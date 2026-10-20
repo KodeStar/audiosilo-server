@@ -19,11 +19,12 @@ import (
 // ViewHybrid is the default library view (filesystem browse + indexed metadata).
 const ViewHybrid = "hybrid"
 
-// Library is a configured root of audiobooks. Its shape (single-file books,
+// Library is a configured root of books or podcast shows. For books, its shape (single-file books,
 // folder-per-book, multi-file parts) is auto-detected per folder by the scanner;
 // there is no library-wide layout setting. Folders the detector gets wrong can be
 // corrected with a per-folder override (see folder_overrides.go).
 type Library struct {
+	Kind        string `json:"kind"`
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	Root        string `json:"root"`
@@ -68,14 +69,15 @@ func checkMetadataSource(l *Library) error {
 
 // Book is an indexed audiobook (single file or a folder of files).
 type Book struct {
-	ID          int64   `json:"id"`
-	LibraryID   int64   `json:"library_id"`
-	RelPath     string  `json:"rel_path"`
-	IsFolder    bool    `json:"is_folder"`
-	Title       string  `json:"title"`
-	Author      string  `json:"author"`
-	Series      string  `json:"series"`
-	SeriesIndex float64 `json:"series_index"`
+	Episode     *PodcastEpisodeInfo `json:"episode,omitempty"`
+	ID          int64               `json:"id"`
+	LibraryID   int64               `json:"library_id"`
+	RelPath     string              `json:"rel_path"`
+	IsFolder    bool                `json:"is_folder"`
+	Title       string              `json:"title"`
+	Author      string              `json:"author"`
+	Series      string              `json:"series"`
+	SeriesIndex float64             `json:"series_index"`
 	// SeriesIndexEnd is the end of a main series position that is a range (an
 	// omnibus of books 1-3: SeriesIndex 1, SeriesIndexEnd 3); 0, and omitted,
 	// when it isn't one, so a client that knows only SeriesIndex reads the start.

@@ -3068,5 +3068,15 @@
   "audit.action.bridge.job": "Queued a bridge job",
   "audit.action.bridge.cancel": "Cancelled a bridge job",
   "audit.detail.job": "Job",
-  "audit.detail.ip": "Address"
+  "audit.detail.ip": "Address",
+  "libraries.form.kind": "Kind",
+  "libraries.kind.books": "Books",
+  "libraries.kind.podcasts": "Podcasts",
+  "libraries.form.kindHint": "Podcasts need a Bridge and the Podcasts module.",
+  "settings.module.podcasts.name": "Podcasts",
+  "settings.module.podcasts.blurb": "Follow podcast shows by URL and keep their feeds up to date.",
+  "settings.module.podcasts.needs": "An online Bridge that supports podcasts",
+  "bridge.kind.podcast.subscribe": "Following a show",
+  "bridge.kind.podcast.poll": "Checking a feed",
+  "settings.modules.podcasts": "Podcasts module"
 }

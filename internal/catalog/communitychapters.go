@@ -123,7 +123,7 @@ func (c *Catalog) DueChapterChecks(ctx context.Context, staleBefore string, limi
 		return r.Scan(&b.LibraryID, &b.Path)
 	}, `SELECT b.library_id, b.rel_path FROM books b
 	     LEFT JOIN community_chapters cc ON cc.library_id = b.library_id AND cc.path = b.rel_path
-	    WHERE (b.asin <> '' OR b.isbn <> '') AND b.duration > 0
+	    WHERE EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='books') AND (b.asin <> '' OR b.isbn <> '') AND b.duration > 0
 	      AND (cc.path IS NULL OR cc.basis <> `+chapterBasisExpr+` OR cc.checked_at < ?)
 	    ORDER BY cc.checked_at IS NOT NULL, cc.checked_at, b.id
 	    LIMIT ?`, staleBefore, limit)

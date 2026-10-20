@@ -157,6 +157,10 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 	if err != nil {
 		return nil, err
 	}
+	if lib.Kind != KindBooks {
+		return nil, ErrNotBookLibrary
+	}
+
 	out := &LibraryExport{
 		Format:        exportFormat,
 		Version:       exportVersion,

@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // handleStats powers the admin Overview/Stats dashboard: catalog totals, per-
@@ -33,7 +35,10 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 	libStats := make([]libStat, 0, len(libs))
 	total := 0
 	for _, l := range libs {
-		n := counts[l.ID]
+		n := 0
+		if l.Kind == catalog.KindBooks {
+			n = counts[l.ID]
+		}
 		total += n
 		libStats = append(libStats, libStat{ID: l.ID, Name: l.Name, BookCount: n})
 	}

@@ -25,6 +25,7 @@ export interface ServerInfo {
      * offers `contribute`; absent before Bridge Phase 2a.
      */
     contributions?: boolean;
+    podcasts?: boolean;
   };
   /**
    * The online Bridge's version and features, only while capabilities.bridge
@@ -912,6 +913,7 @@ export interface LogPage {
 
 /** catalog.Library (internal/catalog/model.go). */
 export interface Library {
+  kind: 'books' | 'podcasts';
   id: number;
   name: string;
   root: string;
@@ -948,6 +950,7 @@ export type MetadataSource = (typeof METADATA_SOURCES)[number];
 
 /** The body of POST /admin/libraries and PATCH /admin/libraries/{id} (handlers_admin.go libraryRequest). */
 export interface LibraryRequest {
+  kind?: Library['kind'];
   name?: string;
   root?: string;
   scan_schedule?: string;
@@ -1217,7 +1220,20 @@ export interface BookLocation {
 }
 
 /** catalog.Book (internal/catalog/model.go). */
+export interface PodcastEpisodeInfo {
+  show_path: string;
+  published: string | null;
+  season: number | null;
+  episode: number | null;
+  episode_type: 'full' | 'trailer' | 'bonus';
+  explicit: boolean;
+  downloaded: boolean;
+  duration_source: 'file' | 'feed' | 'none';
+  removed: boolean;
+}
+
 export interface Book {
+  episode?: PodcastEpisodeInfo;
   id: number;
   library_id: number;
   rel_path: string;

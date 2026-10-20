@@ -114,7 +114,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(u))
+	libs, err := a.cat.CallerLibraries(r.Context(), callerForUser(u))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load access")
 		return
@@ -654,6 +654,7 @@ func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
 // libraryRequest is the body of a library create or edit. The scan settings are
 // pointers so an edit that leaves them out keeps them.
 type libraryRequest struct {
+	Kind           *string   `json:"kind"`
 	Name           string    `json:"name"`
 	Root           string    `json:"root"`
 	DefaultView    string    `json:"default_view"`
@@ -684,7 +685,7 @@ func (req libraryRequest) changes() map[string]any {
 
 // patch is the request as a validated edit (library.ValidatePatch's errors).
 func (req libraryRequest) patch() (catalog.LibraryPatch, error) {
-	p := catalog.LibraryPatch{Name: req.Name, Root: req.Root, DefaultView: req.DefaultView,
+	p := catalog.LibraryPatch{Kind: req.Kind, Name: req.Name, Root: req.Root, DefaultView: req.DefaultView,
 		ScanSchedule: req.ScanSchedule, IgnorePatterns: req.IgnorePatterns, MetadataSource: req.MetadataSource}
 	return p, library.ValidatePatch(&p)
 }
@@ -705,6 +706,10 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lib catalog.Library
+	if req.Kind != nil && *req.Kind != catalog.KindBooks && *req.Kind != catalog.KindPodcasts {
+		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
+		return
+	}
 	p.Apply(&lib)
 	created, err := a.cat.CreateLibrary(r.Context(), lib)
 	if err != nil {

@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // Casting (capability cast): a player mints a cast token for one book and hands
@@ -31,6 +33,10 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	lib, rel, scope, status, msg := a.scopedPath(r, body.LibraryID, body.Path)
 	if status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	if lib.Kind == catalog.KindPodcasts {
+		writeError(w, http.StatusForbidden, "no access to this library")
 		return
 	}
 	book, ok := a.bookAt(w, r, lib, scope, rel, "book not found", "could not load book")

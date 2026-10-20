@@ -33,7 +33,7 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 	q := `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books_fts f
 		JOIN books b ON b.id = f.rowid` + dedupJoins + `
-		WHERE books_fts MATCH ? AND (` + strings.Join(scopeConds, " OR ") + `)
+		WHERE l.kind='books' AND books_fts MATCH ? AND (` + strings.Join(scopeConds, " OR ") + `)
 		ORDER BY rank LIMIT ?`
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {

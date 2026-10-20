@@ -126,7 +126,7 @@ func (r *Runner) settled(ctx context.Context) bool {
 // pass reads the colour of every due book once and records them a batch at a
 // time; true when it stopped because the art kept failing to read.
 func (r *Runner) pass(ctx context.Context) bool {
-	libs, err := r.cat.ListLibraries(ctx)
+	libs, err := r.cat.ListBookLibraries(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			r.log.Warn("cover colours: list libraries failed", "err", err)

@@ -2076,7 +2076,7 @@ func TestMembers_RuleReadsAgree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admin, who := u.Role == auth.RoleAdmin, callerOf(u)
+		admin, who := u.Role == auth.RoleAdmin, callerForUser(u)
 		byID, err1 := m.cat.UserScopes(ctx, id, admin)
 		caller, err2 := m.cat.CallerScopes(ctx, who)
 		if err1 != nil || err2 != nil || !reflect.DeepEqual(norm(byID), norm(caller)) {

@@ -3234,5 +3234,15 @@
   "audit.action.bridge.job": "Puso en cola un trabajo de bridge",
   "audit.action.bridge.cancel": "Canceló un trabajo de bridge",
   "audit.detail.job": "Trabajo",
-  "audit.detail.ip": "Dirección"
+  "audit.detail.ip": "Dirección",
+  "libraries.form.kind": "Tipo",
+  "libraries.kind.books": "Libros",
+  "libraries.kind.podcasts": "Pódcasts",
+  "libraries.form.kindHint": "Los pódcasts necesitan un Bridge y el módulo Pódcasts.",
+  "settings.module.podcasts.name": "Pódcasts",
+  "settings.module.podcasts.blurb": "Sigue programas por URL y mantén sus fuentes actualizadas.",
+  "settings.module.podcasts.needs": "Un Bridge conectado que admita pódcasts",
+  "bridge.kind.podcast.subscribe": "Siguiendo un programa",
+  "bridge.kind.podcast.poll": "Comprobando una fuente",
+  "settings.modules.podcasts": "Módulo Pódcasts"
 }

@@ -211,6 +211,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		return res, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
 	}
 
+	if lib.Kind == catalog.KindPodcasts {
+		return s.scanPodcasts(ctx, lib, res)
+	}
 	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
 	if err != nil {
 		return res, err
@@ -1218,6 +1221,9 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 // full scan would (IndexPathWithin's rules), with the signatures of its metadata
 // files, but nothing read from its audio and nothing indexed.
 func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
+	if lib.Kind == catalog.KindPodcasts {
+		return nil, ErrNotIndexable
+	}
 	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
 	// returns a symlink-RESOLVED path, but we derive the working path from an
 	// unresolved join so the rel_path computed by fileBook/folderBook matches the

@@ -1,0 +1,533 @@
+package catalog
+
+import (
+	"context"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"path"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
+	"github.com/kodestar/audiosilo-server/internal/relpath"
+)
+
+type PodcastError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+type PodcastStatus struct {
+	LastChecked *string       `json:"last_checked"`
+	LastSuccess *string       `json:"last_success"`
+	NextCheck   *string       `json:"next_check"`
+	Error       *PodcastError `json:"error"`
+}
+type PodcastShow struct {
+	LibraryID       int64         `json:"library_id"`
+	Path            string        `json:"path"`
+	Title           string        `json:"title"`
+	Author          string        `json:"author"`
+	Description     string        `json:"description"`
+	Link            string        `json:"link"`
+	Language        string        `json:"language"`
+	Type            string        `json:"type"`
+	Explicit        bool          `json:"explicit"`
+	Private         bool          `json:"private"`
+	FeedURL         *string       `json:"feed_url"`
+	FeedHost        string        `json:"feed_host"`
+	PodcastGUID     string        `json:"podcast_guid"`
+	EpisodeCount    int           `json:"episode_count"`
+	LatestPublished *string       `json:"latest_published"`
+	CoverVersion    string        `json:"cover_version"`
+	Following       bool          `json:"following"`
+	Status          PodcastStatus `json:"status"`
+	CoverPath       string        `json:"-"`
+	FeedSig         string        `json:"-"`
+}
+type PodcastEpisodeInfo struct {
+	ShowPath       string  `json:"show_path"`
+	Published      *string `json:"published"`
+	Season         *int    `json:"season"`
+	Episode        *int    `json:"episode"`
+	EpisodeType    string  `json:"episode_type"`
+	Explicit       bool    `json:"explicit"`
+	Downloaded     bool    `json:"downloaded"`
+	DurationSource string  `json:"duration_source"`
+	Removed        bool    `json:"removed"`
+}
+type PodcastEpisode struct {
+	Path           string  `json:"path"`
+	Title          string  `json:"title"`
+	Published      *string `json:"published"`
+	Duration       float64 `json:"duration"`
+	DurationSource string  `json:"duration_source"`
+	Season         *int    `json:"season"`
+	Episode        *int    `json:"episode"`
+	EpisodeType    string  `json:"episode_type"`
+	Explicit       bool    `json:"explicit"`
+	Description    string  `json:"description"`
+	Downloaded     bool    `json:"downloaded"`
+	Size           int64   `json:"size"`
+	Removed        bool    `json:"removed"`
+}
+type PodcastEpisodePage struct {
+	Episodes   []PodcastEpisode `json:"episodes"`
+	NextCursor *string          `json:"next_cursor"`
+}
+
+// PodcastFile is a presence observation from one directory listing, never a probe.
+type PodcastFile struct {
+	Size  int64
+	MTime int64
+}
+
+func stringOrNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// IndexPodcastShow commits a show's entire derived index together. It never
+// deduplicates GUIDs or touches durable follows and listening state.
+func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
+	changed := false
+	err := c.db.WithTx(ctx, "IndexPodcastShow", func(tx *sql.Tx) error {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM libraries WHERE id=?`, lib).Scan(&kind); err != nil {
+			return err
+		}
+		if kind != KindPodcasts {
+			return ErrInvalidKind
+		}
+		var old string
+		err := tx.QueryRowContext(ctx, `SELECT feed_sig FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&old)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && old == sig && !force {
+			return nil
+		}
+		latest := ""
+		for _, e := range f.Episodes {
+			if e.Published > latest {
+				latest = e.Published
+			}
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path) DO UPDATE SET show_id=excluded.show_id,title=excluded.title,author=excluded.author,description=excluded.description,link=excluded.link,language=excluded.language,show_type=excluded.show_type,explicit=excluded.explicit,private=excluded.private,feed_url=excluded.feed_url,feed_host=excluded.feed_host,feed_url_sha256=excluded.feed_url_sha256,podcast_guid=excluded.podcast_guid,cover_path=excluded.cover_path,episode_count=excluded.episode_count,latest_published=excluded.latest_published,feed_sig=excluded.feed_sig,indexed_at=excluded.indexed_at`, lib, show, f.ShowID, f.Show.Title, f.Show.Author, f.Show.Description, f.Show.Link, f.Show.Language, f.Show.Type, f.Show.Explicit, f.Private, f.FeedURL, f.FeedHost, f.FeedURLSHA256, f.Show.PodcastGUID, cover, len(f.Episodes), stringOrNil(latest), sig, c.ts())
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM podcast_feed_hashes WHERE library_id=? AND show_path=?`, lib, show); err != nil {
+			return err
+		}
+		for _, hash := range append([]string{f.FeedURLSHA256}, f.PreviousFeedURLSHA256...) {
+			if len(hash) != 64 {
+				continue
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_feed_hashes(library_id,show_path,sha256) VALUES(?,?,?)`, lib, show, hash); err != nil {
+				return err
+			}
+		}
+		keep := map[string]bool{}
+		for _, e := range f.Episodes {
+			if !feed.EpisodePath(show, e.Path) {
+				continue
+			}
+			keep[e.Path] = true
+			info, exists := present[path.Base(e.Path)]
+			duration := float64(0)
+			source := "none"
+			if e.DurationSeconds != nil && *e.DurationSeconds > 0 {
+				duration = float64(*e.DurationSeconds)
+				source = "feed"
+			}
+			gen := 0
+			if e.Fetch != nil {
+				gen = e.Fetch.Generation
+				if exists && e.Fetch.DurationMS > 0 {
+					duration = float64(e.Fetch.DurationMS) / 1000
+					source = "file"
+				}
+			}
+			var id int64
+			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,genres_checked,released_checked)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, c.ts(), e.FirstSeen, e.Description, cover != "").Scan(&id)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, durationFromFeed(e.DurationSeconds), exists, gen, e.RemovedAt, source)
+			// A missing duration is stored as zero, not SQL NULL.
+			if err != nil {
+				return err
+			}
+		}
+		oldBooks, err := queryRows(ctx, tx, func(r *sql.Rows, b *Book) error { return r.Scan(&b.ID, &b.RelPath) }, `SELECT b.id,b.rel_path FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE e.library_id=? AND e.show_path=?`, lib, show)
+		if err != nil {
+			return err
+		}
+		for _, b := range oldBooks {
+			if !keep[b.RelPath] {
+				if err := deleteBook(ctx, tx, b.ID); err != nil {
+					return err
+				}
+			}
+		}
+		changed = true
+		return nil
+	})
+	return changed, err
+}
+
+func (c *Catalog) PodcastSignatures(ctx context.Context, lib int64) (map[string]string, error) {
+	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *[2]string) error { return r.Scan(&v[0], &v[1]) }, `SELECT show_path,feed_sig FROM podcast_shows WHERE library_id=?`, lib)
+	out := map[string]string{}
+	for _, r := range rows {
+		out[r[0]] = r[1]
+	}
+	return out, err
+}
+func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, keep map[string]bool) error {
+	return c.db.WithTx(ctx, "PrunePodcastShows", func(tx *sql.Tx) error {
+		shows, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) }, `SELECT show_path FROM podcast_shows WHERE library_id=?`, lib)
+		if err != nil {
+			return err
+		}
+		for _, show := range shows {
+			if keep[show] {
+				continue
+			}
+			ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) }, `SELECT book_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				if err := deleteBook(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (c *Catalog) privatePodcastScope(ctx context.Context, user int64, s Scope) (Scope, error) {
+	type visibility struct {
+		path   string
+		denied bool
+	}
+	shows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *visibility) error { return r.Scan(&v.path, &v.denied) }, `SELECT s.show_path,s.private=1 AND NOT EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.user_id=?) FROM podcast_shows s WHERE library_id=?`, user, s.LibraryID)
+	if err != nil {
+		return Scope{}, err
+	}
+	denied := []string{}
+	for _, v := range shows {
+		if v.denied {
+			denied = append(denied, v.path)
+		}
+	}
+	if len(denied) == 0 {
+		return s, nil
+	}
+	if s.AllowAll {
+		s.AllowAll = false
+		s.Paths = nil
+		for _, v := range shows {
+			if !v.denied {
+				s.Paths = append(s.Paths, v.path)
+			}
+		}
+		return s, nil
+	}
+	// Expand broad grants into visible shows as well as dropping grants inside a
+	// denied show: a grant on the library root must never retain a private child.
+	out := []string{}
+	for _, p := range s.Paths {
+		hidden := false
+		for _, d := range denied {
+			if relpath.Within(d, p) {
+				hidden = true
+				break
+			}
+		}
+		if hidden {
+			continue
+		}
+		if p == "" {
+			for _, v := range shows {
+				if !v.denied {
+					out = append(out, v.path)
+				}
+			}
+		} else {
+			out = append(out, p)
+		}
+	}
+	s.Paths = out
+	return s, nil
+}
+
+const podcastShowSelect = `SELECT s.library_id,s.show_path,s.title,s.author,s.description,s.link,s.language,s.show_type,s.explicit,s.private,NULLIF(s.feed_url,''),s.feed_host,s.podcast_guid,s.cover_path,s.episode_count,s.latest_published,s.feed_sig,
+ EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.user_id=?),
+ st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,'')
+ FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path`
+
+func scanPodcastShow(r interface{ Scan(...any) error }, s *PodcastShow) error {
+	var code, msg string
+	err := r.Scan(&s.LibraryID, &s.Path, &s.Title, &s.Author, &s.Description, &s.Link, &s.Language, &s.Type, &s.Explicit, &s.Private, &s.FeedURL, &s.FeedHost, &s.PodcastGUID, &s.CoverPath, &s.EpisodeCount, &s.LatestPublished, &s.FeedSig, &s.Following, &s.Status.LastChecked, &s.Status.LastSuccess, &s.Status.NextCheck, &code, &msg)
+	if code != "" {
+		s.Status.Error = &PodcastError{code, msg}
+	}
+	if s.Private {
+		s.FeedURL = nil
+		s.Link = ""
+	}
+	s.CoverVersion = CoverVersion(s.CoverPath + "|" + s.FeedSig)
+	return err
+}
+func (c *Catalog) PodcastShows(ctx context.Context, s Scope, user int64, followed bool) ([]PodcastShow, error) {
+	filter, args := pathFilterSQL("s.show_path", s)
+	if !s.AllowAll && len(s.Paths) > 0 {
+		paths, err := json.Marshal(s.Paths)
+		if err != nil {
+			return nil, err
+		}
+		// Shows also appear as ancestors of an episode grant, just as /fs does.
+		filter = "(" + filter + " OR EXISTS(SELECT 1 FROM json_each(?) grant_path WHERE substr(grant_path.value,1,length(s.show_path)+1)=s.show_path||'/'))"
+		args = append(args, string(paths))
+	}
+	q := podcastShowSelect + ` WHERE s.library_id=? AND ` + filter
+	vals := append([]any{user, s.LibraryID}, args...)
+	if followed {
+		q += ` AND EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.user_id=?)`
+		vals = append(vals, user)
+	}
+	q += ` ORDER BY s.title COLLATE NOCASE,s.show_path LIMIT 2000`
+	return queryRows(ctx, c.db, func(r *sql.Rows, s *PodcastShow) error { return scanPodcastShow(r, s) }, q, vals...)
+}
+func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int64) (*PodcastShow, error) {
+	var s PodcastShow
+	err := scanPodcastShow(c.db.QueryRowContext(ctx, podcastShowSelect+` WHERE s.library_id=? AND s.show_path=?`, user, lib, p), &s)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &s, err
+}
+func (c *Catalog) PodcastShowByHash(ctx context.Context, lib int64, hash string, user int64) (*PodcastShow, error) {
+	var p string
+	err := c.db.QueryRowContext(ctx, `SELECT show_path FROM podcast_feed_hashes WHERE library_id=? AND sha256=? ORDER BY show_path LIMIT 1`, lib, hash).Scan(&p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.PodcastShow(ctx, lib, p, user)
+}
+func (c *Catalog) FollowPodcast(ctx context.Context, user, lib int64, p string) error {
+	_, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_follows(user_id,library_id,show_path,created_at) VALUES(?,?,?,?)`, user, lib, p, c.ts())
+	return err
+}
+func (c *Catalog) UnfollowPodcast(ctx context.Context, user, lib int64, p string) error {
+	_, err := c.db.ExecContext(ctx, `DELETE FROM podcast_follows WHERE user_id=? AND library_id=? AND show_path=?`, user, lib, p)
+	return err
+}
+
+// PodcastWholeGrant tests grants before private-show narrowing, which is not a
+// loss of permission to add a new show by URL.
+func (c *Catalog) PodcastWholeGrant(ctx context.Context, who Caller, lib int64) (bool, error) {
+	if !who.Podcasts {
+		return false, nil
+	}
+	if who.Admin {
+		return true, nil
+	}
+	scopes, err := c.userScopes(ctx, who, lib)
+	if err != nil {
+		return false, err
+	}
+	s := scopes[lib]
+	return s != nil && s.AllowAll, nil
+}
+func (c *Catalog) PodcastEpisodes(ctx context.Context, lib int64, show, order string, limit int, cursor string) (*PodcastEpisodePage, error) {
+	return c.PodcastEpisodesWithin(ctx, lib, show, order, limit, cursor, Scope{LibraryID: lib, AllowAll: true})
+}
+func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, order string, limit int, cursor string, scope Scope) (*PodcastEpisodePage, error) {
+	if order != "newest" && order != "oldest" {
+		return nil, ErrInvalidCursor
+	}
+	limit = min(max(limit, 1), 200)
+	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'' FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
+	args := []any{lib, show}
+	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
+	q += " AND " + filter
+	args = append(args, filterArgs...)
+	dir, op := "DESC", "<"
+	if order == "oldest" {
+		dir, op = "ASC", ">"
+	}
+	if cursor != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		var v [4]string
+		if err != nil || json.Unmarshal(raw, &v) != nil || v[0] != show || v[1] != order {
+			return nil, ErrInvalidCursor
+		}
+		q += ` AND (COALESCE(e.published,''),b.rel_path) ` + op + ` (?,?)`
+		args = append(args, v[2], v[3])
+	}
+	q += ` ORDER BY COALESCE(e.published,'') ` + dir + `,b.rel_path ` + dir + ` LIMIT ?`
+	args = append(args, limit+1)
+	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
+		return r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed)
+	}, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	out := &PodcastEpisodePage{Episodes: eps}
+	if len(eps) > limit {
+		out.Episodes = eps[:limit]
+		last := out.Episodes[limit-1]
+		published := ""
+		if last.Published != nil {
+			published = *last.Published
+		}
+		b, _ := json.Marshal([4]string{show, order, published, last.Path})
+		v := base64.RawURLEncoding.EncodeToString(b)
+		out.NextCursor = &v
+	}
+	return out, nil
+}
+func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
+	var e PodcastEpisodeInfo
+	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'' FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err == nil {
+		b.Episode = &e
+	}
+	return err
+}
+
+type PodcastFeedState struct {
+	ETag         string
+	LastModified string
+	LastChecked  *string
+	ErrorCode    string
+}
+
+func (c *Catalog) PodcastState(ctx context.Context, lib int64, show string) (PodcastFeedState, error) {
+	var s PodcastFeedState
+	err := c.db.QueryRowContext(ctx, `SELECT etag,last_modified,last_checked_at,error_code FROM podcast_feed_state WHERE library_id=? AND show_path=?`, lib, show).Scan(&s.ETag, &s.LastModified, &s.LastChecked, &s.ErrorCode)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	return s, err
+}
+func (c *Catalog) DuePodcastPolls(ctx context.Context, limit int) ([]Ref, error) {
+	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path WHERE l.kind='podcasts' AND EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND j.state IN `+bridge.OpenStatesSQL+`) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, c.now().UTC().Format(time.RFC3339), limit)
+}
+func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
+	_, err := c.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error,next_poll_at) VALUES(?,?,'library_not_writable','The Bridge cannot write to this library.',?) ON CONFLICT(library_id,show_path) DO UPDATE SET error_code=excluded.error_code,error=excluded.error,next_poll_at=excluded.next_poll_at`, ref.LibraryID, ref.Path, c.now().Add(30*time.Minute).UTC().Format(time.RFC3339))
+	return err
+}
+
+// FoldPodcastJob is idempotent even if an unfollow happens before the recovery
+// sweep. Durable follow and status writes share the folded marker's transaction.
+func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
+	if !bridge.IsPodcast(j.Kind) || j.LibraryID == nil || !slices.Contains([]string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled}, j.State) {
+		return nil
+	}
+	return c.db.WithTx(ctx, "FoldPodcastJob", func(tx *sql.Tx) error {
+		now := c.now().UTC()
+		stamp := now.Format(time.RFC3339)
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_folded(job_id,at) VALUES(?,?)`, j.ID, stamp)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		if j.State == bridge.StateCancelled {
+			return nil
+		}
+		var result struct {
+			ShowPath     string `json:"show_path"`
+			Status       int    `json:"status"`
+			ETag         string `json:"etag"`
+			LastModified string `json:"last_modified"`
+			Next         int    `json:"next_poll_seconds"`
+			Code         string `json:"code"`
+			Message      string `json:"message"`
+			Retry        *int   `json:"retry_after_seconds"`
+		}
+		if err := json.Unmarshal(j.Result, &result); err != nil {
+			return err
+		}
+		show := j.Target()
+		if j.Kind == bridge.KindPodcastSubscribe {
+			var p bridge.SubscribeParams
+			if err := json.Unmarshal(j.Params, &p); err != nil {
+				return err
+			}
+			show = p.ShowPath
+			if j.State == bridge.StateDone {
+				show = result.ShowPath
+			}
+		}
+		if !feed.ShowPath(show) {
+			return nil
+		}
+		if j.Kind == bridge.KindPodcastSubscribe && j.State == bridge.StateDone && j.RequestedBy != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_follows(user_id,library_id,show_path,created_at) VALUES(?,?,?,?)`, j.RequestedBy.ID, *j.LibraryID, show, stamp); err != nil {
+				return err
+			}
+		}
+		var failures int
+		err = tx.QueryRowContext(ctx, `SELECT failures FROM podcast_feed_state WHERE library_id=? AND show_path=?`, *j.LibraryID, show).Scan(&failures)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if j.State == bridge.StateDone {
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.Next, 900), 86400))*time.Second).Format(time.RFC3339))
+		} else {
+			if result.Code == "" {
+				result.Code = "bridge_lost"
+			}
+			if result.Message == "" {
+				result.Message = j.Error
+			}
+			seconds := 1800 << min(failures, 6)
+			if result.Retry != nil {
+				seconds = min(max(*result.Retry, 60), 86400)
+			}
+			seconds = min(seconds, 86400)
+			var next any = now.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339)
+			if result.Code == "gone" {
+				next = nil
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,last_checked_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,failures=excluded.failures,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, stamp, result.Status, result.Code, result.Message, failures+1, next)
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM podcast_folded WHERE at<?`, now.Add(-7*24*time.Hour).Format(time.RFC3339))
+		return err
+	})
+}
+
+func durationFromFeed(p *int) float64 {
+	if p == nil {
+		return 0
+	}
+	return float64(*p)
+}

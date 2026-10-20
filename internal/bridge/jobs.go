@@ -101,12 +101,17 @@ const (
 	bookNone     bookRule = iota // never a path
 	bookOptional                 // a book, or the library itself
 	bookRequired                 // always a book
+	bookShow
 )
 
 // kindSpec is what the server knows about a job kind: whether a job of it is
 // about a library and a book, whether it writes into the library, how to check
 // its params, and how it stands with the other kinds' open jobs for the book.
 type kindSpec struct {
+	internal     bool
+	quiet        bool
+	booksOnly    bool
+	suffix       func(NewJob) string
 	needsLibrary bool
 	book         bookRule
 	// writes: the job writes into the library, so it is queued only for a
@@ -148,21 +153,23 @@ func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsByte
 // (ErrContributeOpen: it would replace what is being filed) and cancels a parked
 // one, or a queued one held while the contributions module is off.
 var kinds = map[string]kindSpec{
-	KindVerify: {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams,
+	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
+	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, internal: true, quiet: true},
+	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen},
 		cancelsOpen: map[string]string{
 			KindDescribe:       "a generate job for the book replaced it",
 			KindDetectChapters: "a generate job for the book replaced it; it finds the chapters itself",
 			KindContribute:     "a generate job for the book replaced what it was sharing",
 		}},
-	KindContribute: {needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
+	KindContribute: {booksOnly: true, needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
-	KindCorrect: {needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions,
+	KindCorrect: {booksOnly: true, needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions,
 		maxParams: maxCorrectParamsBytes},
-	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
+	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
-	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
+	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen}},
 }
 
@@ -355,8 +362,9 @@ type Job struct {
 	Progress  json.RawMessage `json:"progress"`
 	Result    json.RawMessage `json:"result"`
 	Error     string          `json:"error"`
-	// RequestedBy is the admin who asked, nil once they are deleted.
+	// RequestedBy is the listener or admin who asked, nil once they are deleted.
 	RequestedBy     *Requester `json:"requested_by"`
+	FeedRedacted    string     `json:"-"`
 	Priority        int        `json:"priority"`
 	Attempts        int        `json:"attempts"`
 	LeaseUntil      *string    `json:"lease_until"`
@@ -376,7 +384,7 @@ func (j *Job) Target() string {
 	return *j.Path
 }
 
-// Requester names the admin who queued a job.
+// Requester names the listener or admin who queued a job.
 type Requester struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
@@ -384,7 +392,7 @@ type Requester struct {
 
 const jobColumns = `j.id, j.kind, j.library_id, j.rel_path, j.params, j.state, j.progress, j.result, j.error,
 	j.requested_by, u.username, j.priority, j.attempts, j.lease_until, j.cancel_requested,
-	j.created_at, j.updated_at, j.claimed_at, j.finished_at`
+	j.created_at, j.updated_at, j.claimed_at, j.finished_at, j.feed_redacted`
 
 const jobFrom = ` FROM bridge_jobs j LEFT JOIN users u ON u.id = j.requested_by`
 
@@ -400,7 +408,7 @@ func scanJob(row rowScanner) (*Job, error) {
 	)
 	if err := row.Scan(&j.ID, &j.Kind, &lib, &path, &params, &j.State, &progress, &result, &j.Error,
 		&by, &name, &j.Priority, &j.Attempts, &lease, &j.CancelRequested,
-		&j.CreatedAt, &j.UpdatedAt, &claimed, &finished); err != nil {
+		&j.CreatedAt, &j.UpdatedAt, &claimed, &finished, &j.FeedRedacted); err != nil {
 		return nil, err
 	}
 	if lib.Valid {
@@ -457,15 +465,16 @@ func DedupeKey(kind string, libraryID *int64, path *string) string {
 	return b.String()
 }
 
-// NewJob is an admin's request for a job, after the transport resolved its book.
+// NewJob is a validated request for a job, after the transport resolved its target.
 type NewJob struct {
 	Kind      string
 	LibraryID *int64
 	// Path is the book's indexed path (nil: the job is about the library itself).
-	Path        *string
-	Params      json.RawMessage
-	RequestedBy int64
-	Priority    int
+	Path         *string
+	Params       json.RawMessage
+	RequestedBy  int64
+	Priority     int
+	feedRedacted string
 }
 
 // ErrKindUnavailable is a job of a kind the paired Bridge doesn't run (or no
@@ -543,6 +552,9 @@ func checkNew(j *NewJob) error {
 	if j.Path != nil && spec.book == bookNone {
 		return invalid("this kind takes no path")
 	}
+	if spec.book == bookShow && !validShowPath(j.Path) {
+		return invalid("path must name one show")
+	}
 	if j.Path == nil && spec.book == bookRequired {
 		return invalid("path is required")
 	}
@@ -573,6 +585,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
 	}
+	if err := s.checkPodcastLibrary(ctx, j); err != nil {
+		return nil, false, err
+	}
 	h, err := s.LastHeartbeat(ctx)
 	if err != nil {
 		return nil, false, err
@@ -588,6 +603,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		refuse = ErrCannotContribute
 	}
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
+	if suffix := kinds[j.Kind].suffix; suffix != nil {
+		key += suffix(j)
+	}
 	var exp expiry
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
@@ -608,6 +626,20 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if refuse != nil {
 			return refuse
 		}
+		if j.Kind == KindPodcastSubscribe {
+			var n int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind='podcast.subscribe' AND requested_by=? AND state IN `+OpenStatesSQL, j.RequestedBy).Scan(&n); err != nil {
+				return err
+			}
+			if n >= 5 {
+				return ErrTooManyRequests
+			}
+		}
+		if j.Kind == KindPodcastPoll {
+			if err := s.prunePolls(ctx, tx, key); err != nil {
+				return err
+			}
+		}
 		spec := kinds[j.Kind]
 		b, err := s.blocker(ctx, tx, j.Kind, j.LibraryID, j.Path)
 		if err != nil {
@@ -617,9 +649,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return spec.refusedWhileOpen[b.Kind]
 		}
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Kind, j.LibraryID, j.Path, string(j.Params), j.RequestedBy, j.Priority, key, now, now)
+			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at,feed_redacted)
+			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?,?)`,
+			j.Kind, j.LibraryID, j.Path, string(j.Params), requesterID(j.RequestedBy), j.Priority, key, now, now, j.feedRedacted)
 		if err != nil {
 			return err
 		}
@@ -665,6 +697,7 @@ type Filter struct {
 	LibraryID *int64
 	Path      *string
 	State     string
+	Kind      string
 	// Before is the previous page's last id (0: the first page).
 	Before int64
 	// Limit is the page size (1 to MaxListLimit; anything else DefaultListLimit).
@@ -681,6 +714,11 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 		where []string
 		args  []any
 	)
+	if f.Kind != "" {
+		where, args = append(where, "j.kind = ?"), append(args, f.Kind)
+	} else {
+		where, args = append(where, "j.kind <> ?"), append(args, KindPodcastPoll)
+	}
 	if f.LibraryID != nil {
 		where, args = append(where, "j.library_id = ?"), append(args, *f.LibraryID)
 	}
@@ -715,7 +753,7 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 		if err != nil {
 			return nil, 0, err
 		}
-		jobs = append(jobs, *j)
+		jobs = append(jobs, RedactedJob(*j))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
@@ -795,7 +833,7 @@ func expireTx(ctx context.Context, tx *sql.Tx, now string) (expiry, error) {
 // the job itself filled in only once the update is done.
 func lastAttemptsLapsed(ctx context.Context, tx *sql.Tx, now string) ([]transition, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, state FROM bridge_jobs
-		  WHERE `+lapsedSQL+` AND cancel_requested = 0 AND attempts >= ?2`, now, MaxAttempts)
+		  WHERE `+lapsedSQL+` AND (cancel_requested = 1 OR attempts >= ?2)`, now, MaxAttempts)
 	if err != nil {
 		return nil, err
 	}
@@ -827,6 +865,7 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 // caller's leaving doesn't cancel: the move has committed, and the admin should
 // hear about it either way.
 func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
+	s.reportEnded(ctx, job, from)
 	if s.OnTransition != nil && job.Notable(from, fromCode) {
 		s.OnTransition(context.WithoutCancel(ctx), *job, from)
 	}
@@ -890,7 +929,7 @@ func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wai
 // (highest priority, then oldest) that isn't held (nextQueued), leased for
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
 // paired Bridge's.
-func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
+func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) (*Job, error) {
 	var (
 		job *Job
 		exp expiry
@@ -908,6 +947,14 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
 		}
+		expired, err := s.expirePrivateTx(ctx, tx, now)
+		if err != nil {
+			return err
+		}
+		for i := range expired {
+			exp.failed = append(exp.failed, transition{job: &expired[i], from: StateQueued})
+		}
+
 		id, err := s.nextQueued(ctx, tx, kinds)
 		if err != nil || id == 0 {
 			return err
@@ -1067,6 +1114,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
 			return ErrNotHeld
 		}
+		if IsPodcast(cur.Kind) {
+			sanitizePodcastUpdate(&u)
+		}
 		from = cur.State
 		if from == StateNeedsAttention {
 			fromCode = cur.ParkCode()
@@ -1131,6 +1181,9 @@ var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_wo
 // Bridge reports a rate limit's retry that ran into the book's budget without a
 // running in between, and that park now waits for a person.
 func (j *Job) Notable(from, fromCode string) bool {
+	if kinds[j.Kind].quiet {
+		return false
+	}
 	switch j.State {
 	case StateDone, StateFailed:
 		return from != j.State
@@ -1186,8 +1239,9 @@ var ErrFinished = errors.New("the job has already finished")
 // its next update; a lease that runs out on such a job cancels it then.
 func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	var (
-		job *Job
-		exp expiry
+		job  *Job
+		from string
+		exp  expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.Cancel", func(tx *sql.Tx) error {
 		now := s.ts()
@@ -1199,6 +1253,7 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		if err != nil {
 			return err
 		}
+		from = cur.State
 		switch cur.State {
 		case StateQueued, StateNeedsAttention:
 			_, err = tx.ExecContext(ctx,
@@ -1218,6 +1273,7 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	})
 	if err == nil {
 		s.settle(ctx, exp)
+		s.report(ctx, job, from, "")
 	}
 	return job, err
 }
@@ -1293,4 +1349,11 @@ func jobKinds(ctx context.Context, tx *sql.Tx, libraryID int64, path string) ([]
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func requesterID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
 }

@@ -133,6 +133,9 @@ export function LibraryCard({
             <h2 id={`library-${l.id}-name`} className="h2 [overflow-wrap:anywhere]">
               {l.name}
             </h2>
+            {l.kind === 'podcasts' ? (
+              <Badge variant="info">{t('libraries.kind.podcasts')}</Badge>
+            ) : null}
             {/* A running scan wins: a Retry's scan is the newer news than the
                 availability probe, which the server caches for a few seconds. */}
             {running ? (
@@ -211,15 +214,24 @@ export function LibraryCard({
                 <Pencil aria-hidden="true" />
                 {t('libraries.menu.edit')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setDialog('detect')}>
+              <DropdownMenuItem
+                disabled={l.kind === 'podcasts'}
+                onClick={() => setDialog('detect')}
+              >
                 <Split aria-hidden="true" />
                 {t('libraries.menu.detection')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void exportBooks()} disabled={exporting}>
+              <DropdownMenuItem
+                onClick={() => void exportBooks()}
+                disabled={exporting || l.kind === 'podcasts'}
+              >
                 <Download aria-hidden="true" />
                 {exporting ? t('libraries.menu.exporting') : t('libraries.menu.export')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setDialog('exportPaths')} disabled={exporting}>
+              <DropdownMenuItem
+                onClick={() => setDialog('exportPaths')}
+                disabled={exporting || l.kind === 'podcasts'}
+              >
                 <FileWarning aria-hidden="true" />
                 {t('libraries.menu.exportPaths')}
               </DropdownMenuItem>

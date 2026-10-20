@@ -117,6 +117,8 @@ household:
 # on or off (Settings > Modules) without a restart. A module that needs a Bridge
 # feature stays hidden from listeners until a paired Bridge offers it.
 modules:
+  podcasts:
+    enabled: false # Following feeds and scheduled checks need a paired Bridge.
   contributions:
     enabled: false # send corrections and generated sidecars to the community database through the Bridge (needs a Bridge signed in to GitHub) [AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED]
 

@@ -185,7 +185,7 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	if len(env.Series) == 0 {
 		return env.Series, nil, nil
 	}
-	scopes, err := a.cat.CallerScopes(ctx, callerOf(userFrom(ctx)))
+	scopes, err := a.cat.CallerScopes(ctx, callerOf(ctx))
 	if err != nil {
 		return nil, nil, err
 	}

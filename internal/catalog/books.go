@@ -612,6 +612,9 @@ func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 		return nil, err
 	}
 	finish()
+	if err := c.loadPodcastEpisode(ctx, &b); err != nil {
+		return nil, err
+	}
 	if err := c.loadFiles(ctx, &b); err != nil {
 		return nil, err
 	}
@@ -814,6 +817,18 @@ type SeriesPage struct {
 // the whole library). One indexed query per name; the caller bounds the names.
 func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
 	out := make([]SeriesPage, 0, len(names))
+	lib, err := c.GetLibrary(ctx, libraryID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if lib != nil && lib.Kind == KindPodcasts {
+		for _, name := range names {
+			if name != "" {
+				out = append(out, SeriesPage{Name: name, Page: Page{Books: []Book{}}})
+			}
+		}
+		return out, nil
+	}
 	for _, name := range names {
 		if name == "" {
 			continue
@@ -859,7 +874,7 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 	args = append(args, dedupFetch(limit))
 	q := `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books b` + dedupJoins + `
-		WHERE (` + strings.Join(conds, " OR ") + `)
+		WHERE l.kind = 'books' AND (` + strings.Join(conds, " OR ") + `)
 		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {

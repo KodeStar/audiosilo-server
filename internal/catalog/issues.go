@@ -148,7 +148,7 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 		q := `SELECT ` + strings.Join(cols, ", ") + ` FROM books b
 			LEFT JOIN (SELECT library_id, path, ` + strings.Join(flags, ", ") + `
 			             FROM issue_ignores GROUP BY library_id, path) ig
-			       ON ig.library_id = b.library_id AND ig.path = b.rel_path`
+			       ON ig.library_id = b.library_id AND ig.path = b.rel_path WHERE EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='books')`
 		if err := c.db.QueryRowContext(ctx, q).Scan(dest...); err != nil {
 			return nil, err
 		}
@@ -159,7 +159,7 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 			samples, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *IssueSample) error {
 				return rows.Scan(&s.LibraryID, &s.Path, &s.Title)
 			}, `SELECT b.library_id, b.rel_path, b.title FROM books b
-			     WHERE `+issuePredicates[k]+` AND NOT `+ignoredExpr+`
+			     WHERE EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='books') AND `+issuePredicates[k]+` AND NOT `+ignoredExpr+`
 			     ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, k, maxIssueSamples)
 			if err != nil {
 				return nil, err
@@ -321,7 +321,7 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	      LEFT JOIN (SELECT library_id, rel_path, COUNT(*) AS n FROM progress GROUP BY library_id, rel_path) p
 	             ON p.library_id = b.library_id AND p.rel_path = b.rel_path
 	      LEFT JOIN issue_ignores ii ON ii.library_id = b.library_id AND ii.path = b.rel_path AND ii.kind = ?2
-	     WHERE (?1 = 0 OR b.library_id = ?1) AND NOT `+splitDiscExpr, libraryID, IssueDuplicate)
+	     WHERE EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='books') AND (?1 = 0 OR b.library_id = ?1) AND NOT `+splitDiscExpr, libraryID, IssueDuplicate)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -455,7 +455,7 @@ func (c *Catalog) adminBooksByID(ctx context.Context, ids []int64) (map[int64]Ad
 			args[i] = id
 		}
 		books, err := queryRows(ctx, c.db, scanAdminBook, `SELECT `+adminBookCols+` FROM books b JOIN libraries l ON l.id = b.library_id
-		     WHERE b.id IN (`+placeholders(len(part))+`)`, args...)
+		     WHERE l.kind='books' AND b.id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}

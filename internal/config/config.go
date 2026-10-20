@@ -137,6 +137,7 @@ const (
 // applies on the next request: a module starts and stops without a restart.
 type ModulesConfig struct {
 	Contributions ModuleConfig `yaml:"contributions"`
+	Podcasts      ModuleConfig `yaml:"podcasts"`
 }
 
 // ModuleConfig is one module's toggle.

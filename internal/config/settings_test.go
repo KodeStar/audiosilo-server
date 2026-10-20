@@ -567,3 +567,18 @@ func TestModuleSettings(t *testing.T) {
 		t.Fatalf("config.yaml must keep its own toggle under the variable: %+v %v", c.Modules, err)
 	}
 }
+
+func TestPodcastsModuleSetting(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.ModuleEnabled("podcasts") || !c.HasModule("podcasts") {
+		t.Fatal("podcasts must ship off")
+	}
+	t.Setenv("AUDIOSILO_MODULES_PODCASTS_ENABLED", "true")
+	loaded, _, err := Load(c.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ModuleEnabled("podcasts") || loaded.Locked()["modules.podcasts"] != "AUDIOSILO_MODULES_PODCASTS_ENABLED" {
+		t.Fatal("podcasts environment override missing")
+	}
+}

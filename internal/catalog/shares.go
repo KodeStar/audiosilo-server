@@ -227,12 +227,15 @@ func scopesFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
 type Caller struct {
 	ID    int64
 	Admin bool
+	// Podcasts is the authenticated client gate, never inferred from Admin.
+	Podcasts bool
 	// Member is a household member's rule (members.go), nil for anyone else.
 	Member *MemberRule
 }
 
 // UserScope returns a user's effective scope within one library. Admins get
-// AllowAll. A non-admin with no grants gets an empty scope (no access). A
+// AllowAll for books; background callers exclude podcasts. A non-admin with no
+// grants gets an empty scope (no access). A
 // household member also gets what their owner gives them (the member rule,
 // memberScopes). It reads the rule; CallerScope is it for a Caller.
 func (c *Catalog) UserScope(ctx context.Context, userID, libraryID int64, isAdmin bool) (Scope, error) {
@@ -280,43 +283,91 @@ func (c *Catalog) callerByID(ctx context.Context, userID int64, isAdmin bool) (C
 
 // CallerScope is UserScope for who.
 func (c *Catalog) CallerScope(ctx context.Context, who Caller, libraryID int64) (Scope, error) {
-	if who.Admin {
-		return Scope{LibraryID: libraryID, AllowAll: true}, nil
+	lib, err := c.GetLibrary(ctx, libraryID)
+	if errors.Is(err, ErrNotFound) {
+		return Scope{LibraryID: libraryID, AllowAll: who.Admin}, nil
 	}
-	scopes, err := c.userScopes(ctx, who, libraryID)
 	if err != nil {
 		return Scope{}, err
 	}
-	if s, ok := scopes[libraryID]; ok {
-		return *s, nil
+	if lib.Kind == KindPodcasts && !who.Podcasts {
+		return Scope{LibraryID: libraryID}, nil
 	}
-	return Scope{LibraryID: libraryID}, nil
+	scope := Scope{LibraryID: libraryID, AllowAll: who.Admin}
+	if !who.Admin {
+		scopes, err := c.userScopes(ctx, who, libraryID)
+		if err != nil {
+			return Scope{}, err
+		}
+		if s := scopes[libraryID]; s != nil {
+			scope = *s
+		}
+	}
+	if lib.Kind == KindPodcasts {
+		return c.privatePodcastScope(ctx, who.ID, scope)
+	}
+	return scope, nil
 }
 
-// CallerScopes is UserScopes for who.
+// CallerScopes filters the old-client gate before the caller's private shows.
 func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error) {
+	var scopes []Scope
+	var err error
 	if who.Admin {
-		return c.allLibraryScopes(ctx)
+		scopes, err = c.allLibraryScopes(ctx)
+	} else {
+		var byLib map[int64]*Scope
+		byLib, err = c.userScopes(ctx, who, 0)
+		scopes = flattenScopes(byLib)
 	}
-	scopes, err := c.userScopes(ctx, who, 0)
 	if err != nil {
 		return nil, err
 	}
-	return flattenScopes(scopes), nil
+	libs, err := c.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kind := map[int64]string{}
+	for _, l := range libs {
+		kind[l.ID] = l.Kind
+	}
+	out := []Scope{}
+	for _, s := range scopes {
+		if kind[s.LibraryID] == KindPodcasts {
+			if !who.Podcasts {
+				continue
+			}
+			s, err = c.privatePodcastScope(ctx, who.ID, s)
+			if err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
-// CallerLibraries is AccessibleLibraries for who: every library for an admin,
-// else those who's scopes reach.
+// CallerLibraries applies the client gate but keeps library grants independent
+// of follows: an empty podcast library is still a destination for following.
 func (c *Catalog) CallerLibraries(ctx context.Context, who Caller) ([]Library, error) {
 	libs, err := c.ListLibraries(ctx)
-	if err != nil || who.Admin {
-		return libs, err
-	}
-	scopes, err := c.userScopes(ctx, who, 0)
 	if err != nil {
 		return nil, err
 	}
+	var scopes map[int64]*Scope
+	if !who.Admin {
+		scopes, err = c.userScopes(ctx, who, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return slices.DeleteFunc(libs, func(l Library) bool {
+		if l.Kind == KindPodcasts && !who.Podcasts {
+			return true
+		}
+		if who.Admin {
+			return false
+		}
 		s := scopes[l.ID]
 		return s == nil || !s.AllowAll && len(s.Paths) == 0
 	}), nil

@@ -1,0 +1,5 @@
+HTTPS://Feeds.Example.COM:443/show.xml#x	https://feeds.example.com/show.xml	42affc5fdf78beb1ff86b53012c30d588d1329537358e972f717eceb65b4eeb2
+http://example.com	http://example.com/	2a1b402420ef46577471cdc7409b0fa2c6a204db316e59ade2d805435489a067
+https://example.com:8443/a?b=1&a=2	https://example.com:8443/a?b=1&a=2	e6bb24d6fc7979dfac76e71466c7a57868aa62e59ff4b05ad59373ddfe8b88a1
+https://user:pa%40ss@Example.com/feed	https://user:pa%40ss@example.com/feed	683912e5f819a681a3973f46703472a065d509f540f0fe1814202f6d2a864587
+https://www.patreon.com/rss/show?auth=abc	https://www.patreon.com/rss/show?auth=abc	1f304edb5e9d6d66d8684b7ad5951c260c033481737b2b803584f891ec051904

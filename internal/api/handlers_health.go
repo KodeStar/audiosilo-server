@@ -61,7 +61,7 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 // their indexed books and listeners.
 func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 	ctx := r.Context()
-	libs, err := a.cat.ListLibraries(ctx)
+	libs, err := a.cat.ListBookLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}
