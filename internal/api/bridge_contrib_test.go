@@ -341,9 +341,11 @@ func TestBridgeCorrectJob(t *testing.T) {
 		}
 	}
 	for name, params := range map[string]string{
-		"unknown field":  strings.Replace(good, `"work_id"`, `"x":1,"work_id"`, 1),
-		"no evidence":    strings.Replace(good, `"The cover says so."`, `""`, 1),
-		"an extra field": correction("description", "a", "b"),
+		"unknown field":   strings.Replace(good, `"work_id"`, `"x":1,"work_id"`, 1),
+		"no evidence":     strings.Replace(good, `"The cover says so."`, `""`, 1),
+		"an extra field":  correction("description", "a", "b"),
+		"a bidi override": correction("title", "The Final \u202eEmpire", "Mistborn: The Final Empire"),
+		"a bidi isolate":  strings.Replace(good, `"The cover says so."`, `"The cover \u2066says\u2069 so."`, 1),
 	} {
 		if resp, body := b.queueKind(t, bridge.KindCorrect, mistbornBook, params); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: %d %s, want 400", name, resp.StatusCode, body)
@@ -371,6 +373,37 @@ func TestBridgeCorrectJob(t *testing.T) {
 	_, body = b.do(t, "GET", "/api/v1/admin/bridge", b.adminTok, "")
 	if !strings.Contains(body, `"features":["bridge","contribute","meta"]`) {
 		t.Fatalf("features: %s", body)
+	}
+}
+
+// A meta.correct batch at its bounds is past the request bound the queue
+// route had before the kind's own params cap (32 KiB) when an ASCII-only
+// encoder sends it, and is queued.
+func TestBridgeCorrectJobLargeBatch(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	b.beatKinds(t, `,"setup":`+setupBlock(true), bridge.KindVerify, bridge.KindCorrect)
+	setModule(t, b.testEnv, b.adminTok, true)
+	title := strings.Repeat("📚", 500)
+	if err := b.cat.EditBook(ctx, b.lib.ID, mistbornBook, catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: title}}); err != nil {
+		t.Fatal(err)
+	}
+	escape := func(n int, surrogates string) string { return `"` + strings.Repeat(surrogates, n) + `"` }
+	params := `{"work_id":"the-final-empire","changes":[{"field":"title","current":` + escape(500, `\ud83c\udfa7`) +
+		`,"corrected":` + escape(500, `\ud83d\udcda`) + `}],"evidence":` + escape(2000, `\ud83d\udcd6`) + `}`
+	if len(params) <= 32<<10 {
+		t.Fatalf("params are %d bytes; the test proves nothing", len(params))
+	}
+	resp, body := b.queueKind(t, bridge.KindCorrect, mistbornBook, params)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a batch at its bounds: %d %s", resp.StatusCode, body)
+	}
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	var p bridge.CorrectParams
+	if err := json.Unmarshal(job.Params, &p); err != nil || p.Changes[0].Corrected != title {
+		t.Fatalf("stored params: %v", err)
 	}
 }
 

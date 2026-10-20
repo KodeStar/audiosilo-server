@@ -46,7 +46,10 @@ const (
 	MaxListLimit     = 200
 	DefaultListLimit = 50
 
+	// maxParamsBytes bounds a job's params as sent, unless its kind sets its
+	// own (kindSpec.maxParams); MaxParamsBytes is the most any kind takes.
 	maxParamsBytes   = 16 << 10
+	MaxParamsBytes   = maxCorrectParamsBytes
 	maxProgressBytes = 16 << 10
 	maxResultBytes   = 64 << 10
 	maxErrorBytes    = 2 << 10
@@ -125,6 +128,16 @@ type kindSpec struct {
 	// files to the community, so it also needs a Bridge that can
 	// (ErrCannotContribute).
 	module string
+	// maxParams bounds the params as sent, in bytes (0: maxParamsBytes).
+	maxParams int
+}
+
+// paramsCap is the most bytes of params a job of the kind may send.
+func (s kindSpec) paramsCap() int {
+	if s.maxParams > 0 {
+		return s.maxParams
+	}
+	return maxParamsBytes
 }
 
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
@@ -149,7 +162,8 @@ var kinds = map[string]kindSpec{
 		}},
 	KindContribute: {needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
-	KindCorrect: {needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions},
+	KindCorrect: {needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions,
+		maxParams: maxCorrectParamsBytes},
 	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
 	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
@@ -536,7 +550,7 @@ func checkNew(j *NewJob) error {
 	if j.Path == nil && spec.book == bookRequired {
 		return invalid("path is required")
 	}
-	if len(j.Params) > maxParamsBytes {
+	if len(j.Params) > spec.paramsCap() {
 		return invalid("params too large")
 	}
 	params, err := spec.params(j.Params)

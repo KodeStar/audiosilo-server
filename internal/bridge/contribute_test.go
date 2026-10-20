@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // Phase 2b: the setup checklist on the heartbeat, can_contribute's precedence,
@@ -361,6 +362,133 @@ func TestCorrectQueueRules(t *testing.T) {
 		`],"evidence":"  #` + strings.Repeat("e", maxEvidence-3) + `"}`
 	if p, err := CheckCorrect(json.RawMessage(ok)); err != nil || p.RecordingID != "the-final-empire-kramer" {
 		t.Fatalf("a recording slug and evidence at the bound: %+v, %v", p, err)
+	}
+}
+
+// asciiJSON is s as a JSON string an ASCII-only encoder sends: every character
+// outside ASCII a \u escape, two (a surrogate pair) outside the BMP.
+func asciiJSON(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		if r < 0x80 {
+			b.WriteRune(r)
+			continue
+		}
+		for _, u := range utf16.Encode([]rune{r}) {
+			fmt.Fprintf(&b, "\\u%04x", u)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// fill is s repeated to exactly n characters.
+func fill(s string, n int) string {
+	return string([]rune(strings.Repeat(s, n))[:n])
+}
+
+// maxCorrection is a meta.correct batch at every bound: each field once, both
+// values and the evidence at their most characters (s repeated), encoded by
+// enc.
+func maxCorrection(enc func(string) string, current, corrected, evidence string) string {
+	var changes []string
+	for _, f := range CorrectionFields {
+		changes = append(changes, fmt.Sprintf(`{"field":%q,"current":%s,"corrected":%s}`, f,
+			enc(fill(current, maxCorrectionValue)), enc(fill(corrected, maxCorrectionValue))))
+	}
+	return `{"work_id":"w","changes":[` + strings.Join(changes, ",") + `],"evidence":` +
+		enc(fill(evidence, maxEvidence)) + `}`
+}
+
+// meta.correct's params cap is its own: a batch at every per-field bound is
+// taken however it is encoded (multi-byte characters, each escaped as an
+// ASCII-only encoder does, and characters Go escapes when it stores them),
+// one past a per-field bound is refused for that, and params past the cap are
+// refused as too large. Other kinds keep the default cap.
+func TestCorrectParamsCap(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindVerify, KindSidecars, KindCorrect)
+	utf8JSON := func(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+	for name, params := range map[string]string{
+		"multi-byte":             maxCorrection(utf8JSON, "📚", "ب", "é"),
+		"multi-byte, ASCII-only": maxCorrection(asciiJSON, "📚", "🎧", "📖"),
+		"escaped when stored":    maxCorrection(utf8JSON, "<", "&", ">"),
+		"Persian and joiners":    maxCorrection(asciiJSON, "می\u200cخ", "👩\u200d👩", "ف"),
+	} {
+		if len(params) <= maxParamsBytes {
+			t.Fatalf("%s: %d bytes, under the default cap; the test proves nothing", name, len(params))
+		}
+		job, created, err := q.correct(params, ptr("Author/"+name))
+		if err != nil || !created {
+			t.Fatalf("allowed (%s, %d bytes): %v, %v", name, len(params), created, err)
+		}
+		var p CorrectParams
+		if err := json.Unmarshal(job.Params, &p); err != nil || len(p.Changes) != len(CorrectionFields) {
+			t.Fatalf("%s: stored %d changes, %v", name, len(p.Changes), err)
+		}
+	}
+
+	// Denied: one past a per-field bound, refused for it rather than for size.
+	for name, params := range map[string]string{
+		"a value too long": strings.Replace(maxCorrection(asciiJSON, "📚", "🎧", "📖"),
+			`"corrected":"`, `"corrected":"\ud83c\udfa7`, 1),
+		"evidence too long": strings.Replace(maxCorrection(asciiJSON, "📚", "🎧", "📖"),
+			`"evidence":"`, `"evidence":"\ud83d\udcd6`, 1),
+	} {
+		_, _, err := q.correct(params, ptr("Author/Over"))
+		if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "too large") {
+			t.Errorf("%s: %v, want ErrInvalid for the field", name, err)
+		}
+	}
+	tooLarge := `{"work_id":"w"` + strings.Repeat(" ", maxCorrectParamsBytes) + `}`
+	if _, _, err := q.correct(tooLarge, ptr("Author/Over")); err == nil || !strings.Contains(err.Error(), "params too large") {
+		t.Errorf("meta.correct past its cap: %v, want params too large", err)
+	}
+	if _, err := CheckCorrect(json.RawMessage(tooLarge)); err == nil || !strings.Contains(err.Error(), "params too large") {
+		t.Errorf("CheckCorrect past the cap: %v, want params too large", err)
+	}
+	// Other kinds keep the default.
+	padded := `{"source":"" ` + strings.Repeat(" ", maxParamsBytes) + `}`
+	if _, _, err := q.sidecars(padded, ptr("Author/Book")); err == nil || !strings.Contains(err.Error(), "params too large") {
+		t.Errorf("sidecars.generate past the default cap: %v, want params too large", err)
+	}
+}
+
+// The community refuses a batch holding a bidirectional embedding, override
+// or isolate control (U+202A-U+202E, U+2066-U+2069), so a value or the
+// evidence holding one is refused at queue time; the joiners, the marks and
+// right-to-left text are taken.
+func TestCorrectRefusesBidiControls(t *testing.T) {
+	t.Parallel()
+	params := func(current, corrected, evidence string) string {
+		return fmt.Sprintf(`{"work_id":"w","changes":[{"field":"title","current":%q,"corrected":%q}],"evidence":%q}`,
+			current, corrected, evidence)
+	}
+	for name, p := range map[string]string{
+		"ZWJ":     params("a", "👩\u200d👩", "e"),
+		"ZWNJ":    params("a", "می\u200cخواهم", "e"),
+		"Persian": params("شازده کوچولو", "شازده\u200cی کوچولو", "روی جلد کتاب نوشته شده است."),
+		"marks":   params("a", "\u200fעברית\u200e", "e"),
+	} {
+		if _, err := CheckCorrect(json.RawMessage(p)); err != nil {
+			t.Errorf("allowed (%s): %v", name, err)
+		}
+	}
+	for _, r := range []rune{0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069} {
+		c := string(r)
+		for where, p := range map[string]string{
+			"current":   params("a"+c+"b", "c", "e"),
+			"corrected": params("a", "b"+c+"c", "e"),
+			"evidence":  params("a", "b", "see"+c+" here"),
+		} {
+			_, err := CheckCorrect(json.RawMessage(p))
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "bidirectional") {
+				t.Errorf("U+%04X in %s: %v, want ErrInvalid", r, where, err)
+			}
+		}
 	}
 }
 

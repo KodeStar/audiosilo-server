@@ -1607,8 +1607,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   characters, `corrected` set and different from `current`; `evidence` required, at most 2000 characters,
   line breaks kept, CRLF stored as LF, and at most 2000 as the issue carries it (`issueLength`: a line
   starting with # loses its indent and gains a backslash); `recording_id`, when given, a community slug
-  (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included):
-  what the Bridge would refuse when filing is a 400 now). The handler's `checkCorrections` (security-relevant: the server
+  (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included)
+  and no value or the evidence a bidirectional embedding, override or isolate (U+202A-U+202E,
+  U+2066-U+2069, `isBidiControl`, as audiosilo-meta's issueform refuses; ZWJ/ZWNJ and the marks are
+  fine): what the Bridge or the community would refuse when filing is a 400 now). Its params cap is
+  its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
+  sent by an ASCII-only encoder (each character outside the BMP two `\u` escapes) is about 120 KB, and
+  the queue route's body bound follows (`bridge.MaxParamsBytes` + 4 KiB). The handler's `checkCorrections` (security-relevant: the server
   files only an admin's own edits) then requires each change's field to be `catalog.SourceEdited` on the
   book (`BookMatchState`; never a scanned, path, ABS or accepted-community value) with `corrected` the
   book's value now (`MatchState.EditedValue`), else **400 `not_edited`** naming the `field`, stores the

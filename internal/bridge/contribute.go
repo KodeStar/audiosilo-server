@@ -83,6 +83,12 @@ const (
 	maxEvidence        = 2000 // characters
 	maxCorrectIDLen    = 64   // asin, isbn, region
 	maxSourceLen       = 128
+	// maxCorrectParamsBytes bounds meta.correct's params as sent: a batch at
+	// every bound above (each of the 8 fields once, two 500-character values,
+	// 2000 characters of evidence) is 10,000 characters, at most 12 bytes each
+	// in JSON (a character outside the BMP sent as two \u escapes, as an
+	// ASCII-only encoder does), so 120,000 bytes and the names around them.
+	maxCorrectParamsBytes = 128 << 10
 )
 
 // CorrectParams are meta.correct's params as stored: the community records
@@ -118,7 +124,8 @@ type Correction struct {
 // and different from the current one; evidence required, at most 2000
 // characters (line breaks kept) as the community's issue carries it
 // (issueLength). No value holds a control character (unicode.IsControl, the
-// Bridge's test). It returns them as stored, the values trimmed.
+// Bridge's test) or a bidirectional override (isBidiControl, the
+// community's). It returns them as stored, the values trimmed.
 func correctParams(raw json.RawMessage) (json.RawMessage, error) {
 	p, err := parseCorrect(raw)
 	if err != nil {
@@ -206,7 +213,7 @@ func issueLength(evidence string) int {
 // and returns them decoded, for the api's checks against the book before it
 // queues them (the edited fields, the stamped source).
 func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
-	if len(raw) > maxParamsBytes {
+	if len(raw) > kinds[KindCorrect].paramsCap() {
 		return CorrectParams{}, invalid("params too large")
 	}
 	return parseCorrect(raw)
@@ -214,11 +221,23 @@ func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
 
 // checkProse bounds an admin's text: valid UTF-8, at most max characters, no
 // control characters (unicode.IsControl, C1 included as the Bridge refuses
-// them; but line breaks and tabs when lines allows them).
+// them; but line breaks and tabs when lines allows them), and no bidirectional
+// override (isBidiControl), which the community refuses in a batch.
 func checkProse(name, v string, max int, lines bool) error {
 	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max ||
 		strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
 		return invalid("%s must be at most %d characters of text", name, max)
 	}
+	if strings.ContainsFunc(v, isBidiControl) {
+		return invalid("%s holds a bidirectional override character", name)
+	}
 	return nil
+}
+
+// isBidiControl reports the bidirectional embedding, override and isolate
+// controls (U+202A-U+202E, U+2066-U+2069), which reorder how text displays
+// (audiosilo-meta's issueform refuses them). The joiners (U+200C, U+200D) and
+// the marks (U+200E, U+200F) that right-to-left scripts need are not among them.
+func isBidiControl(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }
