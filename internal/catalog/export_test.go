@@ -205,8 +205,15 @@ func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Only the later copy knows its publication date, other series and blurb.
+	if err := c.EditBook(ctx, lib.ID, "Lee Child/Die Trying", BookEdit{Set: map[string]string{
+		FieldPublished: "1998-07-01", FieldDescription: "Reacher is kidnapped.",
+		FieldMoreSeries: `[{"name":"Reacher Omnibus","position":1,"position_end":3}]`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
 
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{IncludeDescription: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +223,8 @@ func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
 	want := ExportBook{
 		Title: "Die Trying", Authors: []string{"Lee Child"}, Narrators: []string{"Dick Hill"},
 		Series: "Jack Reacher", SeriesPosition: "2", ASIN: "B0TESTASIN",
+		SeriesList: []ExportSeries{{Name: "Jack Reacher", Position: "2"}, {Name: "Reacher Omnibus", Position: "1-3"}},
+		Published:  "1998-07-01", Description: "Reacher is kidnapped.",
 		ISBN: "9780515123333", RuntimeMin: 612, Chapters: 2,
 	}
 	if !reflect.DeepEqual(exp.Books[0], want) {
@@ -293,8 +302,8 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 		t.Fatalf("books = %d, want 1: %s", len(books), raw)
 	}
 	assertKeys("book", books[0], "title", "subtitle", "authors", "narrators",
-		"series", "series_position", "publisher", "language", "abridged", "genres",
-		"asin", "isbn", "runtime_min", "chapters")
+		"series", "series_position", "series_list", "published", "publisher",
+		"language", "abridged", "genres", "asin", "isbn", "runtime_min", "chapters")
 }
 
 // TestExportLibraryBooksIncludes: asked for paths, each row names the path of
@@ -381,6 +390,185 @@ func TestExportLibraryBooksIncludes(t *testing.T) {
 	}
 	if books, _ = export(ExportOptions{IncludeTags: true}); !slices.Equal(books[0].Tags, []string{"Rip", "owned"}) {
 		t.Errorf("collapsed row tags = %q, want both copies' tags, each once", books[0].Tags)
+	}
+}
+
+// TestExportLibraryBooksPublishedSeriesDescription: every row carries its
+// publication date and, for a book in more than its main series, every series
+// it is in; the description only when asked for, and asking for it alone keeps
+// the file the shareable one.
+func TestExportLibraryBooksPublishedSeriesDescription(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/main"})
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "Pratchett/Colour", IsFolder: true, Title: "The Colour of Magic",
+			Author: "Terry Pratchett", Series: "Discworld", SeriesIndex: 1},
+		{LibraryID: lib.ID, RelPath: "Pratchett/Mort", IsFolder: true, Title: "Mort",
+			Author: "Terry Pratchett", Series: "Discworld", SeriesIndex: 4},
+	} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "Pratchett/Colour", BookEdit{Set: map[string]string{
+		FieldPublished: "1983-11-24", FieldDescription: "The first Discworld novel.",
+		FieldMoreSeries: `[{"name":"Rincewind","position":1}]`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	export := func(opt ExportOptions) (*LibraryExport, map[string]ExportBook, string) {
+		t.Helper()
+		exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byTitle := map[string]ExportBook{}
+		for _, b := range exp.Books {
+			byTitle[b.Title] = b
+		}
+		raw, _ := json.Marshal(exp)
+		return exp, byTitle, string(raw)
+	}
+
+	exp, books, raw := export(ExportOptions{})
+	colour, mort := books["The Colour of Magic"], books["Mort"]
+	if colour.Published != "1983-11-24" {
+		t.Errorf("published = %q, want 1983-11-24", colour.Published)
+	}
+	if want := []ExportSeries{{Name: "Discworld", Position: "1"}, {Name: "Rincewind", Position: "1"}}; !reflect.DeepEqual(colour.SeriesList, want) {
+		t.Errorf("series_list = %#v, want %#v", colour.SeriesList, want)
+	}
+	if colour.Series != "Discworld" || colour.SeriesPosition != "1" {
+		t.Errorf("main series = %q %q, want it unchanged", colour.Series, colour.SeriesPosition)
+	}
+	// Only its main series: no list, as the player's Book.SeriesList.
+	if mort.SeriesList != nil || mort.Published != "" {
+		t.Errorf("Mort = %#v, want no series_list or published", mort)
+	}
+	if strings.Contains(raw, `"description"`) || strings.Contains(raw, "first Discworld novel") {
+		t.Errorf("the default export carries a description: %s", raw)
+	}
+	if !strings.Contains(raw, `"series_list":[{"name":"Discworld","position":"1"},{"name":"Rincewind","position":"1"}]`) ||
+		!strings.Contains(raw, `"published":"1983-11-24"`) {
+		t.Errorf("wire shape: %s", raw)
+	}
+	if strings.HasSuffix(exp.Filename(), "-private.json") {
+		t.Errorf("Filename() = %q, want the shareable one", exp.Filename())
+	}
+
+	exp, books, _ = export(ExportOptions{IncludeDescription: true})
+	if got := books["The Colour of Magic"].Description; got != "The first Discworld novel." {
+		t.Errorf("description = %q", got)
+	}
+	if got := books["Mort"].Description; got != "" {
+		t.Errorf("Mort description = %q, want none", got)
+	}
+	if strings.HasSuffix(exp.Filename(), "-private.json") {
+		t.Errorf("Filename() with descriptions = %q, want the shareable one", exp.Filename())
+	}
+}
+
+// TestMergeExportSeries: merged copies keep the main series and its position
+// as one fact, and series_list lists every series either copy lists with the
+// row's main one first, never one copy's list without the row's main series.
+func TestMergeExportSeries(t *testing.T) {
+	t.Parallel()
+	type ser = ExportSeries
+	for _, tc := range []struct {
+		name     string
+		dst, src ExportBook
+		want     ExportBook
+	}{{
+		name: "no series takes the copy's whole",
+		dst:  ExportBook{},
+		src:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "the same series fills its position and list",
+		dst:  ExportBook{Series: "Jack Reacher"},
+		src:  ExportBook{Series: "jack reacher", SeriesPosition: "2", SeriesList: []ser{{"jack reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "another series never lends its position",
+		dst:  ExportBook{Series: "Discworld"},
+		src:  ExportBook{Series: "City Watch", SeriesPosition: "1"},
+		want: ExportBook{Series: "Discworld"},
+	}, {
+		name: "a list from a copy with no main series keeps the row's main first",
+		dst:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+		src:  ExportBook{SeriesList: []ser{{"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "a row with only a list gains the copy's main series first",
+		dst:  ExportBook{SeriesList: []ser{{"Reacher Omnibus", "1-3"}}},
+		src:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Collected", "4"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}, {"Collected", "4"}}},
+	}, {
+		name: "a list naming only the main series is no list",
+		dst:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+		src:  ExportBook{SeriesList: []ser{{"Jack Reacher", "2"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+	}} {
+		dst := tc.dst
+		mergeExportSeries(&dst, tc.src)
+		if !reflect.DeepEqual(dst, tc.want) {
+			t.Errorf("%s: got %#v, want %#v", tc.name, dst, tc.want)
+		}
+	}
+}
+
+// TestExportLibraryBooksSeparateCopies: with SeparateCopies, every indexed copy
+// is its own row with its own path and tags; without it (the default) copies of
+// the same book still merge.
+func TestExportLibraryBooksSeparateCopies(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/main"})
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "Rips/Die Trying.mp3", Title: "Die Trying", Author: "Lee Child", ASIN: "B0TESTASIN"},
+		{LibraryID: lib.ID, RelPath: "Lee Child/Die Trying", IsFolder: true, Title: "Die Trying", Author: "Lee Child",
+			Narrator: "Dick Hill", ASIN: "B0TESTASIN"},
+	} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, tags := range map[string]string{"Rips/Die Trying.mp3": `["Rip"]`, "Lee Child/Die Trying": `["Owned"]`} {
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldTags: tags}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{IncludePaths: true, IncludeTags: true, SeparateCopies: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exp.Books) != 2 {
+		t.Fatalf("books = %d, want 2 (one per copy): %+v", len(exp.Books), exp.Books)
+	}
+	byPath := map[string]ExportBook{}
+	for _, b := range exp.Books {
+		if len(b.Paths) != 1 {
+			t.Fatalf("row paths = %q, want its own path alone", b.Paths)
+		}
+		byPath[b.Paths[0]] = b
+	}
+	if rip := byPath["Rips/Die Trying.mp3"]; !slices.Equal(rip.Tags, []string{"Rip"}) || rip.Narrators != nil {
+		t.Errorf("rip row = %#v, want its own tag and no narrator taken from the other copy", rip)
+	}
+	if full := byPath["Lee Child/Die Trying"]; !slices.Equal(full.Tags, []string{"Owned"}) ||
+		!slices.Equal(full.Narrators, []string{"Dick Hill"}) {
+		t.Errorf("tagged row = %#v, want its own tag and narrator", full)
+	}
+
+	// The default still merges the copies into one row.
+	exp, err = c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{IncludePaths: true, IncludeTags: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exp.Books) != 1 || len(exp.Books[0].Paths) != 2 || !slices.Equal(exp.Books[0].Tags, []string{"Rip", "Owned"}) {
+		t.Errorf("merged = %+v, want one row with both paths and both tags", exp.Books)
 	}
 }
 

@@ -212,7 +212,7 @@
   "libraries.toast.exported": "{{name}} exportada",
   "libraries.toast.exportFailed": "Não foi possível exportar a lista de livros",
   "libraries.exportPaths.title": "Exportar {{name}} com caminhos de ficheiros e etiquetas",
-  "libraries.exportPaths.description": "Cada livro da lista inclui também as suas etiquetas e o caminho de cada cópia, para que os seus próprios scripts o liguem aos ficheiros.",
+  "libraries.exportPaths.description": "Cada cópia de um livro tem a sua própria linha, com o caminho, as etiquetas e a descrição, para que os seus próprios scripts a liguem aos ficheiros.",
   "libraries.exportPaths.warnTitle": "Este ficheiro é só para si",
   "libraries.exportPaths.warnBody": "Os caminhos mostram como as suas pastas se chamam e estão organizadas, e as etiquetas são notas suas. Não anexe este ficheiro a um pedido público nem o carregue no site da comunidade; para isso use a exportação normal.",
   "libraries.exportPaths.confirm": "Exportar com caminhos e etiquetas",

@@ -687,15 +687,15 @@ export const api = {
 
 /**
  * Downloads a library's book list (GET /admin/libraries/{id}/export) as the file
- * the server names. With `personal`, each row also carries the paths of the
- * copies it stands for and the book's tags (?include=paths,tags): a file for the
- * admin's own scripts, not one to share. Returns the file name.
+ * the server names. With `personal`, every copy of a book is its own row carrying
+ * its path, tags and description (?include=paths,tags,description&copies=separate):
+ * a file for the admin's own scripts, not one to share. Returns the file name.
  */
 export function downloadLibraryExport(
   id: number,
   opts: { personal?: boolean } = {},
 ): Promise<string> {
-  const query = opts.personal ? '?include=paths,tags' : '';
+  const query = opts.personal ? '?include=paths,tags,description&copies=separate' : '';
   // The fallback name keeps the server's "-private" mark (catalog.Filename).
   const fallback = `audiosilo-library-${id}${opts.personal ? '-private' : ''}.json`;
   return download(`/admin/libraries/${id}/export${query}`, fallback);
