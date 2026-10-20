@@ -192,6 +192,8 @@ func (s *Service) moduleOff(m string) bool {
 func (s *Service) blocker(ctx context.Context, q rowQuerier, kind string, libraryID *int64, path *string) (*Job, error) {
 	spec := kinds[kind]
 	for _, k := range slices.Sorted(maps.Keys(spec.refusedWhileOpen)) {
+		// The blocker kind's own module: ModuleFor's params-dependent case
+		// (a contributing sidecars.generate) is never a cancelled blocker.
 		where := spec.blockerWhere(k, s.moduleOff(kinds[k].module))
 		j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE `+where+
 			` ORDER BY j.id LIMIT 1`, DedupeKey(k, libraryID, path)))
@@ -704,7 +706,7 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 }
 
 // lapsedSQL picks the jobs whose lease ran out (?1 is now).
-const lapsedSQL = `state IN ('claimed', 'running') AND lease_until < ?1`
+const lapsedSQL = `state IN ` + claimedStatesSQL + ` AND lease_until < ?1`
 
 // expireSQL ends every lease that ran out (?1 is now): a job whose cancel was
 // asked for is cancelled, one on its last attempt (?2) failed (both keep what
@@ -1215,7 +1217,7 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 	}
 	_, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET cancel_requested = 1, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN ('claimed', 'running')`, key, now)
+		  WHERE dedupe_key = ?1 AND state IN `+claimedStatesSQL, key, now)
 	return err
 }
 
