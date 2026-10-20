@@ -10,6 +10,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/modules"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -26,7 +27,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := ReadFile("testdata/feed-v1.json", "Example Show", nil)
+	f, err := feed.ReadFile("testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package podcast
+package feed
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestReadFeedFixture(t *testing.T) {
-	f, err := ReadFile("testdata/feed-v1.json", "Example Show", nil)
+	f, err := ReadFile("../testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestReadFeedFixture(t *testing.T) {
 		t.Fatalf("fixture: %+v", f)
 	}
 	// Unknown keys remain forward-compatible; bad paths never become books.
-	raw, err := os.ReadFile("testdata/feed-v1.json")
+	raw, err := os.ReadFile("../testdata/feed-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestReadFeedFixture(t *testing.T) {
 		})
 	}
 	filename := filepath.Join(t.TempDir(), "linked.json")
-	abs, _ := filepath.Abs("testdata/feed-v1.json")
+	abs, _ := filepath.Abs("../testdata/feed-v1.json")
 	if err := os.Symlink(abs, filename); err != nil {
 		t.Fatal(err)
 	}

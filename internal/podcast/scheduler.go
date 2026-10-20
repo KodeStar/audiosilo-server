@@ -1,8 +1,9 @@
+// Package podcast is the podcasts module's poll scheduler; the feed.json v1
+// format and URL helpers are its feed package, the index and folding catalog's.
 package podcast
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -59,11 +60,7 @@ func SchedulerTick(ctx context.Context, d modules.Deps) error {
 		if err != nil {
 			return err
 		}
-		raw, err := json.Marshal(bridge.PollParams{ETag: st.ETag, LastModified: st.LastModified})
-		if err != nil {
-			return err
-		}
-		_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: raw, Priority: -10})
+		_, _, err = d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &r.LibraryID, Path: &r.Path, Params: st.PollParams(), Priority: -10})
 		if errors.Is(err, bridge.ErrLibraryNotWritable) {
 			err = d.Catalog.PodcastNotWritable(ctx, r)
 		}

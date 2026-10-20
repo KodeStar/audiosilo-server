@@ -24,11 +24,8 @@ func SeesPodcasts(c ClientInfo) bool {
 		return false
 	}
 	got, ok := podcastVersion(c.Version)
-	if !ok {
-		return false
-	}
-	want, ok := podcastVersion(PodcastPlayerMinVersion)
-	if !ok {
+	want, wantOK := podcastVersion(PodcastPlayerMinVersion)
+	if !ok || !wantOK {
 		return false
 	}
 	for i := range got {
@@ -38,6 +35,9 @@ func SeesPodcasts(c ClientInfo) bool {
 	}
 	return true
 }
+
+// podcastVersion reads X.Y.Z[...]: the first three dot parts numeric, anything
+// after a "-" or "+" ignored.
 func podcastVersion(s string) ([3]uint64, bool) {
 	var out [3]uint64
 	s, _, _ = strings.Cut(s, "-")
@@ -47,16 +47,9 @@ func podcastVersion(s string) ([3]uint64, bool) {
 		return out, false
 	}
 	for i, p := range parts[:3] {
-		if p == "" {
-			return out, false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return out, false
-			}
-		}
-		n, e := strconv.ParseUint(p, 10, 64)
-		if e != nil {
+		// ParseUint refuses an empty part and any sign or other non-digit.
+		n, err := strconv.ParseUint(p, 10, 64)
+		if err != nil {
 			return out, false
 		}
 		out[i] = n

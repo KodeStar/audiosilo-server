@@ -40,11 +40,11 @@ func TestPodcastScanner(t *testing.T) {
 	if err != nil || res.Books != 3 || res.Added != 3 {
 		t.Fatalf("scan: %+v %v", res, err)
 	}
-	page, err := cat.PodcastEpisodes(ctx, lib.ID, "Example Show", "newest", 2, "")
+	page, err := cat.PodcastEpisodesWithin(ctx, lib.ID, "Example Show", "newest", 2, "", catalog.Scope{LibraryID: lib.ID, AllowAll: true})
 	if err != nil || len(page.Episodes) != 2 || page.NextCursor == nil || page.Episodes[0].Title != "Episode Three" || page.Episodes[1].DurationSource != "feed" {
 		t.Fatalf("episodes: %+v %v", page, err)
 	}
-	tail, err := cat.PodcastEpisodes(ctx, lib.ID, "Example Show", "newest", 2, *page.NextCursor)
+	tail, err := cat.PodcastEpisodesWithin(ctx, lib.ID, "Example Show", "newest", 2, *page.NextCursor, catalog.Scope{LibraryID: lib.ID, AllowAll: true})
 	if err != nil || len(tail.Episodes) != 1 || tail.Episodes[0].Title != "Untitled episode" || !tail.Episodes[0].Removed || tail.Episodes[0].Published != nil {
 		t.Fatalf("tail %+v %v", tail, err)
 	}

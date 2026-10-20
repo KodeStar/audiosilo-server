@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,14 +20,28 @@ const (
 	KindPodcastPoll      = "podcast.poll"
 	ModulePodcasts       = "podcasts"
 	FeaturePodcast       = "podcast"
+
+	// The libraries.kind values a kindSpec.libraryKind names (catalog.KindBooks,
+	// catalog.KindPodcasts; bridge never imports catalog).
+	libraryBooks    = "books"
+	libraryPodcasts = "podcasts"
 )
 
 var ErrTooManyRequests = errors.New("too many open subscribe requests")
 var ErrNotPodcastLibrary = errors.New("not a podcast library")
 var ErrNotBookLibrary = errors.New("not a book library")
 
+// EndedStatesSQL is the states a job ends in, as an SQL list (OpenStatesSQL's
+// complement among the states a job stays in).
+const EndedStatesSQL = `('done', 'failed', 'cancelled')`
+
 func IsPodcast(kind string) bool { return kind == KindPodcastSubscribe || kind == KindPodcastPoll }
 func Internal(kind string) bool  { return kinds[kind].internal }
+
+// Ended reports whether j is in a state it ends in.
+func (j *Job) Ended() bool {
+	return j.State == StateDone || j.State == StateFailed || j.State == StateCancelled
+}
 
 type SubscribeParams struct {
 	FeedURL       string `json:"feed_url"`
@@ -40,15 +55,40 @@ type PollParams struct {
 	LastModified string `json:"last_modified,omitempty"`
 }
 
+// PodcastOutcome is a podcast job's result (plan 2.9), as the fold and a
+// listener's request both read it.
+type PodcastOutcome struct {
+	ShowPath          string `json:"show_path"`
+	Status            int    `json:"status"`
+	ETag              string `json:"etag"`
+	LastModified      string `json:"last_modified"`
+	NextPollSeconds   int    `json:"next_poll_seconds"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RetryAfterSeconds *int   `json:"retry_after_seconds"`
+}
+
+// PodcastOutcomeOf decodes j's result. A failed job's code defaults to
+// bridge_lost (a lease that ran out with no result) and its message to the
+// job's error.
+func PodcastOutcomeOf(j Job) (PodcastOutcome, error) {
+	var o PodcastOutcome
+	err := json.Unmarshal(j.Result, &o)
+	if j.State == StateFailed {
+		if o.Code == "" {
+			o.Code = "bridge_lost"
+		}
+		if o.Message == "" {
+			o.Message = j.Error
+		}
+	}
+	return o, err
+}
+
 func subscribeParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p SubscribeParams
-	if decodeStrict(raw, &p) != nil || len(p.FeedURLSHA256) != 64 || p.FeedHost == "" || len(p.FeedHost) > 253 || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) {
+	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.FeedURLSHA256, 64) || p.FeedHost == "" || len(p.FeedHost) > 253 || p.ShowPath != "" && !feed.ShowPath(p.ShowPath) {
 		return nil, invalid("invalid subscribe params")
-	}
-	for _, c := range p.FeedURLSHA256 {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return nil, invalid("invalid feed hash")
-		}
 	}
 	if p.Private {
 		if p.FeedURL != "" {
@@ -110,11 +150,12 @@ func (s *Service) EnqueueSubscribe(ctx context.Context, lib, user int64, norm st
 func (s *Service) ExpirePrivateRequests(ctx context.Context) error {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	return s.expirePrivate(ctx)
-}
-func (s *Service) expirePrivate(ctx context.Context) error {
 	var ended []Job
-	err := s.db.WithTx(ctx, "bridge.expirePrivate", func(tx *sql.Tx) error { var err error; ended, err = s.expirePrivateTx(ctx, tx, s.ts()); return err })
+	err := s.db.WithTx(ctx, "bridge.expirePrivate", func(tx *sql.Tx) error {
+		var err error
+		ended, err = s.expirePrivateTx(ctx, tx, s.ts())
+		return err
+	})
 	if err == nil {
 		for _, j := range ended {
 			s.report(ctx, &j, StateQueued, "")
@@ -126,38 +167,19 @@ func (s *Service) expirePrivate(ctx context.Context) error {
 // expirePrivateTx follows lease expiry in the claim transaction too: a lease
 // requeued after a restart must fail before nextQueued can hand it out.
 func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) ([]Job, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='podcast.subscribe' AND j.state='queued'`)
+	queued, err := queryIDs(ctx, tx, `SELECT id FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var candidates []*Job
-	for rows.Next() {
-		j, err := scanJob(rows)
-		if err != nil {
-			return nil, err
-		}
-		var p SubscribeParams
-		if err := json.Unmarshal(j.Params, &p); err != nil {
-			return nil, err
-		}
-		s.secretMu.Lock()
-		missing := s.privateURLs[j.ID] == ""
-		s.secretMu.Unlock()
-		if p.Private && missing {
-			candidates = append(candidates, j)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
+	s.secretMu.Lock()
+	queued = slices.DeleteFunc(queued, func(id int64) bool { return s.privateURLs[id] != "" })
+	s.secretMu.Unlock()
 	ended := []Job{}
-	for _, j := range candidates {
-		if _, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET state='failed',error='The follow request expired. Follow the feed again.',result='{"code":"request_expired","message":"The follow request expired. Follow the feed again."}',finished_at=?1,updated_at=?1 WHERE id=?2`, now, j.ID); err != nil {
+	for _, id := range queued {
+		if _, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET state='failed',error='The follow request expired. Follow the feed again.',result='{"code":"request_expired","message":"The follow request expired. Follow the feed again."}',finished_at=?1,updated_at=?1 WHERE id=?2`, now, id); err != nil {
 			return nil, err
 		}
-		got, err := getJob(ctx, tx, j.ID)
+		got, err := getJob(ctx, tx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -165,14 +187,34 @@ func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) (
 	}
 	return ended, nil
 }
+func queryIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *Service) reportEnded(ctx context.Context, j *Job, from string) {
-	if from == j.State || j.State != StateDone && j.State != StateFailed && j.State != StateCancelled {
+	if from == j.State || !j.Ended() {
 		return
 	}
 	s.secretMu.Lock()
 	delete(s.privateURLs, j.ID)
 	s.secretMu.Unlock()
-	s.ended.fire()
+	if IsPodcast(j.Kind) {
+		// Only podcast outcomes are folded; other kinds needn't wake the scheduler.
+		s.ended.fire()
+	}
 	if s.OnEnded != nil {
 		s.OnEnded(context.WithoutCancel(ctx), *j)
 	}
@@ -238,12 +280,13 @@ func RedactedJob(j Job) Job {
 	return j
 }
 
-// EndedPodcasts recovers a crash between the job commit and folding.
+// EndedPodcasts recovers a crash between the job commit and folding
+// (idx_bridge_jobs_kind_finished serves it).
 func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('podcast.subscribe','podcast.poll') AND j.state IN ('done','failed','cancelled') AND j.finished_at>=? AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`') AND j.state IN `+EndedStatesSQL+` AND j.finished_at>=? AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +308,7 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='podcast.subscribe' AND j.requested_by=? AND (j.state IN `+OpenStatesSQL+` OR j.finished_at>=?) ORDER BY j.id DESC`, user, at(s.now().Add(-7*24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND (j.state IN `+OpenStatesSQL+` OR j.finished_at>=?) ORDER BY j.id DESC`, user, at(s.now().Add(-7*24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}
@@ -280,26 +323,33 @@ func (s *Service) SubscribeRequests(ctx context.Context, user int64) ([]Job, err
 	}
 	return out, rows.Err()
 }
-func (s *Service) checkPodcastLibrary(ctx context.Context, j NewJob) error {
-	spec := kinds[j.Kind]
-	if !IsPodcast(j.Kind) && !spec.booksOnly {
+
+// checkLibraryKind refuses a job of a kind for one kind of library
+// (kindSpec.libraryKind) on a library of the other.
+func (s *Service) checkLibraryKind(ctx context.Context, j NewJob) error {
+	want := kinds[j.Kind].libraryKind
+	if want == "" {
 		return nil
 	}
 	var kind string
-	err := s.db.QueryRowContext(ctx, `SELECT kind FROM libraries WHERE id=?`, j.LibraryID).Scan(&kind)
-	if err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM libraries WHERE id=?`, j.LibraryID).Scan(&kind); err != nil {
 		return err
 	}
-	if IsPodcast(j.Kind) && kind != "podcasts" {
+	switch {
+	case kind == want:
+		return nil
+	case want == libraryPodcasts:
 		return ErrNotPodcastLibrary
-	}
-	if spec.booksOnly && kind != "books" {
+	default:
 		return ErrNotBookLibrary
 	}
-	return nil
 }
-func (s *Service) prunePolls(ctx context.Context, tx *sql.Tx, key string) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE dedupe_key=?1 AND state IN ('done','failed','cancelled') AND id<>(SELECT MAX(id) FROM bridge_jobs WHERE dedupe_key=?1 AND state IN ('done','failed','cancelled'))`, key)
+
+// prunePolls keeps only the newest ended poll of a show (the dedupe key's
+// kind, library and path, which idx_bridge_jobs_book serves).
+func (s *Service) prunePolls(ctx context.Context, tx *sql.Tx, j NewJob) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`
+		AND id<>(SELECT MAX(id) FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`)`, j.LibraryID, j.Path, j.Kind)
 	return err
 }
 func sanitizePodcastUpdate(u *Update) {

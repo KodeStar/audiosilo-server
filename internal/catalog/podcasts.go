@@ -13,7 +13,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
-	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 type PodcastError struct {
@@ -127,7 +126,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			return err
 		}
 		for _, hash := range append([]string{f.FeedURLSHA256}, f.PreviousFeedURLSHA256...) {
-			if len(hash) != 64 {
+			if !feed.ValidHex(hash, 64) {
 				continue
 			}
 			if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_feed_hashes(library_id,show_path,sha256) VALUES(?,?,?)`, lib, show, hash); err != nil {
@@ -141,10 +140,9 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			}
 			keep[e.Path] = true
 			info, exists := present[path.Base(e.Path)]
-			duration := float64(0)
-			source := "none"
-			if e.DurationSeconds != nil && *e.DurationSeconds > 0 {
-				duration = float64(*e.DurationSeconds)
+			feedDuration := durationFromFeed(e.DurationSeconds)
+			duration, source := feedDuration, "none"
+			if feedDuration > 0 {
 				source = "feed"
 			}
 			gen := 0
@@ -161,7 +159,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, durationFromFeed(e.DurationSeconds), exists, gen, e.RemovedAt, source)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source)
 			// A missing duration is stored as zero, not SQL NULL.
 			if err != nil {
 				return err
@@ -220,54 +218,41 @@ func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, keep map[str
 }
 
 func (c *Catalog) privatePodcastScope(ctx context.Context, user int64, s Scope) (Scope, error) {
-	type visibility struct {
-		path   string
-		denied bool
-	}
-	shows, err := queryRows(ctx, c.db, func(r *sql.Rows, v *visibility) error { return r.Scan(&v.path, &v.denied) }, `SELECT s.show_path,s.private=1 AND NOT EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.user_id=?) FROM podcast_shows s WHERE library_id=?`, user, s.LibraryID)
+	scanPath := func(r *sql.Rows, p *string) error { return r.Scan(p) }
+	// The common case (no private show this caller doesn't follow) is one
+	// indexed query that returns nothing and leaves s as it is.
+	denied, err := queryRows(ctx, c.db, scanPath, `SELECT s.show_path FROM podcast_shows s WHERE s.library_id=? AND s.private=1 AND NOT EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.user_id=?)`, s.LibraryID, user)
 	if err != nil {
 		return Scope{}, err
-	}
-	denied := []string{}
-	for _, v := range shows {
-		if v.denied {
-			denied = append(denied, v.path)
-		}
 	}
 	if len(denied) == 0 {
 		return s, nil
 	}
+	hidden := Scope{LibraryID: s.LibraryID, Paths: denied}
+	// A whole-library grant becomes the visible shows: it must never retain a
+	// private child.
+	var visible []string
+	if s.AllowAll || slices.Contains(s.Paths, "") {
+		all, err := queryRows(ctx, c.db, scanPath, `SELECT show_path FROM podcast_shows WHERE library_id=?`, s.LibraryID)
+		if err != nil {
+			return Scope{}, err
+		}
+		visible = slices.DeleteFunc(all, hidden.Allows)
+	}
 	if s.AllowAll {
 		s.AllowAll = false
-		s.Paths = nil
-		for _, v := range shows {
-			if !v.denied {
-				s.Paths = append(s.Paths, v.path)
-			}
-		}
+		s.Paths = visible
 		return s, nil
 	}
-	// Expand broad grants into visible shows as well as dropping grants inside a
-	// denied show: a grant on the library root must never retain a private child.
+	// Drop grants inside a denied show and expand a root grant into the visible
+	// shows.
 	out := []string{}
 	for _, p := range s.Paths {
-		hidden := false
-		for _, d := range denied {
-			if relpath.Within(d, p) {
-				hidden = true
-				break
-			}
-		}
-		if hidden {
-			continue
-		}
-		if p == "" {
-			for _, v := range shows {
-				if !v.denied {
-					out = append(out, v.path)
-				}
-			}
-		} else {
+		switch {
+		case hidden.Allows(p):
+		case p == "":
+			out = append(out, visible...)
+		default:
 			out = append(out, p)
 		}
 	}
@@ -357,9 +342,6 @@ func (c *Catalog) PodcastWholeGrant(ctx context.Context, who Caller, lib int64) 
 	s := scopes[lib]
 	return s != nil && s.AllowAll, nil
 }
-func (c *Catalog) PodcastEpisodes(ctx context.Context, lib int64, show, order string, limit int, cursor string) (*PodcastEpisodePage, error) {
-	return c.PodcastEpisodesWithin(ctx, lib, show, order, limit, cursor, Scope{LibraryID: lib, AllowAll: true})
-}
 func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, order string, limit int, cursor string, scope Scope) (*PodcastEpisodePage, error) {
 	if order != "newest" && order != "oldest" {
 		return nil, ErrInvalidCursor
@@ -405,6 +387,19 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	}
 	return out, nil
 }
+
+// PodcastEpisodeDownloaded reports whether the episode at rel has its file
+// (the index's presence), ErrNotFound for no indexed episode there: the one
+// fact a stream of a podcast library needs, for every Range request.
+func (c *Catalog) PodcastEpisodeDownloaded(ctx context.Context, lib int64, rel string) (bool, error) {
+	var present bool
+	err := c.db.QueryRowContext(ctx, `SELECT e.present FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE b.library_id=? AND b.rel_path=?`, lib, rel).Scan(&present)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return present, err
+}
+
 func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
 	var e PodcastEpisodeInfo
 	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'' FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed)
@@ -422,6 +417,13 @@ type PodcastFeedState struct {
 	LastModified string
 	LastChecked  *string
 	ErrorCode    string
+}
+
+// PollParams are a podcast.poll's params for this state: its conditional-GET
+// validators.
+func (s PodcastFeedState) PollParams() json.RawMessage {
+	raw, _ := json.Marshal(bridge.PollParams{ETag: s.ETag, LastModified: s.LastModified}) // two strings: never fails
+	return raw
 }
 
 func (c *Catalog) PodcastState(ctx context.Context, lib int64, show string) (PodcastFeedState, error) {
@@ -460,17 +462,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if j.State == bridge.StateCancelled {
 			return nil
 		}
-		var result struct {
-			ShowPath     string `json:"show_path"`
-			Status       int    `json:"status"`
-			ETag         string `json:"etag"`
-			LastModified string `json:"last_modified"`
-			Next         int    `json:"next_poll_seconds"`
-			Code         string `json:"code"`
-			Message      string `json:"message"`
-			Retry        *int   `json:"retry_after_seconds"`
-		}
-		if err := json.Unmarshal(j.Result, &result); err != nil {
+		result, err := bridge.PodcastOutcomeOf(j)
+		if err != nil {
 			return err
 		}
 		show := j.Target()
@@ -498,17 +491,11 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		if j.State == bridge.StateDone {
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.Next, 900), 86400))*time.Second).Format(time.RFC3339))
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339))
 		} else {
-			if result.Code == "" {
-				result.Code = "bridge_lost"
-			}
-			if result.Message == "" {
-				result.Message = j.Error
-			}
 			seconds := 1800 << min(failures, 6)
-			if result.Retry != nil {
-				seconds = min(max(*result.Retry, 60), 86400)
+			if result.RetryAfterSeconds != nil {
+				seconds = min(max(*result.RetryAfterSeconds, 60), 86400)
 			}
 			seconds = min(seconds, 86400)
 			var next any = now.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339)

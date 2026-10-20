@@ -108,9 +108,13 @@ const (
 // about a library and a book, whether it writes into the library, how to check
 // its params, and how it stands with the other kinds' open jobs for the book.
 type kindSpec struct {
-	internal     bool
-	quiet        bool
-	booksOnly    bool
+	// internal: only the server queues it (never the admin's POST /admin/bridge/jobs).
+	internal bool
+	// quiet: never notified (Job.Notable).
+	quiet bool
+	// libraryKind is the kind of library a job of it is for ("": any).
+	libraryKind string
+	// suffix extends the dedupe key (a subscribe's feed hash and requester).
 	suffix       func(NewJob) string
 	needsLibrary bool
 	book         bookRule
@@ -153,23 +157,23 @@ func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsByte
 // (ErrContributeOpen: it would replace what is being filed) and cancels a parked
 // one, or a queued one held while the contributions module is off.
 var kinds = map[string]kindSpec{
-	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
-	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, internal: true, quiet: true},
+	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
+	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: sidecarsParams,
+	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen},
 		cancelsOpen: map[string]string{
 			KindDescribe:       "a generate job for the book replaced it",
 			KindDetectChapters: "a generate job for the book replaced it; it finds the chapters itself",
 			KindContribute:     "a generate job for the book replaced what it was sharing",
 		}},
-	KindContribute: {booksOnly: true, needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
+	KindContribute: {libraryKind: libraryBooks, needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
-	KindCorrect: {booksOnly: true, needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions,
+	KindCorrect: {libraryKind: libraryBooks, needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions,
 		maxParams: maxCorrectParamsBytes},
-	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: noParams,
+	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
-	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, booksOnly: true, params: noParams,
+	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen}},
 }
 
@@ -585,7 +589,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
 	}
-	if err := s.checkPodcastLibrary(ctx, j); err != nil {
+	if err := s.checkLibraryKind(ctx, j); err != nil {
 		return nil, false, err
 	}
 	h, err := s.LastHeartbeat(ctx)
@@ -636,7 +640,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			}
 		}
 		if j.Kind == KindPodcastPoll {
-			if err := s.prunePolls(ctx, tx, key); err != nil {
+			if err := s.prunePolls(ctx, tx, j); err != nil {
 				return err
 			}
 		}

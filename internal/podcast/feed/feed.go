@@ -4,9 +4,7 @@ package feed
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -122,35 +120,18 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	if !ShowPath(show) {
 		return nil, ErrInvalidFeed
 	}
-	fi, err := os.Lstat(filename)
+	raw, err := metadata.ReadRegularFile(filename, MaxReadBytes, ErrInvalidFeed, ErrInvalidFeed)
 	if err != nil {
 		return nil, err
-	}
-	if !fi.Mode().IsRegular() || fi.Size() > MaxReadBytes {
-		return nil, ErrInvalidFeed
-	}
-	f, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !os.SameFile(fi, st) || st.Size() > MaxReadBytes {
-		return nil, ErrInvalidFeed
 	}
 	var data File
-	dec := json.NewDecoder(io.LimitReader(f, MaxReadBytes+1))
-	if err := dec.Decode(&data); err != nil {
-		return nil, ErrInvalidFeed
-	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
+	if json.Unmarshal(raw, &data) != nil {
 		return nil, ErrInvalidFeed
 	}
 	if data.Version > 1 {
 		return nil, ErrVersion
 	}
-	if data.Version != 1 || len(data.Episodes) > 20000 || !validHex(data.ShowID, 16) || !validHex(data.FeedURLSHA256, 64) {
+	if data.Version != 1 || len(data.Episodes) > 20000 || !ValidHex(data.ShowID, 16) || !ValidHex(data.FeedURLSHA256, 64) {
 		return nil, ErrInvalidFeed
 	}
 	data.Show.Title = capText(data.Show.Title, 300)
@@ -210,7 +191,7 @@ func ReadFile(filename, show string, log *slog.Logger) (*File, error) {
 	data.Episodes = out
 	return &data, nil
 }
-func validHex(s string, n int) bool {
+func ValidHex(s string, n int) bool {
 	if len(s) != n {
 		return false
 	}

@@ -39,3 +39,8 @@ CREATE TABLE podcast_folded(job_id INTEGER PRIMARY KEY, at TEXT NOT NULL);
 
 -- A request's display label is safe to retain after its volatile credential is gone.
 ALTER TABLE bridge_jobs ADD COLUMN feed_redacted TEXT NOT NULL DEFAULT '';
+
+-- A listener's follow requests (GET /me/podcasts, the open-request cap) and the
+-- scheduler's sweep of ended podcast jobs to fold.
+CREATE INDEX idx_bridge_jobs_subscribe_user ON bridge_jobs(requested_by, id) WHERE kind = 'podcast.subscribe';
+CREATE INDEX idx_bridge_jobs_kind_finished ON bridge_jobs(kind, finished_at);

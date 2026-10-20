@@ -11,7 +11,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
-	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -25,6 +24,14 @@ type podcastRequest struct {
 	Error     *catalog.PodcastError `json:"error"`
 	CreatedAt string                `json:"created_at"`
 	UpdatedAt string                `json:"updated_at"`
+}
+
+func writeShowNotFound(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusNotFound, "show_not_found", "Show not found.")
+}
+
+func writeBridgeUnavailable(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusConflict, "bridge_unavailable", "No online Bridge can check feeds.")
 }
 
 func podcastRequestOf(job bridge.Job) podcastRequest {
@@ -41,22 +48,11 @@ func podcastRequestOf(job bridge.Job) podcastRequest {
 	if p.ShowPath != "" {
 		r.ShowPath = &p.ShowPath
 	}
-	var result struct {
-		ShowPath string `json:"show_path"`
-		Code     string `json:"code"`
-		Message  string `json:"message"`
-	}
-	_ = json.Unmarshal(j.Result, &result)
+	result, _ := bridge.PodcastOutcomeOf(j)
 	if result.ShowPath != "" {
 		r.ShowPath = &result.ShowPath
 	}
 	if j.State == bridge.StateFailed {
-		if result.Code == "" {
-			result.Code = "bridge_lost"
-		}
-		if result.Message == "" {
-			result.Message = j.Error
-		}
 		r.Error = &catalog.PodcastError{Code: result.Code, Message: result.Message}
 	}
 	return r
@@ -91,12 +87,12 @@ func (a *API) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 	show := r.URL.Query().Get("show")
 	if !feed.ShowPath(show) || !s.VisibleInBrowse(show) {
-		writeErrorCode(w, 404, "show_not_found", "Show not found.")
+		writeShowNotFound(w)
 		return
 	}
 	if _, err := a.cat.PodcastShow(r.Context(), lib.ID, show, userFrom(r.Context()).ID); err != nil {
 		if errors.Is(err, catalog.ErrNotFound) {
-			writeErrorCode(w, 404, "show_not_found", "Show not found.")
+			writeShowNotFound(w)
 		} else {
 			a.writeCatalogError(w, err, "load podcast show failed", "Could not load show.")
 		}
@@ -131,21 +127,23 @@ func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {
 	}
 	user := userFrom(r.Context()).ID
 	shows := []catalog.PodcastShow{}
-	allowed := map[int64]bool{}
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+	// The scopes already passed the client gate; the caller's podcast libraries
+	// are those of them of the podcasts kind.
+	libs, err := a.cat.ListLibraries(r.Context())
 	if err != nil {
 		a.writeCatalogError(w, err, "list podcast libraries failed", "Could not load podcasts.")
 		return
 	}
+	podcastLib := map[int64]bool{}
 	for _, l := range libs {
-		if l.Kind == catalog.KindPodcasts {
-			allowed[l.ID] = true
-		}
+		podcastLib[l.ID] = l.Kind == catalog.KindPodcasts
 	}
+	allowed := map[int64]bool{}
 	for _, s := range scopes {
-		if !allowed[s.LibraryID] {
+		if !podcastLib[s.LibraryID] {
 			continue
 		}
+		allowed[s.LibraryID] = true
 		list, err := a.cat.PodcastShows(r.Context(), s, user, true)
 		if err != nil {
 			a.writeCatalogError(w, err, "list followed podcasts failed", "Could not load podcasts.")
@@ -217,10 +215,14 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !feed.ShowPath(p) || !s.VisibleInBrowse(p) {
-			writeErrorCode(w, 404, "show_not_found", "Show not found.")
+			writeShowNotFound(w)
 			return
 		}
 		show, err = a.cat.PodcastShow(r.Context(), lib.ID, p, user)
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeShowNotFound(w)
+			return
+		}
 	} else {
 		whole, grantErr := a.cat.PodcastWholeGrant(r.Context(), callerOf(r.Context()), lib.ID)
 		if grantErr != nil {
@@ -241,10 +243,6 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 		a.writeCatalogError(w, err, "find podcast failed", "Could not load show.")
-		return
-	}
-	if req.Path != nil && show == nil {
-		writeErrorCode(w, 404, "show_not_found", "Show not found.")
 		return
 	}
 	if show != nil {
@@ -285,7 +283,7 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, bridge.ErrLibraryNotWritable):
 		writeErrorCode(w, 409, "library_not_writable", "The Bridge cannot write to this library.")
 	case errors.Is(err, bridge.ErrKindUnavailable):
-		writeErrorCode(w, 409, "bridge_unavailable", "No online Bridge can check feeds.")
+		writeBridgeUnavailable(w)
 	default:
 		a.writeCatalogError(w, err, "podcast queue failed", "Could not queue the request.")
 	}
@@ -293,7 +291,7 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 }
 func (a *API) podcastBridgeReady(w http.ResponseWriter, r *http.Request, kind string) bool {
 	if a.bridge == nil {
-		writeErrorCode(w, 409, "bridge_unavailable", "No online Bridge can check feeds.")
+		writeBridgeUnavailable(w)
 		return false
 	}
 	h, err := a.bridge.Online(r.Context())
@@ -302,7 +300,7 @@ func (a *API) podcastBridgeReady(w http.ResponseWriter, r *http.Request, kind st
 		return false
 	}
 	if h == nil || !h.Offers(kind) {
-		writeErrorCode(w, 409, "bridge_unavailable", "No online Bridge can check feeds.")
+		writeBridgeUnavailable(w)
 		return false
 	}
 	return true
@@ -343,7 +341,7 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, req.Path, userFrom(r.Context()).ID)
 	if errors.Is(err, catalog.ErrNotFound) || err == nil && (!show.Following || !scope.VisibleInBrowse(req.Path)) {
-		writeErrorCode(w, 404, "show_not_found", "Show not found.")
+		writeShowNotFound(w)
 		return
 	}
 	if err != nil {
@@ -371,8 +369,7 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		params, _ := json.Marshal(bridge.PollParams{ETag: st.ETag, LastModified: st.LastModified})
-		job, _, err = a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show.Path, Params: params, RequestedBy: userFrom(r.Context()).ID})
+		job, _, err = a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show.Path, Params: st.PollParams(), RequestedBy: userFrom(r.Context()).ID})
 		if !a.podcastQueueError(w, err) {
 			return
 		}
@@ -417,14 +414,23 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 		if !ok {
 			return
 		}
-		src := catalog.CoverSource{CoverPath: show.CoverPath}
-		art := a.coverArt(r.Context(), lib, p, src)
+		// Every episode's cover is the show's artwork: one thumbnail per show,
+		// cached under the show's path, and no colour reading (shows keep none).
+		art := a.coverArt(r.Context(), lib, show.Path, catalog.CoverSource{CoverPath: show.CoverPath})
 		if art == nil {
 			writeError(w, 404, "no cover")
 			return
 		}
-		jpg, _, err := a.coverThumbnail(r.Context(), lib, p, src, art, size)
-		if err != nil {
+		key := thumbKey(lib.ID, show.Path, size, art.version)
+		jpg, ok := a.thumbs.Get(key)
+		if !ok {
+			if jpg, err = a.makeThumbnail(r.Context(), lib, show.Path, art, size); err != nil {
+				writeError(w, 404, "no cover")
+				return
+			}
+			a.thumbs.Put(key, jpg)
+		}
+		if jpg == nil {
 			writeError(w, 404, "no cover")
 			return
 		}
@@ -436,6 +442,5 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 		writeError(w, 404, "no cover")
 		return
 	}
-	w.Header().Set("Cache-Control", coverCache)
-	media.ServeFile(w, r, abs, false)
+	serveSidecarCover(w, r, abs)
 }

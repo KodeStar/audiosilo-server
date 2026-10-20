@@ -524,16 +524,16 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		b, err := a.cat.GetBookByPath(r.Context(), lib.ID, rel)
-		if err != nil || b.Episode == nil {
-			if err != nil && !errors.Is(err, catalog.ErrNotFound) {
-				a.writeCatalogError(w, err, "load episode for stream failed", "Could not load episode.")
-			} else {
-				writeError(w, 404, "episode not found")
-			}
+		downloaded, err := a.cat.PodcastEpisodeDownloaded(r.Context(), lib.ID, rel)
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, 404, "episode not found")
 			return
 		}
-		if !b.Episode.Downloaded {
+		if err != nil {
+			a.writeCatalogError(w, err, "load episode for stream failed", "Could not load episode.")
+			return
+		}
+		if !downloaded {
 			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
 			return
 		}
@@ -620,14 +620,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	art := book.ArtFiles()
 	if art.CoverPath != "" {
 		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
-			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
-				// The same lifetime as embedded art below. Without one a browser keeps
-				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
-				// custom cover uploaded later would go unseen for weeks, not a day. Set
-				// only for a file that is there, so a 404 is never cached.
-				w.Header().Set("Cache-Control", coverCache)
-			}
-			media.ServeFile(w, r, abs, false)
+			serveSidecarCover(w, r, abs)
 			return
 		}
 	}
@@ -644,4 +637,16 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", coverCache)
 	_, _ = w.Write(data)
+}
+
+// serveSidecarCover serves the image file at abs with the same lifetime as
+// embedded art. Without one a browser keeps a sidecar image fresh by heuristic
+// (a tenth of the file's age), so a custom cover uploaded later would go unseen
+// for weeks, not a day. Set only for a file that is there, so a 404 is never
+// cached.
+func serveSidecarCover(w http.ResponseWriter, r *http.Request, abs string) {
+	if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
+		w.Header().Set("Cache-Control", coverCache)
+	}
+	media.ServeFile(w, r, abs, false)
 }

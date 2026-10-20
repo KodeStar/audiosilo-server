@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -181,14 +181,12 @@ func (s *Scanner) BrowsePodcasts(ctx context.Context, lib catalog.Library, scope
 		}
 		cursor := ""
 		for {
-			page, err := s.cat.PodcastEpisodes(ctx, lib.ID, rel, order, 200, cursor)
+			page, err := s.cat.PodcastEpisodesWithin(ctx, lib.ID, rel, order, 200, cursor, scope)
 			if err != nil {
 				return nil, err
 			}
 			for _, e := range page.Episodes {
-				if scope.Allows(e.Path) {
-					all = append(all, Entry{Name: e.Title, Path: e.Path, IsAudio: true, IsBook: true, Title: e.Title, Author: show.Author, Duration: e.Duration, Size: e.Size})
-				}
+				all = append(all, Entry{Name: e.Title, Path: e.Path, IsAudio: true, IsBook: true, Title: e.Title, Author: show.Author, Duration: e.Duration, Size: e.Size})
 			}
 			if page.NextCursor == nil {
 				break
@@ -210,23 +208,13 @@ func (s *Scanner) BrowsePodcasts(ctx context.Context, lib catalog.Library, scope
 // ReadLibraryMarker reads only a small regular file beneath a real .audiosilo
 // directory. A symlink cannot make the server attest another library's marker.
 func ReadLibraryMarker(root string, id int64) (string, error) {
-	dir := filepath.Join(root, ".audiosilo")
+	dir := filepath.Join(root, metadata.AttachmentsDir)
 	st, err := os.Lstat(dir)
 	if err != nil || !st.IsDir() {
 		return "", ErrNotIndexable
 	}
-	filename := filepath.Join(dir, "library.json")
-	st, err = os.Lstat(filename)
-	if err != nil || !st.Mode().IsRegular() || st.Size() > 4096 {
-		return "", ErrNotIndexable
-	}
-	f, err := os.Open(filename)
+	raw, err := metadata.ReadRegularFile(filepath.Join(dir, "library.json"), 4096, ErrNotIndexable, ErrNotIndexable)
 	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(st, opened) || opened.Size() > 4096 {
 		return "", ErrNotIndexable
 	}
 	var marker struct {
@@ -234,18 +222,8 @@ func ReadLibraryMarker(root string, id int64) (string, error) {
 		LibraryID int64  `json:"library_id"`
 		Nonce     string `json:"nonce"`
 	}
-	dec := json.NewDecoder(io.LimitReader(f, 4097))
-	if err := dec.Decode(&marker); err != nil || marker.Version != 1 || marker.LibraryID != id || len(marker.Nonce) != 32 {
+	if json.Unmarshal(raw, &marker) != nil || marker.Version != 1 || marker.LibraryID != id || !feed.ValidHex(marker.Nonce, 32) {
 		return "", ErrNotIndexable
-	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return "", ErrNotIndexable
-	}
-	for _, c := range marker.Nonce {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return "", ErrNotIndexable
-		}
 	}
 	return marker.Nonce, nil
 }
