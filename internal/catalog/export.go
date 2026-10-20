@@ -270,17 +270,10 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	if len(src.Tags) > 0 {
 		dst.Tags = uniqueLabels(slices.Concat(dst.Tags, src.Tags))
 	}
-	list := func(dst *[]string, src []string) {
-		if len(*dst) == 0 {
-			*dst = src
-		}
-	}
-	list(&dst.Authors, src.Authors)
-	list(&dst.Narrators, src.Narrators)
-	list(&dst.Genres, src.Genres)
-	if len(dst.SeriesList) == 0 {
-		dst.SeriesList = src.SeriesList
-	}
+	fillEmpty(&dst.Authors, src.Authors)
+	fillEmpty(&dst.Narrators, src.Narrators)
+	fillEmpty(&dst.Genres, src.Genres)
+	fillEmpty(&dst.SeriesList, src.SeriesList)
 	dst.Title = cmp.Or(dst.Title, src.Title)
 	dst.Subtitle = cmp.Or(dst.Subtitle, src.Subtitle)
 	dst.Series = cmp.Or(dst.Series, src.Series)
@@ -294,6 +287,13 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	dst.ISBN = cmp.Or(dst.ISBN, src.ISBN)
 	dst.RuntimeMin = cmp.Or(dst.RuntimeMin, src.RuntimeMin)
 	dst.Chapters = cmp.Or(dst.Chapters, src.Chapters)
+}
+
+// fillEmpty is cmp.Or for a list: src fills *dst only when *dst is empty.
+func fillEmpty[T any](dst *[]T, src []T) {
+	if len(*dst) == 0 {
+		*dst = src
+	}
 }
 
 // chapterCounts returns the number of indexed chapters per book id for a whole
@@ -321,7 +321,7 @@ func (c *Catalog) chapterCounts(ctx context.Context, libraryID int64) (map[int64
 	return out, rows.Err()
 }
 
-// descriptions returns the non-empty description per book id for a whole
+// descriptions returns the trimmed description per described book id for a whole
 // library in one query: ListBooks leaves the (long) description out, and a
 // GetBook per book would be one query per row.
 func (c *Catalog) descriptions(ctx context.Context, libraryID int64) (map[int64]string, error) {
@@ -338,9 +338,7 @@ func (c *Catalog) descriptions(ctx context.Context, libraryID int64) (map[int64]
 		if err := rows.Scan(&id, &d); err != nil {
 			return nil, err
 		}
-		if d = strings.TrimSpace(d); d != "" {
-			out[id] = d
-		}
+		out[id] = strings.TrimSpace(d)
 	}
 	return out, rows.Err()
 }
