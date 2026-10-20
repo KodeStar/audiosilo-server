@@ -239,6 +239,39 @@ func TestBridgeContributeJob(t *testing.T) {
 	}
 }
 
+// A queued contribute job held while the contributions module is off gives
+// way: the estimate's open_job no longer names it, and a generate job is
+// queued (201) and cancels it; with the module on it refuses (409
+// contribute_open) and is the open_job.
+func TestBridgeHeldContributeGivesWay(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatKinds(t, `,"setup":`+setupBlock(true), bridge.KindVerify, bridge.KindSidecars, bridge.KindContribute)
+	setModule(t, b.testEnv, b.adminTok, true)
+	resp, body := b.queueKind(t, bridge.KindContribute, mistbornBook, `{}`)
+	var con bridge.Job
+	decodeInto(t, body, &con)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("contribute: %d %s", resp.StatusCode, body)
+	}
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob == nil || est.OpenJob.ID != con.ID {
+		t.Fatalf("open_job, module on = %+v; want the contribute job", est.OpenJob)
+	}
+	resp, body = b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`)
+	wantCode(t, "generate with a queued contribute, module on", resp, body, http.StatusConflict, "contribute_open")
+
+	setModule(t, b.testEnv, b.adminTok, false)
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob != nil {
+		t.Fatalf("open_job, module off = %+v; want none", est.OpenJob)
+	}
+	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate with a held contribute: %d %s, want 201", resp.StatusCode, body)
+	}
+	if j, err := b.api.bridge.Job(context.Background(), con.ID); err != nil || j.State != bridge.StateCancelled {
+		t.Fatalf("the held contribute = %+v, %v; want cancelled", j, err)
+	}
+}
+
 // A contribute job that filed nothing (the community already had both
 // dimensions) is announced as such, never as shared.
 func TestBridgeContributeSharedNothing(t *testing.T) {

@@ -113,7 +113,8 @@ type kindSpec struct {
 	// kind named is open for the same book (blockerWhere): never by one being
 	// cancelled (cancel_requested: it ends without writing), and, when the new
 	// job also cancels that kind (cancelsOpen), only while it is queued or
-	// working: a parked one gives way.
+	// working: a parked one gives way, and so does a queued one held while
+	// its module is off (Service.ModuleOn).
 	refusedWhileOpen map[string]error
 	// cancelsOpen: a new job cancels the open job of each kind named for the
 	// same book (cancelOpenTx, the value its error), in the same transaction.
@@ -136,7 +137,7 @@ type kindSpec struct {
 // which files what the last generate run made, waits for an open generate job
 // (ErrGenerateOpen); a generate job waits for a queued or working contribute job
 // (ErrContributeOpen: it would replace what is being filed) and cancels a parked
-// one.
+// one, or a queued one held while the contributions module is off.
 var kinds = map[string]kindSpec{
 	KindVerify: {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams,
@@ -158,25 +159,41 @@ var kinds = map[string]kindSpec{
 // activeStatesSQL are the open states a job isn't parked in.
 const activeStatesSQL = `('queued', 'claimed', 'running')`
 
+// claimedStatesSQL are the open states of a job a claim handed to the Bridge
+// that it hasn't parked.
+const claimedStatesSQL = `('claimed', 'running')`
+
 // blockerWhere is the condition (on bridge_jobs j, its one argument the dedupe
 // key) for an open job of kind blocker that refuses a new job of spec's kind
-// (refusedWhileOpen): not being cancelled, and parked only when the new job
-// doesn't cancel it.
-func (spec kindSpec) blockerWhere(blocker string) string {
+// (refusedWhileOpen): not being cancelled, and, when the new job cancels it
+// (cancelsOpen), not parked, nor queued while its module is off (held: no
+// claim hands it out, so it gives way like a parked one; moduleOff).
+func (spec kindSpec) blockerWhere(blocker string, moduleOff bool) string {
 	states := OpenStatesSQL
 	if _, gives := spec.cancelsOpen[blocker]; gives {
 		states = activeStatesSQL
+		if moduleOff {
+			states = claimedStatesSQL
+		}
 	}
 	return `j.dedupe_key = ? AND j.cancel_requested = 0 AND j.state IN ` + states
+}
+
+// moduleOff reports whether managed module m is off ("" is no module, and
+// with no ModuleOn wired every module counts as on): a queued job that needs
+// it is held (nextQueued).
+func (s *Service) moduleOff(m string) bool {
+	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
 }
 
 // blocker is the open job that refuses a new job of kind for the book
 // (refusedWhileOpen, its kinds asked in name order so the answer is stable;
 // the refusal is refusedWhileOpen[job.Kind]), nil when none does.
-func blocker(ctx context.Context, q rowQuerier, kind string, libraryID *int64, path *string) (*Job, error) {
+func (s *Service) blocker(ctx context.Context, q rowQuerier, kind string, libraryID *int64, path *string) (*Job, error) {
 	spec := kinds[kind]
 	for _, k := range slices.Sorted(maps.Keys(spec.refusedWhileOpen)) {
-		j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE `+spec.blockerWhere(k)+
+		where := spec.blockerWhere(k, s.moduleOff(kinds[k].module))
+		j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE `+where+
 			` ORDER BY j.id LIMIT 1`, DedupeKey(k, libraryID, path)))
 		if !errors.Is(err, sql.ErrNoRows) {
 			return j, err
@@ -456,8 +473,9 @@ var ErrDetectOpen = errors.New("a chapter detection job is open for the book")
 // ErrContributeOpen is a sidecars.generate job for a book with a
 // sidecars.contribute job queued or working: the generate run would replace the
 // characters and recaps being filed (a 409 contribute_open). A parked contribute
-// job (a GitHub sign-in refused, say) is cancelled by the new generate job
-// instead, which can file its own results.
+// job (a GitHub sign-in refused, say), or a queued one held while the
+// contributions module is off (no claim hands it out), is cancelled by the new
+// generate job instead, which can file its own results.
 var ErrContributeOpen = errors.New("a contribute job is open for the book")
 
 // ErrDescribeOpen is a chapters.detect job for a book with a sidecars.describe
@@ -568,7 +586,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return refuse
 		}
 		spec := kinds[j.Kind]
-		b, err := blocker(ctx, tx, j.Kind, j.LibraryID, j.Path)
+		b, err := s.blocker(ctx, tx, j.Kind, j.LibraryID, j.Path)
 		if err != nil {
 			return err
 		}
@@ -908,7 +926,7 @@ func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (i
 		if !slices.Contains(kinds, kind) {
 			continue
 		}
-		if m := ModuleFor(kind, params); m == "" || s.ModuleOn == nil || s.ModuleOn(m) {
+		if !s.moduleOff(ModuleFor(kind, params)) {
 			return id, rows.Close() // closed before the claim's update: one connection
 		}
 	}
@@ -1124,7 +1142,7 @@ func (s *Service) Blocker(ctx context.Context, kind string, libraryID int64, pat
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	return blocker(ctx, s.db, kind, &libraryID, &path)
+	return s.blocker(ctx, s.db, kind, &libraryID, &path)
 }
 
 // OpenJob returns the open job of kind for a book (its dedupe key), or nil when

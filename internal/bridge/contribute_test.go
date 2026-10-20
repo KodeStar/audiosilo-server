@@ -229,6 +229,63 @@ func TestContributeAndGenerate(t *testing.T) {
 	}
 }
 
+// While the contributions module is off, a queued contribute job is held (no
+// claim hands it out), so it gives way to a generate job like a parked one:
+// it is no blocker, and the generate job is queued and cancels it. A claimed
+// one still blocks (the Bridge may be filing), and with the module on a queued
+// one blocks as before.
+func TestHeldContributeGivesWayToGenerate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindVerify, KindSidecars, KindContribute)
+	on := true
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	book, other := ptr("Author/Book"), ptr("Author/Other")
+
+	con, _, err := q.contribute("", book)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Denied: the module on, a queued contribute refuses a generate job.
+	if _, _, err := q.sidecars("", book); !errors.Is(err, ErrContributeOpen) {
+		t.Fatalf("generate with a queued contribute, module on: %v, want ErrContributeOpen", err)
+	}
+	if b, err := q.Blocker(ctx, KindSidecars, q.lib, *book); err != nil || b == nil || b.ID != con.ID {
+		t.Fatalf("blocker, module on = %+v, %v; want the contribute job", b, err)
+	}
+
+	// Allowed: the module off, the held contribute is no blocker, and a
+	// generate job is queued and cancels it.
+	on = false
+	if b, err := q.Blocker(ctx, KindSidecars, q.lib, *book); err != nil || b != nil {
+		t.Fatalf("blocker, module off = %+v, %v; want none", b, err)
+	}
+	if _, created, err := q.sidecars("", book); err != nil || !created {
+		t.Fatalf("generate with a held contribute: %v, %v", created, err)
+	}
+	if got, err := q.Job(ctx, con.ID); err != nil || got.State != StateCancelled || got.Error == "" {
+		t.Fatalf("the held contribute = %+v, %v; want cancelled with a reason", got, err)
+	}
+
+	// Denied: a contribute job the Bridge claimed blocks even with the module off.
+	on = true
+	claimed, _, err := q.contribute("", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.claim(ctx, q.token, []string{KindContribute}); err != nil || j == nil || j.ID != claimed.ID {
+		t.Fatalf("claim = %+v, %v", j, err)
+	}
+	on = false
+	if _, _, err := q.sidecars("", other); !errors.Is(err, ErrContributeOpen) {
+		t.Fatalf("generate with a claimed contribute, module off: %v, want ErrContributeOpen", err)
+	}
+	if b, err := q.Blocker(ctx, KindSidecars, q.lib, *other); err != nil || b == nil || b.ID != claimed.ID {
+		t.Fatalf("blocker with a claimed contribute = %+v, %v; want it", b, err)
+	}
+}
+
 // A valid meta.correct params body (one title change).
 const goodCorrection = `{"work_id":"the-final-empire","asin":"B002UZMLXM","region":"us",
 	"changes":[{"field":"title","current":"The Final Empire ","corrected":" Mistborn: The Final Empire"}],
