@@ -401,6 +401,19 @@ func maxCorrection(enc func(string) string, current, corrected, evidence string)
 		enc(fill(evidence, maxEvidence)) + `}`
 }
 
+// MaxParamsBytes, which bounds the queue route's body, is the largest cap of
+// any kind: a kind given a larger one would be refused before Enqueue.
+func TestMaxParamsBytesIsTheLargestCap(t *testing.T) {
+	t.Parallel()
+	most := 0
+	for _, s := range kinds {
+		most = max(most, s.paramsCap())
+	}
+	if most != MaxParamsBytes {
+		t.Fatalf("MaxParamsBytes is %d, the largest kind's cap %d", MaxParamsBytes, most)
+	}
+}
+
 // meta.correct's params cap is its own: a batch at every per-field bound is
 // taken however it is encoded (multi-byte characters, each escaped as an
 // ASCII-only encoder does, and characters Go escapes when it stores them),

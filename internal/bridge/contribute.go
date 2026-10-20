@@ -213,7 +213,7 @@ func issueLength(evidence string) int {
 // and returns them decoded, for the api's checks against the book before it
 // queues them (the edited fields, the stamped source).
 func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
-	if len(raw) > kinds[KindCorrect].paramsCap() {
+	if len(raw) > maxCorrectParamsBytes {
 		return CorrectParams{}, invalid("params too large")
 	}
 	return parseCorrect(raw)
