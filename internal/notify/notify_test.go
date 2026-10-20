@@ -426,14 +426,15 @@ func TestBridgeJobEnded(t *testing.T) {
 // Each announced park reads as a sentence of its own: a refused credential
 // says where to replace it (the Bridge's Accounts tab, which resumes the job at
 // once, or the agent container, which the job tries again by itself) and needs
-// no Retry; a missing GitHub sign-in says where to fix it, then Retry; a
+// no Retry; a missing GitHub sign-in says where to sign in, which resumes the
+// job (the Bridge re-admits it), so it needs no Retry either; a
 // spent budget fits the book's and the month's alike (the monthly one resumes
 // by itself); an unknown code points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
 		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself a little later.",
-		"contrib_unavailable":      "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge, then retry the job there.",
+		"contrib_unavailable":      "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge's Accounts tab and the job carries on.",
 		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
 		"something_new":            "See the job in Settings > Bridge.",
 	} {

@@ -480,7 +480,7 @@ func bridgeParkReason(code string) string {
 	case "agent_credential_refused":
 		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself a little later."
 	case "contrib_unavailable":
-		return "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge, then retry the job there."
+		return "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge's Accounts tab and the job carries on."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":
