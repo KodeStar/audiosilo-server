@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
 )
 
 // Phase 2b: the setup checklist on the heartbeat, can_contribute's precedence,
@@ -424,14 +426,15 @@ func TestCorrectParamsCap(t *testing.T) {
 	q := newTestQueue(t)
 	q.beatSetup(t, true, true, KindVerify, KindSidecars, KindCorrect)
 	utf8JSON := func(s string) string { b, _ := json.Marshal(s); return string(b) }
+	astral := maxCorrection(asciiJSON, "📚", "🎧", "📖")
 
 	for name, params := range map[string]string{
 		"multi-byte":             maxCorrection(utf8JSON, "📚", "ب", "é"),
-		"multi-byte, ASCII-only": maxCorrection(asciiJSON, "📚", "🎧", "📖"),
+		"multi-byte, ASCII-only": astral,
 		"escaped when stored":    maxCorrection(utf8JSON, "<", "&", ">"),
 		"Persian and joiners":    maxCorrection(asciiJSON, "می\u200cخ", "👩\u200d👩", "ف"),
 	} {
-		if len(params) <= maxParamsBytes {
+		if len(params) <= defaultParamsBytes {
 			t.Fatalf("%s: %d bytes, under the default cap; the test proves nothing", name, len(params))
 		}
 		job, created, err := q.correct(params, ptr("Author/"+name))
@@ -446,10 +449,8 @@ func TestCorrectParamsCap(t *testing.T) {
 
 	// Denied: one past a per-field bound, refused for it rather than for size.
 	for name, params := range map[string]string{
-		"a value too long": strings.Replace(maxCorrection(asciiJSON, "📚", "🎧", "📖"),
-			`"corrected":"`, `"corrected":"\ud83c\udfa7`, 1),
-		"evidence too long": strings.Replace(maxCorrection(asciiJSON, "📚", "🎧", "📖"),
-			`"evidence":"`, `"evidence":"\ud83d\udcd6`, 1),
+		"a value too long":  strings.Replace(astral, `"corrected":"`, `"corrected":"\ud83c\udfa7`, 1),
+		"evidence too long": strings.Replace(astral, `"evidence":"`, `"evidence":"\ud83d\udcd6`, 1),
 	} {
 		_, _, err := q.correct(params, ptr("Author/Over"))
 		if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "too large") {
@@ -464,7 +465,7 @@ func TestCorrectParamsCap(t *testing.T) {
 		t.Errorf("CheckCorrect past the cap: %v, want params too large", err)
 	}
 	// Other kinds keep the default.
-	padded := `{"source":"" ` + strings.Repeat(" ", maxParamsBytes) + `}`
+	padded := `{"source":"" ` + strings.Repeat(" ", defaultParamsBytes) + `}`
 	if _, _, err := q.sidecars(padded, ptr("Author/Book")); err == nil || !strings.Contains(err.Error(), "params too large") {
 		t.Errorf("sidecars.generate past the default cap: %v, want params too large", err)
 	}
@@ -502,6 +503,83 @@ func TestCorrectRefusesBidiControls(t *testing.T) {
 				t.Errorf("U+%04X in %s: %v, want ErrInvalid", r, where, err)
 			}
 		}
+	}
+}
+
+// The community reads each value and the evidence as GitHub shows them: an
+// HTML character reference ending in ';' is the character it names (a
+// whitespace one a space), and evidence left as "_No response_" is none. So a
+// reference to a control or a bidirectional override is refused as the
+// character is, a corrected value that reads empty or as the current one (the
+// record's, as it spells it) changes nothing, and evidence that reads as none
+// is missing; any other reference, and an ampersand that starts none, is taken
+// and kept as sent.
+func TestCorrectReadsValuesAsTheCommunity(t *testing.T) {
+	t.Parallel()
+	params := func(current, corrected, evidence string) string {
+		return fmt.Sprintf(`{"work_id":"w","changes":[{"field":"title","current":%q,"corrected":%q}],"evidence":%q}`,
+			current, corrected, evidence)
+	}
+	for name, c := range map[string]struct{ params, want string }{
+		"an override by reference":     {params("a&#x202E;b", "c", "e"), "bidirectional"},
+		"a decimal override":           {params("a", "b&#8238;c", "e"), "bidirectional"},
+		"an isolate in the evidence":   {params("a", "b", "see &#x2066;here"), "bidirectional"},
+		"an upper-case hex reference":  {params("a", "b", "see &#X202E;here"), "bidirectional"},
+		"a control by reference":       {params("a", "A&#1;B", "e"), "control character"},
+		"a control in the evidence":    {params("a", "b", "see\fhere"), "control character"},
+		"a no-break space for a value": {params("a", "&#160;", "e"), "must be set"},
+		"a named no-break space":       {params("a", "&nbsp;", "e"), "must be set"},
+		"the current value escaped":    {params("Tom & Jerry", "Tom &amp; Jerry", "e"), "differ"},
+		"evidence a no-break space":    {params("a", "b", "&nbsp;"), "evidence is required"},
+		"evidence as the form's blank": {params("a", "b", " _No response_ "), "evidence is required"},
+	} {
+		_, err := CheckCorrect(json.RawMessage(c.params))
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want ErrInvalid (%s)", name, err, c.want)
+		}
+	}
+	for name, c := range map[string]struct{ current, corrected, evidence string }{
+		"a mark by reference":     {"a", "&lrm;עברית", "e"},
+		"an ampersand":            {"a", "AT&T;", "e"},
+		"a name it doesn't know":  {"a", "&copyright;", "e"},
+		"accents by reference":    {"Resume", "R&#233;sum&#233;", "e"},
+		"a record that spells it": {"Tom &amp; Jerry", "Tom & Jerry", "e"},
+		"markup in the evidence":  {"a", "b", "The cover reads &lt;Mistborn&gt;."},
+	} {
+		p, err := CheckCorrect(json.RawMessage(params(c.current, c.corrected, c.evidence)))
+		if err != nil || p.Changes[0].Corrected != c.corrected || p.Evidence != c.evidence {
+			t.Errorf("allowed (%s): %+v, %v; want it kept as sent", name, p, err)
+		}
+	}
+}
+
+// bridgeParamsBytes is the Bridge's own bound on meta.correct's params as it
+// claims them (audiosilo-bridge's internal/correct ParseParams).
+const bridgeParamsBytes = 64 << 10
+
+// meta.correct's params as stored, which the Bridge claims, fit the Bridge's
+// bound with every bound here reached in the characters the store escapes
+// most (json.Marshal sends <, > and & as six bytes each): a job the server
+// took and the Bridge refused could never be filed.
+func TestCorrectStoredParamsFitTheBridge(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindVerify, KindCorrect)
+	var changes []string
+	for _, f := range CorrectionFields {
+		changes = append(changes, fmt.Sprintf(`{"field":%q,"current":%q,"corrected":%q}`, f,
+			strings.Repeat("<", maxCorrectionValue), strings.Repeat(">", maxCorrectionValue)))
+	}
+	id := strings.Repeat("<", maxCorrectIDLen)
+	params := fmt.Sprintf(`{"work_id":%q,"recording_id":%q,"asin":%q,"isbn":%q,"region":%q,"changes":[%s],"evidence":%q,"source":%q}`,
+		strings.Repeat("<", maxWorkIDLen), strings.Repeat("r", model.MaxSlugLen), id, id, id,
+		strings.Join(changes, ","), strings.Repeat("&", maxEvidence), strings.Repeat("<", maxSourceLen))
+	job, created, err := q.correct(params, ptr("Author/Book"))
+	if err != nil || !created {
+		t.Fatalf("a batch at every bound: %v, %v", created, err)
+	}
+	if len(job.Params) > bridgeParamsBytes {
+		t.Fatalf("stored %d bytes, past the Bridge's %d", len(job.Params), bridgeParamsBytes)
 	}
 }
 

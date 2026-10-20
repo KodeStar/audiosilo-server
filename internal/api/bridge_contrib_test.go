@@ -376,9 +376,11 @@ func TestBridgeCorrectJob(t *testing.T) {
 	}
 }
 
-// A meta.correct batch at its bounds is past the request bound the queue
-// route had before the kind's own params cap (32 KiB) when an ASCII-only
-// encoder sends it, and is queued.
+// The queue route's body bound admits params at the largest cap any kind
+// takes (bridge.MaxParamsBytes) with the request around them: a meta.correct
+// batch at its bounds, sent by an ASCII-only encoder and padded to exactly
+// that cap, is queued. Denied: a byte more is refused as too large (400), and
+// a body past the route's bound is refused before it is read whole (400).
 func TestBridgeCorrectJobLargeBatch(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -390,20 +392,29 @@ func TestBridgeCorrectJobLargeBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	escape := func(n int, surrogates string) string { return `"` + strings.Repeat(surrogates, n) + `"` }
-	params := `{"work_id":"the-final-empire","changes":[{"field":"title","current":` + escape(500, `\ud83c\udfa7`) +
+	batch := `"work_id":"the-final-empire","changes":[{"field":"title","current":` + escape(500, `\ud83c\udfa7`) +
 		`,"corrected":` + escape(500, `\ud83d\udcda`) + `}],"evidence":` + escape(2000, `\ud83d\udcd6`) + `}`
-	if len(params) <= 32<<10 {
-		t.Fatalf("params are %d bytes; the test proves nothing", len(params))
-	}
-	resp, body := b.queueKind(t, bridge.KindCorrect, mistbornBook, params)
+	// params is the batch padded to n bytes with whitespace, which JSON ignores.
+	params := func(n int) string { return "{" + strings.Repeat(" ", n-len(batch)-1) + batch }
+
+	resp, body := b.queueKind(t, bridge.KindCorrect, mistbornBook, params(bridge.MaxParamsBytes))
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("a batch at its bounds: %d %s", resp.StatusCode, body)
+		t.Fatalf("params at the cap: %d %s", resp.StatusCode, body)
 	}
 	var job bridge.Job
 	decodeInto(t, body, &job)
 	var p bridge.CorrectParams
 	if err := json.Unmarshal(job.Params, &p); err != nil || p.Changes[0].Corrected != title {
 		t.Fatalf("stored params: %v", err)
+	}
+
+	resp, body = b.queueKind(t, bridge.KindCorrect, mistbornBook, params(bridge.MaxParamsBytes+1))
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "params too large") {
+		t.Fatalf("params past the cap: %d %s, want 400 params too large", resp.StatusCode, body)
+	}
+	resp, body = b.queueKind(t, bridge.KindCorrect, mistbornBook, params(bridge.MaxParamsBytes)+strings.Repeat(" ", 4<<10))
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "invalid request") {
+		t.Fatalf("a body past the bound: %d %s, want 400 invalid request", resp.StatusCode, body)
 	}
 }
 

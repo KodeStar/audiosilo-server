@@ -33,6 +33,7 @@ import {
   lookupBy,
   MAX_EVIDENCE,
   MAX_VALUE,
+  sendable,
   type CorrectionRow,
 } from './corrections-model';
 
@@ -152,7 +153,7 @@ function CorrectionsForm({
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const evidenceId = useId();
-  const sending = rows.filter((r) => ticked.has(r.field) && !r.tooLong).length;
+  const sending = rows.filter((r) => ticked.has(r.field) && sendable(r)).length;
   const problem = correctionProblem(sending, evidence);
 
   const submit = async (e: React.FormEvent) => {
@@ -174,7 +175,9 @@ function CorrectionsForm({
       ? t('book.corrections.evidenceRequired')
       : problem === 'evidenceTooLong'
         ? t('book.corrections.evidenceTooLong', { max: formatNumber(MAX_EVIDENCE, lang) })
-        : undefined;
+        : problem === 'evidenceBidi'
+          ? t('book.corrections.evidenceBidi')
+          : undefined;
 
   let body: React.ReactNode;
   if (search.isError) {
@@ -271,13 +274,14 @@ function ReviewRow({
   const lang = i18n.resolvedLanguage ?? 'en';
   const id = useId();
   const label = t(`book.field.${r.field}`);
+  const ok = sendable(r);
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <Checkbox
         id={id}
         className="mt-0.5"
-        checked={on && !r.tooLong}
-        disabled={r.tooLong}
+        checked={on && ok}
+        disabled={!ok}
         onCheckedChange={(v) => onToggle(v)}
         aria-label={t('book.corrections.tickAria', { field: label })}
       />
@@ -297,7 +301,7 @@ function ReviewRow({
           <span
             className={cn(
               '[overflow-wrap:anywhere] text-muted-foreground',
-              on && !r.tooLong && 'line-through',
+              on && ok && 'line-through',
             )}
           >
             <span className="sr-only">{t('book.corrections.communityNow')} </span>
@@ -317,6 +321,8 @@ function ReviewRow({
           <p className="text-[12.5px] text-warning">
             {t('book.corrections.tooLong', { max: formatNumber(MAX_VALUE, lang) })}
           </p>
+        ) : r.bidi ? (
+          <p className="text-[12.5px] text-warning">{t('book.corrections.bidi')}</p>
         ) : null}
       </div>
     </li>

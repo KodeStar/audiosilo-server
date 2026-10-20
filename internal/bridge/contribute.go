@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"encoding/json"
+	"html"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -87,7 +89,9 @@ const (
 	// every bound above (each of the 8 fields once, two 500-character values,
 	// 2000 characters of evidence) is 10,000 characters, at most 12 bytes each
 	// in JSON (a character outside the BMP sent as two \u escapes, as an
-	// ASCII-only encoder does), so 120,000 bytes and the names around them.
+	// ASCII-only encoder does), so 120,000 bytes; its identifiers (work_id,
+	// recording_id, asin, isbn, region, source: 720 bytes at most, each byte
+	// at most 6 escaped) and the names around them fit in the rest.
 	maxCorrectParamsBytes = 128 << 10
 )
 
@@ -125,7 +129,8 @@ type Correction struct {
 // characters (line breaks kept) as the community's issue carries it
 // (issueLength). No value holds a control character (unicode.IsControl, the
 // Bridge's test) or a bidirectional override (isBidiControl, the
-// community's). It returns them as stored, the values trimmed.
+// community's), each value and the evidence read as the community reads them
+// (asRead). It returns them as stored, the values trimmed.
 func correctParams(raw json.RawMessage) (json.RawMessage, error) {
 	p, err := parseCorrect(raw)
 	if err != nil {
@@ -178,12 +183,16 @@ func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 				return p, err
 			}
 		}
-		if c.Corrected == "" || c.Corrected == c.Current {
+		// The community applies the corrected value, as it reads it, to the
+		// record, whose value is current as the record spells it: a corrected
+		// "Tom &amp; Jerry" changes nothing in a "Tom & Jerry", and corrects a
+		// "Tom &amp; Jerry".
+		if corrected := asRead(c.Corrected); corrected == "" || corrected == c.Current {
 			return p, invalid("%s: the corrected value must be set and differ from the current one", c.Field)
 		}
 	}
 	p.Evidence = strings.TrimSpace(strings.ReplaceAll(p.Evidence, "\r\n", "\n"))
-	if p.Evidence == "" {
+	if p.Evidence == noResponse || asRead(p.Evidence) == "" {
 		return p, invalid("evidence is required")
 	}
 	if err := checkProse("evidence", p.Evidence, maxEvidence, true); err != nil {
@@ -209,29 +218,67 @@ func issueLength(evidence string) int {
 	return n
 }
 
-// CheckCorrect checks meta.correct's params as Enqueue will (correctParams)
-// and returns them decoded, for the api's checks against the book before it
-// queues them (the edited fields, the stamped source).
+// CheckCorrect checks meta.correct's params as Enqueue will (the kind's cap,
+// correctParams) and returns them decoded, for the api's checks against the
+// book before it queues them (the edited fields, the stamped source). On the
+// api's path it is the cap on the params as sent: Enqueue checks the api's own
+// encoding of them.
 func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
-	if len(raw) > maxCorrectParamsBytes {
+	if len(raw) > kinds[KindCorrect].paramsCap() {
 		return CorrectParams{}, invalid("params too large")
 	}
 	return parseCorrect(raw)
 }
 
-// checkProse bounds an admin's text: valid UTF-8, at most max characters, no
-// control characters (unicode.IsControl, C1 included as the Bridge refuses
-// them; but line breaks and tabs when lines allows them), and no bidirectional
-// override (isBidiControl), which the community refuses in a batch.
+// checkProse bounds an admin's text: valid UTF-8, at most max characters, and,
+// read as the community reads it (asRead), no control characters
+// (unicode.IsControl, C1 included as the Bridge refuses them; but line breaks
+// and tabs when lines allows them) and no bidirectional override
+// (isBidiControl), which the community refuses in a batch.
 func checkProse(name, v string, max int, lines bool) error {
-	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max ||
-		strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
+	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max {
 		return invalid("%s must be at most %d characters of text", name, max)
 	}
-	if strings.ContainsFunc(v, isBidiControl) {
+	read := asRead(v)
+	if strings.ContainsFunc(read, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
+		return invalid("%s holds a control character", name)
+	}
+	if strings.ContainsFunc(read, isBidiControl) {
 		return invalid("%s holds a bidirectional override character", name)
 	}
 	return nil
+}
+
+// The community's issue form reads a field as GitHub shows it (audiosilo-meta's
+// issueform: parseBody, formValue): a field left blank arrives as noResponse,
+// which it reads as empty, and an HTML character reference ending in ';' is
+// the character it names, a whitespace one a space. It checks the values and
+// the evidence read that way, so the checks here read them that way too: an
+// "&#x202E;" is a bidirectional override (GitHub shows the evidence's as one).
+const noResponse = "_No response_"
+
+// charRef is an HTML character reference ending in ';': decimal, hexadecimal
+// ("&#X" too, which GitHub decodes though the community doesn't) or named.
+var charRef = regexp.MustCompile(`&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);`)
+
+// asRead is v as the community reads it, trimmed: each character reference
+// decoded, one decoding to whitespace read as a space, and one decoding to
+// more than two characters left as written (it isn't one: html.UnescapeString
+// reads "&copyright;" as "&copy" and "right;").
+func asRead(v string) string {
+	if strings.Contains(v, "&") {
+		v = charRef.ReplaceAllStringFunc(v, func(ref string) string {
+			r := html.UnescapeString(ref)
+			if utf8.RuneCountInString(r) > 2 {
+				return ref
+			}
+			if c, n := utf8.DecodeRuneInString(r); n == len(r) && unicode.IsSpace(c) {
+				return " "
+			}
+			return r
+		})
+	}
+	return strings.TrimSpace(v)
 }
 
 // isBidiControl reports the bidirectional embedding, override and isolate

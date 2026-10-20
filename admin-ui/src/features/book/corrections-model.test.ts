@@ -158,6 +158,19 @@ describe('the review rows', () => {
     );
   });
 
+  it("marks a value holding a bidirectional control as one that can't be sent", () => {
+    const c = candidate();
+    const rowFor = (series: string) => {
+      const d = detailWith({ series });
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields))[0];
+    };
+    const row = rowFor('Stormlight \u202eArchive');
+    expect(row.bidi).toBe(true);
+    expect(defaultCorrectionTicks([row]).size).toBe(0);
+    // The joiners and marks right-to-left text needs are no such control.
+    expect(rowFor('\u0645\u06cc\u200c\u062e \u200f\u05e2\u05d1\u200e').bidi).toBe(false);
+  });
+
   it("reads published as the recording's release date, never filing what it already says", () => {
     const c = candidate({
       first_published: '1965',
@@ -232,9 +245,15 @@ describe('the review rows', () => {
       corrected: 'b',
       handling: 'maintainer',
       tooLong: false,
+      bidi: false,
       ...over,
     });
-    const rows = [row('title'), row('author'), row('narrator', { tooLong: true })];
+    const rows = [
+      row('title'),
+      row('author'),
+      row('narrator', { tooLong: true }),
+      row('series', { bidi: true }),
+    ];
     expect([...defaultCorrectionTicks(rows, new Set(['author']))]).toEqual(['title']);
   });
 
@@ -270,6 +289,7 @@ describe('sending', () => {
     expect(correctionProblem(2, '   ')).toBe('noEvidence');
     expect(correctionProblem(2, 'x'.repeat(MAX_EVIDENCE + 1))).toBe('evidenceTooLong');
     expect(correctionProblem(2, '📚'.repeat(MAX_EVIDENCE))).toBeUndefined();
+    expect(correctionProblem(2, 'See \u2066the cover\u2069')).toBe('evidenceBidi');
     expect(correctionProblem(8, 'A store page')).toBeUndefined();
   });
 
@@ -301,6 +321,17 @@ describe('sending', () => {
         changes: [{ field: 'isbn', current: '', corrected: '9780765326355' }],
         evidence: 'A store page',
       },
+    });
+  });
+
+  it('sends no change holding a bidirectional control, even ticked', () => {
+    const d = detailWith({ author: 'B. \u202eSanderson', isbn: '9780765326355' });
+    const c = candidate();
+    const target = correctionRecording(c, d.fields);
+    const rows = correctionRows(d.fields, c, target);
+    const req = correctionRequest(d, c, target, rows, new Set(['author', 'isbn']), 'e');
+    expect(req.params).toMatchObject({
+      changes: [{ field: 'isbn', current: '', corrected: '9780765326355' }],
     });
   });
 

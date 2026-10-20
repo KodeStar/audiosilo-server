@@ -697,8 +697,9 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 		Path      *string         `json:"path"`
 		Params    json.RawMessage `json:"params"`
 	}
-	// The params bound is the kind's (bridge.Enqueue); the body holds them and
-	// a little more.
+	// The params bound is the kind's, on the params as sent (bridge.Enqueue;
+	// for meta.correct bridge.CheckCorrect, as checkCorrections re-encodes them
+	// first); the body holds them and a little more.
 	if err := decodeJSON(r, &req, bridge.MaxParamsBytes+4<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return

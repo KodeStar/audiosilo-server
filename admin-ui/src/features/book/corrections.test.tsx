@@ -197,6 +197,40 @@ describe('suggest corrections', () => {
     expect(queued(calls)).toHaveLength(0);
   });
 
+  it("won't send what holds a hidden text-direction character, and says why", async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries/1/book': {
+          body: edited({ author: 'B. \u202eSanderson', narrator: 'Kate Reading' }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Suggest corrections' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Suggest corrections' });
+    const rows = await within(dialog).findByRole('list', { name: 'Corrections to suggest' });
+    const author = within(rows).getByRole('checkbox', { name: 'Suggest Author' });
+    expect(author).not.toBeChecked();
+    expect(author).toHaveAttribute('data-disabled');
+    expect(
+      within(rows).getByText(
+        "Holds a hidden text-direction character the community refuses, so it can't be sent.",
+      ),
+    ).toBeInTheDocument();
+    await user.type(
+      within(dialog).getByRole('textbox', { name: 'Evidence' }),
+      ' See \u2066it\u2069.',
+    );
+    expect(
+      within(dialog).getByText(
+        'The evidence holds a hidden text-direction character the community refuses. Retype any text you pasted.',
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Suggest 1 correction' }));
+    expect(queued(calls)).toHaveLength(0);
+  });
+
   it('says so when the community already agrees, and sends nothing', async () => {
     const user = userEvent.setup();
     mockFetch(

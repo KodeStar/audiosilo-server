@@ -1610,10 +1610,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included)
   and no value or the evidence a bidirectional embedding, override or isolate (U+202A-U+202E,
   U+2066-U+2069, `isBidiControl`, as audiosilo-meta's issueform refuses; ZWJ/ZWNJ and the marks are
-  fine): what the Bridge or the community would refuse when filing is a 400 now). Its params cap is
-  its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
+  fine), each value and the evidence read as the community reads them (`asRead`, its issueform's
+  `formValue`: an HTML character reference ending in `;` is the character it names, a whitespace one a
+  space, so `&#x202E;` is refused as U+202E is, and a `corrected` that so read is empty or `current`
+  (the record's value as it spells it) changes nothing; evidence left as `_No response_`, the form's
+  blank, is none), the values stored as sent: what the Bridge or the community would refuse when
+  filing is a 400 now). Its params cap is its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
   sent by an ASCII-only encoder (each character outside the BMP two `\u` escapes) is about 120 KB, and
-  the queue route's body bound follows (`bridge.MaxParamsBytes` + 4 KiB). The handler's `checkCorrections` (security-relevant: the server
+  the queue route's body bound follows (`bridge.MaxParamsBytes` + 4 KiB). The cap is on the params as
+  sent: `bridge.CheckCorrect` checks it on the api's path (`checkCorrections` re-encodes them before
+  Enqueue). As stored they fit the Bridge's own 64 KiB bound (`ParseParams`) at every bound, about
+  63.7 KB in the characters `json.Marshal` escapes to six bytes (`TestCorrectStoredParamsFitTheBridge`;
+  raise both together). The handler's `checkCorrections` (security-relevant: the server
   files only an admin's own edits) then requires each change's field to be `catalog.SourceEdited` on the
   book (`BookMatchState`; never a scanned, path, ABS or accepted-community value) with `corrected` the
   book's value now (`MatchState.EditedValue`), else **400 `not_edited`** naming the `field`, stores the

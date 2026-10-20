@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -46,13 +47,13 @@ const (
 	MaxListLimit     = 200
 	DefaultListLimit = 50
 
-	// maxParamsBytes bounds a job's params as sent, unless its kind sets its
-	// own (kindSpec.maxParams); MaxParamsBytes is the most any kind takes.
-	maxParamsBytes   = 16 << 10
-	MaxParamsBytes   = maxCorrectParamsBytes
-	maxProgressBytes = 16 << 10
-	maxResultBytes   = 64 << 10
-	maxErrorBytes    = 2 << 10
+	// defaultParamsBytes bounds a job's params as sent, unless its kind sets
+	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind takes.
+	defaultParamsBytes = 16 << 10
+	MaxParamsBytes     = max(defaultParamsBytes, maxCorrectParamsBytes)
+	maxProgressBytes   = 16 << 10
+	maxResultBytes     = 64 << 10
+	maxErrorBytes      = 2 << 10
 )
 
 // KindVerify is Phase 0's proof job: the Bridge stats a book (or a library's
@@ -128,17 +129,12 @@ type kindSpec struct {
 	// files to the community, so it also needs a Bridge that can
 	// (ErrCannotContribute).
 	module string
-	// maxParams bounds the params as sent, in bytes (0: maxParamsBytes).
+	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
 }
 
 // paramsCap is the most bytes of params a job of the kind may send.
-func (s kindSpec) paramsCap() int {
-	if s.maxParams > 0 {
-		return s.maxParams
-	}
-	return maxParamsBytes
-}
+func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsBytes) }
 
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
 // advertises that isn't here is never queued, and neither is one here that the

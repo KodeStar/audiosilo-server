@@ -28,6 +28,15 @@ export const MAX_VALUE = 500;
 export const MAX_EVIDENCE = 2000;
 
 /**
+ * The bidirectional embedding, override and isolate controls (U+202A-U+202E,
+ * U+2066-U+2069): invisible, they reorder how text shows, and the server
+ * refuses a value or evidence holding one, as the community does
+ * (bridge.isBidiControl). The joiners and marks right-to-left scripts need are
+ * not among them.
+ */
+const BIDI = /[\u202A-\u202E\u2066-\u2069]/;
+
+/**
  * The fields meta applies by itself once checked (work title, recording release
  * date and ISBN, decision D5); every other field waits for a maintainer.
  */
@@ -151,6 +160,13 @@ export interface CorrectionRow {
   handling: Handling;
   /** A value is over MAX_VALUE: it can't be sent. */
   tooLong: boolean;
+  /** A value holds a bidirectional control (BIDI): it can't be sent. */
+  bidi: boolean;
+}
+
+/** Whether a row can be sent: no value too long or holding a bidirectional control. */
+export function sendable(r: CorrectionRow): boolean {
+  return !r.tooLong && !r.bidi;
 }
 
 /**
@@ -177,6 +193,7 @@ export function correctionRows(
         corrected: r.mine,
         handling: handling(field, known),
         tooLong: runes(r.mine) > MAX_VALUE || runes(r.theirs) > MAX_VALUE,
+        bidi: BIDI.test(r.mine) || BIDI.test(r.theirs),
       };
     });
 }
@@ -247,17 +264,18 @@ export function defaultCorrectionTicks(
   rows: readonly CorrectionRow[],
   suggested: ReadonlySet<CorrectionField> = new Set(),
 ): Set<CorrectionField> {
-  return new Set(rows.filter((r) => !r.tooLong && !suggested.has(r.field)).map((r) => r.field));
+  return new Set(rows.filter((r) => sendable(r) && !suggested.has(r.field)).map((r) => r.field));
 }
 
 /** Why the suggestion can't be sent yet, or undefined when it can. */
-export type CorrectionProblem = 'none' | 'noEvidence' | 'evidenceTooLong';
+export type CorrectionProblem = 'none' | 'noEvidence' | 'evidenceTooLong' | 'evidenceBidi';
 
 export function correctionProblem(ticked: number, evidence: string): CorrectionProblem | undefined {
   if (ticked === 0) return 'none';
   const e = evidence.trim();
   if (!e) return 'noEvidence';
   if (runes(e) > MAX_EVIDENCE) return 'evidenceTooLong';
+  if (BIDI.test(e)) return 'evidenceBidi';
   return undefined;
 }
 
@@ -290,7 +308,7 @@ export function correctionRequest(
 ): BridgeJobRequest {
   const asin = detail.fields.asin.value;
   const changes: MetaCorrectChange[] = rows
-    .filter((r) => ticks.has(r.field) && !r.tooLong)
+    .filter((r) => ticks.has(r.field) && sendable(r))
     .map((r) => ({ field: r.field, current: r.current, corrected: r.corrected }));
   const named = known ? rec : undefined;
   const params: MetaCorrectParams = {
