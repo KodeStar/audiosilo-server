@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { BridgeEstimate, BridgeJob, BridgeStatus, ServerInfo } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { serverInfo } from '@/test/fixtures';
+import { serverInfo, settingsWith } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -236,6 +236,39 @@ describe('with the contributions module off', () => {
     expect(screen.queryByRole('button', { name: 'Share with the community' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Suggest corrections' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Share with the community' })).toBeNull();
+  });
+
+  it('offers Generate past a share queued while the module is off (the server cancels it)', async () => {
+    mockFetch(
+      routes({
+        'GET /server': { body: server(false) },
+        'GET /admin/settings': { body: settingsWith({ modules: { contributions: false } }) },
+        'GET /admin/bridge/jobs': { body: { jobs: [job({ state: 'queued' })] } },
+      }),
+    );
+    renderApp(URL);
+    // The held share still shows, with its Cancel: the job list has loaded.
+    expect(
+      await screen.findByRole('button', { name: 'Cancel sharing with the community' }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Regenerate' })).toBeInTheDocument();
+    expect(screen.queryByText(/being shared with the community\. Generate again once/)).toBeNull();
+  });
+
+  it('still holds Generate back for a queued share while the module is on', async () => {
+    const share = job({ state: 'queued' });
+    mockFetch(
+      routes({
+        'GET /admin/settings': { body: settingsWith({ modules: { contributions: true } }) },
+        'GET /admin/bridge/jobs': { body: { jobs: [share] } },
+        'GET /admin/bridge/estimate': { body: estimate({ open_job: share }) },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(/being shared with the community\. Generate again once/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
   });
 
   it('still shows a share or corrections job that exists, with its Cancel, but offers no new one', async () => {

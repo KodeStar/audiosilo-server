@@ -1471,9 +1471,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
   decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
   an open describe job is. `kindSpec`'s `refusedWhileOpen` and `cancelsOpen` are the one statement of which
-  open kind refuses or gives way to which (`blockerWhere`: a job with `cancel_requested` refuses nothing,
-  as it ends without writing, so a detect job queues behind a generate job being cancelled; a blocker the
-  new kind also cancels refuses only while queued or working; kinds asked in name order), and
+  open kind refuses or gives way to which (`Service.blocker`, `givesWay`: a job with `cancel_requested`
+  refuses nothing, as it ends without writing, so a detect job queues behind a generate job being
+  cancelled; a blocker the new kind also cancels refuses only while working, or queued and not held
+  (`Service.held`, the claims' own rule: a queued job whose module is off); kinds asked in name order), and
   `Service.Blocker` names the open job that refuses a new job of a kind now). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
   `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
@@ -1523,8 +1524,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
   open job (`open_job`: the book's open generate job, else the job of another kind that refuses a generate
-  job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` or `sidecars.contribute` job; its
-  `kind` says which, additive: the player's Generate holds back only for `chapters.detect`);
+  job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` or `sidecars.contribute` job, never
+  a share held while `contributions` is off; its `kind` says which, additive: the player's Generate holds
+  back for those two kinds);
   `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
@@ -1594,7 +1596,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `generate_open` while a `sidecars.generate` job is open for the book; a NEW generate job is refused 409
   `contribute_open` (`ErrContributeOpen`) while a contribute job is queued or working, and cancels a parked
   one ("replaced what it was sharing"); while `contributions` is off a queued (held) one gives way like a
-  parked one: no 409, not the estimate's `open_job`, cancelled (`blockerWhere`, `Service.moduleOff`).
+  parked one: no 409, not the estimate's `open_job`, cancelled (`Service.givesWay`, `Service.held`); the
+  console's book page mirrors it with the settings envelope's toggle (`blocksGenerate`).
   Result (the Bridge's): `{library_id, path, work_id, contributed: {characters?, recaps?} (issue URLs),
   covered: [dimensions the community already had]}`. `meta.correct` (new family and feature `meta`;
   "Suggest corrections"): a book `path`,

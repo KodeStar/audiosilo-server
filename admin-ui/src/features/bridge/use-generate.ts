@@ -203,7 +203,8 @@ export async function queueInOrder(
  * The refusals a generate run passes a book over for: its chapters are being
  * found (a queued or working chapters.detect job; the generate job is queued once
  * that has finished, reusing its transcription), or its files are being shared
- * with the community (a queued or working sidecars.contribute job, Phase 2b).
+ * with the community (a queued or working sidecars.contribute job, Phase 2b; one
+ * queued while the contributions module is off gives way to the run instead).
  */
 export const GENERATE_SKIPS = ['detect_open', 'contribute_open'] as const;
 

@@ -2611,8 +2611,9 @@ export interface BridgeEstimate {
   earlier: EarlierBook[];
   /**
    * An open sidecars.generate job for this book, else the open job of another kind
-   * that refuses a new one now (a queued or working chapters.detect job): its kind
-   * says which.
+   * that refuses a new one now (a queued or working chapters.detect or
+   * sidecars.contribute job, never a share held while the contributions module is
+   * off): its kind says which.
    */
   open_job?: BridgeJob;
 }

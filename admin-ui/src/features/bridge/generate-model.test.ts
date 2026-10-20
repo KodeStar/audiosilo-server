@@ -1144,6 +1144,23 @@ describe('a share job and Generate (Phase 2b)', () => {
     expect(generateBlocker(undefined, share('queued'))?.kind).toBe(KIND_CONTRIBUTE);
   });
 
+  it('lets a share queued while the contributions module is off give way, as the server does', () => {
+    const share = (state: BridgeJobState) =>
+      job(state, { kind: KIND_CONTRIBUTE, cancel_requested: false });
+    // Held: no claim hands it out, and the generate job cancels it.
+    expect(blocksGenerate(share('queued'), false)).toBe(false);
+    expect(generateBlocker([share('queued')], undefined, false)).toBeUndefined();
+    expect(generateBlocker(undefined, share('queued'), false)).toBeUndefined();
+    // One the Bridge took still blocks, and so does a queued chapter detection.
+    expect(blocksGenerate(share('claimed'), false)).toBe(true);
+    expect(blocksGenerate(share('running'), false)).toBe(true);
+    expect(
+      blocksGenerate(job('queued', { kind: KIND_DETECT, cancel_requested: false }), false),
+    ).toBe(true);
+    // The module on, a queued share blocks.
+    expect(generateBlocker([share('queued')], undefined, true)?.kind).toBe(KIND_CONTRIBUTE);
+  });
+
   it("never offers a second Share while the estimate's open job is one", () => {
     const e = estimate({
       has: localOnly,

@@ -46,9 +46,10 @@ type bridgeEstimate struct {
 	Has         estimateHas   `json:"has"`
 	Earlier     []earlierBook `json:"earlier"`
 	// OpenJob is the book's open generate job, else the open job of another
-	// kind that refuses a new one now (a queued or working chapters.detect or
-	// sidecars.contribute job, bridge.Service.Blocker); its kind says which.
-	// Omitted for neither.
+	// kind that refuses a new one now (bridge.Service.Blocker: a queued or
+	// working chapters.detect or sidecars.contribute job, never a share held
+	// while the contributions module is off); its kind says which. Omitted for
+	// neither.
 	OpenJob *bridge.Job `json:"open_job,omitempty"`
 }
 

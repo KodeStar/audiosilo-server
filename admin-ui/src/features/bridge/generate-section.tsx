@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RotateCw, Sparkles } from 'lucide-react';
-import { useServerInfo } from '@/api/hooks';
+import { useServerInfo, useSettings } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { STORY_CARD_ID } from '@/features/book/story-model';
@@ -54,8 +54,14 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   // community: the server refuses a generate job until that has finished (a
   // detection's transcription is reused), so it stands where the action would:
   // a detection with its status, a share with a line (the Share part shows its
-  // status).
-  const blocker = jobOpen ? undefined : generateBlocker(jobs, estimate.data?.open_job);
+  // status). A share queued while the contributions module is off is held, and
+  // the server cancels it for a generate job: the toggle is the settings
+  // envelope's (the server's rule), not the capability, which also needs the
+  // Bridge; it counts as on until the settings arrive.
+  const contributions = useSettings().data?.modules.contributions ?? true;
+  const blocker = jobOpen
+    ? undefined
+    : generateBlocker(jobs, estimate.data?.open_job, contributions);
   const detect = blocker?.kind === KIND_DETECT ? blocker : undefined;
   const sharing = blocker?.kind === KIND_CONTRIBUTE;
   const idle = !jobOpen && !blocker;

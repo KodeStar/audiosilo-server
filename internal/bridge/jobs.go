@@ -110,11 +110,11 @@ type kindSpec struct {
 	writes bool
 	params func(json.RawMessage) (json.RawMessage, error)
 	// refusedWhileOpen: a new job is refused with the error while a job of the
-	// kind named is open for the same book (blockerWhere): never by one being
+	// kind named is open for the same book (Service.blocker): never by one being
 	// cancelled (cancel_requested: it ends without writing), and, when the new
 	// job also cancels that kind (cancelsOpen), only while it is queued or
 	// working: a parked one gives way, and so does a queued one held while
-	// its module is off (Service.ModuleOn).
+	// its module is off (Service.givesWay, Service.held).
 	refusedWhileOpen map[string]error
 	// cancelsOpen: a new job cancels the open job of each kind named for the
 	// same book (cancelOpenTx, the value its error), in the same transaction.
@@ -156,33 +156,18 @@ var kinds = map[string]kindSpec{
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen}},
 }
 
-// activeStatesSQL are the open states a job isn't parked in.
-const activeStatesSQL = `('queued', 'claimed', 'running')`
-
 // claimedStatesSQL are the open states of a job a claim handed to the Bridge
-// that it hasn't parked.
+// that it hasn't parked, the ones holding a lease (lapsedSQL: migration 0047's
+// idx_bridge_jobs_lease names the same two, in the same order, or expiry
+// scans the table).
 const claimedStatesSQL = `('claimed', 'running')`
 
-// blockerWhere is the condition (on bridge_jobs j, its one argument the dedupe
-// key) for an open job of kind blocker that refuses a new job of spec's kind
-// (refusedWhileOpen): not being cancelled, and, when the new job cancels it
-// (cancelsOpen), not parked, nor queued while its module is off (held: no
-// claim hands it out, so it gives way like a parked one; moduleOff).
-func (spec kindSpec) blockerWhere(blocker string, moduleOff bool) string {
-	states := OpenStatesSQL
-	if _, gives := spec.cancelsOpen[blocker]; gives {
-		states = activeStatesSQL
-		if moduleOff {
-			states = claimedStatesSQL
-		}
-	}
-	return `j.dedupe_key = ? AND j.cancel_requested = 0 AND j.state IN ` + states
-}
-
-// moduleOff reports whether managed module m is off ("" is no module, and
-// with no ModuleOn wired every module counts as on): a queued job that needs
-// it is held (nextQueued).
-func (s *Service) moduleOff(m string) bool {
+// held reports whether a queued job of kind with params waits for a managed
+// module that is off (ModuleFor; with no ModuleOn wired every module counts as
+// on): no claim hands it out (nextQueued), and it refuses no new job that
+// cancels it (givesWay).
+func (s *Service) held(kind string, params json.RawMessage) bool {
+	m := ModuleFor(kind, params)
 	return m != "" && s.ModuleOn != nil && !s.ModuleOn(m)
 }
 
@@ -192,16 +177,42 @@ func (s *Service) moduleOff(m string) bool {
 func (s *Service) blocker(ctx context.Context, q rowQuerier, kind string, libraryID *int64, path *string) (*Job, error) {
 	spec := kinds[kind]
 	for _, k := range slices.Sorted(maps.Keys(spec.refusedWhileOpen)) {
-		// The blocker kind's own module: ModuleFor's params-dependent case
-		// (a contributing sidecars.generate) is never a cancelled blocker.
-		where := spec.blockerWhere(k, s.moduleOff(kinds[k].module))
-		j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE `+where+
-			` ORDER BY j.id LIMIT 1`, DedupeKey(k, libraryID, path)))
-		if !errors.Is(err, sql.ErrNoRows) {
-			return j, err
+		j, err := openJob(ctx, q, DedupeKey(k, libraryID, path))
+		if err != nil {
+			return nil, err
+		}
+		if j != nil && !s.givesWay(spec, j) {
+			return j, nil
 		}
 	}
 	return nil, nil
+}
+
+// givesWay reports whether open job j, of a kind spec's refusedWhileOpen
+// names, lets a new job of spec's kind be queued: while it is being cancelled
+// (cancel_requested: it ends without writing), and, when the new job cancels
+// it (cancelsOpen), while it is parked, or queued but held (no claim hands it
+// out while its module is off).
+func (s *Service) givesWay(spec kindSpec, j *Job) bool {
+	if j.CancelRequested {
+		return true
+	}
+	if _, cancels := spec.cancelsOpen[j.Kind]; !cancels {
+		return false
+	}
+	return j.State == StateNeedsAttention || (j.State == StateQueued && s.held(j.Kind, j.Params))
+}
+
+// openJob is the open job with dedupe key key, read through q, nil when there
+// is none. There is at most one: the query names migration 0047's partial
+// unique index's states (OpenStatesSQL), so it seeks that index.
+func openJob(ctx context.Context, q rowQuerier, key string) (*Job, error) {
+	j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+
+		` WHERE j.dedupe_key = ? AND j.state IN `+OpenStatesSQL, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return j, err
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -610,7 +621,8 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		// finds the chapters itself: a describe job open for the book, and a
 		// parked detect job (a working one refused it above), give way (at once
 		// when no Bridge is on it, else at its next update), so the two never
-		// race for the book's files.
+		// race for the book's files. A parked or held contribute job gives way
+		// too (givesWay): the run replaces what it was sharing.
 		for kind, reason := range spec.cancelsOpen {
 			if err := cancelOpenTx(ctx, tx, DedupeKey(kind, j.LibraryID, j.Path), now, reason); err != nil {
 				return err
@@ -906,9 +918,9 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 
 // nextQueued is the id of the next queued job of one of kinds (highest
 // priority, then oldest), 0 for none, passing over a held one: a job that needs
-// a managed module that is off (ModuleFor, ModuleOn) waits, queued, until the
-// module is on again. The queue is short, so the kinds are matched as read
-// (the statement stays a constant).
+// a managed module that is off (held) waits, queued, until the module is on
+// again. The queue is short, so the kinds are matched as read (the statement
+// stays a constant).
 func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (int64, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' ORDER BY priority DESC, id`)
@@ -928,7 +940,7 @@ func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (i
 		if !slices.Contains(kinds, kind) {
 			continue
 		}
-		if !s.moduleOff(ModuleFor(kind, params)) {
+		if !s.held(kind, params) {
 			return id, rows.Close() // closed before the claim's update: one connection
 		}
 	}
@@ -1153,12 +1165,7 @@ func (s *Service) OpenJob(ctx context.Context, kind string, libraryID int64, pat
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+
-		` WHERE j.dedupe_key = ? AND j.state IN `+OpenStatesSQL, DedupeKey(kind, &libraryID, &path)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return j, err
+	return openJob(ctx, s.db, DedupeKey(kind, &libraryID, &path))
 }
 
 // ErrFinished is a cancel for a job that already ended (a 409).

@@ -313,28 +313,34 @@ const GENERATE_BLOCKER_KINDS: readonly string[] = [KIND_DETECT, KIND_CONTRIBUTE]
  * chapter detection (the server's detect_open) or a share with the community
  * (contribute_open, Phase 2b) queued or working, not being cancelled. A parked
  * one gives way (the generate job cancels it: a detection's chapters it finds
- * itself, a share it offers again from the new run), as one being cancelled does.
+ * itself, a share it offers again from the new run), as one being cancelled does,
+ * and so does a share queued while the contributions module is off
+ * (`contributions`, its toggle: no claim hands that share out, so the server
+ * cancels it for the generate job too).
  */
-export function blocksGenerate(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>): boolean {
-  return (
-    GENERATE_BLOCKER_KINDS.includes(j.kind) &&
-    (j.state === 'queued' || j.state === 'claimed' || j.state === 'running') &&
-    !j.cancel_requested
-  );
+export function blocksGenerate(
+  j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>,
+  contributions = true,
+): boolean {
+  if (!GENERATE_BLOCKER_KINDS.includes(j.kind) || j.cancel_requested) return false;
+  if (j.state === 'queued') return contributions || j.kind !== KIND_CONTRIBUTE;
+  return j.state === 'claimed' || j.state === 'running';
 }
 
 /**
- * The book's job that keeps Generate from being offered now (blocksGenerate):
- * from its job list once loaded (the live answer), else the estimate's
- * `open_job`, which names such a job when no generate job is open.
+ * The book's job that keeps Generate from being offered now (blocksGenerate,
+ * with the contributions module's toggle): from its job list once loaded (the
+ * live answer), else the estimate's `open_job`, which names such a job when no
+ * generate job is open.
  */
 export function generateBlocker(
   jobs: readonly BridgeJob[] | undefined,
   openJob: BridgeJob | undefined,
+  contributions = true,
 ): BridgeJob | undefined {
-  if (!jobs) return openJob && blocksGenerate(openJob) ? openJob : undefined;
+  if (!jobs) return openJob && blocksGenerate(openJob, contributions) ? openJob : undefined;
   return GENERATE_BLOCKER_KINDS.map((k) => latestJobOf(jobs, k)).find(
-    (j): j is BridgeJob => j !== undefined && blocksGenerate(j),
+    (j): j is BridgeJob => j !== undefined && blocksGenerate(j, contributions),
   );
 }
 
