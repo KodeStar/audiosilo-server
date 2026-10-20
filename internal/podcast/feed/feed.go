@@ -89,8 +89,11 @@ type Fetch struct {
 	TimelineChanged bool   `json:"timeline_changed"`
 }
 
+// ShowPath is the one rule for a show folder (and an episode's file name):
+// one non-hidden segment. A line break is refused too, as the Bridge never
+// names a folder with one and a podcast.poll path may not hold one.
 func ShowPath(p string) bool {
-	return p != "" && p != "." && p != ".." && !strings.HasPrefix(p, ".") && !strings.ContainsAny(p, "/\\\x00")
+	return p != "" && p != "." && p != ".." && !strings.HasPrefix(p, ".") && !strings.ContainsAny(p, "/\\\x00\r\n")
 }
 func EpisodePath(show, p string) bool {
 	parts := strings.Split(p, "/")

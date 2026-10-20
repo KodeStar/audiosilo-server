@@ -502,3 +502,100 @@ func TestPodcastStatsAndCastGate(t *testing.T) {
 		t.Fatalf("cast media gate %d %s", resp.StatusCode, out)
 	}
 }
+
+// A path that names no show is a missing directory or cover, not a server error.
+func TestPodcastMissingShowIsNotFound(t *testing.T) {
+	b, _, f := podcastEnv(t, false)
+	h := podcastHeaders()
+	for _, route := range []string{"fs?path=Missing", "fs?path=" + url.QueryEscape(f.Episodes[0].Path), "cover?path=Missing", "cover?path=Missing&size=160"} {
+		resp, out := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, route), b.userTok, "", h)
+		if resp.StatusCode != 404 {
+			t.Fatalf("%s %d %s", route, resp.StatusCode, out)
+		}
+	}
+}
+
+// Restoring a private show's lost secret keeps its URL out of bridge_jobs even
+// when the request leaves out "private" and the URL looks public.
+func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
+	b, _, f := podcastEnv(t, true)
+	ctx := context.Background()
+	plain := "https://feeds.example.com/members/show.xml"
+	if feed.IsPrivateFeedURL(plain) {
+		t.Fatal("the fixture URL must look public")
+	}
+	f.FeedURLSHA256 = feed.FeedURLHash(plain)
+	raw, _ := json.Marshal(f)
+	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, "Example Show"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error) VALUES(?,'Example Show','feed_secret_missing','lost')`, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":%q}`, b.lib.ID, plain), podcastHeaders())
+	if resp.StatusCode != 202 || strings.Contains(out, "members") {
+		t.Fatalf("restore %d %s", resp.StatusCode, out)
+	}
+	var stored string
+	if err := b.db.QueryRowContext(ctx, `SELECT params FROM bridge_jobs WHERE kind='podcast.subscribe'`).Scan(&stored); err != nil || strings.Contains(stored, "members") || !strings.Contains(stored, `"private":true`) {
+		t.Fatalf("stored %s %v", stored, err)
+	}
+	resp, out = b.do(t, "GET", "/api/v1/bridge/jobs/next?kind=podcast.subscribe", b.bridgeTok, "")
+	if resp.StatusCode != 200 || !strings.Contains(out, plain) {
+		t.Fatalf("claim %d %s", resp.StatusCode, out)
+	}
+}
+
+// The console's view of a person lists the podcast libraries they reach; a
+// client the old-client gate keeps podcasts from (an API-key tool) is shown none.
+func TestPodcastConsoleUserDetail(t *testing.T) {
+	b, uid, _ := podcastEnv(t, false)
+	route := fmt.Sprintf("/api/v1/admin/users/%d", uid)
+	for _, tc := range []struct {
+		kind, header string
+		want         bool
+	}{{auth.KindSession, "AudioSilo Admin (web)", true}, {auth.KindAPI, "", false}} {
+		tok, err := b.auth.IssueToken(context.Background(), b.adminID, tc.kind, tc.kind, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		headers := map[string]string{}
+		if tc.header != "" {
+			headers[auth.ClientHeader] = tc.header
+		}
+		resp, body := b.doHeaders(t, "GET", route, tok, "", headers)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", tc.kind, resp.StatusCode, body)
+		}
+		var detail struct {
+			Libraries []catalog.Library `json:"accessible_libraries"`
+		}
+		decodeInto(t, body, &detail)
+		got := false
+		for _, l := range detail.Libraries {
+			got = got || l.ID == b.lib.ID
+		}
+		if got != tc.want {
+			t.Fatalf("%s: %s", tc.kind, body)
+		}
+	}
+}
+
+// An admin's queue add in no library is a 404; a podcast library the old-client
+// gate hides from the request's client is a 403, as for any path.
+func TestPodcastQueueAddUnknownAndHiddenLibrary(t *testing.T) {
+	b, _, f := podcastEnv(t, false)
+	tok, err := b.auth.IssueToken(context.Background(), b.adminID, auth.KindAPI, "tool", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for lib, want := range map[int64]int{99999: 404, b.lib.ID: 403} {
+		resp, out := b.do(t, "POST", "/api/v1/me/queue", tok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, lib, f.Episodes[0].Path))
+		if resp.StatusCode != want {
+			t.Fatalf("library %d: %d %s, want %d", lib, resp.StatusCode, out, want)
+		}
+	}
+}

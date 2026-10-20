@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -102,12 +101,16 @@ func subscribeParams(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(p)
 }
+
+// MaxPollValidator caps each of a podcast.poll's conditional-GET validators.
+const MaxPollValidator = 512
+
 func pollParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p PollParams
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
-	if decodeStrict(raw, &p) != nil || len(p.ETag) > 512 || len(p.LastModified) > 512 {
+	if decodeStrict(raw, &p) != nil || len(p.ETag) > MaxPollValidator || len(p.LastModified) > MaxPollValidator {
 		return nil, invalid("invalid poll params")
 	}
 	return json.Marshal(p)
@@ -223,7 +226,9 @@ func (s *Service) reportEnded(ctx context.Context, j *Job, from string) {
 // Ended is a wakeup for background folding, independent of notification policy.
 func (s *Service) Ended() <-chan struct{} { return s.ended.wait() }
 
-var podcastURLs = regexp.MustCompile(`(?i)https?://[^\s"<>]+`)
+// podcastURLs runs a URL to the next space, whatever it holds: a quote or angle
+// bracket inside a private URL mustn't end the match and leave the rest behind.
+var podcastURLs = regexp.MustCompile(`(?i)https?://\S+`)
 
 func redactPodcastText(s string) string { return podcastURLs.ReplaceAllStringFunc(s, feed.RedactURL) }
 func redactPodcastJSON(raw json.RawMessage) json.RawMessage {
@@ -362,7 +367,7 @@ func sanitizePodcastUpdate(u *Update) {
 }
 
 func validShowPath(p *string) bool {
-	return p != nil && feed.ShowPath(*p) && !strings.ContainsAny(*p, "\r\n")
+	return p != nil && feed.ShowPath(*p)
 }
 
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {

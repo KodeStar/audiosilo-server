@@ -190,16 +190,16 @@ func (c *Catalog) PodcastSignatures(ctx context.Context, lib int64) (map[string]
 	}
 	return out, err
 }
-func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, keep map[string]bool) error {
+
+// PrunePodcastShows removes the named shows of a library with their episodes:
+// a scan names only shows it knew at its start, so one indexed meanwhile (a new
+// subscription's) is never taken for a show that went.
+func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, gone []string) error {
+	if len(gone) == 0 {
+		return nil
+	}
 	return c.db.WithTx(ctx, "PrunePodcastShows", func(tx *sql.Tx) error {
-		shows, err := queryRows(ctx, tx, func(r *sql.Rows, p *string) error { return r.Scan(p) }, `SELECT show_path FROM podcast_shows WHERE library_id=?`, lib)
-		if err != nil {
-			return err
-		}
-		for _, show := range shows {
-			if keep[show] {
-				continue
-			}
+		for _, show := range gone {
 			ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) }, `SELECT book_id FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show)
 			if err != nil {
 				return err
@@ -462,10 +462,9 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if j.State == bridge.StateCancelled {
 			return nil
 		}
-		result, err := bridge.PodcastOutcomeOf(j)
-		if err != nil {
-			return err
-		}
+		// A field of the wrong type stays at its zero value rather than failing
+		// the fold, which the recovery sweep would retry on every tick.
+		result, _ := bridge.PodcastOutcomeOf(j)
 		show := j.Target()
 		if j.Kind == bridge.KindPodcastSubscribe {
 			var p bridge.SubscribeParams
@@ -491,6 +490,14 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		if j.State == bridge.StateDone {
+			// The validators go back out as a poll's params, which refuse one over
+			// bridge.MaxPollValidator bytes: drop it (the next poll asks without it)
+			// rather than store a value no poll could ever be queued with.
+			for _, v := range []*string{&result.ETag, &result.LastModified} {
+				if len(*v) > bridge.MaxPollValidator {
+					*v = ""
+				}
+			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339))
 		} else {
 			seconds := 1800 << min(failures, 6)

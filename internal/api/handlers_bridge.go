@@ -554,7 +554,11 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "Podcast rescans take a show path only.")
 			return
 		}
-		show, n, err := a.scanner.IndexPodcastPath(r.Context(), *lib, p)
+		// Detached from the request like a book's rescan (rescanAt), so a long
+		// show's index is still saved when the Bridge's request gives up.
+		ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+		defer cancel()
+		show, n, err := a.scanner.IndexPodcastPath(ctx, *lib, p)
 		if errors.Is(err, library.ErrNotIndexable) {
 			writeErrorCode(w, 404, "not_indexable", "No valid feed.json.")
 			return

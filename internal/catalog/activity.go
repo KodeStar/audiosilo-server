@@ -795,12 +795,16 @@ func (f finishedSet) all() map[Ref]bool {
 	return out
 }
 
+// progressInBookLibrary is inBookLibrary for a progress row (unaliased):
+// a finished or stalled podcast episode is no book in these figures.
+const progressInBookLibrary = `EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=progress.library_id AND pl.kind='` + KindBooks + `')`
+
 // finishedIn reads the books each user finished in [from, to), of everyone or
 // one user (userID 0: everyone; for one user the progress primary key serves
 // it: user_id leads).
 func (c *Catalog) finishedIn(ctx context.Context, userID int64, from, to time.Time) (finishedSet, error) {
 	q := `SELECT user_id, library_id, rel_path FROM progress
-	  WHERE finished = 1 AND finished_at >= ? AND finished_at < ?`
+	  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? AND ` + progressInBookLibrary
 	args := []any{from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)}
 	if userID != 0 {
 		q, args = q+` AND user_id = ?`, append(args, userID)
@@ -829,7 +833,7 @@ func (c *Catalog) finishedIn(ctx context.Context, userID int64, from, to time.Ti
 
 func (c *Catalog) activityFunnel(ctx context.Context, out *Activity, from, to time.Time) error {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT position, duration, finished FROM progress WHERE updated_at >= ? AND updated_at < ?`,
+		`SELECT position, duration, finished FROM progress WHERE updated_at >= ? AND updated_at < ? AND `+progressInBookLibrary,
 		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
 	if err != nil {
 		return err
@@ -913,7 +917,7 @@ func (c *Catalog) activityDropOffs(ctx context.Context, out *Activity, _, _ time
 // people left that way, the only ones a drop-off can be found in.
 const (
 	stalledWhere = ` FROM progress p JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
-	  WHERE p.finished = 0 AND p.position > 0 AND p.updated_at < ?1`
+	  WHERE p.finished = 0 AND p.position > 0 AND p.updated_at < ?1 AND ` + inBookLibrary
 	stalledBookIDs = `SELECT b.id` + stalledWhere + ` GROUP BY b.id HAVING COUNT(*) >= 2`
 )
 
@@ -990,11 +994,11 @@ func (c *Catalog) activityGrowth(ctx context.Context, out *Activity, from, to ti
 	}
 	fromS, toS := from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)
 	var n int
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE added_at <= ?`, fromS).Scan(&n); err != nil {
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books b WHERE b.added_at <= ? AND `+inBookLibrary, fromS).Scan(&n); err != nil {
 		return err
 	}
 	added, err := queryRows(ctx, c.db, func(rows *sql.Rows, v *string) error { return rows.Scan(v) },
-		`SELECT added_at FROM books WHERE added_at > ? AND added_at <= ? ORDER BY added_at`, fromS, toS)
+		`SELECT b.added_at FROM books b WHERE b.added_at > ? AND b.added_at <= ? AND `+inBookLibrary+` ORDER BY b.added_at`, fromS, toS)
 	if err != nil {
 		return err
 	}
@@ -1071,7 +1075,7 @@ func sortedGroups(m map[string]*StorageGroup) []StorageGroup {
 func (c *Catalog) activityCoverage(ctx context.Context, out *Activity, _, _ time.Time) error {
 	return c.db.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(`+matchedExpr+`), 0), COALESCE(SUM(`+hasChaptersExpr+`), 0),
-		        COALESCE(SUM(`+hasCoverExpr+`), 0) FROM books b`).
+		        COALESCE(SUM(`+hasCoverExpr+`), 0) FROM books b WHERE `+inBookLibrary).
 		Scan(&out.Coverage.Books, &out.Coverage.Identified, &out.Coverage.WithChapters, &out.Coverage.WithCover)
 }
 

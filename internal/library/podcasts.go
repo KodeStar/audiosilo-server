@@ -20,13 +20,15 @@ func feedSignature(info os.FileInfo) string {
 }
 
 func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *ScanResult) (*ScanResult, error) {
-	entries, err := os.ReadDir(lib.Root)
-	if err != nil {
-		return res, ErrLibraryUnavailable
-	}
+	// The shows known before the root is listed are the only ones this scan may
+	// prune: one the Bridge indexes meanwhile isn't in the listing yet.
 	old, err := s.cat.PodcastSignatures(ctx, lib.ID)
 	if err != nil {
 		return res, err
+	}
+	entries, err := os.ReadDir(lib.Root)
+	if err != nil {
+		return res, ErrLibraryUnavailable
 	}
 	if len(entries) == 0 && len(old) > 0 {
 		return res, ErrLibraryUnavailable
@@ -62,7 +64,13 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 	}
 	res.Partial = partial
 	if !partial {
-		if err := s.cat.PrunePodcastShows(ctx, lib.ID, keep); err != nil {
+		var gone []string
+		for show := range old {
+			if !keep[show] {
+				gone = append(gone, show)
+			}
+		}
+		if err := s.cat.PrunePodcastShows(ctx, lib.ID, gone); err != nil {
 			return res, err
 		}
 	}

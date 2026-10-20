@@ -114,7 +114,9 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	libs, err := a.cat.CallerLibraries(r.Context(), callerForUser(u))
+	who := callerForUser(u)
+	who.Podcasts = seesPodcasts(r.Context())
+	libs, err := a.cat.CallerLibraries(r.Context(), who)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load access")
 		return
@@ -157,7 +159,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		ownerLibs, ownerAdmin := []catalog.Library{}, false
 		if rule := u.MemberRule; rule != nil {
 			ownerAdmin = rule.OwnerAdmin
-			if ownerLibs, err = a.cat.CallerLibraries(r.Context(), catalog.Caller{ID: rule.Owner, Admin: ownerAdmin}); err != nil {
+			if ownerLibs, err = a.cat.CallerLibraries(r.Context(), catalog.Caller{ID: rule.Owner, Admin: ownerAdmin, Podcasts: who.Podcasts}); err != nil {
 				a.log.Warn("owner libraries failed", "user", id, "err", err)
 				writeError(w, http.StatusInternalServerError, "could not load access")
 				return

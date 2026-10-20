@@ -267,6 +267,9 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 	showPath := ""
 	if show != nil {
 		showPath = show.Path
+		// The URL that restores a private show is that show's secret, whatever
+		// the request's flag or the URL's look says: it stays out of bridge_jobs.
+		private = private || show.Private
 	}
 	j, _, err := a.bridge.EnqueueSubscribe(r.Context(), lib.ID, user, norm, private, showPath)
 	if !a.podcastQueueError(w, err) {
@@ -401,6 +404,10 @@ func (a *API) handleBridgeMarker(w http.ResponseWriter, r *http.Request) {
 func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string) {
 	showPath := strings.Split(p, "/")[0]
 	show, err := a.cat.PodcastShow(r.Context(), lib.ID, showPath, userFrom(r.Context()).ID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
 	if err != nil {
 		a.writeCatalogError(w, err, "load podcast artwork failed", "No cover.")
 		return

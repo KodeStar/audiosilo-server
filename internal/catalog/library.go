@@ -159,7 +159,10 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 			joinPatterns(existing.IgnorePatterns), existing.MetadataSource, id); err != nil {
 			return err
 		}
-		if existing.MetadataSource == stored {
+		// A podcast library's episodes come from feed.json, never from tags or
+		// the path, and have no scanned snapshot: re-resolving them would blank
+		// what IndexPodcastShow wrote (their descriptions among it).
+		if existing.MetadataSource == stored || existing.Kind == KindPodcasts {
 			return nil
 		}
 		resolved = true

@@ -172,3 +172,17 @@ func TestPrivateLeaseAfterRestartExpiresBeforeClaim(t *testing.T) {
 		t.Fatalf("expired %+v %v", got, err)
 	}
 }
+
+// A URL in a podcast job's text is redacted whole: a quote or angle bracket in
+// it doesn't end the match early and leave part of a secret behind.
+func TestRedactPodcastTextWholeURL(t *testing.T) {
+	for _, s := range []string{
+		`failed https://host/feed?token=abc"SECRET`,
+		`failed https://user:pa"SECRET@host/feed`,
+		`failed https://host/members/abc<SECRET>/feed.xml`,
+	} {
+		if got := redactPodcastText(s); strings.Contains(got, "SECRET") {
+			t.Errorf("%s -> %s", s, got)
+		}
+	}
+}

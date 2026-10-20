@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,98 @@ func TestPodcastScopesAndAggregates(t *testing.T) {
 		t.Fatalf("colors %+v %v", colors, err)
 	}
 }
+
+// A new metadata source re-resolves a books library; a podcast library's
+// episodes come from feed.json and must keep what it said.
+func TestPodcastMetadataSourceKeepsEpisodes(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{MetadataFromPath, MetadataFromTags} {
+		if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{MetadataSource: &source}); err != nil {
+			t.Fatal(err)
+		}
+		b, err := c.GetBookByPath(ctx, lib.ID, f.Episodes[0].Path)
+		if err != nil || b.Title != f.Episodes[0].Title || b.Description != f.Episodes[0].Description || b.Author != f.Show.Author {
+			t.Fatalf("%s: %+v %v", source, b, err)
+		}
+	}
+}
+
+// A prune removes only the shows it names (a scan's, known at its start), so a
+// show indexed while the scan ran stays.
+func TestPodcastPruneNamedShows(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PrunePodcastShows(ctx, lib.ID, []string{"Gone Show"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := c.GetBookByPath(ctx, lib.ID, f.Episodes[0].Path); err != nil || b.Episode == nil {
+		t.Fatalf("unnamed show pruned: %+v %v", b, err)
+	}
+	if err := c.PrunePodcastShows(ctx, lib.ID, []string{"Example Show"}); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := c.PodcastSignatures(ctx, lib.ID)
+	if _, gone := c.GetBookByPath(ctx, lib.ID, f.Episodes[0].Path); err != nil || len(sigs) != 0 || !errors.Is(gone, ErrNotFound) {
+		t.Fatalf("named show kept: %v %v %v", sigs, err, gone)
+	}
+}
+
+// Episodes are no books in the console's activity figures or a listening goal.
+func TestPodcastEpisodesOutOfBookFigures(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	user := seedUser(t, c, ctx)
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SaveProgress(ctx, user, Progress{Ref: Ref{LibraryID: lib.ID, Path: f.Episodes[0].Path},
+		Position: 600, Duration: 600, Finished: true, UpdatedAt: now.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	a, err := c.ActivityFor(ctx, "7d", now.AddDate(0, 0, -7), now, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Coverage.Books != 0 || a.Growth[len(a.Growth)-1].Books != 0 || a.Totals != (ActivityTotals{}) || a.Funnel != (Funnel{}) {
+		t.Fatalf("activity coverage %+v growth %+v totals %+v funnel %+v", a.Coverage, a.Growth, a.Totals, a.Funnel)
+	}
+	goal, err := c.GoalStatusFor(ctx, user, now, time.UTC)
+	if err != nil || goal.Finished != 0 {
+		t.Fatalf("goal %+v %v", goal, err)
+	}
+}
+
 func TestPodcastFolding(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	user := seedUser(t, c, ctx)
@@ -186,4 +279,36 @@ func TestPodcastFolding(t *testing.T) {
 		}
 	}
 
+}
+
+// A validator longer than a poll may carry is dropped, and a field of the wrong
+// type doesn't fail the fold (the sweep would retry it on every tick).
+func TestPodcastFoldingOddOutcomes(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	show := "Example Show"
+	long := strings.Repeat("�", 200) // 600 bytes: obs-text the Bridge encoded
+	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show, State: bridge.StateDone,
+		Result: json.RawMessage(`{"status":200,"etag":"` + long + `","last_modified":"Mon, 20 Oct 2026 07:59:00 GMT","next_poll_seconds":"soon"}`)}
+	if err := c.FoldPodcastJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.PodcastState(ctx, lib.ID, show)
+	if err != nil || st.ETag != "" || st.LastModified != "Mon, 20 Oct 2026 07:59:00 GMT" || st.LastChecked == nil {
+		t.Fatalf("state %+v %v", st, err)
+	}
+	var p bridge.PollParams
+	if err := json.Unmarshal(st.PollParams(), &p); err != nil || len(p.ETag) > bridge.MaxPollValidator {
+		t.Fatalf("params %s %v", st.PollParams(), err)
+	}
 }

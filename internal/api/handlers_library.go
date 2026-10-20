@@ -33,9 +33,16 @@ func callerForUser(u *auth.User) catalog.Caller {
 // client on headerless media requests. Cast credentials never see podcasts.
 func callerOf(ctx context.Context) catalog.Caller {
 	who := callerForUser(userFrom(ctx))
-	cred := credentialFrom(ctx)
-	who.Podcasts = cred.Kind != auth.KindCast && auth.SeesPodcasts(cred.Client)
+	who.Podcasts = seesPodcasts(ctx)
 	return who
+}
+
+// seesPodcasts is the old-client gate for this request's credential: whether
+// what it is shown may include podcast libraries, its own or (in the console's
+// views of a user) another person's.
+func seesPodcasts(ctx context.Context) bool {
+	cred := credentialFrom(ctx)
+	return cred.Kind != auth.KindCast && auth.SeesPodcasts(cred.Client)
 }
 
 // handleListLibraries lists libraries the caller can reach (via any share, or
@@ -74,15 +81,16 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 	return scopes, true
 }
 
-// scopeIn keeps the catalog's computed scope, including its client gate and
-// private-show restrictions for admins. An absent library grants nothing.
-func scopeIn(r *http.Request, scopes []catalog.Scope, libraryID int64) catalog.Scope {
+// scopeIn is the caller's scope in one library out of their callerScopes, as the
+// catalog computed it (the client gate and private shows apply to admins too),
+// and whether the library was among them.
+func scopeIn(scopes []catalog.Scope, libraryID int64) (catalog.Scope, bool) {
 	for _, s := range scopes {
 		if s.LibraryID == libraryID {
-			return s
+			return s, true
 		}
 	}
-	return catalog.Scope{LibraryID: libraryID}
+	return catalog.Scope{LibraryID: libraryID}, false
 }
 
 // scopedLibrary loads the library the caller's scope is for: 403 when the scope
@@ -148,7 +156,13 @@ func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*cat
 // (callerScopes): a request body's book (POST /me/queue,
 // /me/collections/{id}/items) whose answer reads the caller's lists with them.
 func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
-	lib, scope, status, msg := a.scopedLibrary(r, scopeIn(r, scopes, libraryID))
+	scope, ok := scopeIn(scopes, libraryID)
+	if !ok {
+		// None granted, hidden by the client gate, or no such library: scopedPath
+		// tells them apart as for any path (an admin's unknown library is a 404).
+		return a.scopedPath(r, libraryID, rawPath)
+	}
+	lib, scope, status, msg := a.scopedLibrary(r, scope)
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
@@ -238,6 +252,10 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	}
 	if lib.Kind == catalog.KindPodcasts {
 		listing, err := a.scanner.BrowsePodcasts(r.Context(), *lib, scope, userFrom(r.Context()).ID, r.URL.Query().Get("path"), queryInt(r, "offset", 0), queryInt(r, "limit", 200))
+		if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "directory not found")
+			return
+		}
 		if err != nil {
 			a.writeCatalogError(w, err, "browse podcasts failed", "Could not list shows.")
 			return

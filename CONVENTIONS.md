@@ -514,7 +514,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
   (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
   nil = the admin's unscoped view). Every content handler authorizes
-  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
+  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`, except in a
+  podcast library, where the old-client gate and private shows apply to them too (see Podcasts).
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
@@ -1651,28 +1652,35 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
   32 MiB and 20,000 episodes. Unknown fields are ignored; a future version skips the show. Episode
   paths are validated, one level below their show, unique and audio-only; no tags, probes,
-  deduplication, moves or sidecars run. Presence is one directory listing; the feed signature
-  skips unchanged shows, while a targeted Bridge rescan refreshes file presence too. Missing
+  deduplication, moves or sidecars run, and a metadata source change leaves episodes as feed.json
+  wrote them. Presence is one directory listing; the feed signature skips unchanged shows, while a
+  targeted Bridge rescan refreshes file presence too. A scan prunes only shows indexed before it
+  listed the root, so one the Bridge indexes meanwhile stays. Missing
   episodes remain indexed, with `episode` on `/item`, 404 `not_downloaded` on `/stream`, and empty
   chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players remain hidden
   while `PodcastPlayerMinVersion` is empty. Stored clients cover headerless media requests.
   The catalog applies this gate before admin shortcuts, on single and multiple library scopes
-  and library lists. Background callers and cast tokens keep it false. Private shows then narrow
+  and library lists. The console's views of another person (user detail, a progress edit) take
+  that person's access under the viewing request's gate. Background callers and cast tokens keep
+  it false. Private shows then narrow
   every player's scope, including admins, to shows they follow; knowing a feed URL proves access
   by its current or previous normalized SHA-256. Whole-library grants remain the requirement for
-  following a new URL. Book search/recent and admin book tools exclude podcast libraries.
+  following a new URL. Book search/recent, admin book tools, the console's activity figures and
+  listening goals exclude podcast libraries.
   Core show, episode, item and media reads are always available to scoped callers. Follow,
   unfollow and check actions use the module User wrapper (no kids or demo accounts), JSON bodies
   for URLs, and `modules.podcasts.enabled` (off by default,
   `AUDIOSILO_MODULES_PODCASTS_ENABLED`). Its capability also needs an online Bridge offering
   `podcast`; reads do not. Five open subscribes per user, deduped by URL hash and user. Private
   URLs live only in the Bridge service's volatile memory and its claim reply; stored params keep
-  an empty URL, display labels are redacted, and a restart expires unclaimed requests. Podcast
+  an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
+  display labels are redacted, and a restart expires unclaimed requests. Podcast
   errors, progress and results are redacted before storage and never notify. The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
-  up to ten due followed shows. Successful cadence clamps to 15 minutes..24 hours; failures back
+  up to ten due followed shows; a job or show that fails is logged and passed over, and a stored
+  validator over a poll's 512-byte cap is dropped. Successful cadence clamps to 15 minutes..24 hours; failures back
   off, `gone` stops automatic checks. Follows and feed status survive index pruning. The Bridge's
   marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
   and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;
