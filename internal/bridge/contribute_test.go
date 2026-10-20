@@ -513,7 +513,8 @@ func TestCorrectRefusesBidiControls(t *testing.T) {
 // character is, a corrected value that reads empty or as the current one (the
 // record's, as it spells it) changes nothing, and evidence that reads as none
 // is missing; any other reference, and an ampersand that starts none, is taken
-// and kept as sent.
+// and kept as sent. A name html.UnescapeString leaves as written (&nLt; and
+// &nGt;, which a browser decodes; the console's namedRef mirrors Go) is none.
 func TestCorrectReadsValuesAsTheCommunity(t *testing.T) {
 	t.Parallel()
 	params := func(current, corrected, evidence string) string {
@@ -550,6 +551,7 @@ func TestCorrectReadsValuesAsTheCommunity(t *testing.T) {
 		"markup in the evidence":  {"a", "b", "The cover reads &lt;Mistborn&gt;."},
 		"a space before a ref":    {"a", "b\u00a0&#32;", "e"},
 		"evidence ending a ref":   {"a", "b", "see\u00a0&nbsp;"},
+		"a name html keeps":       {"\u226a\u20d2", "&nLt;", "e"},
 	} {
 		p, err := CheckCorrect(json.RawMessage(params(c.current, c.corrected, c.evidence)))
 		if err != nil || p.Changes[0].Corrected != c.corrected || p.Evidence != c.evidence {

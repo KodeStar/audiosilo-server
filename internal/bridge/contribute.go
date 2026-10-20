@@ -125,12 +125,14 @@ type Correction struct {
 // characters for the recording's other identifiers and the region; 1 to
 // MaxCorrections changes, each of a CorrectionFields field (once each), its
 // values trimmed, single-line and at most 500 characters, the corrected one set
-// and different from the current one; evidence required, at most 2000
-// characters (line breaks kept) as the community's issue carries it
-// (issueLength). No value holds a control character (unicode.IsControl, the
-// Bridge's test) or a bidirectional override (isBidiControl, the
-// community's), each value and the evidence read as the community reads them
-// (asRead). It returns them as stored, the values trimmed.
+// and different from the current one as the community reads it (asRead);
+// evidence required (none when it reads as nothing), at most 2000 characters
+// (line breaks kept) both as written and as the community's issue carries it
+// (issueLength). Neither a value nor the evidence holds a control character
+// (unicode.IsControl, the Bridge's test; the evidence keeps line breaks and
+// tabs) or a bidirectional override (isBidiControl, the community's), as
+// written or with its references decoded (checkProse). It returns them as
+// stored, the values trimmed.
 func correctParams(raw json.RawMessage) (json.RawMessage, error) {
 	p, err := parseCorrect(raw)
 	if err != nil {

@@ -1607,15 +1607,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   characters, `corrected` set and different from `current`; `evidence` required, at most 2000 characters,
   line breaks kept, CRLF stored as LF, and at most 2000 as the issue carries it (`issueLength`: a line
   starting with # loses its indent and gains a backslash); `recording_id`, when given, a community slug
-  (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included)
-  and no value or the evidence a bidirectional embedding, override or isolate (U+202A-U+202E,
-  U+2066-U+2069, `isBidiControl`, as audiosilo-meta's issueform refuses; ZWJ/ZWNJ and the marks are
-  fine), each value and the evidence read as the community reads them (`asRead`, its issueform's
-  `formValue`: an HTML character reference ending in `;` is the character it names, a whitespace one a
-  space, so `&#x202E;` is refused as U+202E is, and a `corrected` that so read is empty or `current`
-  (the record's value as it spells it) changes nothing; evidence left as `_No response_`, the form's
-  blank, is none), the values stored as sent: what the Bridge or the community would refuse when
-  filing is a 400 now). Its params cap is its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
+  (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included;
+  nor the evidence one but a line break or a tab) and no value or the evidence a bidirectional
+  embedding, override or isolate (U+202A-U+202E, U+2066-U+2069, `isBidiControl`, as audiosilo-meta's
+  issueform refuses; ZWJ/ZWNJ and the marks are fine), each looked for as written and as the community
+  reads the text (`checkProse` on `decodeRefs`, untrimmed, so a U+0085 a trim would drop before a
+  trailing `&#32;` is refused too; its issueform's `formValue`: an HTML character reference ending in
+  `;` is the character it names, a whitespace one a space, so `&#x202E;` is refused as U+202E is); a
+  `corrected` that so read and trimmed (`asRead`) is empty or `current` (the record's value as it
+  spells it) changes nothing; evidence left as `_No response_`, the form's blank, or reading as nothing
+  is none), the values stored as sent: what the Bridge or the community would refuse when filing is a
+  400 now). Its params cap is its own, 128 KiB (`kindSpec.maxParams`, every other kind 16 KiB as sent): a batch at every bound
   sent by an ASCII-only encoder (each character outside the BMP two `\u` escapes) is about 120 KB, and
   the queue route's body bound follows (`bridge.MaxParamsBytes` + 4 KiB). The cap is on the params as
   sent: `bridge.CheckCorrect` checks it on the api's path (`checkCorrections` re-encodes them before

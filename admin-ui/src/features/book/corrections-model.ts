@@ -82,12 +82,19 @@ const MAX_NAMED_REFS = 256;
 let refParser: DOMParser | undefined;
 
 /**
+ * The two names of the HTML standard's table Go's html leaves as written (its
+ * entity table comments them out: their two characters are wider than the name).
+ */
+const GO_UNDECODED: ReadonlySet<string> = new Set(['&nLt;', '&nGt;']);
+
+/**
  * A named reference decoded by the browser's own HTML parser, which reads the
- * full HTML table as Go's html does (both follow the HTML standard, legacy
- * prefixes like "&copy" in "&copyright;" included). Without a DOM it stays as
- * written.
+ * HTML standard's table as Go's html does (legacy prefixes like "&copy" in
+ * "&copyright;" included) but for GO_UNDECODED, which stays as written. Without
+ * a DOM it stays as written.
  */
 function namedRef(ref: string): string {
+  if (GO_UNDECODED.has(ref)) return ref;
   let r = namedRefs.get(ref);
   if (r === undefined) {
     if (typeof DOMParser === 'undefined') return ref;
@@ -272,11 +279,16 @@ export interface CorrectionRow {
 }
 
 /** A row's refusal flags, in the order the review names them (each is book.corrections.<flag>). */
-export const REFUSALS = ['tooLong', 'control', 'bidi', 'noChange'] as const;
+const REFUSALS = ['tooLong', 'control', 'bidi', 'noChange'] as const;
 
-/** Whether a row can be sent: the server takes it (none of its refusal flags is set). */
+/** Why the server would refuse a row (its first refusal flag set), or undefined when it takes it. */
+export function refusal(r: CorrectionRow): (typeof REFUSALS)[number] | undefined {
+  return REFUSALS.find((k) => r[k]);
+}
+
+/** Whether a row can be sent: the server takes it (no refusal). */
 export function sendable(r: CorrectionRow): boolean {
-  return !REFUSALS.some((k) => r[k]);
+  return !refusal(r);
 }
 
 /**
@@ -298,10 +310,11 @@ export function correctionRows(
     .map((r) => {
       const field = r.field as CorrectionField;
       // Each value as the server checks it (bridge.parseCorrect, checkProse):
-      // trimmed, then its references decoded (which keeps what is written).
+      // trimmed, then its references decoded (which keeps what is written);
+      // the corrected one compared as the community reads it (asRead).
       const values = [goTrim(r.theirs), goTrim(r.mine)];
       const decoded = values.map(decodeRefs);
-      const corrected = goTrim(decoded[1]);
+      const read = asRead(values[1]);
       return {
         field,
         current: r.theirs,
@@ -310,7 +323,7 @@ export function correctionRows(
         tooLong: values.some((v) => runes(v) > MAX_VALUE),
         control: decoded.some((v) => CONTROL.test(v)),
         bidi: decoded.some((v) => BIDI.test(v)),
-        noChange: corrected === '' || corrected === values[0],
+        noChange: read === '' || read === values[0],
       };
     });
 }
@@ -392,16 +405,17 @@ export type CorrectionProblem =
  * Why the suggestion can't be sent: nothing ticked, or evidence the server
  * refuses, checked as it does (bridge.parseCorrect): CRLF read as LF and
  * trimmed as Go trims; the form's blank or reading as nothing is none; over
- * MAX_EVIDENCE as the issue carries it (issueLength); a control character but
- * a line break or a tab (CONTROL_IN_TEXT), or a bidirectional control, as
- * written or as references decode it.
+ * MAX_EVIDENCE as written or as the issue carries it (issueLength, which an
+ * indented # line makes the shorter); a control character but a line break or
+ * a tab (CONTROL_IN_TEXT), or a bidirectional control, as written or as
+ * references decode it.
  */
 export function correctionProblem(ticked: number, evidence: string): CorrectionProblem | undefined {
   if (ticked === 0) return 'none';
   const e = goTrim(evidence.replaceAll('\r\n', '\n'));
+  if (e === NO_RESPONSE || !asRead(e)) return 'noEvidence';
+  if (runes(e) > MAX_EVIDENCE || issueLength(e) > MAX_EVIDENCE) return 'evidenceTooLong';
   const decoded = decodeRefs(e);
-  if (e === NO_RESPONSE || !goTrim(decoded)) return 'noEvidence';
-  if (issueLength(e) > MAX_EVIDENCE) return 'evidenceTooLong';
   if (CONTROL_IN_TEXT.test(decoded)) return 'evidenceControl';
   if (BIDI.test(decoded)) return 'evidenceBidi';
   return undefined;

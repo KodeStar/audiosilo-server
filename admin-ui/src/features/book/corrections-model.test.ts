@@ -347,6 +347,9 @@ describe('sending', () => {
     // Length as the issue carries it: a line led by # counts one more, its indent none.
     expect(correctionProblem(1, '#\n'.repeat(999) + '#')).toBe('evidenceTooLong');
     expect(correctionProblem(1, 'x\n'.repeat(999) + 'x')).toBeUndefined();
+    // And as written: 2003 characters the issue would carry as 2000.
+    expect(issueLength('x'.repeat(1996) + '\n    #1')).toBe(MAX_EVIDENCE);
+    expect(correctionProblem(1, 'x'.repeat(1996) + '\n    #1')).toBe('evidenceTooLong');
   });
 
   it("finds the marketplace of the book's ASIN", () => {
@@ -421,6 +424,8 @@ describe('reading as the community reads', () => {
     // A whitespace reference reads as a space; a name it doesn't know stays as written.
     expect(asRead('a&#9;b&NewLine;c')).toBe('a b c');
     expect(asRead('&copyright; AT&T;')).toBe('&copyright; AT&T;');
+    // The two names of the standard Go's html leaves as written (the browser decodes them).
+    expect(asRead('&nLt;&nGt;')).toBe('&nLt;&nGt;');
     // Trimmed as Go trims: U+0085 yes, U+FEFF no.
     expect(goTrim('\u0085a\u3000')).toBe('a');
     expect(goTrim('\ufeffa')).toBe('\ufeffa');

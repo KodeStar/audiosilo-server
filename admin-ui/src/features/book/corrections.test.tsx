@@ -215,7 +215,7 @@ describe('suggest corrections', () => {
     expect(author).toHaveAttribute('data-disabled');
     expect(
       within(rows).getByText(
-        "Holds a hidden text-direction character the community refuses, so it can't be sent.",
+        "Holds a hidden text-direction character the community refuses (or a character reference to one), so it can't be sent.",
       ),
     ).toBeInTheDocument();
     await user.type(
@@ -224,7 +224,7 @@ describe('suggest corrections', () => {
     );
     expect(
       within(dialog).getByText(
-        'The evidence holds a hidden text-direction character the community refuses. Retype any text you pasted.',
+        'The evidence holds a hidden text-direction character the community refuses (or a character reference to one). Retype any text you pasted.',
       ),
     ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Suggest 1 correction' }));
@@ -258,12 +258,12 @@ describe('suggest corrections', () => {
     expect(within(rows).getByRole('checkbox', { name: 'Suggest ISBN' })).toBeChecked();
     expect(
       within(rows).getByText(
-        "Holds a hidden text-direction character the community refuses, so it can't be sent.",
+        "Holds a hidden text-direction character the community refuses (or a character reference to one), so it can't be sent.",
       ),
     ).toBeInTheDocument();
     expect(
       within(rows).getByText(
-        "Holds a control character the community refuses, so it can't be sent.",
+        "Holds a control character the community refuses (or a character reference to one), so it can't be sent.",
       ),
     ).toBeInTheDocument();
     expect(within(rows).getByText(/this changes nothing/)).toBeInTheDocument();
@@ -274,14 +274,14 @@ describe('suggest corrections', () => {
     await user.type(evidence, ' See &#8238;it.');
     expect(
       within(dialog).getByText(
-        'The evidence holds a hidden text-direction character the community refuses. Retype any text you pasted.',
+        'The evidence holds a hidden text-direction character the community refuses (or a character reference to one). Retype any text you pasted.',
       ),
     ).toBeInTheDocument();
     await user.clear(evidence);
     await user.type(evidence, 'See&#1;it.');
     expect(
       within(dialog).getByText(
-        'The evidence holds a control character the community refuses. Retype any text you pasted.',
+        "The evidence holds a control character (or a character reference to one), so it can't be sent. Retype any text you pasted.",
       ),
     ).toBeInTheDocument();
     await user.clear(evidence);

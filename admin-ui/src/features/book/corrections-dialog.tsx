@@ -33,7 +33,7 @@ import {
   lookupBy,
   MAX_EVIDENCE,
   MAX_VALUE,
-  REFUSALS,
+  refusal,
   sendable,
   type CorrectionRow,
 } from './corrections-model';
@@ -178,15 +178,11 @@ function CorrectionsForm({
     if (ok) onDone();
   };
 
-  // Each evidence problem but noEvidence (said once touched) is its own key.
+  // Each evidence problem is its own key; a missing one is said once touched.
   const evidenceError =
-    problem === 'noEvidence'
-      ? touched
-        ? t('book.corrections.evidenceRequired')
-        : undefined
-      : problem && problem !== 'none'
-        ? t(`book.corrections.${problem}`, { max: formatNumber(MAX_EVIDENCE, lang) })
-        : undefined;
+    problem && problem !== 'none' && (touched || problem !== 'noEvidence')
+      ? t(`book.corrections.${problem}`, { max: formatNumber(MAX_EVIDENCE, lang) })
+      : undefined;
 
   let body: React.ReactNode;
   if (search.isError) {
@@ -283,9 +279,9 @@ function ReviewRow({
   const lang = i18n.resolvedLanguage ?? 'en';
   const id = useId();
   const label = t(`book.field.${r.field}`);
-  const ok = sendable(r);
-  const flag = REFUSALS.find((k) => r[k]);
-  const refusal = flag && t(`book.corrections.${flag}`, { max: formatNumber(MAX_VALUE, lang) });
+  const flag = refusal(r);
+  const ok = !flag;
+  const warning = flag && t(`book.corrections.${flag}`, { max: formatNumber(MAX_VALUE, lang) });
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <Checkbox
@@ -328,7 +324,7 @@ function ReviewRow({
             {shownValue(t, r.field, r.corrected)}
           </span>
         </div>
-        {refusal ? <p className="text-[12.5px] text-warning">{refusal}</p> : null}
+        {warning ? <p className="text-[12.5px] text-warning">{warning}</p> : null}
       </div>
     </li>
   );
