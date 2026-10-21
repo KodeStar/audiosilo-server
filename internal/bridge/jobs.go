@@ -635,16 +635,15 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if err != nil {
 				return err
 			}
-			if (j.Kind == KindPodcastFetch || j.Kind == KindPodcastRetain || j.Kind == KindPodcastPoll) && !samePodcastIdentity(job.Params, j.Params) {
-				_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, now, id)
-				if err != nil {
-					return err
-				}
-				if job.State != StateQueued && job.State != StateNeedsAttention {
-					identityBusy = true
-					return nil
-				}
-			} else {
+			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
+				return nil
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, now, id)
+			if err != nil {
+				return err
+			}
+			if job.State != StateQueued && job.State != StateNeedsAttention {
+				identityBusy = true
 				return nil
 			}
 		}
@@ -663,7 +662,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return ErrTooManyRequests
 			}
 		}
-		if j.Kind == KindPodcastPoll || j.Kind == KindPodcastFetch || j.Kind == KindPodcastRetain {
+		if podcastWork(j.Kind) {
 			if err := s.prunePolls(ctx, tx, j); err != nil {
 				return err
 			}

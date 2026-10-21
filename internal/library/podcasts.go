@@ -313,8 +313,7 @@ func podcastBarrier(dir, base string) error {
 	if err != nil || !st.IsDir() {
 		return ErrNotIndexable
 	}
-	stem := strings.TrimSuffix(base, path.Ext(base))
-	_, err = os.Lstat(filepath.Join(side, stem+".publish.json"))
+	_, err = os.Lstat(filepath.Join(side, stemOf(base)+".publish.json"))
 	if !errors.Is(err, os.ErrNotExist) {
 		return ErrNotIndexable
 	}
@@ -324,15 +323,10 @@ func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, er
 	if !feed.ValidFetch(f) || f.DeletedAt != "" {
 		return nil, nil
 	}
-	stem := strings.TrimSuffix(base, path.Ext(base))
-	raw, err := metadata.ReadRegularFile(filepath.Join(dir, metadata.AttachmentsDir, stem+".chapters.json"), 4<<20, ErrNotIndexable, ErrNotIndexable)
+	l, err := metadata.ReadChapterList(filepath.Join(dir, metadata.AttachmentsDir, stemOf(base)+"."+metadata.AttachmentChapters))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	l, err := metadata.ParseChapterList(raw)
 	if err != nil || l.From != "id3_chap" || len(l.Files) != 1 || l.Files[0].Path != base || l.Files[0].Size != f.Bytes || l.Files[0].DurationMS != f.DurationMS || l.GeneratedAt != f.FetchedAt {
 		return nil, ErrNotIndexable
 	}

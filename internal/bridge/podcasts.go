@@ -42,6 +42,13 @@ func IsPodcast(kind string) bool {
 }
 func Internal(kind string) bool { return kinds[kind].internal }
 
+// podcastWork reports whether kind is one of a followed show's bound jobs
+// (poll, fetch, retain): params naming the show's identity, which an open job
+// for a replaced identity must not absorb, and terminal rows pruned per target.
+func podcastWork(kind string) bool {
+	return kind == KindPodcastPoll || kind == KindPodcastFetch || kind == KindPodcastRetain
+}
+
 // Ended reports whether j is in a state it ends in.
 func (j *Job) Ended() bool {
 	return j.State == StateDone || j.State == StateFailed || j.State == StateCancelled
@@ -327,7 +334,7 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('podcast.subscribe','podcast.poll','podcast.fetch','podcast.retain') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('podcast.fetch','podcast.retain') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}

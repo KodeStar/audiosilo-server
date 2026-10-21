@@ -19,17 +19,24 @@ type Policy struct {
 }
 
 func DefaultPodcastPolicy() Policy { return Policy{Mode: "keep", Keep: 3, Days: 7} }
+
+// podcastPolicySQL selects a show's policy from podcast_policies p, the default
+// (DefaultPodcastPolicy) where it has no override.
+const podcastPolicySQL = `COALESCE(p.mode,'keep'),COALESCE(p.keep,3),COALESCE(p.days,7)`
+
 func (p Policy) Valid() bool {
 	return (p.Mode == "keep" || p.Mode == "on_demand" || p.Mode == "archive") && p.Keep >= 1 && p.Keep <= 1000 && p.Days >= 0 && p.Days <= 365
 }
 
-var ErrPodcastIdentity = errors.New("podcast identity changed")
+// ErrPodcastIdentity is the Bridge queue's identity error: a show or episode at
+// the path is no longer the one the request named.
+var ErrPodcastIdentity = bridge.ErrIdentityChanged
 var ErrInvalidPolicy = errors.New("invalid podcast policy")
 
 func (c *Catalog) PodcastPolicy(ctx context.Context, lib int64, show, id string) (Policy, error) {
 	p := DefaultPodcastPolicy()
 	var current string
-	err := c.db.QueryRowContext(ctx, `SELECT s.show_id,COALESCE(p.mode,'keep'),COALESCE(p.keep,3),COALESCE(p.days,7) FROM podcast_shows s LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id WHERE s.library_id=? AND s.show_path=?`, lib, show).Scan(&current, &p.Mode, &p.Keep, &p.Days)
+	err := c.db.QueryRowContext(ctx, `SELECT s.show_id,`+podcastPolicySQL+` FROM podcast_shows s LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id WHERE s.library_id=? AND s.show_path=?`, lib, show).Scan(&current, &p.Mode, &p.Keep, &p.Days)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -150,6 +157,7 @@ func (s snapshotDB) QueryRowContext(ctx context.Context, q string, args ...any) 
 
 func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req RetentionRequest) (RetentionCheck, error) {
 	out := RetentionCheck{LibraryID: lib, ShowPath: path.Dir(req.Path), RetentionRequest: req}
+	var finishedAt, deadline time.Time
 	err := c.db.WithTx(ctx, "PodcastRetentionCheck", func(tx *sql.Tx) error {
 		snapshot := &Catalog{db: snapshotDB{catalogDB: c.db, tx: tx}, now: c.now}
 		pin, err := snapshot.PodcastPin(ctx, lib, req.Path)
@@ -165,7 +173,7 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 		}
 		now := c.now().UTC()
 		out.CheckedAt = now.Format(time.RFC3339)
-		if err = snapshot.retentionFollowers(ctx, lib, out.ShowPath, req.ShowID, req.Path, &out); err != nil {
+		if finishedAt, err = snapshot.retentionFollowers(ctx, lib, out.ShowPath, req.ShowID, req.Path, &out); err != nil {
 			return err
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM favourites WHERE library_id=?1 AND rel_path=?2),EXISTS(SELECT 1 FROM up_next WHERE library_id=?1 AND rel_path=?2),EXISTS(SELECT 1 FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind='podcast.fetch' AND state IN `+bridge.OpenStatesSQL+`)`, lib, req.Path).Scan(&out.Starred, &out.Queued, &out.FetchOpen); err != nil {
@@ -177,14 +185,14 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 			return err
 		}
 		out.OutsideKeepWindow = !inside
-		if out.AllFinished && out.AllFinishedAt != nil {
-			finished, _ := time.Parse(time.RFC3339, *out.AllFinishedAt)
-			fetched, _ := time.Parse(time.RFC3339, pin.Fetch.FetchedAt)
-			if fetched.After(finished) {
-				finished = fetched
+		if out.AllFinished {
+			from := finishedAt
+			if fetched, _ := time.Parse(time.RFC3339, pin.Fetch.FetchedAt); fetched.After(from) {
+				from = fetched
 			}
-			deadline := finished.Add(time.Duration(out.Policy.Days) * 24 * time.Hour).UTC().Format(time.RFC3339)
-			out.DeleteAfter = &deadline
+			deadline = from.Add(time.Duration(out.Policy.Days) * 24 * time.Hour).UTC()
+			at := deadline.Format(time.RFC3339)
+			out.DeleteAfter = &at
 		}
 		return nil
 	})
@@ -195,33 +203,31 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 	out.ActiveStream = c.podcastStreams[Ref{LibraryID: lib, Path: req.Path}] > 0
 	c.podcastStreamsMu.Unlock()
 	if out.DeleteAfter != nil {
-		deadline, _ := time.Parse(time.RFC3339, *out.DeleteAfter)
 		out.Eligible = out.Policy.Mode != "archive" && out.Followers > 0 && out.AllFinished && !c.now().Before(deadline) && !out.Starred && !out.Queued && !out.ActiveStream && !out.FetchOpen && (out.Policy.Mode != "keep" || out.OutsideKeepWindow)
 	}
 	return out, nil
 }
-func (c *Catalog) retentionFollowers(ctx context.Context, lib int64, show, id, p string, out *RetentionCheck) error {
+
+// retentionFollowers counts the show's followers who still have access to the
+// episode at p into out, sets AllFinished/AllFinishedAt, and returns the latest
+// finish time (zero unless all finished).
+func (c *Catalog) retentionFollowers(ctx context.Context, lib int64, show, id, p string, out *RetentionCheck) (time.Time, error) {
 	type follower struct {
 		id       int64
 		admin    bool
 		finished bool
 		at       sql.NullString
 	}
-	followers, err := queryRows(ctx, c.db, func(r *sql.Rows, f *follower) error { return r.Scan(&f.id, &f.admin, &f.finished, &f.at) }, `SELECT u.id,u.role='admin',COALESCE(p.finished,0),p.finished_at FROM podcast_follows f JOIN users u ON u.id=f.user_id LEFT JOIN progress p ON p.user_id=u.id AND p.library_id=f.library_id AND p.rel_path=? WHERE f.library_id=? AND f.show_path=? AND f.show_id=? AND u.disabled=0 AND u.is_demo=0`, p, lib, show, id)
+	followers, err := queryRows(ctx, c.db, func(r *sql.Rows, f *follower) error { return r.Scan(&f.id, &f.admin, &f.finished, &f.at) }, `SELECT u.id,u.role='admin',COALESCE(p.finished,0),p.finished_at FROM podcast_follows f JOIN users u ON u.id=f.user_id LEFT JOIN progress p ON p.user_id=u.id AND p.library_id=f.library_id AND p.rel_path=? WHERE f.library_id=? AND f.show_path=? AND f.show_id=? AND `+liveFollowerSQL, p, lib, show, id)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	out.AllFinished = true
 	latest := time.Time{}
 	for _, f := range followers {
-		who, err := c.callerByID(ctx, f.id, f.admin)
+		scope, err := c.followerScope(ctx, f.id, f.admin, lib)
 		if err != nil {
-			return err
-		}
-		who.Podcasts = true
-		scope, err := c.CallerScope(ctx, who, lib)
-		if err != nil {
-			return err
+			return time.Time{}, err
 		}
 		if !scope.Allows(p) {
 			continue
@@ -237,11 +243,28 @@ func (c *Catalog) retentionFollowers(ctx context.Context, lib int64, show, id, p
 		}
 	}
 	out.AllFinished = out.AllFinished && out.Followers > 0
-	if out.AllFinished {
-		at := latest.UTC().Format(time.RFC3339)
-		out.AllFinishedAt = &at
+	if !out.AllFinished {
+		return time.Time{}, nil
 	}
-	return nil
+	at := latest.UTC().Format(time.RFC3339)
+	out.AllFinishedAt = &at
+	return latest, nil
+}
+
+// liveFollowerSQL keeps the follows (f) of users (u) who count as followers:
+// enabled, non-demo accounts.
+const liveFollowerSQL = `u.disabled=0 AND u.is_demo=0`
+
+// followerScope is a follower's current access to lib, podcasts enabled: the
+// one access rule for scheduling and retention (never callerByID's
+// hidden-podcast default).
+func (c *Catalog) followerScope(ctx context.Context, user int64, admin bool, lib int64) (Scope, error) {
+	who, err := c.callerByID(ctx, user, admin)
+	if err != nil {
+		return Scope{}, err
+	}
+	who.Podcasts = true
+	return c.CallerScope(ctx, who, lib)
 }
 
 func movePodcastState(ctx context.Context, tx *sql.Tx, lib int64, oldPath, newPath string) error {

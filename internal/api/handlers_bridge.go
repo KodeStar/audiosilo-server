@@ -474,12 +474,7 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	switch {
 	case err == nil:
 		return true
-	case errors.Is(err, bridge.ErrNotPodcastLibrary):
-		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
-	case errors.Is(err, bridge.ErrNotBookLibrary):
-		writeErrorCode(w, 409, "not_book_library", "This library holds podcasts.")
-	case errors.Is(err, bridge.ErrIdentityChanged):
-		writeErrorCode(w, 409, "identity_changed", "The podcast identity changed.")
+	case writeLibraryKindError(w, err):
 	case errors.Is(err, bridge.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, bridge.ErrNotFound):

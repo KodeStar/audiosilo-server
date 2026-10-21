@@ -169,16 +169,6 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 					source = "file"
 				}
 			}
-			var id int64
-			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,genres_checked,released_checked)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, c.ts(), e.FirstSeen, e.Description, cover != "").Scan(&id)
-			if err != nil {
-				return err
-			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source)
-			if err != nil {
-				return err
-			}
 			var fetchJSON any
 			if e.Fetch != nil {
 				raw, _ := json.Marshal(e.Fetch)
@@ -193,32 +183,33 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 					codec = e.Fetch.Codec
 				}
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE podcast_episodes SET sha256=?,timeline_changed=?,fetch_json=?,feed_sig=? WHERE book_id=?`, hash, timeline, fetchJSON, info.FeedSig, id); err != nil {
+			chapterSource := ""
+			if exists && info.Chapters != nil {
+				chapterSource = "id3_chap"
+			}
+			var id int64
+			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,codec,chapters_source,genres_checked,released_checked)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover,codec=excluded.codec,chapters_source=excluded.chapters_source RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, c.ts(), e.FirstSeen, e.Description, cover != "", codec, chapterSource).Scan(&id)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source,sha256,timeline_changed,fetch_json,feed_sig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source,sha256=excluded.sha256,timeline_changed=excluded.timeline_changed,fetch_json=excluded.fetch_json,feed_sig=excluded.feed_sig`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source, hash, timeline, fetchJSON, info.FeedSig)
+			if err != nil {
 				return err
 			}
 			chapters := []metadata.Chapter{}
-			chapterSource := ""
-			if exists {
-				chapters = append(chapters, metadata.Chapter{Index: 0, Title: e.Title, FilePath: e.Path, Start: 0, End: duration})
-				if l := info.Chapters; l != nil {
-					chapters = nil
-					chapterSource = "id3_chap"
-					for i, ch := range l.Chapters {
-						chapters = append(chapters, metadata.Chapter{Index: i, Title: ch.Title, FilePath: e.Path, Start: float64(ch.StartMS) / 1000, End: float64(ch.StartMS+ch.LengthMS) / 1000})
-					}
+			switch {
+			case chapterSource != "":
+				for i, ch := range info.Chapters.Chapters {
+					chapters = append(chapters, metadata.Chapter{Index: i, Title: ch.Title, FilePath: e.Path, Start: float64(ch.StartMS) / 1000, End: float64(ch.StartMS+ch.LengthMS) / 1000})
 				}
+			case exists:
+				chapters = append(chapters, metadata.Chapter{Index: 0, Title: e.Title, FilePath: e.Path, Start: 0, End: duration})
 			}
 			if err = replaceChapters(ctx, tx, id, chapters); err != nil {
 				return err
 			}
 			if _, err = tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id=?`, id); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `UPDATE books SET codec=?,chapters_source=? WHERE id=?`, codec, chapterSource, id); err != nil {
-				return err
-			}
-			// A missing duration is stored as zero, not SQL NULL.
-			if err != nil {
 				return err
 			}
 		}
@@ -323,7 +314,7 @@ const followMatchSQL = `SELECT 1 FROM podcast_follows f WHERE f.library_id=s.lib
 
 const podcastShowSelect = `SELECT s.library_id,s.show_path,s.title,s.author,s.description,s.link,s.language,s.show_type,s.explicit,s.private,NULLIF(s.feed_url,''),s.feed_host,s.podcast_guid,s.cover_path,s.episode_count,s.latest_published,s.feed_sig,s.show_id,
  EXISTS(` + followMatchSQL + ` AND f.user_id=?),
- st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,''),COALESCE(p.mode,'keep'),COALESCE(p.keep,3),COALESCE(p.days,7)
+ st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,''),` + podcastPolicySQL + `
  FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id`
 
 func scanPodcastShow(r interface{ Scan(...any) error }, s *PodcastShow) error {
@@ -413,7 +404,7 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		return nil, ErrInvalidCursor
 	}
 	limit = min(max(limit, 1), 200)
-	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'',e.generation,e.sha256,e.timeline_changed FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
+	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'',e.generation,e.sha256,` + podcastTimelineSQL("e.") + ` FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
 	args := []any{lib, show}
 	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
 	q += " AND " + filter
@@ -434,11 +425,7 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	q += ` ORDER BY COALESCE(e.published,'') ` + dir + `,b.rel_path ` + dir + ` LIMIT ?`
 	args = append(args, limit+1)
 	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
-		err := r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
-		if e.Generation == 0 {
-			e.TimelineChanged = nil
-		}
-		return err
+		return r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
 	}, q, args...)
 	if err != nil {
 		return nil, err
@@ -458,28 +445,19 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	return out, nil
 }
 
-// PodcastEpisodeDownloaded reports whether the episode at rel has its file
-// (the index's presence), ErrNotFound for no indexed episode there: the one
-// fact a stream of a podcast library needs, for every Range request.
-func (c *Catalog) PodcastEpisodeDownloaded(ctx context.Context, lib int64, rel string) (bool, error) {
-	var present bool
-	err := c.db.QueryRowContext(ctx, `SELECT e.present FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE b.library_id=? AND b.rel_path=?`, lib, rel).Scan(&present)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, ErrNotFound
-	}
-	return present, err
+// podcastTimelineSQL selects an episode's timeline_changed flag, NULL (omitted
+// on the wire) while it has never been fetched. prefix is the table alias.
+func podcastTimelineSQL(prefix string) string {
+	return "CASE WHEN " + prefix + "generation=0 THEN NULL ELSE " + prefix + "timeline_changed END"
 }
 
 func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
 	var e PodcastEpisodeInfo
-	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'',generation,sha256,timeline_changed FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
+	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'',generation,sha256,`+podcastTimelineSQL("")+` FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err == nil {
-		if e.Generation == 0 {
-			e.TimelineChanged = nil
-		}
 		b.Episode = &e
 	}
 	return err

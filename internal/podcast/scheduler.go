@@ -60,12 +60,11 @@ func SchedulerTick(ctx context.Context, d modules.Deps) error {
 	if h == nil {
 		return errors.Join(errs...)
 	}
-	refs, err := d.Catalog.DuePodcastPolls(ctx, 10)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
-	}
-	if !h.Offers(bridge.KindPodcastPoll) {
-		refs = nil
+	var refs []catalog.Ref
+	if h.Offers(bridge.KindPodcastPoll) {
+		if refs, err = d.Catalog.DuePodcastPolls(ctx, 10); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 	}
 	for _, r := range refs {
 		if err := ctx.Err(); err != nil {
@@ -96,6 +95,9 @@ func queuePoll(ctx context.Context, d modules.Deps, r catalog.Ref) error {
 }
 
 func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) error {
+	if !h.Offers(bridge.KindPodcastFetch) && !h.Offers(bridge.KindPodcastRetain) {
+		return nil
+	}
 	shows, err := d.Catalog.PodcastWorkShows(ctx)
 	if err != nil {
 		return err

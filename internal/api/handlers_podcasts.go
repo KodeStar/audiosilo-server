@@ -260,7 +260,7 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !a.podcastBridgeReady(w, r, bridge.KindPodcastSubscribe) {
+	if _, ok := a.podcastBridgeReady(w, r, bridge.KindPodcastSubscribe); !ok {
 		return
 	}
 	showPath := ""
@@ -280,12 +280,7 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	switch {
 	case err == nil:
 		return true
-	case errors.Is(err, bridge.ErrNotPodcastLibrary):
-		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
-	case errors.Is(err, bridge.ErrNotBookLibrary):
-		writeErrorCode(w, 409, "not_book_library", "This library holds podcasts.")
-	case errors.Is(err, bridge.ErrIdentityChanged):
-		writeErrorCode(w, 409, "identity_changed", "The podcast identity changed.")
+	case writeLibraryKindError(w, err):
 	case errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
@@ -299,21 +294,42 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	}
 	return false
 }
-func (a *API) podcastBridgeReady(w http.ResponseWriter, r *http.Request, kind string) bool {
+
+// writeLibraryKindError answers the queue's library-kind and podcast-identity
+// refusals (409 not_podcast_library, not_book_library, identity_changed), the
+// ones every podcast and Bridge error mapper shares, and reports whether err
+// was one of them.
+func writeLibraryKindError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, bridge.ErrNotPodcastLibrary):
+		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
+	case errors.Is(err, bridge.ErrNotBookLibrary):
+		writeErrorCode(w, 409, "not_book_library", "This library holds podcasts.")
+	case errors.Is(err, bridge.ErrIdentityChanged):
+		writeErrorCode(w, 409, "identity_changed", "The podcast identity changed.")
+	default:
+		return false
+	}
+	return true
+}
+
+// podcastBridgeReady answers 409 bridge_unavailable unless a Bridge is online
+// and runs kind, and returns its heartbeat when it is.
+func (a *API) podcastBridgeReady(w http.ResponseWriter, r *http.Request, kind string) (*bridge.Heartbeat, bool) {
 	if a.bridge == nil {
 		writeBridgeUnavailable(w)
-		return false
+		return nil, false
 	}
 	h, err := a.bridge.Online(r.Context())
 	if err != nil {
 		a.writeCatalogError(w, err, "podcast Bridge status failed", "Could not check the Bridge.")
-		return false
+		return nil, false
 	}
 	if h == nil || !h.Offers(kind) {
 		writeBridgeUnavailable(w)
-		return false
+		return nil, false
 	}
-	return true
+	return h, true
 }
 func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("library_id"), 10, 64)
@@ -361,7 +377,7 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "check podcast failed", "Could not load show.")
 		return
 	}
-	if !a.podcastBridgeReady(w, r, bridge.KindPodcastPoll) {
+	if _, ok := a.podcastBridgeReady(w, r, bridge.KindPodcastPoll); !ok {
 		return
 	}
 	job, err := a.bridge.OpenJob(r.Context(), bridge.KindPodcastPoll, lib.ID, show.Path)

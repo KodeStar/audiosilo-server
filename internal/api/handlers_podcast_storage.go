@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"strconv"
-	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -42,15 +40,11 @@ func (a *API) podcastStorageWritable(w http.ResponseWriter, r *http.Request, lib
 		writeModuleOff(w)
 		return false
 	}
-	if !a.podcastBridgeReady(w, r, kind) {
+	h, ok := a.podcastBridgeReady(w, r, kind)
+	if !ok {
 		return false
 	}
-	h, err := a.bridge.Online(r.Context())
-	if err != nil {
-		a.writeCatalogError(w, err, "check podcast mapping failed", "Could not check library.")
-		return false
-	}
-	if h == nil || !h.Writable(lib.ID) {
+	if !h.Writable(lib.ID) {
 		writeErrorCode(w, 409, "library_not_writable", "The Bridge cannot write to this library.")
 		return false
 	}
@@ -132,15 +126,19 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 	if !a.podcastStorageWritable(w, r, lib, bridge.KindPodcastFetch) {
 		return
 	}
-	f, _, openErr := library.OpenPodcast(r.Context(), a.cat, *lib, req.Path)
-	if openErr == nil {
-		_ = f.Close()
-		writeJSON(w, 200, map[string]bool{"downloaded": true})
-		return
-	}
-	if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
-		a.writePodcastStorageError(w, openErr)
-		return
+	// Only an indexed, committed pin can be a present file worth opening:
+	// OpenPodcast answers ErrNotIndexable for every other one.
+	if pin.Present && feed.ValidFetch(pin.Fetch) && pin.Fetch.DeletedAt == "" {
+		f, _, openErr := library.OpenPodcast(r.Context(), a.cat, *lib, req.Path)
+		if openErr == nil {
+			_ = f.Close()
+			writeJSON(w, 200, map[string]bool{"downloaded": true})
+			return
+		}
+		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
+			a.writePodcastStorageError(w, openErr)
+			return
+		}
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
 	job, created, err := a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID})
@@ -196,8 +194,7 @@ func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
-	case errors.Is(err, catalog.ErrPodcastIdentity), errors.Is(err, bridge.ErrIdentityChanged):
-		writeErrorCode(w, 409, "identity_changed", "The podcast identity changed.")
+	case writeLibraryKindError(w, err):
 	default:
 		a.writeCatalogError(w, err, "podcast storage failed", "Could not load podcast storage.")
 	}
@@ -220,20 +217,11 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 	}
 	defer f.Close()
 	if r.URL.Query().Get("transcode") == "1" {
-		if a.ffmpeg == "" {
-			writeError(w, 503, "transcoding is not available on this server")
+		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
+		if !ok {
 			return
 		}
-		select {
-		case a.transcodeSem <- struct{}{}:
-			defer func() { <-a.transcodeSem }()
-		default:
-			w.Header().Set("Retry-After", "5")
-			writeError(w, 503, "server busy transcoding; try again shortly")
-			return
-		}
-		a.streams.Note(credentialFrom(r.Context()).DeviceID, lib.ID, rel, time.Now())
-		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+		defer done()
 		media.TranscodeOpened(w, r, f, a.ffmpeg, start, a.log)
 		return
 	}

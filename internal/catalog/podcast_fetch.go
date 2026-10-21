@@ -103,7 +103,7 @@ type PodcastWorkShow struct {
 func (c *Catalog) PodcastWorkShows(ctx context.Context) ([]PodcastWorkShow, error) {
 	shows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *PodcastWorkShow) error {
 		return r.Scan(&s.LibraryID, &s.Path, &s.ShowID, &s.Policy.Mode, &s.Policy.Keep, &s.Policy.Days, &s.Present, &s.RetainDue)
-	}, `SELECT s.library_id,s.show_path,s.show_id,COALESCE(p.mode,'keep'),COALESCE(p.keep,3),COALESCE(p.days,7),EXISTS(SELECT 1 FROM podcast_episodes e WHERE e.library_id=s.library_id AND e.show_path=s.show_path AND e.present=1),NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.retain' AND j.created_at>?) FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id WHERE l.kind='podcasts' AND EXISTS(SELECT 1 FROM podcast_follows f JOIN users u ON u.id=f.user_id WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id AND u.disabled=0 AND u.is_demo=0) ORDER BY s.library_id,s.show_path`, c.now().UTC().Add(-time.Hour).Format(time.RFC3339))
+	}, `SELECT s.library_id,s.show_path,s.show_id,`+podcastPolicySQL+`,EXISTS(SELECT 1 FROM podcast_episodes e WHERE e.library_id=s.library_id AND e.show_path=s.show_path AND e.present=1),NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.retain' AND j.created_at>?) FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id WHERE l.kind='podcasts' AND EXISTS(SELECT 1 FROM podcast_follows f JOIN users u ON u.id=f.user_id WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id AND `+liveFollowerSQL+`) ORDER BY s.library_id,s.show_path`, c.now().UTC().Add(-time.Hour).Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -158,17 +158,12 @@ func (c *Catalog) podcastHasFollowers(ctx context.Context, show PodcastWorkShow)
 		id    int64
 		admin bool
 	}
-	followers, err := queryRows(ctx, c.db, func(r *sql.Rows, f *follower) error { return r.Scan(&f.id, &f.admin) }, `SELECT u.id,u.role='admin' FROM podcast_follows f JOIN users u ON u.id=f.user_id WHERE f.library_id=? AND f.show_path=? AND f.show_id=? AND u.disabled=0 AND u.is_demo=0`, show.LibraryID, show.Path, show.ShowID)
+	followers, err := queryRows(ctx, c.db, func(r *sql.Rows, f *follower) error { return r.Scan(&f.id, &f.admin) }, `SELECT u.id,u.role='admin' FROM podcast_follows f JOIN users u ON u.id=f.user_id WHERE f.library_id=? AND f.show_path=? AND f.show_id=? AND `+liveFollowerSQL, show.LibraryID, show.Path, show.ShowID)
 	if err != nil {
 		return false, err
 	}
 	for _, f := range followers {
-		who, err := c.callerByID(ctx, f.id, f.admin)
-		if err != nil {
-			return false, err
-		}
-		who.Podcasts = true
-		scope, err := c.CallerScope(ctx, who, show.LibraryID)
+		scope, err := c.followerScope(ctx, f.id, f.admin, show.LibraryID)
 		if err != nil {
 			return false, err
 		}
