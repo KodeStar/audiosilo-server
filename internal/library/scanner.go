@@ -222,7 +222,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	books, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl)
+	books, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil)
 	if err != nil {
 		return res, err
 	}
@@ -573,6 +573,17 @@ func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.M
 	return n
 }
 
+// setNames sets b's title, author, series and position (readNames) and its
+// narrator from md, its primary file's tags (nil for none): the names a scan
+// reads, which enrich and the setup preview (Preview) share.
+func setNames(b *catalog.Book, md *metadata.Metadata) {
+	n := readNames(b.RelPath, b.IsFolder, md)
+	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
+	if md != nil {
+		b.Narrator = md.Narrator
+	}
+}
+
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
 // folder context (path heuristics, sibling cover art, an Audiobookshelf
 // metadata.json in a folder book's folder, when the walk found one: b.ABS.Sig,
@@ -585,10 +596,8 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)
 	}
-	n := readNames(b.RelPath, b.IsFolder, md)
-	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
+	setNames(b, md)
 	if md != nil {
-		b.Narrator = md.Narrator
 		b.Released = md.Released
 		b.Genres = md.Genres
 		b.Codec = md.Codec
@@ -854,13 +863,16 @@ func partTitle(relPath string) string {
 // folders are named under lib.Root, so both are the same whether or not the root
 // is a link. (Not os.DirFS: it refuses folder names that aren't valid UTF-8,
 // which a Linux share can hold, and every scan would then read as partial.)
-func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog) (books []*catalog.Book, hadErrors bool, err error) {
+//
+// limit bounds the walk (nil for none, as a scan walks): once it is reached the
+// books of the folders walked so far come back with errWalkCapped.
+func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap) (books []*catalog.Book, hadErrors bool, err error) {
 	walkRoot := lib.Root
 	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
 		walkRoot = resolved
 	}
-	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl)
-	if err != nil {
+	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit)
+	if err != nil && !errors.Is(err, errWalkCapped) {
 		return nil, hadErrors, err
 	}
 	books = booksOf(lib, dirs, overrides)
@@ -870,7 +882,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		}
 	}
 	attachmentsOfWalk(books, side)
-	return books, hadErrors, nil
+	return books, hadErrors, err
 }
 
 // booksOf turns the folders that directly hold audio (dirs: library-relative, with
@@ -908,8 +920,9 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
 // skipped, even when its own name begins with a dot. side is the metadata files
-// found in the same walk (sidecarFiles).
-func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
+// found in the same walk (sidecarFiles). limit bounds the walk (nil for none):
+// reaching it stops the walk with errWalkCapped, dirs holding what it found.
+func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
 	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{}}
 	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
@@ -956,6 +969,9 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			// (which also hides them).
 			if rel != fromRel && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
 				return fs.SkipDir
+			}
+			if !limit.another() {
+				return errWalkCapped
 			}
 			return nil
 		}
@@ -1273,7 +1289,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 		} else if len(own) == 0 || !isDiscFolder(path.Base(dirRel)) {
 			return false
 		}
-		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil)
+		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil, nil)
 		if err != nil {
 			walkErr = err
 			return false
@@ -1417,7 +1433,7 @@ func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *cat
 	if !b.IsFolder || parent == "" || !isDiscFolder(path.Base(b.RelPath)) {
 		return "", nil
 	}
-	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil)
+	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil, nil)
 	if err != nil {
 		return "", err
 	}

@@ -321,14 +321,15 @@ var ErrInvalidKind = errors.New("invalid library kind")
 var ErrKindImmutable = errors.New("library kind is immutable")
 var ErrRootOverlaps = errors.New("podcast library roots must not overlap other libraries")
 
-// checkLibraryRoot runs with the writer held so simultaneous creates cannot
-// admit overlapping roots. Paths are cleaned and made absolute on both sides.
-func checkLibraryRoot(ctx context.Context, tx *sql.Tx, lib Library) error {
+// checkLibraryRoot runs with the writer held (q a writer transaction) so
+// simultaneous creates cannot admit overlapping roots; CheckLibraryRoot reads it
+// without. Paths are cleaned and made absolute on both sides.
+func checkLibraryRoot(ctx context.Context, q rowQuerier, lib Library) error {
 	root, err := filepath.Abs(lib.Root)
 	if err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,root,kind FROM libraries WHERE id != ?`, lib.ID)
+	rows, err := q.QueryContext(ctx, `SELECT id,root,kind FROM libraries WHERE id != ?`, lib.ID)
 	if err != nil {
 		return err
 	}
