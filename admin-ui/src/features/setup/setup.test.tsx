@@ -206,12 +206,78 @@ describe('folder, naming and metadata', () => {
     expect(await screen.findByRole('region', { name: 'Library scans' })).toBeVisible();
   });
 
+  it('keeps the pick made for each library the naming step offers', async () => {
+    localStorage.setItem(
+      'audiosilo.setup.draft',
+      JSON.stringify({ root: '/audiobooks', name: 'Audiobooks' }),
+    );
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': { body: { libraries: libraries() } },
+          'PATCH /admin/libraries/1': (req) => ({
+            body: { ...libraries()[0], ...(req.body as object) },
+          }),
+        },
+        { config_libraries: ['Fiction'] },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('radio', { name: /The files' tags first/ }));
+    await user.selectOptions(screen.getByLabelText('Library'), 'Fiction (from your config)');
+    expect(await screen.findByRole('radio', { name: /Folder names first/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1');
+    expect(patch?.body).toEqual({ metadata_source: 'path' });
+    expect(JSON.parse(localStorage.getItem('audiosilo.setup.draft') ?? '{}')).toEqual({
+      root: '/audiobooks',
+      name: 'Audiobooks',
+      source: 'tags',
+    });
+  });
+
   it('a skipped folder creates nothing', async () => {
     const calls = mockFetch(flowRoutes());
     renderApp('/setup');
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Skip' }));
     expect(await screen.findByText('No folder to name yet')).toBeVisible();
     expect(puts(calls)).toEqual([{ steps: { folder: 'skipped' } }]);
+  });
+
+  it('Continue past naming with nothing left to name keeps it done', async () => {
+    const calls = mockFetch(
+      flowRoutes({ steps: { folder: 'done', naming: 'done', metadata: 'done' } }),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByText('No folder to name yet')).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]));
+  });
+});
+
+describe('the metadata step', () => {
+  it('leaves the switch as saved when the service is not configured', async () => {
+    const off = settingsWith();
+    off.metadata = { ...off.metadata, enabled: true, available: false };
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/settings': { body: off },
+          'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }),
+        },
+      ),
+    );
+    renderApp('/setup?step=metadata');
+    expect(
+      await screen.findByRole('switch', { name: 'Look up community metadata' }),
+    ).not.toBeChecked();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/settings')).toBe(false);
   });
 });
 

@@ -120,11 +120,14 @@ function Flow({
   const [draft, setDraftState] = useState<SetupDraft | null>(() =>
     parseDraft(readStorage(DRAFT_KEY)),
   );
+  // The draft as a step last set it: a step sets it and leaves in one handler,
+  // before this renders again, and where the flow goes next depends on it.
+  const draftNow = useRef(draft);
   const [createdId, setCreatedId] = useState<number | null>(null);
   const current =
     step ??
     resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: props.libraries.length > 0 });
-  const next = nextStep(current, state);
+  const next = nextStep(current, state, draft);
   const prev = previousStep(current);
 
   // Each step opens at the top with its heading focused, as a new page would.
@@ -140,6 +143,7 @@ function Flow({
   }, [current]);
 
   const setDraft = (d: SetupDraft | null) => {
+    draftNow.current = d;
     setDraftState(d);
     if (d) writeStorage(DRAFT_KEY, JSON.stringify(d));
     else removeStorage(DRAFT_KEY);
@@ -147,9 +151,10 @@ function Flow({
   const go = (id: SetupStepId) => void navigate({ to: '/setup', search: { step: id } });
 
   const leave = async (mark: SetupMark) => {
-    const finishing = next === null && !state.finished;
+    const to = nextStep(current, state, draftNow.current);
+    const finishing = to === null && !state.finished;
     await saveSetup(qc, { steps: { [current]: mark }, ...(finishing ? { finished: true } : {}) });
-    if (next) return go(next);
+    if (to) return go(to);
     if (finishing) {
       toast.add({
         title: t('setup.finished'),

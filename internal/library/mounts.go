@@ -109,13 +109,14 @@ func unescapeMount(s string) string {
 
 // systemPath reports whether a mount point belongs to the system rather than to
 // anyone's books: the root itself, /proc, /sys, /tmp, anything under /dev, /run,
-// /etc, /boot or /snap (Docker binds /etc/hosts and friends).
+// /etc, /boot or /snap (Docker binds /etc/hosts and friends). Under is by whole
+// segments: /devices or /snapshots is someone's folder.
 func systemPath(p string) bool {
 	switch p {
-	case "/", "/proc", "/sys", "/tmp":
+	case "/", "/proc", "/sys", "/tmp", "/dev", "/run", "/boot", "/snap":
 		return true
 	}
-	for _, prefix := range []string{"/proc/", "/sys/", "/dev", "/run", "/etc/", "/boot", "/snap"} {
+	for _, prefix := range []string{"/proc/", "/sys/", "/dev/", "/run/", "/etc/", "/boot/", "/snap/"} {
 		if strings.HasPrefix(p, prefix) {
 			return true
 		}

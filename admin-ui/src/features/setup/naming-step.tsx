@@ -61,19 +61,28 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
     ? (picked[target.key] ?? preview.data?.suggested)
     : undefined;
 
+  /** Every target's pick: those made under the Library select, and the one shown. */
+  const picks = targets.flatMap((x) => {
+    const pick = x.key === target?.key ? choice : picked[x.key];
+    return pick ? [{ target: x, pick }] : [];
+  });
+
   const onContinue = async () => {
-    if (!target || !choice) return leave('skipped');
-    const lib = target.library;
-    if (!lib) {
-      if (draft) setDraft({ ...draft, source: choice });
-    } else if (choice !== lib.metadata_source) {
-      const saved = await api.updateLibrary(lib.id, { metadata_source: choice });
+    if (picks.length === 0) return leave('skipped');
+    for (const { target: x, pick } of picks) {
+      const lib = x.library;
+      if (!lib) {
+        if (draft) setDraft({ ...draft, source: pick });
+        continue;
+      }
+      if (pick === lib.metadata_source) continue;
+      const saved = await api.updateLibrary(lib.id, { metadata_source: pick });
       invalidateLibraries(qc);
       invalidateAfterSourceChange(qc, lib.id);
       if (saved.job) noteScanStarted(qc, lib.id);
       toast.add({
         title: t('setup.naming.switched', { name: lib.name }),
-        description: t(`setup.naming.switchedBody.${choice}`),
+        description: t(`setup.naming.switchedBody.${pick}`),
         type: 'success',
       });
     }
@@ -89,7 +98,9 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
         <StepFooter
           back={back}
           onSkip={() => leave('skipped')}
-          onContinue={() => leave('skipped')}
+          // Nothing left to name (the library was created since): Continue keeps
+          // a pick made earlier rather than marking it skipped.
+          onContinue={() => leave(env.state.steps.naming === 'done' ? 'done' : 'skipped')}
           last={last}
         />
       </>

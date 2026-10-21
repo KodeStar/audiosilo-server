@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   CircleCheck,
@@ -19,12 +19,11 @@ import { Notice } from '@/components/notice';
 import { QrCode } from '@/components/qr-code';
 import { StatusText } from '@/components/status-text';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { PairDialog, type ShownCode } from '@/features/bridge/pair-dialog';
+import { PairDialog } from '@/features/bridge/pair-dialog';
 import { BridgeSetupList } from '@/features/bridge/setup-list';
-import { useBridge } from '@/features/bridge/use-bridge';
+import { useBridge, usePairCode } from '@/features/bridge/use-bridge';
 import { playerConnectUrl } from '@/features/book/book-model';
 import { copyWithToast } from '@/lib/clipboard';
-import { toastError } from '@/lib/errors';
 import { useCurrentUser } from '@/lib/session';
 import { usePlayerTab } from '@/lib/use-player-tab';
 import { bridgeCompose } from './setup-model';
@@ -185,31 +184,11 @@ function WebPlayerButton() {
  */
 export function BridgeStep({ libraries, leave, back, last }: StepProps) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
   const bridge = useBridge();
   const status = bridge.data;
-  const [shown, setShown] = useState<ShownCode | null>(null);
-  const [making, setMaking] = useState(false);
+  const { shown, making, makeCode, closeCode } = usePairCode(status);
   const root = libraries.find((l) => l.kind === 'books')?.root ?? '';
   const compose = bridgeCompose(root);
-
-  const makeCode = async () => {
-    setMaking(true);
-    try {
-      const code = await api.pairBridge();
-      setShown({
-        ...code,
-        pairedAtBefore: status?.paired ? status.paired_at : undefined,
-        replacing: Boolean(status?.paired),
-      });
-    } catch (err) {
-      toastError(t('bridge.pair.failed'), err);
-    } finally {
-      setMaking(false);
-      void qc.invalidateQueries({ queryKey: keys.bridge });
-    }
-  };
-  const closeCode = useCallback(() => setShown(null), []);
 
   return (
     <>

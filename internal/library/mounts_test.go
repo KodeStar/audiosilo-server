@@ -10,7 +10,8 @@ import (
 
 // A container's mount table: the books volumes are offered (sorted, an escaped
 // space read back, a repeat once); the root, system paths, pseudo filesystems,
-// a bound file, the data folder and anything not a folder are not.
+// a bound file, the data folder and anything not a folder are not; a folder
+// whose name only begins like a system one (/snapshots) is offered.
 func TestMountHints(t *testing.T) {
 	t.Parallel()
 	table := `
@@ -27,11 +28,13 @@ func TestMountHints(t *testing.T) {
 11 1 8:1 /srv/file /media/a-file rw - ext4 /dev/sda1 rw
 12 1 0:7 / /run/secrets rw - tmpfs tmpfs rw
 13 1 8:2 / /data rw - xfs /dev/sdb1 rw
+14 1 8:3 / /snapshots rw - btrfs /dev/sdc1 rw
+15 1 8:3 / /boot/efi rw - vfat /dev/sdc2 rw
 not a mount line
 `
 	notDir := map[string]bool{"/media/a-file": true}
 	got := mountHints(strings.NewReader(table), []string{"/config/"}, func(p string) bool { return !notDir[p] })
-	want := []string{"/audiobooks", "/data", "/mnt/My Books"}
+	want := []string{"/audiobooks", "/data", "/mnt/My Books", "/snapshots"}
 	if !slices.Equal(got, want) {
 		t.Errorf("hints = %q, want %q", got, want)
 	}

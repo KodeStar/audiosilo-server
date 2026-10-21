@@ -89,7 +89,10 @@ export function MetadataStep(props: StepProps) {
   const [mode, setMode] = useState<MetadataMode>(m.mode);
 
   const onContinue = async () => {
-    await save(unlockedPatch(settings, 'metadata', { enabled, region, mode }));
+    // Without the service the switch shows off but can't be changed: the saved
+    // setting stays as it is, for when the service is configured.
+    const draft = m.available ? { enabled, region, mode } : { region, mode };
+    await save(unlockedPatch(settings, 'metadata', draft));
     await create();
     await leave('done');
   };

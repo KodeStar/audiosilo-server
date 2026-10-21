@@ -6,11 +6,17 @@ import { isSetupPath, shouldRedirect } from './setup-model';
 /** Set once the console has sent this browser session to the flow. */
 const REDIRECTED_KEY = 'audiosilo.setup.redirected';
 
+/**
+ * The mark for this page only, where sessionStorage can't be used (blocked site
+ * data): else every navigation out of the flow would be sent straight back.
+ */
+let redirectedHere = false;
+
 function redirectedThisSession(): boolean {
   try {
     return sessionStorage.getItem(REDIRECTED_KEY) === '1';
   } catch {
-    return false;
+    return redirectedHere;
   }
 }
 
@@ -18,7 +24,8 @@ function markRedirected() {
   try {
     sessionStorage.setItem(REDIRECTED_KEY, '1');
   } catch {
-    // not kept: the next page load sends the admin to the flow again
+    // not kept past this page: the next page load sends the admin to the flow again
+    redirectedHere = true;
   }
 }
 

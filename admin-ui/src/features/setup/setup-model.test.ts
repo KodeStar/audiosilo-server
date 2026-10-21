@@ -90,6 +90,19 @@ describe('nextStep and previousStep', () => {
     expect(nextStep('phone', state({ finished: true, steps: {} }))).toBeNull();
   });
 
+  it('after the flow, a folder chosen again goes on to the steps that add it', () => {
+    const done = state({
+      finished: true,
+      steps: { folder: 'skipped', naming: 'done', metadata: 'done', bridge: 'skipped' },
+    });
+    const draft = { root: '/audiobooks', name: 'Audiobooks' };
+    expect(nextStep('folder', done, draft)).toBe('naming');
+    expect(nextStep('folder', done, { ...draft, source: 'path' })).toBe('metadata');
+    expect(nextStep('naming', done, { ...draft, source: 'tags' })).toBe('metadata');
+    expect(nextStep('metadata', done, null)).toBe('bridge');
+    expect(nextStep('folder', done)).toBe('bridge');
+  });
+
   it('knows the step ids', () => {
     expect(isSetupStep('reach')).toBe(true);
     expect(isSetupStep('demo')).toBe(false);
@@ -244,6 +257,7 @@ describe('how people reach the server', () => {
     const behind = req({ proxied: true, peer: '172.18.0.2' });
     expect(proxyToTrust(behind, [])).toBe('172.18.0.2');
     expect(proxyToTrust(behind, ['172.18.0.2'])).toBeNull();
+    expect(proxyToTrust(behind, ['172.18.0.2/32'])).toBeNull();
     expect(proxyToTrust({ ...behind, peer_trusted: true }, [])).toBeNull();
     expect(proxyToTrust(req(), [])).toBeNull();
   });

@@ -19,15 +19,11 @@ export function StepFooter({
   back,
   onSkip,
   onContinue,
-  continueLabel,
-  skipLabel,
   last,
 }: {
   back: (() => void) | null;
   onSkip: () => Promise<void>;
   onContinue: () => Promise<void>;
-  continueLabel?: string;
-  skipLabel?: string;
   last: boolean;
 }) {
   const { t } = useTranslation();
@@ -56,13 +52,13 @@ export function StepFooter({
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" disabled={busy !== null} onClick={() => void run('skip', onSkip)}>
           {busy === 'skip' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-          {skipLabel ?? t(last ? 'setup.skipFinish' : 'setup.skip')}
+          {t(last ? 'setup.skipFinish' : 'setup.skip')}
         </Button>
         <Button disabled={busy !== null} onClick={() => void run('continue', onContinue)}>
           {busy === 'continue' ? (
             <LoaderCircle className="animate-spin" aria-hidden="true" />
           ) : null}
-          {continueLabel ?? t(last ? 'setup.finish' : 'setup.continue')}
+          {t(last ? 'setup.finish' : 'setup.continue')}
         </Button>
       </div>
     </div>

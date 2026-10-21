@@ -49,12 +49,20 @@ export function resumeStep(
  * The step after `id`, or null when the flow ends there. While the flow runs
  * that's the next step in order. Once it has finished (a skipped step reopened
  * from the Overview card) it is the next step still skipped, so the admin goes
- * through what's left and then back to Overview.
+ * through what's left and then back to Overview; while a draft waits (a folder
+ * chosen on that visit), also the steps that turn it into a library, whatever
+ * their mark: naming while it has no source, and metadata, which creates it.
  */
-export function nextStep(id: SetupStepId, state: SetupState): SetupStepId | null {
+export function nextStep(
+  id: SetupStepId,
+  state: SetupState,
+  draft: SetupDraft | null = null,
+): SetupStepId | null {
   const after = SETUP_STEPS.slice(stepIndex(id) + 1);
   if (!state.finished) return after[0] ?? null;
-  return after.find((s) => state.steps[s] === 'skipped') ?? null;
+  const creates = (s: SetupStepId) =>
+    !!draft && (s === 'metadata' || (s === 'naming' && !draft.source));
+  return after.find((s) => state.steps[s] === 'skipped' || creates(s)) ?? null;
 }
 
 /** The step before `id`, or null on the first. */
@@ -203,8 +211,10 @@ export function addressMismatch(req: SetupRequest, origin: string): boolean {
  * whose address isn't trusted yet (nor already added to the draft).
  */
 export function proxyToTrust(req: SetupRequest, trusted: readonly string[]): string | null {
-  if (!req.proxied || req.peer_trusted || !req.peer) return null;
-  return trusted.includes(req.peer) ? null : req.peer;
+  const peer = req.peer;
+  if (!req.proxied || req.peer_trusted || !peer) return null;
+  // The server stores a bare address as its one-address range (fixProxies).
+  return trusted.some((t) => t === peer || t === `${peer}/32` || t === `${peer}/128`) ? null : peer;
 }
 
 /**
