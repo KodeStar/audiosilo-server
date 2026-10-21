@@ -12,7 +12,14 @@ import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage } from '@/features/section-page';
 import { SETTINGS_PAGES, type SettingsPage } from '@/features/settings/settings-model';
-import { ACTIVITY_RANGES, ISSUE_KINDS, type ActivityRange, type IssueKind } from '@/api/types';
+import {
+  ACTIVITY_RANGES,
+  ISSUE_KINDS,
+  type ActivityRange,
+  type IssueKind,
+  type SetupStepId,
+} from '@/api/types';
+import { isSetupStep } from '@/features/setup/setup-model';
 import { parseBookSearch, type BookSearch } from '@/lib/book-route';
 import { Root } from '@/root';
 
@@ -103,7 +110,24 @@ const bookRouteDef = createRoute({
   pendingComponent: PageSkeleton,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, userRoute, bookRouteDef, ...destinationRoutes]);
+// The first-run flow: a full page outside the shell (Root leaves it out), at
+// the step `?step=` names, else where the flow left off.
+const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/setup',
+  validateSearch: (s: Record<string, unknown>): { step?: SetupStepId } =>
+    isSetupStep(s.step) ? { step: s.step } : {},
+  component: lazyRouteComponent(() => import('@/features/setup/setup-page'), 'SetupPage'),
+  pendingComponent: PageSkeleton,
+});
+
+const routeTree = rootRoute.addChildren([
+  homeRoute,
+  userRoute,
+  bookRouteDef,
+  setupRoute,
+  ...destinationRoutes,
+]);
 
 export function createAppRouter(
   opts: { history?: Parameters<typeof createRouter>[0]['history'] } = {},

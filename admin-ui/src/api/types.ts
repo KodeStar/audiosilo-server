@@ -140,6 +140,8 @@ export interface LoginResponse {
 export interface PairToken {
   pairing_token: string;
   server_id: string;
+  /** The player's connect link carrying the token (what the pairing QR encodes). */
+  web_url?: string;
 }
 
 /** One library's book count in GET /admin/stats (handlers_stats.go libStat). */
@@ -2632,4 +2634,127 @@ export interface BridgeEstimate {
    * off): its kind says which.
    */
   open_job?: BridgeJob;
+}
+
+/**
+ * The first-run flow's steps (FIRST-RUN-PLAN.md Phase F1), in order: the ids
+ * GET/PUT /admin/setup's `steps` use.
+ */
+export const SETUP_STEPS = [
+  'folder',
+  'naming',
+  'metadata',
+  'reach',
+  'abs',
+  'backups',
+  'phone',
+  'bridge',
+] as const;
+export type SetupStepId = (typeof SETUP_STEPS)[number];
+
+/** How a step was left: its choice saved, or passed over for later. */
+export type SetupMark = 'done' | 'skipped';
+
+/** A step id's mark; an absent id hasn't been seen yet. */
+export type SetupMarks = Partial<Record<SetupStepId, SetupMark>>;
+
+/**
+ * The setup state (the server_state key setup_state): GET /admin/setup's
+ * `state` and PUT /admin/setup's answer. A server upgraded from a release
+ * without the flow starts finished and dismissed (migration 0053).
+ */
+export interface SetupState {
+  finished: boolean;
+  /** The Overview's "Finish setting up" card was dismissed. */
+  dismissed: boolean;
+  steps: SetupMarks;
+}
+
+/** The body of PUT /admin/setup: the fields given are merged into the state. */
+export interface SetupPatch {
+  finished?: boolean;
+  dismissed?: boolean;
+  steps?: SetupMarks;
+}
+
+/**
+ * How this request reached the server (GET /admin/setup's `request`), to set
+ * against the address the browser shows: a reverse proxy in between, and
+ * whether its address is among trusted_proxies.
+ */
+export interface SetupRequest {
+  /** The Host the server saw ("nas:8080"). */
+  host: string;
+  scheme: 'http' | 'https';
+  /** The request carried a forwarding header (X-Forwarded-*, Forwarded). */
+  proxied: boolean;
+  /** The address the request came from, sent only when `proxied`. */
+  peer?: string;
+  peer_trusted: boolean;
+}
+
+/** GET /api/v1/admin/setup. */
+export interface SetupEnvelope {
+  state: SetupState;
+  request: SetupRequest;
+  /** The names of the libraries config.yaml or the environment declares. */
+  config_libraries: string[];
+  /** Folders mounted into the server (Linux only; [] elsewhere), as suggestions for the folder. */
+  mount_hints: string[];
+}
+
+/** A sample book's names as one source reads them ("" = that source has none). */
+export interface PreviewNames {
+  title: string;
+  author: string;
+  narrator: string;
+  series: string;
+  position: string;
+}
+
+/** The names a preview field takes, in the order the flow shows them. */
+export const PREVIEW_FIELDS = [
+  'title',
+  'author',
+  'narrator',
+  'series',
+  'position',
+] as const satisfies readonly (keyof PreviewNames)[];
+
+/** One sample book of a preview: what its tags say, and what its folders say. */
+export interface PreviewSample {
+  rel_path: string;
+  tags: PreviewNames;
+  path: PreviewNames;
+  /** The book has an Audiobookshelf metadata.json, which is read over both. */
+  abs: boolean;
+}
+
+/**
+ * POST /api/v1/admin/setup/preview: what a folder holds and how its books would
+ * be named from their tags or from their folders, read without indexing.
+ */
+export interface LibraryPreview {
+  root: string;
+  counts: {
+    audio_files: number;
+    folder_books: number;
+    file_books: number;
+    /** The walk stopped at its folder or time limit: the counts are a floor. */
+    capped: boolean;
+  };
+  /** The name of an existing library with exactly this root (a warning, not a refusal). */
+  same_root: string | null;
+  /** Up to 8 books, spread over the folder. */
+  samples: PreviewSample[];
+  /** Blank fields across the samples, per source. */
+  blanks: { tags: number; path: number };
+  /** The source with fewer blanks (ties go to tags). */
+  suggested: MetadataSource;
+}
+
+/** The body of POST /admin/setup/preview. */
+export interface LibraryPreviewRequest {
+  root: string;
+  ignore_patterns?: string[];
 }

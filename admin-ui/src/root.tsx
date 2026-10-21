@@ -1,8 +1,11 @@
+import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { RotateCw, Unplug } from 'lucide-react';
 import { AppShell } from '@/components/shell/app-shell';
 import { Button } from '@/components/ui/button';
 import { LoginPage } from '@/features/auth/login-page';
+import { isSetupPath } from '@/features/setup/setup-model';
+import { useSetupRedirect } from '@/features/setup/use-setup-redirect';
 import { useSession } from '@/lib/session';
 
 /**
@@ -42,5 +45,16 @@ export function Root() {
     );
   }
   if (state.status === 'signed-out') return <LoginPage reason={state.reason} />;
-  return <AppShell />;
+  return <SignedIn />;
+}
+
+/**
+ * A signed-in admin's console: the shell around every page but the first-run
+ * flow, which is a page of its own; and the flow's once-a-session redirect
+ * while the server hasn't finished it.
+ */
+function SignedIn() {
+  useSetupRedirect();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return isSetupPath(pathname) ? <Outlet /> : <AppShell />;
 }
