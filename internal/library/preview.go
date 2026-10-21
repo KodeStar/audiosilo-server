@@ -86,8 +86,8 @@ type Preview struct {
 }
 
 // PreviewCounts are the audio files and books the walk found. Capped is set when
-// the preview stopped at a limit: the walk at its folders or time, so there are
-// more, or the sample reads at the preview's time, so there are fewer samples.
+// the walk stopped at its folders or time, so there are more. (Sample reads the
+// preview's time cut leave fewer samples; the counts stay whole.)
 type PreviewCounts struct {
 	AudioFiles  int  `json:"audio_files"`
 	FolderBooks int  `json:"folder_books"`
@@ -164,8 +164,8 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	slices.SortFunc(books, func(a, b *catalog.Book) int { return cmp.Compare(a.RelPath, b.RelPath) })
 	// The samples' reads (an ffprobe each) run a few at a time, each into its
 	// own slot, so the samples keep their path order, under what is left of the
-	// preview's time: none starts after it, one running then is ended (its
-	// ffprobe with it) and left out, and the preview says it was capped.
+	// preview's time: none starts after it, and one running then is ended (its
+	// ffprobe with it) and left out. The counts are the walk's, whole either way.
 	n := min(lim.Samples, len(books))
 	type read struct {
 		book   *catalog.Book
@@ -190,7 +190,6 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	}
 	for _, r := range reads {
 		if !r.done {
-			out.Counts.Capped = true
 			continue
 		}
 		out.Samples = append(out.Samples, r.sample)

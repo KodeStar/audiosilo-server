@@ -2030,7 +2030,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a
   scan discovers (`discoverAuto`, no overrides, a `walkCap` of 5,000 folders and 10 s: `capped`), reads
   (four at a time, under the preview's 15 s overall: none starts after it, one running then is ended with
-  its ffprobe via `metadata.ExtractContext` and left out, `capped`) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
+  its ffprobe via `metadata.ExtractContext` and left out, fewer samples, `capped` untouched) 8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
   `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
   `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
   disagree). `blanks` counts, per source on its own, empty title/author/series and a missing position

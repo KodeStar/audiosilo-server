@@ -205,7 +205,8 @@ func TestCheckRoot(t *testing.T) {
 
 // The sample reads run under the preview's overall time: a read still probing
 // when it runs out is ended (its ffprobe killed) and left out, none starts
-// after it, and the preview says it was capped, with the walk's counts whole.
+// after it, and the walk's counts stay whole and uncapped (capped says only
+// that the walk stopped, the folder step's "at least this many").
 func TestPreviewTimeBudget(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -228,7 +229,7 @@ func TestPreviewTimeBudget(t *testing.T) {
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("the preview took %v: its probes outlived its time", took)
 	}
-	if !p.Counts.Capped || p.Counts.FolderBooks != 3 || p.Counts.AudioFiles != 3 || len(p.Samples) != 0 {
-		t.Errorf("counts %+v with %d samples; want capped, 3 books, no samples", p.Counts, len(p.Samples))
+	if p.Counts.Capped || p.Counts.FolderBooks != 3 || p.Counts.AudioFiles != 3 || len(p.Samples) != 0 {
+		t.Errorf("counts %+v with %d samples; want uncapped, 3 books, no samples", p.Counts, len(p.Samples))
 	}
 }

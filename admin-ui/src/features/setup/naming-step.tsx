@@ -114,6 +114,9 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
   }
 
   const lib = target.library;
+  // A preview with no samples read (each one cut by its time) has no evidence
+  // for either side, so it suggests neither.
+  const suggested = preview.data?.samples.length ? preview.data.suggested : undefined;
   return (
     <>
       <div className="flex flex-col gap-5">
@@ -156,15 +159,15 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
             title: t(`libraries.source.${s}`),
             description: t(`setup.naming.pick.${s}`),
             aside:
-              !lib && preview.data?.suggested === s ? (
+              !lib && suggested === s ? (
                 <Badge variant="brand">{t('setup.naming.suggested')}</Badge>
               ) : undefined,
           }))}
         />
-        {lib && preview.data ? (
+        {lib && suggested ? (
           <p className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
             <Info className="size-[15px] shrink-0" aria-hidden="true" />
-            {t(`setup.naming.hint.${preview.data.suggested}`)}
+            {t(`setup.naming.hint.${suggested}`)}
           </p>
         ) : null}
         {lib && choice && choice !== lib.metadata_source ? (

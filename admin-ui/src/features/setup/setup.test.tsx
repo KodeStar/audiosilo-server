@@ -292,6 +292,24 @@ describe('folder, naming and metadata', () => {
     expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]);
   });
 
+  it('suggests no side when the preview read no samples', async () => {
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } },
+          'POST /admin/setup/preview': {
+            body: { ...preview, samples: [], blanks: { tags: 0, path: 0 }, suggested: 'tags' },
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByRole('radio', { name: /The files' tags first/ })).toBeChecked();
+    expect(await screen.findByText('No books to show from this folder.')).toBeVisible();
+    expect(screen.queryByText(/look more complete/)).toBeNull();
+  });
+
   it('a skipped folder creates nothing', async () => {
     const calls = mockFetch(flowRoutes());
     renderApp('/setup');
