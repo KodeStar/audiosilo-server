@@ -209,11 +209,13 @@ func namesOf(m *metadata.Metadata) catalog.ScannedNames {
 	}
 }
 
-// blanks counts a book's empty names: its title, author, narrator and series,
-// and its position when it has a series (a book in no series has none to give).
+// blanks counts a book's empty names: its title, author and series, and its
+// position when it has a series (a book in no series has none to give). The
+// narrator is left out: both modes take it from the tags, so it never tells the
+// sources apart.
 func blanks(n catalog.ScannedNames) int {
 	c := 0
-	for _, v := range []string{n.Title, n.Author, n.Narrator, n.Series} {
+	for _, v := range []string{n.Title, n.Author, n.Series} {
 		if v == "" {
 			c++
 		}

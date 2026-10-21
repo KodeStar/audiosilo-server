@@ -64,12 +64,12 @@ func TestPreviewNamesBothWays(t *testing.T) {
 			t.Errorf("%s:\n got %s\nwant %s", rel, got[rel], w)
 		}
 	}
-	// Blanks are counted on each source alone, not on the columns. The tags: the
-	// filed and loose books' narrator and series (2 + 2), the untagged book's
-	// all four. The folders: every narrator (they never name one), the filed book
-	// nothing else, the loose file its author and series, the untagged book its
-	// series (1 + 3 + 2). The folders say more here, so they are suggested.
-	if want := (PreviewBlanks{Tags: 8, Path: 6}); p.Blanks != want {
+	// Blanks are counted on each source alone, not on the columns, and never
+	// the narrator. The tags: the filed and loose books' series (1 + 1), the
+	// untagged book's all three. The folders: the filed book nothing, the loose
+	// file its author and series, the untagged book its series (0 + 2 + 1). The
+	// folders say more here, so they are suggested.
+	if want := (PreviewBlanks{Tags: 5, Path: 3}); p.Blanks != want {
 		t.Errorf("blanks = %+v, want %+v", p.Blanks, want)
 	}
 	if p.Suggested != catalog.MetadataFromPath {
@@ -91,8 +91,8 @@ func TestPreviewSuggestsRichTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Tags: each book's narrator and series. Folders: all four of each.
-	if want := (PreviewBlanks{Tags: 4, Path: 8}); p.Blanks != want || p.Suggested != catalog.MetadataFromTags {
+	// Tags: each book's series. Folders: all three of each.
+	if want := (PreviewBlanks{Tags: 2, Path: 6}); p.Blanks != want || p.Suggested != catalog.MetadataFromTags {
 		t.Errorf("blanks = %+v, suggested %q; want %+v and tags", p.Blanks, p.Suggested, want)
 	}
 }
@@ -104,8 +104,9 @@ func TestPreviewBlanks(t *testing.T) {
 		n    catalog.ScannedNames
 		want int
 	}{
-		{catalog.ScannedNames{}, 4},
-		{catalog.ScannedNames{Title: "T", Author: "A", Narrator: "N"}, 1},
+		{catalog.ScannedNames{}, 3},
+		{catalog.ScannedNames{Narrator: "N"}, 3},
+		{catalog.ScannedNames{Title: "T", Author: "A"}, 1},
 		{catalog.ScannedNames{Title: "T", Author: "A", Narrator: "N", Series: "S"}, 1},
 		{catalog.ScannedNames{Title: "T", Author: "A", Narrator: "N", Series: "S", Position: "2"}, 0},
 	} {
