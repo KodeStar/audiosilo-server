@@ -265,7 +265,7 @@ const (
 // where builds the WHERE clause (over `books b`) for f, leaving out the facet
 // dimension skip ("" applies everything).
 func (f BookFilter) where(skip string) (string, []any) {
-	conds := []string{"1"}
+	conds := []string{inBookLibrary}
 	var args []any
 	add := func(cond string, a ...any) {
 		conds = append(conds, cond)
@@ -788,9 +788,10 @@ var peopleQueries = map[string]string{
 // outside the grant.
 func aggregateScope(scope *Scope) (string, []any) {
 	if scope == nil {
-		return "1", nil
+		return bookLibraryIDs, nil
 	}
-	return scopesFilterSQL("library_id", "rel_path", []Scope{*scope})
+	filter, args := scopesFilterSQL("library_id", "rel_path", []Scope{*scope})
+	return bookLibraryIDs + ` AND ` + filter, args
 }
 
 // People aggregates the authors or narrators (field = PeopleAuthors/PeopleNarrators)

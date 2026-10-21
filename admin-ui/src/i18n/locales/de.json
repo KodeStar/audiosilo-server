@@ -3068,5 +3068,15 @@
   "audit.action.bridge.job": "Bridge-Aufgabe eingereiht",
   "audit.action.bridge.cancel": "Bridge-Aufgabe abgebrochen",
   "audit.detail.job": "Aufgabe",
-  "audit.detail.ip": "Adresse"
+  "audit.detail.ip": "Adresse",
+  "libraries.form.kind": "Art",
+  "libraries.kind.books": "Bücher",
+  "libraries.kind.podcasts": "Podcasts",
+  "libraries.form.kindHint": "Podcasts benötigen eine Bridge und das Podcasts-Modul.",
+  "settings.module.podcasts.name": "Podcasts",
+  "settings.module.podcasts.blurb": "Podcast-Sendungen per URL folgen und ihre Feeds aktuell halten.",
+  "settings.module.podcasts.needs": "Eine aktive Bridge mit Podcast-Unterstützung",
+  "bridge.kind.podcast.subscribe": "Sendung abonnieren",
+  "bridge.kind.podcast.poll": "Feed prüfen",
+  "settings.modules.podcasts": "Podcasts-Modul"
 }

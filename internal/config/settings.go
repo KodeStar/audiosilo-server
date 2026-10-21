@@ -103,6 +103,7 @@ var fields = []field{
 
 	// Managed modules (internal/modules): one toggle each, applied without a
 	// restart (the API starts and stops the module's background work).
+	{key: "modules.podcasts.enabled", env: "AUDIOSILO_MODULES_PODCASTS_ENABLED", setting: "modules.podcasts", ptr: func(c *Config) any { return &c.Modules.Podcasts.Enabled }},
 	{key: "modules.contributions.enabled", env: "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", setting: "modules.contributions",
 		ptr: func(c *Config) any { return &c.Modules.Contributions.Enabled }},
 

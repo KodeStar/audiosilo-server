@@ -50,7 +50,7 @@ func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []strin
 	// milliseconds on every /meta of a large library, for a few books.
 	rows, err := c.db.QueryContext(ctx, `SELECT `+prefixCols("b.")+` FROM books b
 		  CROSS JOIN libraries l ON l.id = b.library_id
-		 WHERE b.series_key IN (`+placeholders(len(keys))+`) AND `+frag+`
+		 WHERE l.kind='books' AND b.series_key IN (`+placeholders(len(keys))+`) AND `+frag+`
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 			finish()
 			return nil
 		}, `SELECT `+prefixCols("b.")+` FROM books b CROSS JOIN libraries l ON l.id = b.library_id
-			 WHERE b.id IN (`+placeholders(len(part))+`) ORDER BY l.sort_order, l.name, l.id, b.rel_path`, part...)
+			 WHERE l.kind='books' AND b.id IN (`+placeholders(len(part))+`) ORDER BY l.sort_order, l.name, l.id, b.rel_path`, part...)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +123,7 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 	}
 	// Two ordered lists (or several chunks): one placement order, so a more_series
 	// book in an earlier library (or at an earlier path) is still preferred.
-	libs, err := c.ListLibraries(ctx)
+	libs, err := c.ListBookLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}

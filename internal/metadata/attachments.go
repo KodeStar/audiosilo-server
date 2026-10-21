@@ -189,7 +189,7 @@ func ReadProvenance(path string) (*AttachmentProvenance, error) {
 }
 
 func readAttachment(path string) ([]byte, error) {
-	return readRegularFile(path, maxAttachmentFile, errAttachmentNotRegular, errAttachmentTooLarge)
+	return ReadRegularFile(path, maxAttachmentFile, errAttachmentNotRegular, errAttachmentTooLarge)
 }
 
 // decodeAttachment decodes data (a leading byte order mark skipped) into v,

@@ -18,10 +18,10 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
-// callerOf is u as catalog computes access for them: the id, the admin role and
+// callerForUser builds access for a user known outside this request: the id, role and
 // a household member's rule, which u carries from its token lookup (or GetUser),
 // so the scope reads cost no statement for it.
-func callerOf(u *auth.User) catalog.Caller {
+func callerForUser(u *auth.User) catalog.Caller {
 	who := catalog.Caller{ID: u.ID, Admin: u.Role == auth.RoleAdmin}
 	if r := u.MemberRule; r != nil {
 		who.Member = &catalog.MemberRule{Owner: r.Owner, Access: r.Access, OwnerAdmin: r.OwnerAdmin}
@@ -29,10 +29,26 @@ func callerOf(u *auth.User) catalog.Caller {
 	return who
 }
 
+// callerOf applies this request's credential to its user, including the stored
+// client on headerless media requests. Cast credentials never see podcasts.
+func callerOf(ctx context.Context) catalog.Caller {
+	who := callerForUser(userFrom(ctx))
+	who.Podcasts = seesPodcasts(ctx)
+	return who
+}
+
+// seesPodcasts is the old-client gate for this request's credential: whether
+// what it is shown may include podcast libraries, its own or (in the console's
+// views of a user) another person's.
+func seesPodcasts(ctx context.Context) bool {
+	cred := credentialFrom(ctx)
+	return cred.Kind != auth.KindCast && auth.SeesPodcasts(cred.Client)
+}
+
 // handleListLibraries lists libraries the caller can reach (via any share, or
 // for a household member through their owner: the member rule).
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(userFrom(r.Context())))
+	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
@@ -44,7 +60,7 @@ func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 // A non-admin with no access there (no granting share, and for a household
 // member nothing through their owner) gets 403.
 func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, catalog.Scope, int, string) {
-	scope, err := a.cat.CallerScope(r.Context(), callerOf(userFrom(r.Context())), libraryID)
+	scope, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), libraryID)
 	if err != nil {
 		return nil, scope, http.StatusInternalServerError, "access check failed"
 	}
@@ -56,7 +72,7 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 // failure it answers 500 with msg and returns false.
 func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(u))
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		a.log.Warn("load user scopes failed", "user", u.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, msg)
@@ -65,25 +81,30 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 	return scopes, true
 }
 
-// scopeIn is the caller's scope in one library out of their callerScopes, as
-// CallerScope gives it: an admin's is AllowAll (for any id: an unknown library is
-// then a 404, not a 403), anyone else's the library's entry or none.
-func scopeIn(r *http.Request, scopes []catalog.Scope, libraryID int64) catalog.Scope {
-	if userFrom(r.Context()).Role == auth.RoleAdmin {
-		return catalog.Scope{LibraryID: libraryID, AllowAll: true}
-	}
+// scopeIn is the caller's scope in one library out of their callerScopes, as the
+// catalog computed it (the client gate and private shows apply to admins too),
+// and whether the library was among them.
+func scopeIn(scopes []catalog.Scope, libraryID int64) (catalog.Scope, bool) {
 	for _, s := range scopes {
 		if s.LibraryID == libraryID {
-			return s
+			return s, true
 		}
 	}
-	return catalog.Scope{LibraryID: libraryID}
+	return catalog.Scope{LibraryID: libraryID}, false
 }
 
-// scopedLibrary loads the library the caller's scope is for: 403 when the scope
-// grants nothing, 404 for no such library.
+// scopedLibrary loads the library the caller's scope is for: 403 without a
+// library grant, 404 for no such library. Private podcast filtering can leave a
+// granted library with no visible content; its empty listings remain readable.
 func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Library, catalog.Scope, int, string) {
 	if !scope.AllowAll && len(scope.Paths) == 0 {
+		lib, err := a.grantedLibrary(r, scope.LibraryID)
+		if err != nil {
+			return nil, scope, http.StatusInternalServerError, "access check failed"
+		}
+		if lib != nil && lib.Kind == catalog.KindPodcasts {
+			return lib, scope, 0, ""
+		}
 		return nil, scope, http.StatusForbidden, "no access to this library"
 	}
 	lib, err := a.cat.GetLibrary(r.Context(), scope.LibraryID)
@@ -94,6 +115,21 @@ func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Libr
 		return nil, scope, http.StatusInternalServerError, "could not load library"
 	}
 	return lib, scope, 0, ""
+}
+
+// grantedLibrary is library id when the caller holds a grant on it, judged
+// before private-show narrowing (nil without one).
+func (a *API) grantedLibrary(r *http.Request, id int64) (*catalog.Library, error) {
+	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+	if err != nil {
+		return nil, err
+	}
+	for i := range libs {
+		if libs[i].ID == id {
+			return &libs[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // browseScope resolves {id} to the library and the caller's scope in it, writing
@@ -143,7 +179,13 @@ func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*cat
 // (callerScopes): a request body's book (POST /me/queue,
 // /me/collections/{id}/items) whose answer reads the caller's lists with them.
 func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
-	lib, scope, status, msg := a.scopedLibrary(r, scopeIn(r, scopes, libraryID))
+	scope, ok := scopeIn(scopes, libraryID)
+	if !ok {
+		// None granted, hidden by the client gate, or no such library: scopedPath
+		// tells them apart as for any path (an admin's unknown library is a 404).
+		return a.scopedPath(r, libraryID, rawPath)
+	}
+	lib, scope, status, msg := a.scopedLibrary(r, scope)
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
@@ -193,6 +235,9 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 	}
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
+		if lib.Kind == catalog.KindPodcasts {
+			return nil, library.ErrNotIndexable
+		}
 		return a.indexPath(ctx, *lib, path, scope.Allows)
 	case err != nil:
 		return nil, err
@@ -228,6 +273,20 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if lib.Kind == catalog.KindPodcasts {
+		listing, err := a.scanner.BrowsePodcasts(r.Context(), *lib, scope, userFrom(r.Context()).ID, r.URL.Query().Get("path"), queryInt(r, "offset", 0), queryInt(r, "limit", 200))
+		if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "directory not found")
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "browse podcasts failed", "Could not list shows.")
+			return
+		}
+		writeJSON(w, 200, listing)
+		return
+	}
+
 	var allow func(string) bool
 	if !scope.AllowAll {
 		allow = scope.VisibleInBrowse
@@ -317,7 +376,7 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 // handleSearch runs a full-text search across the caller's accessible content,
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(userFrom(r.Context())))
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
@@ -335,7 +394,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 // endpoint so clients render one merged "recently added" list (rather than
 // fanning out to each library's /books and concatenating).
 func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(userFrom(r.Context())))
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load books")
 		return
@@ -505,6 +564,22 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
+	if lib.Kind == catalog.KindPodcasts {
+		downloaded, err := a.cat.PodcastEpisodeDownloaded(r.Context(), lib.ID, rel)
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, 404, "episode not found")
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "load episode for stream failed", "Could not load episode.")
+			return
+		}
+		if !downloaded {
+			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
+			return
+		}
+	}
+
 	// Only ever stream recognized audio. The scope check bounds this to the caller's
 	// grant, but the library root can also hold non-audio sidecar files (.nfo, .jpg,
 	// a stray .env/backup); BrowseFS hides those from listings, and cover art has its
@@ -519,6 +594,13 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
+	if lib.Kind == catalog.KindPodcasts {
+		if info, err := os.Stat(abs); err != nil || !info.Mode().IsRegular() {
+			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
+			return
+		}
+	}
+
 	if r.URL.Query().Get("transcode") == "1" {
 		if a.ffmpeg == "" {
 			writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
@@ -553,6 +635,11 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
+	if lib.Kind == catalog.KindPodcasts {
+		a.servePodcastCover(w, r, lib, path)
+		return
+	}
+
 	if r.URL.Query().Has("size") {
 		a.handleCoverThumbnail(w, r, lib, path, scope)
 		return
@@ -574,14 +661,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	art := book.ArtFiles()
 	if art.CoverPath != "" {
 		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
-			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
-				// The same lifetime as embedded art below. Without one a browser keeps
-				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
-				// custom cover uploaded later would go unseen for weeks, not a day. Set
-				// only for a file that is there, so a 404 is never cached.
-				w.Header().Set("Cache-Control", coverCache)
-			}
-			media.ServeFile(w, r, abs, false)
+			serveSidecarCover(w, r, abs)
 			return
 		}
 	}
@@ -598,4 +678,16 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", coverCache)
 	_, _ = w.Write(data)
+}
+
+// serveSidecarCover serves the image file at abs with the same lifetime as
+// embedded art. Without one a browser keeps a sidecar image fresh by heuristic
+// (a tenth of the file's age), so a custom cover uploaded later would go unseen
+// for weeks, not a day. Set only for a file that is there, so a 404 is never
+// cached.
+func serveSidecarCover(w http.ResponseWriter, r *http.Request, abs string) {
+	if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
+		w.Header().Set("Cache-Control", coverCache)
+	}
+	media.ServeFile(w, r, abs, false)
 }

@@ -69,6 +69,8 @@ export function LibraryCard({
   const running = l.scan.running;
   // Waiting in the job queue behind another library's scan (a running one wins).
   const queued = !running && !!l.scan.queued;
+  // A podcast library has no book tooling (detection, export).
+  const isPodcasts = l.kind === 'podcasts';
 
   // Personal, each copy is its own row with its path, tags and description: a
   // file for the admin's own scripts (the menu warns before it is made), never
@@ -133,6 +135,7 @@ export function LibraryCard({
             <h2 id={`library-${l.id}-name`} className="h2 [overflow-wrap:anywhere]">
               {l.name}
             </h2>
+            {isPodcasts ? <Badge variant="info">{t('libraries.kind.podcasts')}</Badge> : null}
             {/* A running scan wins: a Retry's scan is the newer news than the
                 availability probe, which the server caches for a few seconds. */}
             {running ? (
@@ -211,15 +214,21 @@ export function LibraryCard({
                 <Pencil aria-hidden="true" />
                 {t('libraries.menu.edit')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setDialog('detect')}>
+              <DropdownMenuItem disabled={isPodcasts} onClick={() => setDialog('detect')}>
                 <Split aria-hidden="true" />
                 {t('libraries.menu.detection')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void exportBooks()} disabled={exporting}>
+              <DropdownMenuItem
+                onClick={() => void exportBooks()}
+                disabled={exporting || isPodcasts}
+              >
                 <Download aria-hidden="true" />
                 {exporting ? t('libraries.menu.exporting') : t('libraries.menu.export')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setDialog('exportPaths')} disabled={exporting}>
+              <DropdownMenuItem
+                onClick={() => setDialog('exportPaths')}
+                disabled={exporting || isPodcasts}
+              >
                 <FileWarning aria-hidden="true" />
                 {t('libraries.menu.exportPaths')}
               </DropdownMenuItem>

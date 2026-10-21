@@ -34,6 +34,9 @@ import (
 // Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) {
 	a.bridge = b
+	if err := b.ExpirePrivateRequests(context.Background()); err != nil {
+		a.log.Warn("expire private podcast requests failed", "err", err)
+	}
 	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
 	b.ModuleOn = a.moduleOn
 }
@@ -126,6 +129,7 @@ func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
 
 // bridgeLibrary is a server library as the Bridge maps it.
 type bridgeLibrary struct {
+	Kind string `json:"kind"`
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	Root string `json:"root"`
@@ -153,6 +157,10 @@ func (a *API) libraryFor(w http.ResponseWriter, r *http.Request, id int64, op st
 func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID int64, path, op string) (*catalog.Library, *catalog.Book, bool) {
 	lib, ok := a.libraryFor(w, r, libraryID, op)
 	if !ok {
+		return nil, nil, false
+	}
+	if lib.Kind == catalog.KindPodcasts {
+		writeErrorCode(w, 409, "not_book_library", "This action needs a books library.")
 		return nil, nil, false
 	}
 	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, path)
@@ -196,7 +204,7 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]bridgeLibrary, 0, len(libs))
 	for _, l := range libs {
-		out = append(out, bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root})
+		out = append(out, bridgeLibrary{Kind: l.Kind, ID: l.ID, Name: l.Name, Root: l.Root})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"server_time": time.Now().UTC().Format(time.RFC3339),
@@ -339,6 +347,9 @@ const sampleBooks = 5
 // before a scan prunes it doesn't make the whole library look unmapped; the
 // first book when none is whole.
 func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Book, []bridgeFile, error) {
+	if lib.Kind == catalog.KindPodcasts {
+		return nil, nil, catalog.ErrNotFound
+	}
 	page, err := a.cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID, Sort: "title", Limit: sampleBooks})
 	if err != nil {
 		return nil, nil, err
@@ -421,7 +432,7 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	if !a.writeBridgeError(w, err, "bridge job update failed") {
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	writeJSON(w, http.StatusOK, bridge.RedactedJob(*job))
 }
 
 // notifyBridgeJob reports a job that just finished, failed or parked
@@ -508,21 +519,25 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 // 404 code not_indexable when no book is there (for attachments: no indexed one).
 func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		LibraryID int64  `json:"library_id"`
-		Path      string `json:"path"`
-		Mode      string `json:"mode"`
-		From      string `json:"from"`
+		LibraryID int64   `json:"library_id"`
+		Path      string  `json:"path"`
+		Mode      string  `json:"mode"`
+		From      *string `json:"from"`
 	}
 	if err := decodeJSON(r, &req, 8<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}
-	from := catalog.CleanRelPath(req.From)
+	rawFrom := ""
+	if req.From != nil {
+		rawFrom = *req.From
+	}
+	from := catalog.CleanRelPath(rawFrom)
 	switch {
 	case req.Mode != "" && req.Mode != rescanFull && req.Mode != rescanAttachments:
 		writeError(w, http.StatusBadRequest, "mode must be full or attachments")
 		return
-	case req.From != "" && from == "":
+	case rawFrom != "" && from == "":
 		writeError(w, http.StatusBadRequest, "invalid from")
 		return
 	case from != "" && req.Mode == rescanAttachments:
@@ -534,6 +549,28 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := catalog.CleanRelPath(req.Path)
+	if lib.Kind == catalog.KindPodcasts {
+		if req.Mode == rescanAttachments || req.From != nil {
+			writeError(w, 400, "Podcast rescans take a show path only.")
+			return
+		}
+		// Detached from the request like a book's rescan (rescanAt), so a long
+		// show's index is still saved when the Bridge's request gives up.
+		ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+		defer cancel()
+		show, n, err := a.scanner.IndexPodcastPath(ctx, *lib, p)
+		if errors.Is(err, library.ErrNotIndexable) {
+			writeErrorCode(w, 404, "not_indexable", "No valid feed.json.")
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "rescan podcast failed", "Could not index show.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"path": show, "episodes": n})
+		return
+	}
+
 	if req.Mode == rescanAttachments {
 		got, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*library.AttachmentsRefresh, error) {
 			return a.scanner.RefreshAttachments(ctx, *lib, p)
@@ -623,7 +660,7 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 		out.Estimates, out.Setup = h.Estimates, h.Setup
 	}
 	for _, l := range libs {
-		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}}
+		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{Kind: l.Kind, ID: l.ID, Name: l.Name, Root: l.Root}}
 		if h != nil {
 			al.Mapping = h.Library(l.ID)
 		}
@@ -704,6 +741,11 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	if bridge.Internal(req.Kind) {
+		writeError(w, 400, "This job kind is server-internal.")
+		return
+	}
+
 	// A job that needs a managed module (contributions: filing to the
 	// community) is unknown while the module is off, as the module's routes are.
 	if m := bridge.ModuleFor(req.Kind, req.Params); m != "" && !a.moduleOn(m) {
@@ -805,7 +847,7 @@ func (a *API) checkCorrections(w http.ResponseWriter, r *http.Request, book *cat
 // next_before for the next page.
 func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := bridge.Filter{State: q.Get("state"), Limit: queryInt(r, "limit", bridge.DefaultListLimit)}
+	f := bridge.Filter{Kind: q.Get("kind"), State: q.Get("state"), Limit: queryInt(r, "limit", bridge.DefaultListLimit)}
 	libraryID, ok := parseOptionalID(q.Get("library_id"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
@@ -845,7 +887,7 @@ func (a *API) handleAdminBridgeJob(w http.ResponseWriter, r *http.Request) {
 	if !a.writeBridgeError(w, err, "bridge job failed") {
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	writeJSON(w, http.StatusOK, bridge.RedactedJob(*job))
 }
 
 // handleAdminBridgeCancel serves POST /admin/bridge/jobs/{id}/cancel: cancel a
@@ -861,5 +903,5 @@ func (a *API) handleAdminBridgeCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "bridge.cancel", job.Target(), map[string]any{"job": job.ID, "kind": job.Kind})
-	writeJSON(w, http.StatusOK, job)
+	writeJSON(w, http.StatusOK, bridge.RedactedJob(*job))
 }

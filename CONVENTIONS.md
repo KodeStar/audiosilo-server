@@ -514,7 +514,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
   (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
   nil = the admin's unscoped view). Every content handler authorizes
-  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
+  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`, except in a
+  podcast library, where the old-client gate and private shows apply to them too (see Podcasts).
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
@@ -1645,6 +1646,51 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
   sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
   `retry_at`, no re-admit at a restart).
+- **Podcasts (Bridge Phase 2c-1)**: libraries have an immutable `kind` (`books`, the default,
+  or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
+  direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
+  skips that entry, keeping its existing library when present, so startup continues. API creates
+  and patches still refuse it with 409 `root_overlaps`. Podcast libraries are indexed only
+  from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
+  32 MiB and 20,000 episodes. Unknown fields are ignored; a future version skips the show. Episode
+  paths are validated, one level below their show, unique and audio-only; no tags, probes,
+  deduplication, moves or sidecars run, and a metadata source change leaves episodes as feed.json
+  wrote them. Presence is one directory listing; the feed signature skips unchanged shows, while a
+  targeted Bridge rescan refreshes file presence too. A scan prunes only shows indexed before it
+  listed the root, so one the Bridge indexes meanwhile stays. Missing
+  episodes remain indexed, with `episode` on `/item`, 404 `not_downloaded` on `/stream`, and empty
+  chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
+  `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
+  `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players remain hidden
+  while `PodcastPlayerMinVersion` is empty. Stored clients cover headerless media requests.
+  The catalog applies this gate before admin shortcuts, on single and multiple library scopes
+  and library lists. The console's views of another person (user detail, a progress edit) take
+  that person's access under the viewing request's gate. Background callers and cast tokens keep
+  it false. Private shows then narrow
+  every player's scope, including admins, to shows they follow. A follow records the feed.json
+  `show_id`, so a different show reusing the same path requires fresh proof. A granted library
+  with no visible shows still serves empty lists; content paths remain denied. Knowing a feed URL proves access
+  by its current or previous normalized SHA-256. Whole-library grants remain the requirement for
+  following a new URL. Book search/recent, admin book tools, the console's activity figures and
+  listening goals exclude podcast libraries.
+  Core show, episode, item and media reads are always available to scoped callers. Follow,
+  unfollow and check actions use the module User wrapper (no kids or demo accounts), JSON bodies
+  for URLs, and `modules.podcasts.enabled` (off by default,
+  `AUDIOSILO_MODULES_PODCASTS_ENABLED`). Its capability also needs an online Bridge offering
+  `podcast`; reads do not. Five open subscribes per user, deduped by URL hash and user. Private
+  URLs live only in the Bridge service's volatile memory and its claim reply; stored params keep
+  an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
+  display labels are redacted, and a restart expires unclaimed requests. Podcast
+  errors, progress and results are redacted before storage and never notify. The module scheduler
+  folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
+  up to ten due followed shows; a job or show that fails is logged and passed over, and a stored
+  validator over a poll's 512-byte cap is dropped. Successful cadence clamps to 15 minutes..24 hours; failures back
+  off, `gone` stops automatic checks. Secret loss is retained separately from the latest error:
+  only a successful subscribe or poll clears it, so a follow by URL can still restore it after
+  another failure. Follows and feed status survive index pruning. The Bridge's
+  marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
+  and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;
+  default job lists omit polls. Shared fixtures live in `internal/podcast/testdata`.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
@@ -1683,9 +1729,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   status and refetched after every settings save) shows a card per module (switch, blurb, docs link,
   Bridge state line, the "hidden from listeners" note while enabled but not active); a page a module
   brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
-  on (a `?topic=` for it opens General). One module ships, `contributions` (needs `contribute`), with no
-  routes or `Start` of its own: its actions are the Bridge's community jobs (`bridge.ModuleFor`, see The
-  Bridge). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
+  on (a `?topic=` for it opens General). Two modules ship: `contributions` (needs `contribute`, its actions are Bridge community jobs)
+  and `podcasts` (needs `podcast`, its Start schedules feed checks; see Podcasts above). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
   or clashing route pattern fails the tests, not a start.
   `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
   runtime on/off).
@@ -1958,4 +2003,3 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   zero audio files while books are still indexed. This protects the index - and
   the progress/bookmarks that cascade from it - when a network share (SMB/NFS)
   is unmounted. Library roots are always local paths; mount remote shares first.
-

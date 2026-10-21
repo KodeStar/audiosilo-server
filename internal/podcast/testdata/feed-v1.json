@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "generator": "audiosilo-bridge/0.9.0",
+  "show_id": "a1b2c3d4e5f60718",
+  "feed_url": "https://feeds.example.com/show.xml",
+  "feed_url_sha256": "42affc5fdf78beb1ff86b53012c30d588d1329537358e972f717eceb65b4eeb2",
+  "previous_feed_url_sha256": [
+    "6a5fda1ea9e25d7143ab92321b6ba8ad11e23cc36c968dba0b571552abb51a07"
+  ],
+  "private": false,
+  "feed_host": "feeds.example.com",
+  "subscribed_at": "2026-10-20T08:00:00Z",
+  "updated_at": "2026-10-20T09:00:00Z",
+  "show": {
+    "title": "Example Show",
+    "author": "Example Network",
+    "description": "A show about examples.",
+    "link": "https://example.com/show",
+    "language": "en",
+    "type": "episodic",
+    "explicit": false,
+    "categories": [
+      "Technology"
+    ],
+    "podcast_guid": "917393e3-1b1e-5cef-ace4-edaa54e1f810",
+    "image": {
+      "file": "cover.png",
+      "source_sha256": "c3cdad83d81fa2cb0de6618debfe515ec410f026bb27b99b61734ab460073871",
+      "fetched_at": "2026-10-20T08:00:00Z"
+    }
+  },
+  "episodes": [
+    {
+      "id": "03fd13fa0847392f",
+      "guid": "ep-3",
+      "path": "Example Show/2026-10-19-03fd13fa08.mp3",
+      "title": "Episode Three",
+      "published": "2026-10-19T21:00:00Z",
+      "description": "Plain text notes.",
+      "season": 2,
+      "episode": 3,
+      "episode_type": "full",
+      "explicit": false,
+      "duration_seconds": 1720,
+      "enclosure": {
+        "url": "https://cdn.example.com/ep3.mp3?src=feed",
+        "type": "audio/mpeg",
+        "length": 27525120
+      },
+      "chapters_url": "https://cdn.example.com/ep3.chapters.json",
+      "transcripts": [
+        {
+          "url": "https://cdn.example.com/ep3.vtt",
+          "type": "text/vtt",
+          "language": "en"
+        }
+      ],
+      "first_seen": "2026-10-20T08:00:00Z",
+      "removed_at": "",
+      "fetch": null
+    },
+    {
+      "id": "2fa6ddd63e93fc60",
+      "guid": "ep-2",
+      "path": "Example Show/2026-10-12-2fa6ddd63e.m4a",
+      "title": "Episode Two",
+      "published": "2026-10-12T21:00:00Z",
+      "description": "Plain text notes.",
+      "season": 2,
+      "episode": 2,
+      "episode_type": "full",
+      "explicit": false,
+      "duration_seconds": 1500,
+      "enclosure": {
+        "url": "https://cdn.example.com/ep2.m4a",
+        "type": "audio/x-m4a",
+        "length": 0
+      },
+      "chapters_url": "",
+      "transcripts": [],
+      "first_seen": "2026-10-20T08:00:00Z",
+      "removed_at": "",
+      "fetch": {
+        "generation": 1,
+        "sha256": "72416d01d511a08251eca810f8717fe2d5e9cfd5e426f3655ea0a62160c1475a",
+        "bytes": 24000000,
+        "duration_ms": 1512345,
+        "content_type": "audio/mp4",
+        "fetched_at": "2026-10-20T08:05:00Z",
+        "deleted_at": "",
+        "timeline_changed": false
+      }
+    },
+    {
+      "id": "6ee9b96b83fd6824",
+      "guid": "",
+      "path": "Example Show/undated-6ee9b96b83.mp3",
+      "title": "",
+      "published": "",
+      "description": "Plain text notes.",
+      "season": null,
+      "episode": null,
+      "episode_type": "bonus",
+      "explicit": false,
+      "duration_seconds": null,
+      "enclosure": {
+        "url": "https://cdn.example.com/bonus.mp3",
+        "type": "",
+        "length": 0
+      },
+      "chapters_url": "",
+      "transcripts": [],
+      "first_seen": "2026-10-20T08:00:00Z",
+      "removed_at": "2026-10-20T09:00:00Z",
+      "fetch": null
+    }
+  ]
+}

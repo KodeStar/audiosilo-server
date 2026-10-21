@@ -8,6 +8,7 @@ package builtin
 import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/modules"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 )
 
 // Modules returns the registry.
@@ -20,5 +21,6 @@ func Modules() []modules.Module {
 		// sidecars.generate's contribute "issue"), which the job queue refuses
 		// while it is off (bridge.ModuleFor names it).
 		{ID: bridge.ModuleContributions, RequiresBridge: bridge.FeatureContribute},
+		{ID: bridge.ModulePodcasts, RequiresBridge: bridge.FeaturePodcast, Start: podcast.RunScheduler},
 	}
 }

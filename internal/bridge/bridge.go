@@ -20,7 +20,14 @@ type Service struct {
 	now func() time.Time
 	// wake is closed (and replaced) when a job is queued, so a claim waiting in
 	// waitClaim looks again at once.
-	wake *signal
+	wake         *signal
+	ended        *signal
+	secretFlowMu sync.Mutex
+	secretMu     sync.Mutex
+	privateURLs  map[int64]string
+	// OnEnded hears every committed terminal transition. It must return at once;
+	// wake background work rather than re-entering the queue here.
+	OnEnded func(ctx context.Context, job Job)
 
 	// OnTransition, when set (at wiring, before the first request), hears about
 	// every move of a job into a state an admin is told about (Job.Notable): the
@@ -52,7 +59,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now, wake: newSignal()}
+	return &Service{db: db, now: now, wake: newSignal(), ended: newSignal(), privateURLs: map[int64]string{}}
 }
 
 // ts is now as the bridge tables store times: RFC3339 UTC, whole seconds, so

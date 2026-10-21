@@ -92,6 +92,7 @@ describe('libraries', () => {
     expect(await screen.findByText('Added drama')).toBeInTheDocument();
     const post = calls.find((c) => c.method === 'POST' && c.path === '/admin/libraries');
     expect(post?.body).toEqual({
+      kind: 'books',
       name: 'drama',
       root: '/mnt/drama',
       scan_schedule: '',
@@ -431,4 +432,53 @@ describe('libraries, review regressions', () => {
       within(dialog).getByText('locked', { selector: '[aria-current="location"]' }),
     ).toBeInTheDocument();
   });
+});
+
+it('creates a podcast library and explains the Bridge requirement', async () => {
+  const calls = mockFetch(
+    routes({
+      'POST /admin/libraries': {
+        status: 201,
+        body: {
+          id: 3,
+          kind: 'podcasts',
+          name: 'Shows',
+          root: '/podcasts',
+          default_view: 'hybrid',
+          sort_order: 2,
+        },
+      },
+    }),
+  );
+  renderApp('/library/libraries');
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Add library' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+  expect(
+    within(dialog).getByText('Podcasts need a Bridge and the Podcasts module.'),
+  ).toBeInTheDocument();
+  await user.selectOptions(within(dialog).getByLabelText('Kind'), 'podcasts');
+  await user.type(within(dialog).getByLabelText('Name'), 'Shows');
+  await user.type(within(dialog).getByLabelText('Folder'), '/podcasts');
+  await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+  await waitFor(() =>
+    expect(
+      calls.find((c) => c.method === 'POST' && c.path === '/admin/libraries')?.body,
+    ).toMatchObject({ kind: 'podcasts' }),
+  );
+});
+
+it('shows the podcast badge and keeps its kind read only on edit', async () => {
+  mockFetch(
+    routes({ 'GET /admin/libraries': { body: { libraries: libraries([{ kind: 'podcasts' }]) } } }),
+  );
+  renderApp('/library/libraries');
+  const user = userEvent.setup();
+  const card = await screen.findByRole('listitem', { name: 'Fiction' });
+  expect(within(card).getByText('Podcasts')).toBeInTheDocument();
+  await user.click(within(card).getByRole('button', { name: 'Actions for Fiction' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Edit library...' }));
+  const field = await screen.findByLabelText('Kind');
+  expect(field).toHaveValue('podcasts');
+  expect(field).toBeDisabled();
 });

@@ -100,7 +100,7 @@ func TestModuleCapabilityMatrix(t *testing.T) {
 	if capability(t, b.testEnv) {
 		t.Fatal("on, Bridge without the feature: flag true")
 	}
-	want := `{"modules":[{"id":"contributions","enabled":true,"active":false,"requires_bridge":"contribute","bridge_state":"no_feature"}]}`
+	want := `{"modules":[{"id":"contributions","enabled":true,"active":false,"requires_bridge":"contribute","bridge_state":"no_feature"},{"id":"podcasts","enabled":false,"active":false,"requires_bridge":"podcast","bridge_state":"no_feature"}]}`
 	if got := adminModules(t, b.testEnv, b.adminTok); got != want {
 		t.Fatalf("no feature:\n got %s\nwant %s", got, want)
 	}
@@ -112,7 +112,7 @@ func TestModuleCapabilityMatrix(t *testing.T) {
 	if !strings.Contains(body, `"features":["bridge","contribute","sidecars"]`) {
 		t.Fatalf("bridge.features without contribute: %s", body)
 	}
-	want = `{"modules":[{"id":"contributions","enabled":true,"active":true,"requires_bridge":"contribute","bridge_state":"ready"}]}`
+	want = `{"modules":[{"id":"contributions","enabled":true,"active":true,"requires_bridge":"contribute","bridge_state":"ready"},{"id":"podcasts","enabled":false,"active":false,"requires_bridge":"podcast","bridge_state":"no_feature"}]}`
 	if got := adminModules(t, b.testEnv, b.adminTok); got != want {
 		t.Fatalf("ready:\n got %s\nwant %s", got, want)
 	}
@@ -123,7 +123,7 @@ func TestModuleCapabilityMatrix(t *testing.T) {
 	if capability(t, b.testEnv) {
 		t.Fatal("on, Bridge unpaired: flag true")
 	}
-	want = `{"modules":[{"id":"contributions","enabled":true,"active":false,"requires_bridge":"contribute","bridge_state":"offline"}]}`
+	want = `{"modules":[{"id":"contributions","enabled":true,"active":false,"requires_bridge":"contribute","bridge_state":"offline"},{"id":"podcasts","enabled":false,"active":false,"requires_bridge":"podcast","bridge_state":"offline"}]}`
 	if got := adminModules(t, b.testEnv, b.adminTok); got != want {
 		t.Fatalf("offline:\n got %s\nwant %s", got, want)
 	}
@@ -134,7 +134,7 @@ func TestModuleCapabilityMatrix(t *testing.T) {
 	if capability(t, c.testEnv) {
 		t.Fatal("off, Bridge ready: flag true")
 	}
-	want = `{"modules":[{"id":"contributions","enabled":false,"active":false,"requires_bridge":"contribute","bridge_state":"ready"}]}`
+	want = `{"modules":[{"id":"contributions","enabled":false,"active":false,"requires_bridge":"contribute","bridge_state":"ready"},{"id":"podcasts","enabled":false,"active":false,"requires_bridge":"podcast","bridge_state":"no_feature"}]}`
 	if got := adminModules(t, c.testEnv, c.adminTok); got != want {
 		t.Fatalf("off and ready:\n got %s\nwant %s", got, want)
 	}
@@ -146,14 +146,14 @@ func TestAdminModulesDefault(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	adminTok := adminSession(t, e)
-	want := `{"modules":[{"id":"contributions","enabled":false,"active":false,"requires_bridge":"contribute","bridge_state":"offline"}]}`
+	want := `{"modules":[{"id":"contributions","enabled":false,"active":false,"requires_bridge":"contribute","bridge_state":"offline"},{"id":"podcasts","enabled":false,"active":false,"requires_bridge":"podcast","bridge_state":"offline"}]}`
 	if got := adminModules(t, e, adminTok); got != want {
 		t.Fatalf("GET /admin/modules:\n got %s\nwant %s", got, want)
 	}
 	_, body := e.do(t, "GET", "/api/v1/admin/settings", adminTok, "")
 	var env map[string]json.RawMessage
 	decodeInto(t, body, &env)
-	if string(env["modules"]) != `{"contributions":false}` {
+	if string(env["modules"]) != `{"contributions":false,"podcasts":false}` {
 		t.Fatalf("settings modules = %s", env["modules"])
 	}
 	if capability(t, e) {
@@ -287,7 +287,7 @@ func TestSetModulesValidates(t *testing.T) {
 		}
 	}
 	// A refused registry leaves the last one in place.
-	if len(e.api.modules) != 1 || e.api.modules[0].ID != "contributions" {
+	if len(e.api.modules) != 2 || e.api.modules[0].ID != "contributions" {
 		t.Fatalf("modules after refusals = %+v", e.api.modules)
 	}
 }

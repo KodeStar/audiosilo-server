@@ -1,8 +1,11 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -183,7 +186,7 @@ func TestSyncLibraries(t *testing.T) {
 	cat := catalog.New(storetest.Open(t), time.Now)
 
 	cfg := &config.Config{Libraries: []config.Library{{Name: "Main", Root: filepath.Join("rel", "audiobooks")}}}
-	if err := syncLibraries(ctx, cfg, cat); err != nil {
+	if err := syncLibraries(ctx, cfg, cat, discardLog()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -200,11 +203,55 @@ func TestSyncLibraries(t *testing.T) {
 	}
 
 	// Idempotent: a second sync upserts by name rather than duplicating.
-	if err := syncLibraries(ctx, cfg, cat); err != nil {
+	if err := syncLibraries(ctx, cfg, cat, discardLog()); err != nil {
 		t.Fatal(err)
 	}
 	if libs, _ := cat.ListLibraries(ctx); len(libs) != 1 {
 		t.Fatalf("re-sync duplicated libraries: got %d", len(libs))
+	}
+}
+
+func TestSyncLibrariesContinuesAfterRootOverlap(t *testing.T) {
+	t.Parallel()
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			cat := catalog.New(storetest.Open(t), time.Now)
+			root := t.TempDir()
+			podcasts, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Podcasts", Root: filepath.Join(root, "podcasts"), Kind: catalog.KindPodcasts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldRoot := filepath.Join(root, "books")
+			if existing {
+				if _, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Clash", Root: oldRoot}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{Libraries: []config.Library{
+				{Name: "Clash", Root: filepath.Join(podcasts.Root, "nested")},
+				{Name: "Healthy", Root: filepath.Join(root, "healthy")},
+			}}
+			var logs bytes.Buffer
+			if err := syncLibraries(ctx, cfg, cat, slog.New(slog.NewTextHandler(&logs, nil))); err != nil {
+				t.Fatalf("startup stopped at overlapping config library: %v", err)
+			}
+			if !strings.Contains(logs.String(), "Clash") || !strings.Contains(logs.String(), "overlaps") {
+				t.Fatalf("missing overlap warning: %s", logs.String())
+			}
+			if _, err := cat.GetLibraryByName(ctx, "Healthy"); err != nil {
+				t.Fatalf("later library was not synced: %v", err)
+			}
+			clash, err := cat.GetLibraryByName(ctx, "Clash")
+			if existing {
+				if err != nil || clash.Root != oldRoot {
+					t.Fatalf("existing library changed: %+v %v", clash, err)
+				}
+			} else if !errors.Is(err, catalog.ErrNotFound) {
+				t.Fatalf("overlapping library was created: %+v %v", clash, err)
+			}
+		})
 	}
 }
 

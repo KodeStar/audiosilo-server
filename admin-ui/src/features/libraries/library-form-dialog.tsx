@@ -38,6 +38,7 @@ import {
 
 // Messages are i18n keys, translated where they're shown.
 const schema = z.object({
+  kind: z.enum(['books', 'podcasts']),
   name: z.string().trim().min(1, 'libraries.form.nameRequired'),
   // Not `root`: react-hook-form reserves errors.root for form-level errors.
   folder: z.string().trim().min(1, 'libraries.form.folderRequired'),
@@ -97,6 +98,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: {
+      kind: library?.kind ?? 'books',
       name: library?.name ?? '',
       folder: library?.root ?? '',
       schedule: current.choice,
@@ -110,6 +112,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const onSubmit = form.handleSubmit(async (v) => {
     const patterns = textToPatterns(v.ignore);
     const lib = {
+      kind: v.kind,
       name: v.name,
       root: v.folder,
       scan_schedule: joinSchedule(v.schedule, v.time),
@@ -164,6 +167,16 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
       <DialogBody className="flex flex-col gap-4">
+        <Field
+          htmlFor="library-kind"
+          label={t('libraries.form.kind')}
+          description={t('libraries.form.kindHint')}
+        >
+          <NativeSelect id="library-kind" disabled={!!library} {...form.register('kind')}>
+            <option value="books">{t('libraries.kind.books')}</option>
+            <option value="podcasts">{t('libraries.kind.podcasts')}</option>
+          </NativeSelect>
+        </Field>
         <Field htmlFor="library-name" label={t('libraries.form.name')} error={nameError}>
           <Input
             id="library-name"

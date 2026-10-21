@@ -314,7 +314,7 @@ func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) 
 		_, d.Source.ColorRead = storedCoverColor(d.Source.Art, color)
 		return nil
 	}, `SELECT b.id, b.library_id, b.rel_path, b.cover_art, b.cover_color FROM books b
-		 WHERE b.id > ? AND (COALESCE(b.has_cover, 1) = 1 OR `+customCoverExpr+`)
+		 WHERE `+inBookLibrary+` AND b.id > ? AND (COALESCE(b.has_cover, 1) = 1 OR `+customCoverExpr+`)
 		 ORDER BY b.id LIMIT ?`, afterID, limit+1)
 	if err != nil {
 		return nil, 0, err

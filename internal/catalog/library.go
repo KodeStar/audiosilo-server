@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -30,17 +31,31 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 	if err := checkMetadataSource(&lib); err != nil {
 		return nil, err
 	}
-	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO libraries(name, root, default_view, scan_schedule, ignore_patterns, metadata_source, created_at)
-		 VALUES(?,?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule,
-		joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts())
+	if lib.Kind == "" {
+		lib.Kind = KindBooks
+	}
+	if lib.Kind != KindBooks && lib.Kind != KindPodcasts {
+		return nil, ErrInvalidKind
+	}
+	var id int64
+	err := c.db.WithTx(ctx, "CreateLibrary", func(tx *sql.Tx) error {
+		if err := checkLibraryRoot(ctx, tx, lib); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `INSERT INTO libraries(name,root,default_view,scan_schedule,ignore_patterns,metadata_source,created_at,kind) VALUES(?,?,?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule, joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts(), lib.Kind)
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
 		}
 		return nil, err
 	}
-	lib.ID, _ = res.LastInsertId()
+	lib.ID = id
 	return &lib, nil
 }
 
@@ -57,13 +72,14 @@ func (c *Catalog) UpsertLibraryByName(ctx context.Context, lib Library) (*Librar
 	if lib.DefaultView == "" {
 		lib.DefaultView = existing.DefaultView
 	}
-	_, err = c.db.ExecContext(ctx,
-		`UPDATE libraries SET root = ?, default_view = ? WHERE id = ?`,
-		lib.Root, lib.DefaultView, existing.ID)
+	if lib.Kind != "" && lib.Kind != existing.Kind {
+		return nil, ErrKindImmutable
+	}
+	returnLib, _, err := c.UpdateLibrary(ctx, existing.ID, LibraryPatch{Root: lib.Root, DefaultView: lib.DefaultView})
 	if err != nil {
 		return nil, err
 	}
-	lib.ID = existing.ID
+	lib = *returnLib
 	return &lib, nil
 }
 
@@ -72,6 +88,7 @@ func (c *Catalog) UpsertLibraryByName(ctx context.Context, lib Library) (*Librar
 // (library.ValidatePatch), the metadata source here (checkMetadataSource).
 type LibraryPatch struct {
 	Name, Root, DefaultView string
+	Kind                    *string
 	ScanSchedule            *string
 	IgnorePatterns          *[]string
 	MetadataSource          *string
@@ -79,6 +96,9 @@ type LibraryPatch struct {
 
 // Apply writes the patch's fields onto l (a zero Library for a new one).
 func (p LibraryPatch) Apply(l *Library) {
+	if p.Kind != nil {
+		l.Kind = *p.Kind
+	}
 	if p.Name != "" {
 		l.Name = p.Name
 	}
@@ -111,6 +131,9 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	if err != nil {
 		return nil, false, err
 	}
+	if in.Kind != nil && *in.Kind != existing.Kind {
+		return nil, false, ErrKindImmutable
+	}
 	before := *existing
 	in.Apply(existing)
 	if err := checkMetadataSource(existing); err != nil {
@@ -118,6 +141,9 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	}
 	resolved := false // the books were re-resolved (their identifiers may differ)
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
+		if err := checkLibraryRoot(ctx, tx, *existing); err != nil {
+			return err
+		}
 		var stored string
 		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).
 			Scan(&stored); errors.Is(err, sql.ErrNoRows) {
@@ -133,7 +159,10 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 			joinPatterns(existing.IgnorePatterns), existing.MetadataSource, id); err != nil {
 			return err
 		}
-		if existing.MetadataSource == stored {
+		// A podcast library's episodes come from feed.json, never from tags or
+		// the path, and have no scanned snapshot: re-resolving them would blank
+		// what IndexPodcastShow wrote (their descriptions among it).
+		if existing.MetadataSource == stored || existing.Kind == KindPodcasts {
 			return nil
 		}
 		resolved = true
@@ -199,13 +228,13 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 }
 
 // libraryCols is what scanLibrary reads.
-const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns, metadata_source`
+const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns, metadata_source, kind`
 
 func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	var l Library
 	var patterns string
 	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder, &l.ScanSchedule, &patterns,
-		&l.MetadataSource); err != nil {
+		&l.MetadataSource, &l.Kind); err != nil {
 		return nil, err
 	}
 	l.IgnorePatterns = splitPatterns(patterns)
@@ -272,3 +301,66 @@ func collectLibraries(rows *sql.Rows) ([]Library, error) {
 	}
 	return out, rows.Err()
 }
+
+const (
+	KindBooks    = "books"
+	KindPodcasts = "podcasts"
+)
+
+// inBookLibrary keeps a books row (alias b) of a books-kind library only:
+// podcast episodes are out of every cross-library book aggregate and the admin
+// book tools. It stays a correlated EXISTS: an IN list lets the planner lead
+// with the library index and slows the Health counts (TestSeriesKeyScale).
+// bookLibraryIDs is the rule for a query over books unaliased.
+const (
+	inBookLibrary  = `EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='` + KindBooks + `')`
+	bookLibraryIDs = `library_id IN (SELECT id FROM libraries WHERE kind='` + KindBooks + `')`
+)
+
+var ErrInvalidKind = errors.New("invalid library kind")
+var ErrKindImmutable = errors.New("library kind is immutable")
+var ErrRootOverlaps = errors.New("podcast library roots must not overlap other libraries")
+
+// checkLibraryRoot runs with the writer held so simultaneous creates cannot
+// admit overlapping roots. Paths are cleaned and made absolute on both sides.
+func checkLibraryRoot(ctx context.Context, tx *sql.Tx, lib Library) error {
+	root, err := filepath.Abs(lib.Root)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,root,kind FROM libraries WHERE id != ?`, lib.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var other, kind string
+		if err := rows.Scan(&id, &other, &kind); err != nil {
+			return err
+		}
+		if lib.Kind != KindPodcasts && kind != KindPodcasts {
+			continue
+		}
+		other, err = filepath.Abs(other)
+		if err != nil {
+			return err
+		}
+		if pathOverlaps(root, other) {
+			return ErrRootOverlaps
+		}
+	}
+	return rows.Err()
+}
+func pathOverlaps(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator)) || a == string(filepath.Separator) || b == string(filepath.Separator)
+}
+
+// ListBookLibraries is for cross-library audiobook tools; podcasts have their
+// own scanner and are never candidates for book matching or enrichment.
+func (c *Catalog) ListBookLibraries(ctx context.Context) ([]Library, error) {
+	libs, err := c.ListLibraries(ctx)
+	return slices.DeleteFunc(libs, func(l Library) bool { return l.Kind != KindBooks }), err
+}
+
+var ErrNotBookLibrary = errors.New("not a books library")

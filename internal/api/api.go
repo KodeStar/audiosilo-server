@@ -245,6 +245,14 @@ func (a *API) StartCoverColors(ctx context.Context) {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts", a.requireAuth(http.HandlerFunc(a.handlePodcastShows)))
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts/episodes", a.requireAuth(http.HandlerFunc(a.handlePodcastEpisodes)))
+	mux.Handle("GET /api/v1/me/podcasts", a.requireAuth(http.HandlerFunc(a.handleMyPodcasts)))
+	pr := moduleRoutes{a: a, mux: mux, id: bridge.ModulePodcasts}
+	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
+	pr.User("DELETE /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastUnfollow))
+	pr.User("POST /api/v1/podcasts/check", http.HandlerFunc(a.handlePodcastCheck))
+	mux.Handle("GET /api/v1/bridge/libraries/{id}/marker", a.requireBridge(a.handleBridgeMarker))
 	// Public.
 	mux.HandleFunc("GET /api/v1/server", a.handleServerInfo)
 	// Liveness/readiness probe (public): reports DB read-reachability for a

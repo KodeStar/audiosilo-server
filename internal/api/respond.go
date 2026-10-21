@@ -174,6 +174,14 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidSchedule, err.Error())
 	case errors.Is(err, library.ErrInvalidIgnore):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidPattern, err.Error())
+	case errors.Is(err, catalog.ErrNotBookLibrary):
+		writeErrorCode(w, 409, "not_book_library", "This action needs a books library.")
+	case errors.Is(err, catalog.ErrInvalidKind):
+		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
+	case errors.Is(err, catalog.ErrKindImmutable):
+		writeErrorCode(w, 400, "kind_immutable", "Library kind cannot be changed.")
+	case errors.Is(err, catalog.ErrRootOverlaps):
+		writeErrorCode(w, 409, "root_overlaps", "A podcast library root cannot overlap another library.")
 	case errors.Is(err, catalog.ErrInvalidMetadataSource):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidMetaSource, err.Error())
 	case errors.Is(err, catalog.ErrNameTaken):

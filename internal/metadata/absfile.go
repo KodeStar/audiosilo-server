@@ -104,21 +104,21 @@ func ABSSignature(info fs.FileInfo) string {
 // ErrABSFileInvalid is about the file itself; any other is a read that may work
 // later.
 func ReadABSFile(path string) (*ABSFile, error) {
-	data, err := readRegularFile(path, maxABSFile, errABSFileNotRegular, ErrABSFileTooLarge)
+	data, err := ReadRegularFile(path, maxABSFile, errABSFileNotRegular, ErrABSFileTooLarge)
 	if err != nil {
 		return nil, err
 	}
 	return ParseABSFile(data)
 }
 
-// readRegularFile reads the file at path, at most limit bytes: a regular file
+// ReadRegularFile reads the file at path, at most limit bytes: a regular file
 // only, never through a link, including one swapped in after the file was
 // looked at (os.SameFile on the opened file), so a link can't make the scan read
 // a file outside the library. A link or anything else but a regular file is
 // notRegular, a file over limit tooLarge; any other error is a read that may work
 // later. The metadata files the scan reads beside the audio (ABS's metadata.json,
 // the Bridge's .audiosilo/ attachments) share it.
-func readRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
+func ReadRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err

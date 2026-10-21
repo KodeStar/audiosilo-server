@@ -374,7 +374,7 @@ func scanMatchSubject(rows *sql.Rows, b *Book) error {
 // match reads.
 func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
-	     WHERE (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
 	       AND NOT `+ignoredExpr+`
 	     ORDER BY b.library_id, b.rel_path`, libraryID, IssueUnmatched)
 }
@@ -383,7 +383,7 @@ func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, 
 // library): what a refresh run looks up.
 func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
-	     WHERE (?1 = 0 OR b.library_id = ?1) AND `+matchedExpr+`
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+matchedExpr+`
 	     ORDER BY b.library_id, b.rel_path`, libraryID)
 }
 
@@ -393,7 +393,7 @@ func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, er
 // one.
 func (c *Catalog) CommunityASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
-	     WHERE (?1 = 0 OR b.library_id = ?1) AND b.asin <> '' AND EXISTS(SELECT 1 FROM book_overrides o
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND b.asin <> '' AND EXISTS(SELECT 1 FROM book_overrides o
 	           WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?2 AND o.source = ?3)
 	     ORDER BY b.library_id, b.rel_path`, libraryID, FieldASIN, SourceCommunity)
 }
