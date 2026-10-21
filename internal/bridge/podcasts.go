@@ -169,7 +169,10 @@ func (s *Service) EnqueueSubscribe(ctx context.Context, lib, user int64, norm st
 	}
 	p := SubscribeParams{FeedURL: norm, FeedURLSHA256: feed.FeedURLHash(norm), FeedHost: u.Hostname(), Private: private, ShowPath: show}
 	if show != "" {
-		if err := s.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&p.ShowID); err != nil {
+		// A show pruned since the caller found it has no identity left to bind:
+		// the repair proceeds like a new subscription instead of failing.
+		err := s.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&p.ShowID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, false, err
 		}
 	}

@@ -3244,6 +3244,8 @@
   "settings.module.podcasts.needs": "Un Bridge conectado que admita pódcasts",
   "bridge.kind.podcast.subscribe": "Siguiendo un programa",
   "bridge.kind.podcast.poll": "Comprobando una fuente",
+  "bridge.kind.podcast.fetch": "Descargando un episodio",
+  "bridge.kind.podcast.retain": "Comprobando los episodios guardados",
   "settings.modules.podcasts": "Módulo Pódcasts",
   "libraries.episodeCount_one": "{{formatted}} episodio",
   "libraries.episodeCount_other": "{{formatted}} episodios",

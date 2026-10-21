@@ -64,6 +64,22 @@ func TestPodcastFetchQueueContractAndIdentity(t *testing.T) {
 	if err != nil || !created || next.ID == job.ID {
 		t.Fatalf("replacement: %+v %v", next, err)
 	}
+	// A late request still naming the replaced identity is refused without
+	// touching the current show's work, queued or running.
+	for _, claim := range []bool{false, true} {
+		if claim {
+			if running, err := q.ClaimFor(ctx, q.token, []string{KindPodcastFetch}, 0); err != nil || running == nil || running.ID != next.ID {
+				t.Fatalf("claim current %+v %v", running, err)
+			}
+		}
+		if _, _, err = q.Enqueue(ctx, NewJob{Kind: KindPodcastFetch, LibraryID: &q.lib, Path: &p, Params: params}); !errors.Is(err, ErrIdentityChanged) {
+			t.Fatalf("stale request: %v", err)
+		}
+		current, err := q.Job(ctx, next.ID)
+		if err != nil || current.CancelRequested || current.Ended() {
+			t.Fatalf("stale request cancelled current work: %+v %v", current, err)
+		}
+	}
 }
 func TestPodcastFetchRetainStrictAndHeld(t *testing.T) {
 	q := fetchQueue(t)

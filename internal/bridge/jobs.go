@@ -638,6 +638,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
 				return nil
 			}
+			// Only a request naming the current identity may cancel the open
+			// work: a stale one must never cancel the current show's job.
+			if err := checkPodcastTarget(ctx, tx, j); err != nil {
+				return err
+			}
 			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, now, id)
 			if err != nil {
 				return err
@@ -646,8 +651,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				identityBusy = true
 				return nil
 			}
-		}
-		if err := checkPodcastTarget(ctx, tx, j); err != nil {
+		} else if err := checkPodcastTarget(ctx, tx, j); err != nil {
 			return err
 		}
 		if refuse != nil {
@@ -705,6 +709,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	}
 	if identityBusy {
 		s.wake.fire()
+		s.settle(ctx, exp) // the expiry committed with the cancel intent
 		return nil, false, ErrIdentityChanged
 	}
 	if created {

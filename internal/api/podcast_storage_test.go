@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -260,6 +261,9 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 	req := catalog.RetentionRequest{ShowID: f.ShowID, Path: ep.Path, Generation: ep.Fetch.Generation, SHA256: ep.Fetch.SHA256, Bytes: ep.Fetch.Bytes}
 	for _, suffix := range []string{"", "&download=1", "&transcode=1"} {
 		t.Run(suffix, func(t *testing.T) {
+			if suffix == "&transcode=1" && !media.HasFFmpeg("ffmpeg") {
+				t.Skip("ffmpeg not installed")
+			}
 			b.api.ffmpeg = "ffmpeg"
 			observed := false
 			w := &podcastStreamObserver{ResponseRecorder: httptest.NewRecorder(), observe: func() {

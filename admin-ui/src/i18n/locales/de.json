@@ -3078,6 +3078,8 @@
   "settings.module.podcasts.needs": "Eine aktive Bridge mit Podcast-Unterstützung",
   "bridge.kind.podcast.subscribe": "Sendung abonnieren",
   "bridge.kind.podcast.poll": "Feed prüfen",
+  "bridge.kind.podcast.fetch": "Episode laden",
+  "bridge.kind.podcast.retain": "Behaltene Episoden prüfen",
   "settings.modules.podcasts": "Podcasts-Modul",
   "libraries.episodeCount_one": "{{formatted}} Episode",
   "libraries.episodeCount_other": "{{formatted}} Episoden",

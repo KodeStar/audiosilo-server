@@ -208,6 +208,9 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 		return
 	}
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client left during the checks: no one to answer
+		}
 		if !errors.Is(err, library.ErrNotIndexable) {
 			a.writeCatalogError(w, err, "open podcast failed", "Could not load episode.")
 			return

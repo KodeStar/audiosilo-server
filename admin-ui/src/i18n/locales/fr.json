@@ -3244,6 +3244,8 @@
   "settings.module.podcasts.needs": "Un Bridge en ligne compatible avec les podcasts",
   "bridge.kind.podcast.subscribe": "Abonnement à une émission",
   "bridge.kind.podcast.poll": "Vérification du flux",
+  "bridge.kind.podcast.fetch": "Téléchargement d'un épisode",
+  "bridge.kind.podcast.retain": "Vérification des épisodes conservés",
   "settings.modules.podcasts": "Module Podcasts",
   "libraries.episodeCount_one": "{{formatted}} épisode",
   "libraries.episodeCount_other": "{{formatted}} épisodes",

@@ -3244,6 +3244,8 @@
   "settings.module.podcasts.needs": "Um Bridge online com suporte para podcasts",
   "bridge.kind.podcast.subscribe": "A seguir um programa",
   "bridge.kind.podcast.poll": "A verificar um feed",
+  "bridge.kind.podcast.fetch": "A transferir um episódio",
+  "bridge.kind.podcast.retain": "A verificar os episódios guardados",
   "settings.modules.podcasts": "Módulo Podcasts",
   "libraries.episodeCount_one": "{{formatted}} episódio",
   "libraries.episodeCount_other": "{{formatted}} episódios",

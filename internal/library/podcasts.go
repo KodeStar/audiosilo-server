@@ -148,10 +148,15 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 	present := map[string]catalog.PodcastFile{}
 	cover, version := "", ""
 	for _, e := range entries {
-		if !e.Type().IsRegular() {
+		// Hidden names are never episodes or artwork; the Bridge's staging
+		// files among them may be renamed into place during this listing.
+		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		info, err := e.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return 0, false, err
 		}
@@ -289,6 +294,9 @@ func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
 				continue
 			}
 			st, err := e.Info()
+			if errors.Is(err, os.ErrNotExist) {
+				continue // renamed away since the listing (a Bridge temp or trash move)
+			}
 			if err != nil {
 				return "", err
 			}

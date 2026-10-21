@@ -183,7 +183,9 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, absPath string, inpu
 		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
 	}
 	if input != nil {
-		args = append(args, "-protocol_whitelist", "file,pipe")
+		// The opened descriptor is the only input: publisher bytes that probe
+		// as a playlist may not open secondary local files.
+		args = append(args, "-protocol_whitelist", "pipe")
 	}
 	args = append(args, "-i", absPath)
 	if input != nil && startSec > 0 {

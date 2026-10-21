@@ -3078,6 +3078,8 @@
   "settings.module.podcasts.needs": "An online Bridge that supports podcasts",
   "bridge.kind.podcast.subscribe": "Following a show",
   "bridge.kind.podcast.poll": "Checking a feed",
+  "bridge.kind.podcast.fetch": "Fetching an episode",
+  "bridge.kind.podcast.retain": "Checking retained episodes",
   "settings.modules.podcasts": "Podcasts module",
   "libraries.episodeCount_one": "{{formatted}} episode",
   "libraries.episodeCount_other": "{{formatted}} episodes",

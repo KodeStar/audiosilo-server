@@ -143,10 +143,10 @@ type RetentionCheck struct {
 
 // snapshotDB makes the existing access resolver read the same transaction as
 // the listening facts. No HTTP or filesystem work occurs under this snapshot.
-type snapshotDB struct {
-	catalogDB
-	tx *sql.Tx
-}
+// Every method stays on tx: the enclosing WithTx holds the one writer
+// connection, so a call that reached the store's pools would leave the
+// snapshot or, for a write, wait on that connection forever.
+type snapshotDB struct{ tx *sql.Tx }
 
 func (s snapshotDB) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	return s.tx.QueryContext(ctx, q, args...)
@@ -154,12 +154,25 @@ func (s snapshotDB) QueryContext(ctx context.Context, q string, args ...any) (*s
 func (s snapshotDB) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
 	return s.tx.QueryRowContext(ctx, q, args...)
 }
+func (s snapshotDB) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return s.tx.ExecContext(ctx, q, args...)
+}
+func (s snapshotDB) WriteRowContext(ctx context.Context, q string, args ...any) *sql.Row {
+	return s.tx.QueryRowContext(ctx, q, args...)
+}
+func (s snapshotDB) WithTx(_ context.Context, _ string, fn func(*sql.Tx) error) error {
+	return fn(s.tx)
+}
+func (s snapshotDB) Ping(ctx context.Context) error {
+	var x int
+	return s.tx.QueryRowContext(ctx, `SELECT 1`).Scan(&x)
+}
 
 func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req RetentionRequest) (RetentionCheck, error) {
 	out := RetentionCheck{LibraryID: lib, ShowPath: path.Dir(req.Path), RetentionRequest: req}
 	var finishedAt, deadline time.Time
 	err := c.db.WithTx(ctx, "PodcastRetentionCheck", func(tx *sql.Tx) error {
-		snapshot := &Catalog{db: snapshotDB{catalogDB: c.db, tx: tx}, now: c.now}
+		snapshot := &Catalog{db: snapshotDB{tx: tx}, now: c.now}
 		pin, err := snapshot.PodcastPin(ctx, lib, req.Path)
 		if err != nil {
 			return err
