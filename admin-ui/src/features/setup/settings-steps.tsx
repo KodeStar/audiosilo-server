@@ -17,6 +17,7 @@ import { RadioCards } from '@/components/ui/radio-cards';
 import { Switch } from '@/components/ui/switch';
 import { SettingBadges } from '@/features/settings/settings-form';
 import {
+  lockLabel,
   lockOf,
   METADATA_MODES,
   outOfRange,
@@ -48,14 +49,7 @@ function Badges({ settings, id }: Pick<StepProps, 'settings'> & { id: SettingId 
   const lock = lockOf(settings, id);
   if (!lock) return <SettingBadges settings={settings} id={id} />;
   return (
-    <Badge
-      variant="outline"
-      title={
-        lock === 'launcher'
-          ? t('settings.locked.launcher')
-          : t('settings.locked.env', { name: lock })
-      }
-    >
+    <Badge variant="outline" title={lockLabel(t, lock)}>
       <Lock aria-hidden="true" />
       {t('setup.locked')}
     </Badge>

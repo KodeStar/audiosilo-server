@@ -252,13 +252,13 @@ export function isHomeHost(hostport: string): boolean {
   }
   if (hostport.startsWith('[')) return false; // brackets hold an address, never a name
   const name = host.toLowerCase().replace(/\.$/, '');
-  if (!isHostName(name) || name === 'localhost' || name.endsWith('.localhost')) return false;
+  if (!isHostName(name) || name === 'localhost') return false;
   if (['.local', '.lan', '.home.arpa', '.internal'].some((x) => name.endsWith(x))) return true;
   return !name.includes('.');
 }
 
 /** A loopback Host (localhost, 127.0.0.0/8, ::1): an address only this machine reaches. */
-export function isLoopbackHost(hostport: string): boolean {
+function isLoopbackHost(hostport: string): boolean {
   const host = hostOf(hostport);
   if (host === null) return false;
   const name = host.toLowerCase().replace(/\.$/, '');

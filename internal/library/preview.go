@@ -179,7 +179,7 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	}
 	budget, cancel := context.WithDeadline(ctx, start.Add(lim.MaxTime))
 	defer cancel()
-	pool.Each(budget, previewReaders, reads, func() bool { return budget.Err() == nil }, func(r *read) {
+	pool.Each(budget, previewReaders, reads, func() bool { return true }, func(r *read) {
 		if budget.Err() == nil {
 			r.sample, r.own = s.previewSample(budget, lib, r.book)
 			r.done = budget.Err() == nil
