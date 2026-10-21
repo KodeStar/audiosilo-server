@@ -1,7 +1,17 @@
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useCallback, useState } from 'react';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
+import type { BridgeStatus } from '@/api/types';
+import { toastError } from '@/lib/errors';
 import { jobsPollMs, statusPollMs } from './bridge-model';
+import type { ShownCode } from './pair-dialog';
 
 /**
  * The Bridge's pairing and last report, asked again every 15 s while the page
@@ -14,6 +24,37 @@ export function useBridge() {
     queryFn: api.bridge,
     refetchInterval: (q) => statusPollMs(q.state.data),
   });
+}
+
+/**
+ * A pairing code for the PairDialog (Settings > Bridge, the setup flow's Bridge
+ * step): `makeCode` asks for one, noting the pairing it would replace so the
+ * dialog can tell when a Bridge takes it; a refusal is toasted. The status is
+ * asked again either way.
+ */
+export function usePairCode(status: BridgeStatus | undefined) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [shown, setShown] = useState<ShownCode | null>(null);
+  const [making, setMaking] = useState(false);
+  const makeCode = async () => {
+    setMaking(true);
+    try {
+      const code = await api.pairBridge();
+      setShown({
+        ...code,
+        pairedAtBefore: status?.paired ? status.paired_at : undefined,
+        replacing: Boolean(status?.paired),
+      });
+    } catch (err) {
+      toastError(t('bridge.pair.failed'), err);
+    } finally {
+      setMaking(false);
+      void qc.invalidateQueries({ queryKey: keys.bridge });
+    }
+  };
+  const closeCode = useCallback(() => setShown(null), []);
+  return { shown, making, makeCode, closeCode };
 }
 
 const JOBS_PAGE = 30;

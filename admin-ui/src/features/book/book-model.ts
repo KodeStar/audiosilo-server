@@ -565,18 +565,21 @@ export function audioLine(
 }
 
 /**
- * Where "Listen in player" sends its tab: the web player's connect page on this
- * origin (never the pairing's web_url, whose base may be the public_url, another
- * origin), which exchanges the token, or skips it when that browser is already
- * signed in as `userId` (sid + uid name the connection), and opens the book.
+ * Where a web player tab opened from the console goes ("Listen in player", the
+ * setup flow's web player): the player's connect page on this origin (never the
+ * pairing's web_url, whose base may be the public_url, another origin), which
+ * exchanges the token, or skips it when that browser is already signed in as
+ * `userId` (sid + uid name the connection), and opens `book` when given.
  */
-export function playerConnectUrl(pairing: PairToken, userId: number, book: BookRef): string {
+export function playerConnectUrl(pairing: PairToken, userId: number, book?: BookRef): string {
   const q = new URLSearchParams({
     token: pairing.pairing_token,
     sid: pairing.server_id,
     uid: String(userId),
-    book: String(book.library_id),
-    path: book.path,
   });
+  if (book) {
+    q.set('book', String(book.library_id));
+    q.set('path', book.path);
+  }
   return `/web/connect?${q.toString()}`;
 }

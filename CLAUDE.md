@@ -51,7 +51,10 @@ DISTRIBUTION.md).
 instead of auto-creating the admin and printing credentials, the server mints a
 one-time setup token and enables a guarded browser wizard at `/setup` (handlers in
 `internal/api/handlers_setup.go`, page in `internal/web/assets/setup.{html,js}`).
-The wizard sets the admin password and the books folder; the token rides in the URL
+The wizard creates the admin account only and hands over to the console's "Set up your
+server" flow (`/admin`; see First-run setup in CONVENTIONS.md); a POST that still sends
+`library_name` + `library_root` (an older page, the manager) also creates the library, as
+before. The token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (404 when never enabled).
 `API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL and reports it
@@ -261,6 +264,8 @@ a metadata.json (`abs_sig <> ''`), so the next scan reads each again for the new
 below. `0050` adds `book_attachments.description` (the Bridge's checked `description.json`, Phase 1c;
 `''` for none; derived like the rest of the row). `0051` adds `book_attachments.chapters` (the Bridge's
 checked `chapters.json`, Phase 1d, a chapter source of its own: see Generated chapters; `''` for none).
+`0053` inserts `server_state('setup_state')` as finished and dismissed on a server that already has a
+library or a second account (not a demo or member), so an upgraded server never shows the first-run flow.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -320,6 +325,7 @@ keep this index in step (one line per topic).
   - Podcasts (Bridge Phase 2c-1)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
   - Unavailable-root guard
+  - First-run setup (Phase F1, `catalog/setup.go`, `library/preview.go`, `api/handlers_admin_setup.go`)
 
 ## Roadmap
 

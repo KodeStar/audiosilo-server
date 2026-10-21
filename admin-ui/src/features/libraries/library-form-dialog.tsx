@@ -7,9 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { Database, FolderSearch } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import {
+  invalidateAfterSourceChange,
   invalidateLibraries,
-  invalidateLibraryBooks,
-  keys,
   noteScanStarted,
   useDirs,
   useLibraries,
@@ -127,11 +126,8 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
         : await api.createLibrary(lib);
       const rescans = !library || !!saved.job;
       invalidateLibraries(qc);
-      // A new source re-resolved every book of the library on the server, and with
-      // their titles and authors the Health issues (duplicates are grouped by them).
       if (library && v.source !== library.metadata_source) {
-        invalidateLibraryBooks(qc, library.id);
-        void qc.invalidateQueries({ queryKey: keys.issues });
+        invalidateAfterSourceChange(qc, library.id);
       }
       if (rescans) noteScanStarted(qc, saved.id);
       toast.add({

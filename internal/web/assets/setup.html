@@ -19,7 +19,7 @@
       </div>
       <div class="card">
         <h1>Welcome - let's set up your server</h1>
-        <p class="muted">Create your admin account and point AudioSilo at the folder where your audiobooks live. You can change all of this later in the admin console.</p>
+        <p class="muted">Create your admin account. The admin console then walks you through adding your books, naming them and connecting a phone.</p>
 
         <form id="setup-form">
           <div class="field">
@@ -31,24 +31,15 @@
             <input id="password" type="password" autocomplete="new-password" required>
             <p class="muted">At least 8 characters - you'll sign in with this.</p>
           </div>
-          <div class="field">
-            <label for="library-name">Library name</label>
-            <input id="library-name" value="Audiobooks" required>
-          </div>
-          <div class="field">
-            <label for="library-root">Books folder (full path on this computer)</label>
-            <input id="library-root" placeholder="/Users/you/Audiobooks" required>
-          </div>
-          <button type="submit" class="block" id="setup-submit">Finish setup</button>
+          <button type="submit" class="block" id="setup-submit">Create account</button>
         </form>
         <div id="setup-msg" class="msg" role="alert"></div>
 
         <div id="setup-done" class="hidden">
-          <h2>You're all set 🎉</h2>
-          <p class="muted">Your library is scanning now. Open the admin console to manage it, or the web player to start listening.</p>
+          <h2>Your account is ready</h2>
+          <p class="muted">Sign in to the admin console with it to finish setting up your server: your books folder, how books are named, and your phone.</p>
           <div class="inline">
-            <a class="button" href="/admin">Open admin console</a>
-            <a class="button secondary" href="/web">Open web player</a>
+            <a class="button" href="/admin">Continue setup</a>
           </div>
         </div>
       </div>

@@ -4,6 +4,7 @@
 package metadata
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,6 +90,12 @@ func IsAudio(path string) bool {
 // Path-based inference is intentionally not done here - the scanner applies it
 // with knowledge of the library's storage layout (see DeriveFromPath).
 func Extract(path, ffprobePath string) (*Metadata, error) {
+	return ExtractContext(context.Background(), path, ffprobePath)
+}
+
+// ExtractContext is Extract with its ffprobe run ended when ctx is (a ProbeErr
+// then, the tags still read): the setup preview's time budget.
+func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, error) {
 	m := &Metadata{Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")}
 
 	// Embedded tags via dhowden/tag (best-effort).
@@ -104,7 +111,7 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 
 	// ffprobe for duration + chapters + richer container tags (best-effort).
 	if ffprobePath != "" {
-		if p, err := probe(path, ffprobePath); err == nil {
+		if p, err := probe(ctx, path, ffprobePath); err == nil {
 			applyProbe(m, p)
 		} else {
 			m.ProbeErr = err

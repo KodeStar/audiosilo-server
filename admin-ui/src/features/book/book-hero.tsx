@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -48,6 +48,7 @@ import {
 import { joinLibraryPath } from '@/lib/paths';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
+import { usePlayerTab } from '@/lib/use-player-tab';
 import { cn } from '@/lib/utils';
 import { COVER_TYPES, audioLine, coverFileProblem, playerConnectUrl } from './book-model';
 import { HERO_GRID } from './layout';
@@ -257,36 +258,8 @@ function NameLinks({
 function ListenButton({ book: b }: { book: AdminBook }) {
   const { t } = useTranslation();
   const me = useCurrentUser();
-  // One token per click: a second click while one is on its way is ignored (the
-  // ref sees it at once, even within one task; the state disables the button).
-  const [busy, setBusy] = useState(false);
-  const inFlight = useRef(false);
-  const listen = async () => {
-    if (inFlight.current) return;
-    // Opened in the click itself, or the browser takes it for a pop-up and blocks it;
-    // pointed at the player once the token is back.
-    const tab = window.open('', '_blank');
-    if (!tab) {
-      toast.add({
-        title: t('book.hero.listenFailed'),
-        description: t('book.hero.listenBlocked'),
-        type: 'error',
-      });
-      return;
-    }
-    tab.opener = null;
-    inFlight.current = true;
-    setBusy(true);
-    try {
-      tab.location.href = playerConnectUrl(await api.pairSelf(), me.id, b);
-    } catch (err) {
-      tab.close();
-      toastError(t('book.hero.listenFailed'), err);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  };
+  const { busy, open } = usePlayerTab(t('book.hero.listenFailed'));
+  const listen = () => open((pairing) => playerConnectUrl(pairing, me.id, b));
   return (
     <Button variant="outline" disabled={busy} onClick={() => void listen()}>
       <Headphones aria-hidden="true" />

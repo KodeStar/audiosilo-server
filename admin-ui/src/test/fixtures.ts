@@ -17,6 +17,8 @@ import type {
   ScanProgress,
   ServerInfo,
   UserDetail,
+  SetupEnvelope,
+  SetupState,
 } from '@/api/types';
 
 export const serverInfo: ServerInfo = {
@@ -526,4 +528,18 @@ export function issuesSummary(over: Partial<IssuesSummary> = {}): IssuesSummary 
 /** GET /admin/jobs: nothing running, nothing queued, no schedules. */
 export function jobsState(over: Partial<JobsState> = {}): JobsState {
   return { running: null, queued: [], schedules: [], ...over };
+}
+
+/** GET /admin/setup: the flow finished (a set-up server), unless `state` says otherwise. */
+export function setupEnvelope(
+  state: Partial<SetupState> = {},
+  over: Partial<SetupEnvelope> = {},
+): SetupEnvelope {
+  return {
+    state: { finished: true, dismissed: true, steps: {}, ...state },
+    request: { host: 'localhost', scheme: 'http', proxied: false, peer_trusted: false },
+    config_libraries: [],
+    mount_hints: [],
+    ...over,
+  };
 }

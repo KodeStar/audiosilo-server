@@ -39,7 +39,7 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 	}
 	var id int64
 	err := c.db.WithTx(ctx, "CreateLibrary", func(tx *sql.Tx) error {
-		if err := checkLibraryRoot(ctx, tx, lib); err != nil {
+		if _, err := checkLibraryRoot(ctx, tx, lib); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO libraries(name,root,default_view,scan_schedule,ignore_patterns,metadata_source,created_at,kind) VALUES(?,?,?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule, joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts(), lib.Kind)
@@ -141,7 +141,7 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	}
 	resolved := false // the books were re-resolved (their identifiers may differ)
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
-		if err := checkLibraryRoot(ctx, tx, *existing); err != nil {
+		if _, err := checkLibraryRoot(ctx, tx, *existing); err != nil {
 			return err
 		}
 		var stored string
@@ -321,36 +321,38 @@ var ErrInvalidKind = errors.New("invalid library kind")
 var ErrKindImmutable = errors.New("library kind is immutable")
 var ErrRootOverlaps = errors.New("podcast library roots must not overlap other libraries")
 
-// checkLibraryRoot runs with the writer held so simultaneous creates cannot
-// admit overlapping roots. Paths are cleaned and made absolute on both sides.
-func checkLibraryRoot(ctx context.Context, tx *sql.Tx, lib Library) error {
+// checkLibraryRoot runs with the writer held (q a writer transaction) so
+// simultaneous creates cannot admit overlapping roots; CheckLibraryRoot reads it
+// without. Paths are cleaned and made absolute on both sides. sameRoot is the
+// name of another library at exactly this root (first in the console's order),
+// which is allowed between two books libraries.
+func checkLibraryRoot(ctx context.Context, q rowQuerier, lib Library) (sameRoot string, err error) {
 	root, err := filepath.Abs(lib.Root)
 	if err != nil {
-		return err
+		return "", err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,root,kind FROM libraries WHERE id != ?`, lib.ID)
+	rows, err := q.QueryContext(ctx, `SELECT name,root,kind FROM libraries WHERE id != ? ORDER BY sort_order, name`, lib.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id int64
-		var other, kind string
-		if err := rows.Scan(&id, &other, &kind); err != nil {
-			return err
-		}
-		if lib.Kind != KindPodcasts && kind != KindPodcasts {
-			continue
+		var name, other, kind string
+		if err := rows.Scan(&name, &other, &kind); err != nil {
+			return "", err
 		}
 		other, err = filepath.Abs(other)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if pathOverlaps(root, other) {
-			return ErrRootOverlaps
+		if (lib.Kind == KindPodcasts || kind == KindPodcasts) && pathOverlaps(root, other) {
+			return "", ErrRootOverlaps
+		}
+		if other == root && sameRoot == "" {
+			sameRoot = name
 		}
 	}
-	return rows.Err()
+	return sameRoot, rows.Err()
 }
 func pathOverlaps(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator)) || a == string(filepath.Separator) || b == string(filepath.Separator)
