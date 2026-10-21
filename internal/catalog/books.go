@@ -625,6 +625,12 @@ func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 }
 
 func (c *Catalog) loadFiles(ctx context.Context, b *Book) error {
+	if b.Episode != nil {
+		if b.Episode.Downloaded {
+			b.Files = append(b.Files, BookFile{RelPath: b.RelPath, Duration: b.Duration, Format: b.Format, Codec: b.Codec, Size: b.Size})
+		}
+		return nil
+	}
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, seq, duration, format, codec, size FROM book_files WHERE book_id = ? ORDER BY seq`, b.ID)
 	if err != nil {

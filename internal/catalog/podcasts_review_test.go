@@ -18,9 +18,16 @@ func TestPodcastSecretMissingSurvivesOtherOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, true); err != nil {
+				t.Fatal(err)
+			}
 			show := "Example Show"
 			job := bridge.Job{ID: 1, Kind: kind, LibraryID: &lib.ID, Path: &show,
-				Params: json.RawMessage(`{"show_path":"Example Show"}`),
+				Params: json.RawMessage(`{"show_path":"Example Show","show_id":"a1b2c3d4e5f60718"}`),
 				State:  bridge.StateFailed, Result: json.RawMessage(`{"code":"feed_secret_missing"}`)}
 			fold := func() {
 				t.Helper()
@@ -50,8 +57,8 @@ func TestPodcastSecretMissingSurvivesOtherOutcomes(t *testing.T) {
 			check(true, "timeout")
 			job.State = bridge.StateDone
 			job.Kind = kind
-			job.Params = json.RawMessage(`{}`)
-			job.Result = json.RawMessage(`{"show_path":"Example Show","status":304}`)
+			job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
+			job.Result = json.RawMessage(`{"show_path":"Example Show","show_id":"a1b2c3d4e5f60718","status":304}`)
 			fold()
 			check(false, "")
 			job.State = bridge.StateFailed

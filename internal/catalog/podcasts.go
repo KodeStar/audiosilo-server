@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -44,11 +45,18 @@ type PodcastShow struct {
 	CoverVersion    string        `json:"cover_version"`
 	Following       bool          `json:"following"`
 	Status          PodcastStatus `json:"status"`
+	Retention       Policy        `json:"retention"`
 	CoverPath       string        `json:"-"`
 	FeedSig         string        `json:"-"`
 	ShowID          string        `json:"-"`
 }
+type PodcastGeneration struct {
+	Generation      int    `json:"generation,omitempty"`
+	SHA256          string `json:"sha256,omitempty"`
+	TimelineChanged *bool  `json:"timeline_changed,omitempty"`
+}
 type PodcastEpisodeInfo struct {
+	PodcastGeneration
 	ShowPath       string  `json:"show_path"`
 	Published      *string `json:"published"`
 	Season         *int    `json:"season"`
@@ -60,6 +68,7 @@ type PodcastEpisodeInfo struct {
 	Removed        bool    `json:"removed"`
 }
 type PodcastEpisode struct {
+	PodcastGeneration
 	Path           string  `json:"path"`
 	Title          string  `json:"title"`
 	Published      *string `json:"published"`
@@ -81,8 +90,10 @@ type PodcastEpisodePage struct {
 
 // PodcastFile is a presence observation from one directory listing, never a probe.
 type PodcastFile struct {
-	Size  int64
-	MTime int64
+	Size     int64
+	MTime    int64
+	Chapters *metadata.ChapterList
+	FeedSig  string
 }
 
 func stringOrNil(s string) any {
@@ -141,6 +152,10 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			}
 			keep[e.Path] = true
 			info, exists := present[path.Base(e.Path)]
+			exists = exists && feed.ValidFetch(e.Fetch) && e.Fetch.DeletedAt == "" && info.Size == e.Fetch.Bytes
+			if !exists {
+				info = PodcastFile{}
+			}
 			feedDuration := durationFromFeed(e.DurationSeconds)
 			duration, source := feedDuration, "none"
 			if feedDuration > 0 {
@@ -149,7 +164,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			gen := 0
 			if e.Fetch != nil {
 				gen = e.Fetch.Generation
-				if exists && e.Fetch.DurationMS > 0 {
+				if exists {
 					duration = float64(e.Fetch.DurationMS) / 1000
 					source = "file"
 				}
@@ -161,6 +176,47 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				return err
 			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source)
+			if err != nil {
+				return err
+			}
+			var fetchJSON any
+			if e.Fetch != nil {
+				raw, _ := json.Marshal(e.Fetch)
+				fetchJSON = string(raw)
+			}
+			hash, codec := "", ""
+			timeline := false
+			if feed.ValidFetch(e.Fetch) {
+				hash = e.Fetch.SHA256
+				timeline = e.Fetch.TimelineChanged
+				if exists {
+					codec = e.Fetch.Codec
+				}
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE podcast_episodes SET sha256=?,timeline_changed=?,fetch_json=?,feed_sig=? WHERE book_id=?`, hash, timeline, fetchJSON, info.FeedSig, id); err != nil {
+				return err
+			}
+			chapters := []metadata.Chapter{}
+			chapterSource := ""
+			if exists {
+				chapters = append(chapters, metadata.Chapter{Index: 0, Title: e.Title, FilePath: e.Path, Start: 0, End: duration})
+				if l := info.Chapters; l != nil {
+					chapters = nil
+					chapterSource = "id3_chap"
+					for i, ch := range l.Chapters {
+						chapters = append(chapters, metadata.Chapter{Index: i, Title: ch.Title, FilePath: e.Path, Start: float64(ch.StartMS) / 1000, End: float64(ch.StartMS+ch.LengthMS) / 1000})
+					}
+				}
+			}
+			if err = replaceChapters(ctx, tx, id, chapters); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id=?`, id); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE books SET codec=?,chapters_source=? WHERE id=?`, codec, chapterSource, id); err != nil {
+				return err
+			}
 			// A missing duration is stored as zero, not SQL NULL.
 			if err != nil {
 				return err
@@ -267,12 +323,12 @@ const followMatchSQL = `SELECT 1 FROM podcast_follows f WHERE f.library_id=s.lib
 
 const podcastShowSelect = `SELECT s.library_id,s.show_path,s.title,s.author,s.description,s.link,s.language,s.show_type,s.explicit,s.private,NULLIF(s.feed_url,''),s.feed_host,s.podcast_guid,s.cover_path,s.episode_count,s.latest_published,s.feed_sig,s.show_id,
  EXISTS(` + followMatchSQL + ` AND f.user_id=?),
- st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,'')
- FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path`
+ st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,''),COALESCE(p.mode,'keep'),COALESCE(p.keep,3),COALESCE(p.days,7)
+ FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id LEFT JOIN podcast_policies p ON p.library_id=s.library_id AND p.show_path=s.show_path AND p.show_id=s.show_id`
 
 func scanPodcastShow(r interface{ Scan(...any) error }, s *PodcastShow) error {
 	var code, msg string
-	err := r.Scan(&s.LibraryID, &s.Path, &s.Title, &s.Author, &s.Description, &s.Link, &s.Language, &s.Type, &s.Explicit, &s.Private, &s.FeedURL, &s.FeedHost, &s.PodcastGUID, &s.CoverPath, &s.EpisodeCount, &s.LatestPublished, &s.FeedSig, &s.ShowID, &s.Following, &s.Status.LastChecked, &s.Status.LastSuccess, &s.Status.NextCheck, &code, &msg)
+	err := r.Scan(&s.LibraryID, &s.Path, &s.Title, &s.Author, &s.Description, &s.Link, &s.Language, &s.Type, &s.Explicit, &s.Private, &s.FeedURL, &s.FeedHost, &s.PodcastGUID, &s.CoverPath, &s.EpisodeCount, &s.LatestPublished, &s.FeedSig, &s.ShowID, &s.Following, &s.Status.LastChecked, &s.Status.LastSuccess, &s.Status.NextCheck, &code, &msg, &s.Retention.Mode, &s.Retention.Keep, &s.Retention.Days)
 	if code != "" {
 		s.Status.Error = &PodcastError{code, msg}
 	}
@@ -357,7 +413,7 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		return nil, ErrInvalidCursor
 	}
 	limit = min(max(limit, 1), 200)
-	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'' FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
+	q := `SELECT b.rel_path,b.title,e.published,b.duration,e.duration_source,e.season,e.episode,e.episode_type,e.explicit,b.description,e.present,b.size,e.removed_at<>'',e.generation,e.sha256,e.timeline_changed FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=?`
 	args := []any{lib, show}
 	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
 	q += " AND " + filter
@@ -378,7 +434,11 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	q += ` ORDER BY COALESCE(e.published,'') ` + dir + `,b.rel_path ` + dir + ` LIMIT ?`
 	args = append(args, limit+1)
 	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
-		return r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed)
+		err := r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
+		if e.Generation == 0 {
+			e.TimelineChanged = nil
+		}
+		return err
 	}, q, args...)
 	if err != nil {
 		return nil, err
@@ -412,17 +472,21 @@ func (c *Catalog) PodcastEpisodeDownloaded(ctx context.Context, lib int64, rel s
 
 func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
 	var e PodcastEpisodeInfo
-	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'' FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed)
+	err := c.db.QueryRowContext(ctx, `SELECT show_path,published,season,episode,episode_type,explicit,present,duration_source,removed_at<>'',generation,sha256,timeline_changed FROM podcast_episodes WHERE book_id=?`, b.ID).Scan(&e.ShowPath, &e.Published, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Downloaded, &e.DurationSource, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err == nil {
+		if e.Generation == 0 {
+			e.TimelineChanged = nil
+		}
 		b.Episode = &e
 	}
 	return err
 }
 
 type PodcastFeedState struct {
+	ShowID        string
 	ETag          string
 	LastModified  string
 	LastChecked   *string
@@ -433,23 +497,23 @@ type PodcastFeedState struct {
 // PollParams are a podcast.poll's params for this state: its conditional-GET
 // validators.
 func (s PodcastFeedState) PollParams() json.RawMessage {
-	raw, _ := json.Marshal(bridge.PollParams{ETag: s.ETag, LastModified: s.LastModified}) // two strings: never fails
+	raw, _ := json.Marshal(bridge.PollParams{ShowID: s.ShowID, ETag: s.ETag, LastModified: s.LastModified}) // two strings: never fails
 	return raw
 }
 
 func (c *Catalog) PodcastState(ctx context.Context, lib int64, show string) (PodcastFeedState, error) {
 	var s PodcastFeedState
-	err := c.db.QueryRowContext(ctx, `SELECT etag,last_modified,last_checked_at,error_code,secret_missing FROM podcast_feed_state WHERE library_id=? AND show_path=?`, lib, show).Scan(&s.ETag, &s.LastModified, &s.LastChecked, &s.ErrorCode, &s.SecretMissing)
+	err := c.db.QueryRowContext(ctx, `SELECT s.show_id,COALESCE(st.etag,''),COALESCE(st.last_modified,''),st.last_checked_at,COALESCE(st.error_code,''),COALESCE(st.secret_missing,0) FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id WHERE s.library_id=? AND s.show_path=?`, lib, show).Scan(&s.ShowID, &s.ETag, &s.LastModified, &s.LastChecked, &s.ErrorCode, &s.SecretMissing)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
 	return s, err
 }
 func (c *Catalog) DuePodcastPolls(ctx context.Context, limit int) ([]Ref, error) {
-	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path WHERE l.kind='podcasts' AND EXISTS(`+followMatchSQL+`) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND j.state IN `+bridge.OpenStatesSQL+`) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, c.now().UTC().Format(time.RFC3339), limit)
+	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path AND st.show_id=s.show_id WHERE l.kind='podcasts' AND EXISTS(`+followMatchSQL+`) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND j.state IN `+bridge.OpenStatesSQL+`) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, c.now().UTC().Format(time.RFC3339), limit)
 }
 func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
-	_, err := c.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error,next_poll_at) VALUES(?,?,'library_not_writable','The Bridge cannot write to this library.',?) ON CONFLICT(library_id,show_path) DO UPDATE SET error_code=excluded.error_code,error=excluded.error,next_poll_at=excluded.next_poll_at`, ref.LibraryID, ref.Path, c.now().Add(30*time.Minute).UTC().Format(time.RFC3339))
+	_, err := c.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,error_code,error,next_poll_at) SELECT library_id,show_path,show_id,'library_not_writable','The Bridge cannot write to this library.',? FROM podcast_shows WHERE library_id=? AND show_path=? ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET error_code=excluded.error_code,error=excluded.error,next_poll_at=excluded.next_poll_at`, c.now().Add(30*time.Minute).UTC().Format(time.RFC3339), ref.LibraryID, ref.Path)
 	return err
 }
 
@@ -470,7 +534,10 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if err != nil || n == 0 {
 			return err
 		}
-		if j.State == bridge.StateCancelled {
+		if j.Kind == bridge.KindPodcastFetch {
+			return c.foldPodcastFetch(ctx, tx, j)
+		}
+		if j.Kind == bridge.KindPodcastRetain || j.State == bridge.StateCancelled {
 			return nil
 		}
 		// A field of the wrong type stays at its zero value rather than failing
@@ -490,6 +557,33 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if !feed.ShowPath(show) {
 			return nil
 		}
+		var expected string
+		if j.Kind == bridge.KindPodcastPoll {
+			var p bridge.PollParams
+			_ = json.Unmarshal(j.Params, &p)
+			expected = p.ShowID
+		} else {
+			var p bridge.SubscribeParams
+			_ = json.Unmarshal(j.Params, &p)
+			expected = p.ShowID
+			if j.State == bridge.StateDone && expected == "" {
+				expected = result.ShowID
+			}
+		}
+		if !feed.ValidHex(expected, 16) {
+			return nil
+		}
+		var current string
+		err = tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, *j.LibraryID, show).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if current != expected || result.ShowID != "" && result.ShowID != expected {
+			return nil
+		}
 		// Without a valid show identity the follow could never match its show.
 		if j.Kind == bridge.KindPodcastSubscribe && j.State == bridge.StateDone && j.RequestedBy != nil && feed.ValidHex(result.ShowID, 16) {
 			if _, err := tx.ExecContext(ctx, followPodcastSQL, j.RequestedBy.ID, *j.LibraryID, show, result.ShowID, stamp); err != nil {
@@ -497,7 +591,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			}
 		}
 		var failures int
-		err = tx.QueryRowContext(ctx, `SELECT failures FROM podcast_feed_state WHERE library_id=? AND show_path=?`, *j.LibraryID, show).Scan(&failures)
+		err = tx.QueryRowContext(ctx, `SELECT failures FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -510,7 +604,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 					*v = ""
 				}
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339))
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, expected, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339))
 		} else {
 			seconds := 1800 << min(failures, 6)
 			if result.RetryAfterSeconds != nil {
@@ -521,12 +615,12 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			if result.Code == "gone" {
 				next = nil
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", failures+1, next)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", failures+1, next)
 		}
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM podcast_folded WHERE at<?`, now.Add(-7*24*time.Hour).Format(time.RFC3339))
+		_, err = tx.ExecContext(ctx, `DELETE FROM podcast_folded WHERE at<? AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id=podcast_folded.job_id)`, now.Add(-7*24*time.Hour).Format(time.RFC3339))
 		return err
 	})
 }

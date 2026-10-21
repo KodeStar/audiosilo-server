@@ -11,6 +11,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"regexp"
 	"runtime"
@@ -309,8 +310,10 @@ func (db *DB) Close() error {
 }
 
 // migrationNames lists the embedded migrations in the order they apply.
-func migrationNames() ([]string, error) {
-	entries, err := migrationsFS.ReadDir("migrations")
+func migrationNames() ([]string, error) { return migrationNamesFrom(migrationsFS) }
+
+func migrationNamesFrom(source fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(source, "migrations")
 	if err != nil {
 		return nil, err
 	}
@@ -330,12 +333,14 @@ func migrationNames() ([]string, error) {
 
 // migrate applies embedded migrations that have not yet been recorded. It runs
 // entirely on the writer connection (setup-time, single-threaded).
-func (db *DB) migrate(ctx context.Context) error {
+func (db *DB) migrate(ctx context.Context) error { return db.migrateFrom(ctx, migrationsFS) }
+
+func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 	if _, err := db.writer.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("create migrations table: %w", err)
 	}
-	names, err := migrationNames()
+	names, err := migrationNamesFrom(source)
 	if err != nil {
 		return err
 	}
@@ -349,7 +354,7 @@ func (db *DB) migrate(ctx context.Context) error {
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
 
-		body, err := migrationsFS.ReadFile("migrations/" + name)
+		body, err := fs.ReadFile(source, "migrations/"+name)
 		if err != nil {
 			return err
 		}

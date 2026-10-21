@@ -2,8 +2,10 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -117,7 +119,11 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 	if !info.Mode().IsRegular() {
 		return 0, false, ErrNotIndexable
 	}
-	sig := feedSignature(info)
+	feedSig := feedSignature(info)
+	sig, err := podcastShowSignature(dir, info)
+	if err != nil {
+		return 0, false, err
+	}
 	if !force {
 		old, err := s.cat.PodcastShow(ctx, lib.ID, show, 0)
 		if err == nil && old.FeedSig == sig {
@@ -149,11 +155,27 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 		if err != nil {
 			return 0, false, err
 		}
-		present[e.Name()] = catalog.PodcastFile{Size: info.Size(), MTime: info.ModTime().UnixNano()}
+		present[e.Name()] = catalog.PodcastFile{Size: info.Size(), MTime: info.ModTime().UnixNano(), FeedSig: feedSig}
 		if cover == "" && (e.Name() == "cover.jpg" || e.Name() == "cover.png") {
 			cover = path.Join(show, e.Name())
 			version = feedSignature(info)
 		}
+	}
+	for _, ep := range f.Episodes {
+		base := path.Base(ep.Path)
+		file, ok := present[base]
+		if !ok {
+			continue
+		}
+		if podcastBarrier(dir, base) != nil {
+			delete(present, base)
+			continue
+		}
+		file.Chapters, err = podcastChapters(dir, base, ep.Fetch)
+		if err != nil {
+			s.log.Warn("unusable podcast chapter attachment", "library", lib.ID)
+		}
+		present[base] = file
 	}
 	changed, err := s.cat.IndexPodcastShow(ctx, lib.ID, show, sig, cover, version, f, present, force)
 	return len(f.Episodes), changed, err
@@ -234,4 +256,90 @@ func ReadLibraryMarker(root string, id int64) (string, error) {
 		return "", ErrNotIndexable
 	}
 	return marker.Nonce, nil
+}
+
+// podcastShowSignature notices content and attachment changes even if feed.json
+// kept its size and mtime. Hidden staging files are not content.
+func podcastShowSignature(dir string, info os.FileInfo) (string, error) {
+	h := sha256.New()
+	_, _ = fmt.Fprint(h, feedSignature(info))
+	for _, sub := range []string{"", metadata.AttachmentsDir} {
+		if sub != "" {
+			st, e := os.Lstat(filepath.Join(dir, sub))
+			if errors.Is(e, os.ErrNotExist) {
+				continue
+			}
+			if e != nil {
+				return "", e
+			}
+			if !st.IsDir() {
+				_, _ = fmt.Fprint(h, "invalid attachments")
+				continue
+			}
+		}
+		entries, err := os.ReadDir(filepath.Join(dir, sub))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			if sub == "" && e.Name() != ".audiosilo" && strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			st, err := e.Info()
+			if err != nil {
+				return "", err
+			}
+			_, _ = fmt.Fprintf(h, "%s/%s:%s:%s;", sub, e.Name(), st.Mode(), feedSignature(st))
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+func feedSignatureMust(filename string) string {
+	st, err := os.Lstat(filename)
+	if err != nil {
+		return ""
+	}
+	return feedSignature(st)
+}
+func podcastBarrier(dir, base string) error {
+	side := filepath.Join(dir, metadata.AttachmentsDir)
+	st, err := os.Lstat(side)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !st.IsDir() {
+		return ErrNotIndexable
+	}
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	_, err = os.Lstat(filepath.Join(side, stem+".publish.json"))
+	if !errors.Is(err, os.ErrNotExist) {
+		return ErrNotIndexable
+	}
+	return nil
+}
+func podcastChapters(dir, base string, f *feed.Fetch) (*metadata.ChapterList, error) {
+	if !feed.ValidFetch(f) || f.DeletedAt != "" {
+		return nil, nil
+	}
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	raw, err := metadata.ReadRegularFile(filepath.Join(dir, metadata.AttachmentsDir, stem+".chapters.json"), 4<<20, ErrNotIndexable, ErrNotIndexable)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	l, err := metadata.ParseChapterList(raw)
+	if err != nil || l.From != "id3_chap" || len(l.Files) != 1 || l.Files[0].Path != base || l.Files[0].Size != f.Bytes || l.Files[0].DurationMS != f.DurationMS || l.GeneratedAt != f.FetchedAt {
+		return nil, ErrNotIndexable
+	}
+	for _, ch := range l.Chapters {
+		if ch.StartMS > f.DurationMS || ch.LengthMS > f.DurationMS-ch.StartMS {
+			return nil, ErrNotIndexable
+		}
+	}
+	return l, nil
 }

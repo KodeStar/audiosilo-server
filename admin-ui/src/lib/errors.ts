@@ -18,6 +18,7 @@ const BY_CODE: Record<string, string> = {
   password_too_short: 'errors.passwordTooShort',
   cannot_delete_self: 'errors.deleteSelf',
   folder_unreadable: 'errors.folderUnreadable',
+  root_overlaps: 'errors.rootOverlaps',
   // The console caps bulk edits and share additions at the server's limits, so
   // the one too_large a person can hit is a cover upload.
   too_large: 'book.cover.tooLarge',

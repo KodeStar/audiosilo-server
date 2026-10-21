@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "generator": "audiosilo-bridge",
+  "generated_at": "2026-10-20T08:00:00Z",
+  "from": "id3_chap",
+  "files": [
+    {
+      "path": "2026-10-19-1cc306d831.mp3",
+      "size": 16403,
+      "duration_ms": 4056
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Intro",
+      "start_ms": 0,
+      "length_ms": 1000
+    },
+    {
+      "title": "Chapter 2",
+      "start_ms": 1000,
+      "length_ms": 1500
+    },
+    {
+      "title": "Finish",
+      "start_ms": 2500,
+      "length_ms": 1556
+    }
+  ]
+}

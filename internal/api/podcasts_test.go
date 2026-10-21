@@ -159,6 +159,11 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	ctx := context.Background()
 	headers := podcastHeaders()
 	episode := f.Episodes[1].Path
+	f.Episodes[1].Fetch.Bytes = 5
+	raw, _ := json.Marshal(f)
+	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(b.lib.Root, filepath.FromSlash(episode)), []byte("audio"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +465,7 @@ func TestPodcastCheckRequiresFollowAndThrottles(t *testing.T) {
 	if err := b.cat.FollowPodcast(context.Background(), uid, b.lib.ID, "Example Show", f.ShowID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.db.ExecContext(context.Background(), `INSERT INTO podcast_feed_state(library_id,show_path,last_checked_at) VALUES(?,'Example Show',?)`, b.lib.ID, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err := b.db.ExecContext(context.Background(), `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at) VALUES(?,'Example Show','a1b2c3d4e5f60718',?)`, b.lib.ID, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, body, h)
@@ -532,7 +537,7 @@ func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
 	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, "Example Show"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error,secret_missing) VALUES(?,'Example Show','feed_secret_missing','lost',1)`, b.lib.ID); err != nil {
+	if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,error_code,error,secret_missing) VALUES(?,'Example Show','a1b2c3d4e5f60718','feed_secret_missing','lost',1)`, b.lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":%q}`, b.lib.ID, plain), podcastHeaders())

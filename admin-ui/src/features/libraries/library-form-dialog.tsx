@@ -51,6 +51,7 @@ type Values = z.infer<typeof schema>;
 
 /** The field a refused save's error code belongs under (anything else: the folder). */
 const FIELD_BY_CODE: Partial<Record<string, keyof Values>> = {
+  root_overlaps: 'folder',
   invalid_schedule: 'time',
   invalid_pattern: 'ignore',
   invalid_metadata_source: 'source',
@@ -116,8 +117,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       name: v.name,
       root: v.folder,
       scan_schedule: joinSchedule(v.schedule, v.time),
-      ignore_patterns: patterns,
-      metadata_source: v.source,
+      ...(v.kind === 'books' ? { ignore_patterns: patterns, metadata_source: v.source } : {}),
     };
     try {
       // A new library is always scanned; an edit only when the server queued a
@@ -137,7 +137,13 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
         description: rescans
-          ? t(library ? 'libraries.toast.savedBody' : 'libraries.toast.addedBody')
+          ? t(
+              library
+                ? 'libraries.toast.savedBody'
+                : v.kind === 'podcasts'
+                  ? 'libraries.toast.podcastAddedBody'
+                  : 'libraries.toast.addedBody',
+            )
           : undefined,
         type: 'success',
       });
@@ -163,6 +169,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const ignoreError = fieldMessage(errors.ignore?.message, t);
   const sourceError = fieldMessage(errors.source?.message, t);
   const schedule = form.watch('schedule');
+  const isPodcasts = form.watch('kind') === 'podcasts';
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
@@ -181,7 +188,11 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
           <Input
             id="library-name"
             autoComplete="off"
-            placeholder={t('libraries.form.namePlaceholder')}
+            placeholder={t(
+              isPodcasts
+                ? 'libraries.form.podcastNamePlaceholder'
+                : 'libraries.form.namePlaceholder',
+            )}
             aria-invalid={nameError ? true : undefined}
             aria-describedby={describedBy('library-name', !!nameError, false)}
             {...form.register('name')}
@@ -191,7 +202,15 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
           htmlFor="library-root"
           label={t('libraries.form.folder')}
           description={
-            library ? t('libraries.form.folderEditHint') : t('libraries.form.folderHint')
+            isPodcasts
+              ? t(
+                  library
+                    ? 'libraries.form.podcastFolderEditHint'
+                    : 'libraries.form.podcastFolderHint',
+                )
+              : library
+                ? t('libraries.form.folderEditHint')
+                : t('libraries.form.folderHint')
           }
           error={folderError}
         >
@@ -201,7 +220,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
               className="font-mono text-[13px]"
               autoComplete="off"
               spellCheck={false}
-              placeholder="/mnt/audiobooks"
+              placeholder={isPodcasts ? '/mnt/podcasts' : '/mnt/audiobooks'}
               aria-invalid={folderError ? true : undefined}
               aria-describedby={describedBy('library-root', !!folderError, true)}
               {...form.register('folder')}
@@ -229,7 +248,9 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
           <Field
             htmlFor="library-schedule"
             label={t('libraries.form.schedule')}
-            description={t('libraries.form.scheduleHint')}
+            description={t(
+              isPodcasts ? 'libraries.form.podcastScheduleHint' : 'libraries.form.scheduleHint',
+            )}
           >
             <NativeSelect
               id="library-schedule"
@@ -261,42 +282,46 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             </Field>
           ) : null}
         </div>
-        <Field
-          htmlFor="library-ignore"
-          label={t('libraries.form.ignore')}
-          description={t('libraries.form.ignoreHint')}
-          error={ignoreError}
-        >
-          <Textarea
-            id="library-ignore"
-            className="font-mono text-[13px]"
-            rows={3}
-            spellCheck={false}
-            placeholder={'*.sample.mp3\nExtras/'}
-            aria-invalid={ignoreError ? true : undefined}
-            aria-describedby={describedBy('library-ignore', !!ignoreError, true)}
-            {...form.register('ignore')}
-          />
-        </Field>
-        <Field
-          htmlFor="library-source"
-          label={t('libraries.form.source')}
-          description={t('libraries.form.sourceHint')}
-          error={sourceError}
-        >
-          <NativeSelect
-            id="library-source"
-            aria-invalid={sourceError ? true : undefined}
-            aria-describedby={describedBy('library-source', !!sourceError, true)}
-            {...form.register('source')}
-          >
-            {METADATA_SOURCES.map((s) => (
-              <option key={s} value={s}>
-                {t(`libraries.source.${s}`)}
-              </option>
-            ))}
-          </NativeSelect>
-        </Field>
+        {!isPodcasts ? (
+          <>
+            <Field
+              htmlFor="library-ignore"
+              label={t('libraries.form.ignore')}
+              description={t('libraries.form.ignoreHint')}
+              error={ignoreError}
+            >
+              <Textarea
+                id="library-ignore"
+                className="font-mono text-[13px]"
+                rows={3}
+                spellCheck={false}
+                placeholder={'*.sample.mp3\nExtras/'}
+                aria-invalid={ignoreError ? true : undefined}
+                aria-describedby={describedBy('library-ignore', !!ignoreError, true)}
+                {...form.register('ignore')}
+              />
+            </Field>
+            <Field
+              htmlFor="library-source"
+              label={t('libraries.form.source')}
+              description={t('libraries.form.sourceHint')}
+              error={sourceError}
+            >
+              <NativeSelect
+                id="library-source"
+                aria-invalid={sourceError ? true : undefined}
+                aria-describedby={describedBy('library-source', !!sourceError, true)}
+                {...form.register('source')}
+              >
+                {METADATA_SOURCES.map((s) => (
+                  <option key={s} value={s}>
+                    {t(`libraries.source.${s}`)}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          </>
+        ) : null}
       </DialogBody>
       <DialogFormFooter
         busy={isSubmitting}

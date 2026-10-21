@@ -135,7 +135,7 @@ func TestSchedulerPassesOverAFailingShow(t *testing.T) {
 		}
 	}
 	// "A Show" is due first and holds a validator no poll may carry.
-	if _, err := db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,etag,next_poll_at) VALUES(?1,'A Show',?2,'2026-10-20T11:00:00Z'),(?1,'B Show','','2026-10-20T11:30:00Z')`, lib.ID, strings.Repeat("x", 600)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,next_poll_at) VALUES(?1,'A Show','a1b2c3d4e5f60718',?2,'2026-10-20T11:00:00Z'),(?1,'B Show','a1b2c3d4e5f60718','','2026-10-20T11:30:00Z')`, lib.ID, strings.Repeat("x", 600)); err != nil {
 		t.Fatal(err)
 	}
 	if err := queue.SaveHeartbeat(ctx, 1, bridge.Status{Version: "0.9.0", Kinds: []string{bridge.KindPodcastPoll}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, MountPath: "/podcasts", Mapped: true, Writable: true}}}); err != nil {

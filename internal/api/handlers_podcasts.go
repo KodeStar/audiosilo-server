@@ -31,7 +31,7 @@ func writeShowNotFound(w http.ResponseWriter) {
 }
 
 func writeBridgeUnavailable(w http.ResponseWriter) {
-	writeErrorCode(w, http.StatusConflict, "bridge_unavailable", "No online Bridge can check feeds.")
+	writeErrorCode(w, http.StatusConflict, "bridge_unavailable", "No online Bridge can perform this podcast action.")
 }
 
 func podcastRequestOf(job bridge.Job) podcastRequest {
@@ -252,6 +252,9 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 				a.writeCatalogError(w, err, "follow podcast failed", "Could not follow show.")
 				return
 			}
+			if a.bridge != nil {
+				a.bridge.WakePodcasts()
+			}
 			show.Following = true
 			writeJSON(w, 200, map[string]any{"state": "following", "show": show})
 			return
@@ -277,6 +280,14 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	switch {
 	case err == nil:
 		return true
+	case errors.Is(err, bridge.ErrNotPodcastLibrary):
+		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
+	case errors.Is(err, bridge.ErrNotBookLibrary):
+		writeErrorCode(w, 409, "not_book_library", "This library holds podcasts.")
+	case errors.Is(err, bridge.ErrIdentityChanged):
+		writeErrorCode(w, 409, "identity_changed", "The podcast identity changed.")
+	case errors.Is(err, bridge.ErrNotFound):
+		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
 		writeErrorCode(w, 429, "too_many_requests", "At most five follow requests may be open.")
 	case errors.Is(err, bridge.ErrLibraryNotWritable):
@@ -317,6 +328,9 @@ func (a *API) handlePodcastUnfollow(w http.ResponseWriter, r *http.Request) {
 	if err := a.cat.UnfollowPodcast(r.Context(), userFrom(r.Context()).ID, id, p); err != nil {
 		a.writeCatalogError(w, err, "unfollow podcast failed", "Could not unfollow show.")
 		return
+	}
+	if a.bridge != nil {
+		a.bridge.WakePodcasts()
 	}
 	w.WriteHeader(204)
 }

@@ -55,6 +55,9 @@ func (c *Catalog) MoveFolderFavourites(ctx context.Context, libraryID int64, old
 		return nil
 	}
 	return c.db.WithTx(ctx, "MoveFolderFavourites", func(tx *sql.Tx) error {
+		if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
+			return err
+		}
 		return carryFavourites(ctx, tx, libraryID, oldPath, newPath)
 	})
 }

@@ -565,19 +565,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		downloaded, err := a.cat.PodcastEpisodeDownloaded(r.Context(), lib.ID, rel)
-		if errors.Is(err, catalog.ErrNotFound) {
-			writeError(w, 404, "episode not found")
-			return
-		}
-		if err != nil {
-			a.writeCatalogError(w, err, "load episode for stream failed", "Could not load episode.")
-			return
-		}
-		if !downloaded {
-			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
-			return
-		}
+		a.servePodcastStream(w, r, lib, rel)
+		return
 	}
 
 	// Only ever stream recognized audio. The scope check bounds this to the caller's
@@ -593,12 +582,6 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
-	}
-	if lib.Kind == catalog.KindPodcasts {
-		if info, err := os.Stat(abs); err != nil || !info.Mode().IsRegular() {
-			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
-			return
-		}
 	}
 
 	if r.URL.Query().Get("transcode") == "1" {

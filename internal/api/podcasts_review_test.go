@@ -130,7 +130,7 @@ func TestPodcastRestoreAfterLaterFailure(t *testing.T) {
 			b, _, _ := podcastEnv(t, true)
 			ctx := t.Context()
 			show := "Example Show"
-			job := bridge.Job{ID: 1001, Kind: bridge.KindPodcastPoll, LibraryID: &b.lib.ID, Path: &show,
+			job := bridge.Job{ID: 1001, Kind: bridge.KindPodcastPoll, Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`), LibraryID: &b.lib.ID, Path: &show,
 				State: bridge.StateFailed, Result: json.RawMessage(`{"code":"feed_secret_missing","message":"lost"}`)}
 			if err := b.cat.FoldPodcastJob(ctx, job); err != nil {
 				t.Fatal(err)

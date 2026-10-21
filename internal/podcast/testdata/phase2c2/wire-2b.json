@@ -1,0 +1,46 @@
+{
+  "phase": "2c-2b",
+  "status_response": {
+    "fetch": {
+      "state": "fetching",
+      "request_id": 81,
+      "bytes_received": 100,
+      "bytes_total": 1000,
+      "retry_after_seconds": 2,
+      "error": null
+    }
+  },
+  "stream_response": {
+    "error": "Episode is being fetched.",
+    "code": "podcast_fetching",
+    "fetch": {
+      "state": "fetching",
+      "request_id": 81,
+      "bytes_received": 100,
+      "bytes_total": 1000,
+      "retry_after_seconds": 2,
+      "error": null
+    }
+  },
+  "ready": {
+    "state": "ready",
+    "request_id": null,
+    "bytes_received": 16493,
+    "bytes_total": 16493,
+    "retry_after_seconds": 0,
+    "error": null
+  },
+  "failed": {
+    "state": "failed",
+    "request_id": 82,
+    "bytes_received": 0,
+    "bytes_total": null,
+    "retry_after_seconds": 0,
+    "error": {
+      "code": "too_large",
+      "message": "The episode exceeds the size limit."
+    }
+  },
+  "accepts": "claim_min_priority",
+  "priority_interactive": 100
+}

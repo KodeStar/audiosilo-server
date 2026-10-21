@@ -1,0 +1,113 @@
+{
+  "phase": "2c-2a",
+  "path": "Fixture Show/2026-10-19-1cc306d831.mp3",
+  "episode_id": "1cc306d831645e2b",
+  "assets": [
+    {
+      "file": "chap-v23.mp3",
+      "fetch": {
+        "generation": 1,
+        "sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda",
+        "bytes": 16403,
+        "duration_ms": 4056,
+        "content_type": "audio/mpeg",
+        "fetched_at": "2026-10-20T08:00:00Z",
+        "deleted_at": "",
+        "timeline_changed": false,
+        "codec": "mp3"
+      },
+      "physical_order": [
+        "intro",
+        "missing",
+        "finish"
+      ],
+      "ctoc_order": [
+        "intro",
+        "missing",
+        "finish"
+      ],
+      "has_chap_image": false
+    },
+    {
+      "file": "chap-v24-reverse.mp3",
+      "fetch": {
+        "generation": 2,
+        "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+        "bytes": 16493,
+        "duration_ms": 4056,
+        "content_type": "audio/mpeg",
+        "fetched_at": "2026-10-21T08:00:00Z",
+        "deleted_at": "",
+        "timeline_changed": true,
+        "codec": "mp3"
+      },
+      "physical_order": [
+        "finish",
+        "missing",
+        "intro"
+      ],
+      "ctoc_order": [
+        "finish",
+        "missing",
+        "intro"
+      ],
+      "has_chap_image": true
+    }
+  ],
+  "transitions": [
+    {
+      "previous": null,
+      "received_sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda",
+      "generation": 1,
+      "timeline_changed": false
+    },
+    {
+      "previous": {
+        "generation": 1,
+        "sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda",
+        "bytes": 16403,
+        "duration_ms": 4056,
+        "content_type": "audio/mpeg",
+        "fetched_at": "2026-10-20T08:00:00Z",
+        "deleted_at": "2026-10-21T07:00:00Z",
+        "timeline_changed": false,
+        "codec": "mp3"
+      },
+      "received_sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda",
+      "generation": 1,
+      "timeline_changed": false
+    },
+    {
+      "previous": {
+        "generation": 1,
+        "sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda",
+        "bytes": 16403,
+        "duration_ms": 4056,
+        "content_type": "audio/mpeg",
+        "fetched_at": "2026-10-20T08:00:00Z",
+        "deleted_at": "2026-10-21T07:00:00Z",
+        "timeline_changed": false,
+        "codec": "mp3"
+      },
+      "received_sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+      "generation": 2,
+      "timeline_changed": true
+    },
+    {
+      "previous": {
+        "generation": 2,
+        "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+        "bytes": 16493,
+        "duration_ms": 4056,
+        "content_type": "audio/mpeg",
+        "fetched_at": "2026-10-21T08:00:00Z",
+        "deleted_at": "2026-10-22T07:00:00Z",
+        "timeline_changed": true,
+        "codec": "mp3"
+      },
+      "received_sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+      "generation": 2,
+      "timeline_changed": true
+    }
+  ]
+}

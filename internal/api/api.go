@@ -252,6 +252,12 @@ func (a *API) Handler() http.Handler {
 	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
 	pr.User("DELETE /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastUnfollow))
 	pr.User("POST /api/v1/podcasts/check", http.HandlerFunc(a.handlePodcastCheck))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
+	mux.Handle("PUT /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
+	mux.Handle("DELETE /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
+	mux.Handle("POST /api/v1/admin/libraries/{id}/podcasts/fetch", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastFetch))))
+	mux.Handle("GET /api/v1/bridge/libraries/{id}/podcasts/retention", a.requireBridge(a.handleBridgePodcastRetention))
+	mux.Handle("POST /api/v1/bridge/libraries/{id}/podcasts/retention/check", a.requireBridge(a.handleBridgePodcastRetentionCheck))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/marker", a.requireBridge(a.handleBridgeMarker))
 	// Public.
 	mux.HandleFunc("GET /api/v1/server", a.handleServerInfo)

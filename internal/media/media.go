@@ -121,6 +121,18 @@ func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download 
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	ServeOpened(w, r, f, download)
+}
+
+// ServeOpened serves an already verified descriptor without reopening its path.
+// The caller owns the descriptor and any generation validator.
+func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bool) {
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "not found", 404)
+		return
+	}
+	absPath := f.Name()
 	if download {
 		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(absPath)))
 	}
@@ -154,13 +166,30 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	transcodeInput(w, r, absPath, nil, ffmpegPath, startSec, log)
+}
+
+// TranscodeOpened feeds the verified generation through an owned pipe on every OS.
+func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, log *slog.Logger) {
+	transcodeInput(w, r, "pipe:0", f, ffmpegPath, startSec, log)
+}
+func transcodeInput(w http.ResponseWriter, r *http.Request, absPath string, input *os.File, ffmpegPath string, startSec float64, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
 	args := []string{"-nostdin", "-loglevel", "error"}
-	if startSec > 0 {
+	if startSec > 0 && input == nil {
 		// Input-side seek (fast): ffmpeg jumps near startSec before decoding.
 		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
 	}
+	if input != nil {
+		args = append(args, "-protocol_whitelist", "file,pipe")
+	}
+	args = append(args, "-i", absPath)
+	if input != nil && startSec > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
+	}
 	args = append(args,
-		"-i", absPath,
 		"-vn",                // drop any cover-art/video stream
 		"-c:a", "libmp3lame", // broadly compatible output
 		"-b:a", "128k",
@@ -168,6 +197,9 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		"pipe:1",
 	)
 	cmd := exec.CommandContext(r.Context(), ffmpegPath, args...)
+	if input != nil {
+		cmd.Stdin = input
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		http.Error(w, "transcode failed", http.StatusInternalServerError)

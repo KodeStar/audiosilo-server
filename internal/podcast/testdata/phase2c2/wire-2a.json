@@ -1,0 +1,63 @@
+{
+  "phase": "2c-2a",
+  "fetch_params": {
+    "show_id": "a1b2c3d4e5f60718",
+    "episode_id": "1cc306d831645e2b"
+  },
+  "fetch_result": {
+    "library_id": 3,
+    "path": "Fixture Show/2026-10-19-1cc306d831.mp3",
+    "show_id": "a1b2c3d4e5f60718",
+    "episode_id": "1cc306d831645e2b",
+    "fetch": {
+      "generation": 2,
+      "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+      "bytes": 16493,
+      "duration_ms": 4056,
+      "content_type": "audio/mpeg",
+      "fetched_at": "2026-10-21T08:00:00Z",
+      "deleted_at": "",
+      "timeline_changed": true,
+      "codec": "mp3"
+    },
+    "chapters": 3,
+    "reused": false
+  },
+  "retention_policy": {
+    "mode": "keep",
+    "keep": 3,
+    "days": 7
+  },
+  "retention_check_request": {
+    "show_id": "a1b2c3d4e5f60718",
+    "path": "Fixture Show/2026-10-19-1cc306d831.mp3",
+    "generation": 2,
+    "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+    "bytes": 16493
+  },
+  "retention_check_response": {
+    "library_id": 3,
+    "show_path": "Fixture Show",
+    "show_id": "a1b2c3d4e5f60718",
+    "path": "Fixture Show/2026-10-19-1cc306d831.mp3",
+    "generation": 2,
+    "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b",
+    "bytes": 16493,
+    "checked_at": "2026-10-21T08:00:00Z",
+    "policy": {
+      "mode": "keep",
+      "keep": 3,
+      "days": 7
+    },
+    "followers": 2,
+    "all_finished": true,
+    "all_finished_at": "2026-10-12T08:00:00Z",
+    "starred": false,
+    "queued": false,
+    "active_stream": false,
+    "fetch_open": false,
+    "outside_keep_window": true,
+    "delete_after": "2026-10-28T08:00:00Z",
+    "eligible": false
+  }
+}

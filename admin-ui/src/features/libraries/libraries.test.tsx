@@ -18,6 +18,113 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('libraries', () => {
+  it.each([0, 1, 4])('counts %i podcast episodes', async (count) => {
+    mockFetch(
+      routes({
+        'GET /admin/libraries': {
+          body: { libraries: libraries([{ kind: 'podcasts', book_count: count }]) },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const card = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(
+      within(card).getByText(`${count} ${count === 1 ? 'episode' : 'episodes'}`),
+    ).toBeInTheDocument();
+  });
+
+  it('uses podcast copy, hides book settings and preserves them when switching back', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries': {
+          status: 201,
+          body: { id: 3, name: 'Talks', root: '/mnt/podcasts', kind: 'podcasts' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+    await user.type(within(dialog).getByLabelText('Skip these files and folders'), 'Extras/');
+    await user.selectOptions(within(dialog).getByLabelText('Book details come from'), 'path');
+    await user.selectOptions(within(dialog).getByLabelText('Kind'), 'podcasts');
+    expect(within(dialog).getByPlaceholderText('e.g. Podcasts')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('/mnt/podcasts')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Skip these files and folders')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Book details come from')).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/Feed checks run separately/)).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText('Kind'), 'books');
+    expect(within(dialog).getByLabelText('Skip these files and folders')).toHaveValue('Extras/');
+    expect(within(dialog).getByLabelText('Book details come from')).toHaveValue('path');
+    await user.selectOptions(within(dialog).getByLabelText('Kind'), 'podcasts');
+    await user.type(within(dialog).getByLabelText('Name'), 'Talks');
+    await user.type(within(dialog).getByLabelText('Folder'), '/mnt/podcasts');
+    await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+    await screen.findByText('Added Talks');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/admin/libraries')?.body).toEqual({
+      kind: 'podcasts',
+      name: 'Talks',
+      root: '/mnt/podcasts',
+      scan_schedule: '',
+    });
+  });
+
+  it('preserves stored book settings when editing a podcast library', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': {
+          body: {
+            libraries: libraries([
+              { kind: 'podcasts', metadata_source: 'path', ignore_patterns: ['Extras/'] },
+            ]),
+          },
+        },
+        'PATCH /admin/libraries/1': {
+          body: { id: 1, name: 'Talks', root: '/mnt/tank/fiction', kind: 'podcasts' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Actions for Fiction' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Fiction' });
+    expect(within(dialog).getByLabelText('Kind')).toBeDisabled();
+    expect(within(dialog).queryByLabelText('Book details come from')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1')).toBe(true),
+    );
+    const body = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1')?.body;
+    expect(body).not.toHaveProperty('metadata_source');
+    expect(body).not.toHaveProperty('ignore_patterns');
+  });
+
+  it('places a localized root overlap error at the folder field', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/libraries': {
+          status: 409,
+          body: { code: 'root_overlaps', error: 'raw root overlap' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+    await user.type(within(dialog).getByLabelText('Name'), 'Pods');
+    await user.type(within(dialog).getByLabelText('Folder'), '/mnt/podcasts');
+    await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+    expect(
+      await within(dialog).findByText(
+        'This folder overlaps a podcast library. Choose separate folders.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Folder')).toHaveAttribute('aria-invalid', 'true');
+  });
+
   it('lists libraries with their folder, book count and status', async () => {
     mockFetch(routes());
     renderApp('/library/libraries');
