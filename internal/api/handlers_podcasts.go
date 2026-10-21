@@ -170,21 +170,17 @@ func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {
 // podcastActionLibrary checks the gate and grant before the private-show scope:
 // knowing a private URL is the proof needed to follow that particular show.
 func (a *API) podcastActionLibrary(w http.ResponseWriter, r *http.Request, id int64) (*catalog.Library, bool) {
-	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
-	if err != nil {
+	lib, err := a.grantedLibrary(r, id)
+	switch {
+	case err != nil:
 		a.writeCatalogError(w, err, "podcast access failed", "Could not check access.")
-		return nil, false
+	case lib == nil:
+		writeErrorCode(w, 403, "no_library_access", "No access to this library.")
+	case lib.Kind != catalog.KindPodcasts:
+		writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
+	default:
+		return lib, true
 	}
-	for _, lib := range libs {
-		if lib.ID == id {
-			if lib.Kind != catalog.KindPodcasts {
-				writeErrorCode(w, 409, "not_podcast_library", "This library holds books.")
-				return nil, false
-			}
-			return &lib, true
-		}
-	}
-	writeErrorCode(w, 403, "no_library_access", "No access to this library.")
 	return nil, false
 }
 func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {

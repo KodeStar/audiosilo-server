@@ -222,7 +222,7 @@ func (c *Catalog) privatePodcastScope(ctx context.Context, user int64, s Scope) 
 	scanPath := func(r *sql.Rows, p *string) error { return r.Scan(p) }
 	// The common case (no private show this caller doesn't follow) is one
 	// indexed query that returns nothing and leaves s as it is.
-	denied, err := queryRows(ctx, c.db, scanPath, `SELECT s.show_path FROM podcast_shows s WHERE s.library_id=? AND s.private=1 AND NOT EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id AND f.user_id=?)`, s.LibraryID, user)
+	denied, err := queryRows(ctx, c.db, scanPath, `SELECT s.show_path FROM podcast_shows s WHERE s.library_id=? AND s.private=1 AND NOT EXISTS(`+followMatchSQL+` AND f.user_id=?)`, s.LibraryID, user)
 	if err != nil {
 		return Scope{}, err
 	}
@@ -261,8 +261,12 @@ func (c *Catalog) privatePodcastScope(ctx context.Context, user int64, s Scope) 
 	return s, nil
 }
 
+// followMatchSQL selects the follows of show s: a follow counts only for the show
+// identity it was made for, so a show reusing a folder does not inherit it.
+const followMatchSQL = `SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id`
+
 const podcastShowSelect = `SELECT s.library_id,s.show_path,s.title,s.author,s.description,s.link,s.language,s.show_type,s.explicit,s.private,NULLIF(s.feed_url,''),s.feed_host,s.podcast_guid,s.cover_path,s.episode_count,s.latest_published,s.feed_sig,s.show_id,
- EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id AND f.user_id=?),
+ EXISTS(` + followMatchSQL + ` AND f.user_id=?),
  st.last_checked_at,st.last_success_at,st.next_poll_at,COALESCE(st.error_code,''),COALESCE(st.error,'')
  FROM podcast_shows s LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path`
 
@@ -293,7 +297,7 @@ func (c *Catalog) PodcastShows(ctx context.Context, s Scope, user int64, followe
 	q := podcastShowSelect + ` WHERE s.library_id=? AND ` + filter
 	vals := append([]any{user, s.LibraryID}, args...)
 	if followed {
-		q += ` AND EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id AND f.user_id=?)`
+		q += ` AND EXISTS(` + followMatchSQL + ` AND f.user_id=?)`
 		vals = append(vals, user)
 	}
 	q += ` ORDER BY s.title COLLATE NOCASE,s.show_path LIMIT 2000`
@@ -442,7 +446,7 @@ func (c *Catalog) PodcastState(ctx context.Context, lib int64, show string) (Pod
 	return s, err
 }
 func (c *Catalog) DuePodcastPolls(ctx context.Context, limit int) ([]Ref, error) {
-	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path WHERE l.kind='podcasts' AND EXISTS(SELECT 1 FROM podcast_follows f WHERE f.library_id=s.library_id AND f.show_path=s.show_path AND f.show_id=s.show_id) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND j.state IN `+bridge.OpenStatesSQL+`) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, c.now().UTC().Format(time.RFC3339), limit)
+	return queryRows(ctx, c.db, func(r *sql.Rows, p *Ref) error { return r.Scan(&p.LibraryID, &p.Path) }, `SELECT s.library_id,s.show_path FROM podcast_shows s JOIN libraries l ON l.id=s.library_id LEFT JOIN podcast_feed_state st ON st.library_id=s.library_id AND st.show_path=s.show_path WHERE l.kind='podcasts' AND EXISTS(`+followMatchSQL+`) AND COALESCE(st.error_code,'')<>'gone' AND (st.next_poll_at IS NULL OR st.next_poll_at<=?) AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.library_id=s.library_id AND j.rel_path=s.show_path AND j.kind='podcast.poll' AND j.state IN `+bridge.OpenStatesSQL+`) ORDER BY st.next_poll_at,s.library_id,s.show_path LIMIT ?`, c.now().UTC().Format(time.RFC3339), limit)
 }
 func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
 	_, err := c.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error,next_poll_at) VALUES(?,?,'library_not_writable','The Bridge cannot write to this library.',?) ON CONFLICT(library_id,show_path) DO UPDATE SET error_code=excluded.error_code,error=excluded.error,next_poll_at=excluded.next_poll_at`, ref.LibraryID, ref.Path, c.now().Add(30*time.Minute).UTC().Format(time.RFC3339))

@@ -98,14 +98,12 @@ func scopeIn(scopes []catalog.Scope, libraryID int64) (catalog.Scope, bool) {
 // granted library with no visible content; its empty listings remain readable.
 func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Library, catalog.Scope, int, string) {
 	if !scope.AllowAll && len(scope.Paths) == 0 {
-		libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+		lib, err := a.grantedLibrary(r, scope.LibraryID)
 		if err != nil {
 			return nil, scope, http.StatusInternalServerError, "access check failed"
 		}
-		for _, lib := range libs {
-			if lib.ID == scope.LibraryID && lib.Kind == catalog.KindPodcasts {
-				return &lib, scope, 0, ""
-			}
+		if lib != nil && lib.Kind == catalog.KindPodcasts {
+			return lib, scope, 0, ""
 		}
 		return nil, scope, http.StatusForbidden, "no access to this library"
 	}
@@ -117,6 +115,21 @@ func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Libr
 		return nil, scope, http.StatusInternalServerError, "could not load library"
 	}
 	return lib, scope, 0, ""
+}
+
+// grantedLibrary is library id when the caller holds a grant on it, judged
+// before private-show narrowing (nil without one).
+func (a *API) grantedLibrary(r *http.Request, id int64) (*catalog.Library, error) {
+	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+	if err != nil {
+		return nil, err
+	}
+	for i := range libs {
+		if libs[i].ID == id {
+			return &libs[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // browseScope resolves {id} to the library and the caller's scope in it, writing
