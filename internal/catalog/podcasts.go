@@ -490,7 +490,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if !feed.ShowPath(show) {
 			return nil
 		}
-		if j.Kind == bridge.KindPodcastSubscribe && j.State == bridge.StateDone && j.RequestedBy != nil {
+		// Without a valid show identity the follow could never match its show.
+		if j.Kind == bridge.KindPodcastSubscribe && j.State == bridge.StateDone && j.RequestedBy != nil && feed.ValidHex(result.ShowID, 16) {
 			if _, err := tx.ExecContext(ctx, followPodcastSQL, j.RequestedBy.ID, *j.LibraryID, show, result.ShowID, stamp); err != nil {
 				return err
 			}

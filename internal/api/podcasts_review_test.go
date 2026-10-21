@@ -93,14 +93,15 @@ func TestPodcastEmptyPrivateLibraryAccess(t *testing.T) {
 	b, _, f := podcastEnv(t, true)
 	_, outsider := newUserWithSession(t, b.testEnv, "outsider", false)
 	for _, tok := range []string{b.userTok, b.adminTok} {
-		for _, route := range []string{podcastRoute(b.lib.ID, "podcasts"), podcastRoute(b.lib.ID, "fs"), "/api/v1/me/podcasts"} {
+		for _, route := range []string{podcastRoute(b.lib.ID, "podcasts"), podcastRoute(b.lib.ID, "fs"), podcastRoute(b.lib.ID, "books"), "/api/v1/me/podcasts"} {
 			resp, body := b.doHeaders(t, "GET", route, tok, "", podcastHeaders())
 			var list struct {
 				Shows   []catalog.PodcastShow `json:"shows"`
 				Entries []json.RawMessage     `json:"entries"`
+				Books   []json.RawMessage     `json:"books"`
 			}
 			decodeInto(t, body, &list)
-			if resp.StatusCode != 200 || len(list.Shows) != 0 || len(list.Entries) != 0 {
+			if resp.StatusCode != 200 || len(list.Shows) != 0 || len(list.Entries) != 0 || len(list.Books) != 0 {
 				t.Fatalf("empty library %s: %d %s", route, resp.StatusCode, body)
 			}
 		}
