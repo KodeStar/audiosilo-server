@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -198,5 +200,35 @@ func TestCheckRoot(t *testing.T) {
 		if _, err := CheckRoot(locked); !errors.Is(err, ErrRootUnreadable) {
 			t.Errorf("CheckRoot(unreadable) = %v, want ErrRootUnreadable", err)
 		}
+	}
+}
+
+// The sample reads run under the preview's overall time: a read still probing
+// when it runs out is ended (its ffprobe killed) and left out, none starts
+// after it, and the preview says it was capped, with the walk's counts whole.
+func TestPreviewTimeBudget(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in ffprobe is a shell script")
+	}
+	root := t.TempDir()
+	for i := range 3 {
+		writeFile(t, root, fmt.Sprintf("Author/Book %d/a.mp3", i), []byte("x"))
+	}
+	slow := filepath.Join(t.TempDir(), "ffprobe")
+	if err := os.WriteFile(slow, []byte("#!/bin/sh\nexec sleep 20\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(nil, slow, slog.Default())
+	start := time.Now()
+	p, err := s.Preview(t.Context(), root, nil, PreviewLimits{MaxTime: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the preview took %v: its probes outlived its time", took)
+	}
+	if !p.Counts.Capped || p.Counts.FolderBooks != 3 || p.Counts.AudioFiles != 3 || len(p.Samples) != 0 {
+		t.Errorf("counts %+v with %d samples; want capped, 3 books, no samples", p.Counts, len(p.Samples))
 	}
 }

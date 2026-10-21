@@ -54,13 +54,15 @@ const previewReaders = 4
 // PreviewLimits bound a preview; a zero field takes its default.
 type PreviewLimits struct {
 	MaxDirs int           // folders walked (5,000)
-	MaxTime time.Duration // the walk's time (10 s)
+	MaxWalk time.Duration // the walk's time (10 s)
+	MaxTime time.Duration // the whole preview's, walk and sample reads (15 s)
 	Samples int           // books read and named (8)
 }
 
 func (l PreviewLimits) withDefaults() PreviewLimits {
 	l.MaxDirs = cmp.Or(l.MaxDirs, 5000)
-	l.MaxTime = cmp.Or(l.MaxTime, 10*time.Second)
+	l.MaxWalk = cmp.Or(l.MaxWalk, 10*time.Second)
+	l.MaxTime = cmp.Or(l.MaxTime, 15*time.Second)
 	l.Samples = cmp.Or(l.Samples, 8)
 	return l
 }
@@ -84,7 +86,8 @@ type Preview struct {
 }
 
 // PreviewCounts are the audio files and books the walk found. Capped is set when
-// it stopped at its limit, so there are more.
+// the preview stopped at a limit: the walk at its folders or time, so there are
+// more, or the sample reads at the preview's time, so there are fewer samples.
 type PreviewCounts struct {
 	AudioFiles  int  `json:"audio_files"`
 	FolderBooks int  `json:"folder_books"`
@@ -140,8 +143,9 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 		return nil, err
 	}
 	lim = lim.withDefaults()
+	start := time.Now()
 	lib := catalog.Library{Name: "(setup preview)", Root: root, Kind: catalog.KindBooks}
-	walk := &walkCap{dirs: lim.MaxDirs, until: time.Now().Add(lim.MaxTime)}
+	walk := &walkCap{dirs: lim.MaxDirs, until: start.Add(min(lim.MaxWalk, lim.MaxTime))}
 	books, _, err := discoverAuto(ctx, lib, nil, ParseIgnore(lines), s.log, nil, walk)
 	capped := errors.Is(err, errWalkCapped)
 	if err != nil && !capped {
@@ -159,26 +163,36 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	}
 	slices.SortFunc(books, func(a, b *catalog.Book) int { return cmp.Compare(a.RelPath, b.RelPath) })
 	// The samples' reads (an ffprobe each) run a few at a time, each into its
-	// own slot, so the samples keep their path order.
+	// own slot, so the samples keep their path order, under what is left of the
+	// preview's time: none starts after it, one running then is ended (its
+	// ffprobe with it) and left out, and the preview says it was capped.
 	n := min(lim.Samples, len(books))
 	type read struct {
 		book   *catalog.Book
 		sample PreviewSample
 		own    PreviewBlanks
+		done   bool
 	}
 	reads := make([]read, n)
 	for i := range reads {
 		reads[i].book = books[i*len(books)/n]
 	}
-	pool.Each(ctx, previewReaders, reads, func() bool { return true }, func(r *read) {
-		if ctx.Err() == nil {
-			r.sample, r.own = s.previewSample(lib, r.book)
+	budget, cancel := context.WithDeadline(ctx, start.Add(lim.MaxTime))
+	defer cancel()
+	pool.Each(budget, previewReaders, reads, func() bool { return budget.Err() == nil }, func(r *read) {
+		if budget.Err() == nil {
+			r.sample, r.own = s.previewSample(budget, lib, r.book)
+			r.done = budget.Err() == nil
 		}
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	for _, r := range reads {
+		if !r.done {
+			out.Counts.Capped = true
+			continue
+		}
 		out.Samples = append(out.Samples, r.sample)
 		out.Blanks.Tags += r.own.Tags
 		out.Blanks.Path += r.own.Path
@@ -192,8 +206,8 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 
 // previewSample reads b's names as a scan does and names it both ways, with
 // the names each source leaves empty on its own.
-func (s *Scanner) previewSample(lib catalog.Library, b *catalog.Book) (PreviewSample, PreviewBlanks) {
-	md, _ := metadata.Extract(absOf(lib, primaryPath(b)), s.ffprobePath)
+func (s *Scanner) previewSample(ctx context.Context, lib catalog.Library, b *catalog.Book) (PreviewSample, PreviewBlanks) {
+	md, _ := metadata.ExtractContext(ctx, absOf(lib, primaryPath(b)), s.ffprobePath)
 	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
 	setNames(b, md)
 	if b.IsFolder {
