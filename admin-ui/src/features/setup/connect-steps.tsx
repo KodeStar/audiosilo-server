@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -21,9 +22,11 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { PairDialog, type ShownCode } from '@/features/bridge/pair-dialog';
 import { BridgeSetupList } from '@/features/bridge/setup-list';
 import { useBridge } from '@/features/bridge/use-bridge';
+import { playerConnectUrl } from '@/features/book/book-model';
 import { copyWithToast } from '@/lib/clipboard';
 import { toastError } from '@/lib/errors';
-import { toast } from '@/lib/toast';
+import { useCurrentUser } from '@/lib/session';
+import { usePlayerTab } from '@/lib/use-player-tab';
 import { bridgeCompose } from './setup-model';
 import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
@@ -45,8 +48,10 @@ export function AbsStep({ leave, back, last }: StepProps) {
           <li>{t('setup.abs.metadata')}</li>
         </ul>
         <div>
-          <a
-            href="/admin/server?topic=import"
+          <Link
+            to="/server/{-$section}"
+            params={{ section: undefined }}
+            search={{ topic: 'import' }}
             target="_blank"
             rel="noreferrer"
             className={buttonVariants({ variant: 'outline' })}
@@ -54,7 +59,7 @@ export function AbsStep({ leave, back, last }: StepProps) {
           >
             <ExternalLink aria-hidden="true" />
             {t('setup.abs.open')}
-          </a>
+          </Link>
         </div>
       </div>
       <StepFooter
@@ -67,7 +72,7 @@ export function AbsStep({ leave, back, last }: StepProps) {
   );
 }
 
-/** The player's connect link for a pairing token (the server sends it as web_url). */
+/** The phone's connect link for a pairing token (the server sends it as web_url). */
 function connectUrl(p: PairToken): string {
   if (p.web_url) return p.web_url;
   const q = new URLSearchParams({ token: p.pairing_token, sid: p.server_id });
@@ -85,7 +90,7 @@ export function PhoneStep({ leave, back, last }: StepProps) {
   const server = useServerInfo();
   const system = useSystem();
   const pair = useQuery({
-    queryKey: ['admin', 'setup', 'pair'],
+    queryKey: keys.setupPair,
     queryFn: api.pairSelf,
     staleTime: Infinity,
     gcTime: 0,
@@ -156,36 +161,15 @@ export function PhoneStep({ leave, back, last }: StepProps) {
 /** Opens the web player in a new tab, signed in as this admin by a token of its own. */
 function WebPlayerButton() {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const inFlight = useRef(false);
-  const open = async () => {
-    if (inFlight.current) return;
-    // Opened in the click itself, or the browser blocks it as a pop-up.
-    const tab = window.open('', '_blank');
-    if (!tab) {
-      toast.add({
-        title: t('setup.phone.webFailed'),
-        description: t('book.hero.listenBlocked'),
-        type: 'error',
-      });
-      return;
-    }
-    tab.opener = null;
-    inFlight.current = true;
-    setBusy(true);
-    try {
-      tab.location.href = connectUrl(await api.pairSelf());
-    } catch (err) {
-      tab.close();
-      toastError(t('setup.phone.webFailed'), err);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  };
+  const me = useCurrentUser();
+  const { busy, open } = usePlayerTab(t('setup.phone.webFailed'));
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Button variant="outline" disabled={busy} onClick={() => void open()}>
+      <Button
+        variant="outline"
+        disabled={busy}
+        onClick={() => void open((p) => playerConnectUrl(p, me.id))}
+      >
         <Headphones aria-hidden="true" />
         {t('setup.phone.web')}
       </Button>

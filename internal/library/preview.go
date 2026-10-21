@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // The setup flow's folder preview (FIRST-RUN-PLAN.md Phase F1): what a books
@@ -46,6 +47,9 @@ func (c *walkCap) another() bool {
 	c.seen++
 	return c.seen <= c.dirs && time.Now().Before(c.until)
 }
+
+// previewReaders is how many samples a preview reads at once.
+const previewReaders = 4
 
 // PreviewLimits bound a preview; a zero field takes its default.
 type PreviewLimits struct {
@@ -154,15 +158,30 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 		}
 	}
 	slices.SortFunc(books, func(a, b *catalog.Book) int { return cmp.Compare(a.RelPath, b.RelPath) })
+	// The samples' reads (an ffprobe each) run a few at a time, each into its
+	// own slot, so the samples keep their path order.
 	n := min(lim.Samples, len(books))
-	for i := range n {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	type read struct {
+		book   *catalog.Book
+		sample PreviewSample
+		own    PreviewBlanks
+	}
+	reads := make([]read, n)
+	for i := range reads {
+		reads[i].book = books[i*len(books)/n]
+	}
+	pool.Each(ctx, previewReaders, reads, func() bool { return true }, func(r *read) {
+		if ctx.Err() == nil {
+			r.sample, r.own = s.previewSample(lib, r.book)
 		}
-		sample, own := s.previewSample(lib, books[i*len(books)/n])
-		out.Samples = append(out.Samples, sample)
-		out.Blanks.Tags += own.Tags
-		out.Blanks.Path += own.Path
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, r := range reads {
+		out.Samples = append(out.Samples, r.sample)
+		out.Blanks.Tags += r.own.Tags
+		out.Blanks.Path += r.own.Path
 	}
 	out.Suggested = catalog.MetadataFromTags
 	if out.Blanks.Path < out.Blanks.Tags {

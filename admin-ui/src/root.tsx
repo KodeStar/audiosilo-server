@@ -54,7 +54,17 @@ export function Root() {
  * while the server hasn't finished it.
  */
 function SignedIn() {
+  const onSetup = useRouterState({ select: (s) => isSetupPath(s.location.pathname) });
+  return (
+    <>
+      <SetupRedirect />
+      {onSetup ? <Outlet /> : <AppShell />}
+    </>
+  );
+}
+
+/** The redirect as a leaf, so its pathname subscription re-renders nothing else. */
+function SetupRedirect() {
   useSetupRedirect();
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  return isSetupPath(pathname) ? <Outlet /> : <AppShell />;
+  return null;
 }

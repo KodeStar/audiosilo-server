@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { FileText, FolderTree, Info } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateLibraries, invalidateLibraryBooks, keys, noteScanStarted } from '@/api/hooks';
+import { invalidateAfterSourceChange, invalidateLibraries, noteScanStarted } from '@/api/hooks';
 import {
   METADATA_SOURCES,
   PREVIEW_FIELDS,
@@ -69,8 +69,7 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
     } else if (choice !== lib.metadata_source) {
       const saved = await api.updateLibrary(lib.id, { metadata_source: choice });
       invalidateLibraries(qc);
-      invalidateLibraryBooks(qc, lib.id);
-      void qc.invalidateQueries({ queryKey: keys.issues });
+      invalidateAfterSourceChange(qc, lib.id);
       if (saved.job) noteScanStarted(qc, lib.id);
       toast.add({
         title: t('setup.naming.switched', { name: lib.name }),

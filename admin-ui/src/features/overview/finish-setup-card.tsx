@@ -18,7 +18,7 @@ export function FinishSetupCard() {
   const qc = useQueryClient();
   const state = useSetup().data?.state;
   const [busy, setBusy] = useState(false);
-  if (!state || !showFinishCard(state)) return null;
+  if (!showFinishCard(state)) return null;
   const skipped = skippedSteps(state);
 
   const dismiss = async () => {

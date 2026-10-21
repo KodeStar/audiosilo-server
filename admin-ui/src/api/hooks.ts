@@ -63,6 +63,8 @@ export const keys = {
   setup: ['admin', 'setup'] as const,
   /** A folder's setup preview (POST /admin/setup/preview), by root. */
   setupPreview: (root: string) => ['admin', 'setup', 'preview', root] as const,
+  /** The setup flow's phone pairing token: outside `setup`, so refreshing the state never mints another. */
+  setupPair: ['admin', 'setup-pair'] as const,
   /** Settings > Modules (a settings save or a Bridge status change moves it). */
   modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
@@ -424,6 +426,16 @@ export function invalidateLibraryBooks(qc: QueryClient, libraryId: number) {
   ]) {
     void qc.invalidateQueries({ queryKey: key });
   }
+}
+
+/**
+ * After a library's metadata source changed: the server re-resolved every book,
+ * and with their titles and authors the Health issues (duplicates are grouped by
+ * them).
+ */
+export function invalidateAfterSourceChange(qc: QueryClient, libraryId: number) {
+  invalidateLibraryBooks(qc, libraryId);
+  void qc.invalidateQueries({ queryKey: keys.issues });
 }
 
 /** Whether a query key is one of these books' pages (or a match search on one). */

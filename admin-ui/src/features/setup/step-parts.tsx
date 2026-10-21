@@ -6,7 +6,7 @@ import type { AdminLibrary, AdminSettings } from '@/api/types';
 import { ProgressBar } from '@/components/progress-bar';
 import { Button } from '@/components/ui/button';
 import { toastError } from '@/lib/errors';
-import { formatNumber } from '@/lib/format';
+import { formatNumber, progressFraction } from '@/lib/format';
 import type { SettingId } from '@/features/settings/settings-model';
 import { editable } from './setup-model';
 import { StepStop } from './step-actions';
@@ -88,13 +88,12 @@ export function LockedNote({ settings, id }: { settings: AdminSettings; id: Sett
 export function ScanStatus({
   libraries,
   createdId,
-  lang,
 }: {
   libraries: AdminLibrary[];
   createdId: number | null;
-  lang: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const shown = libraries.filter((l) => scanActive(l) || l.id === createdId);
   if (shown.length === 0) return null;
   return (
@@ -105,7 +104,9 @@ export function ScanStatus({
       {shown.map((l) => {
         const active = scanActive(l);
         const fraction =
-          l.scan.running && l.scan.total > 0 ? l.scan.done / l.scan.total : undefined;
+          l.scan.running && l.scan.total > 0
+            ? progressFraction(l.scan.done, l.scan.total)
+            : undefined;
         return (
           <div key={l.id} className="flex flex-col gap-1.5" role="status">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[13px]">
@@ -129,7 +130,9 @@ export function ScanStatus({
                       })}
               </span>
             </div>
-            {active ? <ProgressBar fraction={fraction} /> : null}
+            {active ? (
+              <ProgressBar fraction={fraction} label={t('libraries.scanProgress')} />
+            ) : null}
           </div>
         );
       })}

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -67,18 +66,12 @@ func (a *API) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 // "done"|"skipped"}}: merges the fields given and returns the state. 400
 // invalid_setup_step for a step id or outcome it doesn't know.
 func (a *API) handleUpdateSetup(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Finished  *bool             `json:"finished"`
-		Dismissed *bool             `json:"dismissed"`
-		Steps     map[string]string `json:"steps"`
-	}
+	var body catalog.SetupPatch
 	if err := decodeJSON(r, &body, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	st, err := a.cat.UpdateSetupState(r.Context(), catalog.SetupPatch{
-		Finished: body.Finished, Dismissed: body.Dismissed, Steps: body.Steps,
-	})
+	st, err := a.cat.UpdateSetupState(r.Context(), body)
 	if err != nil {
 		a.writeCatalogError(w, err, "setup: save", "could not save the setup state")
 		return
@@ -124,12 +117,8 @@ func (a *API) handleSetupPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	root, err := library.CheckRoot(body.Root)
-	switch {
-	case errors.Is(err, library.ErrNotAbsolute):
-		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")
-		return
-	case err != nil:
-		writeErrorCode(w, http.StatusNotFound, codeFolderUnreadable, "folder not found or not readable")
+	if err != nil {
+		writeFolderError(w, err)
 		return
 	}
 	same, err := a.cat.CheckLibraryRoot(r.Context(), root)

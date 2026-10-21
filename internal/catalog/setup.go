@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 )
 
@@ -42,11 +41,12 @@ type SetupState struct {
 }
 
 // SetupPatch is the fields an update sets; the rest keep their value. Steps
-// merge: an id it names takes the new outcome, the others stay.
+// merge: an id it names takes the new outcome, the others stay. It is also PUT
+// /admin/setup's body.
 type SetupPatch struct {
-	Finished  *bool
-	Dismissed *bool
-	Steps     map[string]string
+	Finished  *bool             `json:"finished"`
+	Dismissed *bool             `json:"dismissed"`
+	Steps     map[string]string `json:"steps"`
 }
 
 // SetupState reads the flow's progress (Steps never nil).
@@ -101,23 +101,7 @@ func (c *Catalog) UpdateSetupState(ctx context.Context, p SetupPatch) (SetupStat
 // create racing it is still checked again when it runs), else the name of a
 // library already at exactly this root ("" for none), which create allows.
 func (c *Catalog) CheckLibraryRoot(ctx context.Context, root string) (sameRoot string, err error) {
-	if err := checkLibraryRoot(ctx, c.db, Library{Root: root, Kind: KindBooks}); err != nil {
-		return "", err
-	}
-	want, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	libs, err := c.ListLibraries(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, l := range libs {
-		if other, err := filepath.Abs(l.Root); err == nil && other == want {
-			return l.Name, nil
-		}
-	}
-	return "", nil
+	return checkLibraryRoot(ctx, c.db, Library{Root: root, Kind: KindBooks})
 }
 
 // ScannedNames are a book's names as a library resolves them from what the scan

@@ -68,7 +68,7 @@ export function skippedSteps(state: SetupState): SetupStepId[] {
 }
 
 /** The Overview's "Finish setting up" card: after the flow, while a step is still skipped, until dismissed. */
-export function showFinishCard(state: SetupState | undefined): boolean {
+export function showFinishCard(state: SetupState | undefined): state is SetupState {
   return !!state && state.finished && !state.dismissed && skippedSteps(state).length > 0;
 }
 

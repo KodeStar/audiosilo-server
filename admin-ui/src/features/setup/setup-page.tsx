@@ -23,7 +23,6 @@ import { FolderStep } from './folder-step';
 import { NamingStep } from './naming-step';
 import { BackupsStep, MetadataStep, ReachStep } from './settings-steps';
 import {
-  isSetupStep,
   nextStep,
   parseDraft,
   previousStep,
@@ -114,18 +113,17 @@ function Flow({
   state: SetupState;
   props: Pick<StepProps, 'env' | 'settings' | 'libraries'>;
 }) {
-  const { t, i18n } = useTranslation();
-  const lang = i18n.resolvedLanguage ?? 'en';
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const search: { step?: unknown } = useSearch({ strict: false });
+  const { step } = useSearch({ from: '/setup' });
   const [draft, setDraftState] = useState<SetupDraft | null>(() =>
     parseDraft(readStorage(DRAFT_KEY)),
   );
   const [createdId, setCreatedId] = useState<number | null>(null);
-  const current = isSetupStep(search.step)
-    ? search.step
-    : resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: props.libraries.length > 0 });
+  const current =
+    step ??
+    resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: props.libraries.length > 0 });
   const next = nextStep(current, state);
   const prev = previousStep(current);
 
@@ -179,7 +177,7 @@ function Flow({
           </p>
         </div>
         {stepIndex(current) >= stepIndex('metadata') ? (
-          <ScanStatus libraries={props.libraries} createdId={createdId} lang={lang} />
+          <ScanStatus libraries={props.libraries} createdId={createdId} />
         ) : null}
         <section
           aria-labelledby="setup-step-title"
@@ -214,6 +212,13 @@ function Stepper({ state, current }: { state: SetupState; current: SetupStepId }
         {SETUP_STEPS.map((id, i) => {
           const mark = state.steps[id];
           const here = id === current;
+          const Mark = here
+            ? null
+            : mark === 'done'
+              ? Check
+              : mark === 'skipped'
+                ? CircleDashed
+                : null;
           return (
             <li key={id} className="shrink-0">
               <Link
@@ -236,15 +241,7 @@ function Stepper({ state, current }: { state: SetupState; current: SetupStepId }
                   )}
                   aria-hidden="true"
                 >
-                  {here ? (
-                    i + 1
-                  ) : mark === 'done' ? (
-                    <Check className="size-4" />
-                  ) : mark === 'skipped' ? (
-                    <CircleDashed className="size-4" />
-                  ) : (
-                    i + 1
-                  )}
+                  {Mark ? <Mark className="size-4" /> : i + 1}
                 </span>
                 <span className="sr-only lg:not-sr-only">
                   {t(`setup.step.${id}.short`)}
