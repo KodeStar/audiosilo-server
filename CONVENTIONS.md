@@ -2003,3 +2003,33 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   zero audio files while books are still indexed. This protects the index - and
   the progress/bookmarks that cascade from it - when a network share (SMB/NFS)
   is unmounted. Library roots are always local paths; mount remote shares first.
+- **First-run setup (FIRST-RUN-PLAN.md Phase F1, `catalog/setup.go`, `library/preview.go`,
+  `library/mounts.go`, `api/handlers_admin_setup.go`)**: the account still comes from the banner or
+  `--setup`'s `/setup` page, which now asks only for the account and links "Continue setup" to `/admin`
+  (`POST /setup` without `library_name`/`library_root` creates only the admin, 201 `{user}`; with both it
+  creates the library as before; one alone is 400). The console's flow then runs on the ordinary admin
+  APIs; the server holds only its progress and a folder preview. Admin only, console only (no
+  capability). **State**: `server_state` key `setup_state`, `{finished, dismissed, steps: {id:
+  "done"|"skipped"}}`, ids `catalog.SetupSteps` (`folder naming metadata reach abs backups phone
+  bridge`); no row = a fresh server, not finished; migration `0053` marks a server with a library or a
+  second non-demo, non-member account finished and dismissed. `GET /admin/setup` -> `{state, request:
+  {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints}`: `request` is the direct
+  connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
+  header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
+  `config_libraries` the names config/env declares; `mount_hints` `library.MountHints` (Linux
+  `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
+  at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
+  transaction), returns the state, audited `settings.setup`; 400 `invalid_setup_step`
+  (`catalog.ErrInvalidSetupStep`). **Preview** `POST /admin/setup/preview` `{root, ignore_patterns?}` ->
+  `{root, counts: {audio_files, folder_books, file_books, capped}, same_root, samples: [{rel_path, tags,
+  path, abs}], blanks: {tags, path}, suggested}`: refuses as the folder picker and library create do
+  (`library.CheckRoot`: 400 `path_not_absolute`, 404 `folder_unreadable`; `catalog.CheckLibraryRoot`, the
+  same `checkLibraryRoot` read outside the writer: 409 `root_overlaps`; 400 `invalid_pattern`), and
+  `same_root` names a library already at exactly the root (a warning; create allows it). It walks as a
+  scan discovers (`discoverAuto`, no overrides, a `walkCap` of 5,000 folders and 10 s: `capped`), reads
+  8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
+  `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
+  `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
+  disagree). `blanks` counts empty title/author/narrator/series and a missing position beside a series;
+  `suggested` is the side with fewer, the tags on a tie. Read-only: never a file's contents, never an
+  index write (in the audit test's `notAudited`).

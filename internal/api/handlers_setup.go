@@ -13,9 +13,9 @@ import (
 )
 
 // The first-run setup wizard (enabled via API.EnableSetup) lets a non-technical
-// home user finish setup in the browser: set the admin password and pick the
-// folder their books live in. It is locked down three ways so it's safe even if
-// the port is exposed:
+// home user create the admin account in the browser; the admin console's "Set
+// up your server" flow (handlers_admin_setup.go) takes it from there. It is
+// locked down three ways so it's safe even if the port is exposed:
 //   - it is OFF unless the launcher enabled it (setupToken non-empty);
 //   - it self-closes the instant an admin exists (setupDone);
 //   - POST requires the one-time setup token (carried in the URL fragment, so it
@@ -56,9 +56,14 @@ func (a *API) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(html)
 }
 
-// handleSetup completes first-run setup: it creates the first admin account and a
-// library, then kicks off a background scan. It is the only unauthenticated way
-// to create an admin, so it is gated by setupAvailable + the one-time token.
+// handleSetup completes first-run setup: it creates the first admin account,
+// 201 {user}. The page asks only for the account and hands over to the console's
+// setup flow, which adds the library. A caller that still sends library_name and
+// library_root (an older page, the manager) gets the library too, as before:
+// created with the defaults and a background scan started, 201 {user, library};
+// the folder is checked before the admin is made, and sending only one of the two
+// is 400. It is the only unauthenticated way to create an admin, so it is gated
+// by setupAvailable + the one-time token.
 func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if !a.setupAvailable(r) {
 		writeError(w, http.StatusConflict, "setup is not available (already completed or not enabled)")
@@ -84,18 +89,22 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if req.Username == "" {
 		req.Username = "admin"
 	}
-	if req.LibraryName == "" || req.LibraryRoot == "" {
+	withLibrary := req.LibraryName != "" || req.LibraryRoot != ""
+	if withLibrary && (req.LibraryName == "" || req.LibraryRoot == "") {
 		writeError(w, http.StatusBadRequest, "library name and folder are required")
 		return
 	}
-	root, err := filepath.Abs(req.LibraryRoot)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid folder path")
-		return
-	}
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		writeError(w, http.StatusBadRequest, "that folder does not exist on the server")
-		return
+	var root string
+	if withLibrary {
+		var err error
+		if root, err = filepath.Abs(req.LibraryRoot); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid folder path")
+			return
+		}
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			writeError(w, http.StatusBadRequest, "that folder does not exist on the server")
+			return
+		}
 	}
 
 	// Create the admin first (CreateUser enforces the password rules - admins must
@@ -104,6 +113,10 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	adminUser, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, auth.RoleAdmin)
 	if err != nil {
 		a.writeUserError(w, err, "could not create user")
+		return
+	}
+	if !withLibrary {
+		writeJSON(w, http.StatusCreated, map[string]any{"user": adminUser})
 		return
 	}
 	lib, err := a.cat.CreateLibrary(r.Context(), catalog.Library{Name: req.LibraryName, Root: root})

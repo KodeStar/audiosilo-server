@@ -1263,7 +1263,8 @@ func TestDeleteUserHandler(t *testing.T) {
 	}
 }
 
-// TestSetupWizard covers the first-run /setup flow: it serves while no admin
+// TestSetupWizard covers the first-run /setup flow as an older page or the
+// manager posts it, with the library fields: it serves while no admin
 // exists, rejects a wrong token (403) and a missing folder (400) without creating
 // anything, creates the admin + library on a valid token (201), and then
 // self-closes (409 + the page redirects to /admin). A server that never enabled

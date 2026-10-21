@@ -1,4 +1,5 @@
-// First-run setup wizard. Posts to /setup with the one-time setup token, which
+// First-run setup wizard: creates the admin account only, then hands over to the
+// admin console's setup flow. Posts to /setup with the one-time setup token, which
 // rides in the URL fragment (#token=...) so it never reaches the server's logs.
 // All behaviour is external + addEventListener to satisfy the strict CSP.
 const $ = (id) => document.getElementById(id);
@@ -27,8 +28,6 @@ $("setup-form").addEventListener("submit", async (e) => {
         token: setupToken(),
         username: $("username").value.trim(),
         password: $("password").value,
-        library_name: $("library-name").value.trim(),
-        library_root: $("library-root").value.trim(),
       }),
     });
     const data = await resp.json().catch(() => ({}));
