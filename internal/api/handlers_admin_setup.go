@@ -23,7 +23,8 @@ type setupEnvelope struct {
 	// already added).
 	ConfigLibraries []string `json:"config_libraries"`
 	// MountHints are folders mounted into the server that may hold books
-	// (library.MountHints; [] off Linux).
+	// (library.MountHints; [] off Linux), read only while the flow is not
+	// finished ([] after: only its folder step offers them).
 	MountHints []string `json:"mount_hints"`
 }
 
@@ -57,8 +58,12 @@ func (a *API) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 	for _, l := range cfg.Libraries {
 		names = append(names, l.Name)
 	}
+	hints := []string{}
+	if !st.Finished {
+		hints = a.mountHints(cfg.DataDir)
+	}
 	writeJSON(w, http.StatusOK, setupEnvelope{
-		State: st, Request: req, ConfigLibraries: names, MountHints: library.MountHints(cfg.DataDir),
+		State: st, Request: req, ConfigLibraries: names, MountHints: hints,
 	})
 }
 
@@ -100,9 +105,12 @@ type setupPreview struct {
 
 // handleSetupPreview is POST /admin/setup/preview {root, ignore_patterns?}: what
 // a books library at root would hold and a sample of its books named from the
-// tags and from the folders (library.Preview). It refuses what library create
-// and the folder picker refuse: 400 path_not_absolute, 404 folder_unreadable,
-// 409 root_overlaps, 400 invalid_pattern. Reads only; never a file's contents.
+// tags and from the folders (library.Preview). It checks the folder as the
+// folder picker does (library.CheckRoot: 400 path_not_absolute, 404
+// folder_unreadable; library create checks neither), the root against the other
+// libraries as library create does (catalog.CheckLibraryRoot: 409
+// root_overlaps) and the ignore rules as a library edit does (400
+// invalid_pattern). Reads only; never a file's contents.
 func (a *API) handleSetupPreview(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Root           string   `json:"root"`

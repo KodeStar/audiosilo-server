@@ -60,7 +60,8 @@ func (a *API) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 // 201 {user}. The page asks only for the account and hands over to the console's
 // setup flow, which adds the library. A caller that still sends library_name and
 // library_root (an older page, the manager) gets the library too, as before:
-// created with the defaults and a background scan started, 201 {user, library};
+// created with the defaults and a background scan started, 201 {user, library},
+// and the console flow's folder step recorded as done;
 // the folder is checked before the admin is made, and sending only one of the two
 // is 400. It is the only unauthenticated way to create an admin, so it is gated
 // by setupAvailable + the one-time token.
@@ -125,6 +126,14 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.scanner.Enqueue(*lib, library.TriggerManual, &adminUser.ID)
+	// That library is the console flow's: its folder step is done, the naming
+	// step stays open so the admin still picks the library's source. Failing to
+	// record it costs only a step shown again, so the setup still succeeds.
+	if _, err := a.cat.UpdateSetupState(r.Context(), catalog.SetupPatch{
+		Steps: map[string]string{"folder": catalog.SetupStepDone},
+	}); err != nil {
+		a.log.Warn("setup: record the folder step failed", "err", err)
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user":    adminUser,

@@ -1331,6 +1331,11 @@ func TestSetupWizard(t *testing.T) {
 	if libs, _ := cat.ListLibraries(ctx); len(libs) != 1 || libs[0].Name != "Books" {
 		t.Fatalf("setup did not create the library: %+v", libs)
 	}
+	// That library is the console flow's folder: the step is done, the naming
+	// step (its source) still open, the flow not finished.
+	if st, _ := cat.SetupState(ctx); st.Finished || len(st.Steps) != 1 || st.Steps["folder"] != catalog.SetupStepDone {
+		t.Errorf("setup state after a setup with a library = %+v, want only folder done", st)
+	}
 
 	// Self-closes once an admin exists: POST is refused and GET redirects to /admin.
 	if resp, _ := do("POST", "/setup", good); resp.StatusCode != http.StatusConflict {

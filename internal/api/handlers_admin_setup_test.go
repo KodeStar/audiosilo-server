@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -188,10 +189,11 @@ func TestAdminSetupPut(t *testing.T) {
 	}
 }
 
-// The preview refuses what library create and the folder picker refuse, with
-// their codes: a missing root, a relative path, a folder that isn't there (or is
-// a file), a root overlapping a podcast library (which create refuses too), a bad
-// ignore rule. A books library already at the root is a warning, not a refusal.
+// The preview refuses, with the folder picker's codes, a missing root, a
+// relative path and a folder that isn't there (or is a file); with library
+// create's, a root overlapping a podcast library (which create refuses too); and
+// a bad ignore rule. A books library already at the root is a warning, not a
+// refusal.
 func TestAdminSetupPreviewRefusals(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -323,5 +325,41 @@ func TestAdminSetupPreviewTwoColumns(t *testing.T) {
 	}
 	if n, _ := e.cat.CountBooksByLibrary(context.Background()); len(n) != 0 {
 		t.Errorf("the preview indexed books: %v", n)
+	}
+}
+
+// The mount hints are read only while the flow is open: once it is finished,
+// GET /admin/setup sends [] without reading the mount table.
+func TestAdminSetupMountHintsWhileOpen(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	var reads atomic.Int32
+	e.api.mountHints = func(exclude ...string) []string {
+		reads.Add(1)
+		return []string{"/audiobooks"}
+	}
+	hints := func() string {
+		t.Helper()
+		resp, body := e.do(t, "GET", "/api/v1/admin/setup", adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /admin/setup = %d %s", resp.StatusCode, body)
+		}
+		var env struct {
+			Mounts []string `json:"mount_hints"`
+		}
+		if err := json.Unmarshal([]byte(body), &env); err != nil || env.Mounts == nil {
+			t.Fatalf("mount_hints in %s (%v)", body, err)
+		}
+		return strings.Join(env.Mounts, ",")
+	}
+	if got := hints(); got != "/audiobooks" || reads.Load() != 1 {
+		t.Errorf("open flow: hints %q after %d reads, want /audiobooks read once", got, reads.Load())
+	}
+	if resp, body := e.do(t, "PUT", "/api/v1/admin/setup", adminTok, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT finished = %d %s", resp.StatusCode, body)
+	}
+	if got := hints(); got != "" || reads.Load() != 1 {
+		t.Errorf("finished flow: hints %q after %d reads, want [] and no read", got, reads.Load())
 	}
 }

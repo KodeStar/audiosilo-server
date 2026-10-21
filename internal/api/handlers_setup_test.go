@@ -74,7 +74,7 @@ func TestSetupWizardAccountOnly(t *testing.T) {
 	if libs, _ := cat.ListLibraries(ctx); len(libs) != 0 {
 		t.Errorf("an account-only setup created libraries: %+v", libs)
 	}
-	if st, _ := cat.SetupState(ctx); st.Finished {
+	if st, _ := cat.SetupState(ctx); st.Finished || len(st.Steps) != 0 {
 		t.Error("the console's setup flow is marked finished on a fresh server")
 	}
 	if code, _ := do("POST", "/setup", `{"token":"`+tok+`","password":"longenough"}`); code != http.StatusConflict {

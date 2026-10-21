@@ -101,6 +101,9 @@ type API struct {
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
+	// mountHints is GET /admin/setup's mount hint reader, library.MountHints;
+	// a field so tests can see when it is read.
+	mountHints func(exclude ...string) []string
 
 	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
 	// /setup): the wizard creates the first admin + a library. It is a one-time
@@ -180,6 +183,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		log:            log,
 		baseCtx:        context.Background(),
 		timeoutDur:     requestTimeout,
+		mountHints:     library.MountHints,
 		loginLimiter:   newLimiter(10, 15*time.Minute),
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
