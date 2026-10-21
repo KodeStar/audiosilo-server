@@ -316,9 +316,11 @@ func TestAdminSetupPreviewTwoColumns(t *testing.T) {
 	if filed.RelPath != "Somebody Else/Some Series/03 - Other Title" || filed.Tags != wantTags || filed.Path != wantPath || filed.ABS {
 		t.Errorf("filed sample = %+v, want tags %+v and path %+v", filed, wantTags, wantPath)
 	}
-	// Both lack every narrator and the loose book's series: a tie, so the tags.
-	if p.Blanks["tags"] != 3 || p.Blanks["path"] != 3 || p.Suggested != catalog.MetadataFromTags {
-		t.Errorf("blanks %v, suggested %q; want 3 each and tags", p.Blanks, p.Suggested)
+	// Each source on its own: the tags lack both narrators and series (4); the
+	// folders every narrator, and the loose file's author and series (4). A tie
+	// goes to the tags.
+	if p.Blanks["tags"] != 4 || p.Blanks["path"] != 4 || p.Suggested != catalog.MetadataFromTags {
+		t.Errorf("blanks %v, suggested %q; want 4 each and tags", p.Blanks, p.Suggested)
 	}
 	if n, _ := e.cat.CountBooksByLibrary(context.Background()); len(n) != 0 {
 		t.Errorf("the preview indexed books: %v", n)

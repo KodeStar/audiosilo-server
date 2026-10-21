@@ -64,19 +64,40 @@ func TestPreviewNamesBothWays(t *testing.T) {
 			t.Errorf("%s:\n got %s\nwant %s", rel, got[rel], w)
 		}
 	}
-	// Blanks: each book's narrator, and the two books in no series' series.
-	if want := (PreviewBlanks{Tags: 5, Path: 5}); p.Blanks != want {
+	// Blanks are counted on each source alone, not on the columns. The tags: the
+	// filed and loose books' narrator and series (2 + 2), the untagged book's
+	// all four. The folders: every narrator (they never name one), the filed book
+	// nothing else, the loose file its author and series, the untagged book its
+	// series (1 + 3 + 2). The folders say more here, so they are suggested.
+	if want := (PreviewBlanks{Tags: 8, Path: 6}); p.Blanks != want {
 		t.Errorf("blanks = %+v, want %+v", p.Blanks, want)
 	}
-	if p.Suggested != catalog.MetadataFromTags {
-		t.Errorf("suggested = %q, want tags on a tie", p.Suggested)
+	if p.Suggested != catalog.MetadataFromPath {
+		t.Errorf("suggested = %q, want path", p.Suggested)
 	}
 	if p.Root != root {
 		t.Errorf("root = %q, want %q", p.Root, root)
 	}
 }
 
-// The side with fewer blanks is suggested, the tags on a tie.
+// Well-tagged loose files at the root named by track: the folders say nothing
+// (a track label is no title), so the tags are suggested.
+func TestPreviewSuggestsRichTags(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Track 1.m4b"))
+	copyChapteredM4B(t, filepath.Join(root, "Track 2.m4b"))
+	p, err := previewScanner().Preview(t.Context(), root, nil, PreviewLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Tags: each book's narrator and series. Folders: all four of each.
+	if want := (PreviewBlanks{Tags: 4, Path: 8}); p.Blanks != want || p.Suggested != catalog.MetadataFromTags {
+		t.Errorf("blanks = %+v, suggested %q; want %+v and tags", p.Blanks, p.Suggested, want)
+	}
+}
+
+// blanks counts a reading's empty names, the position only beside a series.
 func TestPreviewBlanks(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

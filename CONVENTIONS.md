@@ -2030,6 +2030,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   8 samples spread evenly over the path-sorted books as a scan reads names (`setNames`: tags over
   `DeriveFromPath`, `readABS`; no fingerprint, chapters or covers), and names each both ways with
   `catalog.ResolveScanned` (the stored book's own `bookLayers.scannedFields`, so preview and library never
-  disagree). `blanks` counts empty title/author/narrator/series and a missing position beside a series;
-  `suggested` is the side with fewer, the tags on a tie. Read-only: never a file's contents, never an
+  disagree). `blanks` counts, per source on its own, empty title/author/narrator/series and a missing
+  position beside a series: the tags before any path fallback (a generic title counting as none), the
+  folders as `metadata.FromPathLayout` reads them (never a narrator); the columns stay the resolved names.
+  `suggested` is the source with fewer, the tags on a tie. Read-only: never a file's contents, never an
   index write (in the audit test's `notAudited`).

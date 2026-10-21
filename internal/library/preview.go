@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -67,7 +68,11 @@ type Preview struct {
 	Counts PreviewCounts `json:"counts"`
 	// Samples are spread evenly over the books found, in path order.
 	Samples []PreviewSample `json:"samples"`
-	// Blanks counts each side's empty names over the samples (PreviewSample.blanks).
+	// Blanks counts, over the samples, the names each source leaves empty on its
+	// own (blanks): the tags before any path fallback, and the folders as a
+	// library that prefers them reads them (metadata.FromPathLayout). The
+	// columns show the resolved names, so a source's blanks can be filled there
+	// by the other source.
 	Blanks PreviewBlanks `json:"blanks"`
 	// Suggested is the metadata source with fewer blanks, the tags on a tie:
 	// catalog.MetadataFromTags or catalog.MetadataFromPath.
@@ -83,7 +88,7 @@ type PreviewCounts struct {
 	Capped      bool `json:"capped"`
 }
 
-// PreviewBlanks are the empty names on each side.
+// PreviewBlanks are the names each source leaves empty.
 type PreviewBlanks struct {
 	Tags int `json:"tags"`
 	Path int `json:"path"`
@@ -154,10 +159,10 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		sample := s.previewSample(lib, books[i*len(books)/n])
+		sample, own := s.previewSample(lib, books[i*len(books)/n])
 		out.Samples = append(out.Samples, sample)
-		out.Blanks.Tags += blanks(sample.Tags)
-		out.Blanks.Path += blanks(sample.Path)
+		out.Blanks.Tags += own.Tags
+		out.Blanks.Path += own.Path
 	}
 	out.Suggested = catalog.MetadataFromTags
 	if out.Blanks.Path < out.Blanks.Tags {
@@ -166,9 +171,11 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	return out, nil
 }
 
-// previewSample reads b's names as a scan does and names it both ways.
-func (s *Scanner) previewSample(lib catalog.Library, b *catalog.Book) PreviewSample {
+// previewSample reads b's names as a scan does and names it both ways, with
+// the names each source leaves empty on its own.
+func (s *Scanner) previewSample(lib catalog.Library, b *catalog.Book) (PreviewSample, PreviewBlanks) {
 	md, _ := metadata.Extract(absOf(lib, primaryPath(b)), s.ffprobePath)
+	own := PreviewBlanks{Tags: blanks(tagNames(md)), Path: blanks(namesOf(metadata.FromPathLayout(b.RelPath, b.IsFolder)))}
 	setNames(b, md)
 	if b.IsFolder {
 		b.ABS.File, _ = s.readABS(lib, b.RelPath, b.ABS.Sig)
@@ -178,6 +185,27 @@ func (s *Scanner) previewSample(lib catalog.Library, b *catalog.Book) PreviewSam
 		Tags:    catalog.ResolveScanned(b, catalog.MetadataFromTags),
 		Path:    catalog.ResolveScanned(b, catalog.MetadataFromPath),
 		ABS:     b.ABS.File != nil,
+	}, own
+}
+
+// tagNames are the names md's tags give on their own (nil: none), a generic
+// title ("Track 01") counting as none, as the scan's title choice reads it.
+func tagNames(md *metadata.Metadata) catalog.ScannedNames {
+	if md == nil {
+		return catalog.ScannedNames{}
+	}
+	n := namesOf(md)
+	if metadata.IsGenericTitle(n.Title) {
+		n.Title = ""
+	}
+	return n
+}
+
+// namesOf is a metadata reading's names, trimmed.
+func namesOf(m *metadata.Metadata) catalog.ScannedNames {
+	return catalog.ScannedNames{
+		Title: strings.TrimSpace(m.Title), Author: strings.TrimSpace(m.Author), Narrator: strings.TrimSpace(m.Narrator),
+		Series: strings.TrimSpace(m.Series), Position: catalog.FormatSeriesRange(m.SeriesIndex, m.SeriesIndexEnd),
 	}
 }
 
