@@ -25,21 +25,27 @@ import { compareField, disagreements } from './setup-model';
 import { StepFooter } from './step-parts';
 import { previewQuery, type StepProps } from './step-actions';
 
-/** What the naming step can name: the draft's new folder, or a library config declares. */
+/**
+ * What the naming step can name: the draft's new folder, a library config
+ * declares and, with no draft, any books library there is already (one an
+ * older setup page made, say).
+ */
 interface Target {
   key: string;
   root: string;
   name: string;
-  /** Set for a library that exists already (a config-declared one). */
+  /** Set for a library that exists already. */
   library?: AdminLibrary;
 }
 
 /**
  * Step 2: how books are named. A sample of the folder's books as their tags
  * and their folders name them, side by side, with the blanks and the
- * disagreements marked and the side with fewer blanks preselected. The pick is
- * the new library's metadata_source; for a library config declares (already
- * scanned) another pick PATCHes it, which re-resolves its books.
+ * disagreements marked. For the new library the side with fewer blanks is
+ * preselected and the pick is its metadata_source. A library that exists
+ * already (scanned) keeps its own source preselected, the preview's side shown
+ * as a hint, so Continue alone changes nothing; another pick PATCHes it, which
+ * re-resolves its books.
  */
 export function NamingStep({ env, libraries, draft, setDraft, leave, back, last }: StepProps) {
   const { t, i18n } = useTranslation();
@@ -48,7 +54,7 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
   const targets: Target[] = [
     ...(draft ? [{ key: 'draft', root: draft.root, name: draft.name }] : []),
     ...libraries
-      .filter((l) => l.kind === 'books' && env.config_libraries.includes(l.name))
+      .filter((l) => l.kind === 'books' && (!draft || env.config_libraries.includes(l.name)))
       .map((l) => ({ key: `library-${l.id}`, root: l.root, name: l.name, library: l })),
   ];
   const [targetKey, setTargetKey] = useState(targets[0]?.key);
@@ -58,7 +64,7 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
     draft?.source ? { draft: draft.source } : {},
   );
   const choice: MetadataSource | undefined = target
-    ? (picked[target.key] ?? preview.data?.suggested)
+    ? (picked[target.key] ?? target.library?.metadata_source ?? preview.data?.suggested)
     : undefined;
 
   /** Every target's pick: those made under the Library select, and the one shown. */
@@ -150,11 +156,17 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
             title: t(`libraries.source.${s}`),
             description: t(`setup.naming.pick.${s}`),
             aside:
-              preview.data?.suggested === s ? (
+              !lib && preview.data?.suggested === s ? (
                 <Badge variant="brand">{t('setup.naming.suggested')}</Badge>
               ) : undefined,
           }))}
         />
+        {lib && preview.data ? (
+          <p className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
+            <Info className="size-[15px] shrink-0" aria-hidden="true" />
+            {t(`setup.naming.hint.${preview.data.suggested}`)}
+          </p>
+        ) : null}
         {lib && choice && choice !== lib.metadata_source ? (
           <p className="text-[13px] text-muted-foreground" role="status">
             {t('setup.naming.reresolve', {

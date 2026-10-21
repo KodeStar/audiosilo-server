@@ -3339,6 +3339,8 @@
   "setup.naming.pick.tags": "Ideale se i file hanno buoni tag (come la maggior parte degli audiolibri acquistati). I nomi delle cartelle completano ciò che manca.",
   "setup.naming.pick.path": "Ideale se le cartelle seguono Autore / Serie / 01 - Titolo. I tag completano ciò che manca.",
   "setup.naming.suggested": "Consigliato",
+  "setup.naming.hint.path": "Per questi libri, i nomi delle cartelle sembrano più completi.",
+  "setup.naming.hint.tags": "Per questi libri, i tag sembrano più completi.",
   "setup.naming.reresolve_one": "Continuando si rileggono ora i dettagli del suo {{formatted}} libro. Le tue modifiche restano.",
   "setup.naming.reresolve_other": "Continuando si rileggono ora i dettagli dei suoi {{formatted}} libri. Le tue modifiche restano.",
   "setup.naming.reresolve_many": "Continuando si rileggono ora i dettagli dei suoi {{formatted}} libri. Le tue modifiche restano.",

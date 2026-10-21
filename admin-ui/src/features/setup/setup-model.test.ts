@@ -6,6 +6,7 @@ import {
   bridgeCompose,
   compareField,
   disagreements,
+  finishMarks,
   folderErrorKey,
   isHomeHost,
   isSetupStep,
@@ -14,6 +15,7 @@ import {
   parseDraft,
   previousStep,
   proxyToTrust,
+  reachOffers,
   resumeStep,
   shouldRedirect,
   showFinishCard,
@@ -112,6 +114,24 @@ describe('nextStep and previousStep', () => {
 
 describe('the Finish setting up card', () => {
   const skipped = { folder: 'done', abs: 'skipped', bridge: 'skipped' } as const;
+
+  it('Finish marks every step without a mark as skipped, so the card lists them', () => {
+    const marks = { folder: 'skipped', naming: 'done', reach: 'done' } as const;
+    const sent = finishMarks(marks, 'bridge', 'done');
+    expect(sent).toEqual({
+      metadata: 'skipped',
+      abs: 'skipped',
+      backups: 'skipped',
+      phone: 'skipped',
+      bridge: 'done',
+    });
+    const after = state({ finished: true, steps: { ...marks, ...sent } });
+    expect(skippedSteps(after)).toEqual(['folder', 'metadata', 'abs', 'backups', 'phone']);
+    // A stepper jump straight to the end leaves even the folder on the card.
+    expect(
+      skippedSteps(state({ finished: true, steps: finishMarks({}, 'bridge', 'skipped') })),
+    ).toEqual(['folder', 'naming', 'metadata', 'reach', 'abs', 'backups', 'phone', 'bridge']);
+  });
 
   it('shows after the flow while a step is skipped, in flow order', () => {
     const s = state({ finished: true, steps: { bridge: 'skipped', abs: 'skipped' } });
@@ -267,20 +287,78 @@ describe('how people reach the server', () => {
     expect(addressMismatch(req(), 'https://books.example.com')).toBe(true);
   });
 
-  it('tells home-network hosts from public ones', () => {
-    for (const h of [
-      'localhost:8080',
-      '192.168.1.20:8080',
-      '10.0.0.5',
-      'nas',
-      'nas.local',
-      '[fd00::1]:8080',
-    ]) {
-      expect(isHomeHost(h)).toBe(true);
-    }
-    for (const h of ['books.example.com', '8.8.8.8', '[2001:db8::1]:443', '172.32.0.1']) {
-      expect(isHomeHost(h)).toBe(false);
-    }
+  // The cases of the server's TestHomeNetworkHost (internal/config), so the
+  // console offers lan_url for exactly the hosts the server derives one from.
+  it.each([
+    ['10.0.0.5', true],
+    ['10.0.0.5:8080', true],
+    ['172.16.4.2:8080', true],
+    ['172.31.255.255', true],
+    ['192.168.1.20:8080', true],
+    ['192.168.1.20', true],
+    ['172.32.0.1:8080', false],
+    ['192.169.1.1', false],
+    ['100.64.0.1:8080', false],
+    ['100.127.255.254', false],
+    ['169.254.10.20:8080', true],
+    ['[fe80::1]:8080', true],
+    ['[fe80::1%25en0]:8080', true],
+    ['[fd12:3456::20]:8080', true],
+    ['[fd12:3456::20]', true],
+    ['fd12:3456::20', true],
+    ['[fc00::1]:443', true],
+    ['[::ffff:192.168.1.20]:8080', true],
+    ['[::ffff:8.8.8.8]:8080', false],
+    ['127.0.0.1:8080', false],
+    ['127.0.0.1', false],
+    ['127.8.9.10', false],
+    ['[::1]:8080', false],
+    ['[::1]', false],
+    ['::1', false],
+    ['0.0.0.0:8080', false],
+    ['localhost:8080', false],
+    ['localhost', false],
+    ['LOCALHOST', false],
+    ['app.localhost:8080', false],
+    ['8.8.8.8', false],
+    ['203.0.113.9:8080', false],
+    ['[2001:db8::1]:8080', false],
+    ['books.example.com', false],
+    ['books.example.com:8443', false],
+    ['nas.local:8080', true],
+    ['nas.local', true],
+    ['NAS.Local.', true],
+    ['books.lan', true],
+    ['server.home.arpa:8080', true],
+    ['nas.internal', true],
+    ['nas.internal:8080', true],
+    ['internal', true],
+    ['foo.internal.example.com', false],
+    ['nas.home', false],
+    ['nas', true],
+    ['nas:8080', true],
+    ['my-nas:8080', true],
+    ['', false],
+    [':8080', false],
+    ['nas:0', false],
+    ['nas:99999', false],
+    ['nas:http', false],
+    ['bad_name:8080', false],
+    ['-nas:8080', false],
+    ['nas..local', false],
+    ['[nas]:8080', false],
+  ])('isHomeHost(%j) is %s, as the server judges it', (host, want) => {
+    expect(isHomeHost(host)).toBe(want);
+  });
+
+  it('never offers a loopback address, and offers a home one as the home address first', () => {
+    expect(reachOffers('localhost:8080')).toEqual([]);
+    expect(reachOffers('127.0.0.1:8080')).toEqual([]);
+    expect(reachOffers('[::1]:8080')).toEqual([]);
+    expect(reachOffers('192.168.1.20:8080')).toEqual(['lan', 'public']);
+    expect(reachOffers('nas.local')).toEqual(['lan', 'public']);
+    expect(reachOffers('books.example.com')).toEqual(['public']);
+    expect(reachOffers('100.64.0.1:8080')).toEqual(['public']);
   });
 });
 

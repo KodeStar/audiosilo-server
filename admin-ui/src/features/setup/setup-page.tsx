@@ -23,6 +23,7 @@ import { FolderStep } from './folder-step';
 import { NamingStep } from './naming-step';
 import { BackupsStep, MetadataStep, ReachStep } from './settings-steps';
 import {
+  finishMarks,
   nextStep,
   parseDraft,
   previousStep,
@@ -153,7 +154,12 @@ function Flow({
   const leave = async (mark: SetupMark) => {
     const to = nextStep(current, state, draftNow.current);
     const finishing = to === null && !state.finished;
-    await saveSetup(qc, { steps: { [current]: mark }, ...(finishing ? { finished: true } : {}) });
+    await saveSetup(
+      qc,
+      finishing
+        ? { steps: finishMarks(state.steps, current, mark), finished: true }
+        : { steps: { [current]: mark } },
+    );
     if (to) return go(to);
     if (finishing) {
       toast.add({

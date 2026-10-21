@@ -9,6 +9,7 @@ import {
   type PreviewSample,
   type SettingsPatch,
   type SettingsSection,
+  type SetupMark,
   type SetupMarks,
   type SetupRequest,
   type SetupState,
@@ -73,6 +74,16 @@ export function previousStep(id: SetupStepId): SetupStepId | null {
 /** The steps passed over, in flow order. */
 export function skippedSteps(state: SetupState): SetupStepId[] {
   return SETUP_STEPS.filter((id) => state.steps[id] === 'skipped');
+}
+
+/**
+ * The marks Finish sends: the step left with its own mark, and every step
+ * without one (passed over by the stepper, or never reached) as skipped, so
+ * the Overview card lists what is left.
+ */
+export function finishMarks(marks: SetupMarks, current: SetupStepId, mark: SetupMark): SetupMarks {
+  const left = SETUP_STEPS.filter((id) => id !== current && !marks[id]);
+  return { ...Object.fromEntries(left.map((id) => [id, 'skipped'])), [current]: mark };
 }
 
 /** The Overview's "Finish setting up" card: after the flow, while a step is still skipped, until dismissed. */
@@ -218,25 +229,118 @@ export function proxyToTrust(req: SetupRequest, trusted: readonly string[]): str
 }
 
 /**
- * Whether a host is a home-network one (a private or loopback address, or a
- * .local/.lan/.home name), so the browser's address suits lan_url rather than
- * public_url.
+ * Whether a request's Host ("host" or "host:port", an IPv6 address in
+ * brackets) names the server on a home network, by the server's own rule
+ * (config.HomeNetworkHost): a private IP (RFC 1918, IPv6 fc00::/7) or a
+ * link-local one, a name ending in .local, .lan, .home.arpa or .internal, or a
+ * single-label name. Loopback (127.0.0.0/8, ::1, localhost) is not: no other
+ * device can reach it. Nor is carrier-grade NAT space (100.64.0.0/10).
  */
-export function isHomeHost(host: string): boolean {
-  const h = host
-    .replace(/:\d+$/, '')
-    .replace(/^\[|\]$/g, '')
-    .toLowerCase();
-  if (h === 'localhost' || h === '::1') return true;
-  // IPv6: unique-local (fc00::/7) and link-local (fe80::/10) are home addresses.
-  if (h.includes(':')) return /^f[cd]/.test(h) || /^fe[89ab]/.test(h);
-  // A single-label name ("nas") only resolves on the home network.
-  if (!h.includes('.')) return true;
-  if (/\.(local|lan|home|internal|home\.arpa)$/.test(h)) return true;
-  const ip = h.split('.').map(Number);
-  if (ip.length !== 4 || ip.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  const [a, b] = ip;
-  return a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+export function isHomeHost(hostport: string): boolean {
+  const host = hostOf(hostport);
+  if (host === null) return false;
+  const v4 = ipv4(host);
+  if (v4) return homeIPv4(v4);
+  if (host.includes(':')) {
+    const v6 = ipv6(host);
+    if (!v6) return false;
+    // An IPv4-mapped address (::ffff:a.b.c.d) is judged as its IPv4 one.
+    if (v6.slice(0, 5).every((n) => n === 0) && v6[5] === 0xffff) {
+      return homeIPv4([v6[6] >> 8, v6[6] & 0xff, v6[7] >> 8, v6[7] & 0xff]);
+    }
+    return (v6[0] & 0xfe00) === 0xfc00 || (v6[0] & 0xffc0) === 0xfe80;
+  }
+  if (hostport.startsWith('[')) return false; // brackets hold an address, never a name
+  const name = host.toLowerCase().replace(/\.$/, '');
+  if (!isHostName(name) || name === 'localhost' || name.endsWith('.localhost')) return false;
+  if (['.local', '.lan', '.home.arpa', '.internal'].some((x) => name.endsWith(x))) return true;
+  return !name.includes('.');
+}
+
+/** A loopback Host (localhost, 127.0.0.0/8, ::1): an address only this machine reaches. */
+export function isLoopbackHost(hostport: string): boolean {
+  const host = hostOf(hostport);
+  if (host === null) return false;
+  const name = host.toLowerCase().replace(/\.$/, '');
+  if (name === 'localhost' || name.endsWith('.localhost')) return true;
+  const v4 = ipv4(host);
+  if (v4) return v4[0] === 127;
+  const v6 = host.includes(':') ? ipv6(host) : null;
+  return !!v6 && v6.slice(0, 7).every((n) => n === 0) && v6[7] === 1;
+}
+
+/**
+ * Which of the server's addresses the reach step offers the browser's own
+ * address for, the likelier first: a home-network address suits lan_url (and
+ * may still be the only one there is), anything else public_url; a loopback
+ * one neither, since no other device can use it.
+ */
+export function reachOffers(hostport: string): ('lan' | 'public')[] {
+  if (isLoopbackHost(hostport)) return [];
+  return isHomeHost(hostport) ? ['lan', 'public'] : ['public'];
+}
+
+/** The host of a Host header without its port or brackets; null for a malformed one. */
+function hostOf(hostport: string): string | null {
+  const bracketed = /^\[([^\]]*)\](?::(\d+))?$/.exec(hostport);
+  if (bracketed) return bracketed[2] !== undefined && !isPort(bracketed[2]) ? null : bracketed[1];
+  if (hostport.startsWith('[')) return null;
+  const colons = hostport.split(':').length - 1;
+  if (colons === 1) {
+    const [host, port] = hostport.split(':');
+    return isPort(port) ? host : null;
+  }
+  return hostport; // no port, or a bare IPv6 address
+}
+
+function isPort(s: string): boolean {
+  return /^\d{1,5}$/.test(s) && Number(s) > 0 && Number(s) <= 65535;
+}
+
+function ipv4(s: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  // Go's netip refuses a leading zero ("010") as well as an octet over 255.
+  if (m.slice(1).some((p) => p.length > 1 && p.startsWith('0'))) return null;
+  return parts.every((n) => n <= 255) ? parts : null;
+}
+
+/** An IPv6 address as its eight 16-bit groups (an IPv4 tail allowed); null if it isn't one. */
+function ipv6(addr: string): number[] | null {
+  let s = addr.replace(/%.*$/, ''); // a zone ("fe80::1%en0")
+  const last = s.slice(s.lastIndexOf(':') + 1);
+  if (last.includes('.')) {
+    // "::ffff:192.168.1.1": the IPv4 tail as its two groups.
+    const v4 = ipv4(last);
+    if (!v4) return null;
+    const hex = (hi: number, lo: number) => ((hi << 8) | lo).toString(16);
+    s = `${s.slice(0, s.length - last.length)}${hex(v4[0], v4[1])}:${hex(v4[2], v4[3])}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const groups = (h: string) => (h === '' ? [] : h.split(':'));
+  const head = groups(halves[0]);
+  const rest = halves.length === 2 ? groups(halves[1]) : [];
+  if ([...head, ...rest].some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
+  const given = head.length + rest.length;
+  if (halves.length === 1 ? given !== 8 : given > 7) return null;
+  return [...head, ...Array<string>(8 - given).fill('0'), ...rest].map((g) => parseInt(g, 16));
+}
+
+function homeIPv4([a, b]: number[]): boolean {
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  );
+}
+
+/** A DNS name of letters, digits and hyphens in non-empty dot-separated labels (lowercase already). */
+function isHostName(s: string): boolean {
+  if (s === '' || s.length > 253) return false;
+  return s.split('.').every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l));
 }
 
 // --- Adding a Bridge ------------------------------------------------------------

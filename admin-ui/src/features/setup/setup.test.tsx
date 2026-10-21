@@ -226,8 +226,13 @@ describe('folder, naming and metadata', () => {
     renderApp('/setup?step=naming');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('radio', { name: /The files' tags first/ }));
+    // Beside a draft, only config's libraries: Kids was made in the console.
+    expect(screen.queryByRole('option', { name: /Kids/ })).toBeNull();
     await user.selectOptions(screen.getByLabelText('Library'), 'Fiction (from your config)');
-    expect(await screen.findByRole('radio', { name: /Folder names first/ })).toBeChecked();
+    // An existing library opens on its own source, the preview's side a hint.
+    expect(await screen.findByRole('radio', { name: /The files' tags first/ })).toBeChecked();
+    expect(await screen.findByText(/Folder names look more complete/)).toBeVisible();
+    await user.click(screen.getByRole('radio', { name: /Folder names first/ }));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'Community metadata' });
     const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1');
@@ -237,6 +242,54 @@ describe('folder, naming and metadata', () => {
       name: 'Audiobooks',
       source: 'tags',
     });
+  });
+
+  it('with no draft, names a books library that exists already and switches its source', async () => {
+    // A library the older setup page's fields made: not from config, no draft here.
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } },
+          'PATCH /admin/libraries/1': (req) => ({
+            body: { ...libraries()[0], ...(req.body as object) },
+          }),
+        },
+      ),
+    );
+    renderApp('/setup');
+    expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
+    expect(await screen.findByRole('radio', { name: /The files' tags first/ })).toBeChecked();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: /Folder names first/ }));
+    expect(screen.getByText(/re-reads the details of its 2,400 books/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    const preview = calls.find((c) => c.path === '/admin/setup/preview');
+    expect(preview?.body).toEqual({ root: libraries()[0].root });
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1');
+    expect(patch?.body).toEqual({ metadata_source: 'path' });
+    expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]);
+  });
+
+  it("plain Continue keeps an existing library's source, whatever the preview suggests", async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        { 'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } } },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByRole('radio', { name: /The files' tags first/ })).toBeChecked();
+    expect(await screen.findByText(/Folder names look more complete/)).toBeVisible();
+    // The Suggested badge is the new library's; an existing one gets the hint.
+    expect(screen.queryByText('Suggested')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    expect(calls.some((c) => c.method === 'PATCH' && c.path.startsWith('/admin/libraries'))).toBe(
+      false,
+    );
+    expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]);
   });
 
   it('a skipped folder creates nothing', async () => {
@@ -282,6 +335,14 @@ describe('the metadata step', () => {
 });
 
 describe('the reach step', () => {
+  // The page's own address decides what the step offers: jsdom's URL, moved
+  // to a home-network one for a test and back after.
+  const jsdom = (globalThis as unknown as { jsdom: { reconfigure(o: { url: string }): void } })
+    .jsdom;
+  const testUrl = window.location.href;
+  const browseAt = (url: string) => jsdom.reconfigure({ url });
+  afterEach(() => browseAt(testUrl));
+
   it('shows a setting the environment sets as set by your config, and leaves it out', async () => {
     const calls = mockFetch(
       flowRoutes(
@@ -294,15 +355,36 @@ describe('the reach step', () => {
         },
       ),
     );
+    browseAt('http://192.168.1.20:8080/admin/setup');
     renderApp('/setup?step=reach');
     expect(await screen.findByLabelText('Public address')).toBeDisabled();
-    expect(screen.getByText('Set by your config')).toBeVisible();
+    // One indicator per locked row: the words, the variable in its tooltip.
+    const locked = screen.getAllByText('Set by your config');
+    expect(locked).toHaveLength(1);
+    expect(locked[0].closest('[title]')).toHaveAttribute('title', 'Set by AUDIOSILO_PUBLIC_URL');
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Use as the home address' }));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
     const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
-    expect(patch?.body).toEqual({ general: { lan_url: window.location.origin } });
+    expect(patch?.body).toEqual({ general: { lan_url: 'http://192.168.1.20:8080' } });
+  });
+
+  it('never offers a loopback address (localhost) as the home or public address', async () => {
+    mockFetch(flowRoutes());
+    browseAt('http://localhost:8080/admin/setup');
+    renderApp('/setup?step=reach');
+    expect(await screen.findByText('http://localhost:8080')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Use as the home address' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use as the public address' })).toBeNull();
+  });
+
+  it('offers a public address only as the public one', async () => {
+    mockFetch(flowRoutes());
+    browseAt('https://books.example.com/admin/setup');
+    renderApp('/setup?step=reach');
+    expect(await screen.findByRole('button', { name: 'Use as the public address' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Use as the home address' })).toBeNull();
   });
 
   it('offers an untrusted reverse proxy for trusted proxies', async () => {
@@ -332,23 +414,23 @@ describe('the reach step', () => {
 });
 
 describe('the end of the flow', () => {
+  const bridgeUnpaired = {
+    paired: false,
+    paired_by: null,
+    pairing: null,
+    online: false,
+    kinds: [],
+    features: [],
+    libraries: [],
+    workers: [],
+  };
+
   it('Finish on the Bridge step marks the flow finished and opens Overview', async () => {
     const calls = mockFetch(
       flowRoutes(
         {},
         {
-          'GET /admin/bridge': {
-            body: {
-              paired: false,
-              paired_by: null,
-              pairing: null,
-              online: false,
-              kinds: [],
-              features: [],
-              libraries: [],
-              workers: [],
-            },
-          },
+          'GET /admin/bridge': { body: bridgeUnpaired },
         },
       ),
     );
@@ -358,6 +440,47 @@ describe('the end of the flow', () => {
     ).toBeVisible();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(puts(calls)).toEqual([{ steps: { bridge: 'skipped' }, finished: true }]);
+    // Reached by a jump: every step without a mark goes down as skipped,
+    // the folder too, since no library was made.
+    expect(puts(calls)).toEqual([
+      {
+        steps: {
+          folder: 'skipped',
+          naming: 'skipped',
+          metadata: 'skipped',
+          reach: 'skipped',
+          abs: 'skipped',
+          backups: 'skipped',
+          phone: 'skipped',
+          bridge: 'skipped',
+        },
+        finished: true,
+      },
+    ]);
+    const card = await screen.findByRole('region', { name: 'Finish setting up' });
+    expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
+    expect(within(card).getByRole('link', { name: /Add a Bridge/ })).toBeVisible();
+  });
+
+  it('Finish keeps the marks already made and skips only the unmarked steps', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done', metadata: 'done', reach: 'skipped' } },
+        { 'GET /admin/bridge': { body: bridgeUnpaired } },
+      ),
+    );
+    const { router } = renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(puts(calls)).toEqual([
+      {
+        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'skipped' },
+        finished: true,
+      },
+    ]);
+    const card = await screen.findByRole('region', { name: 'Finish setting up' });
+    expect(within(card).queryByRole('link', { name: /Where are your books/ })).toBeNull();
+    expect(within(card).getByRole('link', { name: /reach the server/ })).toBeVisible();
   });
 });

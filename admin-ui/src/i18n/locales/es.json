@@ -3339,6 +3339,8 @@
   "setup.naming.pick.tags": "Mejor si tus archivos están bien etiquetados (como la mayoría de audiolibros comprados). Los nombres de carpeta completan lo que falte.",
   "setup.naming.pick.path": "Mejor si tus carpetas siguen Autor / Serie / 01 - Título. Las etiquetas completan lo que falte.",
   "setup.naming.suggested": "Sugerido",
+  "setup.naming.hint.path": "Para estos libros, los nombres de carpeta parecen más completos.",
+  "setup.naming.hint.tags": "Para estos libros, las etiquetas parecen más completas.",
   "setup.naming.reresolve_one": "Al continuar se vuelven a leer los datos de su {{formatted}} libro. Tus ediciones se mantienen.",
   "setup.naming.reresolve_other": "Al continuar se vuelven a leer los datos de sus {{formatted}} libros. Tus ediciones se mantienen.",
   "setup.naming.reresolve_many": "Al continuar se vuelven a leer los datos de sus {{formatted}} libros. Tus ediciones se mantienen.",

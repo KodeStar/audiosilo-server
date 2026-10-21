@@ -3171,6 +3171,8 @@
   "setup.naming.pick.tags": "Best when your files are tagged well (most bought audiobooks are). Folder names fill what the tags leave empty.",
   "setup.naming.pick.path": "Best when your folders follow Author / Series / 01 - Title. Tags fill what the folders leave empty.",
   "setup.naming.suggested": "Suggested",
+  "setup.naming.hint.path": "Folder names look more complete for these books.",
+  "setup.naming.hint.tags": "Tags look more complete for these books.",
   "setup.naming.reresolve_one": "Continuing re-reads the details of its {{formatted}} book now. Your own edits stay.",
   "setup.naming.reresolve_other": "Continuing re-reads the details of its {{formatted}} books now. Your own edits stay.",
   "setup.naming.switched": "{{name}} now reads its book details another way",

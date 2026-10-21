@@ -3339,6 +3339,8 @@
   "setup.naming.pick.tags": "Idéal quand vos fichiers sont bien taggés (comme la plupart des livres audio achetés). Les noms de dossiers complètent ce qui manque.",
   "setup.naming.pick.path": "Idéal quand vos dossiers suivent Auteur / Série / 01 - Titre. Les tags complètent ce qui manque.",
   "setup.naming.suggested": "Suggéré",
+  "setup.naming.hint.path": "Pour ces livres, les noms de dossiers semblent plus complets.",
+  "setup.naming.hint.tags": "Pour ces livres, les tags semblent plus complets.",
   "setup.naming.reresolve_one": "Continuer relit maintenant les informations de son {{formatted}} livre. Vos modifications restent.",
   "setup.naming.reresolve_other": "Continuer relit maintenant les informations de ses {{formatted}} livres. Vos modifications restent.",
   "setup.naming.reresolve_many": "Continuer relit maintenant les informations de ses {{formatted}} livres. Vos modifications restent.",

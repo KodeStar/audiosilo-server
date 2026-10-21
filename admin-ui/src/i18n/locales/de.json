@@ -3171,6 +3171,8 @@
   "setup.naming.pick.tags": "Am besten, wenn deine Dateien gut getaggt sind (wie die meisten gekauften Hörbücher). Ordnernamen füllen, was die Tags leer lassen.",
   "setup.naming.pick.path": "Am besten, wenn deine Ordner Autor / Reihe / 01 - Titel folgen. Tags füllen, was die Ordner leer lassen.",
   "setup.naming.suggested": "Empfohlen",
+  "setup.naming.hint.path": "Für diese Bücher wirken die Ordnernamen vollständiger.",
+  "setup.naming.hint.tags": "Für diese Bücher wirken die Tags vollständiger.",
   "setup.naming.reresolve_one": "Weiter liest die Details ihres {{formatted}} Buchs jetzt neu. Deine Bearbeitungen bleiben.",
   "setup.naming.reresolve_other": "Weiter liest die Details ihrer {{formatted}} Bücher jetzt neu. Deine Bearbeitungen bleiben.",
   "setup.naming.switched": "{{name}} liest die Buchdetails jetzt anders",

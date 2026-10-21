@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Globe, Network, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Globe, Lock, Network, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateLibraries, noteScanStarted, useSystem } from '@/api/hooks';
 import type { MetadataMode } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { SettingRow } from '@/components/setting-row';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -15,7 +16,12 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { Switch } from '@/components/ui/switch';
 import { SettingBadges } from '@/features/settings/settings-form';
-import { METADATA_MODES, outOfRange, type SettingId } from '@/features/settings/settings-model';
+import {
+  lockOf,
+  METADATA_MODES,
+  outOfRange,
+  type SettingId,
+} from '@/features/settings/settings-model';
 import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
 import { regionOptions } from '@/lib/regions';
@@ -23,22 +29,36 @@ import { toast } from '@/lib/toast';
 import {
   addressMismatch,
   editable,
-  isHomeHost,
   mergePatches,
   proxyToTrust,
+  reachOffers,
   seenAs,
   unlockedPatch,
 } from './setup-model';
 import { LockedNote, StepFooter } from './step-parts';
 import { StepStop, useSaveStepSettings, type StepProps } from './step-actions';
 
-/** A setting's badges (locked, restart) and, when locked, "Set by your config". */
+/**
+ * A setting's badge: "Set by your config" with a lock for one the environment
+ * or the desktop app sets (which variable in its tooltip), else the restart
+ * badges Settings shows.
+ */
 function Badges({ settings, id }: Pick<StepProps, 'settings'> & { id: SettingId }) {
+  const { t } = useTranslation();
+  const lock = lockOf(settings, id);
+  if (!lock) return <SettingBadges settings={settings} id={id} />;
   return (
-    <>
-      <SettingBadges settings={settings} id={id} />
-      <LockedNote settings={settings} id={id} />
-    </>
+    <Badge
+      variant="outline"
+      title={
+        lock === 'launcher'
+          ? t('settings.locked.launcher')
+          : t('settings.locked.env', { name: lock })
+      }
+    >
+      <Lock aria-hidden="true" />
+      {t('setup.locked')}
+    </Badge>
   );
 }
 
@@ -198,7 +218,6 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
   const [homeHttp, setHomeHttp] = useState(n.tls_home_http);
   const [error, setError] = useState<string | null>(null);
   const origin = window.location.origin;
-  const home = isHomeHost(window.location.host);
   const peer = proxyToTrust(env.request, proxies);
   const canPublic = editable(settings, 'general.public_url');
   const canLan = editable(settings, 'general.lan_url');
@@ -223,11 +242,11 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
     await leave('done');
   };
 
-  const offers = [
-    { which: 'lan' as const, can: canLan, set: setLanUrl, value: lanUrl },
-    { which: 'public' as const, can: canPublic, set: setPublicUrl, value: publicUrl },
-  ];
-  if (!home) offers.reverse();
+  const fields = {
+    lan: { can: canLan, set: setLanUrl, value: lanUrl },
+    public: { can: canPublic, set: setPublicUrl, value: publicUrl },
+  };
+  const offers = reachOffers(window.location.host).map((which) => ({ which, ...fields[which] }));
 
   return (
     <>
@@ -238,20 +257,22 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
             {t('setup.reach.browser')}
             <code className="font-mono text-[12.5px] [overflow-wrap:anywhere]">{origin}</code>
           </span>
-          <div className="flex flex-wrap gap-2">
-            {offers.map((b) => (
-              <Button
-                key={b.which}
-                type="button"
-                size="sm"
-                variant={b === offers[0] ? 'secondary' : 'outline'}
-                disabled={!b.can || b.value === origin}
-                onClick={() => b.set(origin)}
-              >
-                {t(`setup.reach.use.${b.which}`)}
-              </Button>
-            ))}
-          </div>
+          {offers.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {offers.map((b) => (
+                <Button
+                  key={b.which}
+                  type="button"
+                  size="sm"
+                  variant={b === offers[0] ? 'secondary' : 'outline'}
+                  disabled={!b.can || b.value === origin}
+                  onClick={() => b.set(origin)}
+                >
+                  {t(`setup.reach.use.${b.which}`)}
+                </Button>
+              ))}
+            </div>
+          ) : null}
           {addressMismatch(env.request, origin) ? (
             <span className="text-[12.5px] text-muted-foreground">
               {t('setup.reach.seenAs', { address: seenAs(env.request) })}
