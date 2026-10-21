@@ -35,6 +35,8 @@ import type {
   MatchRun,
   MetaMirrorStatus,
   PersonField,
+  SetupEnvelope,
+  SetupPatch,
   ServerEventKind,
   SessionCursor,
   SessionFilter,
@@ -57,6 +59,10 @@ export const keys = {
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
   bridge: ['admin', 'bridge', 'status'] as const,
+  /** The first-run flow's state (GET /admin/setup). */
+  setup: ['admin', 'setup'] as const,
+  /** A folder's setup preview (POST /admin/setup/preview), by root. */
+  setupPreview: (root: string) => ['admin', 'setup', 'preview', root] as const,
   /** Settings > Modules (a settings save or a Bridge status change moves it). */
   modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
@@ -343,6 +349,22 @@ export function useAudit(filter: AuditFilter) {
     getNextPageParam: (last) => last.next_before || undefined,
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * The first-run flow's state, how this request reached the server, the
+ * config-declared libraries and the mount hints. Fresh for the session: the
+ * flow and the Overview card write it through saveSetup.
+ */
+export function useSetup() {
+  return useQuery({ queryKey: keys.setup, queryFn: api.setup, staleTime: Infinity });
+}
+
+/** Saves a change to the setup state (PUT /admin/setup) and puts the answer in the cache. */
+export async function saveSetup(qc: QueryClient, patch: SetupPatch) {
+  const state = await api.updateSetup(patch);
+  qc.setQueryData<SetupEnvelope>(keys.setup, (env) => (env ? { ...env, state } : env));
+  return state;
 }
 
 /** Whether the Overview's support card shows (it changes only by days, or an answer). */

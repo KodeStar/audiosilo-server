@@ -36,6 +36,8 @@ import type {
   IssuesSummary,
   Job,
   JobsState,
+  LibraryPreview,
+  LibraryPreviewRequest,
   LibraryRequest,
   ListeningDays,
   ListeningSession,
@@ -84,6 +86,9 @@ import type {
   PairToken,
   PathRule,
   ServerInfo,
+  SetupEnvelope,
+  SetupPatch,
+  SetupState,
   Share,
   User,
   UserPatch,
@@ -466,6 +471,13 @@ export const api = {
   audit: (opts: AuditFilter & { before?: number; limit?: number } = {}) =>
     request<AuditPage>('GET', `/admin/audit${bookQuery(opts)}`),
 
+  // The first-run flow (FIRST-RUN-PLAN.md F1): its state, and a folder's preview.
+  setup: () => request<SetupEnvelope>('GET', '/admin/setup'),
+  /** Merges the fields given into the setup state; answers the whole state. */
+  updateSetup: (patch: SetupPatch) => request<SetupState>('PUT', '/admin/setup', patch),
+  /** What a folder holds and how its books would be named, read without indexing. */
+  previewLibrary: (req: LibraryPreviewRequest) =>
+    request<LibraryPreview>('POST', '/admin/setup/preview', req),
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
   createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>
     request<Library>('POST', '/admin/libraries', lib),
