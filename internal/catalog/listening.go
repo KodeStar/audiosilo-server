@@ -501,6 +501,9 @@ func mergeFurthest(a, b UserProgress) UserProgress {
 // moveBookState carries the book's own path-keyed state (enrichment, ignored
 // issues, an admin's metadata edits, a custom cover) from oldPath to newPath.
 func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
+	if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
+		return err
+	}
 	// book_enrichment is keyed on the book path too, so a move must carry the
 	// attached ASIN/ISBN to the new path or the moved book silently loses it.
 	if _, err := tx.ExecContext(ctx,

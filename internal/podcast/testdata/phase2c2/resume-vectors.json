@@ -1,0 +1,139 @@
+{
+  "phase": "2c-2a",
+  "cases": [
+    {
+      "name": "exact",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "append"
+    },
+    {
+      "name": "full-response",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 200,
+      "etag": "\"one\"",
+      "content_range": "",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "restart_with_200_body"
+    },
+    {
+      "name": "unsatisfiable",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 416,
+      "etag": "\"one\"",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "weak",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "W/\"one\"",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "missing",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "changed-etag",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"two\"",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "changed-total",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "bytes 100-1099/1100",
+      "content_length": 1000,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "wrong-offset",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "bytes 99-999/1000",
+      "content_length": 901,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "bad-range",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "garbage",
+      "content_length": 900,
+      "encoding": "identity",
+      "action": "fresh_get"
+    },
+    {
+      "name": "encoded",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "bytes 100-999/1000",
+      "content_length": 900,
+      "encoding": "gzip",
+      "action": "fresh_get"
+    },
+    {
+      "name": "short-range",
+      "offset": 100,
+      "prior_total": 1000,
+      "prior_etag": "\"one\"",
+      "status": 206,
+      "etag": "\"one\"",
+      "content_range": "bytes 100-998/1000",
+      "content_length": 899,
+      "encoding": "identity",
+      "action": "fresh_get"
+    }
+  ],
+  "no_range_without_strong_prior_etag": true,
+  "feed_length_is_never_a_bound": true
+}

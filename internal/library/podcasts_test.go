@@ -54,6 +54,11 @@ func TestPodcastScanner(t *testing.T) {
 	}
 	var f feed.File
 	_ = json.Unmarshal(raw, &f)
+	f.Episodes[1].Fetch.Bytes = 4
+	updated, _ := json.Marshal(f)
+	if err := os.WriteFile(filename, updated, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(f.Episodes[1].Path)), []byte("file"), 0600); err != nil {
 		t.Fatal(err)
 	}

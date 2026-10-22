@@ -565,19 +565,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		downloaded, err := a.cat.PodcastEpisodeDownloaded(r.Context(), lib.ID, rel)
-		if errors.Is(err, catalog.ErrNotFound) {
-			writeError(w, 404, "episode not found")
-			return
-		}
-		if err != nil {
-			a.writeCatalogError(w, err, "load episode for stream failed", "Could not load episode.")
-			return
-		}
-		if !downloaded {
-			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
-			return
-		}
+		a.servePodcastStream(w, r, lib, rel)
+		return
 	}
 
 	// Only ever stream recognized audio. The scope check bounds this to the caller's
@@ -594,35 +583,40 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	if lib.Kind == catalog.KindPodcasts {
-		if info, err := os.Stat(abs); err != nil || !info.Mode().IsRegular() {
-			writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
-			return
-		}
-	}
 
 	if r.URL.Query().Get("transcode") == "1" {
-		if a.ffmpeg == "" {
-			writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
+		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
+		if !ok {
 			return
 		}
-		// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
-		// rather than forking another core-pinning encoder.
-		select {
-		case a.transcodeSem <- struct{}{}:
-			defer func() { <-a.transcodeSem }()
-		default:
-			w.Header().Set("Retry-After", "5")
-			writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
-			return
-		}
-		// Marks the device's session transcoded: a cast token's is its sender's.
-		a.streams.Note(credentialFrom(r.Context()).DeviceID, lib.ID, rel, time.Now())
-		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+		defer done()
 		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 		return
 	}
 	media.ServeFile(w, r, abs, r.URL.Query().Get("download") == "1")
+}
+
+// beginTranscode admits one ?transcode=1 request for the file at rel: 503 when
+// ffmpeg isn't configured or every slot is busy (Retry-After 5), else it takes
+// a slot, marks the device's session transcoded (a cast token's is its
+// sender's) and returns the slot's release and the ?t= start in seconds.
+func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel string) (done func(), start float64, ok bool) {
+	if a.ffmpeg == "" {
+		writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
+		return nil, 0, false
+	}
+	// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
+	// rather than forking another core-pinning encoder.
+	select {
+	case a.transcodeSem <- struct{}{}:
+	default:
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
+		return nil, 0, false
+	}
+	a.streams.Note(credentialFrom(r.Context()).DeviceID, lib, rel, time.Now())
+	start, _ = strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+	return func() { <-a.transcodeSem }, start, true
 }
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the

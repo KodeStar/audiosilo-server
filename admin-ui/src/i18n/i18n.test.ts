@@ -37,6 +37,24 @@ describe.each(Object.keys(LANGUAGES))('locale %s', (lang) => {
     );
     expect(mismatched).toEqual([]);
   });
+
+  // i18next never falls back to _other within a language: a missing form
+  // (es/fr/it/pt "_many", e.g. 1,000,000) shows the English string.
+  it('has every plural form of every plural key', () => {
+    const forms = new Intl.PluralRules(lang).resolvedOptions().pluralCategories;
+    const plurals = Object.keys(en)
+      .filter((k) => k.endsWith('_other'))
+      .map((k) => k.slice(0, -'_other'.length));
+    for (const key of plurals) {
+      for (const form of forms) {
+        const translated = dict[`${key}_${form}`];
+        expect(translated, `${key}_${form}`).toBeTruthy();
+        expect(placeholders(translated ?? '')).toEqual(
+          placeholders(en[`${key}_${form}`] ?? en[`${key}_other`]),
+        );
+      }
+    }
+  });
 });
 
 describe('navigation labels', () => {

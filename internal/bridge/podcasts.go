@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -17,6 +18,8 @@ import (
 const (
 	KindPodcastSubscribe = "podcast.subscribe"
 	KindPodcastPoll      = "podcast.poll"
+	KindPodcastFetch     = "podcast.fetch"
+	KindPodcastRetain    = "podcast.retain"
 	ModulePodcasts       = "podcasts"
 	FeaturePodcast       = "podcast"
 
@@ -34,15 +37,48 @@ var ErrNotBookLibrary = errors.New("not a book library")
 // complement among the states a job stays in).
 const EndedStatesSQL = `('done', 'failed', 'cancelled')`
 
-func IsPodcast(kind string) bool { return kind == KindPodcastSubscribe || kind == KindPodcastPoll }
-func Internal(kind string) bool  { return kinds[kind].internal }
+func IsPodcast(kind string) bool {
+	return kind == KindPodcastSubscribe || kind == KindPodcastPoll || kind == KindPodcastFetch || kind == KindPodcastRetain
+}
+func Internal(kind string) bool { return kinds[kind].internal }
+
+// podcastWork reports whether kind is one of a followed show's bound jobs
+// (poll, fetch, retain): params naming the show's identity, which an open job
+// for a replaced identity must not absorb, and terminal rows pruned per target.
+func podcastWork(kind string) bool {
+	return kind == KindPodcastPoll || kind == KindPodcastFetch || kind == KindPodcastRetain
+}
 
 // Ended reports whether j is in a state it ends in.
 func (j *Job) Ended() bool {
 	return j.State == StateDone || j.State == StateFailed || j.State == StateCancelled
 }
 
+type EpisodeParams struct {
+	ShowID    string `json:"show_id"`
+	EpisodeID string `json:"episode_id"`
+}
+type RetainParams struct {
+	ShowID string `json:"show_id"`
+}
+
+func fetchParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p EpisodeParams
+	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.ShowID, 16) || !feed.ValidHex(p.EpisodeID, 16) {
+		return nil, invalid("invalid fetch params")
+	}
+	return json.Marshal(p)
+}
+func retainParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p RetainParams
+	if decodeStrict(raw, &p) != nil || !feed.ValidHex(p.ShowID, 16) {
+		return nil, invalid("invalid retention params")
+	}
+	return json.Marshal(p)
+}
+
 type SubscribeParams struct {
+	ShowID        string `json:"show_id,omitempty"`
 	FeedURL       string `json:"feed_url"`
 	FeedURLSHA256 string `json:"feed_url_sha256"`
 	FeedHost      string `json:"feed_host"`
@@ -50,6 +86,7 @@ type SubscribeParams struct {
 	ShowPath      string `json:"show_path"`
 }
 type PollParams struct {
+	ShowID       string `json:"show_id,omitempty"`
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
 }
@@ -111,7 +148,7 @@ func pollParams(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
-	if decodeStrict(raw, &p) != nil || len(p.ETag) > MaxPollValidator || len(p.LastModified) > MaxPollValidator {
+	if decodeStrict(raw, &p) != nil || p.ShowID != "" && !feed.ValidHex(p.ShowID, 16) || len(p.ETag) > MaxPollValidator || len(p.LastModified) > MaxPollValidator {
 		return nil, invalid("invalid poll params")
 	}
 	return json.Marshal(p)
@@ -131,6 +168,14 @@ func (s *Service) EnqueueSubscribe(ctx context.Context, lib, user int64, norm st
 		return nil, false, feed.ErrInvalidFeedURL
 	}
 	p := SubscribeParams{FeedURL: norm, FeedURLSHA256: feed.FeedURLHash(norm), FeedHost: u.Hostname(), Private: private, ShowPath: show}
+	if show != "" {
+		// A show pruned since the caller found it has no identity left to bind:
+		// the repair proceeds like a new subscription instead of failing.
+		err := s.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&p.ShowID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, false, err
+		}
+	}
 	if private {
 		p.FeedURL = ""
 	}
@@ -292,7 +337,7 @@ func (s *Service) EndedPodcasts(ctx context.Context) ([]Job, error) {
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`') AND j.state IN `+EndedStatesSQL+` AND j.finished_at>=? AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind IN ('`+KindPodcastSubscribe+`','`+KindPodcastPoll+`','`+KindPodcastFetch+`','`+KindPodcastRetain+`') AND j.state IN `+EndedStatesSQL+` AND (j.kind IN ('`+KindPodcastFetch+`','`+KindPodcastRetain+`') OR j.finished_at>=?) AND NOT EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=j.id) ORDER BY j.id`, at(s.now().Add(-24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +400,7 @@ func (s *Service) checkLibraryKind(ctx context.Context, j NewJob) error {
 // kind, library and path, which idx_bridge_jobs_book serves).
 func (s *Service) prunePolls(ctx context.Context, tx *sql.Tx, j NewJob) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`
-		AND id<>(SELECT MAX(id) FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`)`, j.LibraryID, j.Path, j.Kind)
+		AND (kind='podcast.poll' OR EXISTS(SELECT 1 FROM podcast_folded f WHERE f.job_id=bridge_jobs.id)) AND id<>(SELECT MAX(id) FROM bridge_jobs WHERE library_id=?1 AND rel_path=?2 AND kind=?3 AND state IN `+EndedStatesSQL+`)`, j.LibraryID, j.Path, j.Kind)
 	return err
 }
 func sanitizePodcastUpdate(u *Update) {
@@ -392,3 +437,40 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 	}
 	return j, err
 }
+
+var ErrIdentityChanged = errors.New("podcast identity changed")
+
+func validEpisodePath(p string) bool { return feed.EpisodePath(strings.SplitN(p, "/", 2)[0], p) }
+func samePodcastIdentity(a, b json.RawMessage) bool {
+	var x, y EpisodeParams
+	_ = json.Unmarshal(a, &x)
+	_ = json.Unmarshal(b, &y)
+	return x.ShowID == y.ShowID && x.EpisodeID == y.EpisodeID
+}
+func checkPodcastTarget(ctx context.Context, tx *sql.Tx, j NewJob) error {
+	if j.Kind != KindPodcastFetch && j.Kind != KindPodcastRetain {
+		return nil
+	}
+	var p EpisodeParams
+	_ = json.Unmarshal(j.Params, &p)
+	var showID, episodeID string
+	var err error
+	if j.Kind == KindPodcastFetch {
+		err = tx.QueryRowContext(ctx, `SELECT s.show_id,e.episode_id FROM podcast_episodes e JOIN books b ON b.id=e.book_id JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path WHERE b.library_id=? AND b.rel_path=?`, j.LibraryID, j.Path).Scan(&showID, &episodeID)
+	} else {
+		err = tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, j.LibraryID, j.Path).Scan(&showID)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if showID != p.ShowID || j.Kind == KindPodcastFetch && episodeID != p.EpisodeID {
+		return ErrIdentityChanged
+	}
+	return nil
+}
+
+// WakePodcasts asks the scheduler to reconsider policies and follows immediately.
+func (s *Service) WakePodcasts() { s.ended.fire() }

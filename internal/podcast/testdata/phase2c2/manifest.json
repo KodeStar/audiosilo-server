@@ -1,0 +1,58 @@
+{
+  "phases": [
+    "2c-2a",
+    "2c-2b"
+  ],
+  "episode_path": "Fixture Show/2026-10-19-1cc306d831.mp3",
+  "probe_duration_ms": 4056,
+  "files": {
+    "chap-v23.chapters.json": {
+      "bytes": 515,
+      "sha256": "581fac682de634c6d08f6d710e1536682acbaec183e2e1d8a0bb277564b730ef"
+    },
+    "chap-v23.mp3": {
+      "bytes": 16403,
+      "sha256": "b9e2206c3fd1f9a9e9c78e9b467d888926e0396ec49760736f78705920ba8dda"
+    },
+    "chap-v24-reverse.chapters.json": {
+      "bytes": 515,
+      "sha256": "4fc876f52595bebfebc1860096a67784de1fa8d7373446414aebd8fcc7c45b15"
+    },
+    "chap-v24-reverse.mp3": {
+      "bytes": 16493,
+      "sha256": "7be5836ba147da1215098df9f7a34f33b157d07fd92dd801928c9caef17e6d2b"
+    },
+    "feed-fetch-v1.json": {
+      "bytes": 3374,
+      "sha256": "54cd1d86b5e2bb72a687259670cf1ae026ab227c1db7c08b49deda3e57975d00"
+    },
+    "generation-vectors.json": {
+      "bytes": 3172,
+      "sha256": "1e5c261901c6423344bfb8e3b305b1f984cbe130ab0c46a1a6fbd190552de482"
+    },
+    "plain.mp3": {
+      "bytes": 16224,
+      "sha256": "68591134da77ed241044bfef09d39be8bafa9dee7301258e5979904c6a402667"
+    },
+    "publish-v1.json": {
+      "bytes": 1121,
+      "sha256": "54bd19f8335c2b990e77bf86122fd27d7059d33663daa27a93a4a969480b09b6"
+    },
+    "resume-vectors.json": {
+      "bytes": 3372,
+      "sha256": "bcdb9dbdaea65fd3b37180ba41437401363ef893b475e0e78f1a8bc9838ebd54"
+    },
+    "retention-vectors.json": {
+      "bytes": 5539,
+      "sha256": "0ff05f07281080b166be59d03caeb1f53cfc301681595845814615bcea979a32"
+    },
+    "wire-2a.json": {
+      "bytes": 1703,
+      "sha256": "b35532572c19253cb39ce98f7490849ec01b01176720ea1a4ed68a90dc85ed7e"
+    },
+    "wire-2b.json": {
+      "bytes": 993,
+      "sha256": "c80883e115ac2da8c6d97ad3014d75a8f1752fec8ea617f84bf8f49ae0eee04f"
+    }
+  }
+}

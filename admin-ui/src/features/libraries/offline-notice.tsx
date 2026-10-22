@@ -46,7 +46,7 @@ export function OfflineNotice({
       actions={actions}
       className={className}
     >
-      {t('libraries.safety.body', {
+      {t(l.kind === 'podcasts' ? 'libraries.safety.podcastBody' : 'libraries.safety.body', {
         root: l.root,
         count: l.book_count,
         formatted: formatNumber(l.book_count, i18n.resolvedLanguage ?? 'en'),

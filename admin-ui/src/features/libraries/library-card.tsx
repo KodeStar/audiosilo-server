@@ -164,7 +164,7 @@ export function LibraryCard({
             {l.root}
           </span>
           <span className="text-[13px] text-muted-foreground tabular-nums">
-            {t('libraries.bookCount', {
+            {t(isPodcasts ? 'libraries.episodeCount' : 'libraries.bookCount', {
               count: l.book_count,
               formatted: formatNumber(l.book_count, lang),
             })}
@@ -177,7 +177,7 @@ export function LibraryCard({
                 })}
               </span>
             ) : null}
-            {l.metadata_source === 'path' ? (
+            {!isPodcasts && l.metadata_source === 'path' ? (
               <span className="ml-3 inline-flex items-center gap-1">
                 <FolderTree className="size-3.5" aria-hidden="true" />
                 {t('libraries.sourcePath')}
@@ -243,7 +243,12 @@ export function LibraryCard({
       </div>
 
       {running ? (
-        <ScanProgressBar progress={l.scan} lang={lang} className="px-4 pb-4 md:px-5 md:pb-5" />
+        <ScanProgressBar
+          progress={l.scan}
+          podcasts={isPodcasts}
+          lang={lang}
+          className="px-4 pb-4 md:px-5 md:pb-5"
+        />
       ) : null}
 
       {!l.available && !running && !queued ? (
@@ -344,10 +349,12 @@ function FannedCovers({ library: l }: { library: AdminLibrary }) {
 /** A scan's progress bar and "N of M books checked" (the library card, Health > Jobs). */
 export function ScanProgressBar({
   progress: p,
+  podcasts = false,
   lang,
   className,
 }: {
   progress: ScanProgress;
+  podcasts?: boolean;
   lang: string;
   className?: string;
 }) {
@@ -360,11 +367,11 @@ export function ScanProgressBar({
       />
       <div className="mt-1.5 text-[12px] text-muted-foreground tabular-nums">
         {p.total
-          ? t('libraries.scanCount', {
+          ? t(podcasts ? 'libraries.scanEpisodeCount' : 'libraries.scanCount', {
               done: formatNumber(p.done, lang),
               total: formatNumber(p.total, lang),
             })
-          : t('libraries.scanDiscovering')}
+          : t(podcasts ? 'libraries.scanPodcastDiscovering' : 'libraries.scanDiscovering')}
       </div>
     </div>
   );

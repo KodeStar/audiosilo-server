@@ -87,6 +87,37 @@ type Fetch struct {
 	FetchedAt       string `json:"fetched_at"`
 	DeletedAt       string `json:"deleted_at"`
 	TimelineChanged bool   `json:"timeline_changed"`
+	Codec           string `json:"codec,omitempty"`
+}
+
+// A malformed optional Fetch must not discard the feed's episode. Its zero
+// value has no generation authority, so it stays visible and unready.
+func (f *Fetch) UnmarshalJSON(raw []byte) error {
+	type fields Fetch
+	var decoded fields
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		*f = Fetch{}
+		return nil
+	}
+	*f = Fetch(decoded)
+	return nil
+}
+
+// ValidFetch is the authority check for a managed generation. An invalid fetch
+// remains readable as metadata, but never authorizes serving or deletion.
+func ValidFetch(f *Fetch) bool {
+	if f == nil || f.Generation < 1 || !ValidHex(f.SHA256, 64) || f.Bytes <= 0 || f.DurationMS <= 0 {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339, f.FetchedAt); err != nil {
+		return false
+	}
+	if f.DeletedAt != "" {
+		if _, err := time.Parse(time.RFC3339, f.DeletedAt); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // ShowPath is the one rule for a show folder (and an episode's file name):
@@ -97,7 +128,15 @@ func ShowPath(p string) bool {
 }
 func EpisodePath(show, p string) bool {
 	parts := strings.Split(p, "/")
-	return len(parts) == 2 && parts[0] == show && ShowPath(parts[1]) && path.Clean(p) == p && metadata.IsAudio(p)
+	if !ShowPath(show) || len(parts) != 2 || parts[0] != show || !ShowPath(parts[1]) || path.Clean(p) != p {
+		return false
+	}
+	switch strings.ToLower(path.Ext(p)) {
+	case ".mp3", ".m4a", ".m4b", ".mp4", ".ogg", ".opus", ".flac":
+		return true
+	default:
+		return false
+	}
 }
 func capText(s string, n int) string {
 	if len(s) <= n {

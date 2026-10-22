@@ -38,6 +38,13 @@ func (a *API) SetBridge(b *bridge.Service) {
 		a.log.Warn("expire private podcast requests failed", "err", err)
 	}
 	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
+	b.OnEnded = func(ctx context.Context, job bridge.Job) {
+		if bridge.IsPodcast(job.Kind) {
+			if err := a.cat.FoldPodcastJob(ctx, job); err != nil {
+				a.log.Warn("fold podcast outcome failed", "job", job.ID, "err", err)
+			}
+		}
+	}
 	b.ModuleOn = a.moduleOn
 }
 
@@ -467,6 +474,7 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	switch {
 	case err == nil:
 		return true
+	case writeLibraryKindError(w, err):
 	case errors.Is(err, bridge.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, bridge.ErrNotFound):
@@ -567,6 +575,7 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 			a.writeCatalogError(w, err, "rescan podcast failed", "Could not index show.")
 			return
 		}
+		a.bridge.WakePodcasts()
 		writeJSON(w, 200, map[string]any{"path": show, "episodes": n})
 		return
 	}

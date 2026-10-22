@@ -6,6 +6,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -216,13 +217,26 @@ type BookFile struct {
 }
 
 // Catalog provides indexed reads/writes over the store.
+type catalogDB interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	WriteRowContext(context.Context, string, ...any) *sql.Row
+	WithTx(context.Context, string, func(*sql.Tx) error) error
+	Ping(context.Context) error
+}
+
 type Catalog struct {
-	db  *store.DB
+	db  catalogDB
 	now func() time.Time
 	// onChange hears that a book's index row was written (OnBookChange): the
 	// listeners, replaced whole (copy-on-write) by each registration.
-	onChange   atomic.Pointer[[]func()]
-	onChangeMu sync.Mutex
+	onChange          atomic.Pointer[[]func()]
+	onChangeMu        sync.Mutex
+	podcastStreamsMu  sync.Mutex
+	podcastStreams    map[Ref]int
+	podcastScheduleMu sync.Mutex
+	podcastVisit      Ref
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without

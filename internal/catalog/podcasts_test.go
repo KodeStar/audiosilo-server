@@ -227,6 +227,7 @@ func TestPodcastFolding(t *testing.T) {
 		t.Fatal("fold sweep undid unfollow")
 	}
 	job.Kind = bridge.KindPodcastPoll
+	job.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`)
 	show := "Example Show"
 	job.Path = &show
 	for i, code := range []string{"timeout", "timeout", "gone"} {
@@ -298,7 +299,7 @@ func TestPodcastFoldingOddOutcomes(t *testing.T) {
 	}
 	show := "Example Show"
 	long := strings.Repeat("�", 200) // 600 bytes: obs-text the Bridge encoded
-	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show, State: bridge.StateDone,
+	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastPoll, Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`), LibraryID: &lib.ID, Path: &show, State: bridge.StateDone,
 		Result: json.RawMessage(`{"status":200,"etag":"` + long + `","last_modified":"Mon, 20 Oct 2026 07:59:00 GMT","next_poll_seconds":"soon"}`)}
 	if err := c.FoldPodcastJob(ctx, job); err != nil {
 		t.Fatal(err)

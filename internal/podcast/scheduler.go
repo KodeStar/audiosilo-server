@@ -4,6 +4,7 @@ package podcast
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -56,12 +57,14 @@ func SchedulerTick(ctx context.Context, d modules.Deps) error {
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	if h == nil || !h.Offers(bridge.KindPodcastPoll) {
+	if h == nil {
 		return errors.Join(errs...)
 	}
-	refs, err := d.Catalog.DuePodcastPolls(ctx, 10)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
+	var refs []catalog.Ref
+	if h.Offers(bridge.KindPodcastPoll) {
+		if refs, err = d.Catalog.DuePodcastPolls(ctx, 10); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 	}
 	for _, r := range refs {
 		if err := ctx.Err(); err != nil {
@@ -70,6 +73,9 @@ func SchedulerTick(ctx context.Context, d modules.Deps) error {
 		if err := queuePoll(ctx, d, r); err != nil {
 			errs = append(errs, fmt.Errorf("poll library %d show %q: %w", r.LibraryID, r.Path, err))
 		}
+	}
+	if err := scheduleEpisodes(ctx, d, h); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
@@ -86,4 +92,63 @@ func queuePoll(ctx context.Context, d modules.Deps, r catalog.Ref) error {
 		err = d.Catalog.PodcastNotWritable(ctx, r)
 	}
 	return err
+}
+
+func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) error {
+	if !h.Offers(bridge.KindPodcastFetch) && !h.Offers(bridge.KindPodcastRetain) {
+		return nil
+	}
+	shows, err := d.Catalog.PodcastWorkShows(ctx)
+	if err != nil {
+		return err
+	}
+
+	fetches, retains := 0, 0
+	var errs []error
+	for _, show := range shows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if !h.Writable(show.LibraryID) {
+			continue
+		}
+		if h.Offers(bridge.KindPodcastFetch) && fetches < 10 {
+			d.Catalog.PodcastVisited(show.Ref)
+			candidates, err := d.Catalog.PodcastFetchCandidates(ctx, show)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			added := 0
+			for _, ep := range candidates {
+				raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: show.ShowID, EpisodeID: ep.EpisodeID})
+				_, created, err := d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: -10})
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if created {
+					fetches++
+					added++
+				}
+				if fetches == 10 || added == 2 {
+					break
+				}
+			}
+		}
+		if h.Offers(bridge.KindPodcastRetain) && show.Present && show.RetainDue && retains < 10 {
+			raw, _ := json.Marshal(bridge.RetainParams{ShowID: show.ShowID})
+			_, created, err := d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastRetain, LibraryID: &show.LibraryID, Path: &show.Path, Params: raw, Priority: -20})
+			if err != nil {
+				errs = append(errs, err)
+			} else if created {
+				retains++
+			}
+		}
+		if fetches == 10 && retains == 10 {
+			break
+		}
+	}
+	return errors.Join(errs...)
 }

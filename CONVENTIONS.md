@@ -30,6 +30,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
+  The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
+  migration to arrive later. Phase F1 owns 0053 and podcast downloads own 0054; neither depends on the other.
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear.
@@ -1646,7 +1648,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
   sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
   `retry_at`, no re-admit at a restart).
-- **Podcasts (Bridge Phase 2c-1)**: libraries have an immutable `kind` (`books`, the default,
+- **Podcasts (Bridge Phases 2c-1 and 2c-2a)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
   skips that entry, keeping its existing library when present, so startup continues. API creates
@@ -1654,9 +1656,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   from regular, non-symlinked `feed.json` v1 files in top-level non-hidden show folders, capped at
   32 MiB and 20,000 episodes. Unknown fields are ignored; a future version skips the show. Episode
   paths are validated, one level below their show, unique and audio-only; no tags, probes,
-  deduplication, moves or sidecars run, and a metadata source change leaves episodes as feed.json
-  wrote them. Presence is one directory listing; the feed signature skips unchanged shows, while a
-  targeted Bridge rescan refreshes file presence too. A scan prunes only shows indexed before it
+  deduplication or book metadata heuristics run, and a metadata source change leaves episodes as feed.json
+  wrote them. Presence requires a valid committed Fetch generation, matching regular file size, no
+  tombstone and no publication journal. Show and attachment listings extend the feed signature, so
+  audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh. A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing
   episodes remain indexed, with `episode` on `/item`, 404 `not_downloaded` on `/stream`, and empty
   chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
@@ -1690,7 +1693,44 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   another failure. Follows and feed status survive index pruning. The Bridge's
   marker route validates `.audiosilo/library.json` without symlinks (4 KiB, version, id, nonce),
   and podcast rescans accept only shows or indexed episodes. Admins cannot enqueue podcast kinds;
-  default job lists omit polls. Shared fixtures live in `internal/podcast/testdata`.
+  default job lists omit polls. Shared fixtures live in `internal/podcast/testdata` and the byte-identical
+  `phase2c2/` copy (manifest hashes are tested).
+  Migration 0054 binds feed status to `(library_id,show_path,show_id)`: late or unbound outcomes
+  cannot change a replacement show's validators, failures, gone or secret flags. Subscribe repair
+  and poll params capture the expected identity. Fetch outcomes have a separate backoff summary
+  (30 minutes doubling to 24 hours, larger Retry-After capped at 24 hours); cancellation and
+  identity replacement do not count as failures. Fold before pruning terminal fetch/retain history.
+  Policies are durable `(library_id,show_path,show_id)` preferences, reset for a replacement,
+  included in DB backups, moved with collision handling and cascaded on library deletion. Default
+  `{mode:"keep",keep:3,days:7}` applies to old and new shows. Admin-only retention GET/PUT/DELETE
+  and explicit fetch use `/admin/libraries/{id}/podcasts/retention|fetch`; writes require the module,
+  an online Bridge offering the exact kind and a checked writable mapping. Policy controls are API-only.
+  Internal quiet `podcast.fetch` and `podcast.retain` jobs carry IDs, never URLs, credentials or
+  listener facts. The scheduler wakes on follows, policies, rescans and job endings, and considers
+  unchanged feeds too: at most ten new fetches per pass and two per show, rotated across shows;
+  ten retain jobs per pass, no more than hourly per show. Keep fetches newest listed N, Archive
+  oldest listed first, On demand no feed-wide downloads. No current accessible followers means
+  no automatic disk work. The absent-file stream remains 404 `not_downloaded` in 2c-2a.
+  Bridge-token-only retention lookup and strict POST `retention/check` return a no-store aggregate
+  from one DB snapshot plus current stream marks. Only enabled, non-demo, matching-ID followers
+  with current episode access count, including private follow proof and household grants with
+  podcasts explicitly enabled internally. Missing progress or invalid finish timestamps deny
+  deletion. Exact favourites protect even after access revocation; a show-folder heart does not.
+  Queues, open fetches and live direct/download/transcode requests also protect. Grace starts at
+  max(last follower finish, last fetch), plus policy days. Keep deletes only outside its window;
+  Archive never deletes. Keep N is a soft download window: unfinished, starred or queued episodes
+  can exceed it indefinitely, including when one follower never listens.
+  CHAP attachments are `<show>/.audiosilo/<stem>.chapters.json`, validated by ParseChapterList,
+  `from=id3_chap`, and the committed single basename/size/duration/fetch timestamp. Times are used
+  directly, without generated-book chapter heuristics or alignment. Valid lists expose
+  `chapters_source:id3_chap`, never `generated`; no usable CHAP yields one whole-file chapter.
+  Missing audio clears files and chapters while retaining the indexed episode and user state.
+  Media marks streams before opening, checks current feed identity, stats, journal absence and
+  os.SameFile, then keeps that descriptor for the entire direct/download/transcode response.
+  Direct bytes use `"podcast-g<generation>-<sha256>"` and private revalidation; transformed bytes
+  use an owned descriptor input and no source strong ETag. Ready media remains core while offline
+  or module-off. The console uses episode plurals, hides book settings for podcasts, omits those
+  keys on podcast saves, and localizes root_overlaps at the folder field in all six locales.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,

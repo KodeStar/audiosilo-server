@@ -102,6 +102,7 @@ const (
 	bookOptional                 // a book, or the library itself
 	bookRequired                 // always a book
 	bookShow
+	bookEpisode
 )
 
 // kindSpec is what the server knows about a job kind: whether a job of it is
@@ -157,6 +158,8 @@ func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsByte
 // (ErrContributeOpen: it would replace what is being filed) and cancels a parked
 // one, or a queued one held while the contributions module is off.
 var kinds = map[string]kindSpec{
+	KindPodcastFetch:     {needsLibrary: true, book: bookEpisode, writes: true, params: fetchParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
+	KindPodcastRetain:    {needsLibrary: true, book: bookShow, writes: true, params: retainParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
@@ -559,6 +562,9 @@ func checkNew(j *NewJob) error {
 	if spec.book == bookShow && !validShowPath(j.Path) {
 		return invalid("path must name one show")
 	}
+	if spec.book == bookEpisode && (j.Path == nil || !validEpisodePath(*j.Path)) {
+		return invalid("path must name an episode")
+	}
 	if j.Path == nil && spec.book == bookRequired {
 		return invalid("path is required")
 	}
@@ -611,6 +617,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		key += suffix(j)
 	}
 	var exp expiry
+	identityBusy := false
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
 		var err error
@@ -625,6 +632,26 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		}
 		if err == nil {
 			job, err = getJob(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
+				return nil
+			}
+			// Only a request naming the current identity may cancel the open
+			// work: a stale one must never cancel the current show's job.
+			if err := checkPodcastTarget(ctx, tx, j); err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, now, id)
+			if err != nil {
+				return err
+			}
+			if job.State != StateQueued && job.State != StateNeedsAttention {
+				identityBusy = true
+				return nil
+			}
+		} else if err := checkPodcastTarget(ctx, tx, j); err != nil {
 			return err
 		}
 		if refuse != nil {
@@ -639,7 +666,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return ErrTooManyRequests
 			}
 		}
-		if j.Kind == KindPodcastPoll {
+		if podcastWork(j.Kind) {
 			if err := s.prunePolls(ctx, tx, j); err != nil {
 				return err
 			}
@@ -679,6 +706,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if identityBusy {
+		s.wake.fire()
+		s.settle(ctx, exp) // the expiry committed with the cancel intent
+		return nil, false, ErrIdentityChanged
 	}
 	if created {
 		s.wake.fire()
