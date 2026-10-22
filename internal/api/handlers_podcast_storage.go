@@ -133,6 +133,9 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
+			if r.Context().Err() != nil {
+				return // the client left during the checks: no one to answer
+			}
 			a.writePodcastStorageError(w, openErr)
 			return
 		}
