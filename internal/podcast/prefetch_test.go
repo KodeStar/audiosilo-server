@@ -3,6 +3,7 @@ package podcast
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path"
 	"testing"
 	"time"
@@ -29,6 +30,79 @@ func TestNextPodcastScopedQueue(t *testing.T) {
 		t.Fatal("wrapped queue")
 	}
 }
+
+func TestPrefetchSkipsFetchLimitAndRetriesAfterSlotFreed(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	jobs := bridge.New(db, time.Now)
+	if _, err := db.ExecContext(ctx, `INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES(1,'admin','','admin','t','t'),(2,'listener','','user','t','t'); INSERT INTO tokens(id,user_id,token_hash,kind,created_at) VALUES(1,1,'bridgehash','bridge','t'); INSERT INTO bridge_status(id,paired_at,paired_by) VALUES(1,'t',1)`); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = jobs.SaveHeartbeat(ctx, 1, bridge.Status{Kinds: []string{bridge.KindPodcastFetch}, Libraries: []bridge.LibraryStatus{{LibraryID: lib.ID, Mapped: true, Writable: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := feed.ReadFile("testdata/phase2c2/feed-fetch-v1.json", "Fixture Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := f.Episodes[0]
+	f.Episodes = nil
+	for i := range 6 {
+		ep := template
+		ep.ID, ep.Path, ep.Fetch = fmt.Sprintf("%016x", i+1), fmt.Sprintf("Fixture Show/limit-%d.mp3", i), nil
+		f.Episodes = append(f.Episodes, ep)
+	}
+	if _, err = cat.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	var first int64
+	for i := range 5 {
+		ep := f.Episodes[i]
+		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: f.ShowID, EpisodeID: ep.ID})
+		j, _, err := jobs.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &lib.ID, Path: &ep.Path, Params: raw, Priority: 100, RequestedBy: 2}, bridge.FetchOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = j.ID
+		}
+	}
+	if err = cat.GrantWholeLibrary(ctx, 2, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	who := catalog.Caller{ID: 2, Podcasts: true}
+	scopes, err := cat.CallerScopes(ctx, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[0].Path}
+	next := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[5].Path}
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, next}, scopes); err != nil {
+		t.Fatal(err)
+	}
+	p := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
+	done := p.Start(who, current, true)
+	defer done()
+	p.work.Wait()
+	var n int
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, next.Path).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("prefetch exceeded cap: %d, %v", n, err)
+	}
+	if _, err = jobs.Cancel(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	p.Reconsider(who)
+	p.work.Wait()
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=? AND priority=10 AND requested_by=2`, next.Path).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("free slot not prefetched: %d, %v", n, err)
+	}
+}
+
 func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	ctx := context.Background()
 	db := storetest.Open(t)

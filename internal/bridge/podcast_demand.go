@@ -15,6 +15,7 @@ var (
 	ErrFetchCooldown  = errors.New("podcast fetch is cooling down")
 	ErrFetchModuleOff = errors.New("podcasts module is off")
 	ErrFetchDemo      = errors.New("demo cannot start a podcast fetch")
+	ErrFetchLimit     = errors.New("too many open podcast fetches")
 )
 
 // FetchOptions belongs to the server's trusted trigger, never a request body.
@@ -83,6 +84,29 @@ func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (boo
 	return !folded && (parseErr != nil || now.Before(t.Add(30*time.Minute))), nil
 }
 
+// checkFetchLimit shares the insertion's writer transaction, after open-intent
+// dedupe. The creator owns the quota even when another listener promotes it.
+func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
+	if by == 0 { // Scheduled work has no requester.
+		return nil
+	}
+	var admin bool
+	if err := tx.QueryRowContext(ctx, `SELECT role='admin' FROM users WHERE id=?`, by).Scan(&admin); err != nil {
+		return err
+	}
+	if admin {
+		return nil
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch' AND requested_by=? AND state IN `+OpenStatesSQL, by).Scan(&n); err != nil {
+		return err
+	}
+	if n >= 5 {
+		return ErrFetchLimit
+	}
+	return nil
+}
+
 // FetchStatus is the public summary, deliberately excluding job internals.
 // Every key is present, including null values.
 type FetchStatus struct {
@@ -123,6 +147,7 @@ var fetchMessages = map[string]string{
 	"bridge_unavailable":   "No online Bridge can fetch this episode.",
 	"library_not_writable": "The Bridge cannot write to this library.",
 	"demo_account":         "Demo accounts cannot fetch episodes.",
+	"fetch_limit":          "Too many episodes are being fetched. Try again shortly.",
 	"blocked_address":      "The episode address is blocked.",
 	"fetch_failed":         "The episode could not be fetched.",
 	"bridge_lost":          "The Bridge stopped reporting.",
@@ -162,6 +187,8 @@ func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
 		code = "library_not_writable"
 	case errors.Is(refusal, ErrFetchDemo):
 		code = "demo_account"
+	case errors.Is(refusal, ErrFetchLimit):
+		code = "fetch_limit"
 	}
 	st.State = "unavailable"
 	st.RetryAfterSeconds = 2

@@ -56,12 +56,21 @@ func isBackupDownload(p string) bool {
 	return ok && name != "" && !strings.Contains(name, "/")
 }
 
-// timeout wraps non-streaming handlers in http.TimeoutHandler, which cancels the
-// request context at the deadline and emits a 503. Streaming routes pass through
-// unbounded (see isStreamingPath).
+// timeout wraps ordinary handlers in http.TimeoutHandler, which cancels the
+// request context at the deadline and emits a 503. Claims retain the context
+// deadline without buffering; streaming routes pass through unbounded.
 func (a *API) timeout(next http.Handler) http.Handler {
 	timed := http.TimeoutHandler(next, a.timeoutDur, `{"error":"request timed out"}`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/bridge/jobs/next" {
+			// Claims must observe response write failures before returning, so
+			// they can release an undelivered lease. TimeoutHandler buffers the
+			// response until after the handler's cleanup has finished.
+			ctx, cancel := context.WithTimeout(r.Context(), a.timeoutDur)
+			defer cancel()
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		// Only reads stream: an upload to a streaming-shaped path (an admin's PUT
 		// .../cover) stays bounded, or a slow client could hold it open forever.
 		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && isStreamingPath(r.URL.Path) {

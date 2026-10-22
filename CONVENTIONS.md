@@ -1493,6 +1493,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.
+  Claim responses retain the request deadline but bypass response buffering and flush before return.
+  A cancelled request or failed 200 write returns its untouched lease to queued and restores the
+  attempt in one transaction, then wakes claims. Cleanup matches the claimed state, attempt and
+  lease timestamps; any Bridge report changes the state or renews the lease, even an empty
+  acknowledgement within the same second, so received work is preserved. A pending admin cancel
+  becomes cancelled instead of queued.
   Leases are expired (`expireSQL`: requeued with the dead attempt's progress, result and error dropped,
   failed on the last of `MaxAttempts` (3), or cancelled when a cancel was asked; those two keep what was
   reported) inside every `bridge.Service` transaction that reads or changes job states (`expireTx`:
@@ -1716,6 +1722,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cooldown and authorizes new work against the current online heartbeat/mapping. Priorities are
   100/20/10/-10 respectively; explicit Retry/admin bypass cooldown, while ordinary stream retries
   expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping.
+  Each non-admin, including kids, may create at most five open fetch intents across libraries.
+  The same writer transaction checks the creator's count before insertion; promotion preserves
+  ownership and existing open work still wins at the cap. Admins and requester-free scheduled
+  work are exempt. Refusal is an unavailable fetch status with retry_after_seconds 2 and safe
+  error code `fetch_limit` ("Too many episodes are being fetched. Try again shortly."). Streams
+  keep 503 `podcast_fetch_unavailable`; player fetch POST uses its existing error envelope with
+  409 `fetch_limit`. Prefetch silently skips capped new work.
   Absent streams wait within one two-second absolute budget, including DB work, with bounded
   per-path broadcast registrations and a final descriptor recheck. Disconnection releases the waiter
   without cancelling the job. Pending media answers 503 with `podcast_fetching`,

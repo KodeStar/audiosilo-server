@@ -145,6 +145,14 @@ scripts/build-admin.sh  build the admin console locally (npm ci + check + build)
 scripts/build-web.sh  dev helper: build the frontend export locally for AUDIOSILO_WEB_DIR
 ```
 
+Bridge claim replies bypass response buffering while keeping the request deadline.
+Cancelled or failed replies release an untouched claim and restore its attempt
+transactionally; matching the attempt and lease preserves jobs already reported on.
+On-demand podcast fetches share a transactional five-open-intent cap per non-admin
+creator (kids included), after dedupe. Admins and the scheduler are exempt; prefetch
+silently skips new work at the cap. Streams return 503 with an unavailable fetch
+status and `fetch_limit`; player fetch POST returns 409 in its existing error envelope.
+
 Dependency direction: `api` → (`auth`, `catalog`, `library`, `media`, `config`);
 `library` → (`catalog`, `metadata`, `config`); everything DB-backed → `store`; `catalog` and `auth`
 share `relpath` (the segment-boundary path rule of share scopes and cast tokens), so `auth` never

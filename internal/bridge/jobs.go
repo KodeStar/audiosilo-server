@@ -699,6 +699,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return ErrFetchCooldown
 			}
 		}
+		if j.fetch != nil {
+			if err := checkFetchLimit(ctx, tx, j.RequestedBy); err != nil {
+				return err
+			}
+		}
 		if j.Kind == KindPodcastSubscribe {
 			var n int
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind='podcast.subscribe' AND requested_by=? AND state IN `+OpenStatesSQL, j.RequestedBy).Scan(&n); err != nil {
@@ -1061,6 +1066,36 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 	return job, err
 }
 
+// ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
+// The state, attempt and lease identify the untouched claim: any Bridge report
+// either changes its state or renews its lease, and makes this a no-op.
+// Cleanup must use a context independent of the disconnected claim request.
+func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
+	var job *Job
+	err := s.db.WithTx(ctx, "bridge.ReleaseUnsentClaim", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
+		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'queued' END,
+		 attempts=attempts-1,lease_until=NULL,claimed_at=NULL,updated_at=?,
+		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END
+		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
+			s.ts(), s.ts(), claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		job, err = getJob(ctx, tx, claim.ID)
+		return err
+	})
+	if err == nil && job != nil {
+		s.wake.fire()
+		s.report(ctx, job, StateClaimed, "")
+	}
+	return err
+}
+
 // nextQueued is the id of the next queued job of one of kinds (highest
 // priority, then oldest), 0 for none, passing over a held one: a job that needs
 // a managed module that is off (held) waits, queued, until the module is on
@@ -1222,7 +1257,16 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
-			lease = at(s.now().Add(Lease))
+			until := s.now().Add(Lease)
+			// Even a fieldless acknowledgement in the claim's second must
+			// distinguish its renewed lease from an undelivered response.
+			if state == StateClaimed && cur.LeaseUntil != nil {
+				previous, err := time.Parse(time.RFC3339, *cur.LeaseUntil)
+				if err == nil && !until.Truncate(time.Second).After(previous) {
+					until = previous.Add(time.Second)
+				}
+			}
+			lease = at(until)
 		case StateDone, StateFailed, StateCancelled:
 			finished = now
 		}

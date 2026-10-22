@@ -353,7 +353,7 @@ func TestClaimMinimumPriorityStillChecksModuleAndToken(t *testing.T) {
 }
 
 func TestPodcastFetchErrorsKeepSafeCodes(t *testing.T) {
-	for _, code := range []string{"dns", "network", "timeout", "tls", "invalid_feed_url", "feed_secret_missing", "write_failed", "identity_changed", "http_429", "http_503"} {
+	for _, code := range []string{"dns", "network", "timeout", "tls", "invalid_feed_url", "feed_secret_missing", "write_failed", "identity_changed", "http_429", "http_503", "fetch_limit"} {
 		if err := FetchErrorFor(code); err.Code != code || err.Message == "" {
 			t.Fatalf("lost safe error %+v", err)
 		}

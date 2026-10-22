@@ -435,7 +435,31 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	case job == nil:
 		w.WriteHeader(http.StatusNoContent)
 	default:
-		writeJSON(w, http.StatusOK, job)
+		// Claim cleanup outlives a disconnected request, but is bounded so a
+		// database fault cannot hold this handler indefinitely.
+		var writeErr error
+		defer func() {
+			if ctx.Err() == nil && writeErr == nil {
+				return
+			}
+			cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer stop()
+			if err := a.bridge.ReleaseUnsentClaim(cleanup, job); err != nil {
+				a.log.Warn("bridge claim release failed", "job_id", job.ID, "err", err)
+			}
+		}()
+		if ctx.Err() != nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		writeErr = json.NewEncoder(w).Encode(job)
+		if writeErr == nil {
+			if err := http.NewResponseController(w).Flush(); !errors.Is(err, http.ErrNotSupported) {
+				writeErr = err
+			}
+		}
 	}
 }
 

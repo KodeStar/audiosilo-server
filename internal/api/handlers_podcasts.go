@@ -300,6 +300,8 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
 		writeErrorCode(w, 429, "too_many_requests", "At most five follow requests may be open.")
+	case errors.Is(err, bridge.ErrFetchLimit):
+		writeErrorCode(w, 409, "fetch_limit", bridge.FetchErrorFor("fetch_limit").Message)
 	case errors.Is(err, bridge.ErrLibraryNotWritable):
 		writeErrorCode(w, 409, "library_not_writable", "The Bridge cannot write to this library.")
 	case errors.Is(err, bridge.ErrKindUnavailable):
