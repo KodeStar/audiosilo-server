@@ -80,7 +80,9 @@ var (
 )
 
 // Follow follows r.FeedURL in r.LibraryID as r.Caller. The library is the
-// caller's to have resolved as a podcast library.
+// caller's to have resolved as a podcast library. A refusal once the URL was
+// read still returns an outcome carrying only the request's effective privacy
+// (a matched private show's included), for an import row to report.
 func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, error) {
 	if f.ModuleOn != nil && !f.ModuleOn() {
 		return nil, ErrModuleOff
@@ -99,7 +101,7 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 	out := &FollowOutcome{Private: r.Private || feed.IsPrivateFeedURL(norm)}
 	show, err := f.Catalog.PodcastShowByHash(ctx, r.LibraryID, feed.FeedURLHash(norm), r.Caller.ID)
 	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
-		return nil, err
+		return out, err
 	}
 	showPath := ""
 	if show != nil {
@@ -107,38 +109,38 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 		out.Private = out.Private || show.Private
 		state, err := f.Catalog.PodcastState(ctx, r.LibraryID, show.Path)
 		if err != nil {
-			return nil, err
+			return out, err
 		}
 		if !state.SecretMissing {
-			out.State = StateFollowing
+			following := StateFollowing
 			if show.Following {
-				out.State = StateAlreadyFollowing
+				following = StateAlreadyFollowing
 			}
 			if err := f.Catalog.FollowPodcast(ctx, r.Caller.ID, r.LibraryID, show.Path, show.ShowID); err != nil {
-				return nil, err
+				return out, err
 			}
 			if f.Queue != nil {
 				f.Queue.WakePodcasts()
 			}
 			show.Following = true
-			out.Show = show
+			out.State, out.Show = following, show
 			return out, nil
 		}
 		showPath = show.Path
 	}
 	if f.Queue == nil {
-		return nil, ErrBridgeUnavailable
+		return out, ErrBridgeUnavailable
 	}
 	h, err := f.Queue.Online(ctx)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	if h == nil || !h.Offers(bridge.KindPodcastSubscribe) {
-		return nil, ErrBridgeUnavailable
+		return out, ErrBridgeUnavailable
 	}
 	j, created, err := f.Queue.Subscribe(ctx, bridge.SubscribeRequest{LibraryID: r.LibraryID, User: r.Caller.ID, FeedURL: norm, Private: out.Private, ShowPath: showPath, AdoptOnly: r.AdoptOnly})
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	out.State, out.Job, out.Created = StateSubscribing, j, created
 	return out, nil

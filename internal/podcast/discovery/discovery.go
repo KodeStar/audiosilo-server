@@ -331,7 +331,8 @@ func (s *Service) leaveLocked(m map[string]*flight, key string, f *flight) {
 func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
 	now := s.opts.Now()
 	if until, ok := s.cooldown[q.Provider]; ok && now.Before(until) {
-		return nil, errProviderRateLimited.withRetry(int(max(1, until.Sub(now).Round(time.Second)/time.Second)))
+		// Whole seconds rounded up: a retry at Retry-After is never still cooling.
+		return nil, errProviderRateLimited.withRetry(int(max(1, (until.Sub(now)+time.Second-1)/time.Second)))
 	}
 	if !s.fetchSlots.TryAcquire() {
 		return nil, errBusy
@@ -359,6 +360,9 @@ func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
 		case e == nil:
 			s.results.put(key, res, res.size())
 			s.registerLocked(res)
+		case e.Code == errProviderRateLimited.Code:
+			// An upstream 429 is the provider's cooldown's to answer (with the
+			// seconds actually left), not a frozen Retry-After for 15 s.
 		case ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded):
 			// A provider failure, not every waiter leaving: answer it again
 			// for a while without asking the provider.

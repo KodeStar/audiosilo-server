@@ -138,6 +138,8 @@ func TestParseRules(t *testing.T) {
 		{"two heads", `<opml version="2.0"><head/><head/><body/></opml>`, ErrInvalid, nil},
 		{"second root", wrap("") + `<opml version="2.0"><body/></opml>`, ErrInvalid, nil},
 		{"text after root", wrap("") + "x", ErrInvalid, nil},
+		{"non-XML space after root", wrap("") + " ", ErrInvalid, nil},
+		{"XML space after root", wrap("") + " \t\r\n", nil, nil},
 		{"unclosed", `<opml version="2.0"><body>`, ErrInvalid, nil},
 		{"empty", ``, ErrInvalid, nil},
 		{"structure error after a valid outline", wrap(`<outline xmlUrl="https://a.example/f"/></outline>`), ErrInvalid, nil},

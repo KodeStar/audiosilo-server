@@ -11,9 +11,6 @@ import (
 // every directory request to (http://127.0.0.1:<port>, nothing else).
 const TestOriginEnv = "AUDIOSILO_TEST_PODCAST_DISCOVERY_ORIGIN"
 
-// TestOriginBuild reports whether this binary honours TestOriginEnv.
-func TestOriginBuild() bool { return testOriginBuild }
-
 // The fixed origins an ordinary build asks.
 const (
 	itunesSearchURL = "https://itunes.apple.com/search"

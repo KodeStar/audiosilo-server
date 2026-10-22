@@ -11,7 +11,7 @@ import (
 // A podcastdiscoverytest build sends every directory request to the origin
 // variable's address, and only that address gets the loopback exception.
 func TestTaggedOriginHonoured(t *testing.T) {
-	if !TestOriginBuild() {
+	if !testOriginBuild {
 		t.Fatal("the tag is set")
 	}
 	f := newFake(t)

@@ -427,6 +427,22 @@ func TestFollow(t *testing.T) {
 			t.Fatalf("request %+v", r)
 		}
 	})
+	t.Run("refused repair keeps the show's privacy", func(t *testing.T) {
+		f, cat, q := fixtureFollower(t)
+		q.offline = true
+		cat.shows[0].secretMissing = true
+		cat.shows[0].show.Private = true
+		out, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: 7, FeedURL: "https://feeds.example.org/one.xml"})
+		if !errors.Is(err, ErrBridgeUnavailable) || out == nil || !out.Private || out.State != "" {
+			t.Fatalf("%+v %v", out, err)
+		}
+		// The import's row reports the matched show as private too.
+		doc := &opml.Document{Version: "2.0", Outlines: 1, Candidates: []opml.Candidate{{Index: 1, URL: "https://feeds.example.org/one.xml"}}}
+		res := f.Import(ctx, caller, 7, doc)
+		if len(res.Rows) != 1 || res.Rows[0].Status != RowUnavailable || !res.Rows[0].Private {
+			t.Fatalf("row %+v", res.Rows)
+		}
+	})
 	t.Run("member feed", func(t *testing.T) {
 		f, _, q := fixtureFollower(t)
 		if _, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: 7, FeedURL: "https://example.com/members.xml", Private: true}); err != nil {

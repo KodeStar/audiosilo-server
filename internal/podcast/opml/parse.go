@@ -68,7 +68,9 @@ func Parse(data []byte) (*Document, error) {
 			return nil, ErrInvalid
 		case xml.Comment:
 		case xml.CharData:
-			if len(stack) == 0 && len(bytes.TrimSpace(t)) > 0 {
+			// Outside the root only XML's own whitespace (no NBSP or other
+			// Unicode space, which bytes.TrimSpace would pass).
+			if len(stack) == 0 && len(bytes.Trim(t, " \t\r\n")) > 0 {
 				return nil, ErrInvalid
 			}
 		case xml.EndElement:

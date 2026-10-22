@@ -393,7 +393,12 @@ func TestOPMLImportRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.GrantWholeLibrary(ctx, uid, books.ID)
+	// Without a grant its kind stays hidden: 403, not 409.
+	resp, body = opmlPost(t, b, b.userTok, books.ID, valid, "text/xml", nil)
+	wantErr(t, resp, body, 403, "no_library_access")
+	if err := b.cat.GrantWholeLibrary(ctx, uid, books.ID); err != nil {
+		t.Fatal(err)
+	}
 	resp, body = opmlPost(t, b, b.userTok, books.ID, valid, "text/xml", nil)
 	wantErr(t, resp, body, 409, "not_podcast_library")
 	// A narrow grant, a demo, a kid and an old client are refused.

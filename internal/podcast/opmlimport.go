@@ -131,6 +131,10 @@ func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64,
 		first[norm] = c.Index
 		res, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: lib, FeedURL: norm, AdoptOnly: created >= ImportNewRequests})
 		if err != nil {
+			if res != nil {
+				// A matched private show's privacy, on a refused row too.
+				row.Private = res.Private
+			}
 			e, status := FollowError(err)
 			if status == "" {
 				status = RowFailed

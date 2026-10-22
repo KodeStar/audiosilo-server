@@ -447,6 +447,12 @@ func TestCooldown(t *testing.T) {
 	if _, e := s.Search(context.Background(), "2", query(t, "q=two")); e == nil || e.Code != "provider_rate_limited" || e.RetryAfter != 20 {
 		t.Fatalf("cooling = %+v", e)
 	}
+	// The same key answers the seconds actually left too (no frozen 30 from
+	// a cached failure), rounded up: 19.3 s left is 20.
+	c.Add(700 * time.Millisecond)
+	if _, e := s.Search(context.Background(), "2", query(t, "q=one")); e == nil || e.Code != "provider_rate_limited" || e.RetryAfter != 20 {
+		t.Fatalf("same key cooling = %+v", e)
+	}
 	if f.count("/itunes/search") != 1 {
 		t.Fatal("asked while cooling")
 	}
@@ -950,7 +956,7 @@ func TestURLRules(t *testing.T) {
 // one (this test) always asks the fixed origins and its guard admits no
 // loopback address.
 func TestTestOriginSeam(t *testing.T) {
-	if TestOriginBuild() {
+	if testOriginBuild {
 		t.Skip("tagged build: see origin_tagged_test.go")
 	}
 	t.Setenv(TestOriginEnv, "http://127.0.0.1:9123")

@@ -255,17 +255,16 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	}
 	who := callerOf(r.Context())
 	lib, err := a.cat.GetLibrary(r.Context(), id)
-	switch {
-	case errors.Is(err, catalog.ErrNotFound):
+	if errors.Is(err, catalog.ErrNotFound) {
 		writeNoStoreError(w, http.StatusNotFound, "library_not_found", "Library not found.", 0)
 		return
-	case err != nil:
+	}
+	if err != nil {
 		a.writeCatalogError(w, err, "opml import library failed", "Could not import.")
 		return
-	case lib.Kind != catalog.KindPodcasts:
-		writeNoStoreError(w, http.StatusConflict, "not_podcast_library", "This library holds books.", 0)
-		return
 	}
+	// The grant before the kind: a library the caller holds no whole grant on
+	// is 403 whatever it holds, so its kind is never revealed.
 	whole, err := a.cat.PodcastWholeGrant(r.Context(), who, id)
 	if err != nil {
 		a.writeCatalogError(w, err, "opml import grant failed", "Could not import.")
@@ -275,6 +274,10 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 		writeNoStoreError(w, http.StatusForbidden, "no_library_access", "Importing needs access to the whole library.", 0)
 		return
 	}
+	if lib.Kind != catalog.KindPodcasts {
+		writeNoStoreError(w, http.StatusConflict, "not_podcast_library", "This library holds books.", 0)
+		return
+	}
 	if !opmlUploadType(r) {
 		writeNoStoreError(w, http.StatusUnsupportedMediaType, "unsupported_opml_type", "Send the OPML document itself as XML (UTF-8, uncompressed).", 0)
 		return
@@ -282,13 +285,16 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	if !a.opmlAdmit(w, a.opml.imports.Take(quotaKey(r))) {
 		return
 	}
-	if !a.opml.slots.TryAcquire() {
-		writeNoStoreError(w, http.StatusServiceUnavailable, "opml_busy", "OPML transfers are busy. Try again shortly.", 1)
-		return
-	}
-	defer a.opml.slots.Release()
+	// The body (<= 1 MiB, the person's budget spent) is read before a slot is
+	// taken, so a slow upload can't hold one of the two server-wide slots for
+	// the whole read timeout.
 	body, err := opml.ReadBody(r.Body)
 	if err == nil {
+		if !a.opml.slots.TryAcquire() {
+			writeNoStoreError(w, http.StatusServiceUnavailable, "opml_busy", "OPML transfers are busy. Try again shortly.", 1)
+			return
+		}
+		defer a.opml.slots.Release()
 		var doc *opml.Document
 		if doc, err = opml.Parse(body); err == nil {
 			writeNoStore(w, http.StatusOK, a.follower().Import(r.Context(), who, id, doc))
