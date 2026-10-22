@@ -26,6 +26,13 @@ export interface ServerInfo {
      */
     contributions?: boolean;
     podcasts?: boolean;
+    /**
+     * Podcast directory search (/podcasts/discovery/*): discovery enabled at
+     * start AND the podcasts module on; absent before Bridge Phase 2c-3.
+     */
+    podcast_discovery?: boolean;
+    /** OPML subscription import/export; absent before Bridge Phase 2c-3. */
+    podcast_opml?: boolean;
   };
   /**
    * The online Bridge's version and features, only while capabilities.bridge

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 )
 
@@ -134,7 +135,14 @@ func (a *API) StopModules() { a.moduleRuns.Stop() }
 
 // syncModules brings each module's background work in line with the live
 // config (modules.Runner.Sync: it never waits for a stopping module).
-func (a *API) syncModules() { a.moduleRuns.Sync(a.moduleOn) }
+func (a *API) syncModules() {
+	a.moduleRuns.Sync(a.moduleOn)
+	if a.discovery != nil && !a.moduleOn(bridge.ModulePodcasts) {
+		// Podcasts off: end discovery's fetches and forget its results and
+		// artwork, so turning it back on starts empty.
+		a.discovery.Reset()
+	}
+}
 
 // adminModule is one module in GET /admin/modules.
 type adminModule struct {
