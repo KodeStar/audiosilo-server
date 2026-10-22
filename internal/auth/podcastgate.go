@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
-// PodcastPlayerMinVersion stays empty until a released player supports podcasts.
-var PodcastPlayerMinVersion = ""
+// PodcastPlayerMinVersion is the first player with podcast views (Bridge Phase
+// 2d-1); raise it only if a later player must be required. An empty value hides
+// podcasts from every released player.
+var PodcastPlayerMinVersion = "2.2.0"
 
 // SeesPodcasts uses the authenticated request's client, including a media token's
 // stored client when no valid header was sent. An admin role grants no exception.

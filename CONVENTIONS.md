@@ -1674,8 +1674,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
   chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
-  `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players remain hidden
-  while `PodcastPlayerMinVersion` is empty. Stored clients cover headerless media requests.
+  `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
+  `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
+  counts as its base version), so 2.1.x and older stay hidden. Stored clients cover headerless media requests.
   The catalog applies this gate before admin shortcuts, on single and multiple library scopes
   and library lists. The console's views of another person (user detail, a progress edit) take
   that person's access under the viewing request's gate. Background callers and cast tokens keep

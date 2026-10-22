@@ -84,6 +84,10 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 	}{
 		{"dev", "AudioSilo/dev (web)", auth.KindSession, false, true},
 		{"console", "AudioSilo Admin (web)", auth.KindSession, true, true},
+		{"released", "AudioSilo/2.2.0 (ios)", auth.KindSession, false, true},
+		{"released admin", "AudioSilo/2.2.0 (web)", auth.KindSession, true, true},
+		{"newer", "AudioSilo/2.3.0 (android)", auth.KindSession, false, true},
+		{"just below", "AudioSilo/2.1.9 (ios)", auth.KindSession, false, false},
 		{"old", "AudioSilo/2.1.0 (web)", auth.KindSession, false, false},
 		{"old admin", "AudioSilo/2.1.0 (web)", auth.KindSession, true, false},
 		{"missing", "", auth.KindSession, false, false},
@@ -154,6 +158,41 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestPodcastGateStoredReleasedClient: a released player's header, sent once,
+// is stored on its token, so a later headerless media request (an <audio> tag's
+// ?token= stream) passes the gate; an older player's stored client is refused.
+func TestPodcastGateStoredReleasedClient(t *testing.T) {
+	b, uid, f := podcastEnv(t, false)
+	ctx := context.Background()
+	episode := f.Episodes[0].Path
+	for _, tc := range []struct {
+		header string
+		want   int
+	}{
+		{"AudioSilo/2.2.0 (web)", 503},
+		{"AudioSilo/2.1.0 (web)", 403},
+	} {
+		t.Run(tc.header, func(t *testing.T) {
+			tok, err := b.auth.IssueToken(ctx, uid, auth.KindSession, "stored "+tc.header, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, body := b.doHeaders(t, "GET", "/api/v1/libraries", tok, "", map[string]string{auth.ClientHeader: tc.header})
+			if resp.StatusCode != 200 {
+				t.Fatal(body)
+			}
+			resp, body = b.do(t, "GET", podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(episode)+"&token="+url.QueryEscape(tok)), "", "")
+			if resp.StatusCode != tc.want {
+				t.Fatalf("headerless stream %d %s", resp.StatusCode, body)
+			}
+			if tc.want == 503 && !strings.Contains(body, "podcast_fetch_unavailable") {
+				t.Fatalf("gate passed but wrong refusal: %s", body)
+			}
+		})
+	}
+}
+
 func TestPodcastPrivateShowScopes(t *testing.T) {
 	b, uid, f := podcastEnv(t, true)
 	ctx := context.Background()
