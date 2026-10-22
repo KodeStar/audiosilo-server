@@ -18,6 +18,17 @@ var (
 	ErrFetchLimit     = errors.New("too many open podcast fetches")
 )
 
+// IsFetchRefusal reports whether err is a known scheduling refusal, which a
+// trigger answers with a fetch status rather than a fault.
+func IsFetchRefusal(err error) bool {
+	for _, refusal := range []error{ErrFetchCooldown, ErrKindUnavailable, ErrLibraryNotWritable, ErrFetchModuleOff, ErrFetchDemo, ErrFetchLimit} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
 // FetchOptions belongs to the server's trusted trigger, never a request body.
 type FetchOptions struct {
 	Retry bool
@@ -97,14 +108,7 @@ func checkFetchLimit(ctx context.Context, tx *sql.Tx, by int64) error {
 	if admin {
 		return nil
 	}
-	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch' AND requested_by=? AND state IN `+OpenStatesSQL, by).Scan(&n); err != nil {
-		return err
-	}
-	if n >= 5 {
-		return ErrFetchLimit
-	}
-	return nil
+	return checkOpenRequests(ctx, tx, KindPodcastFetch, by, ErrFetchLimit)
 }
 
 // FetchStatus is the public summary, deliberately excluding job internals.

@@ -27,13 +27,13 @@ func fetchLimitJobs(t *testing.T, q *testQueue, n int) []NewJob {
 	return jobs
 }
 
-func fetchLimitListener(t *testing.T, q *testQueue, kid bool) int64 {
+func fetchLimitListener(t *testing.T, q *testQueue, name string, kid bool) int64 {
 	t.Helper()
 	var member any
 	if kid {
 		member = "kid"
 	}
-	r, err := q.db.ExecContext(context.Background(), `INSERT INTO users(username,password_hash,role,member_kind,created_at,updated_at) VALUES('listener','','user',?,'t','t')`, member)
+	r, err := q.db.ExecContext(context.Background(), `INSERT INTO users(username,password_hash,role,member_kind,created_at,updated_at) VALUES(?,'','user',?,'t','t')`, name, member)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {
 		t.Run(fmt.Sprint("kid=", kid), func(t *testing.T) {
 			q := fetchQueue(t)
 			ctx := context.Background()
-			by := fetchLimitListener(t, q, kid)
+			by := fetchLimitListener(t, q, "listener", kid)
 			jobs := fetchLimitJobs(t, q, 18)
 			var owned *Job
 			for i := range 5 {
@@ -106,7 +106,7 @@ func TestPodcastFetchLimitCountsCreatorOpenIntents(t *testing.T) {
 func TestPodcastFetchLimitConcurrentDistinctPaths(t *testing.T) {
 	q := fetchQueue(t)
 	ctx := context.Background()
-	by := fetchLimitListener(t, q, false)
+	by := fetchLimitListener(t, q, "listener", false)
 	jobs := fetchLimitJobs(t, q, 20)
 	var wg sync.WaitGroup
 	results := make(chan error, len(jobs))
@@ -140,13 +140,7 @@ func TestPodcastFetchLimitConcurrentDistinctPaths(t *testing.T) {
 		t.Fatalf("cap: stored=%d allowed=%d denied=%d, %v", n, allowed, denied, err)
 	}
 	// The cap belongs to each creator, not the household or library.
-	if _, err := q.db.ExecContext(ctx, `INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES('other','','user','t','t')`); err != nil {
-		t.Fatal(err)
-	}
-	var other int64
-	if err := q.db.QueryRowContext(ctx, `SELECT id FROM users WHERE username='other'`).Scan(&other); err != nil {
-		t.Fatal(err)
-	}
+	other := fetchLimitListener(t, q, "other", false)
 	job := demandJob(q, 100)
 	job.RequestedBy = other
 	if j, created, err := q.EnsurePodcastFetch(ctx, job, FetchOptions{}); err != nil || !created || j.RequestedBy.ID != other {
@@ -157,7 +151,7 @@ func TestPodcastFetchLimitConcurrentDistinctPaths(t *testing.T) {
 func TestPodcastFetchLimitAcrossLibraries(t *testing.T) {
 	q := fetchQueue(t)
 	ctx := context.Background()
-	by := fetchLimitListener(t, q, false)
+	by := fetchLimitListener(t, q, "listener", false)
 	for _, job := range fetchLimitJobs(t, q, 5) {
 		job.RequestedBy = by
 		if _, _, err := q.EnsurePodcastFetch(ctx, job, FetchOptions{}); err != nil {

@@ -545,7 +545,7 @@ func (a *API) Handler() http.Handler {
 	// else (requireBridge).
 	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(a.handleBridgeStatus))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/book", a.requireBridge(a.handleBridgeBook))
-	mux.Handle("GET /api/v1/bridge/jobs/next", a.requireBridge(a.handleBridgeClaim))
+	mux.Handle("GET "+bridgeClaimPath, a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
 

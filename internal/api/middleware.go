@@ -56,13 +56,17 @@ func isBackupDownload(p string) bool {
 	return ok && name != "" && !strings.Contains(name, "/")
 }
 
+// bridgeClaimPath is the Bridge's long-poll claim, which the timeout middleware
+// bounds without buffering its response.
+const bridgeClaimPath = "/api/v1/bridge/jobs/next"
+
 // timeout wraps ordinary handlers in http.TimeoutHandler, which cancels the
 // request context at the deadline and emits a 503. Claims retain the context
 // deadline without buffering; streaming routes pass through unbounded.
 func (a *API) timeout(next http.Handler) http.Handler {
 	timed := http.TimeoutHandler(next, a.timeoutDur, `{"error":"request timed out"}`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/bridge/jobs/next" {
+		if r.Method == http.MethodGet && r.URL.Path == bridgeClaimPath {
 			// Claims must observe response write failures before returning, so
 			// they can release an undelivered lease. TimeoutHandler buffers the
 			// response until after the handler's cleanup has finished.

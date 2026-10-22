@@ -61,7 +61,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		status.RetryAfterSeconds = 2
 	}
 	refusal := err
-	if err != nil && !errors.Is(err, bridge.ErrFetchCooldown) && !errors.Is(err, bridge.ErrKindUnavailable) && !errors.Is(err, bridge.ErrLibraryNotWritable) && !errors.Is(err, bridge.ErrFetchModuleOff) && !errors.Is(err, bridge.ErrFetchDemo) && !errors.Is(err, bridge.ErrFetchLimit) {
+	if err != nil && !bridge.IsFetchRefusal(err) {
 		if budget.Err() == nil {
 			return nil, nil, status, err
 		}
@@ -90,7 +90,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		if noNew {
 			status = bridge.UnavailableFetchStatus(status, bridge.ErrFetchDemo)
 		}
-		if errors.Is(refusal, bridge.ErrFetchLimit) || refusal != nil && !errors.Is(refusal, bridge.ErrFetchCooldown) && status.State == "absent" {
+		if refusal != nil && !errors.Is(refusal, bridge.ErrFetchCooldown) && (status.State == "absent" || errors.Is(refusal, bridge.ErrFetchLimit)) {
 			status = bridge.UnavailableFetchStatus(status, refusal)
 		}
 		left := deadline.Sub(d.now())

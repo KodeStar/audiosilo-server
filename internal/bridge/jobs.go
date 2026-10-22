@@ -690,27 +690,23 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if refuse != nil {
 			return refuse
 		}
-		if j.fetch != nil && !j.fetch.Retry {
-			cooling, err := fetchCooling(ctx, tx, j, s.now())
-			if err != nil {
-				return err
-			}
-			if cooling {
-				return ErrFetchCooldown
-			}
-		}
 		if j.fetch != nil {
+			if !j.fetch.Retry {
+				cooling, err := fetchCooling(ctx, tx, j, s.now())
+				if err != nil {
+					return err
+				}
+				if cooling {
+					return ErrFetchCooldown
+				}
+			}
 			if err := checkFetchLimit(ctx, tx, j.RequestedBy); err != nil {
 				return err
 			}
 		}
 		if j.Kind == KindPodcastSubscribe {
-			var n int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind='podcast.subscribe' AND requested_by=? AND state IN `+OpenStatesSQL, j.RequestedBy).Scan(&n); err != nil {
+			if err := checkOpenRequests(ctx, tx, KindPodcastSubscribe, j.RequestedBy, ErrTooManyRequests); err != nil {
 				return err
-			}
-			if n >= 5 {
-				return ErrTooManyRequests
 			}
 		}
 		if podcastWork(j.Kind) {
@@ -1064,6 +1060,22 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
 	}
 	return job, err
+}
+
+// maxOpenRequests caps one requester's open jobs of a capped kind.
+const maxOpenRequests = 5
+
+// checkOpenRequests answers over when by already has maxOpenRequests open jobs
+// of kind, inside the insertion's writer transaction.
+func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, over error) error {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind=? AND requested_by=? AND state IN `+OpenStatesSQL, kind, by).Scan(&n); err != nil {
+		return err
+	}
+	if n >= maxOpenRequests {
+		return over
+	}
+	return nil
 }
 
 // ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
