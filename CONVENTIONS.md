@@ -957,7 +957,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **Community covers** (`api/handlers_community_covers.go`): a match candidate's `cover_url` is
   an image on its own host (Audible's CDN, Open Library), which the console's CSP can't load, so
   the server fetches it (`meta.Service.FetchCover`: http(s) only, every connection's resolved
-  address checked public at dial time, redirects included (`publicAddr`; no proxy), <= 3
+  address checked public at dial time, redirects included (`netguard.PublicAddr` through
+  `netguard.Dialer`, shared with podcast discovery; no proxy), <= 3
   redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
   `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
   order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
@@ -1657,7 +1658,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
   sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
   `retry_at`, no re-admit at a restart).
-- **Podcasts (Bridge Phases 2c-1, 2c-2a and 2c-2b)**: libraries have an immutable `kind` (`books`, the default,
+- **Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
   skips that entry, keeping its existing library when present, so startup continues. API creates
@@ -1771,6 +1772,46 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   use an owned descriptor input and no source strong ETag. Ready media remains core while offline
   or module-off. The console uses episode plurals, hides book settings for podcasts, omits those
   keys on podcast saves, and localizes root_overlaps at the folder field in all six locales.
+  **Phase 2c-3 (discovery and OPML)**: `internal/podcast/discovery` searches iTunes and Podcast Index
+  (`GET /podcasts/discovery/providers|search`, `GET /podcasts/discovery/artwork?id=`) and
+  `internal/podcast` follows by URL for both `POST /podcasts/follow`'s `feed_url` and every row of
+  `POST /podcasts/opml/import?library_id=` (`Follower.Follow`: module, whole grant, URL stable under a
+  second `NormalizeFeedURL` (else `invalid_feed_url`, 400 on the single follow), known show by hash,
+  else an online Bridge offering `podcast.subscribe`; the single follow keeps its 200/202 envelopes).
+  An open subscribe for the same URL at the other privacy is `bridge.ErrPrivacyConflict` (409
+  `privacy_conflict`, an `error` row), checked inside the dedupe transaction. Search, providers, the
+  artwork and the import are module User routes plus the client gate (`callerOf(ctx).Podcasts`, 403
+  `no_library_access`); the artwork takes the media auth (session/API `?token=`, the media rate limit);
+  `GET /podcasts/opml/export` needs only `requireAuth` + `notDemo` + the client gate, module off or
+  Bridge offline. Every new GET has an explicit `HEAD` route answering 405 first, every new query rejects
+  unknown or repeated parameters (400 `invalid_request`), and JSON answers are `Cache-Control: no-store`.
+  Discovery is built only when boot-only `podcasts.discovery.enabled` (default true,
+  `AUDIOSILO_PODCAST_DISCOVERY_ENABLED`, no console setting) is on, else its routes are 404
+  `discovery_off`. `podcast_discovery` = that AND the live module toggle (false, not absent);
+  `podcast_opml` is always true. The Podcast Index pair is env only (`AUDIOSILO_PODCAST_INDEX_KEY` /
+  `_SECRET`, read at start, `yaml:"-" json:"-"`, never in settings, logs, audit, cache keys or errors);
+  a half or malformed pair turns that provider off with one warning naming the variable. Upstream
+  fetches dial through `internal/netguard` (the dialled address checked: providers public :443, artwork
+  public any port; no proxy, no cookies, providers no redirects, artwork <= 3 without a downgrade), within
+  bounded bodies, per-user and per-provider token buckets (`internal/podcast/quota`), two provider and
+  image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches; turning the module off
+  (`syncModules`) or shutdown calls `Reset`, so nothing publishes afterwards. Artwork is only a URL a
+  result registered (`sha256` id), re-encoded to a <= 320 px JPEG (`media.ThumbnailJPEG`). Build tag
+  `podcastdiscoverytest` alone honours `AUDIOSILO_TEST_PODCAST_DISCOVERY_ORIGIN=http://127.0.0.1:<port>`
+  (both providers and fixture art at that one origin); an untagged binary ignores it.
+  `internal/podcast/opml` reads the raw body (application/xml, text/xml, text/x-opml or
+  application/x-opml+xml, UTF-8 only, no content coding: else 415 `unsupported_opml_type`) whole, <= 1 MiB,
+  with strict tokens: no DOCTYPE, directive or processing instruction but the XML declaration, no
+  unknown entity, duplicate attributes refused, outline/nesting/depth/element/attribute caps (413
+  `opml_limit`), and the whole document valid (else 400 `invalid_opml`) before any row acts. Rows follow
+  in preorder as the caller, at most `ImportNewRequests` (5) new subscribes per upload besides the
+  five-open cap (the rest `limited`, the next upload is the retry wave), the module and grant rechecked
+  per row. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
+  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1). The export (`catalog.PodcastExport`: current
+  scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
+  `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
+  dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. Shared
+  fixtures: the byte-identical `internal/podcast/testdata/phase2c3/` copy.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
