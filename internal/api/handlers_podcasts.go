@@ -285,7 +285,8 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, feed.ErrInvalidFeedURL):
 		writeErrorCode(w, 400, "invalid_feed_url", "Invalid feed URL.")
 	case errors.Is(err, bridge.ErrPrivacyConflict):
-		writeErrorCode(w, 409, "privacy_conflict", "This feed is already requested with a different privacy.")
+		e, _ := podcast.FollowError(err)
+		writeErrorCode(w, 409, e.Code, e.Message)
 	case errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
