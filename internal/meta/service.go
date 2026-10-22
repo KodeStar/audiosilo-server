@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/netguard"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -307,7 +308,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
-		covers:        newCoverClient(publicAddr),
+		covers:        newCoverClient(netguard.PublicAddr),
 		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
 		now:           now,
 	}

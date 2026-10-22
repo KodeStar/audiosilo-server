@@ -11,49 +11,8 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/netguard"
 )
-
-func TestPublicAddr(t *testing.T) {
-	for addr, want := range map[string]bool{
-		"93.184.216.34":          true, // a public IPv4 host
-		"2606:2800:220:1::248":   true, // a public IPv6 host
-		"::ffff:93.184.216.34":   true, // IPv4-mapped, read as the IPv4 address
-		"64:ff9b::5db8:d822":     true, // NAT64 of a public IPv4 host
-		"127.0.0.1":              false,
-		"::1":                    false,
-		"10.1.2.3":               false,
-		"172.16.0.1":             false,
-		"192.168.0.10":           false,
-		"169.254.169.254":        false, // cloud metadata
-		"fe80::1":                false,
-		"fd00::1":                false,
-		"0.0.0.0":                false,
-		"0.1.2.3":                false,
-		"100.64.0.1":             false, // carrier-grade NAT
-		"198.18.0.1":             false,
-		"224.0.0.1":              false,
-		"255.255.255.255":        false,
-		"::ffff:127.0.0.1":       false,
-		"64:ff9b::a00:1":         false, // NAT64 of 10.0.0.1
-		"2002:c0a8:1::1":         false, // 6to4 of 192.168.0.1
-		"::7f00:1":               false, // IPv4-compatible 127.0.0.1
-		"::5db8:d822":            false, // IPv4-compatible, deprecated whatever it embeds
-		"64:ff9b:1::a00:1":       false, // local-use NAT64 of 10.0.0.1
-		"fec0::1":                false, // site-local
-		"::":                     false,
-		"ff02::1":                false,
-		"240.0.0.1":              false,
-		"192.0.0.8":              false,
-		"100.127.255.255":        false,
-		"100.128.0.1":            true, // just past carrier-grade NAT
-		"2001:4860:4860::8888":   true,
-		"::ffff:192.168.100.200": false,
-	} {
-		if got := publicAddr(netip.MustParseAddr(addr)); got != want {
-			t.Errorf("publicAddr(%s) = %v, want %v", addr, got, want)
-		}
-	}
-}
 
 // The default client never connects to the server's own network: a cover on
 // loopback is refused before a byte is sent.
@@ -65,8 +24,8 @@ func TestFetchCoverRefusesPrivateAddresses(t *testing.T) {
 	}))
 	defer srv.Close()
 	s := NewService("http://meta.invalid", nil)
-	if _, err := s.FetchCover(context.Background(), srv.URL+"/cover.jpg", 1<<20); !errors.Is(err, errBlockedAddress) {
-		t.Fatalf("loopback cover = %v, want errBlockedAddress", err)
+	if _, err := s.FetchCover(context.Background(), srv.URL+"/cover.jpg", 1<<20); !errors.Is(err, netguard.ErrBlockedAddress) {
+		t.Fatalf("loopback cover = %v, want netguard.ErrBlockedAddress", err)
 	}
 	if hit {
 		t.Fatal("the request reached the loopback server")
@@ -112,8 +71,8 @@ func TestFetchCover(t *testing.T) {
 			t.Errorf("%s = %d bytes, %v; want the image", path, len(got), err)
 		}
 	}
-	if _, err := s.FetchCover(ctx, srv.URL+"/to-private", 1<<20); !errors.Is(err, errBlockedAddress) {
-		t.Errorf("redirect to a private address = %v, want errBlockedAddress", err)
+	if _, err := s.FetchCover(ctx, srv.URL+"/to-private", 1<<20); !errors.Is(err, netguard.ErrBlockedAddress) {
+		t.Errorf("redirect to a private address = %v, want netguard.ErrBlockedAddress", err)
 	}
 	if _, err := s.FetchCover(ctx, srv.URL+"/to-file", 1<<20); !errors.Is(err, ErrCoverURL) {
 		t.Errorf("redirect to file: = %v, want ErrCoverURL", err)
