@@ -3248,6 +3248,7 @@
   "bridge.kind.podcast.retain": "Controllo degli episodi conservati",
   "settings.modules.podcasts": "Modulo Podcast",
   "libraries.episodeCount_one": "{{formatted}} episodio",
+  "libraries.episodeCount_many": "{{formatted}} episodi",
   "libraries.episodeCount_other": "{{formatted}} episodi",
   "libraries.form.podcastNamePlaceholder": "ad es. Podcast",
   "libraries.form.podcastFolderHint": "Una cartella di podcast sul server con una mappatura Bridge scrivibile. Monta prima le condivisioni di rete.",
@@ -3258,5 +3259,6 @@
   "libraries.scanPodcastDiscovering": "Ricerca di episodi podcast...",
   "errors.rootOverlaps": "Questa cartella si sovrappone a una libreria di podcast. Scegli cartelle separate.",
   "libraries.safety.podcastBody_one": "AudioSilo non può leggere {{root}}, quindi conserva il suo {{formatted}} episodio e tutti i progressi. Monta la cartella e riprova.",
+  "libraries.safety.podcastBody_many": "AudioSilo non può leggere {{root}}, quindi conserva tutti i {{formatted}} episodi e i progressi. Monta la cartella e riprova.",
   "libraries.safety.podcastBody_other": "AudioSilo non può leggere {{root}}, quindi conserva tutti i {{formatted}} episodi e i progressi. Monta la cartella e riprova."
 }

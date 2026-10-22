@@ -3248,6 +3248,7 @@
   "bridge.kind.podcast.retain": "Vérification des épisodes conservés",
   "settings.modules.podcasts": "Module Podcasts",
   "libraries.episodeCount_one": "{{formatted}} épisode",
+  "libraries.episodeCount_many": "{{formatted}} épisodes",
   "libraries.episodeCount_other": "{{formatted}} épisodes",
   "libraries.form.podcastNamePlaceholder": "p. ex. Podcasts",
   "libraries.form.podcastFolderHint": "Un dossier de podcasts sur le serveur avec un mappage Bridge accessible en écriture. Montez les partages réseau au préalable.",
@@ -3258,5 +3259,6 @@
   "libraries.scanPodcastDiscovering": "Recherche des épisodes de podcasts...",
   "errors.rootOverlaps": "Ce dossier chevauche une bibliothèque de podcasts. Choisissez des dossiers distincts.",
   "libraries.safety.podcastBody_one": "AudioSilo ne peut pas lire {{root}} et conserve son {{formatted}} épisode et toutes les progressions. Montez le dossier et réessayez.",
+  "libraries.safety.podcastBody_many": "AudioSilo ne peut pas lire {{root}} et conserve les {{formatted}} épisodes et toutes les progressions. Montez le dossier et réessayez.",
   "libraries.safety.podcastBody_other": "AudioSilo ne peut pas lire {{root}} et conserve les {{formatted}} épisodes et toutes les progressions. Montez le dossier et réessayez."
 }

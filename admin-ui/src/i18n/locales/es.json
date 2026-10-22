@@ -3248,6 +3248,7 @@
   "bridge.kind.podcast.retain": "Comprobando los episodios guardados",
   "settings.modules.podcasts": "Módulo Pódcasts",
   "libraries.episodeCount_one": "{{formatted}} episodio",
+  "libraries.episodeCount_many": "{{formatted}} episodios",
   "libraries.episodeCount_other": "{{formatted}} episodios",
   "libraries.form.podcastNamePlaceholder": "p. ej., Podcasts",
   "libraries.form.podcastFolderHint": "Una carpeta de podcasts del servidor con una asignación de Bridge que permita escritura. Monta primero los recursos de red.",
@@ -3258,5 +3259,6 @@
   "libraries.scanPodcastDiscovering": "Buscando episodios de podcasts...",
   "errors.rootOverlaps": "Esta carpeta se solapa con una biblioteca de podcasts. Elige carpetas separadas.",
   "libraries.safety.podcastBody_one": "AudioSilo no puede leer {{root}}, así que conserva su {{formatted}} episodio y todo el progreso. Monta la carpeta y vuelve a intentarlo.",
+  "libraries.safety.podcastBody_many": "AudioSilo no puede leer {{root}}, así que conserva los {{formatted}} episodios y todo el progreso. Monta la carpeta y vuelve a intentarlo.",
   "libraries.safety.podcastBody_other": "AudioSilo no puede leer {{root}}, así que conserva los {{formatted}} episodios y todo el progreso. Monta la carpeta y vuelve a intentarlo."
 }

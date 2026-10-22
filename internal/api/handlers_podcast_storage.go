@@ -123,9 +123,6 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		a.writePodcastStorageError(w, err)
 		return
 	}
-	if !a.podcastStorageWritable(w, r, lib, bridge.KindPodcastFetch) {
-		return
-	}
 	// Only an indexed, committed pin can be a present file worth opening:
 	// OpenPodcast answers ErrNotIndexable for every other one.
 	if pin.Present && feed.ValidFetch(pin.Fetch) && pin.Fetch.DeletedAt == "" {
@@ -139,6 +136,9 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 			a.writePodcastStorageError(w, openErr)
 			return
 		}
+	}
+	if !a.podcastStorageWritable(w, r, lib, bridge.KindPodcastFetch) {
+		return
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
 	job, created, err := a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID})

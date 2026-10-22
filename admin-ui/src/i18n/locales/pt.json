@@ -3248,6 +3248,7 @@
   "bridge.kind.podcast.retain": "A verificar os episódios guardados",
   "settings.modules.podcasts": "Módulo Podcasts",
   "libraries.episodeCount_one": "{{formatted}} episódio",
+  "libraries.episodeCount_many": "{{formatted}} episódios",
   "libraries.episodeCount_other": "{{formatted}} episódios",
   "libraries.form.podcastNamePlaceholder": "por ex., Podcasts",
   "libraries.form.podcastFolderHint": "Uma pasta de podcasts no servidor com um mapeamento Bridge que permita escrita. Monte primeiro as partilhas de rede.",
@@ -3258,5 +3259,6 @@
   "libraries.scanPodcastDiscovering": "A procurar episódios de podcasts...",
   "errors.rootOverlaps": "Esta pasta sobrepõe-se a uma biblioteca de podcasts. Escolha pastas separadas.",
   "libraries.safety.podcastBody_one": "O AudioSilo não consegue ler {{root}}, por isso mantém o seu {{formatted}} episódio e todo o progresso. Monte a pasta e tente novamente.",
+  "libraries.safety.podcastBody_many": "O AudioSilo não consegue ler {{root}}, por isso mantém todos os {{formatted}} episódios e o progresso. Monte a pasta e tente novamente.",
   "libraries.safety.podcastBody_other": "O AudioSilo não consegue ler {{root}}, por isso mantém todos os {{formatted}} episódios e o progresso. Monte a pasta e tente novamente."
 }

@@ -37,6 +37,22 @@ describe.each(Object.keys(LANGUAGES))('locale %s', (lang) => {
     );
     expect(mismatched).toEqual([]);
   });
+
+  it('has every plural form for library counts and safety notices', () => {
+    const forms = new Intl.PluralRules(lang).resolvedOptions().pluralCategories;
+    for (const key of [
+      'libraries.bookCount',
+      'libraries.episodeCount',
+      'libraries.safety.body',
+      'libraries.safety.podcastBody',
+    ]) {
+      for (const form of forms) {
+        const translated = dict[`${key}_${form}`];
+        expect(translated, `${key}_${form}`).toBeTruthy();
+        expect(placeholders(translated ?? '')).toEqual(placeholders(en[`${key}_other`]));
+      }
+    }
+  });
 });
 
 describe('navigation labels', () => {
