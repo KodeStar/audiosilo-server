@@ -292,7 +292,7 @@ func TestPodcastGenerationMediaContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, body = b.doHeaders(t, "GET", route, b.adminTok, "", podcastHeaders())
-	if resp.StatusCode != 404 || !strings.Contains(body, "not_downloaded") {
+	if resp.StatusCode != 503 || !strings.Contains(body, "podcast_fetch_unavailable") {
 		t.Fatalf("barrier %d %s", resp.StatusCode, body)
 	}
 }

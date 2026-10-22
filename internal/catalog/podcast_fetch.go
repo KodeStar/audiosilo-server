@@ -66,28 +66,10 @@ func (c *Catalog) foldPodcastFetch(ctx context.Context, tx *sql.Tx, j bridge.Job
 		if result.Code == "" {
 			result.Code = "bridge_lost"
 		}
-		result.Message = podcastFetchMessage(result.Code)
+		result.Message = bridge.FetchErrorFor(result.Code).Message
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,last_job_id,failures,next_attempt_at,error_code,error) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(library_id,rel_path,show_id) DO UPDATE SET last_job_id=excluded.last_job_id,failures=excluded.failures,next_attempt_at=excluded.next_attempt_at,error_code=excluded.error_code,error=excluded.error`, j.LibraryID, j.Path, current, j.ID, failures, next, result.Code, result.Message)
 	return err
-}
-func podcastFetchMessage(code string) string {
-	switch code {
-	case "episode_not_found":
-		return "Episode not found."
-	case "enclosure_missing":
-		return "The episode has no available enclosure."
-	case "invalid_audio":
-		return "The enclosure is not supported audio."
-	case "probe_unavailable":
-		return "The audio probe is unavailable."
-	case "unsupported_encoding":
-		return "The enclosure uses an unsupported encoding."
-	case "index_failed":
-		return "The episode could not be indexed."
-	default:
-		return "The episode could not be fetched."
-	}
 }
 
 type PodcastWorkShow struct {

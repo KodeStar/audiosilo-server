@@ -24,6 +24,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/modules"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -41,6 +42,8 @@ const webDemoPath = "/web/demo"
 
 // API holds handler dependencies.
 type API struct {
+	prefetch      *podcast.Prefetcher
+	podcastDemand *podcast.Demand
 	// boot is the config the server started with; live (read through config())
 	// is the one it works with now, swapped whole by a settings save
 	// (handlers_settings.go). Neither is ever mutated in place.
@@ -229,7 +232,12 @@ func (a *API) EnableSetup(token string) { a.setupToken = token }
 
 // SetBaseContext sets the server lifecycle context that detached background work
 // derives from, so it's cancelled on shutdown. Call before Handler().
-func (a *API) SetBaseContext(ctx context.Context) { a.baseCtx = ctx }
+func (a *API) SetBaseContext(ctx context.Context) {
+	a.baseCtx = ctx
+	if a.prefetch != nil {
+		a.prefetch.Context = ctx
+	}
+}
 
 // StartChapterChecks starts the background community chapter checks
 // (chaptercheck.Runner.Run) for ctx's lifetime; nothing without metadata.
@@ -251,6 +259,8 @@ func (a *API) Handler() http.Handler {
 
 	mux.Handle("GET /api/v1/libraries/{id}/podcasts", a.requireAuth(http.HandlerFunc(a.handlePodcastShows)))
 	mux.Handle("GET /api/v1/libraries/{id}/podcasts/episodes", a.requireAuth(http.HandlerFunc(a.handlePodcastEpisodes)))
+	mux.Handle("GET /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(http.HandlerFunc(a.handlePodcastFetch)))
+	mux.Handle("POST /api/v1/libraries/{id}/podcasts/fetch", a.requireAuth(notDemo(http.HandlerFunc(a.handlePodcastFetch))))
 	mux.Handle("GET /api/v1/me/podcasts", a.requireAuth(http.HandlerFunc(a.handleMyPodcasts)))
 	pr := moduleRoutes{a: a, mux: mux, id: bridge.ModulePodcasts}
 	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
@@ -535,7 +545,7 @@ func (a *API) Handler() http.Handler {
 	// else (requireBridge).
 	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(a.handleBridgeStatus))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/book", a.requireBridge(a.handleBridgeBook))
-	mux.Handle("GET /api/v1/bridge/jobs/next", a.requireBridge(a.handleBridgeClaim))
+	mux.Handle("GET "+bridgeClaimPath, a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
 

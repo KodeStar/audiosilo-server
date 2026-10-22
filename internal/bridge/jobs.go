@@ -482,6 +482,7 @@ type NewJob struct {
 	RequestedBy  int64
 	Priority     int
 	feedRedacted string
+	fetch        *FetchOptions
 }
 
 // ErrKindUnavailable is a job of a kind the paired Bridge doesn't run (or no
@@ -592,21 +593,28 @@ func checkNew(j *NewJob) error {
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
+	if j.Kind == KindPodcastFetch && j.fetch == nil {
+		return s.EnsurePodcastFetch(ctx, j, FetchOptions{Retry: true})
+	}
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
 	}
 	if err := s.checkLibraryKind(ctx, j); err != nil {
 		return nil, false, err
 	}
-	h, err := s.LastHeartbeat(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	if h == nil || !h.Offers(j.Kind) {
-		return nil, false, ErrKindUnavailable
+	var h *Heartbeat
+	if j.fetch == nil {
+		if h, err = s.LastHeartbeat(ctx); err != nil {
+			return nil, false, err
+		}
+		if h == nil || !h.Offers(j.Kind) {
+			return nil, false, ErrKindUnavailable
+		}
 	}
 	var refuse error
 	switch {
+	case j.fetch != nil:
+		// New fetch authorization is checked in the writer transaction below.
 	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
 		refuse = ErrLibraryNotWritable
 	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
@@ -617,7 +625,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		key += suffix(j)
 	}
 	var exp expiry
-	identityBusy := false
+	identityBusy, promoted := false, false
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
 		var err error
@@ -636,6 +644,24 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return err
 			}
 			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
+				if j.fetch != nil {
+					if err := checkPodcastTarget(ctx, tx, j); err != nil {
+						return err
+					}
+					// Promotion only ever raises the priority; an unchanged row
+					// is not rewritten and wakes no claim.
+					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
+					if err != nil {
+						return err
+					}
+					if n, err := res.RowsAffected(); err != nil {
+						return err
+					} else if n > 0 {
+						promoted = true
+						job.Priority = j.Priority
+						job.UpdatedAt = now
+					}
+				}
 				return nil
 			}
 			// Only a request naming the current identity may cancel the open
@@ -654,16 +680,33 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		} else if err := checkPodcastTarget(ctx, tx, j); err != nil {
 			return err
 		}
+		if j.fetch != nil {
+			h, err := readHeartbeat(ctx, tx)
+			if err != nil {
+				return err
+			}
+			refuse = s.fetchRefusal(h, *j.LibraryID, j.fetch.NoNew)
+		}
 		if refuse != nil {
 			return refuse
 		}
-		if j.Kind == KindPodcastSubscribe {
-			var n int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind='podcast.subscribe' AND requested_by=? AND state IN `+OpenStatesSQL, j.RequestedBy).Scan(&n); err != nil {
+		if j.fetch != nil {
+			if !j.fetch.Retry {
+				cooling, err := fetchCooling(ctx, tx, j, s.now())
+				if err != nil {
+					return err
+				}
+				if cooling {
+					return ErrFetchCooldown
+				}
+			}
+			if err := checkFetchLimit(ctx, tx, j.RequestedBy); err != nil {
 				return err
 			}
-			if n >= 5 {
-				return ErrTooManyRequests
+		}
+		if j.Kind == KindPodcastSubscribe {
+			if err := checkOpenRequests(ctx, tx, KindPodcastSubscribe, j.RequestedBy, ErrTooManyRequests); err != nil {
+				return err
 			}
 		}
 		if podcastWork(j.Kind) {
@@ -712,7 +755,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		s.settle(ctx, exp) // the expiry committed with the cancel intent
 		return nil, false, ErrIdentityChanged
 	}
-	if created {
+	if created || promoted {
 		s.wake.fire()
 	}
 	s.settle(ctx, exp)
@@ -901,9 +944,14 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 // caller's leaving doesn't cancel: the move has committed, and the admin should
 // hear about it either way.
 func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
+	if job.Kind == KindPodcastFetch && job.LibraryID != nil && job.Path != nil {
+		s.NotifyPodcast(*job.LibraryID, *job.Path)
+	}
 	s.reportEnded(ctx, job, from)
 	if s.OnTransition != nil && job.Notable(from, fromCode) {
-		s.OnTransition(context.WithoutCancel(ctx), *job, from)
+		committed, cancel := committedContext(ctx)
+		defer cancel()
+		s.OnTransition(committed, *job, from)
 	}
 }
 
@@ -942,6 +990,11 @@ var ErrNoHeartbeat = errors.New("the bridge hasn't reported yet")
 // poll outlives the request's authentication), no job is handed out on it
 // (ErrNotPaired).
 func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wait time.Duration) (*Job, error) {
+	return s.ClaimForPriority(ctx, token, asked, wait, nil)
+}
+
+// ClaimForPriority applies the optional priority floor before a lease is issued.
+func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []string, wait time.Duration, minPriority *int32) (*Job, error) {
 	h, err := s.LastHeartbeat(ctx)
 	if err != nil {
 		return nil, err
@@ -958,14 +1011,14 @@ func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wai
 	if len(ks) == 0 {
 		return nil, nil
 	}
-	return s.waitClaim(ctx, token, ks, wait)
+	return s.waitClaimPriority(ctx, token, ks, wait, minPriority)
 }
 
 // claim hands the Bridge holding token the next queued job of one of kinds
 // (highest priority, then oldest) that isn't held (nextQueued), leased for
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
 // paired Bridge's.
-func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) (*Job, error) {
+func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	var (
 		job *Job
 		exp expiry
@@ -991,7 +1044,7 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) 
 			exp.failed = append(exp.failed, transition{job: &expired[i], from: StateQueued})
 		}
 
-		id, err := s.nextQueued(ctx, tx, kinds)
+		id, err := s.nextQueued(ctx, tx, kinds, minPriority)
 		if err != nil || id == 0 {
 			return err
 		}
@@ -1009,14 +1062,60 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) 
 	return job, err
 }
 
+// maxOpenRequests caps one requester's open jobs of a capped kind.
+const maxOpenRequests = 5
+
+// checkOpenRequests answers over when by already has maxOpenRequests open jobs
+// of kind, inside the insertion's writer transaction.
+func checkOpenRequests(ctx context.Context, tx *sql.Tx, kind string, by int64, over error) error {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs WHERE kind=? AND requested_by=? AND state IN `+OpenStatesSQL, kind, by).Scan(&n); err != nil {
+		return err
+	}
+	if n >= maxOpenRequests {
+		return over
+	}
+	return nil
+}
+
+// ReleaseUnsentClaim returns an undelivered claim without spending an attempt.
+// The state, attempt and lease identify the untouched claim: any Bridge report
+// either changes its state or renews its lease, and makes this a no-op.
+// Cleanup must use a context independent of the disconnected claim request.
+func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
+	var job *Job
+	err := s.db.WithTx(ctx, "bridge.ReleaseUnsentClaim", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET
+		 state=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'queued' END,
+		 attempts=attempts-1,lease_until=NULL,claimed_at=NULL,updated_at=?,
+		 finished_at=CASE WHEN cancel_requested=1 THEN ? ELSE NULL END
+		 WHERE id=? AND state='claimed' AND attempts=? AND lease_until=? AND claimed_at=?`,
+			s.ts(), s.ts(), claim.ID, claim.Attempts, claim.LeaseUntil, claim.ClaimedAt)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		job, err = getJob(ctx, tx, claim.ID)
+		return err
+	})
+	if err == nil && job != nil {
+		s.wake.fire()
+		s.report(ctx, job, StateClaimed, "")
+	}
+	return err
+}
+
 // nextQueued is the id of the next queued job of one of kinds (highest
 // priority, then oldest), 0 for none, passing over a held one: a job that needs
 // a managed module that is off (held) waits, queued, until the module is on
 // again. The queue is short, so the kinds are matched as read (the statement
 // stays a constant).
-func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (int64, error) {
+func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string, minPriority *int32) (int64, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' ORDER BY priority DESC, id`)
+		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, minPriority, minPriority)
 	if err != nil {
 		return 0, err
 	}
@@ -1045,12 +1144,15 @@ func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (i
 // caller left, or the server is stopping: a claim cut short by it committed
 // nothing).
 func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration) (*Job, error) {
+	return s.waitClaimPriority(ctx, token, kinds, wait, nil)
+}
+func (s *Service) waitClaimPriority(ctx context.Context, token int64, kinds []string, wait time.Duration, minPriority *int32) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
 		woken := s.wake.wait()
-		job, err := s.claim(ctx, token, kinds)
+		job, err := s.claimPriority(ctx, token, kinds, minPriority)
 		if err != nil && ctx.Err() != nil {
 			return nil, nil
 		}
@@ -1167,7 +1269,16 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		var lease, finished any
 		switch state {
 		case StateClaimed, StateRunning:
-			lease = at(s.now().Add(Lease))
+			until := s.now().Add(Lease)
+			// Even a fieldless acknowledgement in the claim's second must
+			// distinguish its renewed lease from an undelivered response.
+			if state == StateClaimed && cur.LeaseUntil != nil {
+				previous, err := time.Parse(time.RFC3339, *cur.LeaseUntil)
+				if err == nil && !until.Truncate(time.Second).After(previous) {
+					until = previous.Add(time.Second)
+				}
+			}
+			lease = at(until)
 		case StateDone, StateFailed, StateCancelled:
 			finished = now
 		}

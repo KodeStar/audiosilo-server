@@ -123,28 +123,20 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		a.writePodcastStorageError(w, err)
 		return
 	}
-	// Only an indexed, committed pin can be a present file worth opening:
-	// OpenPodcast answers ErrNotIndexable for every other one.
-	if pin.Present && feed.ValidFetch(pin.Fetch) && pin.Fetch.DeletedAt == "" {
-		f, _, openErr := library.OpenPodcast(r.Context(), a.cat, *lib, req.Path)
-		if openErr == nil {
-			_ = f.Close()
-			writeJSON(w, 200, map[string]bool{"downloaded": true})
-			return
+	present, err := a.podcastPresent(r.Context(), lib, req.Path, pin)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client left during the checks: no one to answer
 		}
-		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
-			if r.Context().Err() != nil {
-				return // the client left during the checks: no one to answer
-			}
-			a.writePodcastStorageError(w, openErr)
-			return
-		}
+		a.writePodcastStorageError(w, err)
+		return
 	}
-	if !a.podcastStorageWritable(w, r, lib, bridge.KindPodcastFetch) {
+	if present {
+		writeJSON(w, 200, map[string]bool{"downloaded": true})
 		return
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
-	job, created, err := a.bridge.Enqueue(r.Context(), bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID})
+	job, created, err := a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
 	if !a.podcastQueueError(w, err) {
 		return
 	}
@@ -195,7 +187,8 @@ func (a *API) handleBridgePodcastRetentionCheck(w http.ResponseWriter, r *http.R
 }
 func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, catalog.ErrNotFound):
+	// bridge.ErrNotFound: a fetch's target left the index (checkPodcastTarget).
+	case errors.Is(err, catalog.ErrNotFound), errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case writeLibraryKindError(w, err):
 	default:
@@ -218,10 +211,28 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			a.writeCatalogError(w, err, "open podcast failed", "Could not load episode.")
 			return
 		}
-		writeErrorCode(w, 404, "not_downloaded", "episode not downloaded")
-		return
+		if a.bridge == nil {
+			writePodcastFetchPending(w, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable))
+			return
+		}
+		var status bridge.FetchStatus
+		f, pin, status, err = a.podcastDemand.Fetch(r.Context(), *lib, rel, userFrom(r.Context()).ID, userFrom(r.Context()).IsDemo)
+		if err != nil {
+			if r.Context().Err() == nil {
+				a.writePodcastStorageError(w, err)
+			}
+			return
+		}
+		if f == nil {
+			if status.RequestID != nil {
+				a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, false)
+			}
+			writePodcastFetchPending(w, status)
+			return
+		}
 	}
 	defer f.Close()
+	defer a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, true)()
 	if r.URL.Query().Get("transcode") == "1" {
 		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
 		if !ok {

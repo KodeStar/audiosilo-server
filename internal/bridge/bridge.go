@@ -22,6 +22,8 @@ type Service struct {
 	// waitClaim looks again at once.
 	wake         *signal
 	ended        *signal
+	fetchWaitMu  sync.Mutex
+	fetchWait    map[fetchKey]*fetchWatch
 	secretFlowMu sync.Mutex
 	secretMu     sync.Mutex
 	privateURLs  map[int64]string
@@ -68,3 +70,13 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 
 // at is t as the bridge tables store it.
 func at(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+// committedContext ignores a disconnected caller while retaining the operation's
+// absolute deadline, so outcome folding cannot extend a bounded media request.
+func committedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return detached, func() {}
+}

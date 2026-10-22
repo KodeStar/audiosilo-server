@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -15,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/notify"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 )
 
 // The Bridge (BRIDGE-PLAN.md Phase 0): the optional companion that writes to the
@@ -34,6 +36,9 @@ import (
 // Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) {
 	a.bridge = b
+	a.cat.SetPodcastChanged(b.NotifyPodcast)
+	a.prefetch = &podcast.Prefetcher{Catalog: a.cat, Bridge: b, Context: a.baseCtx}
+	a.podcastDemand = &podcast.Demand{Catalog: a.cat, Bridge: b}
 	if err := b.ExpirePrivateRequests(context.Background()); err != nil {
 		a.log.Warn("expire private podcast requests failed", "err", err)
 	}
@@ -401,23 +406,78 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer context.AfterFunc(a.baseCtx, cancel)()
-	job, err := a.bridge.ClaimFor(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait)
+	var floor *int32
+	if values, exists := r.URL.Query()["min_priority"]; exists {
+		if len(values) != 1 {
+			writeErrorCode(w, 400, "invalid_request", "Invalid minimum priority.")
+			return
+		}
+		n, err := strconv.ParseInt(values[0], 10, 32)
+		if err != nil {
+			writeErrorCode(w, 400, "invalid_request", "Invalid minimum priority.")
+			return
+		}
+		v := int32(n)
+		floor = &v
+	}
+	job, err := a.bridge.ClaimForPriority(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait, floor)
 	switch {
 	case errors.Is(err, bridge.ErrNoHeartbeat):
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
 	case errors.Is(err, bridge.ErrNotPaired):
 		writeError(w, http.StatusUnauthorized, "invalid or expired token")
 	case err != nil && ctx.Err() != nil:
-		// The server is stopping (or the Bridge left): nothing was claimed.
-		w.WriteHeader(http.StatusNoContent)
+		// The server is stopping, the Bridge left or the deadline passed:
+		// nothing was claimed.
+		claimEnded(ctx, w)
 	case err != nil:
 		a.log.Warn("bridge claim failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not claim a job")
 	case job == nil:
-		w.WriteHeader(http.StatusNoContent)
+		claimEnded(ctx, w)
 	default:
-		writeJSON(w, http.StatusOK, job)
+		// Claim cleanup outlives a disconnected request, but is bounded so a
+		// database fault cannot hold this handler indefinitely.
+		delivered := false
+		defer func() {
+			if delivered {
+				return
+			}
+			cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer stop()
+			if err := a.bridge.ReleaseUnsentClaim(cleanup, job); err != nil {
+				a.log.Warn("bridge claim release failed", "job_id", job.ID, "err", err)
+			}
+		}()
+		if ctx.Err() != nil {
+			claimEnded(ctx, w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		writeErr := json.NewEncoder(w).Encode(job)
+		if writeErr == nil {
+			if err := http.NewResponseController(w).Flush(); !errors.Is(err, http.ErrNotSupported) {
+				writeErr = err
+			}
+		}
+		// The reply's last chunk follows this return, so a Bridge that left
+		// meanwhile never read the job. A flushed reply is still delivered when
+		// the server starts stopping or the deadline passes after the flush:
+		// releasing it then would hand the same attempt out twice.
+		delivered = writeErr == nil && !errors.Is(r.Context().Err(), context.Canceled)
 	}
+}
+
+// claimEnded answers a claim whose wait ended early: 503 at the request
+// deadline (as the timeout middleware answered before claims bypassed its
+// buffering), else 204 (the server is stopping or the Bridge left).
+func claimEnded(ctx context.Context, w http.ResponseWriter) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleBridgeUpdate serves PATCH /bridge/jobs/{id} {attempt, state?, progress?,

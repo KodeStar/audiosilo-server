@@ -118,6 +118,21 @@ func (a *API) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "list podcast episodes failed", "Could not load episodes.")
 		return
 	}
+	// One batched status read per page, never one per episode.
+	paths := make([]string, len(page.Episodes))
+	for i := range page.Episodes {
+		paths[i] = page.Episodes[i].Path
+	}
+	states, err := a.podcastFetchStatuses(r, lib.ID, paths)
+	if err != nil {
+		a.writeCatalogError(w, err, "load podcast fetch status failed", "Could not load episodes.")
+		return
+	}
+	for i := range page.Episodes {
+		if st, ok := states[page.Episodes[i].Path]; ok {
+			page.Episodes[i].Fetch = &st
+		}
+	}
 	writeJSON(w, 200, page)
 }
 func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {
@@ -285,10 +300,14 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
 		writeErrorCode(w, 429, "too_many_requests", "At most five follow requests may be open.")
+	case errors.Is(err, bridge.ErrFetchLimit):
+		writeErrorCode(w, 409, "fetch_limit", bridge.FetchErrorFor("fetch_limit").Message)
 	case errors.Is(err, bridge.ErrLibraryNotWritable):
 		writeErrorCode(w, 409, "library_not_writable", "The Bridge cannot write to this library.")
 	case errors.Is(err, bridge.ErrKindUnavailable):
 		writeBridgeUnavailable(w)
+	case errors.Is(err, bridge.ErrFetchModuleOff):
+		writeModuleOff(w)
 	default:
 		a.writeCatalogError(w, err, "podcast queue failed", "Could not queue the request.")
 	}

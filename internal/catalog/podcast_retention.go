@@ -78,13 +78,15 @@ type PodcastPin struct {
 	EpisodeID string
 	FeedSig   string
 	Present   bool
-	Fetch     *feed.Fetch
+	// Removed: the entry left the feed; only an explicit request fetches it.
+	Removed bool
+	Fetch   *feed.Fetch
 }
 
 func (c *Catalog) PodcastPin(ctx context.Context, lib int64, p string) (PodcastPin, error) {
 	var pin PodcastPin
 	var raw sql.NullString
-	err := c.db.QueryRowContext(ctx, `SELECT s.show_id,e.episode_id,e.feed_sig,e.present,e.fetch_json FROM podcast_episodes e JOIN books b ON b.id=e.book_id JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path WHERE b.library_id=? AND b.rel_path=?`, lib, p).Scan(&pin.ShowID, &pin.EpisodeID, &pin.FeedSig, &pin.Present, &raw)
+	err := c.db.QueryRowContext(ctx, `SELECT s.show_id,e.episode_id,e.feed_sig,e.present,e.removed_at<>'',e.fetch_json FROM podcast_episodes e JOIN books b ON b.id=e.book_id JOIN podcast_shows s ON s.library_id=e.library_id AND s.show_path=e.show_path WHERE b.library_id=? AND b.rel_path=?`, lib, p).Scan(&pin.ShowID, &pin.EpisodeID, &pin.FeedSig, &pin.Present, &pin.Removed, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return pin, ErrNotFound
 	}

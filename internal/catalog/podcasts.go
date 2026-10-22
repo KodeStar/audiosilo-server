@@ -51,9 +51,10 @@ type PodcastShow struct {
 	ShowID          string        `json:"-"`
 }
 type PodcastGeneration struct {
-	Generation      int    `json:"generation,omitempty"`
-	SHA256          string `json:"sha256,omitempty"`
-	TimelineChanged *bool  `json:"timeline_changed,omitempty"`
+	Fetch           *bridge.FetchStatus `json:"fetch,omitempty"`
+	Generation      int                 `json:"generation,omitempty"`
+	SHA256          string              `json:"sha256,omitempty"`
+	TimelineChanged *bool               `json:"timeline_changed,omitempty"`
 }
 type PodcastEpisodeInfo struct {
 	PodcastGeneration
@@ -227,6 +228,11 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		changed = true
 		return nil
 	})
+	if notify := c.podcastChanged.Load(); err == nil && changed && notify != nil {
+		for _, ep := range f.Episodes {
+			(*notify)(lib, ep.Path)
+		}
+	}
 	return changed, err
 }
 

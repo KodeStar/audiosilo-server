@@ -129,7 +129,7 @@ internal/updates/     the update check: GitHub Releases' latest release, once a 
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, and Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
-internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format in feed/), poll/fetch/retention scheduler; catalog/podcasts.go and podcast_{fetch,retention}.go hold the generation index, identity-bound status, follows, durable policies and aggregate checks; library/podcast_media.go opens committed media
+internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format in feed/), poll/fetch/retention scheduler, bounded on-demand media waits and scoped one-ahead prefetch; catalog/podcasts.go and podcast_{fetch,retention}.go hold the generation index, identity-bound status, follows, durable policies and aggregate checks; library/podcast_media.go opens committed media
 internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions: no routes of its own, its actions are Bridge jobs gated by `bridge.ModuleFor`)
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed`)
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
@@ -322,7 +322,7 @@ keep this index in step (one line per topic).
   - Progress reconciliation
   - Chapters are normalized
   - Community chapters (incl. Generated chapters, Bridge Phase 1d)
-  - Podcasts (Bridge Phase 2c-1)
+  - Podcasts (Bridge Phases 2c-1, 2c-2a and 2c-2b)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
   - Unavailable-root guard
   - First-run setup (Phase F1, `catalog/setup.go`, `library/preview.go`, `api/handlers_admin_setup.go`)
@@ -359,7 +359,7 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`household_members`, `bridge`, `podcast_fetch`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player

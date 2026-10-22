@@ -419,6 +419,16 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if book.Episode != nil {
+		states, err := a.podcastFetchStatuses(r, book.LibraryID, []string{book.RelPath})
+		if err != nil {
+			a.writeCatalogError(w, err, "load podcast fetch status failed", "could not load book")
+			return
+		}
+		if st, ok := states[book.RelPath]; ok {
+			book.Episode.Fetch = &st
+		}
+	}
 	dp := media.DirectPlayable(book.Codec)
 	book.DirectPlayable = &dp
 	writeJSON(w, http.StatusOK, book)

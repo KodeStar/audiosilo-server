@@ -37,6 +37,23 @@ func TestTimeoutMiddlewareFiresOnSlowRequest(t *testing.T) {
 	}
 }
 
+func TestTimeoutMiddlewareBoundsUnbufferedClaim(t *testing.T) {
+	a := &API{timeoutDur: 20 * time.Millisecond}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.Context().Deadline(); !ok {
+			t.Fatal("claim has no deadline")
+		}
+		<-r.Context().Done()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	a.timeout(handler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/bridge/jobs/next", nil))
+	if rec.Code != http.StatusNoContent || time.Since(start) > 2*time.Second {
+		t.Fatalf("claim timeout: %d after %v", rec.Code, time.Since(start))
+	}
+}
+
 // TestTimeoutMiddlewareExemptsStreaming asserts streaming routes are NOT bounded:
 // a /stream handler that runs past the deadline still completes (audio playback
 // must not be cut off - there is deliberately no WriteTimeout either).
