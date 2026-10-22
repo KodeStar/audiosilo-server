@@ -5,7 +5,7 @@ import "testing"
 func TestPodcastGate(t *testing.T) {
 	old := PodcastPlayerMinVersion
 	defer func() { PodcastPlayerMinVersion = old }()
-	for _, min := range []string{"", "2.2.0"} {
+	for _, min := range []string{"", old} {
 		PodcastPlayerMinVersion = min
 		for _, tc := range []struct {
 			app, version string
@@ -17,6 +17,7 @@ func TestPodcastGate(t *testing.T) {
 			{"AudioSilo", "2.1.0", false}, {"AudioSilo", "2.1.99", false}, {"AudioSilo", "1.9.9", false},
 			{"AudioSilo", "", false}, {"AudioSilo", "2.x.0", false}, {"AudioSilo", "-", false}, {"AudioSilo", "2.3", false}, {"AudioSilo", "+", false},
 			{"AudioSilo Bridge", "dev", false}, {"AudioSilo Manager", "dev", false}, {"", "", false},
+			{"AudioSilo Bridge", "2.2.0", false}, {"AudioSilo Manager", "3.0.0", false}, {"", "2.2.0", false},
 		} {
 			if got := SeesPodcasts(ClientInfo{App: tc.app, Version: tc.version}); got != tc.want {
 				t.Errorf("min=%q %s/%s=%t", min, tc.app, tc.version, got)
