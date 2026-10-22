@@ -51,14 +51,16 @@ import { useCurrentUser } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { chapterLabel } from '@/features/activity/live-model';
 import { greetingFor, splitListening } from './overview-model';
+import { FinishSetupCard } from './finish-setup-card';
 import { SupportCard } from './support-card';
 
 /**
  * Home (the mark): a greeting, who is listening right now (the live sessions),
  * catalog totals, recent listening, books per library and a server card. Built on
  * GET /admin/stats, /admin/sessions/live, /admin/settings, /server,
- * /admin/issues (the "needs attention" card) and /admin/support (the support
- * card, shown only when the server says so).
+ * /admin/issues (the "needs attention" card), /admin/support (the support
+ * card, shown only when the server says so) and /admin/setup (the "Finish
+ * setting up" card, while a first-run step is still skipped).
  */
 export function OverviewPage() {
   const { t, i18n } = useTranslation();
@@ -196,6 +198,7 @@ export function OverviewPage() {
           </div>
         </section>
         <aside className="flex flex-col gap-4">
+          <FinishSetupCard />
           <NeedsAttention lang={lang} />
           <LibrariesCard libraries={stats.data?.libraries} lang={lang} />
           <ServerCard />

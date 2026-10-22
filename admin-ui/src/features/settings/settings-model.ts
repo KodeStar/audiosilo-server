@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type {
   AdminSettings,
   MetadataMode,
@@ -68,6 +69,13 @@ type ReadOnlyFact =
 /** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
   return s.locked[id];
+}
+
+/** What a lock says: "Set by AUDIOSILO_X" or "Managed by the desktop app". */
+export function lockLabel(t: TFunction, lock: string): string {
+  return lock === 'launcher'
+    ? t('settings.locked.launcher')
+    : t('settings.locked.env', { name: lock });
 }
 
 /** The setting is read only when the server starts. */

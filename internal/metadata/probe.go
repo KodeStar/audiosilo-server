@@ -40,8 +40,8 @@ type probeResult struct {
 // probe runs ffprobe to obtain duration, the audio codec, chapters and container
 // tags. -select_streams a:0 limits -show_streams to the first audio stream so we
 // read the codec that actually needs (or doesn't need) transcoding.
-func probe(path, ffprobePath string) (*probeResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func probe(parent context.Context, path, ffprobePath string) (*probeResult, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
 		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read

@@ -90,7 +90,8 @@ const (
 	codeCurrentDevice      = "current_device"
 	codeInvalidRange       = "invalid_range"
 	codeNoAccess           = "no_access"
-	codeInvalidSetting     = "invalid_setting"   // + "field": the setting it names
+	codeInvalidSetting     = "invalid_setting" // + "field": the setting it names
+	codeInvalidSetupStep   = "invalid_setup_step"
 	codeSettingLocked      = "setting_locked"    // + "field": set by the environment or the launcher
 	codeUnknownSetting     = "unknown_setting"   // + "field"
 	codeSettingReadOnly    = "setting_read_only" // + "field"
@@ -190,6 +191,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 	case errors.Is(err, catalog.ErrInvalidOverrideMode):
 		writeError(w, http.StatusBadRequest, `mode must be "book" or "collection"`)
+	case errors.Is(err, catalog.ErrInvalidSetupStep):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidSetupStep, err.Error())
 	case errors.Is(err, catalog.ErrInvalidSupportChoice):
 		writeError(w, http.StatusBadRequest, `action must be "donated" or "snoozed"`)
 	case errors.Is(err, library.ErrOutsideRoot):

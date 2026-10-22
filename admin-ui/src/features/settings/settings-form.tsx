@@ -24,6 +24,7 @@ import { describedBy } from '@/lib/a11y';
 import { cn } from '@/lib/utils';
 import {
   listToText,
+  lockLabel,
   lockOf,
   needsRestart,
   outOfRange,
@@ -38,11 +39,7 @@ export function SettingBadges({ settings, id }: { settings: AdminSettings; id: S
   const { t } = useTranslation();
   const lock = lockOf(settings, id);
   const pending = settings.restart_pending.includes(id);
-  const lockText = lock
-    ? lock === 'launcher'
-      ? t('settings.locked.launcher')
-      : t('settings.locked.env', { name: lock })
-    : '';
+  const lockText = lock ? lockLabel(t, lock) : '';
   const lockParts = lockText.split('_');
   return (
     <>

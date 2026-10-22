@@ -42,5 +42,6 @@ window.matchMedia ??= ((query: string) => ({
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');
 });

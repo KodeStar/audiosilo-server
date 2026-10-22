@@ -6,6 +6,7 @@ import {
   libraries,
   serverInfo,
   settings,
+  setupEnvelope,
   stats,
   updateStatus,
 } from './fixtures';
@@ -25,6 +26,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     // The Overview's support card: not due, by default.
     'GET /admin/support': { body: { show: false } },
     'GET /admin/libraries': { body: { libraries: libraries() } },
+    // The first-run flow: finished, as on any server that's set up.
+    'GET /admin/setup': { body: setupEnvelope() },
     // The overview's "needs attention" card.
     'GET /admin/issues': { body: issuesSummary() },
     // Who is listening (Overview, People) and everyone's devices (People): nobody, by default.

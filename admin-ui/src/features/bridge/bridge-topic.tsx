@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +26,6 @@ import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { toastError } from '@/lib/errors';
 import { formatDateTime, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -43,10 +42,10 @@ import {
   PRESENCE_TONE,
   safeHttpUrl,
 } from './bridge-model';
-import { PairDialog, type ShownCode } from './pair-dialog';
+import { PairDialog } from './pair-dialog';
 import { BridgeSetupList } from './setup-list';
 import { ACCOUNTS_TAB, agentCredentialSet, setupComplete, setupProgress } from './setup-model';
-import { useBridge } from './use-bridge';
+import { useBridge, usePairCode } from './use-bridge';
 import { VerifyDialog } from './verify-dialog';
 
 /**
@@ -57,35 +56,15 @@ import { VerifyDialog } from './verify-dialog';
  */
 export function BridgeTopic() {
   const { t, i18n } = useTranslation();
-  const qc = useQueryClient();
   const bridge = useBridge();
   const status = bridge.data;
-  const [shown, setShown] = useState<ShownCode | null>(null);
-  const [making, setMaking] = useState(false);
+  const { shown, making, makeCode, closeCode } = usePairCode(status);
   // Each server library's name by id, for the job rows.
   const libraries = status?.libraries;
   const libraryNames = useMemo(
     () => new Map((libraries ?? []).map((l) => [l.id, l.name] as const)),
     [libraries],
   );
-
-  const makeCode = async () => {
-    setMaking(true);
-    try {
-      const code = await api.pairBridge();
-      setShown({
-        ...code,
-        pairedAtBefore: status?.paired ? status.paired_at : undefined,
-        replacing: Boolean(status?.paired),
-      });
-    } catch (err) {
-      toastError(t('bridge.pair.failed'), err);
-    } finally {
-      setMaking(false);
-      void qc.invalidateQueries({ queryKey: keys.bridge });
-    }
-  };
-  const closeCode = useCallback(() => setShown(null), []);
 
   if (bridge.isError)
     return (

@@ -641,16 +641,23 @@ const maxDirListing = 1000
 // library.ListDirs for the bounds.
 func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	listing, err := library.ListDirs(r.URL.Query().Get("path"), maxDirListing)
-	switch {
-	case errors.Is(err, library.ErrNotAbsolute):
-		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")
-	case err != nil:
-		// Missing, not a folder, or not readable by the server: the same answer,
-		// and the OS error (which can name the path) stays out of the body.
-		writeErrorCode(w, http.StatusNotFound, codeFolderUnreadable, "folder not found or not readable")
-	default:
-		writeJSON(w, http.StatusOK, listing)
+	if err != nil {
+		writeFolderError(w, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, listing)
+}
+
+// writeFolderError answers a typed server folder the folder picker or the setup
+// preview refused: 400 path_not_absolute for a relative path, else 404
+// folder_unreadable (missing, not a folder, or not readable by the server: the
+// same answer, and the OS error, which can name the path, stays out of the body).
+func writeFolderError(w http.ResponseWriter, err error) {
+	if errors.Is(err, library.ErrNotAbsolute) {
+		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")
+		return
+	}
+	writeErrorCode(w, http.StatusNotFound, codeFolderUnreadable, "folder not found or not readable")
 }
 
 // libraryRequest is the body of a library create or edit. The scan settings are

@@ -353,7 +353,7 @@ func setupBanner(cfg *config.Config, token string) {
 	fmt.Println(" Open this URL in your browser to finish setting up:")
 	fmt.Printf("   %s\n", openURL(cfg, token))
 	fmt.Println("--------------------------------------------------------")
-	fmt.Println(" You'll choose an admin password and your books folder.")
+	fmt.Println(" You'll choose an admin password, then the console walks you through the rest.")
 	fmt.Println("========================================================")
 }
 

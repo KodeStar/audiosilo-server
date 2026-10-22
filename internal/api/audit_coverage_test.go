@@ -28,6 +28,7 @@ var notAudited = map[string]string{
 	"handleUpdateImport":           "changes only an unapplied import's review (its cutoff)",
 	"handleDeleteImport":           "drops an unapplied import's record; it wrote nothing (or an undo took it out, audited)",
 	"handleCheckCommunityChapters": "re-checks the community chapter list; changes nothing an admin chose (picking a chapter source is a book.edit)",
+	"handleSetupPreview":           "a read of a folder (a POST only for its body); creates nothing",
 }
 
 // TestAdminChangesAreAudited reads the route table and the package's call graph: a
