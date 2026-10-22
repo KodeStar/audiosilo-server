@@ -30,6 +30,16 @@ const (
 )
 
 var ErrTooManyRequests = errors.New("too many open subscribe requests")
+
+// ErrPrivacyConflict is a subscribe for a feed URL the same person already has
+// an open request for with the other privacy: the open request is never
+// adopted across privacy (a private URL is never attached to a public job, a
+// public request never rides a private one).
+var ErrPrivacyConflict = errors.New("an open follow request for this feed has the other privacy")
+
+// ErrNoNewRequest is an adopt-only subscribe (SubscribeRequest.AdoptOnly: an
+// OPML import past its new-request budget) with no open request to adopt.
+var ErrNoNewRequest = errors.New("no new subscribe request may be queued")
 var ErrNotPodcastLibrary = errors.New("not a podcast library")
 var ErrNotBookLibrary = errors.New("not a book library")
 
@@ -153,16 +163,44 @@ func pollParams(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(p)
 }
+
+// subscribePrivate is a subscribe's params' privacy flag.
+func subscribePrivate(raw json.RawMessage) bool {
+	var p SubscribeParams
+	_ = json.Unmarshal(raw, &p)
+	return p.Private
+}
+
 func subscribeSuffix(j NewJob) string {
 	var p SubscribeParams
 	_ = json.Unmarshal(j.Params, &p)
 	return "|" + p.FeedURLSHA256 + "|" + fmt.Sprint(j.RequestedBy)
 }
 
-// EnqueueSubscribe transfers a private URL only into volatile per-job memory.
-// The same lock covers its claim, so a freshly queued job cannot expire between
-// the commit and the memory write. It remains available for lease retries.
+// SubscribeRequest is one podcast.subscribe to queue or adopt.
+type SubscribeRequest struct {
+	LibraryID int64
+	User      int64
+	FeedURL   string // normalized (feed.NormalizeFeedURL)
+	Private   bool
+	ShowPath  string // a known show this repairs, "" for a new one
+	// AdoptOnly answers the open request for this feed and user (created
+	// false), or ErrNoNewRequest: nothing new is queued.
+	AdoptOnly bool
+}
+
+// EnqueueSubscribe is Subscribe for a request that may queue a new job.
 func (s *Service) EnqueueSubscribe(ctx context.Context, lib, user int64, norm string, private bool, show string) (*Job, bool, error) {
+	return s.Subscribe(ctx, SubscribeRequest{LibraryID: lib, User: user, FeedURL: norm, Private: private, ShowPath: show})
+}
+
+// Subscribe transfers a private URL only into volatile per-job memory. The
+// same lock covers its claim, so a freshly queued job cannot expire between the
+// commit and the memory write. It remains available for lease retries. The
+// open request for the same feed and user is adopted only with the same
+// privacy (ErrPrivacyConflict otherwise), checked in the dedupe transaction.
+func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool, error) {
+	lib, user, norm, private, show := r.LibraryID, r.User, r.FeedURL, r.Private, r.ShowPath
 	u, err := url.Parse(norm)
 	if err != nil {
 		return nil, false, feed.ErrInvalidFeedURL
@@ -185,7 +223,7 @@ func (s *Service) EnqueueSubscribe(ctx context.Context, lib, user int64, norm st
 	}
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: 10, feedRedacted: feed.RedactURL(norm)})
+	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: 10, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly})
 	if err == nil && private {
 		s.secretMu.Lock()
 		s.privateURLs[j.ID] = norm

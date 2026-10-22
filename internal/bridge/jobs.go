@@ -483,6 +483,9 @@ type NewJob struct {
 	Priority     int
 	feedRedacted string
 	fetch        *FetchOptions
+	// adoptOnly: only an open job with the same dedupe key is returned;
+	// ErrNoNewRequest instead of inserting one.
+	adoptOnly bool
 }
 
 // ErrKindUnavailable is a job of a kind the paired Bridge doesn't run (or no
@@ -643,6 +646,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if err != nil {
 				return err
 			}
+			if j.Kind == KindPodcastSubscribe && subscribePrivate(job.Params) != subscribePrivate(j.Params) {
+				return ErrPrivacyConflict
+			}
 			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
 				if j.fetch != nil {
 					if err := checkPodcastTarget(ctx, tx, j); err != nil {
@@ -679,6 +685,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			}
 		} else if err := checkPodcastTarget(ctx, tx, j); err != nil {
 			return err
+		}
+		if j.adoptOnly {
+			return ErrNoNewRequest
 		}
 		if j.fetch != nil {
 			h, err := readHeartbeat(ctx, tx)

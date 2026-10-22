@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -336,16 +337,27 @@ func scanPodcastShow(r interface{ Scan(...any) error }, s *PodcastShow) error {
 	s.CoverVersion = CoverVersion(s.CoverPath + "|" + s.FeedSig)
 	return err
 }
-func (c *Catalog) PodcastShows(ctx context.Context, s Scope, user int64, followed bool) ([]PodcastShow, error) {
+
+// podcastShowFilter is the SQL (over podcast_shows s) selecting the shows scope
+// s shows: those it allows, and those holding an episode it grants (as /fs).
+func podcastShowFilter(s Scope) (string, []any, error) {
 	filter, args := pathFilterSQL("s.show_path", s)
 	if !s.AllowAll && len(s.Paths) > 0 {
 		paths, err := json.Marshal(s.Paths)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		// Shows also appear as ancestors of an episode grant, just as /fs does.
 		filter = "(" + filter + " OR EXISTS(SELECT 1 FROM json_each(?) grant_path WHERE substr(grant_path.value,1,length(s.show_path)+1)=s.show_path||'/'))"
 		args = append(args, string(paths))
+	}
+	return filter, args, nil
+}
+
+func (c *Catalog) PodcastShows(ctx context.Context, s Scope, user int64, followed bool) ([]PodcastShow, error) {
+	filter, args, err := podcastShowFilter(s)
+	if err != nil {
+		return nil, err
 	}
 	q := podcastShowSelect + ` WHERE s.library_id=? AND ` + filter
 	vals := append([]any{user, s.LibraryID}, args...)
@@ -356,6 +368,70 @@ func (c *Catalog) PodcastShows(ctx context.Context, s Scope, user int64, followe
 	q += ` ORDER BY s.title COLLATE NOCASE,s.show_path LIMIT 2000`
 	return queryRows(ctx, c.db, func(r *sql.Rows, s *PodcastShow) error { return scanPodcastShow(r, s) }, q, vals...)
 }
+
+// PodcastExportRow is one show the OPML export considers: followed by the
+// caller (for its current identity) and visible to them now.
+type PodcastExportRow struct {
+	LibraryID int64
+	Path      string
+	Title     string
+	FeedURL   string // "" for a private show
+	Private   bool
+}
+
+// MaxPodcastExportRows bounds the shows one export reads.
+const MaxPodcastExportRows = 10000
+
+// ErrPodcastExportTooLarge is an export over MaxPodcastExportRows shows.
+var ErrPodcastExportTooLarge = errors.New("too many followed shows to export")
+
+// PodcastExport returns the shows who follows, across their podcast libraries,
+// as their current scopes show them (the client gate, grants, a member's rule
+// and private-show narrowing all apply, admins included), in library id then
+// show path order. A follow of a replaced show (another identity at its path)
+// or a pruned one counts for nothing. Past MaxPodcastExportRows it is
+// ErrPodcastExportTooLarge: never a truncated list.
+func (c *Catalog) PodcastExport(ctx context.Context, who Caller) ([]PodcastExportRow, error) {
+	if !who.Podcasts {
+		return []PodcastExportRow{}, nil
+	}
+	scopes, err := c.CallerScopes(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	libs, err := c.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	podcasts := map[int64]bool{}
+	for _, l := range libs {
+		podcasts[l.ID] = l.Kind == KindPodcasts
+	}
+	slices.SortFunc(scopes, func(a, b Scope) int { return cmp.Compare(a.LibraryID, b.LibraryID) })
+	out := []PodcastExportRow{}
+	for _, s := range scopes {
+		if !podcasts[s.LibraryID] {
+			continue
+		}
+		filter, args, err := podcastShowFilter(s)
+		if err != nil {
+			return nil, err
+		}
+		vals := append(append([]any{s.LibraryID}, args...), who.ID, MaxPodcastExportRows+1-len(out))
+		rows, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastExportRow) error {
+			return r.Scan(&e.LibraryID, &e.Path, &e.Title, &e.FeedURL, &e.Private)
+		}, `SELECT s.library_id,s.show_path,s.title,s.feed_url,s.private FROM podcast_shows s WHERE s.library_id=? AND `+filter+` AND EXISTS(`+followMatchSQL+` AND f.user_id=?) ORDER BY s.show_path LIMIT ?`, vals...)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if len(out) > MaxPodcastExportRows {
+			return nil, ErrPodcastExportTooLarge
+		}
+	}
+	return out, nil
+}
+
 func (c *Catalog) PodcastShow(ctx context.Context, lib int64, p string, user int64) (*PodcastShow, error) {
 	var s PodcastShow
 	err := scanPodcastShow(c.db.QueryRowContext(ctx, podcastShowSelect+` WHERE s.library_id=? AND s.show_path=?`, user, lib, p), &s)
