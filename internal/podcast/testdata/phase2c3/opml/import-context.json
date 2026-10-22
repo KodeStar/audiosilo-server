@@ -1,0 +1,23 @@
+{
+  "library_id": 7,
+  "user_id": 11,
+  "whole_library": true,
+  "client": "AudioSilo/dev",
+  "module": true,
+  "bridge": "online_writable",
+  "open_subscribes": 0,
+  "shows": [
+    {
+      "path": "Fixture One",
+      "show_id": "0123456789abcdef",
+      "private": false,
+      "following": true,
+      "current_url": "https://feeds.example.org/one.xml",
+      "previous_urls": [
+        "https://feeds.example.org/old-one.xml"
+      ]
+    }
+  ],
+  "next_request_id": 81,
+  "private_canary": "OPML_PRIVATE_CANARY_2C3"
+}

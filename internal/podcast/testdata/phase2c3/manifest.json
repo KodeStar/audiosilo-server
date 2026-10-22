@@ -1,0 +1,129 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 1069,
+      "sha256": "93b1bb355bd9dff1b0d91795b13fd39e62fe0c2b782078447f546ba9d3370cda"
+    },
+    {
+      "path": "opml/deep.opml",
+      "bytes": 758,
+      "sha256": "19524232a4098f81ad2f34dbe605e8f9bfa304cd7d831febf1bd404abcf59655"
+    },
+    {
+      "path": "opml/duplicate-attribute.opml",
+      "bytes": 238,
+      "sha256": "1695f7051c402f43021483fd091d223eb3e537b4901c9f72b13b033a4a20900e"
+    },
+    {
+      "path": "opml/duplicates-private-expected.json",
+      "bytes": 1567,
+      "sha256": "066db603222af302094c8e316d70ee8a27154fc95afd27d36ebbef47f210b21a"
+    },
+    {
+      "path": "opml/duplicates-private.opml",
+      "bytes": 689,
+      "sha256": "9778e8f6354641f6e41fd34833dbd1c4ca1c330e9ca27facf101405450ef738d"
+    },
+    {
+      "path": "opml/entity-bomb.opml",
+      "bytes": 221,
+      "sha256": "760836ad201564be7dfc6590f29cdfcfb1ffcb49dd47271610e471f811b3c6ea"
+    },
+    {
+      "path": "opml/export-context.json",
+      "bytes": 1512,
+      "sha256": "34edb16626b25fb098ea5a0936db2312065da91e0dba421ddf86146e5ef632fa"
+    },
+    {
+      "path": "opml/export-expected-headers.json",
+      "bytes": 299,
+      "sha256": "9a473207a01ba9da102dcbc2644d569f159225a870f8aab002cf3591a1193799"
+    },
+    {
+      "path": "opml/export-expected.opml",
+      "bytes": 258,
+      "sha256": "245c2b65fe5a9722369cfe99051c34b23c0c00396653d8f33700eef66c68e16e"
+    },
+    {
+      "path": "opml/external-entity.opml",
+      "bytes": 178,
+      "sha256": "5dc8235ea576f154f66faa6b4996f5e1a56efdb4bfbf3ab159df582fb8501e00"
+    },
+    {
+      "path": "opml/huge.opml",
+      "bytes": 1048577,
+      "sha256": "392d78820b82358ea5533b2228e0c9122d80e16c2ebf524fd90b5067774f98aa"
+    },
+    {
+      "path": "opml/import-context.json",
+      "bytes": 522,
+      "sha256": "91795e197ea251928845a490eea6536b7ab78f69909cdaaaf7ad2eaf7c2c61e8"
+    },
+    {
+      "path": "opml/malformed-tail.opml",
+      "bytes": 215,
+      "sha256": "ff2453e2d042d492d0f44c354470a392f5c3efaaea0e75a606813fe911da879b"
+    },
+    {
+      "path": "opml/outline-cap.opml",
+      "bytes": 24154,
+      "sha256": "fdcd1b003e0de327e925503af5d54006c573b9cf4f84bc03627b4f3efa87c7bd"
+    },
+    {
+      "path": "opml/parser-expectations.json",
+      "bytes": 872,
+      "sha256": "ae6d92242861cad891eb3c412f6c8dd88788582b3eff877ff31982b930fbe9b7"
+    },
+    {
+      "path": "opml/queue-cap.opml",
+      "bytes": 676,
+      "sha256": "af18df6552ed7676ca3c91269feb74d668697e54bae7af259d3852b6597231f3"
+    },
+    {
+      "path": "opml/valid-v1.opml",
+      "bytes": 287,
+      "sha256": "0bec186364f7deb445aeca7168dc24db5b8e0eb7a9626d5dada6432776277c23"
+    },
+    {
+      "path": "opml/valid-v2.opml",
+      "bytes": 334,
+      "sha256": "7bb5e8b8bc86001727a0c4e8a12bb4884655221ee6b8bfa03939b02edbb9a170"
+    },
+    {
+      "path": "providers/errors.json",
+      "bytes": 1239,
+      "sha256": "f49eab94873bda4aa99c80fd1c152a06fc75f25eeb0613d8e492303e0df84751"
+    },
+    {
+      "path": "providers/itunes-normalized.json",
+      "bytes": 840,
+      "sha256": "5d14c7ff6537f87c27844a54bac3512fad7dc4b96bac9afaedfdd1eaf6031470"
+    },
+    {
+      "path": "providers/itunes-search.json",
+      "bytes": 1523,
+      "sha256": "efbffadc4ee5a9eaedd09eac212e9e4dda1380ea54f06e8399891c57dfb3bf84"
+    },
+    {
+      "path": "providers/podcast-index-normalized.json",
+      "bytes": 848,
+      "sha256": "481ee80f4046705fcb88e4a09e179ea72ba6d9dadd472c62ec155ca69bf2ef7a"
+    },
+    {
+      "path": "providers/podcast-index-search.json",
+      "bytes": 790,
+      "sha256": "848365dfe527bc8f491a1a40807fe668455a56cde2899f047dae6b50a6883843"
+    },
+    {
+      "path": "providers/signing-vector.json",
+      "bytes": 187,
+      "sha256": "8ee54c3397668b7904beca27d372e51ce901e89b89eb9f8a11ffc9f175a55f73"
+    },
+    {
+      "path": "wire.json",
+      "bytes": 819,
+      "sha256": "3abbf5db893c48aca41ae2a72d3e96197a1118fb0cfa3570adfc9287124d46db"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "key": "fixture-key",
+  "secret": "fixture-secret",
+  "unix_seconds": 1700000000,
+  "user_agent": "AudioSilo/fixture",
+  "authorization": "5c7b5a8219d9cfe8e3dcd81bb5c9ab57f8207ea3"
+}

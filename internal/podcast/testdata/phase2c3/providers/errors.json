@@ -1,0 +1,62 @@
+[
+  {
+    "case": "malformed_json",
+    "status": 200,
+    "body": "{",
+    "http_status": 502,
+    "code": "discovery_unavailable"
+  },
+  {
+    "case": "wrong_envelope",
+    "status": 200,
+    "body": "{}",
+    "http_status": 502,
+    "code": "discovery_unavailable"
+  },
+  {
+    "case": "index_refusal",
+    "provider": "podcast_index",
+    "status": 401,
+    "body": "fixture-key fixture-secret",
+    "http_status": 502,
+    "code": "provider_rejected"
+  },
+  {
+    "case": "index_false",
+    "provider": "podcast_index",
+    "status": 200,
+    "body": "{\"status\":\"false\",\"feeds\":[]}",
+    "http_status": 502,
+    "code": "discovery_unavailable"
+  },
+  {
+    "case": "rate",
+    "status": 429,
+    "headers": {
+      "Retry-After": "120"
+    },
+    "http_status": 429,
+    "code": "provider_rate_limited",
+    "retry_after": 120
+  },
+  {
+    "case": "outage",
+    "status": 503,
+    "http_status": 502,
+    "code": "discovery_unavailable"
+  },
+  {
+    "case": "timeout",
+    "http_status": 504,
+    "code": "discovery_timeout"
+  },
+  {
+    "case": "redirect",
+    "status": 302,
+    "headers": {
+      "Location": "http://169.254.169.254/latest/meta-data/"
+    },
+    "http_status": 502,
+    "code": "discovery_unavailable"
+  }
+]

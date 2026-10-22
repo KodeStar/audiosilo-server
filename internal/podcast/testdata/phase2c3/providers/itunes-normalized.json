@@ -1,0 +1,31 @@
+{
+  "provider": "itunes",
+  "query": "fixture show",
+  "country": "US",
+  "results": [
+    {
+      "title": "Fixture One",
+      "author": "A & B",
+      "feed_url": "https://feeds.example.org/one.xml",
+      "artwork_url": "/api/v1/podcasts/discovery/artwork?id=4745a0c5c9b5a0a81f9d9396ab9abcc27c981462c6fdcbb7ab8f117de612d0e6",
+      "provider_ids": {
+        "itunes": "12345",
+        "podcast_index": null
+      },
+      "episode_count": 12,
+      "provider_url": "https://podcasts.apple.com/us/podcast/fixture-one/id12345"
+    },
+    {
+      "title": "Fixture Two",
+      "author": "",
+      "feed_url": "https://feeds.example.org/two.xml",
+      "artwork_url": null,
+      "provider_ids": {
+        "itunes": "9007199254740993",
+        "podcast_index": null
+      },
+      "episode_count": 0,
+      "provider_url": null
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0"><head><title>Fixture subscriptions</title></head><body>
+<outline text="Group">
+<outline type="rss" text="Fixture One" xmlUrl="https://feeds.example.org/one.xml"/>
+<outline type="rss" text="Same URL" xmlUrl="HTTPS://Feeds.Example.org:443/one.xml#ignored"/>
+<outline type="rss" text="Old URL" xmlUrl="https://feeds.example.org/old-one.xml"/>
+<outline type="rss" text="Private" xmlUrl="https://feeds.example.org/private.xml?token=OPML_PRIVATE_CANARY_2C3&amp;x=1"/>
+<outline type="rss" text="Invalid" xmlUrl="file:///etc/hosts"/>
+<outline type="rss" text="Missing URL"/>
+<outline text="Not a subscription"/>
+</outline>
+</body></opml>

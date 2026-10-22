@@ -1,0 +1,36 @@
+{
+  "status": "true",
+  "count": 5,
+  "feeds": [
+    {
+      "id": 101,
+      "itunesId": 12345,
+      "title": "Fixture One",
+      "author": "A & B",
+      "url": "https://feeds.example.org/one.xml",
+      "image": "https://images.example.org/one.jpg",
+      "artwork": "https://images.example.org/fallback.png",
+      "episodeCount": 12
+    },
+    {
+      "id": 102,
+      "title": "Fixture Two",
+      "url": "https://feeds.example.org/two.xml",
+      "episodeCount": 0
+    },
+    {
+      "id": 103,
+      "title": "Duplicate",
+      "url": "https://feeds.example.org/one.xml"
+    },
+    {
+      "id": 104,
+      "title": "Unsafe",
+      "url": "https://feeds.example.org/private.xml?token=OPML_PRIVATE_CANARY_2C3"
+    },
+    {
+      "id": 105,
+      "title": "Missing URL"
+    }
+  ]
+}

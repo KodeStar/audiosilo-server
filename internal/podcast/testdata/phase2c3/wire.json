@@ -1,0 +1,44 @@
+{
+  "capabilities": {
+    "podcast_discovery": true,
+    "podcast_opml": true
+  },
+  "providers": {
+    "providers": [
+      {
+        "id": "itunes",
+        "available": true
+      },
+      {
+        "id": "podcast_index",
+        "available": false
+      }
+    ]
+  },
+  "errors": [
+    {
+      "http_status": 409,
+      "body": {
+        "error": "This discovery provider is not configured.",
+        "code": "provider_unavailable"
+      }
+    },
+    {
+      "http_status": 429,
+      "headers": {
+        "Retry-After": "6"
+      },
+      "body": {
+        "error": "Too many discovery requests. Try again shortly.",
+        "code": "discovery_rate_limited"
+      }
+    },
+    {
+      "http_status": 400,
+      "body": {
+        "error": "Invalid OPML document.",
+        "code": "invalid_opml"
+      }
+    }
+  ]
+}

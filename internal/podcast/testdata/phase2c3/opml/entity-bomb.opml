@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE opml [<!ENTITY a "CANARY"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]>
+<opml version="2.0"><body><outline text="&b;" xmlUrl="https://feeds.example.org/one.xml"/></body></opml>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0"><head><title>Fixture subscriptions</title></head><body>
+<outline text="Science &amp; Arts">
+<outline type="rss" text="Fixture One" xmlUrl="https://feeds.example.org/one.xml"/>
+<outline text="Fixture Two" xmlUrl="https://feeds.example.org/two.xml"/>
+</outline>
+</body></opml>
