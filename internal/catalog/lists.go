@@ -300,11 +300,10 @@ func (l orderedList) keptRows(rows []listRow, listed map[Ref]bool, keep []Scope,
 
 // withKept merges kept (stored rows a replace keeps unlisted, in stored order)
 // into next (the listed rows, in their new order; listed holds their refs): each
-// kept row goes just after
-// the listed row that last preceded it in the stored order (rows, everything
-// stored now), or first when none did. When the new order of the listed rows
-// would put kept rows out of their stored order, they all go after next instead,
-// in stored order.
+// kept row goes just after the listed row that last preceded it in the stored
+// order (rows, everything stored now), or first when none did. When the new
+// order of the listed rows would put kept rows out of their stored order, they
+// all go after next instead, in stored order.
 func withKept(rows, next []listRow, listed map[Ref]bool, kept []listRow) []listRow {
 	if len(kept) == 0 {
 		return next

@@ -158,11 +158,7 @@ func (a *API) handleSetCollectionItems(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	scopes, ok := a.callerScopes(w, r, "could not save the collection")
-	if !ok {
-		return
-	}
-	keep, ok := a.gatedScopes(w, r, "could not save the collection")
+	scopes, keep, ok := a.gatedScopes(w, r, "could not save the collection")
 	if !ok {
 		return
 	}

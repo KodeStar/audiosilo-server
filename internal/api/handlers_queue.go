@@ -128,11 +128,7 @@ func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	scopes, ok := a.callerScopes(w, r, "could not save the queue")
-	if !ok {
-		return
-	}
-	keep, ok := a.gatedScopes(w, r, "could not save the queue")
+	scopes, keep, ok := a.gatedScopes(w, r, "could not save the queue")
 	if !ok {
 		return
 	}

@@ -74,11 +74,16 @@ func (e gateEnv) scopes(t *testing.T, who Caller) []Scope {
 
 func (e gateEnv) gated(t *testing.T, who Caller) []Scope {
 	t.Helper()
-	s, err := e.c.GatedScopes(e.ctx, who)
+	scopes, keep, err := e.c.GatedScopes(e.ctx, who)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	if want := e.scopes(t, who); !slices.EqualFunc(scopes, want, func(a, b Scope) bool {
+		return a.LibraryID == b.LibraryID && a.AllowAll == b.AllowAll && slices.Equal(a.Paths, b.Paths)
+	}) {
+		t.Fatalf("replace scopes %+v, want CallerScopes %+v", scopes, want)
+	}
+	return keep
 }
 
 func (e gateEnv) book(p string) Ref { return Ref{LibraryID: e.books.ID, Path: p} }

@@ -81,17 +81,18 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 	return scopes, true
 }
 
-// gatedScopes is what the old-client gate alone hides from the caller
-// (catalog.GatedScopes): the podcast entries a whole-list replace from a player
-// that can't see podcasts keeps. nil for a caller that sees them.
-func (a *API) gatedScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
-	keep, err := a.cat.GatedScopes(r.Context(), callerOf(r.Context()))
+// gatedScopes is the caller's scopes for a whole-list replace
+// (catalog.GatedScopes): what they may list, and keep, the podcast entries a
+// replace from a player that can't see podcasts keeps (nil for a caller that
+// sees them).
+func (a *API) gatedScopes(w http.ResponseWriter, r *http.Request, msg string) (scopes, keep []catalog.Scope, ok bool) {
+	scopes, keep, err := a.cat.GatedScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
-		a.log.Warn("load gated scopes failed", "user", userFrom(r.Context()).ID, "err", err)
+		a.log.Warn("load user scopes failed", "user", userFrom(r.Context()).ID, "err", err)
 		writeError(w, http.StatusInternalServerError, msg)
-		return nil, false
+		return nil, nil, false
 	}
-	return keep, true
+	return scopes, keep, true
 }
 
 // scopeIn is the caller's scope in one library out of their callerScopes, as the

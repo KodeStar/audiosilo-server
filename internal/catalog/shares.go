@@ -347,27 +347,40 @@ func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error)
 	return out, nil
 }
 
-// GatedScopes is what the old-client gate alone hides from who: their scopes in
-// podcast libraries as a client that sees podcasts would get them (shares,
-// household rules and private shows applied), nil when who already sees
-// podcasts. A whole-list replace from such a caller keeps the stored entries
-// these allow (SetQueue, SetCollectionItems), so an old player reordering a list
-// can't delete podcast entries it was never shown. Entries outside them (a
-// revoked share, an unfollowed private show) get no such protection.
-func (c *Catalog) GatedScopes(ctx context.Context, who Caller) ([]Scope, error) {
+// GatedScopes is who's scopes for a whole-list replace, from one read of their
+// access: scopes is CallerScopes, and keep is what the old-client gate alone
+// hides from who, their scopes in podcast libraries as a client that sees
+// podcasts would get them (shares, household rules and private shows applied;
+// nil when who already sees podcasts). A replace from such a caller keeps the
+// stored entries keep allows (SetQueue, SetCollectionItems), so an old player
+// reordering a list can't delete podcast entries it was never shown. Entries
+// outside them (a revoked share, an unfollowed private show) get no such
+// protection.
+func (c *Catalog) GatedScopes(ctx context.Context, who Caller) (scopes, keep []Scope, err error) {
 	if who.Podcasts {
-		return nil, nil
+		scopes, err = c.CallerScopes(ctx, who)
+		return scopes, nil, err
 	}
 	who.Podcasts = true
-	scopes, err := c.CallerScopes(ctx, who)
+	all, err := c.CallerScopes(ctx, who)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	podcasts, err := c.podcastLibraries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return slices.DeleteFunc(scopes, func(s Scope) bool { return !podcasts[s.LibraryID] }), nil
+	// The gate changes nothing outside podcast libraries, so the rest is
+	// exactly CallerScopes for who as they are.
+	scopes, keep = []Scope{}, []Scope{}
+	for _, s := range all {
+		if podcasts[s.LibraryID] {
+			keep = append(keep, s)
+		} else {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes, keep, nil
 }
 
 // podcastLibraries is the set of podcast library ids.
