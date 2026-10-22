@@ -40,7 +40,7 @@ func (p *Prefetcher) Start(who catalog.Caller, current catalog.Ref, stream bool)
 	}
 	c := p.users[who.ID]
 	if c == nil || c.ref != current {
-		if c == nil && len(p.users) >= 4096 {
+		if c == nil && len(p.users) >= 4096 && !p.evictIdle() {
 			p.mu.Unlock()
 			return func() {}
 		}
@@ -59,6 +59,19 @@ func (p *Prefetcher) Start(who catalog.Caller, current catalog.Ref, stream bool)
 			p.mu.Unlock()
 		}
 	}
+}
+
+// evictIdle drops one user whose current item has no stream open and no look
+// running, so a full map still admits a new listener; false when every entry
+// is busy. The caller holds p.mu.
+func (p *Prefetcher) evictIdle() bool {
+	for id, c := range p.users {
+		if c.streams == 0 && !c.busy {
+			delete(p.users, id)
+			return true
+		}
+	}
+	return false
 }
 
 // Reconsider is called only after a successful queue mutation, or a play-fetch
@@ -150,8 +163,10 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 		if err != nil {
 			return
 		}
+		// Absent is prepared; a queued intent (a scheduled -10 one, say) is
+		// raised to the prefetch priority by the same Ensure, with no new job.
 		st, ok := states[next.Path]
-		if !ok || st.State != "absent" {
+		if !ok || st.State != "absent" && st.State != "queued" {
 			settled = true
 			return
 		}
@@ -165,6 +180,12 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 		}
 		pin, err := p.Catalog.PodcastPin(ctx, next.LibraryID, next.Path)
 		if err != nil {
+			return
+		}
+		// A removed entry is never fetched automatically (plan 2.2); open
+		// work for it may still be raised.
+		if pin.Removed && st.State == "absent" {
+			settled = true
 			return
 		}
 		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})

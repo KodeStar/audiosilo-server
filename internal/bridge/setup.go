@@ -114,6 +114,10 @@ func (s *Setup) validate() *Setup {
 // AcceptSetup names the setup block in a heartbeat reply's accepts.
 const AcceptSetup = "setup"
 
+// AcceptClaimMinPriority names the claim's min_priority option
+// (GET /bridge/jobs/next) in a heartbeat reply's accepts.
+const AcceptClaimMinPriority = "claim_min_priority"
+
 // HeartbeatAccepts advertises optional heartbeat blocks and claim options.
 // A Bridge sends an extension only after negotiation with this server.
-func HeartbeatAccepts() []string { return []string{AcceptSetup, "claim_min_priority"} }
+func HeartbeatAccepts() []string { return []string{AcceptSetup, AcceptClaimMinPriority} }

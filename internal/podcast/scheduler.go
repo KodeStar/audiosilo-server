@@ -124,6 +124,10 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 			for _, ep := range candidates {
 				raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: show.ShowID, EpisodeID: ep.EpisodeID})
 				_, created, err := d.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: -10}, bridge.FetchOptions{})
+				if errors.Is(err, bridge.ErrFetchCooldown) {
+					// A failure not folded yet: its backoff holds it, not a fault.
+					continue
+				}
 				if err != nil {
 					errs = append(errs, err)
 					continue

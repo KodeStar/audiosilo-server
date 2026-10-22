@@ -187,7 +187,8 @@ func (a *API) handleBridgePodcastRetentionCheck(w http.ResponseWriter, r *http.R
 }
 func (a *API) writePodcastStorageError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, catalog.ErrNotFound):
+	// bridge.ErrNotFound: a fetch's target left the index (checkPodcastTarget).
+	case errors.Is(err, catalog.ErrNotFound), errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case writeLibraryKindError(w, err):
 	default:

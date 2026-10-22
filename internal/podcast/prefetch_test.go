@@ -169,4 +169,40 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=? AND priority=10`, current.Path).Scan(&n); err != nil || n != 1 {
 		t.Fatal("mutation after settle", n, err)
 	}
+	// An open scheduled intent for the next episode is raised to the prefetch
+	// priority, never duplicated.
+	if _, err = db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	scheduled, _, err := jobs.EnsurePodcastFetch(ctx, bridge.NewJob{LibraryID: &lib.ID, Path: &candidate.Path, Params: raw, Priority: -10}, bridge.FetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, candidate}, scopes); err != nil {
+		t.Fatal(err)
+	}
+	p3 := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
+	done6 := p3.Start(who, third, true)
+	defer done6()
+	p3.work.Wait()
+	if j, err = jobs.Job(ctx, scheduled.ID); err != nil || j.Priority != 10 {
+		t.Fatal("scheduled candidate not raised", j, err)
+	}
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, candidate.Path).Scan(&n); err != nil || n != 1 {
+		t.Fatal("scheduled candidate duplicated", n, err)
+	}
+	// A removed feed entry next in the queue is not prepared automatically.
+	if _, err = db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, `UPDATE podcast_episodes SET removed_at='2026-10-01T00:00:00Z' WHERE book_id=(SELECT id FROM books WHERE library_id=? AND rel_path=?)`, lib.ID, candidate.Path); err != nil {
+		t.Fatal(err)
+	}
+	p4 := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
+	done7 := p4.Start(who, third, true)
+	defer done7()
+	p4.work.Wait()
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, candidate.Path).Scan(&n); err != nil || n != 0 {
+		t.Fatal("removed entry prefetched", n, err)
+	}
 }

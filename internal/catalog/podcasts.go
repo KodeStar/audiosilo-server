@@ -228,9 +228,9 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		changed = true
 		return nil
 	})
-	if err == nil && c.PodcastChanged != nil {
+	if notify := c.podcastChanged.Load(); err == nil && changed && notify != nil {
 		for _, ep := range f.Episodes {
-			c.PodcastChanged(lib, ep.Path)
+			(*notify)(lib, ep.Path)
 		}
 	}
 	return changed, err

@@ -78,16 +78,14 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 			release()
 			return nil, nil, status, openErr
 		}
-		states, readErr := d.Bridge.PodcastFetchStatuses(budget, lib.ID, []string{rel})
+		// An indexed pin whose committed descriptor cannot be opened is unready.
+		st, readErr := d.Bridge.UnreadyFetchStatus(budget, lib.ID, rel)
 		if readErr != nil && budget.Err() == nil {
 			release()
 			return nil, nil, status, readErr
 		}
-		if st, ok := states[rel]; ok {
-			// An indexed pin whose committed descriptor cannot be opened is unready.
-			if st.State != "ready" {
-				status = st
-			}
+		if readErr == nil {
+			status = st
 		}
 		if noNew {
 			status = bridge.UnavailableFetchStatus(status, bridge.ErrFetchDemo)

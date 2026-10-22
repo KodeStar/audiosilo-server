@@ -1727,7 +1727,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Episode pages and Book.episode gain optional `fetch`, batched per page. `podcast_fetch:true`
   advertises this protocol even offline; the existing podcasts capability keeps its module meaning.
   One-ahead queue preparation uses the actual request's caller, scopes and private proof, at most
-  one candidate per user/current, in bounded detached work. Queue mutations reconsider an active
+  one candidate per user/current, in bounded detached work; an absent candidate is queued at 10 and a
+  queued one (a scheduled -10 intent) raised to 10, never duplicated. Queue mutations reconsider an active
   podcast stream/fetch; removal never cancels shared work. Playing the prepared episode promotes
   the same intent. No player UI or released-client gate change is included.
   Heartbeat replies advertise `claim_min_priority`; negotiated `GET /bridge/jobs/next` accepts a

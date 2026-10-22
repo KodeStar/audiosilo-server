@@ -364,3 +364,48 @@ func TestPodcastFetchErrorsKeepSafeCodes(t *testing.T) {
 		}
 	}
 }
+
+// An index that calls the pin present while its file does not open shows the
+// open work (or, with none, absent plus the refusal), never "ready".
+func TestUnreadyFetchStatusIgnoresIndexedPin(t *testing.T) {
+	q := fetchQueue(t)
+	ctx := context.Background()
+	raw, err := os.ReadFile("../podcast/testdata/phase2c2/feed-fetch-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var feed struct {
+		Episodes []struct {
+			Fetch json.RawMessage `json:"fetch"`
+		} `json:"episodes"`
+	}
+	if err = json.Unmarshal(raw, &feed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.db.ExecContext(ctx, `UPDATE podcast_episodes SET present=1,fetch_json=?`, string(feed.Episodes[0].Fetch)); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := q.UnreadyFetchStatus(ctx, q.lib, "Show/episode.mp3"); err != nil || st.State != "absent" || st.RequestID != nil {
+		t.Fatalf("absent %+v %v", st, err)
+	}
+	j, _, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), FetchOptions{Retry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states, err := q.PodcastFetchStatuses(ctx, q.lib, []string{"Show/episode.mp3"}); err != nil || states["Show/episode.mp3"].State != "ready" {
+		t.Fatalf("indexed %+v %v", states, err)
+	}
+	if st, err := q.UnreadyFetchStatus(ctx, q.lib, "Show/episode.mp3"); err != nil || st.State != "queued" || st.RequestID == nil || *st.RequestID != j.ID {
+		t.Fatalf("queued %+v %v", st, err)
+	}
+	if _, err = q.db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	q.ModuleOn = func(string) bool { return false }
+	if st, err := q.UnreadyFetchStatus(ctx, q.lib, "Show/episode.mp3"); err != nil || st.State != "unavailable" || st.Error == nil || st.Error.Code != "module_off" {
+		t.Fatalf("refusal %+v %v", st, err)
+	}
+	if st, err := q.UnreadyFetchStatus(ctx, q.lib, "Show/other.mp3"); err != nil || st.State != "absent" {
+		t.Fatalf("not indexed %+v %v", st, err)
+	}
+}

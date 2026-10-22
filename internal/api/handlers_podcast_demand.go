@@ -118,6 +118,14 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 		a.writePodcastStorageError(w, err)
 		return
 	}
+	if a.bridge == nil && !ready {
+		if r.Method == http.MethodPost {
+			writeBridgeUnavailable(w)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"fetch": bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable)})
+		return
+	}
 	if r.Method == http.MethodPost && !ready {
 		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
 		_, _, err = a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: 100, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
@@ -125,14 +133,14 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	states, err := a.bridge.PodcastFetchStatuses(r.Context(), lib.ID, []string{rel})
-	if err != nil {
+	// A pin that opened is ready whatever the job rows say; one the index calls
+	// present that did not open shows its open work or refusal instead.
+	var st bridge.FetchStatus
+	if ready {
+		st = bridge.ReadyFetchStatus(pin.Fetch)
+	} else if st, err = a.bridge.UnreadyFetchStatus(r.Context(), lib.ID, rel); err != nil {
 		a.writePodcastStorageError(w, err)
 		return
-	}
-	st := states[rel]
-	if !ready && st.State == "ready" {
-		st = bridge.FetchStatus{State: "absent"}
 	}
 	if userFrom(r.Context()).IsDemo && !ready {
 		st = bridge.UnavailableFetchStatus(st, bridge.ErrFetchDemo)

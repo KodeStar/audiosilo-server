@@ -172,6 +172,25 @@ func UnavailableFetchStatus(st FetchStatus, refusal error) FetchStatus {
 // PodcastFetchStatuses reads a whole page in one index query. Ready indexed
 // generations win over stale work, and summaries survive terminal-row pruning.
 func (s *Service) PodcastFetchStatuses(ctx context.Context, lib int64, paths []string) (map[string]FetchStatus, error) {
+	return s.podcastFetchStatuses(ctx, lib, paths, true)
+}
+
+// UnreadyFetchStatus is one episode's summary once its committed file failed
+// to open (library.OpenPodcast): the indexed pin is not ready, so its open
+// work, failure or scheduling refusal shows instead; absent when not indexed.
+func (s *Service) UnreadyFetchStatus(ctx context.Context, lib int64, path string) (FetchStatus, error) {
+	states, err := s.podcastFetchStatuses(ctx, lib, []string{path}, false)
+	if err != nil {
+		return FetchStatus{}, err
+	}
+	st, ok := states[path]
+	if !ok {
+		st = FetchStatus{State: "absent"}
+	}
+	return st, nil
+}
+
+func (s *Service) podcastFetchStatuses(ctx context.Context, lib int64, paths []string, pinReady bool) (map[string]FetchStatus, error) {
 	out := map[string]FetchStatus{}
 	if len(paths) == 0 {
 		return out, nil
@@ -204,7 +223,7 @@ func (s *Service) PodcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		var f *feed.Fetch
 		_ = json.Unmarshal([]byte(pin.String), &f)
 		switch {
-		case present && feed.ValidFetch(f) && f.DeletedAt == "":
+		case pinReady && present && feed.ValidFetch(f) && f.DeletedAt == "":
 			st = ReadyFetchStatus(f)
 		case state.String == StateQueued:
 			st.State = "queued"

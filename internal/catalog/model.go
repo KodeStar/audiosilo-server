@@ -227,11 +227,12 @@ type catalogDB interface {
 }
 
 type Catalog struct {
-	// PodcastChanged hears that a podcast episode's index row was written (the
-	// Bridge wakes media requests waiting on it); wired before serving.
-	PodcastChanged func(int64, string)
-	db             catalogDB
-	now            func() time.Time
+	db  catalogDB
+	now func() time.Time
+	// podcastChanged hears that a podcast episode's index row was written
+	// (SetPodcastChanged): atomic, as the startup scan indexes before the
+	// Bridge is wired.
+	podcastChanged atomic.Pointer[func(int64, string)]
 	// onChange hears that a book's index row was written (OnBookChange): the
 	// listeners, replaced whole (copy-on-write) by each registration.
 	onChange          atomic.Pointer[[]func()]
@@ -260,6 +261,17 @@ func (c *Catalog) OnBookChange(f func()) {
 	}
 	fs = append(fs, f)
 	c.onChange.Store(&fs)
+}
+
+// SetPodcastChanged sets the one listener told, after each podcast show's
+// index commits, about each episode path it wrote (the Bridge wakes media
+// requests waiting on it); nil clears it. Safe while the catalog is in use.
+func (c *Catalog) SetPodcastChanged(f func(lib int64, path string)) {
+	if f == nil {
+		c.podcastChanged.Store(nil)
+		return
+	}
+	c.podcastChanged.Store(&f)
 }
 
 // changed tells the OnBookChange listeners.

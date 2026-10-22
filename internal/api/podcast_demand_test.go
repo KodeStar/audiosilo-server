@@ -414,7 +414,7 @@ func TestPodcastEnqueueTimeCountsAgainstWait(t *testing.T) {
 func TestPodcastFinalPresenceCheckWithoutWake(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	ready := f.Episodes[0].Path
-	b.cat.PodcastChanged = nil
+	b.cat.SetPodcastChanged(nil)
 	if err := os.Remove(filepath.Join(b.lib.Root, ready)); err != nil {
 		t.Fatal(err)
 	}

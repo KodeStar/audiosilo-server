@@ -89,19 +89,19 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"series_books":       true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)
 		"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 		"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
-		"podcast_fetch":      true,
-		"queue":              true,            // the up-next queue (/me/queue)
-		"collections":        true,            // collections, shareable read-only (/me/collections, /me/share-targets)
-		"user_stats":         true,            // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
-		"ratings":            true,            // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
-		"progress_edit":      true,            // PATCH /libraries/{id}/progress; started_at/finished_at on progress
-		"my_devices":         true,            // own devices (GET /me/devices, DELETE /me/devices/{id})
-		"annotations":        true,            // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
-		"addresses":          true,            // home/away addresses on pairing, exchange and login; GET /addresses
-		"household":          true,            // listening in the house (GET/PUT /me/household, GET /household/listening)
-		"cast":               true,            // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
-		"household_members":  true,            // household members (/me/household/members; user.managed_by/member_kind; also_members)
-		"bridge":             bridgeOn != nil, // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
+		"podcast_fetch":      true,                 // on-demand podcast fetch/status (GET/POST /libraries/{id}/podcasts/fetch; 503 fetch on /stream)
+		"queue":              true,                 // the up-next queue (/me/queue)
+		"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
+		"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+		"ratings":            true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+		"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+		"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
+		"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+		"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
+		"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
+		"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
+		"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
+		"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
 	}
 }
 
