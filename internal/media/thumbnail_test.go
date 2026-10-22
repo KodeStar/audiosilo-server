@@ -75,6 +75,26 @@ func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
 	}
 }
 
+// ThumbnailJPEG never hands back the source's bytes: a small JPEG carrying
+// trailing bytes (a polyglot) comes back as this server's own encoding.
+func TestThumbnailJPEGAlwaysReencodes(t *testing.T) {
+	t.Parallel()
+	src := append(encodeJPEG(t, 200, 200), []byte("<html>trailing</html>")...)
+	out, err := ThumbnailJPEG(src, 320)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(out, src) || bytes.Contains(out, []byte("<html>")) {
+		t.Fatal("ThumbnailJPEG returned the source bytes")
+	}
+	if w, h := decodedSize(t, out); w != 200 || h != 200 {
+		t.Fatalf("size = %dx%d", w, h)
+	}
+	if _, err := ThumbnailJPEG([]byte("<svg xmlns='http://www.w3.org/2000/svg'/>"), 320); err == nil {
+		t.Fatal("an SVG decoded")
+	}
+}
+
 func TestThumbnailSmallPNGBecomesJPEGWithoutUpscaling(t *testing.T) {
 	t.Parallel()
 	out, err := Thumbnail(encodePNG(t, 100, 150, color.NRGBA{0, 0, 0, 0}), 320)
