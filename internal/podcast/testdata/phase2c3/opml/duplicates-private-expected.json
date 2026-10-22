@@ -1,0 +1,71 @@
+{
+  "library_id": 7,
+  "rows": [
+    {
+      "outline_index": 2,
+      "status": "already_following",
+      "feed": "https://feeds.example.org/...",
+      "private": false,
+      "path": "Fixture One",
+      "request_id": null,
+      "duplicate_of": null,
+      "error": null
+    },
+    {
+      "outline_index": 3,
+      "status": "duplicate",
+      "feed": "https://feeds.example.org/...",
+      "private": false,
+      "path": null,
+      "request_id": null,
+      "duplicate_of": 2,
+      "error": null
+    },
+    {
+      "outline_index": 4,
+      "status": "already_following",
+      "feed": "https://feeds.example.org/...",
+      "private": false,
+      "path": "Fixture One",
+      "request_id": null,
+      "duplicate_of": null,
+      "error": null
+    },
+    {
+      "outline_index": 5,
+      "status": "queued",
+      "feed": "https://feeds.example.org/...",
+      "private": true,
+      "path": null,
+      "request_id": 81,
+      "duplicate_of": null,
+      "error": null
+    },
+    {
+      "outline_index": 6,
+      "status": "invalid",
+      "feed": null,
+      "private": true,
+      "path": null,
+      "request_id": null,
+      "duplicate_of": null,
+      "error": {
+        "code": "invalid_feed_url",
+        "message": "Invalid feed URL."
+      }
+    },
+    {
+      "outline_index": 7,
+      "status": "invalid",
+      "feed": null,
+      "private": true,
+      "path": null,
+      "request_id": null,
+      "duplicate_of": null,
+      "error": {
+        "code": "missing_feed_url",
+        "message": "A feed URL is required."
+      }
+    }
+  ]
+}

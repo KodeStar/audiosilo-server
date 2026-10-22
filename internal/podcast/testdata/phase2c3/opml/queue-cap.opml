@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0"><head><title>Fixture subscriptions</title></head><body>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-1.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-2.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-3.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-4.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-5.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-6.xml"/>
+<outline type="rss" text="New" xmlUrl="https://feeds.example.org/new-7.xml"/>
+</body></opml>

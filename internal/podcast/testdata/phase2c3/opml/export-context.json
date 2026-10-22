@@ -1,0 +1,64 @@
+{
+  "shows": [
+    {
+      "library_id": 7,
+      "path": "Fixture One",
+      "show_id": "0123456789abcdef",
+      "title": "Fixture One",
+      "feed_url": "https://feeds.example.org/one.xml",
+      "private": false,
+      "following": true,
+      "visible": true
+    },
+    {
+      "library_id": 8,
+      "path": "Copy",
+      "show_id": "1234567890abcdef",
+      "title": "Duplicate elsewhere",
+      "feed_url": "https://feeds.example.org/one.xml",
+      "private": false,
+      "following": true,
+      "visible": true
+    },
+    {
+      "library_id": 7,
+      "path": "Private",
+      "show_id": "2222222222222222",
+      "title": "Private title",
+      "feed_url": "",
+      "private": true,
+      "following": true,
+      "visible": true
+    },
+    {
+      "library_id": 7,
+      "path": "Hidden",
+      "show_id": "3333333333333333",
+      "title": "Hidden title",
+      "feed_url": "https://feeds.example.org/hidden.xml",
+      "private": false,
+      "following": true,
+      "visible": false
+    },
+    {
+      "library_id": 7,
+      "path": "Not followed",
+      "show_id": "4444444444444444",
+      "title": "Not followed",
+      "feed_url": "https://feeds.example.org/not-followed.xml",
+      "private": false,
+      "following": false,
+      "visible": true
+    },
+    {
+      "library_id": 7,
+      "path": "Missing URL",
+      "show_id": "5555555555555555",
+      "title": "Missing URL",
+      "feed_url": "",
+      "private": false,
+      "following": true,
+      "visible": true
+    }
+  ]
+}

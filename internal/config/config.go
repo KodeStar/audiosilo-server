@@ -165,6 +165,65 @@ func (c *Config) ModuleEnabled(id string) bool {
 	return on != nil && *on
 }
 
+// PodcastsConfig holds the podcast settings that are not the module's toggle
+// (modules.podcasts.enabled).
+type PodcastsConfig struct {
+	Discovery PodcastDiscoveryConfig `yaml:"discovery"`
+}
+
+// PodcastDiscoveryConfig configures podcast directory search (Bridge Phase
+// 2c-3). Enabled is read once at start (podcasts.discovery.enabled,
+// AUDIOSILO_PODCAST_DISCOVERY_ENABLED; on by default) and has no console
+// setting; the podcasts module stays the live switch. The Podcast Index key pair
+// comes only from the environment (AUDIOSILO_PODCAST_INDEX_KEY and
+// AUDIOSILO_PODCAST_INDEX_SECRET, read at start): never written to config.yaml,
+// never a console setting, never serialized (yaml:"-" json:"-").
+type PodcastDiscoveryConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	IndexKey    string `yaml:"-" json:"-"`
+	IndexSecret string `yaml:"-" json:"-"`
+}
+
+// The Podcast Index credential variables (environment only).
+const (
+	EnvPodcastIndexKey    = "AUDIOSILO_PODCAST_INDEX_KEY"
+	EnvPodcastIndexSecret = "AUDIOSILO_PODCAST_INDEX_SECRET" //nolint:gosec // G101: the variable's name, not a credential
+)
+
+// maxPodcastIndexCredential bounds each Podcast Index credential, in bytes.
+const maxPodcastIndexCredential = 256
+
+// PodcastIndex returns the Podcast Index key pair when both are set and each is
+// 1 to 256 printable, non-space ASCII bytes (kept byte for byte). ok is false
+// otherwise; problem then says which variable is wrong and why, never its value,
+// and is "" when neither is set (Podcast Index simply isn't configured).
+func (d PodcastDiscoveryConfig) PodcastIndex() (key, secret string, ok bool, problem string) {
+	if d.IndexKey == "" && d.IndexSecret == "" {
+		return "", "", false, ""
+	}
+	for _, v := range []struct{ name, value string }{{EnvPodcastIndexKey, d.IndexKey}, {EnvPodcastIndexSecret, d.IndexSecret}} {
+		if v.value == "" {
+			return "", "", false, v.name + " is not set"
+		}
+		if !credentialBytes(v.value) {
+			return "", "", false, v.name + " must be 1 to 256 printable ASCII characters without spaces"
+		}
+	}
+	return d.IndexKey, d.IndexSecret, true, ""
+}
+
+func credentialBytes(v string) bool {
+	if len(v) == 0 || len(v) > maxPodcastIndexCredential {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x21 || v[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // DemoConfig configures public demo mode: when enabled, an unauthenticated
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
 // named library), and idle demo accounts are reaped in the background.
@@ -302,6 +361,7 @@ type Config struct {
 	Activity       ActivityConfig  `yaml:"activity"`  // listening history retention
 	Household      HouseholdConfig `yaml:"household"` // household members
 	Modules        ModulesConfig   `yaml:"modules"`   // managed modules (internal/modules), each off by default
+	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -351,6 +411,7 @@ func Default(dataDir string) *Config {
 		Backups:        BackupConfig{Schedule: DefaultBackupSchedule, Keep: DefaultBackupKeep},
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
 		Household:      HouseholdConfig{MembersEnabled: true, MaxMembers: DefaultMaxMembers},
+		Podcasts:       PodcastsConfig{Discovery: PodcastDiscoveryConfig{Enabled: true}},
 	}
 }
 
@@ -378,6 +439,10 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 
 	cfg.file = cfg.Clone()
 	applyEnv(cfg)
+	// The Podcast Index pair is environment only: no fields row, so it is never a
+	// console setting, never locked or listed, and never saved.
+	cfg.Podcasts.Discovery.IndexKey = os.Getenv(EnvPodcastIndexKey)
+	cfg.Podcasts.Discovery.IndexSecret = os.Getenv(EnvPodcastIndexSecret)
 	if cfg.TLS.CacheDir == "" {
 		cfg.TLS.CacheDir = filepath.Join(dataDir, "certs")
 	}

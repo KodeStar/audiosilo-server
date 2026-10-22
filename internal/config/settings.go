@@ -107,6 +107,11 @@ var fields = []field{
 	{key: "modules.contributions.enabled", env: "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", setting: "modules.contributions",
 		ptr: func(c *Config) any { return &c.Modules.Contributions.Enabled }},
 
+	// Podcast directory search: read once at start, no console setting (the
+	// podcasts module is the live switch).
+	{key: "podcasts.discovery.enabled", env: "AUDIOSILO_PODCAST_DISCOVERY_ENABLED", restart: true,
+		ptr: func(c *Config) any { return &c.Podcasts.Discovery.Enabled }},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",

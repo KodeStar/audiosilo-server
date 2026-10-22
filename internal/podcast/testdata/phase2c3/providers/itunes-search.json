@@ -1,0 +1,57 @@
+{
+  "resultCount": 8,
+  "results": [
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 12345,
+      "trackId": 12345,
+      "collectionName": " Fixture One ",
+      "artistName": "A & B",
+      "feedUrl": "HTTPS://Feeds.Example.org:443/one.xml#fragment",
+      "artworkUrl600": "https://images.example.org/one.jpg",
+      "collectionViewUrl": "https://podcasts.apple.com/us/podcast/fixture-one/id12345",
+      "trackCount": 12
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 12345,
+      "collectionName": "Duplicate title",
+      "feedUrl": "https://feeds.example.org/one.xml",
+      "trackCount": 999
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "trackId": 9007199254740993,
+      "trackName": "Fixture Two",
+      "feedUrl": "https://feeds.example.org/two.xml",
+      "trackCount": 0
+    },
+    {
+      "kind": "podcast",
+      "collectionName": "Missing feed"
+    },
+    {
+      "kind": "podcast-episode",
+      "trackName": "An episode",
+      "feedUrl": "https://feeds.example.org/episode.xml"
+    },
+    {
+      "kind": "podcast",
+      "collectionName": "Synthetic private canary",
+      "feedUrl": "https://feeds.example.org/private.xml?token=OPML_PRIVATE_CANARY_2C3"
+    },
+    {
+      "kind": "podcast",
+      "collectionName": "Not HTTP",
+      "feedUrl": "file:///etc/hosts"
+    },
+    {
+      "kind": "podcast",
+      "collectionName": "Loopback",
+      "feedUrl": "http://127.0.0.1/feed.xml"
+    }
+  ]
+}

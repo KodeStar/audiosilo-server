@@ -186,3 +186,71 @@ func TestRedactPodcastTextWholeURL(t *testing.T) {
 		}
 	}
 }
+
+// An open request is adopted only with the same privacy: a public request
+// never rides a private job (nor the reverse), and the private URL in memory is
+// never attached to a public job. Same-privacy adoption still works at the
+// open cap.
+func TestSubscribePrivacyConflict(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	public := "https://example.com/feed.xml"
+	pub, created, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, public, false, "")
+	if err != nil || !created {
+		t.Fatal(err)
+	}
+	if _, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, public, true, ""); !errors.Is(err, ErrPrivacyConflict) {
+		t.Fatalf("private onto public = %v", err)
+	}
+	q.secretMu.Lock()
+	if q.privateURLs[pub.ID] != "" {
+		t.Fatal("a private URL was attached to a public job")
+	}
+	q.secretMu.Unlock()
+	// A member feed that looks public, followed as private.
+	secret := "https://example.com/members.xml"
+	priv, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, false, ""); !errors.Is(err, ErrPrivacyConflict) {
+		t.Fatalf("public onto private = %v", err)
+	}
+	// Fill the open cap, then the same requests still adopt.
+	for i := range 3 {
+		if _, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, fmt.Sprintf("https://example.com/%d.xml", i), false, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/sixth.xml", false, ""); !errors.Is(err, ErrTooManyRequests) {
+		t.Fatalf("cap = %v", err)
+	}
+	if j, created, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, public, false, ""); err != nil || created || j.ID != pub.ID {
+		t.Fatalf("public adoption at cap = %v", err)
+	}
+	if j, created, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, true, ""); err != nil || created || j.ID != priv.ID {
+		t.Fatalf("private adoption at cap = %v", err)
+	}
+}
+
+// An adopt-only subscribe returns the open request or ErrNoNewRequest, and
+// queues nothing either way.
+func TestSubscribeAdoptOnly(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	if _, _, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true}); !errors.Is(err, ErrNoNewRequest) {
+		t.Fatalf("nothing open = %v", err)
+	}
+	var n int
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bridge_jobs`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("queued %d %v", n, err)
+	}
+	j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/a.xml", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, created, err := q.Subscribe(ctx, SubscribeRequest{LibraryID: q.lib, User: q.admin, FeedURL: "https://example.com/a.xml", AdoptOnly: true})
+	if err != nil || created || got.ID != j.ID {
+		t.Fatalf("adopt = %v", err)
+	}
+}

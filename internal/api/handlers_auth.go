@@ -90,6 +90,8 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 		"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
 		"podcast_fetch":      true,                 // on-demand podcast fetch/status (GET/POST /libraries/{id}/podcasts/fetch; 503 fetch on /stream)
+		"podcast_discovery":  a.discoveryOn(),      // podcast directory search (/podcasts/discovery/*): discovery enabled at start AND the podcasts module on
+		"podcast_opml":       true,                 // OPML subscription transfer (POST /podcasts/opml/import needs the module, GET /podcasts/opml/export does not)
 		"queue":              true,                 // the up-next queue (/me/queue)
 		"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
 		"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)

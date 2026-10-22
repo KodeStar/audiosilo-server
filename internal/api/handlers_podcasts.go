@@ -11,6 +11,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -214,88 +215,78 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := userFrom(r.Context()).ID
-	var show *catalog.PodcastShow
-	var err error
-	norm := ""
-	private := req.Private != nil && *req.Private
-	if req.Path != nil {
-		p := *req.Path
-		s, scopeErr := a.cat.CallerScope(r.Context(), callerOf(r.Context()), lib.ID)
-		if scopeErr != nil {
-			a.writeCatalogError(w, scopeErr, "podcast scope failed", "Could not check access.")
-			return
-		}
-		if !feed.ShowPath(p) || !s.VisibleInBrowse(p) {
-			writeShowNotFound(w)
-			return
-		}
-		show, err = a.cat.PodcastShow(r.Context(), lib.ID, p, user)
-		if errors.Is(err, catalog.ErrNotFound) {
-			writeShowNotFound(w)
-			return
-		}
-	} else {
-		whole, grantErr := a.cat.PodcastWholeGrant(r.Context(), callerOf(r.Context()), lib.ID)
-		if grantErr != nil {
-			a.writeCatalogError(w, grantErr, "podcast grant failed", "Could not check access.")
-			return
-		}
-		if !whole {
-			writeErrorCode(w, 403, "no_library_access", "Following a URL needs access to the whole library.")
-			return
-		}
-		norm, err = feed.NormalizeFeedURL(*req.FeedURL)
-		if err != nil {
-			writeErrorCode(w, 400, "invalid_feed_url", "Invalid feed URL.")
-			return
-		}
-		private = private || feed.IsPrivateFeedURL(norm)
-		show, err = a.cat.PodcastShowByHash(r.Context(), lib.ID, feed.FeedURLHash(norm), user)
+	if req.FeedURL != nil {
+		a.followByURL(w, r, lib.ID, *req.FeedURL, req.Private != nil && *req.Private)
+		return
 	}
-	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+	p := *req.Path
+	s, err := a.cat.CallerScope(r.Context(), callerOf(r.Context()), lib.ID)
+	if err != nil {
+		a.writeCatalogError(w, err, "podcast scope failed", "Could not check access.")
+		return
+	}
+	if !feed.ShowPath(p) || !s.VisibleInBrowse(p) {
+		writeShowNotFound(w)
+		return
+	}
+	show, err := a.cat.PodcastShow(r.Context(), lib.ID, p, user)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeShowNotFound(w)
+		return
+	}
+	if err != nil {
 		a.writeCatalogError(w, err, "find podcast failed", "Could not load show.")
 		return
 	}
-	if show != nil {
-		state, err := a.cat.PodcastState(r.Context(), lib.ID, show.Path)
-		if err != nil {
-			a.writeCatalogError(w, err, "load feed state failed", "Could not load show.")
-			return
-		}
-		if !state.SecretMissing || req.Path != nil {
-			if err := a.cat.FollowPodcast(r.Context(), user, lib.ID, show.Path, show.ShowID); err != nil {
-				a.writeCatalogError(w, err, "follow podcast failed", "Could not follow show.")
-				return
-			}
-			if a.bridge != nil {
-				a.bridge.WakePodcasts()
-			}
-			show.Following = true
-			writeJSON(w, 200, map[string]any{"state": "following", "show": show})
-			return
-		}
-	}
-	if _, ok := a.podcastBridgeReady(w, r, bridge.KindPodcastSubscribe); !ok {
+	// A visible show is followed by its path even while its secret is missing
+	// (the path, unlike a URL, cannot repair it).
+	if err := a.cat.FollowPodcast(r.Context(), user, lib.ID, show.Path, show.ShowID); err != nil {
+		a.writeCatalogError(w, err, "follow podcast failed", "Could not follow show.")
 		return
 	}
-	showPath := ""
-	if show != nil {
-		showPath = show.Path
-		// The URL that restores a private show is that show's secret, whatever
-		// the request's flag or the URL's look says: it stays out of bridge_jobs.
-		private = private || show.Private
+	if a.bridge != nil {
+		a.bridge.WakePodcasts()
 	}
-	j, _, err := a.bridge.EnqueueSubscribe(r.Context(), lib.ID, user, norm, private, showPath)
-	if !a.podcastQueueError(w, err) {
+	show.Following = true
+	writeJSON(w, 200, map[string]any{"state": "following", "show": show})
+}
+
+// followByURL is POST /podcasts/follow with a feed_url: podcast.Follower, the
+// implementation an OPML import's rows share. Both follow states answer 200
+// "following" (the shipped envelope); a queued or adopted subscription 202.
+func (a *API) followByURL(w http.ResponseWriter, r *http.Request, lib int64, raw string, private bool) {
+	out, err := a.follower().Follow(r.Context(), podcast.FollowURL{Caller: callerOf(r.Context()), LibraryID: lib, FeedURL: raw, Private: private})
+	switch {
+	case err == nil:
+	case errors.Is(err, podcast.ErrNoWholeGrant):
+		writeErrorCode(w, 403, "no_library_access", "Following a URL needs access to the whole library.")
+		return
+	case errors.Is(err, podcast.ErrBridgeUnavailable):
+		writeBridgeUnavailable(w)
+		return
+	case errors.Is(err, podcast.ErrModuleOff):
+		writeModuleOff(w)
+		return
+	default:
+		a.podcastQueueError(w, err)
 		return
 	}
-	writeJSON(w, 202, map[string]any{"state": "subscribing", "request": podcastRequestOf(*j)})
+	if out.State == podcast.StateSubscribing {
+		writeJSON(w, 202, map[string]any{"state": "subscribing", "request": podcastRequestOf(*out.Job)})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"state": "following", "show": out.Show})
 }
 func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	switch {
 	case err == nil:
 		return true
 	case writeLibraryKindError(w, err):
+	case errors.Is(err, feed.ErrInvalidFeedURL):
+		writeErrorCode(w, 400, "invalid_feed_url", "Invalid feed URL.")
+	case errors.Is(err, bridge.ErrPrivacyConflict):
+		e, _ := podcast.FollowError(err)
+		writeErrorCode(w, 409, e.Code, e.Message)
 	case errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):

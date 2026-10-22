@@ -25,6 +25,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
+	"github.com/kodestar/audiosilo-server/internal/podcast/discovery"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -152,6 +153,12 @@ type API struct {
 	modules    []modules.Module
 	moduleRuns modules.Runner
 
+	// discovery is podcast directory search and its artwork proxy (Bridge Phase
+	// 2c-3), nil when podcasts.discovery.enabled was off at start; opml holds
+	// the OPML transfer budgets (handlers_podcast_discovery.go).
+	discovery *discovery.Service
+	opml      opmlTransfers
+
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
 	streams *catalog.StreamMarks
@@ -199,6 +206,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
+		opml:           newOPMLTransfers(),
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
 	// The runner exists without a service too, for clearing matches: its runs
@@ -217,6 +225,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	cat.OnBookChange(a.coverColors.Kick)
 	a.matchRuns = matchrun.New(cat, matcher, a.saveMatchCover, a.metadataOn, log)
 	a.live.Store(newLiveConfig(cfg, cfg))
+	a.discovery = a.newDiscovery()
 	a.playerSource = web.PlayerSource(cfg.WebDir)
 	a.rt.StartedAt = time.Now()
 	return a
@@ -236,6 +245,13 @@ func (a *API) SetBaseContext(ctx context.Context) {
 	a.baseCtx = ctx
 	if a.prefetch != nil {
 		a.prefetch.Context = ctx
+	}
+	if a.discovery != nil {
+		// Shutdown ends the directory and artwork fetches in flight.
+		go func() {
+			<-ctx.Done()
+			a.discovery.Reset()
+		}()
 	}
 }
 
@@ -266,6 +282,7 @@ func (a *API) Handler() http.Handler {
 	pr.User("POST /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastFollow))
 	pr.User("DELETE /api/v1/podcasts/follow", http.HandlerFunc(a.handlePodcastUnfollow))
 	pr.User("POST /api/v1/podcasts/check", http.HandlerFunc(a.handlePodcastCheck))
+	a.mountPodcastTransfer(mux)
 	mux.Handle("GET /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/podcasts/retention", a.requireAdmin(notDemo(http.HandlerFunc(a.handleAdminPodcastRetention))))

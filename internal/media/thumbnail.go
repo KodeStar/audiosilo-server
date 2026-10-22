@@ -38,7 +38,14 @@ const thumbnailQuality = 80
 // as a JPEG. It never scales up: art already within size is re-encoded only when
 // it isn't a JPEG (a JPEG that small is returned as is). Transparent areas are
 // flattened onto white, as a cover is shown on a card.
-func Thumbnail(src []byte, size int) ([]byte, error) {
+func Thumbnail(src []byte, size int) ([]byte, error) { return thumbnail(src, size, false) }
+
+// ThumbnailJPEG is Thumbnail that always re-encodes, a small JPEG too: what it
+// returns is only ever this server's JPEG encoding of the decoded pixels, never
+// the source's bytes (art fetched from a stranger's host).
+func ThumbnailJPEG(src []byte, size int) ([]byte, error) { return thumbnail(src, size, true) }
+
+func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(src))
 	if err != nil {
 		return nil, err
@@ -46,7 +53,7 @@ func Thumbnail(src []byte, size int) ([]byte, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxThumbnailSourcePixels {
 		return nil, ErrImageTooLarge
 	}
-	if format == "jpeg" && cfg.Width <= size && cfg.Height <= size {
+	if !reencode && format == "jpeg" && cfg.Width <= size && cfg.Height <= size {
 		return src, nil
 	}
 	img, _, err := image.Decode(bytes.NewReader(src))

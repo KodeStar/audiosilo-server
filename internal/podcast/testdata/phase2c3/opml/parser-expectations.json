@@ -1,0 +1,53 @@
+[
+  {
+    "file": "valid-v1.opml",
+    "http_status": 200,
+    "feed_outline_indexes": [
+      1,
+      2
+    ]
+  },
+  {
+    "file": "valid-v2.opml",
+    "http_status": 200,
+    "feed_outline_indexes": [
+      2,
+      3
+    ]
+  },
+  {
+    "file": "entity-bomb.opml",
+    "http_status": 400,
+    "code": "invalid_opml"
+  },
+  {
+    "file": "external-entity.opml",
+    "http_status": 400,
+    "code": "invalid_opml"
+  },
+  {
+    "file": "malformed-tail.opml",
+    "http_status": 400,
+    "code": "invalid_opml"
+  },
+  {
+    "file": "duplicate-attribute.opml",
+    "http_status": 400,
+    "code": "invalid_opml"
+  },
+  {
+    "file": "outline-cap.opml",
+    "http_status": 413,
+    "code": "opml_limit"
+  },
+  {
+    "file": "deep.opml",
+    "http_status": 413,
+    "code": "opml_limit"
+  },
+  {
+    "file": "huge.opml",
+    "http_status": 413,
+    "code": "opml_limit"
+  }
+]
