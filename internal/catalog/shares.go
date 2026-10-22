@@ -347,6 +347,33 @@ func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error)
 	return out, nil
 }
 
+// GatedScopes is what the old-client gate alone hides from who: their scopes in
+// podcast libraries as a client that sees podcasts would get them (shares,
+// household rules and private shows applied), nil when who already sees
+// podcasts. A whole-list replace from such a caller keeps the stored entries
+// these allow (SetQueue, SetCollectionItems), so an old player reordering a list
+// can't delete podcast entries it was never shown. Entries outside them (a
+// revoked share, an unfollowed private show) get no such protection.
+func (c *Catalog) GatedScopes(ctx context.Context, who Caller) ([]Scope, error) {
+	if who.Podcasts {
+		return nil, nil
+	}
+	who.Podcasts = true
+	scopes, err := c.CallerScopes(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	libs, err := c.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	podcasts := map[int64]bool{}
+	for _, l := range libs {
+		podcasts[l.ID] = l.Kind == KindPodcasts
+	}
+	return slices.DeleteFunc(scopes, func(s Scope) bool { return !podcasts[s.LibraryID] }), nil
+}
+
 // CallerLibraries applies the client gate but keeps library grants independent
 // of follows: an empty podcast library is still a destination for following.
 func (c *Catalog) CallerLibraries(ctx context.Context, who Caller) ([]Library, error) {

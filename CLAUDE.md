@@ -234,7 +234,8 @@ scopes; for a collection, the owner's): `position` is a 0-based index among the 
 visible row; hidden rows stay put), and the caps (`MaxQueue` 500, `MaxCollectionItems` 1000)
 count visible rows: a new book the hidden rows alone would overflow evicts the oldest hidden
 rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list PUT replaces
-everything, hidden rows included, and its length check is unchanged); a move or join carries them
+everything, hidden rows included, except podcast entries an old player can't see, which it keeps
+(see Podcasts in CONVENTIONS.md), and its length check is unchanged); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
 Player redesign Phase 8: `household_sharing` (`0042`: `user_id` PK -> users CASCADE,
 `share_listening` 0/1; no row = off; names no book) and `cast_grants` (`0043`: a cast token is a

@@ -1687,6 +1687,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by its current or previous normalized SHA-256. Whole-library grants remain the requirement for
   following a new URL. Book search/recent, admin book tools, the console's activity figures and
   listening goals exclude podcast libraries.
+  A whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`) from a caller the gate
+  hides podcasts from keeps the stored entries only the gate hides (`catalog.GatedScopes`: their
+  podcast scopes as a podcast-seeing client would get them, passed as `keep`), each after the listed
+  entry it followed, or all after the list in stored order when the new order would shuffle them; they
+  count toward the cap as an add's hidden rows do (oldest evicted). Entries hidden for another reason
+  (a revoked share, an unfollowed private show) and every replace from a podcast-seeing caller keep
+  the delete rule, so a 2.1.x device reordering Up next can't drop a 2.2.0 player's episodes.
   Core show, episode, item and media reads are always available to scoped callers. Follow,
   unfollow and check actions use the module User wrapper (no kids or demo accounts), JSON bodies
   for URLs, and `modules.podcasts.enabled` (off by default,

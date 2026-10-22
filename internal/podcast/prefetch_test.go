@@ -82,7 +82,7 @@ func TestPrefetchSkipsFetchLimitAndRetriesAfterSlotFreed(t *testing.T) {
 	}
 	current := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[0].Path}
 	next := catalog.Ref{LibraryID: lib.ID, Path: f.Episodes[5].Path}
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, next}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, next}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	p := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
@@ -178,7 +178,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err != nil || created || promoted.ID != id || promoted.Priority != 100 {
 		t.Fatalf("promote %+v %v", promoted, err)
 	}
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, third}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{current, third}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	p.Reconsider(who)
@@ -191,13 +191,13 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 		t.Fatal("queue removal cancelled work", err)
 	}
 	// A different current with an empty queue is reconsidered after mutation.
-	if err = cat.SetQueue(ctx, 2, nil, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, nil, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	done2 := p.Start(who, third, true)
 	defer done2()
 	p.work.Wait()
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, current}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, current}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	p.Reconsider(who)
@@ -206,7 +206,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 		t.Fatal("mutation", n, err)
 	}
 	// Old clients and revoked scope create no preparation work.
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{candidate, third}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{candidate, third}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	who.Podcasts = false
@@ -222,14 +222,14 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	who.Podcasts = true
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	p2 := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
 	done4 := p2.Start(who, third, true)
 	defer done4()
 	p2.work.Wait()
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, current}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, current}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	done5 := p2.Start(who, third, true)
@@ -252,7 +252,7 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, candidate}, scopes); err != nil {
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, candidate}, scopes, nil); err != nil {
 		t.Fatal(err)
 	}
 	p3 := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}

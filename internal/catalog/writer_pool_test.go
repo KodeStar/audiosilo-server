@@ -98,7 +98,7 @@ func TestUserStateWritesUseTheWriter(t *testing.T) {
 	if err := c.AddToQueue(ctx, uid, ref, nil, scopes); err != nil {
 		t.Fatalf("AddToQueue: %v", err)
 	}
-	if err := c.SetQueue(ctx, uid, []Ref{ref}, scopes); err != nil {
+	if err := c.SetQueue(ctx, uid, []Ref{ref}, scopes, nil); err != nil {
 		t.Fatalf("SetQueue: %v", err)
 	}
 	if err := c.RemoveFromQueue(ctx, uid, ref); err != nil {
@@ -116,7 +116,7 @@ func TestUserStateWritesUseTheWriter(t *testing.T) {
 	if err := c.AddCollectionItem(ctx, col.ID, uid, ref, nil, scopes); err != nil {
 		t.Fatalf("AddCollectionItem: %v", err)
 	}
-	if err := c.SetCollectionItems(ctx, col.ID, uid, []Ref{ref}, scopes); err != nil {
+	if err := c.SetCollectionItems(ctx, col.ID, uid, []Ref{ref}, scopes, nil); err != nil {
 		t.Fatalf("SetCollectionItems: %v", err)
 	}
 	if err := c.SetCollectionShares(ctx, col.ID, uid, nil); err != nil {

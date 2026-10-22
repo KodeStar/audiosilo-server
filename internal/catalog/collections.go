@@ -493,21 +493,22 @@ func (c *Catalog) AddCollectionItem(ctx context.Context, id, userID int64, ref R
 }
 
 // SetCollectionItems replaces the items of a collection userID owns with refs, by
-// the skip rule (listableRefs, against the owner's scopes). More than
-// MaxCollectionItems refs is ErrTooManyItems.
-func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs []Ref, scopes []Scope) error {
+// the skip rule (listableRefs, against the owner's scopes). Unlisted items keep
+// allows (the owner's GatedScopes; nil keeps none) stay, as for SetQueue. More
+// than MaxCollectionItems refs is ErrTooManyItems.
+func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs []Ref, scopes, keep []Scope) error {
 	if err := requireOwner(ctx, c.db, id, userID); err != nil {
 		return err // answer a stranger or a viewer before reading anything for them
 	}
 	if err := collectionItems.fits(refs); err != nil {
 		return err
 	}
-	keep, err := c.listableRefs(ctx, refs, scopes)
+	listed, err := c.listableRefs(ctx, refs, scopes)
 	if err != nil {
 		return err
 	}
 	return c.changeItems(ctx, "SetCollectionItems", id, userID, func(tx *sql.Tx, now string) (bool, error) {
-		return collectionItems.replace(ctx, tx, id, keep, now)
+		return collectionItems.replace(ctx, tx, id, listed, keep, now)
 	})
 }
 

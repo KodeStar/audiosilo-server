@@ -143,7 +143,7 @@ func TestSetQueueSkipRule(t *testing.T) {
 		{LibraryID: other.ID, Path: "Z"}, // a library the user has no scope in
 		ref(""),
 	}
-	if err := c.SetQueue(ctx, user, refs, kid); err != nil {
+	if err := c.SetQueue(ctx, user, refs, kid, nil); err != nil {
 		t.Fatal(err)
 	}
 	wantPaths(t, "replaced queue", queuePaths(t, c, user, kid), "Kid/B", "Kid/A")
@@ -158,10 +158,10 @@ func TestSetQueueSkipRule(t *testing.T) {
 		t.Fatalf("book not attached: %+v", after[0])
 	}
 
-	if err := c.SetQueue(ctx, user, make([]Ref, MaxQueue+1), kid); !errors.Is(err, ErrTooManyItems) {
+	if err := c.SetQueue(ctx, user, make([]Ref, MaxQueue+1), kid, nil); !errors.Is(err, ErrTooManyItems) {
 		t.Fatalf("replace with %d refs = %v, want ErrTooManyItems", MaxQueue+1, err)
 	}
-	if err := c.SetQueue(ctx, user, make([]Ref, MaxQueue), kid); err != nil {
+	if err := c.SetQueue(ctx, user, make([]Ref, MaxQueue), kid, nil); err != nil {
 		t.Fatalf("replace with %d refs: %v", MaxQueue, err)
 	}
 	wantPaths(t, "replaced with nothing listable", queuePaths(t, c, user, kid))

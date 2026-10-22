@@ -44,17 +44,20 @@ func (c *Catalog) AddToQueue(ctx context.Context, userID int64, ref Ref, positio
 // SetQueue replaces a user's whole queue with refs, in order, by the skip rule
 // (listableRefs: only exactly indexed books in scopes, duplicates collapsed).
 // Stored entries not in the result are deleted, hidden (out-of-scope) ones
-// included. More than MaxQueue refs is ErrTooManyItems.
-func (c *Catalog) SetQueue(ctx context.Context, userID int64, refs []Ref, scopes []Scope) error {
+// included, except those keep allows: the caller's GatedScopes, the podcast
+// entries an old player can't see, which stay in their place (see
+// orderedList.replace; nil keeps none). More than MaxQueue refs is
+// ErrTooManyItems.
+func (c *Catalog) SetQueue(ctx context.Context, userID int64, refs []Ref, scopes, keep []Scope) error {
 	if err := upNext.fits(refs); err != nil {
 		return err
 	}
-	keep, err := c.listableRefs(ctx, refs, scopes)
+	listed, err := c.listableRefs(ctx, refs, scopes)
 	if err != nil {
 		return err
 	}
 	return c.db.WithTx(ctx, "SetQueue", func(tx *sql.Tx) error {
-		_, err := upNext.replace(ctx, tx, userID, keep, c.stamp())
+		_, err := upNext.replace(ctx, tx, userID, listed, keep, c.stamp())
 		return err
 	})
 }
