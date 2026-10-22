@@ -115,7 +115,7 @@ func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64,
 			out.Rows = append(out.Rows, row)
 			continue
 		}
-		norm, err := NormalizeFollowURL(c.URL)
+		norm, err := feed.NormalizeStable(c.URL)
 		if err != nil {
 			row.fail(RowInvalid, followErrors["invalid_feed_url"])
 			out.Rows = append(out.Rows, row)

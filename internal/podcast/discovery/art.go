@@ -2,24 +2,16 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
 // ValidArtworkID reports whether id has an artwork id's shape: 64 lower-case
 // hex digits.
-func ValidArtworkID(id string) bool {
-	if len(id) != 64 {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		if c := id[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
+func ValidArtworkID(id string) bool { return feed.ValidHex(id, 64) }
 
 // Artwork answers GET /podcasts/discovery/artwork: the image a recent search
 // registered under id, fetched by this server and re-encoded as a JPEG of at
@@ -32,11 +24,8 @@ func (s *Service) Artwork(ctx context.Context, user, id string) ([]byte, *Error)
 	if !ValidArtworkID(id) {
 		return nil, errArtNotFound
 	}
-	if d := s.userArt.Take(user); !d.OK {
-		if d.Full {
-			return nil, errBusy
-		}
-		return nil, errUserRateLimited.withRetry(d.RetryAfter)
+	if e := userRefusal(s.userArt.Take(user)); e != nil {
+		return nil, e
 	}
 	s.mu.Lock()
 	raw, ok := s.art.get(id)
@@ -93,7 +82,7 @@ func (s *Service) startArtLocked(id, raw string) (*flight, *Error) {
 			s.images.put(id, jpg, len(jpg)+len(id))
 		default:
 			e = errArtUnavailable
-			if ctx.Err() == nil || ctx.Err() == context.DeadlineExceeded {
+			if ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				s.artFails.put(id, true, 1)
 			}
 		}

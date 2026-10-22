@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -16,9 +17,6 @@ const (
 	ITunes       Provider = "itunes"
 	PodcastIndex Provider = "podcast_index"
 )
-
-// Providers is every provider in the listed order.
-var Providers = []Provider{ITunes, PodcastIndex}
 
 // Query bounds and defaults.
 const (
@@ -51,12 +49,7 @@ func (q Query) key() string {
 // only). An unknown or repeated parameter is invalid_request.
 func ParseQuery(v url.Values) (Query, *Error) {
 	for name, vals := range v {
-		switch name {
-		case "q", "provider", "limit", "country":
-		default:
-			return Query{}, errInvalidRequest
-		}
-		if len(vals) != 1 {
+		if len(vals) != 1 || !slices.Contains([]string{"q", "provider", "limit", "country"}, name) {
 			return Query{}, errInvalidRequest
 		}
 	}

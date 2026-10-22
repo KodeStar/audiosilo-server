@@ -40,7 +40,7 @@ func BuildExport(rows []catalog.PodcastExportRow) Export {
 			out.OmittedUnavailable++
 			continue
 		}
-		norm, err := NormalizeFollowURL(r.FeedURL)
+		norm, err := feed.NormalizeStable(r.FeedURL)
 		if err != nil {
 			out.OmittedUnavailable++
 			continue

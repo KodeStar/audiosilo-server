@@ -48,7 +48,6 @@ func parseTestOrigin(s string) netip.AddrPort {
 // /itunes/search and /index/api/1.0/search/byterm.
 type endpoints struct {
 	itunes, index string
-	origin        netip.AddrPort // valid only in a test build with the variable set
 }
 
 func endpointsFor(origin netip.AddrPort) endpoints {
@@ -56,5 +55,5 @@ func endpointsFor(origin netip.AddrPort) endpoints {
 		return endpoints{itunes: itunesSearchURL, index: indexSearchURL}
 	}
 	base := "http://" + origin.String()
-	return endpoints{itunes: base + "/itunes/search", index: base + "/index/api/1.0/search/byterm", origin: origin}
+	return endpoints{itunes: base + "/itunes/search", index: base + "/index/api/1.0/search/byterm"}
 }

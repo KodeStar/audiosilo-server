@@ -438,15 +438,15 @@ func TestFollow(t *testing.T) {
 	})
 }
 
-func TestNormalizeFollowURL(t *testing.T) {
-	got, err := NormalizeFollowURL("HTTPS://Feeds.Example.org:443/one.xml#x")
+func TestNormalizeStable(t *testing.T) {
+	got, err := feed.NormalizeStable("HTTPS://Feeds.Example.org:443/one.xml#x")
 	if err != nil || got != "https://feeds.example.org/one.xml" {
 		t.Fatalf("%q %v", got, err)
 	}
-	if again, err := NormalizeFollowURL(got); err != nil || again != got {
+	if again, err := feed.NormalizeStable(got); err != nil || again != got {
 		t.Fatal("normalizing twice changed the URL")
 	}
-	if _, err := NormalizeFollowURL("ftp://example.org/a"); !errors.Is(err, feed.ErrInvalidFeedURL) {
+	if _, err := feed.NormalizeStable("ftp://example.org/a"); !errors.Is(err, feed.ErrInvalidFeedURL) {
 		t.Fatal(err)
 	}
 }

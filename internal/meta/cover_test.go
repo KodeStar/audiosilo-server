@@ -63,7 +63,7 @@ func TestFetchCover(t *testing.T) {
 	defer srv.Close()
 	s := NewService("http://meta.invalid", nil)
 	// Loopback stands in for the public internet; the private range stays refused.
-	s.covers = newCoverClient(func(a netip.Addr) bool { return a.IsLoopback() })
+	s.covers = newCoverClient(func(ap netip.AddrPort) bool { return ap.Addr().IsLoopback() })
 	ctx := context.Background()
 
 	for _, path := range []string{"/cover.jpg", "/moved.jpg"} {

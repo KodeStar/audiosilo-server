@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -137,14 +138,7 @@ func writeDiscoveryError(w http.ResponseWriter, e *discovery.Error) {
 // twice (400 invalid_request), and reports whether it passed.
 func onlyParams(w http.ResponseWriter, q url.Values, allowed ...string) bool {
 	for name, vals := range q {
-		ok := len(vals) == 1
-		if ok {
-			ok = false
-			for _, a := range allowed {
-				ok = ok || name == a
-			}
-		}
-		if !ok {
+		if len(vals) != 1 || !slices.Contains(allowed, name) {
 			writeNoStoreError(w, http.StatusBadRequest, "invalid_request", "Invalid request.", 0)
 			return false
 		}
@@ -351,7 +345,6 @@ func (a *API) handleOPMLExport(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/x-opml; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="audiosilo-subscriptions.opml"`)
-	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-OPML-Exported", strconv.Itoa(exp.Exported))
 	h.Set("X-OPML-Omitted-Private", strconv.Itoa(exp.OmittedPrivate))

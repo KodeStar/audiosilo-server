@@ -955,7 +955,7 @@ func TestTestOriginSeam(t *testing.T) {
 	}
 	t.Setenv(TestOriginEnv, "http://127.0.0.1:9123")
 	s := New(Options{})
-	if s.ends.itunes != itunesSearchURL || s.ends.index != indexSearchURL || s.ends.origin.IsValid() || s.rules.origin.IsValid() {
+	if s.ends.itunes != itunesSearchURL || s.ends.index != indexSearchURL || s.rules.origin.IsValid() {
 		t.Fatalf("untagged build honoured the origin: %+v", s.ends)
 	}
 	if testOrigin().IsValid() {

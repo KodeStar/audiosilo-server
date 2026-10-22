@@ -34,9 +34,6 @@ func TestTakeRefillAndRetryAfter(t *testing.T) {
 	if d := l.Take("u"); !d.OK {
 		t.Fatalf("refilled = %+v", d)
 	}
-	if d := l.Peek("u"); d.OK || d.RetryAfter != 6 {
-		t.Fatalf("peek = %+v", d)
-	}
 }
 
 // A full map refuses a new key (busy) while every bucket is active, and admits
@@ -56,12 +53,8 @@ func TestMapBound(t *testing.T) {
 	if d := l.Take("new"); !d.OK {
 		t.Fatalf("after idle = %+v", d)
 	}
-	if l.Len() != 2 {
-		t.Fatalf("len %d", l.Len())
-	}
-	l.Reset()
-	if l.Len() != 0 {
-		t.Fatal("reset")
+	if n := len(l.buckets); n != 2 {
+		t.Fatalf("len %d", n)
 	}
 }
 

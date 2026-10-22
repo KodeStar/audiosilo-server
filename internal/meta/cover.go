@@ -43,8 +43,8 @@ const (
 // (netguard's dialer Control, netguard.ErrBlockedAddress), so a public name
 // can't lead it into the server's own network. It uses no proxy: through one,
 // the check would see only the proxy's address.
-func newCoverClient(allowed func(netip.Addr) bool) *http.Client {
-	dialer := netguard.Dialer(func(ap netip.AddrPort) bool { return allowed(ap.Addr()) }, 5*time.Second)
+func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
+	dialer := netguard.Dialer(allowed, 5*time.Second)
 	return &http.Client{
 		Timeout: coverTimeout,
 		Transport: &http.Transport{

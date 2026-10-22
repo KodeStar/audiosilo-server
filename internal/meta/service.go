@@ -308,7 +308,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
-		covers:        newCoverClient(netguard.PublicAddr),
+		covers:        newCoverClient(netguard.PublicAddrPort),
 		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
 		now:           now,
 	}

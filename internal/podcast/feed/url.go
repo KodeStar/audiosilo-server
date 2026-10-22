@@ -66,6 +66,20 @@ func NormalizeFeedURL(s string) (string, error) {
 	return norm, nil
 }
 
+// NormalizeStable is a feed URL as a follow accepts it: NormalizeFeedURL, and
+// stable under a second normalization (ErrInvalidFeedURL otherwise), so the
+// hash a follow stores is the one the same URL gives again.
+func NormalizeStable(raw string) (string, error) {
+	norm, err := NormalizeFeedURL(raw)
+	if err != nil {
+		return "", ErrInvalidFeedURL
+	}
+	if again, err := NormalizeFeedURL(norm); err != nil || again != norm {
+		return "", ErrInvalidFeedURL
+	}
+	return norm, nil
+}
+
 func FeedURLHash(norm string) string {
 	h := sha256.Sum256([]byte(norm))
 	return hex.EncodeToString(h[:])

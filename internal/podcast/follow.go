@@ -67,7 +67,6 @@ type FollowOutcome struct {
 	Show    *catalog.PodcastShow // following / already_following
 	Job     *bridge.Job          // subscribing
 	Created bool                 // subscribing: a new job (not an adopted one)
-	Feed    string               // the normalized URL
 	Private bool                 // the request's effective privacy
 }
 
@@ -79,20 +78,6 @@ var (
 	ErrBridgeUnavailable = errors.New("no online Bridge runs podcast.subscribe")
 	ErrModuleOff         = errors.New("the podcasts module is off")
 )
-
-// NormalizeFollowURL is a feed URL as a follow accepts it: feed.NormalizeFeedURL,
-// and stable under a second normalization (feed.ErrInvalidFeedURL otherwise),
-// so the hash a follow stores is the one the same URL gives again.
-func NormalizeFollowURL(raw string) (string, error) {
-	norm, err := feed.NormalizeFeedURL(raw)
-	if err != nil {
-		return "", feed.ErrInvalidFeedURL
-	}
-	if again, err := feed.NormalizeFeedURL(norm); err != nil || again != norm {
-		return "", feed.ErrInvalidFeedURL
-	}
-	return norm, nil
-}
 
 // Follow follows r.FeedURL in r.LibraryID as r.Caller. The library is the
 // caller's to have resolved as a podcast library.
@@ -107,11 +92,11 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 	if !whole {
 		return nil, ErrNoWholeGrant
 	}
-	norm, err := NormalizeFollowURL(r.FeedURL)
+	norm, err := feed.NormalizeStable(r.FeedURL)
 	if err != nil {
 		return nil, err
 	}
-	out := &FollowOutcome{Feed: norm, Private: r.Private || feed.IsPrivateFeedURL(norm)}
+	out := &FollowOutcome{Private: r.Private || feed.IsPrivateFeedURL(norm)}
 	show, err := f.Catalog.PodcastShowByHash(ctx, r.LibraryID, feed.FeedURLHash(norm), r.Caller.ID)
 	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 		return nil, err

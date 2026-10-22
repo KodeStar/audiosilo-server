@@ -134,17 +134,13 @@ func ArtworkID(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// feedURL accepts a directory's feed URL as a follow would (feed.NormalizeFeedURL,
-// stable under a second normalization, at most 2048 bytes), and only when it
-// is plainly public: never one that looks private (credentials, a query, a
+// feedURL accepts a directory's feed URL as a follow would
+// (feed.NormalizeStable), and only when it is plainly public: never one that looks private (credentials, a query, a
 // token-like path, a member host), nor a literal non-public address, localhost
 // or a .local name. Nothing is resolved or fetched.
 func (r rules) feedURL(raw string) (string, bool) {
-	norm, err := feed.NormalizeFeedURL(raw)
-	if err != nil || len(norm) > maxURLBytes {
-		return "", false
-	}
-	if again, err := feed.NormalizeFeedURL(norm); err != nil || again != norm || feed.IsPrivateFeedURL(norm) {
+	norm, err := feed.NormalizeStable(raw)
+	if err != nil || len(norm) > maxURLBytes || feed.IsPrivateFeedURL(norm) {
 		return "", false
 	}
 	u, err := url.Parse(norm)

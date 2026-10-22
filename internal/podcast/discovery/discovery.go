@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // Podcast Index's request signature is SHA-1 of key+secret+time; nothing else uses it
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -261,11 +262,8 @@ func (s *Service) Search(ctx context.Context, user string, q Query) (*Search, *E
 	if q.Provider == PodcastIndex && s.opts.IndexKey == "" {
 		return nil, ErrProviderUnavailable
 	}
-	if d := s.userSearch.Take(user); !d.OK {
-		if d.Full {
-			return nil, errBusy
-		}
-		return nil, errUserRateLimited.withRetry(d.RetryAfter)
+	if e := userRefusal(s.userSearch.Take(user)); e != nil {
+		return nil, e
 	}
 	key := q.key()
 	s.mu.Lock()
@@ -289,6 +287,18 @@ func (s *Service) Search(ctx context.Context, user string, q Query) (*Search, *E
 	f.waiters++
 	s.mu.Unlock()
 	return wait(ctx, s, f, func() { s.leaveLocked(s.flights, key, f) }, func(f *flight) (*Search, *Error) { return f.search, f.err })
+}
+
+// userRefusal is a per-user bucket's refusal as the API answers it: a full
+// bucket map is busy, an empty bucket rate limited; nil when d admitted.
+func userRefusal(d quota.Decision) *Error {
+	switch {
+	case d.OK:
+		return nil
+	case d.Full:
+		return errBusy
+	}
+	return errUserRateLimited.withRetry(d.RetryAfter)
 }
 
 // wait waits for f, or for ctx: a waiter that gives up detaches, and the last
@@ -460,7 +470,7 @@ func readJSON(resp *http.Response) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !oneJSONDocument(body) {
+	if !json.Valid(body) {
 		return nil, errNotJSON
 	}
 	return body, nil
@@ -511,11 +521,11 @@ func (s *Service) logFailure(p Provider, reason string, status int) {
 	}
 	s.logged[key] = now
 	s.mu.Unlock()
+	attrs := []any{"provider", string(p), "reason", reason}
 	if status != 0 {
-		s.opts.Log.Warn("podcast discovery failed", "provider", string(p), "reason", reason, "status", status)
-	} else {
-		s.opts.Log.Warn("podcast discovery failed", "provider", string(p), "reason", reason)
+		attrs = append(attrs, "status", status)
 	}
+	s.opts.Log.Warn("podcast discovery failed", attrs...)
 }
 
 // retryAfter reads an upstream 429's Retry-After (seconds or an HTTP date),

@@ -74,22 +74,6 @@ func (l *Limiter) Take(key string) Decision {
 	return Decision{RetryAfter: retryAfter(b.tokens, l.rate)}
 }
 
-// Peek reports whether key has a token now, and the seconds until it would,
-// without spending it.
-func (l *Limiter) Peek(key string) Decision {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b := l.buckets[key]
-	if b == nil {
-		return Decision{OK: l.burst >= 1}
-	}
-	tokens := math.Min(b.tokens+math.Max(l.now().Sub(b.last).Seconds(), 0)*l.rate, l.burst)
-	if tokens >= 1-eps {
-		return Decision{OK: true}
-	}
-	return Decision{RetryAfter: retryAfter(tokens, l.rate)}
-}
-
 // eps absorbs float residue in refills (5 + 1 seconds of 1/6 token each).
 const eps = 1e-9
 
@@ -106,20 +90,6 @@ func (l *Limiter) sweep(now time.Time) {
 			delete(l.buckets, k)
 		}
 	}
-}
-
-// Reset forgets every bucket.
-func (l *Limiter) Reset() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	clear(l.buckets)
-}
-
-// Len is the number of buckets held (tests).
-func (l *Limiter) Len() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.buckets)
 }
 
 // Slots is a counting semaphore that never waits: TryAcquire takes a slot or
