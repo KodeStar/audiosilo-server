@@ -68,9 +68,3 @@ func (c *lru[V]) remove(el *list.Element) {
 }
 
 func (c *lru[V]) len() int { return len(c.items) }
-
-func (c *lru[V]) clear() {
-	c.order.Init()
-	clear(c.items)
-	c.used = 0
-}

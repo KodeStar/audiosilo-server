@@ -3,7 +3,6 @@ package netguard
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -90,7 +89,7 @@ func TestDialerChecksTheDialledAddress(t *testing.T) {
 	if err := ctl("tcp", "not an address", nil); err == nil || errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("unparsable = %v", err)
 	}
-	var d net.Dialer = *Dialer(PublicAddrPort, time.Second)
+	d := Dialer(PublicAddrPort, time.Second)
 	if _, err := d.DialContext(context.Background(), "tcp", "10.255.255.1:443"); !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("private dial = %v", err)
 	}

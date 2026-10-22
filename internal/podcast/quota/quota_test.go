@@ -67,7 +67,8 @@ func TestMapBound(t *testing.T) {
 
 func TestSlots(t *testing.T) {
 	s := NewSlots(2)
-	if !s.TryAcquire() || !s.TryAcquire() || s.TryAcquire() {
+	first, second, third := s.TryAcquire(), s.TryAcquire(), s.TryAcquire()
+	if !first || !second || third {
 		t.Fatal("two slots")
 	}
 	s.Release()

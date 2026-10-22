@@ -187,7 +187,7 @@ type PodcastDiscoveryConfig struct {
 // The Podcast Index credential variables (environment only).
 const (
 	EnvPodcastIndexKey    = "AUDIOSILO_PODCAST_INDEX_KEY"
-	EnvPodcastIndexSecret = "AUDIOSILO_PODCAST_INDEX_SECRET"
+	EnvPodcastIndexSecret = "AUDIOSILO_PODCAST_INDEX_SECRET" //nolint:gosec // G101: the variable's name, not a credential
 )
 
 // maxPodcastIndexCredential bounds each Podcast Index credential, in bytes.
