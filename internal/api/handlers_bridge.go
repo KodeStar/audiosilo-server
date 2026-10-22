@@ -427,19 +427,20 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, bridge.ErrNotPaired):
 		writeError(w, http.StatusUnauthorized, "invalid or expired token")
 	case err != nil && ctx.Err() != nil:
-		// The server is stopping (or the Bridge left): nothing was claimed.
-		w.WriteHeader(http.StatusNoContent)
+		// The server is stopping, the Bridge left or the deadline passed:
+		// nothing was claimed.
+		claimEnded(ctx, w)
 	case err != nil:
 		a.log.Warn("bridge claim failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not claim a job")
 	case job == nil:
-		w.WriteHeader(http.StatusNoContent)
+		claimEnded(ctx, w)
 	default:
 		// Claim cleanup outlives a disconnected request, but is bounded so a
 		// database fault cannot hold this handler indefinitely.
-		var writeErr error
+		delivered := false
 		defer func() {
-			if ctx.Err() == nil && writeErr == nil {
+			if delivered {
 				return
 			}
 			cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -449,18 +450,34 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 		if ctx.Err() != nil {
-			w.WriteHeader(http.StatusNoContent)
+			claimEnded(ctx, w)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		writeErr = json.NewEncoder(w).Encode(job)
+		writeErr := json.NewEncoder(w).Encode(job)
 		if writeErr == nil {
 			if err := http.NewResponseController(w).Flush(); !errors.Is(err, http.ErrNotSupported) {
 				writeErr = err
 			}
 		}
+		// The reply's last chunk follows this return, so a Bridge that left
+		// meanwhile never read the job. A flushed reply is still delivered when
+		// the server starts stopping or the deadline passes after the flush:
+		// releasing it then would hand the same attempt out twice.
+		delivered = writeErr == nil && !errors.Is(r.Context().Err(), context.Canceled)
 	}
+}
+
+// claimEnded answers a claim whose wait ended early: 503 at the request
+// deadline (as the timeout middleware answered before claims bypassed its
+// buffering), else 204 (the server is stopping or the Bridge left).
+func claimEnded(ctx context.Context, w http.ResponseWriter) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleBridgeUpdate serves PATCH /bridge/jobs/{id} {attempt, state?, progress?,

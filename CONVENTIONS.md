@@ -1493,9 +1493,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.
-  Claim responses retain the request deadline but bypass response buffering and flush before return.
-  A cancelled request or failed 200 write returns its untouched lease to queued and restores the
-  attempt in one transaction, then wakes claims. Cleanup matches the claimed state, attempt and
+  Claim responses retain the request deadline but bypass response buffering and flush before return;
+  a wait the deadline ends still answers 503 `request timed out`, as the buffered timeout did.
+  A claim ended before its reply was written, a failed 200 write, or a Bridge that left before the
+  reply finished returns its untouched lease to queued and restores the attempt in one transaction,
+  then wakes claims; a flushed reply stays claimed when the server starts stopping or the deadline
+  passes after it (the Bridge still reads it). Cleanup matches the claimed state, attempt and
   lease timestamps; any Bridge report changes the state or renews the lease, even an empty
   acknowledgement within the same second, so received work is preserved. A pending admin cancel
   becomes cancelled instead of queued.

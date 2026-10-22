@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 )
@@ -26,12 +27,15 @@ func (w claimResponseWriter) FlushError() error {
 }
 
 func TestBridgeClaimDeliveryCleanup(t *testing.T) {
-	for _, mode := range []string{"normal", "cancelled", "write_failed", "flush_failed", "running", "acknowledged"} {
+	for _, mode := range []string{"normal", "cancelled", "write_failed", "flush_failed", "running", "acknowledged", "server_stopping"} {
 		t.Run(mode, func(t *testing.T) {
 			b := newBridgeEnv(t)
 			queued := b.queue(t, mistbornBook, `{}`)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			server, stop := context.WithCancel(context.Background())
+			defer stop()
+			b.api.SetBaseContext(server)
 			r := httptest.NewRequest("GET", "/api/v1/bridge/jobs/next?wait=0", nil).WithContext(ctx)
 			r.Header.Set("Authorization", "Bearer "+b.bridgeTok)
 			recorder := httptest.NewRecorder()
@@ -53,7 +57,12 @@ func TestBridgeClaimDeliveryCleanup(t *testing.T) {
 				if mode == "write_failed" {
 					return 0, errors.New("response connection closed")
 				}
-				if mode != "normal" && mode != "flush_failed" {
+				switch mode {
+				case "server_stopping":
+					// A reply that is written still reaches the Bridge.
+					stop()
+				case "normal", "flush_failed":
+				default:
 					cancel() // The lease has committed before writing the response.
 				}
 				return recorder.Write(p)
@@ -110,5 +119,17 @@ func TestBridgeClaimCancelledAfterCommitBeforeWrite(t *testing.T) {
 	job, err := b.api.bridge.Job(context.Background(), queued.ID)
 	if err != nil || job.State != bridge.StateQueued || job.Attempts != 0 || job.LeaseUntil != nil {
 		t.Fatalf("cancelled claim not released: %+v, %v", job, err)
+	}
+}
+
+func TestBridgeClaimDeadlineAnswers503(t *testing.T) {
+	b := newBridgeEnv(t)
+	b.api.timeoutDur = 50 * time.Millisecond
+	r := httptest.NewRequest("GET", "/api/v1/bridge/jobs/next?wait=5", nil)
+	r.Header.Set("Authorization", "Bearer "+b.bridgeTok)
+	w := httptest.NewRecorder()
+	b.srv.Config.Handler.ServeHTTP(w, r)
+	if w.Code != 503 {
+		t.Fatalf("claim past its deadline: %d %s", w.Code, w.Body)
 	}
 }

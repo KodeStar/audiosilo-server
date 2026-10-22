@@ -90,7 +90,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		if noNew {
 			status = bridge.UnavailableFetchStatus(status, bridge.ErrFetchDemo)
 		}
-		if refusal != nil && !errors.Is(refusal, bridge.ErrFetchCooldown) && (status.State == "absent" || errors.Is(refusal, bridge.ErrFetchLimit)) {
+		if refusal != nil && !errors.Is(refusal, bridge.ErrFetchCooldown) && (status.State == "absent" || (errors.Is(refusal, bridge.ErrFetchLimit) && status.State != "queued" && status.State != "fetching")) {
 			status = bridge.UnavailableFetchStatus(status, refusal)
 		}
 		left := deadline.Sub(d.now())
