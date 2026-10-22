@@ -13,6 +13,9 @@ type prefetchCurrent struct {
 	ref     catalog.Ref
 	streams int
 	chosen  bool
+	// settled: an evaluation for this current item finished. Another stream
+	// or Range request for it does not look again; a queue mutation does.
+	settled bool
 	busy    bool
 	pending *catalog.Caller
 }
@@ -60,11 +63,18 @@ func (p *Prefetcher) Start(who catalog.Caller, current catalog.Ref, stream bool)
 
 // Reconsider is called only after a successful queue mutation, or a play-fetch
 // trigger. Admission happens before starting a goroutine and never waits.
-func (p *Prefetcher) Reconsider(who catalog.Caller) { p.reconsider(who, false) }
+func (p *Prefetcher) Reconsider(who catalog.Caller) {
+	p.mu.Lock()
+	if c := p.users[who.ID]; c != nil {
+		c.settled = false
+	}
+	p.mu.Unlock()
+	p.reconsider(who, false)
+}
 func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 	p.mu.Lock()
 	c := p.users[who.ID]
-	if c == nil || c.chosen {
+	if c == nil || c.chosen || (initial && c.settled) {
 		p.mu.Unlock()
 		return
 	}
@@ -85,11 +95,13 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 	p.work.Add(1)
 	go func() {
 		defer p.work.Done()
-		chosen := false
+		chosen, settled := false, false
 		defer func() {
 			p.mu.Lock()
 			c.busy = false
 			c.chosen = c.chosen || chosen
+			// A queue mutation during this run asked for another look.
+			c.settled = (c.settled || settled) && c.pending == nil
 			pending := c.pending
 			c.pending = nil
 			p.mu.Unlock()
@@ -131,6 +143,7 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 		}
 		next, ok := NextPodcast(queue, c.ref, podcasts)
 		if !ok {
+			settled = true
 			return
 		}
 		states, err := p.Bridge.PodcastFetchStatuses(ctx, next.LibraryID, []string{next.Path})
@@ -139,6 +152,7 @@ func (p *Prefetcher) reconsider(who catalog.Caller, initial bool) {
 		}
 		st, ok := states[next.Path]
 		if !ok || st.State != "absent" {
+			settled = true
 			return
 		}
 		// A queue replacement while we were reading must not prepare an episode for

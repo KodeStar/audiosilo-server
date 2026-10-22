@@ -49,7 +49,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 	pin, err := d.Catalog.PodcastPin(budget, lib.ID, rel)
 	if err != nil {
 		if budget.Err() != nil {
-			return nil, nil, bridge.FetchStatus{State: "unavailable", RetryAfterSeconds: 2, Error: bridge.FetchErrorFor("bridge_unavailable")}, nil
+			return nil, nil, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable), nil
 		}
 		return nil, nil, status, err
 	}
@@ -65,14 +65,14 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 		if budget.Err() == nil {
 			return nil, nil, status, err
 		}
-		return nil, nil, bridge.FetchStatus{State: "unavailable", RetryAfterSeconds: 2, Error: bridge.FetchErrorFor("bridge_unavailable")}, nil
+		return nil, nil, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable), nil
 	}
 	for {
 		wake, release := d.Bridge.WatchPodcast(lib.ID, rel)
 		f, fetch, openErr := library.OpenPodcast(budget, d.Catalog, lib, rel)
 		if openErr == nil {
 			release()
-			return f, fetch, bridge.FetchStatus{State: "ready", BytesReceived: fetch.Bytes, BytesTotal: &fetch.Bytes}, nil
+			return f, fetch, bridge.ReadyFetchStatus(fetch), nil
 		}
 		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) && budget.Err() == nil {
 			release()
@@ -89,10 +89,8 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 				status = st
 			}
 		}
-		if noNew && status.State != "ready" {
-			status.State = "unavailable"
-			status.RetryAfterSeconds = 2
-			status.Error = bridge.FetchErrorFor("demo_account")
+		if noNew {
+			status = bridge.UnavailableFetchStatus(status, bridge.ErrFetchDemo)
 		}
 		if refusal != nil && !errors.Is(refusal, bridge.ErrFetchCooldown) && status.State == "absent" {
 			status = bridge.UnavailableFetchStatus(status, refusal)
@@ -103,7 +101,7 @@ func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by i
 			// Presence always gets one final check, including timeout and terminal wakes.
 			f, fetch, err = library.OpenPodcast(budget, d.Catalog, lib, rel)
 			if err == nil {
-				return f, fetch, bridge.FetchStatus{State: "ready", BytesReceived: fetch.Bytes, BytesTotal: &fetch.Bytes}, nil
+				return f, fetch, bridge.ReadyFetchStatus(fetch), nil
 			}
 			return nil, nil, status, nil
 		}

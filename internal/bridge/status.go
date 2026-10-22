@@ -406,11 +406,24 @@ func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
 	}
 	gen := s.hbGen
 	s.hbMu.Unlock()
+	h, err := readHeartbeat(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	s.keep(gen, h)
+	return h, nil
+}
+
+// readHeartbeat reads the paired Bridge's stored heartbeat through q (the
+// database, or a transaction that must see its own snapshot), uncached.
+func readHeartbeat(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (*Heartbeat, error) {
 	var (
 		stamp sql.NullString
 		body  string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT heartbeat_at, status FROM bridge_status
 		  WHERE id = 1 AND paired_at IS NOT NULL AND `+auth.BridgeLiveSQL).Scan(&stamp, &body)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -426,7 +439,6 @@ func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
 			}
 		}
 	}
-	s.keep(gen, h)
 	return h, nil
 }
 

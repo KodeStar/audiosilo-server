@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,16 +27,55 @@ func writePodcastFetchPending(w http.ResponseWriter, st bridge.FetchStatus) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 503, map[string]any{"error": message, "code": code, "fetch": st})
 }
-func (a *API) podcastFetchQueueError(w http.ResponseWriter, err error) bool {
-	switch {
-	case errors.Is(err, bridge.ErrFetchModuleOff):
-		writeModuleOff(w)
-	case errors.Is(err, bridge.ErrKindUnavailable):
-		writeBridgeUnavailable(w)
-	default:
-		return a.podcastQueueError(w, err)
+
+// podcastFetchStatuses reads fetch summaries for the caller in one batch. A
+// demo account cannot start disk work, so it sees what is not ready as
+// unavailable to it.
+func (a *API) podcastFetchStatuses(r *http.Request, lib int64, paths []string) (map[string]bridge.FetchStatus, error) {
+	if a.bridge == nil {
+		return nil, nil
 	}
-	return false
+	states, err := a.bridge.PodcastFetchStatuses(r.Context(), lib, paths)
+	if err != nil || !userFrom(r.Context()).IsDemo {
+		return states, err
+	}
+	for p, st := range states {
+		states[p] = bridge.UnavailableFetchStatus(st, bridge.ErrFetchDemo)
+	}
+	return states, nil
+}
+
+// podcastPresent reports whether the episode's committed generation opens.
+// Only an indexed, committed pin can be a present file worth opening:
+// OpenPodcast answers ErrNotIndexable or ErrNotFound for every other one, and
+// those mean absent; any other open failure is returned.
+func (a *API) podcastPresent(ctx context.Context, lib *catalog.Library, rel string, pin catalog.PodcastPin) (bool, error) {
+	if !pin.Present || !feed.ValidFetch(pin.Fetch) || pin.Fetch.DeletedAt != "" {
+		return false, nil
+	}
+	f, _, err := library.OpenPodcast(ctx, a.cat, *lib, rel)
+	if err == nil {
+		_ = f.Close()
+		return true, nil
+	}
+	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, catalog.ErrNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+// prefetchStart and prefetchReconsider are the one-ahead queue preparation
+// hooks: never for a demo account, which cannot start disk work.
+func (a *API) prefetchStart(r *http.Request, current catalog.Ref, stream bool) func() {
+	if a.prefetch == nil || userFrom(r.Context()).IsDemo {
+		return func() {}
+	}
+	return a.prefetch.Start(callerOf(r.Context()), current, stream)
+}
+func (a *API) prefetchReconsider(r *http.Request) {
+	if a.prefetch != nil && !userFrom(r.Context()).IsDemo {
+		a.prefetch.Reconsider(callerOf(r.Context()))
+	}
 }
 func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -73,21 +113,15 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 		a.writePodcastStorageError(w, err)
 		return
 	}
-	ready := false
-	if pin.Present && feed.ValidFetch(pin.Fetch) && pin.Fetch.DeletedAt == "" {
-		f, _, openErr := library.OpenPodcast(r.Context(), a.cat, *lib, rel)
-		if openErr == nil {
-			ready = true
-			_ = f.Close()
-		} else if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
-			a.writePodcastStorageError(w, openErr)
-			return
-		}
+	ready, err := a.podcastPresent(r.Context(), lib, rel, pin)
+	if err != nil {
+		a.writePodcastStorageError(w, err)
+		return
 	}
 	if r.Method == http.MethodPost && !ready {
 		raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
 		_, _, err = a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &rel, Params: raw, Priority: 100, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
-		if !a.podcastFetchQueueError(w, err) {
+		if !a.podcastQueueError(w, err) {
 			return
 		}
 	}
@@ -101,12 +135,10 @@ func (a *API) handlePodcastFetch(w http.ResponseWriter, r *http.Request) {
 		st = bridge.FetchStatus{State: "absent"}
 	}
 	if userFrom(r.Context()).IsDemo && !ready {
-		st.State = "unavailable"
-		st.RetryAfterSeconds = 2
-		st.Error = bridge.FetchErrorFor("demo_account")
+		st = bridge.UnavailableFetchStatus(st, bridge.ErrFetchDemo)
 	}
-	if r.Method == http.MethodPost && a.prefetch != nil {
-		a.prefetch.Start(callerOf(r.Context()), catalog.Ref{LibraryID: lib.ID, Path: rel}, false)
+	if r.Method == http.MethodPost {
+		a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, false)
 	}
 	status = 200
 	if r.Method == http.MethodPost && !ready {

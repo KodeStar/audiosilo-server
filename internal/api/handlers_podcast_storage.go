@@ -123,26 +123,21 @@ func (a *API) handleAdminPodcastFetch(w http.ResponseWriter, r *http.Request) {
 		a.writePodcastStorageError(w, err)
 		return
 	}
-	// Only an indexed, committed pin can be a present file worth opening:
-	// OpenPodcast answers ErrNotIndexable for every other one.
-	if pin.Present && feed.ValidFetch(pin.Fetch) && pin.Fetch.DeletedAt == "" {
-		f, _, openErr := library.OpenPodcast(r.Context(), a.cat, *lib, req.Path)
-		if openErr == nil {
-			_ = f.Close()
-			writeJSON(w, 200, map[string]bool{"downloaded": true})
-			return
+	present, err := a.podcastPresent(r.Context(), lib, req.Path, pin)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client left during the checks: no one to answer
 		}
-		if !errors.Is(openErr, library.ErrNotIndexable) && !errors.Is(openErr, catalog.ErrNotFound) {
-			if r.Context().Err() != nil {
-				return // the client left during the checks: no one to answer
-			}
-			a.writePodcastStorageError(w, openErr)
-			return
-		}
+		a.writePodcastStorageError(w, err)
+		return
+	}
+	if present {
+		writeJSON(w, 200, map[string]bool{"downloaded": true})
+		return
 	}
 	raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: pin.ShowID, EpisodeID: pin.EpisodeID})
 	job, created, err := a.bridge.EnsurePodcastFetch(r.Context(), bridge.NewJob{LibraryID: &lib.ID, Path: &req.Path, Params: raw, Priority: 20, RequestedBy: userFrom(r.Context()).ID}, bridge.FetchOptions{Retry: true})
-	if !a.podcastFetchQueueError(w, err) {
+	if !a.podcastQueueError(w, err) {
 		return
 	}
 	if created {
@@ -216,7 +211,7 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			return
 		}
 		if a.bridge == nil {
-			writePodcastFetchPending(w, bridge.FetchStatus{State: "unavailable", RetryAfterSeconds: 2, Error: bridge.FetchErrorFor("bridge_unavailable")})
+			writePodcastFetchPending(w, bridge.UnavailableFetchStatus(bridge.FetchStatus{}, bridge.ErrKindUnavailable))
 			return
 		}
 		var status bridge.FetchStatus
@@ -228,18 +223,15 @@ func (a *API) servePodcastStream(w http.ResponseWriter, r *http.Request, lib *ca
 			return
 		}
 		if f == nil {
-			if a.prefetch != nil && !userFrom(r.Context()).IsDemo && status.RequestID != nil {
-				a.prefetch.Start(callerOf(r.Context()), catalog.Ref{LibraryID: lib.ID, Path: rel}, false)
+			if status.RequestID != nil {
+				a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, false)
 			}
 			writePodcastFetchPending(w, status)
 			return
 		}
 	}
 	defer f.Close()
-	if a.prefetch != nil && !userFrom(r.Context()).IsDemo {
-		done := a.prefetch.Start(callerOf(r.Context()), catalog.Ref{LibraryID: lib.ID, Path: rel}, true)
-		defer done()
-	}
+	defer a.prefetchStart(r, catalog.Ref{LibraryID: lib.ID, Path: rel}, true)()
 	if r.URL.Query().Get("transcode") == "1" {
 		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
 		if !ok {

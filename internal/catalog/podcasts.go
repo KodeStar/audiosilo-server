@@ -448,21 +448,6 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		v := base64.RawURLEncoding.EncodeToString(b)
 		out.NextCursor = &v
 	}
-	if c.PodcastFetchStatuses != nil {
-		paths := make([]string, len(out.Episodes))
-		for i := range out.Episodes {
-			paths[i] = out.Episodes[i].Path
-		}
-		states, err := c.PodcastFetchStatuses(ctx, lib, paths)
-		if err != nil {
-			return nil, err
-		}
-		for i := range out.Episodes {
-			if st, ok := states[out.Episodes[i].Path]; ok {
-				out.Episodes[i].Fetch = &st
-			}
-		}
-	}
 	return out, nil
 }
 
@@ -480,15 +465,6 @@ func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
 	}
 	if err == nil {
 		b.Episode = &e
-		if c.PodcastFetchStatuses != nil {
-			states, loadErr := c.PodcastFetchStatuses(ctx, b.LibraryID, []string{b.RelPath})
-			if loadErr != nil {
-				return loadErr
-			}
-			if st, ok := states[b.RelPath]; ok {
-				e.Fetch = &st
-			}
-		}
 	}
 	return err
 }

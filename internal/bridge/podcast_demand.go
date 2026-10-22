@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 )
 
@@ -46,25 +45,6 @@ func (s *Service) fetchRefusal(h *Heartbeat, lib int64, noNew bool) error {
 	default:
 		return nil
 	}
-}
-
-func (s *Service) fetchRefusalTx(ctx context.Context, tx *sql.Tx, lib int64, noNew bool) (error, error) {
-	var stamp sql.NullString
-	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT heartbeat_at,status FROM bridge_status WHERE id=1 AND paired_at IS NOT NULL AND `+auth.BridgeLiveSQL).Scan(&stamp, &raw)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	var h *Heartbeat
-	if err == nil && stamp.Valid {
-		if at, err := time.Parse(time.RFC3339, stamp.String); err == nil {
-			h = &Heartbeat{At: at}
-			if json.Unmarshal([]byte(raw), &h.Status) != nil {
-				h = nil
-			}
-		}
-	}
-	return s.fetchRefusal(h, lib, noNew), nil
 }
 
 func fetchCooling(ctx context.Context, tx *sql.Tx, j NewJob, now time.Time) (bool, error) {
@@ -118,48 +98,55 @@ type FetchError struct {
 	Message string `json:"message"`
 }
 
+// fetchMessages is our own copy for every safe fetch error code.
+var fetchMessages = map[string]string{
+	"dns":                  "The episode host could not be resolved.",
+	"network":              "The episode could not be reached.",
+	"timeout":              "The episode did not respond in time.",
+	"tls":                  "The episode's secure connection could not be verified.",
+	"invalid_feed_url":     "The episode address is invalid.",
+	"not_a_feed":           "The episode's feed could not be read.",
+	"not_a_podcast":        "The feed has no supported podcast episodes.",
+	"feed_secret_missing":  "The private feed secret is missing. Follow the feed again.",
+	"write_failed":         "The episode could not be saved.",
+	"not_podcast_library":  "This job needs a podcast library.",
+	"identity_changed":     "The episode identity changed.",
+	"gone":                 "The episode is no longer available.",
+	"too_large":            "The episode exceeds the size limit.",
+	"episode_not_found":    "Episode not found.",
+	"enclosure_missing":    "The episode has no available enclosure.",
+	"invalid_audio":        "The enclosure is not supported audio.",
+	"probe_unavailable":    "The audio probe is unavailable.",
+	"unsupported_encoding": "The enclosure uses an unsupported encoding.",
+	"index_failed":         "The episode could not be indexed.",
+	"module_off":           "The podcasts module is off.",
+	"bridge_unavailable":   "No online Bridge can fetch this episode.",
+	"library_not_writable": "The Bridge cannot write to this library.",
+	"demo_account":         "Demo accounts cannot fetch episodes.",
+	"blocked_address":      "The episode address is blocked.",
+	"fetch_failed":         "The episode could not be fetched.",
+	"bridge_lost":          "The Bridge stopped reporting.",
+}
+
 // FetchErrorFor accepts only known safe codes and supplies our own copy.
 func FetchErrorFor(code string) *FetchError {
-	messages := map[string]string{
-		"dns":                  "The episode host could not be resolved.",
-		"network":              "The episode could not be reached.",
-		"timeout":              "The episode did not respond in time.",
-		"tls":                  "The episode's secure connection could not be verified.",
-		"invalid_feed_url":     "The episode address is invalid.",
-		"not_a_feed":           "The episode's feed could not be read.",
-		"not_a_podcast":        "The feed has no supported podcast episodes.",
-		"feed_secret_missing":  "The private feed secret is missing. Follow the feed again.",
-		"write_failed":         "The episode could not be saved.",
-		"not_podcast_library":  "This job needs a podcast library.",
-		"identity_changed":     "The episode identity changed.",
-		"gone":                 "The episode is no longer available.",
-		"too_large":            "The episode exceeds the size limit.",
-		"episode_not_found":    "Episode not found.",
-		"enclosure_missing":    "The episode has no available enclosure.",
-		"invalid_audio":        "The enclosure is not supported audio.",
-		"probe_unavailable":    "The audio probe is unavailable.",
-		"unsupported_encoding": "The enclosure uses an unsupported encoding.",
-		"index_failed":         "The episode could not be indexed.",
-		"module_off":           "The podcasts module is off.",
-		"bridge_unavailable":   "No online Bridge can fetch this episode.",
-		"library_not_writable": "The Bridge cannot write to this library.",
-		"demo_account":         "Demo accounts cannot fetch episodes.",
-		"blocked_address":      "The episode address is blocked.",
-		"fetch_failed":         "The episode could not be fetched.",
-		"bridge_lost":          "The Bridge stopped reporting.",
-	}
-	message, ok := messages[code]
+	message, ok := fetchMessages[code]
 	if !ok && len(code) == 8 && code[:5] == "http_" {
-		if status, err := strconv.Atoi(code[5:]); err == nil && status >= 100 && status <= 599 && code[5] >= '1' && code[5] <= '5' {
+		if status, err := strconv.Atoi(code[5:]); err == nil && code[5] >= '1' && code[5] <= '5' {
 			message = "The episode returned HTTP " + strconv.Itoa(status) + "."
 			ok = true
 		}
 	}
 	if !ok {
 		code = "fetch_failed"
-		message = messages[code]
+		message = fetchMessages[code]
 	}
 	return &FetchError{Code: code, Message: message}
+}
+
+// ReadyFetchStatus is the summary of a present committed generation.
+func ReadyFetchStatus(f *feed.Fetch) FetchStatus {
+	return FetchStatus{State: "ready", BytesReceived: f.Bytes, BytesTotal: &f.Bytes}
 }
 
 // UnavailableFetchStatus overlays a known scheduling refusal on a summary.
@@ -218,9 +205,7 @@ func (s *Service) PodcastFetchStatuses(ctx context.Context, lib int64, paths []s
 		_ = json.Unmarshal([]byte(pin.String), &f)
 		switch {
 		case present && feed.ValidFetch(f) && f.DeletedAt == "":
-			st.State = "ready"
-			st.BytesReceived = f.Bytes
-			st.BytesTotal = &f.Bytes
+			st = ReadyFetchStatus(f)
 		case state.String == StateQueued:
 			st.State = "queued"
 			st.RequestID = &id.Int64

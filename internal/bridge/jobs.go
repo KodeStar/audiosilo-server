@@ -604,13 +604,12 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	}
 	var h *Heartbeat
 	if j.fetch == nil {
-		h, err = s.LastHeartbeat(ctx)
-		if err != nil {
+		if h, err = s.LastHeartbeat(ctx); err != nil {
 			return nil, false, err
 		}
-	}
-	if j.fetch == nil && (h == nil || !h.Offers(j.Kind)) {
-		return nil, false, ErrKindUnavailable
+		if h == nil || !h.Offers(j.Kind) {
+			return nil, false, ErrKindUnavailable
+		}
 	}
 	var refuse error
 	switch {
@@ -626,7 +625,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		key += suffix(j)
 	}
 	var exp expiry
-	identityBusy := false
+	identityBusy, promoted := false, false
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
 		var err error
@@ -649,11 +648,19 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 					if err := checkPodcastTarget(ctx, tx, j); err != nil {
 						return err
 					}
-					if _, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=MAX(priority,?),updated_at=? WHERE id=?`, j.Priority, now, id); err != nil {
+					// Promotion only ever raises the priority; an unchanged row
+					// is not rewritten and wakes no claim.
+					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
+					if err != nil {
 						return err
 					}
-					job.Priority = max(job.Priority, j.Priority)
-					job.UpdatedAt = now
+					if n, err := res.RowsAffected(); err != nil {
+						return err
+					} else if n > 0 {
+						promoted = true
+						job.Priority = j.Priority
+						job.UpdatedAt = now
+					}
 				}
 				return nil
 			}
@@ -674,10 +681,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return err
 		}
 		if j.fetch != nil {
-			refuse, err = s.fetchRefusalTx(ctx, tx, *j.LibraryID, j.fetch.NoNew)
+			h, err := readHeartbeat(ctx, tx)
 			if err != nil {
 				return err
 			}
+			refuse = s.fetchRefusal(h, *j.LibraryID, j.fetch.NoNew)
 		}
 		if refuse != nil {
 			return refuse
@@ -746,7 +754,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		s.settle(ctx, exp) // the expiry committed with the cancel intent
 		return nil, false, ErrIdentityChanged
 	}
-	if created || j.fetch != nil {
+	if created || promoted {
 		s.wake.fire()
 	}
 	s.settle(ctx, exp)

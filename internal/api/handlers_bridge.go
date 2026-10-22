@@ -36,7 +36,6 @@ import (
 // Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) {
 	a.bridge = b
-	a.cat.PodcastFetchStatuses = b.PodcastFetchStatuses
 	a.cat.PodcastChanged = b.NotifyPodcast
 	a.prefetch = &podcast.Prefetcher{Catalog: a.cat, Bridge: b, Context: a.baseCtx}
 	a.podcastDemand = &podcast.Demand{Catalog: a.cat, Bridge: b}

@@ -142,4 +142,31 @@ func TestPrefetchScopesPromotionAndMutationCap(t *testing.T) {
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch' AND rel_path=?`, third.Path).Scan(&n); err != nil || n != 0 {
 		t.Fatal("old-client prefetched", n, err)
 	}
+	// A finished look is not repeated for each Range request of the same item;
+	// a queue mutation looks again.
+	if _, err = db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	who.Podcasts = true
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third}, scopes); err != nil {
+		t.Fatal(err)
+	}
+	p2 := &Prefetcher{Catalog: cat, Bridge: jobs, Context: ctx}
+	done4 := p2.Start(who, third, true)
+	defer done4()
+	p2.work.Wait()
+	if err = cat.SetQueue(ctx, 2, []catalog.Ref{third, current}, scopes); err != nil {
+		t.Fatal(err)
+	}
+	done5 := p2.Start(who, third, true)
+	defer done5()
+	p2.work.Wait()
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=?`, current.Path).Scan(&n); err != nil || n != 0 {
+		t.Fatal("settled item looked again", n, err)
+	}
+	p2.Reconsider(who)
+	p2.work.Wait()
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM bridge_jobs WHERE rel_path=? AND priority=10`, current.Path).Scan(&n); err != nil || n != 1 {
+		t.Fatal("mutation after settle", n, err)
+	}
 }

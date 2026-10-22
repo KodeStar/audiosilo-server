@@ -66,6 +66,24 @@ func TestEnsurePodcastFetchConcurrentPromotion(t *testing.T) {
 	}
 	select {
 	case <-wake:
+		t.Fatal("an unchanged priority woke the claims")
+	default:
+	}
+}
+func TestEnsurePodcastFetchPromotionWakes(t *testing.T) {
+	q := fetchQueue(t)
+	ctx := context.Background()
+	first, _, err := q.EnsurePodcastFetch(ctx, demandJob(q, 10), FetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := q.wake.wait()
+	j, created, err := q.EnsurePodcastFetch(ctx, demandJob(q, 100), FetchOptions{})
+	if err != nil || created || j.ID != first.ID || j.Priority != 100 {
+		t.Fatalf("promotion %+v %v", j, err)
+	}
+	select {
+	case <-wake:
 	default:
 		t.Fatal("no post-commit wake")
 	}
