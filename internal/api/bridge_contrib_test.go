@@ -58,7 +58,7 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 		Accepts []string `json:"accepts"`
 	}
 	decodeInto(t, reply, &r)
-	if !slices.Equal(r.Accepts, []string{"setup"}) {
+	if !slices.Equal(r.Accepts, []string{"setup", "claim_min_priority"}) {
 		t.Fatalf("accepts = %s", reply)
 	}
 	// No setup sent: none shown.

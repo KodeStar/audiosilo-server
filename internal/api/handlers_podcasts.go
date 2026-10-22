@@ -118,6 +118,14 @@ func (a *API) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "list podcast episodes failed", "Could not load episodes.")
 		return
 	}
+	if userFrom(r.Context()).IsDemo {
+		for i := range page.Episodes {
+			if st := page.Episodes[i].Fetch; st != nil {
+				v := bridge.UnavailableFetchStatus(*st, bridge.ErrFetchDemo)
+				page.Episodes[i].Fetch = &v
+			}
+		}
+	}
 	writeJSON(w, 200, page)
 }
 func (a *API) handleMyPodcasts(w http.ResponseWriter, r *http.Request) {

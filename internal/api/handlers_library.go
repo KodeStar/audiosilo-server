@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -418,6 +419,10 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
 	if !ok {
 		return
+	}
+	if userFrom(r.Context()).IsDemo && book.Episode != nil && book.Episode.Fetch != nil {
+		st := bridge.UnavailableFetchStatus(*book.Episode.Fetch, bridge.ErrFetchDemo)
+		book.Episode.Fetch = &st
 	}
 	dp := media.DirectPlayable(book.Codec)
 	book.DirectPlayable = &dp

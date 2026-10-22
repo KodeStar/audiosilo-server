@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -15,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/notify"
+	"github.com/kodestar/audiosilo-server/internal/podcast"
 )
 
 // The Bridge (BRIDGE-PLAN.md Phase 0): the optional companion that writes to the
@@ -34,6 +36,10 @@ import (
 // Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) {
 	a.bridge = b
+	a.cat.PodcastFetchStatuses = b.PodcastFetchStatuses
+	a.cat.PodcastChanged = b.NotifyPodcast
+	a.prefetch = &podcast.Prefetcher{Catalog: a.cat, Bridge: b, Context: a.baseCtx}
+	a.podcastDemand = &podcast.Demand{Catalog: a.cat, Bridge: b}
 	if err := b.ExpirePrivateRequests(context.Background()); err != nil {
 		a.log.Warn("expire private podcast requests failed", "err", err)
 	}
@@ -401,7 +407,21 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer context.AfterFunc(a.baseCtx, cancel)()
-	job, err := a.bridge.ClaimFor(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait)
+	var floor *int32
+	if values, exists := r.URL.Query()["min_priority"]; exists {
+		if len(values) != 1 {
+			writeErrorCode(w, 400, "invalid_request", "Invalid minimum priority.")
+			return
+		}
+		n, err := strconv.ParseInt(values[0], 10, 32)
+		if err != nil {
+			writeErrorCode(w, 400, "invalid_request", "Invalid minimum priority.")
+			return
+		}
+		v := int32(n)
+		floor = &v
+	}
+	job, err := a.bridge.ClaimForPriority(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait, floor)
 	switch {
 	case errors.Is(err, bridge.ErrNoHeartbeat):
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")

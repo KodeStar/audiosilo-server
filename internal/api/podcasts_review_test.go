@@ -55,7 +55,7 @@ func TestPodcastFollowDoesNotGrantReplacementShow(t *testing.T) {
 			if want {
 				code = 200
 				if strings.HasPrefix(route, "stream") {
-					code = 404 // The allowed episode has not been downloaded.
+					code = 503 // The allowed episode needs an available fetch worker.
 				}
 			}
 			if resp.StatusCode != code {

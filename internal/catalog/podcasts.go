@@ -51,9 +51,10 @@ type PodcastShow struct {
 	ShowID          string        `json:"-"`
 }
 type PodcastGeneration struct {
-	Generation      int    `json:"generation,omitempty"`
-	SHA256          string `json:"sha256,omitempty"`
-	TimelineChanged *bool  `json:"timeline_changed,omitempty"`
+	Fetch           *bridge.FetchStatus `json:"fetch,omitempty"`
+	Generation      int                 `json:"generation,omitempty"`
+	SHA256          string              `json:"sha256,omitempty"`
+	TimelineChanged *bool               `json:"timeline_changed,omitempty"`
 }
 type PodcastEpisodeInfo struct {
 	PodcastGeneration
@@ -227,6 +228,11 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		changed = true
 		return nil
 	})
+	if err == nil && c.PodcastChanged != nil {
+		for _, ep := range f.Episodes {
+			c.PodcastChanged(lib, ep.Path)
+		}
+	}
 	return changed, err
 }
 
@@ -442,6 +448,21 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		v := base64.RawURLEncoding.EncodeToString(b)
 		out.NextCursor = &v
 	}
+	if c.PodcastFetchStatuses != nil {
+		paths := make([]string, len(out.Episodes))
+		for i := range out.Episodes {
+			paths[i] = out.Episodes[i].Path
+		}
+		states, err := c.PodcastFetchStatuses(ctx, lib, paths)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out.Episodes {
+			if st, ok := states[out.Episodes[i].Path]; ok {
+				out.Episodes[i].Fetch = &st
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -459,6 +480,15 @@ func (c *Catalog) loadPodcastEpisode(ctx context.Context, b *Book) error {
 	}
 	if err == nil {
 		b.Episode = &e
+		if c.PodcastFetchStatuses != nil {
+			states, loadErr := c.PodcastFetchStatuses(ctx, b.LibraryID, []string{b.RelPath})
+			if loadErr != nil {
+				return loadErr
+			}
+			if st, ok := states[b.RelPath]; ok {
+				e.Fetch = &st
+			}
+		}
 	}
 	return err
 }

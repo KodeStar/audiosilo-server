@@ -123,7 +123,7 @@ func scheduleEpisodes(ctx context.Context, d modules.Deps, h *bridge.Heartbeat) 
 			added := 0
 			for _, ep := range candidates {
 				raw, _ := json.Marshal(bridge.EpisodeParams{ShowID: show.ShowID, EpisodeID: ep.EpisodeID})
-				_, created, err := d.Bridge.Enqueue(ctx, bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: -10})
+				_, created, err := d.Bridge.EnsurePodcastFetch(ctx, bridge.NewJob{Kind: bridge.KindPodcastFetch, LibraryID: &show.LibraryID, Path: &ep.Path, Params: raw, Priority: -10}, bridge.FetchOptions{})
 				if err != nil {
 					errs = append(errs, err)
 					continue

@@ -265,7 +265,9 @@ func (s *Service) reportEnded(ctx context.Context, j *Job, from string) {
 		s.ended.fire()
 	}
 	if s.OnEnded != nil {
-		s.OnEnded(context.WithoutCancel(ctx), *j)
+		committed, cancel := committedContext(ctx)
+		defer cancel()
+		s.OnEnded(committed, *j)
 	}
 }
 
@@ -417,9 +419,12 @@ func validShowPath(p *string) bool {
 }
 
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
+	return s.claimPriority(ctx, token, kinds, nil)
+}
+func (s *Service) claimPriority(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
-	j, err := s.claimStored(ctx, token, kinds)
+	j, err := s.claimStored(ctx, token, kinds, minPriority)
 	if err != nil || j == nil {
 		return j, err
 	}

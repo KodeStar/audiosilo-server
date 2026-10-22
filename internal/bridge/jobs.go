@@ -482,6 +482,7 @@ type NewJob struct {
 	RequestedBy  int64
 	Priority     int
 	feedRedacted string
+	fetch        *FetchOptions
 }
 
 // ErrKindUnavailable is a job of a kind the paired Bridge doesn't run (or no
@@ -592,21 +593,29 @@ func checkNew(j *NewJob) error {
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
+	if j.Kind == KindPodcastFetch && j.fetch == nil {
+		return s.EnsurePodcastFetch(ctx, j, FetchOptions{Retry: true})
+	}
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
 	}
 	if err := s.checkLibraryKind(ctx, j); err != nil {
 		return nil, false, err
 	}
-	h, err := s.LastHeartbeat(ctx)
-	if err != nil {
-		return nil, false, err
+	var h *Heartbeat
+	if j.fetch == nil {
+		h, err = s.LastHeartbeat(ctx)
+		if err != nil {
+			return nil, false, err
+		}
 	}
-	if h == nil || !h.Offers(j.Kind) {
+	if j.fetch == nil && (h == nil || !h.Offers(j.Kind)) {
 		return nil, false, ErrKindUnavailable
 	}
 	var refuse error
 	switch {
+	case j.fetch != nil:
+		// New fetch authorization is checked in the writer transaction below.
 	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
 		refuse = ErrLibraryNotWritable
 	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
@@ -636,6 +645,16 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return err
 			}
 			if !podcastWork(j.Kind) || samePodcastIdentity(job.Params, j.Params) {
+				if j.fetch != nil {
+					if err := checkPodcastTarget(ctx, tx, j); err != nil {
+						return err
+					}
+					if _, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=MAX(priority,?),updated_at=? WHERE id=?`, j.Priority, now, id); err != nil {
+						return err
+					}
+					job.Priority = max(job.Priority, j.Priority)
+					job.UpdatedAt = now
+				}
 				return nil
 			}
 			// Only a request naming the current identity may cancel the open
@@ -654,8 +673,23 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		} else if err := checkPodcastTarget(ctx, tx, j); err != nil {
 			return err
 		}
+		if j.fetch != nil {
+			refuse, err = s.fetchRefusalTx(ctx, tx, *j.LibraryID, j.fetch.NoNew)
+			if err != nil {
+				return err
+			}
+		}
 		if refuse != nil {
 			return refuse
+		}
+		if j.fetch != nil && !j.fetch.Retry {
+			cooling, err := fetchCooling(ctx, tx, j, s.now())
+			if err != nil {
+				return err
+			}
+			if cooling {
+				return ErrFetchCooldown
+			}
 		}
 		if j.Kind == KindPodcastSubscribe {
 			var n int
@@ -712,7 +746,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		s.settle(ctx, exp) // the expiry committed with the cancel intent
 		return nil, false, ErrIdentityChanged
 	}
-	if created {
+	if created || j.fetch != nil {
 		s.wake.fire()
 	}
 	s.settle(ctx, exp)
@@ -901,9 +935,14 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 // caller's leaving doesn't cancel: the move has committed, and the admin should
 // hear about it either way.
 func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
+	if job.Kind == KindPodcastFetch && job.LibraryID != nil && job.Path != nil {
+		s.NotifyPodcast(*job.LibraryID, *job.Path)
+	}
 	s.reportEnded(ctx, job, from)
 	if s.OnTransition != nil && job.Notable(from, fromCode) {
-		s.OnTransition(context.WithoutCancel(ctx), *job, from)
+		committed, cancel := committedContext(ctx)
+		defer cancel()
+		s.OnTransition(committed, *job, from)
 	}
 }
 
@@ -942,6 +981,11 @@ var ErrNoHeartbeat = errors.New("the bridge hasn't reported yet")
 // poll outlives the request's authentication), no job is handed out on it
 // (ErrNotPaired).
 func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wait time.Duration) (*Job, error) {
+	return s.ClaimForPriority(ctx, token, asked, wait, nil)
+}
+
+// ClaimForPriority applies the optional priority floor before a lease is issued.
+func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []string, wait time.Duration, minPriority *int32) (*Job, error) {
 	h, err := s.LastHeartbeat(ctx)
 	if err != nil {
 		return nil, err
@@ -958,14 +1002,14 @@ func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wai
 	if len(ks) == 0 {
 		return nil, nil
 	}
-	return s.waitClaim(ctx, token, ks, wait)
+	return s.waitClaimPriority(ctx, token, ks, wait, minPriority)
 }
 
 // claim hands the Bridge holding token the next queued job of one of kinds
 // (highest priority, then oldest) that isn't held (nextQueued), leased for
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
 // paired Bridge's.
-func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) (*Job, error) {
+func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
 	var (
 		job *Job
 		exp expiry
@@ -991,7 +1035,7 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) 
 			exp.failed = append(exp.failed, transition{job: &expired[i], from: StateQueued})
 		}
 
-		id, err := s.nextQueued(ctx, tx, kinds)
+		id, err := s.nextQueued(ctx, tx, kinds, minPriority)
 		if err != nil || id == 0 {
 			return err
 		}
@@ -1014,9 +1058,9 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string) 
 // a managed module that is off (held) waits, queued, until the module is on
 // again. The queue is short, so the kinds are matched as read (the statement
 // stays a constant).
-func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (int64, error) {
+func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string, minPriority *int32) (int64, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' ORDER BY priority DESC, id`)
+		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, minPriority, minPriority)
 	if err != nil {
 		return 0, err
 	}
@@ -1045,12 +1089,15 @@ func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string) (i
 // caller left, or the server is stopping: a claim cut short by it committed
 // nothing).
 func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration) (*Job, error) {
+	return s.waitClaimPriority(ctx, token, kinds, wait, nil)
+}
+func (s *Service) waitClaimPriority(ctx context.Context, token int64, kinds []string, wait time.Duration, minPriority *int32) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
 		woken := s.wake.wait()
-		job, err := s.claim(ctx, token, kinds)
+		job, err := s.claimPriority(ctx, token, kinds, minPriority)
 		if err != nil && ctx.Err() != nil {
 			return nil, nil
 		}

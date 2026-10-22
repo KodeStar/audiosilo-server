@@ -126,8 +126,8 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 				if tc.allowed {
 					want := 200
 					if strings.HasPrefix(route, "stream") {
-						want = 404
-						if !strings.Contains(body, "not_downloaded") {
+						want = 503
+						if !strings.Contains(body, "podcast_fetch_unavailable") {
 							t.Fatal(body)
 						}
 					}
@@ -146,7 +146,7 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 			resp, body = b.do(t, "GET", podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(episode)+"&token="+url.QueryEscape(tok)), "", "")
 			want := 403
 			if tc.allowed {
-				want = 404
+				want = 503
 			}
 			if resp.StatusCode != want {
 				t.Fatalf("media inherited %d %s", resp.StatusCode, body)

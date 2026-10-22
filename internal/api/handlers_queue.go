@@ -137,6 +137,9 @@ func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "set queue failed", "could not save the queue", "user", u.ID)
 		return
 	}
+	if a.prefetch != nil && !userFrom(r.Context()).IsDemo {
+		a.prefetch.Reconsider(callerOf(r.Context()))
+	}
 	a.writeQueue(w, r, scopes)
 }
 
@@ -153,6 +156,9 @@ func (a *API) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "add to queue failed", "could not add the book", "user", u.ID)
 		return
 	}
+	if a.prefetch != nil && !userFrom(r.Context()).IsDemo {
+		a.prefetch.Reconsider(callerOf(r.Context()))
+	}
 	a.writeQueue(w, r, scopes)
 }
 
@@ -166,6 +172,9 @@ func (a *API) handleRemoveFromQueue(w http.ResponseWriter, r *http.Request) {
 	if err := a.cat.RemoveFromQueue(r.Context(), u.ID, ref); err != nil {
 		a.writeCatalogError(w, err, "remove from queue failed", "could not remove the book", "user", u.ID)
 		return
+	}
+	if a.prefetch != nil && !userFrom(r.Context()).IsDemo {
+		a.prefetch.Reconsider(callerOf(r.Context()))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

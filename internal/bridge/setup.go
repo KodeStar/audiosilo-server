@@ -114,8 +114,6 @@ func (s *Setup) validate() *Setup {
 // AcceptSetup names the setup block in a heartbeat reply's accepts.
 const AcceptSetup = "setup"
 
-// HeartbeatAccepts is the reply's accepts list: the optional heartbeat blocks
-// the server reads (PUT /bridge/status). A Bridge sends such a block only after
-// a reply named it, as an older server refuses a heartbeat with a field it
-// doesn't know.
-func HeartbeatAccepts() []string { return []string{AcceptSetup} }
+// HeartbeatAccepts advertises optional heartbeat blocks and claim options.
+// A Bridge sends an extension only after negotiation with this server.
+func HeartbeatAccepts() []string { return []string{AcceptSetup, "claim_min_priority"} }

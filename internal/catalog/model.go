@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -227,8 +228,11 @@ type catalogDB interface {
 }
 
 type Catalog struct {
-	db  catalogDB
-	now func() time.Time
+	// Wired before serving; summaries are read in one batch per page.
+	PodcastFetchStatuses func(context.Context, int64, []string) (map[string]bridge.FetchStatus, error)
+	PodcastChanged       func(int64, string)
+	db                   catalogDB
+	now                  func() time.Time
 	// onChange hears that a book's index row was written (OnBookChange): the
 	// listeners, replaced whole (copy-on-write) by each registration.
 	onChange          atomic.Pointer[[]func()]

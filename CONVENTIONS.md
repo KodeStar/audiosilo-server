@@ -1648,7 +1648,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
   sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
   `retry_at`, no re-admit at a restart).
-- **Podcasts (Bridge Phases 2c-1 and 2c-2a)**: libraries have an immutable `kind` (`books`, the default,
+- **Podcasts (Bridge Phases 2c-1, 2c-2a and 2c-2b)**: libraries have an immutable `kind` (`books`, the default,
   or `podcasts`). Creating or re-rooting either kind may never overlap a podcast root in either
   direction (clean absolute paths, checked under the writer). Config sync logs a root clash and
   skips that entry, keeping its existing library when present, so startup continues. API creates
@@ -1661,7 +1661,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tombstone and no publication journal. Show and attachment listings extend the feed signature, so
   audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh. A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing
-  episodes remain indexed, with `episode` on `/item`, 404 `not_downloaded` on `/stream`, and empty
+  episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
   chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players remain hidden
@@ -1710,7 +1710,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unchanged feeds too: at most ten new fetches per pass and two per show, rotated across shows;
   ten retain jobs per pass, no more than hourly per show. Keep fetches newest listed N, Archive
   oldest listed first, On demand no feed-wide downloads. No current accessible followers means
-  no automatic disk work. The absent-file stream remains 404 `not_downloaded` in 2c-2a.
+  no automatic feed-wide disk work. On-demand stream/Range/download/transcode triggers share
+  `bridge.EnsurePodcastFetch` with player Retry, admin, prefetch and scheduled work. The writer
+  transaction deduplicates open work, promotes priority with MAX without changing attempts, checks
+  cooldown and authorizes new work against the current online heartbeat/mapping. Priorities are
+  100/20/10/-10 respectively; explicit Retry/admin bypass cooldown, while ordinary stream retries
+  expose the terminal failure. Existing work can be promoted offline or with an unwritable mapping.
+  Absent streams wait within one two-second absolute budget, including DB work, with bounded
+  per-path broadcast registrations and a final descriptor recheck. Disconnection releases the waiter
+  without cancelling the job. Pending media answers 503 with `podcast_fetching`,
+  `podcast_fetch_unavailable` or `podcast_fetch_failed`, `Retry-After: 2`, `Cache-Control: no-store`
+  and a public `fetch` summary. Kids with read access may fetch; demo accounts cannot start disk work.
+  Core player `GET /libraries/{id}/podcasts/fetch?path=` observes only; strict POST `{path}` retries
+  at 100 and answers 202, or 200 when ready. Status always includes state, nullable request_id,
+  int64 bytes_received, nullable int64 bytes_total, retry_after_seconds and nullable safe error.
+  Episode pages and Book.episode gain optional `fetch`, batched per page. `podcast_fetch:true`
+  advertises this protocol even offline; the existing podcasts capability keeps its module meaning.
+  One-ahead queue preparation uses the actual request's caller, scopes and private proof, at most
+  one candidate per user/current, in bounded detached work. Queue mutations reconsider an active
+  podcast stream/fetch; removal never cancels shared work. Playing the prepared episode promotes
+  the same intent. No player UI or released-client gate change is included.
+  Heartbeat replies advertise `claim_min_priority`; negotiated `GET /bridge/jobs/next` accepts a
+  signed int32 `min_priority`, filtered in the general claim transaction before attempts or leases
+  change. Omission preserves ordinary claims. Bridge worker reservation/claim refresh is owned by
+  the companion repo.
   Bridge-token-only retention lookup and strict POST `retention/check` return a no-store aggregate
   from one DB snapshot plus current stream marks. Only enabled, non-demo, matching-ID followers
   with current episode access count, including private follow proof and household grants with
