@@ -197,9 +197,8 @@ func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows 
 	if over <= 0 {
 		return rows, nil
 	}
-	slices.SortStableFunc(hidden, func(a, b int) int { return strings.Compare(rows[a].AddedAt, rows[b].AddedAt) })
 	evict := make(map[int]bool, over)
-	for _, i := range hidden[:over] {
+	for _, i := range oldestOf(rows, hidden, over) {
 		if _, err := tx.ExecContext(ctx, l.remove, owner, rows[i].LibraryID, rows[i].Path); err != nil {
 			return nil, err
 		}
@@ -212,6 +211,14 @@ func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows 
 		}
 	}
 	return kept, nil
+}
+
+// oldestOf sorts idx (indexes into rows, in stored order) oldest first
+// (added_at, ties in stored order) and returns the first n: the rows makeRoom and
+// keptRows evict.
+func oldestOf(rows []listRow, idx []int, n int) []int {
+	slices.SortStableFunc(idx, func(a, b int) int { return strings.Compare(rows[a].AddedAt, rows[b].AddedAt) })
+	return idx[:n]
 }
 
 // visibleAt is where a row goes among rest (the list's other rows, in stored
@@ -260,7 +267,7 @@ func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs [
 		next[i], listed[ref] = r, true
 	}
 	if len(keep) > 0 {
-		next = withKept(rows, next, l.keptRows(rows, listed, keep, len(next)))
+		next = withKept(rows, next, listed, l.keptRows(rows, listed, keep, len(next)))
 	}
 	return l.write(ctx, tx, owner, rows, placed(next))
 }
@@ -270,37 +277,37 @@ func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs [
 // (added_at, ties in stored order) while they and the n listed rows would exceed
 // l.max.
 func (l orderedList) keptRows(rows []listRow, listed map[Ref]bool, keep []Scope, n int) []listRow {
-	var kept []listRow
-	for _, r := range rows {
+	var idx []int // indexes into rows, in stored order
+	for i, r := range rows {
 		if !listed[r.Ref] && ScopesAllow(keep, r.Ref) {
-			kept = append(kept, r)
+			idx = append(idx, i)
 		}
 	}
-	if over := n + len(kept) - l.max; over > 0 {
-		oldest := slices.Clone(kept)
-		slices.SortStableFunc(oldest, func(a, b listRow) int { return strings.Compare(a.AddedAt, b.AddedAt) })
-		evict := make(map[Ref]bool, over)
-		for _, r := range oldest[:over] {
-			evict[r.Ref] = true
+	evict := map[int]bool{}
+	if over := n + len(idx) - l.max; over > 0 {
+		for _, i := range oldestOf(rows, slices.Clone(idx), over) {
+			evict[i] = true
 		}
-		kept = slices.DeleteFunc(kept, func(r listRow) bool { return evict[r.Ref] })
+	}
+	var kept []listRow
+	for _, i := range idx {
+		if !evict[i] {
+			kept = append(kept, rows[i])
+		}
 	}
 	return kept
 }
 
 // withKept merges kept (stored rows a replace keeps unlisted, in stored order)
-// into next (the listed rows, in their new order): each kept row goes just after
+// into next (the listed rows, in their new order; listed holds their refs): each
+// kept row goes just after
 // the listed row that last preceded it in the stored order (rows, everything
 // stored now), or first when none did. When the new order of the listed rows
 // would put kept rows out of their stored order, they all go after next instead,
 // in stored order.
-func withKept(rows, next, kept []listRow) []listRow {
+func withKept(rows, next []listRow, listed map[Ref]bool, kept []listRow) []listRow {
 	if len(kept) == 0 {
 		return next
-	}
-	inNext := make(map[Ref]bool, len(next))
-	for _, r := range next {
-		inNext[r.Ref] = true
 	}
 	isKept := make(map[Ref]bool, len(kept))
 	for _, r := range kept {
@@ -312,7 +319,7 @@ func withKept(rows, next, kept []listRow) []listRow {
 	var anchor Ref
 	for _, r := range rows {
 		switch {
-		case inNext[r.Ref]:
+		case listed[r.Ref]:
 			anchor = r.Ref
 		case isKept[r.Ref]:
 			after[anchor] = append(after[anchor], r)

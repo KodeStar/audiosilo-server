@@ -363,6 +363,15 @@ func (c *Catalog) GatedScopes(ctx context.Context, who Caller) ([]Scope, error) 
 	if err != nil {
 		return nil, err
 	}
+	podcasts, err := c.podcastLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(scopes, func(s Scope) bool { return !podcasts[s.LibraryID] }), nil
+}
+
+// podcastLibraries is the set of podcast library ids.
+func (c *Catalog) podcastLibraries(ctx context.Context) (map[int64]bool, error) {
 	libs, err := c.ListLibraries(ctx)
 	if err != nil {
 		return nil, err
@@ -371,7 +380,7 @@ func (c *Catalog) GatedScopes(ctx context.Context, who Caller) ([]Scope, error) 
 	for _, l := range libs {
 		podcasts[l.ID] = l.Kind == KindPodcasts
 	}
-	return slices.DeleteFunc(scopes, func(s Scope) bool { return !podcasts[s.LibraryID] }), nil
+	return podcasts, nil
 }
 
 // CallerLibraries applies the client gate but keeps library grants independent

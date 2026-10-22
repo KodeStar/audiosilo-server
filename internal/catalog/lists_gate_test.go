@@ -178,26 +178,15 @@ func TestSetCollectionItemsOldClientKeepsPodcastEntries(t *testing.T) {
 	if err := e.c.SetCollectionItems(e.ctx, col.ID, e.user, []Ref{e.book("A"), e.ep(0), e.book("B")}, e.newScopes, nil); err != nil {
 		t.Fatal(err)
 	}
-	items := func(scopes []Scope) []string {
-		_, list, err := e.c.CollectionDetail(e.ctx, col.ID, e.user, scopes)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := []string{}
-		for _, it := range list {
-			out = append(out, it.Path)
-		}
-		return out
-	}
 	if err := e.c.SetCollectionItems(e.ctx, col.ID, e.user, []Ref{e.book("B")}, e.oldScopes, e.gated(t, e.old)); err != nil {
 		t.Fatal(err)
 	}
 	// A, which the episode followed, is gone: no listed row preceded it, so it leads.
-	wantPaths(t, "old player kept", items(e.every), e.eps[0], "B")
+	wantPaths(t, "old player kept", itemPaths(t, e.c, col.ID, e.user, e.every), e.eps[0], "B")
 	if err := e.c.SetCollectionItems(e.ctx, col.ID, e.user, []Ref{e.book("B")}, e.newScopes, e.gated(t, e.newer)); err != nil {
 		t.Fatal(err)
 	}
-	wantPaths(t, "new player deleted", items(e.every), "B")
+	wantPaths(t, "new player deleted", itemPaths(t, e.c, col.ID, e.user, e.every), "B")
 }
 
 // Kept rows count toward the cap as add counts hidden rows: the oldest go.
