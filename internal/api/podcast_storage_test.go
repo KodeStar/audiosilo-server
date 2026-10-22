@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -103,9 +104,7 @@ func TestPodcastStorageRoutesAllowedDenied(t *testing.T) {
 		})
 	}
 	resp, body := b.do(t, "POST", adminBase+"fetch", b.adminTok, fmt.Sprintf(`{"path":%q}`, f.Episodes[0].Path))
-	if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"downloaded":true}` {
-		t.Fatalf("present pin %d %s", resp.StatusCode, body)
-	}
+	wantDownloaded(t, "present pin", resp, body)
 	for _, kind := range []string{bridge.KindPodcastFetch, bridge.KindPodcastRetain} {
 		resp, body = b.do(t, "POST", "/api/v1/admin/bridge/jobs", b.adminTok, fmt.Sprintf(`{"kind":%q,"library_id":%d,"path":"Fixture Show","params":{}}`, kind, b.lib.ID))
 		if resp.StatusCode != 400 {
@@ -113,48 +112,44 @@ func TestPodcastStorageRoutesAllowedDenied(t *testing.T) {
 		}
 	}
 }
+
+// wantDownloaded checks the answer for a present, valid pin.
+func wantDownloaded(t *testing.T, what string, resp *http.Response, body string) {
+	t.Helper()
+	if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"downloaded":true}` {
+		t.Fatalf("%s: %d %s", what, resp.StatusCode, body)
+	}
+}
+
 func TestPodcastFetchPresentPinBeforeWriteChecks(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name      string
-		moduleOff bool
-		status    int
-		code      string
+		name                             string
+		setupMethod, setupURL, setupBody string
+		setupStatus, status              int
+		code                             string
 	}{
-		{"module off", true, 404, "module_off"},
-		{"no Bridge", false, 409, "bridge_unavailable"},
+		{"module off", "PATCH", "/api/v1/admin/settings", `{"modules":{"podcasts":false}}`, 200, 404, "module_off"},
+		{"no Bridge", "DELETE", "/api/v1/admin/bridge", "", 204, 409, "bridge_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, f := podcastStorageEnv(t)
 			route := fmt.Sprintf("/api/v1/admin/libraries/%d/podcasts/fetch", b.lib.ID)
-			if tc.moduleOff {
-				resp, body := b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
-				if resp.StatusCode != 200 {
-					t.Fatalf("disable module: %d %s", resp.StatusCode, body)
-				}
-			} else {
-				resp, body := b.do(t, "DELETE", "/api/v1/admin/bridge", b.adminTok, "")
-				if resp.StatusCode != 204 {
-					t.Fatalf("unpair: %d %s", resp.StatusCode, body)
-				}
+			resp, body := b.do(t, tc.setupMethod, tc.setupURL, b.adminTok, tc.setupBody)
+			if resp.StatusCode != tc.setupStatus {
+				t.Fatalf("setup: %d %s", resp.StatusCode, body)
 			}
 			present := fmt.Sprintf(`{"path":%q}`, f.Episodes[0].Path)
-			resp, body := b.do(t, "POST", route, b.adminTok, present)
-			if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"downloaded":true}` {
-				t.Fatalf("present pin: %d %s", resp.StatusCode, body)
-			}
+			resp, body = b.do(t, "POST", route, b.adminTok, present)
+			wantDownloaded(t, "present pin", resp, body)
 			resp, body = b.do(t, "POST", route, b.adminTok, fmt.Sprintf(`{"path":%q}`, f.Episodes[2].Path))
-			if resp.StatusCode != tc.status || !strings.Contains(body, tc.code) {
-				t.Fatalf("absent pin: %d %s", resp.StatusCode, body)
-			}
+			wantCode(t, "absent pin", resp, body, tc.status, tc.code)
 			// An indexed pin whose file vanished must still pass the write checks.
 			if err := os.Remove(filepath.Join(b.lib.Root, filepath.FromSlash(f.Episodes[0].Path))); err != nil {
 				t.Fatal(err)
 			}
 			resp, body = b.do(t, "POST", route, b.adminTok, present)
-			if resp.StatusCode != tc.status || !strings.Contains(body, tc.code) {
-				t.Fatalf("stale pin: %d %s", resp.StatusCode, body)
-			}
+			wantCode(t, "stale pin", resp, body, tc.status, tc.code)
 			var queued int
 			if err := b.db.QueryRowContext(context.Background(), `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch'`).Scan(&queued); err != nil || queued != 0 {
 				t.Fatalf("unexpected fetch jobs: %d %v", queued, err)
@@ -215,9 +210,7 @@ func TestPodcastStorageValidationAndGating(t *testing.T) {
 		t.Fatalf("kind: %d %s", resp.StatusCode, out)
 	}
 	resp, out = b.do(t, "POST", base+"fetch", b.adminTok, fmt.Sprintf(`{"path":%q}`, f.Episodes[0].Path))
-	if resp.StatusCode != 200 || strings.TrimSpace(out) != `{"downloaded":true}` {
-		t.Fatalf("present pin without fetch kind: %d %s", resp.StatusCode, out)
-	}
+	wantDownloaded(t, "present pin without fetch kind", resp, out)
 	b.beat(t, bridge.KindPodcastFetch, bridge.KindPodcastRetain)
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE users SET is_demo=1 WHERE id=?`, b.adminID); err != nil {
 		t.Fatal(err)
@@ -359,9 +352,7 @@ func TestPodcastStorageMappingLibraryAndFailureErrors(t *testing.T) {
 		t.Fatal(out)
 	}
 	resp, out = b.do(t, "POST", base+"fetch", b.adminTok, fmt.Sprintf(`{"path":%q}`, f.Episodes[0].Path))
-	if resp.StatusCode != 200 || strings.TrimSpace(out) != `{"downloaded":true}` {
-		t.Fatalf("present pin without writable mapping: %d %s", resp.StatusCode, out)
-	}
+	wantDownloaded(t, "present pin without writable mapping", resp, out)
 	for _, route := range []struct{ method, url, body string }{{"PUT", base + "retention?path=Fixture+Show", `{"mode":"keep","keep":3,"days":7}`}, {"DELETE", base + "retention?path=Fixture+Show", ""}, {"POST", base + "fetch", fmt.Sprintf(`{"path":%q}`, f.Episodes[2].Path)}} {
 		resp, out = b.do(t, route.method, route.url, b.adminTok, route.body)
 		if resp.StatusCode != 409 || !strings.Contains(out, "library_not_writable") {
