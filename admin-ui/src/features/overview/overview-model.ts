@@ -1,4 +1,4 @@
-import type { ListeningRow, ListeningSession } from '@/api/types';
+import type { LibraryStat, ListeningRow, ListeningSession } from '@/api/types';
 import { liveSummary, sortLive } from '@/features/activity/live-model';
 import { refKey } from '@/lib/book-route';
 
@@ -43,4 +43,9 @@ export function greetingFor(hour: number): Greeting {
   if (hour < 12) return 'morning';
   if (hour < 18) return 'afternoon';
   return 'evening';
+}
+
+/** The libraries "Books per library" lists: books libraries (a podcast library has no books). */
+export function bookLibraries(libraries: readonly LibraryStat[]): LibraryStat[] {
+  return libraries.filter((l) => l.kind !== 'podcasts');
 }

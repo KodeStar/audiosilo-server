@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { idle, libraries, stats } from '@/test/fixtures';
+import { admin, idle, libraries, sam, setupEnvelope, stats } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -418,7 +418,7 @@ describe('libraries', () => {
       await screen.findByRole('menuitem', { name: 'Export with file paths and tags...' }),
     );
     const dialog = await screen.findByRole('dialog', {
-      name: 'Export Fiction with file paths and tags',
+      name: 'Export Fiction with paths, tags and descriptions',
     });
     expect(
       within(dialog).getByText(/Don't attach this file to a public issue/),
@@ -588,4 +588,109 @@ it('shows the podcast badge and keeps its kind read only on edit', async () => {
   const field = await screen.findByLabelText('Kind');
   expect(field).toHaveValue('podcasts');
   expect(field).toBeDisabled();
+});
+
+describe('libraries, 2.4.0 fixes', () => {
+  const created = {
+    status: 201,
+    body: { id: 3, name: 'Talks', root: '/mnt/podcasts', kind: 'podcasts' },
+  };
+  const demo = { ...sam, id: 4, username: 'demo', is_demo: true };
+  const member = { ...sam, id: 5, username: 'kid', managed_by: { id: 2, username: 'sam' } };
+
+  async function addPodcasts(everyone: boolean) {
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+    await user.selectOptions(within(dialog).getByLabelText('Kind'), 'podcasts');
+    const box = within(dialog).getByRole('checkbox', { name: 'Give everyone access' });
+    expect(box).toBeChecked();
+    if (!everyone) await user.click(box);
+    await user.type(within(dialog).getByLabelText('Name'), 'Talks');
+    await user.type(within(dialog).getByLabelText('Folder'), '/mnt/podcasts');
+    await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
+    await screen.findByText('Added Talks');
+  }
+  const grants = (calls: ReturnType<typeof mockFetch>) =>
+    calls.filter((c) => c.method === 'POST' && c.path === '/admin/library-access');
+
+  it('gives a new podcast library to every listener, not admins, members or the demo (BRIDGE-07)', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries': created,
+        'GET /admin/users': { body: { users: [admin, sam, demo, member] } },
+        'POST /admin/library-access': { status: 204 },
+      }),
+    );
+    await addPodcasts(true);
+    await waitFor(() => expect(grants(calls)).toHaveLength(1));
+    expect(grants(calls)[0].body).toEqual({ user_id: sam.id, library_id: 3 });
+  });
+
+  it('gives it to no one when the box is cleared', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries': created,
+        'GET /admin/users': { body: { users: [admin, sam] } },
+      }),
+    );
+    await addPodcasts(false);
+    expect(grants(calls)).toHaveLength(0);
+  });
+
+  it('says how many grants failed, the library still added', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/libraries': created,
+        'GET /admin/users': { body: { users: [admin, sam] } },
+        'POST /admin/library-access': { status: 500, body: { error: 'boom' } },
+      }),
+    );
+    await addPodcasts(true);
+    expect(await screen.findByText("Couldn't give 1 person access")).toBeInTheDocument();
+  });
+
+  it('keeps the name and folder of a library config.yaml declares (UPG-01)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+      }),
+    );
+    renderApp('/library/libraries');
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Fiction' });
+    expect(within(dialog).getByLabelText('Name')).toHaveAttribute('readonly');
+    expect(within(dialog).getByLabelText('Folder')).toHaveAttribute('readonly');
+    expect(within(dialog).getByRole('button', { name: 'Browse' })).toBeDisabled();
+    expect(within(dialog).getByText(/set in config.yaml/)).toBeInTheDocument();
+  });
+
+  it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
+    mockFetch(
+      routes({
+        'PATCH /admin/libraries/1': {
+          status: 409,
+          body: { error: 'declared in config', code: 'config_library' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(within(fiction).queryByText('From your config')).toBeNull();
+    const user = userEvent.setup();
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Fiction' });
+    const name = within(dialog).getByLabelText('Name');
+    expect(name).not.toHaveAttribute('readonly');
+    await user.clear(name);
+    await user.type(name, 'Novels');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(name).toHaveAttribute('aria-invalid', 'true'));
+  });
 });

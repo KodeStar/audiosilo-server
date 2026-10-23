@@ -7,8 +7,7 @@ import { ProgressBar } from '@/components/progress-bar';
 import { Button } from '@/components/ui/button';
 import { toastError } from '@/lib/errors';
 import { formatNumber, progressFraction } from '@/lib/format';
-import type { SettingId } from '@/features/settings/settings-model';
-import { editable } from './setup-model';
+import { lockLabel, lockOf, type SettingId } from '@/features/settings/settings-model';
 import { StepStop } from './step-actions';
 
 /**
@@ -65,14 +64,18 @@ export function StepFooter({
   );
 }
 
-/** "Set by your config": a setting the environment or the desktop app sets, shown, not asked. */
+/**
+ * What sets a setting the environment or the desktop app sets ("Set by
+ * AUDIOSILO_X", as Settings says), shown, not asked.
+ */
 export function LockedNote({ settings, id }: { settings: AdminSettings; id: SettingId }) {
   const { t } = useTranslation();
-  if (editable(settings, id)) return null;
+  const lock = lockOf(settings, id);
+  if (!lock) return null;
   return (
     <span className="inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
       <Lock className="size-[15px]" aria-hidden="true" />
-      {t('setup.locked')}
+      {lockLabel(t, lock)}
     </span>
   );
 }

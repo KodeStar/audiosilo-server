@@ -341,7 +341,17 @@ export const api = {
    * A single-use, ten-minute pairing token for the signed-in admin, which "Listen in
    * player" hands the web player (403 for an API key).
    */
-  pairSelf: () => request<PairToken>('POST', '/auth/pair'),
+  /**
+   * A pairing token for this admin (single use). `ttlSeconds` asks the server
+   * for a shorter life than its 10 minutes (clamped to 30 s at the least); an
+   * older server ignores no body and refuses none.
+   */
+  pairSelf: (ttlSeconds?: number) =>
+    request<PairToken>(
+      'POST',
+      '/auth/pair',
+      ttlSeconds === undefined ? undefined : { ttl_seconds: ttlSeconds },
+    ),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
   /** Queues a scan (coalesced with one already waiting); answers with the job. */

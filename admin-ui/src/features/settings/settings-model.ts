@@ -166,3 +166,8 @@ export function certificateLook(
   if (days < 14) return { key: 'settings.network.cert.expiring', status: 'warn', days };
   return { key: 'settings.network.cert.valid', status: 'ok', days };
 }
+
+/** The saved settings the running server doesn't use yet, by name ("Metadata source, HTTPS"). */
+export function restartList(t: TFunction, settings: AdminSettings): string {
+  return settings.restart_pending.map((id) => t(`settings.${id}`)).join(', ');
+}

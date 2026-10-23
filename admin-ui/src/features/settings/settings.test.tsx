@@ -51,7 +51,7 @@ describe('settings', () => {
     expect(save).toBeDisabled();
     await user.type(name, 'Hearthside');
     await user.click(save);
-    expect(await screen.findByText('This server saved')).toBeInTheDocument();
+    expect(await screen.findByText('Server details saved')).toBeInTheDocument();
     expect(screen.getByText('Applied now. No restart needed.')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
       general: { name: 'Hearthside' },
@@ -90,7 +90,7 @@ describe('settings', () => {
     await user.click(
       within(home.closest('section') as HTMLElement).getByRole('button', { name: 'Save changes' }),
     );
-    expect(await screen.findByText('This server saved')).toBeInTheDocument();
+    expect(await screen.findByText('Server details saved')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
       general: { lan_url: 'http://192.168.1.20:8080' },
     });

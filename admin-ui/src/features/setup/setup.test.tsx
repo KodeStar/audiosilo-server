@@ -376,10 +376,9 @@ describe('the reach step', () => {
     browseAt('http://192.168.1.20:8080/admin/setup');
     renderApp('/setup?step=reach');
     expect(await screen.findByLabelText('Public address')).toBeDisabled();
-    // One indicator per locked row: the words, the variable in its tooltip.
-    const locked = screen.getAllByText('Set by your config');
-    expect(locked).toHaveLength(1);
-    expect(locked[0].closest('[title]')).toHaveAttribute('title', 'Set by AUDIOSILO_PUBLIC_URL');
+    // One indicator per locked row, naming the variable, as Settings does.
+    expect(screen.getAllByText('Set by AUDIOSILO_PUBLIC_URL')).toHaveLength(1);
+    expect(screen.queryByText('Set by your config')).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Use as the home address' }));
     await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -500,5 +499,226 @@ describe('the end of the flow', () => {
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).queryByRole('link', { name: /Where are your books/ })).toBeNull();
     expect(within(card).getByRole('link', { name: /reach the server/ })).toBeVisible();
+  });
+});
+
+describe('the 2.4.0 fixes', () => {
+  const jsdom = (globalThis as unknown as { jsdom: { reconfigure(o: { url: string }): void } })
+    .jsdom;
+  const testUrl = window.location.href;
+  const browseAt = (url: string) => jsdom.reconfigure({ url });
+  afterEach(() => browseAt(testUrl));
+
+  const pairAt = (web: string, addresses?: { home?: string }) => ({
+    body: {
+      pairing_token: 'p1',
+      server_id: 's1',
+      web_url: web,
+      ...(addresses ? { addresses } : {}),
+    },
+  });
+
+  it('counts the Audiobookshelf step as done on Continue (ADMIN-07)', async () => {
+    const calls = mockFetch(flowRoutes({ steps: { folder: 'done', naming: 'done' } }));
+    renderApp('/setup?step=abs');
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
+  });
+
+  it("warns that a phone can't open a loopback link, and leads to the address step (ADMIN-02)", async () => {
+    browseAt('http://127.0.0.1:8080/admin/setup');
+    mockFetch(
+      flowRoutes(
+        {},
+        { 'POST /auth/pair': pairAt('http://127.0.0.1:8080/web/connect?token=p1&sid=s1') },
+      ),
+    );
+    renderApp('/setup?step=phone');
+    expect(await screen.findByText("A phone can't reach 127.0.0.1:8080")).toBeVisible();
+    expect(screen.getByRole('link', { name: "Set the server's address" })).toHaveAttribute(
+      'href',
+      '/admin/setup?step=reach',
+    );
+  });
+
+  it('points the phone at the home address when the page is open at a loopback one', async () => {
+    browseAt('http://127.0.0.1:8080/admin/setup');
+    mockFetch(
+      flowRoutes(
+        {},
+        {
+          'POST /auth/pair': pairAt('http://127.0.0.1:8080/web/connect?token=p1&sid=s1', {
+            home: 'http://192.168.1.20:8080',
+          }),
+        },
+      ),
+    );
+    renderApp('/setup?step=phone');
+    expect(
+      await screen.findByText(
+        /sends your phone to the home address, http:\/\/192\.168\.1\.20:8080/,
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/A phone can't reach/)).toBeNull();
+  });
+
+  it('says nothing more when the pairing link is already reachable', async () => {
+    mockFetch(
+      flowRoutes(
+        {},
+        { 'POST /auth/pair': pairAt('https://books.example.com/web/connect?token=p1&sid=s1') },
+      ),
+    );
+    renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
+    expect(screen.queryByText(/A phone can't reach/)).toBeNull();
+    expect(screen.queryByText(/home address,/)).toBeNull();
+  });
+
+  it('refuses an address that is not one under its own field, asking nothing (ADMIN-06)', async () => {
+    browseAt('http://192.168.1.20:8080/admin/setup');
+    const calls = mockFetch(flowRoutes());
+    renderApp('/setup?step=reach');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Public address'), 'ftp://books.example.com');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(
+      await screen.findByText('Enter a full address, like https://books.example.com.'),
+    ).toBeVisible();
+    expect(screen.getByLabelText('Public address')).toHaveAttribute('aria-invalid', 'true');
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('adds the scheme left off an address before saving it', async () => {
+    browseAt('http://192.168.1.20:8080/admin/setup');
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        { 'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }) },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Home address'), '192.168.1.20:8080/');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
+    expect(patch?.body).toMatchObject({ general: { lan_url: 'http://192.168.1.20:8080' } });
+  });
+
+  it("puts the server's refusal of an address under that field", async () => {
+    browseAt('http://192.168.1.20:8080/admin/setup');
+    mockFetch(
+      flowRoutes(
+        {},
+        {
+          'PATCH /admin/settings': {
+            status: 400,
+            body: {
+              error: 'not a usable address',
+              code: 'invalid_setting',
+              field: 'general.lan_url',
+            },
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=reach');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Home address'), 'http://nas.local:8080');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    const alert = await screen.findByRole('alert');
+    expect(screen.getByLabelText('Home address')).toHaveAttribute('aria-invalid', 'true');
+    expect(alert.id).toBe(`${screen.getByLabelText('Home address').id}-error`);
+  });
+
+  it('decides nothing when the naming preview failed and nothing was picked (R-32)', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': { body: { libraries: libraries().slice(0, 1) } },
+          'POST /admin/setup/preview': { status: 500, body: { error: 'boom' } },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    await screen.findByRole('heading', { name: 'How are your books named?' });
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/setup/preview')).toBe(true));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    expect(puts(calls)).toEqual([{ steps: { naming: 'skipped' } }]);
+  });
+
+  it("Finish reads the marks again, so another tab's are kept (R-10)", async () => {
+    const steps: SetupState['steps'] = {};
+    const calls = mockFetch(
+      flowRoutes(
+        { steps },
+        {
+          'GET /admin/bridge': {
+            body: {
+              paired: false,
+              paired_by: null,
+              pairing: null,
+              online: false,
+              kinds: [],
+              features: [],
+              libraries: [],
+              workers: [],
+            },
+          },
+        },
+      ),
+    );
+    const { router } = renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    // Another tab finishes the backups step meanwhile.
+    steps.backups = 'done';
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    const finish = puts(calls).at(-1) as SetupPatch;
+    expect(finish.finished).toBe(true);
+    expect(finish.steps).not.toHaveProperty('backups');
+  });
+
+  it('Finish says a restart is still due for a choice made in the flow (ADMIN-03)', async () => {
+    mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/settings': {
+            body: settingsWith({ restart_pending: ['metadata.mode'] } as object),
+          },
+          'GET /admin/bridge': {
+            body: {
+              paired: false,
+              paired_by: null,
+              pairing: null,
+              online: false,
+              kinds: [],
+              features: [],
+              libraries: [],
+              workers: [],
+            },
+          },
+        },
+      ),
+    );
+    const { router } = renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(
+      await screen.findByText(
+        'Restart AudioSilo to finish applying Metadata source. Everything else is in use now.',
+      ),
+    ).toBeVisible();
+    // Overview says so too, with the way to Settings.
+    expect(
+      await screen.findByText('Restart AudioSilo to finish applying your changes'),
+    ).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open Settings' })).toBeVisible();
   });
 });

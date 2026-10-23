@@ -3,7 +3,9 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Check, CircleDashed } from 'lucide-react';
+import { api } from '@/api/client';
 import {
+  keys,
   saveSetup,
   useLibraries,
   useScanWatcher,
@@ -11,10 +13,17 @@ import {
   useSettings,
   useSetup,
 } from '@/api/hooks';
-import { SETUP_STEPS, type SetupMark, type SetupState, type SetupStepId } from '@/api/types';
+import {
+  SETUP_STEPS,
+  type AdminSettings,
+  type SetupMark,
+  type SetupState,
+  type SetupStepId,
+} from '@/api/types';
 import { LogoTile } from '@/components/logo';
 import { QueryError } from '@/components/query-error';
 import { buttonVariants } from '@/components/ui/button';
+import { restartList } from '@/features/settings/settings-model';
 import { readStorage, removeStorage, writeStorage } from '@/lib/storage';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -154,18 +163,28 @@ function Flow({
   const leave = async (mark: SetupMark) => {
     const to = nextStep(current, state, draftNow.current);
     const finishing = to === null && !state.finished;
-    await saveSetup(
-      qc,
-      finishing
-        ? { steps: finishMarks(state.steps, current, mark), finished: true }
-        : { steps: { [current]: mark } },
-    );
+    if (finishing) {
+      // The marks as the server has them now, not as this tab last read them:
+      // a step another tab recorded since must not be marked skipped over it.
+      const fresh = await qc.fetchQuery({ queryKey: keys.setup, queryFn: api.setup });
+      await saveSetup(qc, {
+        steps: finishMarks(fresh.state.steps, current, mark, props.libraries.length > 0),
+        finished: true,
+      });
+    } else {
+      await saveSetup(qc, { steps: { [current]: mark } });
+    }
     if (to) return go(to);
     if (finishing) {
+      // A restart-only choice (a local metadata copy, the HTTPS mode) is named
+      // here, and stays on the Overview until the restart.
+      const saved = qc.getQueryData<AdminSettings>(keys.settings) ?? props.settings;
       toast.add({
         title: t('setup.finished'),
-        description: t('setup.finishedBody'),
-        type: 'success',
+        description: saved.restart_pending.length
+          ? t('setup.finishedRestart', { list: restartList(t, saved) })
+          : t('setup.finishedBody'),
+        type: saved.restart_pending.length ? 'info' : 'success',
       });
     }
     void navigate({ to: '/' });

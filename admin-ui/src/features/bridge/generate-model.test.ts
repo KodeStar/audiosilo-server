@@ -46,6 +46,7 @@ import {
   KNOWN_PARKS,
   KNOWN_STAGES,
   latestJobOf,
+  parkHint,
   parkKey,
   planEstimate,
   roundEta,
@@ -246,6 +247,13 @@ describe('parks', () => {
     expect(parkKey('core_needed')).toBe('bridge.park.core_needed');
     expect(parkKey('new_thing')).toBe('bridge.park.unknown');
     expect(strings['bridge.park.unknown']).toContain('{{code}}');
+  });
+
+  it("shows the Bridge's hint, else the error, but not under wording that has its own", () => {
+    expect(parkHint('agent_unavailable', 'Start the agent.', 'parked')).toBe('Start the agent.');
+    expect(parkHint('agent_unavailable', undefined, 'parked')).toBe('parked');
+    expect(parkHint(undefined, undefined, '')).toBeUndefined();
+    expect(parkHint('chapters_not_detected', 'then cancel this job', 'parked')).toBeUndefined();
   });
 
   it("links a parked job into the Bridge's own page", () => {

@@ -121,9 +121,9 @@ describe('bridge page', () => {
     renderApp('/server?topic=bridge');
     const user = userEvent.setup();
     expect(await screen.findByText(/optional companion/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Connect a bridge' }));
+    await user.click(screen.getByRole('button', { name: 'Connect a Bridge' }));
 
-    const dialog = await screen.findByRole('dialog', { name: 'Connect a bridge' });
+    const dialog = await screen.findByRole('dialog', { name: 'Connect a Bridge' });
     expect(within(dialog).getAllByText(CODE, { exact: false }).length).toBeGreaterThan(0);
     expect(within(dialog).getByLabelText('Server address')).toHaveValue(
       'https://books.example.com',
@@ -137,7 +137,7 @@ describe('bridge page', () => {
     // The status poll (every 3 s while the code waits) sees the Bridge paired.
     expect(await screen.findByText('Bridge connected', {}, { timeout: 6000 })).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Connect a bridge' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('dialog', { name: 'Connect a Bridge' })).not.toBeInTheDocument(),
     );
     expect(await screen.findByRole('button', { name: 'Unpair...' })).toBeInTheDocument();
   }, 10_000);
@@ -153,7 +153,7 @@ describe('bridge page', () => {
       }),
     );
     renderApp('/server?topic=bridge');
-    expect(await screen.findByText('A pairing code is waiting for a bridge')).toBeInTheDocument();
+    expect(await screen.findByText('A pairing code is waiting for a Bridge')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Make a new code' })).toBeInTheDocument();
     await waitFor(() =>
       expect(calls.some((c) => c.method === 'GET' && c.path === '/admin/bridge/jobs')).toBe(true),
@@ -187,7 +187,7 @@ describe('bridge page', () => {
     );
     renderApp('/server?topic=bridge');
     const user = userEvent.setup();
-    expect(await screen.findByRole('button', { name: 'Connect a bridge' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
     const jobs = await screen.findByRole('list', { name: 'Jobs' });
     expect(within(jobs).getByText('Queued')).toBeInTheDocument();
     expect(within(jobs).getByText('Fiction', { exact: false })).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe('bridge page', () => {
     const libs = await screen.findByRole('list', { name: 'Libraries' });
     await user.click(within(libs).getAllByRole('button', { name: 'Verify' })[0]);
     expect(await screen.findByText("Couldn't queue the job")).toBeInTheDocument();
-    expect(screen.getByText(/The paired bridge doesn't run this job/)).toBeInTheDocument();
+    expect(screen.getByText(/The paired Bridge doesn't run this job/)).toBeInTheDocument();
   });
 
   it('cancels a running job, which then reads as cancelling', async () => {
@@ -333,13 +333,104 @@ describe('bridge page', () => {
     renderApp('/server?topic=bridge');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Unpair...' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Unpair the bridge?' });
-    expect(within(dialog).getByText(/Queued ones wait for the next bridge/)).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: 'Unpair the Bridge?' });
+    expect(within(dialog).getByText(/Queued ones wait for the next Bridge/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Unpair' }));
     await waitFor(() =>
       expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/bridge')).toBe(true),
     );
     expect(await screen.findByText('Bridge unpaired')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Connect a bridge' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
+  });
+
+  it('shows the unpaired card how to get a Bridge: the compose snippet and the docs (ADMIN-05)', async () => {
+    mockFetch(routes({ 'GET /admin/bridge': { body: notPaired() } }));
+    renderApp('/server?topic=bridge');
+    expect(
+      await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/),
+    ).toBeInTheDocument();
+    // One volume per library, at the server's own path.
+    expect(screen.getByText(/\/path\/to\/fiction:\/books\/fiction:rw/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Running a Bridge/ })).toHaveAttribute(
+      'href',
+      'https://docs.audiosilo.app/users/getting-started/running-a-bridge',
+    );
+    expect(screen.getByText(/connect it with a pairing code/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
+  });
+
+  it("gives a loopback server address as the compose snippet's, saying why (ADMIN-10)", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge': { body: notPaired() },
+        'POST /admin/bridge/pair': {
+          status: 201,
+          body: {
+            code: CODE,
+            expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+            server_url: 'http://127.0.0.1:8080',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Connect a Bridge' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect a Bridge' });
+    expect(within(dialog).getByLabelText('Server address')).toHaveValue('http://audiosilo:8080');
+    expect(
+      within(dialog).getByText(/only knows itself as http:\/\/127\.0\.0\.1:8080/),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText(/AUDIOSILO_BRIDGE_SERVER_URL=http:\/\/audiosilo:8080/),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no Verify on a podcast library, and names its marker check (BRIDGE-04, BRIDGE-17)', async () => {
+    const status = paired();
+    status.libraries = [
+      status.libraries[0],
+      {
+        id: 3,
+        name: 'Podcasts',
+        root: '/podcasts',
+        kind: 'podcasts',
+        mapping: {
+          library_id: 3,
+          mount_path: '/libraries/podcasts',
+          mapped: true,
+          writable: true,
+          checked_path: '.audiosilo/library.json',
+          error: '',
+        },
+      },
+    ];
+    mockFetch(routes({ 'GET /admin/bridge': { body: status } }));
+    renderApp('/server?topic=bridge');
+    const libs = await screen.findByRole('list', { name: 'Libraries' });
+    const rows = within(libs).getAllByRole('listitem');
+    const podcasts = rows.find((r) => within(r).queryByText('Podcasts')) as HTMLElement;
+    const fiction = rows.find((r) => within(r).queryByText('Fiction')) as HTMLElement;
+    expect(within(fiction).getByRole('button', { name: 'Verify' })).toBeInTheDocument();
+    expect(within(podcasts).queryByRole('button', { name: 'Verify' })).toBeNull();
+    expect(within(podcasts).getByText('Found by its marker')).toBeInTheDocument();
+    expect(within(fiction).getByText('Checked with')).toBeInTheDocument();
+  });
+
+  it("says a job the server queued itself is the server's, not a deleted account's (BRIDGE-03)", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({ id: 8, kind: 'podcast.poll', requested_by: null, state: 'done' }),
+              job({ id: 9, requested_by: null, state: 'done' }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    expect(await screen.findByText(/Scheduled by the server/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(1);
   });
 });

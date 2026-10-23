@@ -67,9 +67,18 @@ export function NamingStep({ env, libraries, draft, setDraft, leave, back, last 
     ? (picked[target.key] ?? target.library?.metadata_source ?? preview.data?.suggested)
     : undefined;
 
-  /** Every target's pick: those made under the Library select, and the one shown. */
+  /**
+   * Every target's pick: those made under the Library select, and the one
+   * shown. The shown one's preselection (its own source, or the preview's
+   * suggestion) counts only once its preview came back: Continue past a failed
+   * preview with nothing picked by hand decides nothing, so the step is
+   * skipped, not done.
+   */
   const picks = targets.flatMap((x) => {
-    const pick = x.key === target?.key ? choice : picked[x.key];
+    const shown = x.key === target?.key;
+    const pick = shown
+      ? (picked[x.key] ?? (preview.isSuccess ? choice : undefined))
+      : picked[x.key];
     return pick ? [{ target: x, pick }] : [];
   });
 

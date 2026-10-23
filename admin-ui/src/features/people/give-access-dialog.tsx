@@ -67,10 +67,14 @@ function GiveAccessForm({
       .map((l) => ({
         value: accessValue({ kind: 'library', id: l.id }),
         title: l.name,
-        description: t('user.access.libraryOption', {
-          count: l.book_count,
-          formatted: formatNumber(l.book_count, lang),
-        }),
+        // A podcast library holds shows, not books: its book count says nothing.
+        description:
+          l.kind === 'podcasts'
+            ? t('user.access.podcastLibrary')
+            : t('user.access.libraryOption', {
+                count: l.book_count,
+                formatted: formatNumber(l.book_count, lang),
+              }),
       })),
     ...(shares.data ?? [])
       .filter((s) => wholeLibraryOf(s) === undefined && !grantedIds.has(s.id))

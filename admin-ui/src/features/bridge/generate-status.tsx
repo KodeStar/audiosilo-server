@@ -13,6 +13,7 @@ import {
   KIND_DESCRIBE,
   KIND_DETECT,
   KIND_GENERATE,
+  parkHint,
   parkKey,
   roundEta,
   stageLabel,
@@ -108,7 +109,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
     const link = bridgeJobLink(uiUrl, job.id);
     const park = p.park;
     // The hint says what to do; without one, the park message (the job's error) does.
-    const hint = park?.hint ?? (job.error || undefined);
+    const hint = parkHint(park?.code, park?.hint, job.error);
     return (
       <div className="flex flex-col gap-1.5 rounded-lg border border-[color-mix(in_oklab,var(--warning)_30%,var(--border))] bg-warning-soft/40 px-3 py-2.5">
         <p className="flex items-start gap-1.5 text-[12.5px] font-semibold">

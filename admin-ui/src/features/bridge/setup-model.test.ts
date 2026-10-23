@@ -3,7 +3,9 @@ import type { BridgeLibrary, BridgeSetup, BridgeSetupItem, BridgeStatus } from '
 import en from '@/i18n/locales/en.json';
 import {
   agentCredentialSet,
+  billingKnown,
   generateNeed,
+  githubStep,
   KNOWN_SETUP_ITEMS,
   setupComplete,
   setupItemLabel,
@@ -134,5 +136,25 @@ describe('what generating waits on', () => {
     expect(
       generateNeed(status({ setup: setup([item('agent', false, false)]) }), 1),
     ).toBeUndefined();
+  });
+});
+
+describe('githubStep and billingKnown', () => {
+  it("finds the checklist's GitHub step", () => {
+    expect(githubStep(setup([item('asr', true), item('github', true, false)]))?.done).toBe(true);
+    expect(githubStep(setup([item('asr', true)]))).toBeUndefined();
+  });
+
+  it('knows how the agent is paid for only once there is a credential (BRIDGE-05)', () => {
+    const est = (agent_ready: boolean) =>
+      ({ sidecars: { agent_ready } }) as unknown as BridgeStatus['estimates'];
+    expect(billingKnown({ setup: setup([item('agent', true)]), estimates: est(false) })).toBe(true);
+    expect(billingKnown({ setup: setup([item('agent', false)]), estimates: est(true) })).toBe(
+      false,
+    );
+    // A Bridge without the agent step: its agent being ready says so.
+    expect(billingKnown({ setup: setup([item('asr', true)]), estimates: est(true) })).toBe(true);
+    expect(billingKnown({ setup: undefined, estimates: est(false) })).toBe(false);
+    expect(billingKnown({ setup: undefined, estimates: undefined })).toBe(false);
   });
 });

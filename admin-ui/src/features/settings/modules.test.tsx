@@ -66,7 +66,7 @@ describe('settings > modules', () => {
       'href',
       '/admin/server?topic=bridge',
     );
-    expect(within(c).queryByText(/hidden from listeners/)).not.toBeInTheDocument();
+    expect(within(c).queryByText(/^On, but/)).not.toBeInTheDocument();
   });
 
   it("says what the Bridge lacks, in the module's own words", async () => {
@@ -85,7 +85,7 @@ describe('settings > modules', () => {
     expect(within(c).queryByRole('link', { name: 'Bridge settings' })).not.toBeInTheDocument();
   });
 
-  it('notes an enabled module still hidden from listeners, and not one that is offered', async () => {
+  it('notes an enabled module still waiting for its Bridge, in words for an admin feature', async () => {
     mockFetch(
       routes([contributions({ enabled: true, bridge_state: 'no_feature' })], {
         'GET /admin/settings': { body: settingsWith({ modules: { contributions: true } }) },
@@ -95,8 +95,33 @@ describe('settings > modules', () => {
     const c = await card();
     expect(within(c).getByRole('switch', { name: 'Enable Contributions' })).toBeChecked();
     expect(
+      within(c).getByText('On, but nothing is sent until the Bridge is ready.'),
+    ).toBeInTheDocument();
+    expect(within(c).queryByText(/hidden from listeners/)).not.toBeInTheDocument();
+  });
+
+  it('notes a listener module hidden from listeners until its Bridge is ready', async () => {
+    mockFetch(
+      routes(
+        [
+          {
+            id: 'podcasts',
+            enabled: true,
+            active: false,
+            requires_bridge: 'podcasts',
+            bridge_state: 'offline',
+          },
+        ],
+        { 'GET /admin/settings': { body: settingsWith({ modules: { podcasts: true } }) } },
+      ),
+    );
+    renderApp('/server?topic=modules');
+    const heading = await screen.findByRole('heading', { name: 'Podcasts' });
+    const c = heading.closest('section') as HTMLElement;
+    expect(
       within(c).getByText('On, but hidden from listeners until the Bridge is ready.'),
     ).toBeInTheDocument();
+    expect(within(c).getByText(/a directory search/)).toBeInTheDocument();
   });
 
   it('hides the note once the module is active', async () => {
@@ -108,7 +133,7 @@ describe('settings > modules', () => {
     renderApp('/server?topic=modules');
     const c = await card();
     expect(within(c).getByText('Bridge ready')).toBeInTheDocument();
-    expect(within(c).queryByText(/hidden from listeners/)).not.toBeInTheDocument();
+    expect(within(c).queryByText(/^On, but/)).not.toBeInTheDocument();
   });
 
   it('turns a module on at once and asks the module list again', async () => {
@@ -143,7 +168,7 @@ describe('settings > modules', () => {
     await userEvent.setup().click(toggle);
     expect(await screen.findByText('Contributions is on')).toBeInTheDocument();
     expect(toggle).toBeChecked();
-    expect(within(c).queryByText(/hidden from listeners/)).not.toBeInTheDocument();
+    expect(within(c).queryByText(/^On, but/)).not.toBeInTheDocument();
   });
 
   it('locks a module the environment sets, naming the variable', async () => {

@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Globe, Lock, Network, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { invalidateLibraries, noteScanStarted, useSystem } from '@/api/hooks';
 import type { MetadataMode } from '@/api/types';
 import { Notice } from '@/components/notice';
@@ -31,6 +31,7 @@ import {
   addressMismatch,
   editable,
   mergePatches,
+  normalizeAddress,
   proxyToTrust,
   reachOffers,
   seenAs,
@@ -40,18 +41,18 @@ import { LockedNote, StepFooter } from './step-parts';
 import { StepStop, useSaveStepSettings, type StepProps } from './step-actions';
 
 /**
- * A setting's badge: "Set by your config" with a lock for one the environment
- * or the desktop app sets (which variable in its tooltip), else the restart
- * badges Settings shows.
+ * A setting's badge: what sets it, with a lock, for one the environment or the
+ * desktop app sets ("Set by AUDIOSILO_TLS_MODE", as Settings says), else the
+ * restart badges Settings shows.
  */
 function Badges({ settings, id }: Pick<StepProps, 'settings'> & { id: SettingId }) {
   const { t } = useTranslation();
   const lock = lockOf(settings, id);
   if (!lock) return <SettingBadges settings={settings} id={id} />;
   return (
-    <Badge variant="outline" title={lockLabel(t, lock)}>
+    <Badge variant="outline">
       <Lock aria-hidden="true" />
-      {t('setup.locked')}
+      {lockLabel(t, lock)}
     </Badge>
   );
 }
@@ -211,6 +212,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
   const [proxies, setProxies] = useState(n.trusted_proxies);
   const [homeHttp, setHomeHttp] = useState(n.tls_home_http);
   const [error, setError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<Partial<Record<'public' | 'lan', string>>>({});
   const origin = window.location.origin;
   const peer = proxyToTrust(env.request, proxies);
   const canPublic = editable(settings, 'general.public_url');
@@ -219,18 +221,36 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
 
   const onContinue = async () => {
     setError(null);
+    setFieldError({});
+    // Each address checked on its own field, with http(s):// added when it was
+    // left off, before the server is asked (it refuses one at a time).
+    const pub = canPublic ? normalizeAddress(publicUrl, 'https') : publicUrl.trim();
+    const lan = canLan ? normalizeAddress(lanUrl, 'http') : lanUrl.trim();
+    const bad: Partial<Record<'public' | 'lan', string>> = {};
+    if (pub === null) {
+      bad.public = t('setup.reach.invalidAddress', { example: 'https://books.example.com' });
+    }
+    if (lan === null) {
+      bad.lan = t('setup.reach.invalidAddress', { example: 'http://192.168.1.20:8080' });
+    }
+    if (pub === null || lan === null) {
+      setFieldError(bad);
+      throw new StepStop();
+    }
+    setPublicUrl(pub);
+    setLanUrl(lan);
     try {
       await save(
         mergePatches(
-          unlockedPatch(settings, 'general', {
-            public_url: publicUrl.trim(),
-            lan_url: lanUrl.trim(),
-          }),
+          unlockedPatch(settings, 'general', { public_url: pub, lan_url: lan }),
           unlockedPatch(settings, 'network', { trusted_proxies: proxies, tls_home_http: homeHttp }),
         ),
       );
     } catch (err) {
-      setError(errorMessage(err, t));
+      // A refusal naming one of the address fields goes under that field.
+      const field = err instanceof ApiError ? ADDRESS_FIELD[err.field ?? ''] : undefined;
+      if (field) setFieldError({ [field]: errorMessage(err, t) });
+      else setError(errorMessage(err, t));
       throw new StepStop();
     }
     await leave('done');
@@ -281,13 +301,13 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
             htmlFor="setup-public-url"
             description={t('setup.reach.publicBody')}
           >
-            <Input
+            <AddressInput
               id="setup-public-url"
-              className="w-full font-mono text-[13px] sm:w-[300px]"
               placeholder="https://books.example.com"
               value={publicUrl}
               disabled={!canPublic}
-              onChange={(e) => setPublicUrl(e.target.value)}
+              error={fieldError.public}
+              onChange={setPublicUrl}
             />
           </SettingRow>
           <SettingRow
@@ -296,13 +316,13 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
             htmlFor="setup-lan-url"
             description={t('setup.reach.lanBody')}
           >
-            <Input
+            <AddressInput
               id="setup-lan-url"
-              className="w-full font-mono text-[13px] sm:w-[300px]"
               placeholder="http://192.168.1.20:8080"
               value={lanUrl}
               disabled={!canLan}
-              onChange={(e) => setLanUrl(e.target.value)}
+              error={fieldError.lan}
+              onChange={setLanUrl}
             />
           </SettingRow>
         </div>
@@ -383,6 +403,49 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
       </div>
       <StepFooter back={back} onSkip={() => leave('skipped')} onContinue={onContinue} last={last} />
     </>
+  );
+}
+
+/** The settings field a refused reach step save names, by the server's field id. */
+const ADDRESS_FIELD: Partial<Record<string, 'public' | 'lan'>> = {
+  'general.public_url': 'public',
+  'general.lan_url': 'lan',
+};
+
+/** An address field with its own message under it when it was refused. */
+function AddressInput({
+  id,
+  placeholder,
+  value,
+  disabled,
+  error,
+  onChange,
+}: {
+  id: string;
+  placeholder: string;
+  value: string;
+  disabled: boolean;
+  error: string | undefined;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-1 sm:w-[300px]">
+      <Input
+        id={id}
+        className="font-mono text-[13px]"
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {error ? (
+        <p id={`${id}-error`} role="alert" className="text-[12.5px] font-medium text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

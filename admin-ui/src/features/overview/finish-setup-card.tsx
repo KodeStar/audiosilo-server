@@ -3,23 +3,26 @@ import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ListChecks } from 'lucide-react';
-import { saveSetup, useSetup } from '@/api/hooks';
+import { saveSetup, useLibraries, useSetup } from '@/api/hooks';
 import { Button } from '@/components/ui/button';
 import { showFinishCard, skippedSteps } from '@/features/setup/setup-model';
 import { toastError } from '@/lib/errors';
 
 /**
  * The Overview's "Finish setting up" card (FIRST-RUN-PLAN.md decision 4):
- * after the first-run flow, the steps still skipped, each a link back into it,
- * until an admin dismisses the card (for every admin of the server).
+ * while the first-run flow is unfinished ("Finish later"), a link back into it;
+ * after it, the steps still skipped, each a link back into it; until an admin
+ * dismisses the card (for every admin of the server).
  */
 export function FinishSetupCard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const state = useSetup().data?.state;
+  const libraries = useLibraries();
   const [busy, setBusy] = useState(false);
-  if (!showFinishCard(state)) return null;
-  const skipped = skippedSteps(state);
+  const hasLibraries = (libraries.data?.length ?? 0) > 0;
+  if (!libraries.data || !showFinishCard(state, hasLibraries)) return null;
+  const skipped = skippedSteps(state, hasLibraries);
 
   const dismiss = async () => {
     setBusy(true);
@@ -42,9 +45,22 @@ export function FinishSetupCard() {
         {t('setup.card.title')}
       </h3>
       <p className="text-[13.5px] text-muted-foreground">
-        {t('setup.card.body', { count: skipped.length })}
+        {state.finished
+          ? t('setup.card.body', { count: skipped.length })
+          : t('setup.card.unfinished')}
       </p>
       <ul className="-mx-2 flex flex-col">
+        {state.finished ? null : (
+          <li>
+            <Link
+              to="/setup"
+              className="flex items-center justify-between gap-2 rounded-md px-2 py-2 font-semibold hover:bg-accent"
+            >
+              {t('setup.card.continue')}
+              <ChevronRight className="size-4 text-muted-foreground" aria-hidden="true" />
+            </Link>
+          </li>
+        )}
         {skipped.map((id) => (
           <li key={id}>
             <Link

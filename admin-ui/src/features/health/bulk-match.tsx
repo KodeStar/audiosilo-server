@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -67,6 +67,7 @@ import {
   leaveOut,
   runFraction,
   runProgress,
+  leaveOutStale,
   togglePick,
   type Picks,
 } from './bulk-match-model';
@@ -392,6 +393,12 @@ function ReviewDialog({
         },
     );
   };
+  // A loaded confident item the apply would leave alone (gone, matched since)
+  // is left out, so the count is what the apply writes.
+  const onLoaded = useCallback(
+    (items: MatchRunItem[]) => setPicks((p) => leaveOutStale(p, items)),
+    [],
+  );
   const count = applyCount(run, picks);
   const country = regionName(run.region, lang);
   const headings: Record<MatchRunMode, { title: string; description: string }> = {
@@ -486,6 +493,7 @@ function ReviewDialog({
                 picks={picks}
                 onToggle={(item) => setPicks((p) => togglePick(p, item))}
                 onMatchByHand={setByHand}
+                onLoaded={onLoaded}
               />
             </DialogBody>
             <DialogFooter>
@@ -522,6 +530,7 @@ function ItemList({
   picks,
   onToggle,
   onMatchByHand,
+  onLoaded,
 }: {
   run: MatchRun;
   outcome: MatchOutcome;
@@ -529,11 +538,17 @@ function ItemList({
   picks: Picks;
   onToggle: (item: MatchRunItem) => void;
   onMatchByHand: (item: MatchRunItem) => void;
+  /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
+  onLoaded: (items: MatchRunItem[]) => void;
 }) {
   const { t } = useTranslation();
   const list = useMatchRunItems(run.id, outcome);
   const roots = useLibraryRoots();
-  const items = list.data?.pages.flatMap((p) => p.items ?? []) ?? [];
+  const data = list.data;
+  const items = useMemo(() => data?.pages.flatMap((p) => p.items ?? []) ?? [], [data]);
+  useEffect(() => {
+    if (items.length) onLoaded(items);
+  }, [items, onLoaded]);
   if (list.isError) {
     return (
       <QueryError
@@ -717,6 +732,14 @@ function ItemRow({
             )}
           </span>
         )}
+        {candidate && item.detail === 'length_differs' && p.runtime_min && item.book.duration ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.lengthDiffers', {
+              book: formatDuration(item.book.duration, lang),
+              recording: formatDuration(p.runtime_min * 60, lang),
+            })}
+          </span>
+        ) : null}
         {candidate && (seriesText || series) ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             {seriesText || t('health.bulkMatch.inSeries', { series })}

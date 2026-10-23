@@ -31,10 +31,21 @@ export function stepIndex(id: SetupStepId): number {
 }
 
 /**
+ * The one rule for the folder step: a library on the server satisfies it,
+ * whatever its mark (it was added here, by config, or by an older setup page).
+ * Where the flow opens, what Finish marks and what the Overview card lists all
+ * follow it.
+ */
+export function folderSatisfied(hasLibraries: boolean): boolean {
+  return hasLibraries;
+}
+
+/**
  * Where the flow opens: the first step without a mark (the last step when all
  * have one, so Finish is a click away). A folder chosen on another visit lives
- * only in that browser's draft, so when that draft is gone and the server has
- * no library yet, the folder step is asked again rather than naming nothing.
+ * only in that browser's draft, so when that draft is gone and the folder step
+ * isn't satisfied (no library yet), the folder step is asked again rather than
+ * naming nothing.
  */
 export function resumeStep(
   marks: SetupMarks,
@@ -42,7 +53,9 @@ export function resumeStep(
 ): SetupStepId {
   const first = SETUP_STEPS.find((id) => !marks[id]) ?? SETUP_STEPS[SETUP_STEPS.length - 1];
   const beforeCreate = first === 'naming' || first === 'metadata';
-  if (beforeCreate && marks.folder === 'done' && !hasDraft && !hasLibraries) return 'folder';
+  if (beforeCreate && marks.folder === 'done' && !hasDraft && !folderSatisfied(hasLibraries)) {
+    return 'folder';
+  }
   return first;
 }
 
@@ -71,24 +84,47 @@ export function previousStep(id: SetupStepId): SetupStepId | null {
   return SETUP_STEPS[stepIndex(id) - 1] ?? null;
 }
 
-/** The steps passed over, in flow order. */
-export function skippedSteps(state: SetupState): SetupStepId[] {
-  return SETUP_STEPS.filter((id) => state.steps[id] === 'skipped');
+/**
+ * The steps passed over and still left to do, in flow order: a skipped folder
+ * step isn't, once the server has a library (folderSatisfied).
+ */
+export function skippedSteps(state: SetupState, hasLibraries: boolean): SetupStepId[] {
+  return SETUP_STEPS.filter(
+    (id) => state.steps[id] === 'skipped' && !(id === 'folder' && folderSatisfied(hasLibraries)),
+  );
 }
 
 /**
  * The marks Finish sends: the step left with its own mark, and every step
  * without one (passed over by the stepper, or never reached) as skipped, so
- * the Overview card lists what is left.
+ * the Overview card lists what is left; an unmarked folder step is done once
+ * the server has a library (folderSatisfied). `marks` should be the server's
+ * current marks (read again just before Finish), so a step another tab
+ * recorded isn't overwritten.
  */
-export function finishMarks(marks: SetupMarks, current: SetupStepId, mark: SetupMark): SetupMarks {
+export function finishMarks(
+  marks: SetupMarks,
+  current: SetupStepId,
+  mark: SetupMark,
+  hasLibraries: boolean,
+): SetupMarks {
   const left = SETUP_STEPS.filter((id) => id !== current && !marks[id]);
-  return { ...Object.fromEntries(left.map((id) => [id, 'skipped'])), [current]: mark };
+  const unmarked = (id: SetupStepId): SetupMark =>
+    id === 'folder' && folderSatisfied(hasLibraries) ? 'done' : 'skipped';
+  return { ...Object.fromEntries(left.map((id) => [id, unmarked(id)])), [current]: mark };
 }
 
-/** The Overview's "Finish setting up" card: after the flow, while a step is still skipped, until dismissed. */
-export function showFinishCard(state: SetupState | undefined): state is SetupState {
-  return !!state && state.finished && !state.dismissed && skippedSteps(state).length > 0;
+/**
+ * The Overview's "Finish setting up" card, until dismissed: while the flow is
+ * unfinished ("Finish later" left it), and after it while a step is still left
+ * to do.
+ */
+export function showFinishCard(
+  state: SetupState | undefined,
+  hasLibraries: boolean,
+): state is SetupState {
+  if (!state || state.dismissed) return false;
+  return !state.finished || skippedSteps(state, hasLibraries).length > 0;
 }
 
 /**
@@ -258,7 +294,7 @@ export function isHomeHost(hostport: string): boolean {
 }
 
 /** A loopback Host (localhost, 127.0.0.0/8, ::1): an address only this machine reaches. */
-function isLoopbackHost(hostport: string): boolean {
+export function isLoopbackHost(hostport: string): boolean {
   const host = hostOf(hostport);
   if (host === null) return false;
   const name = host.toLowerCase().replace(/\.$/, '');
@@ -278,6 +314,68 @@ function isLoopbackHost(hostport: string): boolean {
 export function reachOffers(hostport: string): ('lan' | 'public')[] {
   if (isLoopbackHost(hostport)) return [];
   return isHomeHost(hostport) ? ['lan', 'public'] : ['public'];
+}
+
+/**
+ * A server address as typed into the reach step, the way the server will
+ * store it (config httpURL): trimmed, without a trailing slash, and with
+ * `scheme`:// added when it has none ("192.168.1.20:8080" ->
+ * "http://192.168.1.20:8080", as the placeholder shows). "" stays "" (no
+ * address). Null when it still isn't a plain http(s) address (another scheme,
+ * no host, a ?, # or user name), so the field can say so before the server is
+ * asked.
+ */
+export function normalizeAddress(raw: string, scheme: 'http' | 'https'): string | null {
+  const s = raw.trim();
+  if (s === '') return '';
+  // The scheme is judged before trailing slashes go, so "http://" stays no address.
+  const full = (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `${scheme}://${s}`).replace(/\/+$/, '');
+  let u: URL;
+  try {
+    u = new URL(full);
+  } catch {
+    return null;
+  }
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname) return null;
+  if (u.search || u.hash || u.username || u.password || full.includes('?') || full.includes('#')) {
+    return null;
+  }
+  return full;
+}
+
+/** Whether an address ("http://127.0.0.1:8080/x") names a loopback host; false for one that isn't a URL. */
+export function isLoopbackUrl(address: string): boolean {
+  try {
+    return isLoopbackHost(new URL(address).host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The link the phone step's QR encodes: the pairing's own (web_url). When that
+ * names a loopback address (the console opened at localhost or 127.0.0.1, with
+ * no public address), a phone can't open it: the same link at the server's
+ * home address instead when there is one (`via: 'home'`), else the loopback
+ * link as it is (`via: 'loopback'`, the step says so and points to the reach
+ * step).
+ */
+export function phoneLink(
+  webUrl: string,
+  home: string | undefined,
+): { url: string; via: 'pairing' | 'home' | 'loopback' } {
+  if (!isLoopbackUrl(webUrl)) return { url: webUrl, via: 'pairing' };
+  if (home && !isLoopbackUrl(home)) {
+    try {
+      const link = new URL(webUrl);
+      const base = new URL(home);
+      const prefix = base.pathname.replace(/\/+$/, '');
+      return { url: `${base.origin}${prefix}${link.pathname}${link.search}`, via: 'home' };
+    } catch {
+      // a malformed home address: fall through to the warning
+    }
+  }
+  return { url: webUrl, via: 'loopback' };
 }
 
 /** The host of a Host header without its port or brackets; null for a malformed one. */
@@ -341,37 +439,4 @@ function homeIPv4([a, b]: number[]): boolean {
 function isHostName(s: string): boolean {
   if (s === '' || s.length > 253) return false;
   return s.split('.').every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l));
-}
-
-// --- Adding a Bridge ------------------------------------------------------------
-
-/**
- * The Bridge's service for the server's compose file, from audiosilo-bridge's
- * compose.example.yaml. It mounts the library folder read-write at the
- * server's own path (`root`), so the Bridge needs no mapping. The agent
- * container (characters and recaps) is in the full example.
- */
-export function bridgeCompose(root: string): string {
-  const at = root.trim() || '/audiobooks';
-  return `  bridge:
-    image: ghcr.io/kodestar/audiosilo-bridge:latest
-    restart: unless-stopped
-    depends_on: [audiosilo]
-    environment:
-      PUID: "1000"
-      PGID: "1000"
-      # The server as the Bridge reaches it on this network.
-      AUDIOSILO_BRIDGE_SERVER_URL: http://audiosilo:8080
-      # The Bridge's page as your LAN reaches it (the console links to it).
-      AUDIOSILO_BRIDGE_PUBLIC_URL: http://192.168.1.10:8091
-      AUDIOSILO_BRIDGE_AGENT_STAGING_DIR: /staging
-    ports:
-      - "8091:8091"
-    volumes:
-      - ./bridge-data:/bridge-data
-      - /path/to/audiobooks:${at}:rw
-      - staging:/staging
-
-# And under the file's top-level volumes:
-#   staging: {}`;
 }

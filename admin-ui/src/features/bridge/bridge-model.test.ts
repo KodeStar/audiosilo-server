@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { BridgeJobState } from '@/api/types';
 import {
   BRIDGE_JOB_STATES,
+  bridgeCompose,
+  bridgeServerUrl,
+  COMPOSE_SERVER_URL,
   codeExchanged,
   holdParams,
   isOpen,
@@ -10,6 +13,7 @@ import {
   JOBS_POLL_OPEN_MS,
   jobsPollMs,
   kindName,
+  serverScheduled,
   mappingState,
   presence,
   progressOf,
@@ -179,5 +183,43 @@ describe('progress and results', () => {
     expect(holdParams('-1')).toBeNull();
     expect(holdParams('1.5')).toBeNull();
     expect(holdParams('soon')).toBeNull();
+  });
+});
+
+describe('bridgeCompose', () => {
+  it("mounts each library read-write at the server's own path", () => {
+    const c = bridgeCompose(['/mnt/books', '/mnt/kids', '/mnt/books', '']);
+    expect(c).toContain('- /path/to/books:/mnt/books:rw');
+    expect(c).toContain('- /path/to/kids:/mnt/kids:rw');
+    expect(c.match(/:\/mnt\/books:rw/g)).toHaveLength(1);
+    expect(bridgeCompose([])).toContain('- /path/to/audiobooks:/audiobooks:rw');
+    expect(c).toContain('image: ghcr.io/kodestar/audiosilo-bridge:latest');
+    expect(c).toContain(`AUDIOSILO_BRIDGE_SERVER_URL: ${COMPOSE_SERVER_URL}`);
+  });
+});
+
+describe('bridgeServerUrl', () => {
+  it("offers the server's own address, or the compose name for a loopback one", () => {
+    expect(bridgeServerUrl('http://192.168.1.20:8080')).toEqual({
+      url: 'http://192.168.1.20:8080',
+      loopback: false,
+    });
+    expect(bridgeServerUrl('http://127.0.0.1:19290')).toEqual({
+      url: COMPOSE_SERVER_URL,
+      loopback: true,
+    });
+  });
+});
+
+describe('serverScheduled', () => {
+  it('names the podcast jobs the server queues itself', () => {
+    expect(serverScheduled('podcast.poll')).toBe(true);
+    expect(serverScheduled('podcast.fetch')).toBe(true);
+    expect(serverScheduled('podcast.retain')).toBe(true);
+  });
+  it('leaves out a follow and the book jobs, which someone asks for', () => {
+    expect(serverScheduled('podcast.subscribe')).toBe(false);
+    expect(serverScheduled('sidecars.generate')).toBe(false);
+    expect(serverScheduled('bridge.verify')).toBe(false);
   });
 });

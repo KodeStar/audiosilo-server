@@ -91,6 +91,22 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
     : { ...picks, include: withoutId(picks.include, item.id) };
 }
 
+/**
+ * Leaves out every confident item the review has loaded whose book an apply
+ * would leave alone anyway (gone, or matched since the run), so the apply's
+ * count doesn't promise them. The same picks when nothing is new.
+ */
+export function leaveOutStale(picks: Picks, items: readonly MatchRunItem[]): Picks {
+  const stale = items.filter(
+    (it) =>
+      it.outcome === 'auto' &&
+      !it.applied &&
+      (it.gone || it.matched_since) &&
+      !picks.exclude.has(it.id),
+  );
+  return stale.reduce((p, it) => leaveOut(p, it), picks);
+}
+
 /** How many books an apply writes to: the confident ones still pending, less left out, plus put in. */
 export function applyCount(run: MatchRun, picks: Picks): number {
   return Math.max(0, run.counts.pending - picks.exclude.size) + picks.include.size;

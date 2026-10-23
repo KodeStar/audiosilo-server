@@ -468,6 +468,23 @@ export function parkKey(code: string): string {
     : 'bridge.park.unknown';
 }
 
+/**
+ * Park codes whose console wording already says what to do, so the Bridge's own
+ * hint is left out rather than stacked under it in other words (BRIDGE-19: a
+ * chapters job's hint spoke of "a new generate job").
+ */
+const PARKS_WITH_OWN_HINT: readonly string[] = ['chapters_not_detected'];
+
+/** The hint to show under a park's wording: the Bridge's, else the job's error; none when the wording has its own. */
+export function parkHint(
+  code: string | undefined,
+  hint: string | undefined,
+  error: string,
+): string | undefined {
+  if (code && PARKS_WITH_OWN_HINT.includes(code)) return undefined;
+  return hint ?? (error || undefined);
+}
+
 /** A parked job's page on the Bridge (`<ui_url>#/jobs/<id>`), only for an http(s) ui_url. */
 export function bridgeJobLink(uiUrl: string | undefined, jobId: number): string | undefined {
   return bridgeTabLink(uiUrl, `jobs/${jobId}`);

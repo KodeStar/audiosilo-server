@@ -11,7 +11,6 @@ import {
   MonitorSmartphone,
   Puzzle,
   Repeat2,
-  RotateCcw,
   Settings2,
   ShieldCheck,
   Ticket,
@@ -41,6 +40,7 @@ import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
 import { ModulesTopic } from './modules-topic';
+import { RestartNotice } from './restart-notice';
 import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
@@ -165,19 +165,6 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
   }
 }
 
-/** Saved settings the running server doesn't use yet. */
-function RestartNotice({ settings }: { settings: AdminSettings }) {
-  const { t } = useTranslation();
-  if (settings.restart_pending.length === 0) return null;
-  return (
-    <Notice tone="warn" icon={RotateCcw} title={t('settings.restart.title')} role="status">
-      {t('settings.restart.body', {
-        list: settings.restart_pending.map((id) => t(`settings.${id}`)).join(', '),
-      })}
-    </Notice>
-  );
-}
-
 function GeneralTopic({ settings }: { settings: AdminSettings }) {
   const { t } = useTranslation();
   return (
@@ -186,6 +173,7 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
         settings={settings}
         section="general"
         title={t('settings.general.card')}
+        savedTitle={t('settings.general.saved')}
         fields={[
           { name: 'name', kind: 'text', placeholder: DEFAULT_SERVER_NAME },
           {
