@@ -102,7 +102,7 @@ func TestListWritesStayLocal(t *testing.T) {
 	}
 	want = kept
 	step("replace dropping three", 3, func(tx listTx) (bool, error) {
-		return upNext.replace(ctx, tx, user, refs, "now")
+		return upNext.replace(ctx, tx, user, refs, nil, "now")
 	})
 }
 
@@ -166,7 +166,7 @@ func TestListOrderMatchesModel(t *testing.T) {
 				refs[i] = ref(q)
 			}
 			if err := c.db.WithTx(ctx, "replace", func(tx *sql.Tx) error {
-				_, err := upNext.replace(ctx, tx, user, refs, "now")
+				_, err := upNext.replace(ctx, tx, user, refs, nil, "now")
 				return err
 			}); err != nil {
 				t.Fatal(err)

@@ -84,6 +84,10 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 	}{
 		{"dev", "AudioSilo/dev (web)", auth.KindSession, false, true},
 		{"console", "AudioSilo Admin (web)", auth.KindSession, true, true},
+		{"released", "AudioSilo/2.2.0 (ios)", auth.KindSession, false, true},
+		{"released admin", "AudioSilo/2.2.0 (web)", auth.KindSession, true, true},
+		{"newer", "AudioSilo/2.3.0 (android)", auth.KindSession, false, true},
+		{"just below", "AudioSilo/2.1.9 (ios)", auth.KindSession, false, false},
 		{"old", "AudioSilo/2.1.0 (web)", auth.KindSession, false, false},
 		{"old admin", "AudioSilo/2.1.0 (web)", auth.KindSession, true, false},
 		{"missing", "", auth.KindSession, false, false},
@@ -148,12 +152,13 @@ func TestPodcastClientGateMatrix(t *testing.T) {
 			if tc.allowed {
 				want = 503
 			}
-			if resp.StatusCode != want {
+			if resp.StatusCode != want || tc.allowed && !strings.Contains(body, "podcast_fetch_unavailable") {
 				t.Fatalf("media inherited %d %s", resp.StatusCode, body)
 			}
 		})
 	}
 }
+
 func TestPodcastPrivateShowScopes(t *testing.T) {
 	b, uid, f := podcastEnv(t, true)
 	ctx := context.Background()

@@ -158,12 +158,12 @@ func (a *API) handleSetCollectionItems(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	scopes, ok := a.callerScopes(w, r, "could not save the collection")
+	scopes, keep, ok := a.gatedScopes(w, r, "could not save the collection")
 	if !ok {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.SetCollectionItems(r.Context(), id, u.ID, items, scopes); err != nil {
+	if err := a.cat.SetCollectionItems(r.Context(), id, u.ID, items, scopes, keep); err != nil {
 		a.writeCollectionError(w, err, "set collection items failed", "could not save the collection", "collection", id)
 		return
 	}

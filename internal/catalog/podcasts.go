@@ -399,13 +399,9 @@ func (c *Catalog) PodcastExport(ctx context.Context, who Caller) ([]PodcastExpor
 	if err != nil {
 		return nil, err
 	}
-	libs, err := c.ListLibraries(ctx)
+	podcasts, err := c.podcastLibraries(ctx)
 	if err != nil {
 		return nil, err
-	}
-	podcasts := map[int64]bool{}
-	for _, l := range libs {
-		podcasts[l.ID] = l.Kind == KindPodcasts
 	}
 	slices.SortFunc(scopes, func(a, b Scope) int { return cmp.Compare(a.LibraryID, b.LibraryID) })
 	out := []PodcastExportRow{}

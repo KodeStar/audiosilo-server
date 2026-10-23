@@ -347,6 +347,55 @@ func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error)
 	return out, nil
 }
 
+// GatedScopes is who's scopes for a whole-list replace, from one read of their
+// access: scopes is CallerScopes, and keep is what the old-client gate alone
+// hides from who, their scopes in podcast libraries as a client that sees
+// podcasts would get them (shares, household rules and private shows applied;
+// nil when who already sees podcasts). A replace from such a caller keeps the
+// stored entries keep allows (SetQueue, SetCollectionItems), so an old player
+// reordering a list can't delete podcast entries it was never shown. Entries
+// outside them (a revoked share, an unfollowed private show) get no such
+// protection.
+func (c *Catalog) GatedScopes(ctx context.Context, who Caller) (scopes, keep []Scope, err error) {
+	if who.Podcasts {
+		scopes, err = c.CallerScopes(ctx, who)
+		return scopes, nil, err
+	}
+	who.Podcasts = true
+	all, err := c.CallerScopes(ctx, who)
+	if err != nil {
+		return nil, nil, err
+	}
+	podcasts, err := c.podcastLibraries(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The gate changes nothing outside podcast libraries, so the rest is
+	// exactly CallerScopes for who as they are.
+	scopes, keep = []Scope{}, []Scope{}
+	for _, s := range all {
+		if podcasts[s.LibraryID] {
+			keep = append(keep, s)
+		} else {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes, keep, nil
+}
+
+// podcastLibraries is the set of podcast library ids.
+func (c *Catalog) podcastLibraries(ctx context.Context) (map[int64]bool, error) {
+	libs, err := c.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	podcasts := map[int64]bool{}
+	for _, l := range libs {
+		podcasts[l.ID] = l.Kind == KindPodcasts
+	}
+	return podcasts, nil
+}
+
 // CallerLibraries applies the client gate but keeps library grants independent
 // of follows: an empty podcast library is still a destination for following.
 func (c *Catalog) CallerLibraries(ctx context.Context, who Caller) ([]Library, error) {

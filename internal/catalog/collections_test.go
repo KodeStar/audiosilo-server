@@ -138,7 +138,7 @@ func TestCollectionRoles(t *testing.T) {
 	writes := map[string]func(user int64) error{
 		"update":       func(u int64) error { return c.UpdateCollection(ctx, col.ID, u, &name, nil) },
 		"add item":     func(u int64) error { return c.AddCollectionItem(ctx, col.ID, u, e.ref("Kid/A"), intp(0), e.all) },
-		"set items":    func(u int64) error { return c.SetCollectionItems(ctx, col.ID, u, nil, e.all) },
+		"set items":    func(u int64) error { return c.SetCollectionItems(ctx, col.ID, u, nil, e.all, nil) },
 		"remove item":  func(u int64) error { return c.RemoveCollectionItem(ctx, col.ID, u, e.ref("Kid/A")) },
 		"set shares":   func(u int64) error { return c.SetCollectionShares(ctx, col.ID, u, nil) },
 		"read":         func(u int64) error { _, err := c.Collection(ctx, col.ID, u, e.all); return err },
@@ -297,10 +297,10 @@ func TestCollectionLimits(t *testing.T) {
 	if err := c.AddCollectionItem(ctx, first.ID, e.owner, e.ref("Kid/A"), nil, e.all); !errors.Is(err, ErrListFull) {
 		t.Fatalf("add to a full collection = %v, want ErrListFull", err)
 	}
-	if err := c.SetCollectionItems(ctx, first.ID, e.owner, make([]Ref, MaxCollectionItems+1), e.all); !errors.Is(err, ErrTooManyItems) {
+	if err := c.SetCollectionItems(ctx, first.ID, e.owner, make([]Ref, MaxCollectionItems+1), e.all, nil); !errors.Is(err, ErrTooManyItems) {
 		t.Fatalf("replace past the cap = %v, want ErrTooManyItems", err)
 	}
-	if err := c.SetCollectionItems(ctx, first.ID, e.owner, make([]Ref, MaxCollectionItems), e.all); err != nil {
+	if err := c.SetCollectionItems(ctx, first.ID, e.owner, make([]Ref, MaxCollectionItems), e.all, nil); err != nil {
 		t.Fatalf("replace at the cap: %v", err)
 	}
 

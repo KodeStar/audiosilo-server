@@ -1674,8 +1674,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
   chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
-  `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players remain hidden
-  while `PodcastPlayerMinVersion` is empty. Stored clients cover headerless media requests.
+  `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
+  `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
+  counts as its base version), so 2.1.x and older stay hidden. Stored clients cover headerless media requests.
   The catalog applies this gate before admin shortcuts, on single and multiple library scopes
   and library lists. The console's views of another person (user detail, a progress edit) take
   that person's access under the viewing request's gate. Background callers and cast tokens keep
@@ -1686,6 +1687,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by its current or previous normalized SHA-256. Whole-library grants remain the requirement for
   following a new URL. Book search/recent, admin book tools, the console's activity figures and
   listening goals exclude podcast libraries.
+  A whole-list replace (`PUT /me/queue`, `PUT /me/collections/{id}/items`) from a caller the gate
+  hides podcasts from keeps the stored entries only the gate hides (`catalog.GatedScopes`: their
+  podcast scopes as a podcast-seeing client would get them, passed as `keep`), each after the listed
+  entry it followed, or all after the list in stored order when the new order would shuffle them; they
+  count toward the cap as an add's hidden rows do (oldest evicted). Entries hidden for another reason
+  (a revoked share, an unfollowed private show) and every replace from a podcast-seeing caller keep
+  the delete rule, so a 2.1.x device reordering Up next can't drop a 2.2.0 player's episodes.
   Core show, episode, item and media reads are always available to scoped callers. Follow,
   unfollow and check actions use the module User wrapper (no kids or demo accounts), JSON bodies
   for URLs, and `modules.podcasts.enabled` (off by default,

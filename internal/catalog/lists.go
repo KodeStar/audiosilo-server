@@ -22,7 +22,9 @@ import (
 // they see it: an add's position is an index among their visible rows, and the
 // cap counts only those (an add the hidden rows alone would overflow evicts the
 // oldest of them; see orderedList.add). A whole-list replace deletes hidden rows
-// like any other row not listed.
+// like any other row not listed, except those its keep scopes allow: the rows the
+// old-client gate alone hides (Catalog.GatedScopes), which a replace from a
+// player that can't show podcasts must not drop (see orderedList.replace).
 
 // ListItem is one entry of an ordered list (an up-next entry, a collection item):
 // the book's path identity, when it was added, and the book itself (the list
@@ -195,9 +197,8 @@ func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows 
 	if over <= 0 {
 		return rows, nil
 	}
-	slices.SortStableFunc(hidden, func(a, b int) int { return strings.Compare(rows[a].AddedAt, rows[b].AddedAt) })
 	evict := make(map[int]bool, over)
-	for _, i := range hidden[:over] {
+	for _, i := range oldestOf(rows, hidden, over) {
 		if _, err := tx.ExecContext(ctx, l.remove, owner, rows[i].LibraryID, rows[i].Path); err != nil {
 			return nil, err
 		}
@@ -210,6 +211,14 @@ func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows 
 		}
 	}
 	return kept, nil
+}
+
+// oldestOf sorts idx (indexes into rows, in stored order) oldest first
+// (added_at, ties in stored order) and returns the first n: the rows makeRoom and
+// keptRows evict.
+func oldestOf(rows []listRow, idx []int, n int) []int {
+	slices.SortStableFunc(idx, func(a, b int) int { return strings.Compare(rows[a].AddedAt, rows[b].AddedAt) })
+	return idx[:n]
 }
 
 // visibleAt is where a row goes among rest (the list's other rows, in stored
@@ -232,9 +241,14 @@ func visibleAt(rest []listRow, position *int, scopes []Scope) int {
 
 // replace makes refs (already deduplicated and checked, see listableRefs and
 // fits) the owner's whole list in that order, inside tx: an entry already listed
-// keeps its added_at, a new one is added now. It reports whether anything
-// changed.
-func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs []Ref, now string) (bool, error) {
+// keeps its added_at, a new one is added now. A stored row not in refs is
+// deleted unless keep (scopes the caller can't see but must not lose, see
+// Catalog.GatedScopes; nil for none) allows it: those rows stay, in their
+// stored order, each just after the listed row it followed (see withKept).
+// Kept rows count toward l.max as hidden rows do for add: when refs and the kept
+// rows together exceed it, the oldest kept rows (added_at, then stored order)
+// go. It reports whether anything changed.
+func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs []Ref, keep []Scope, now string) (bool, error) {
 	rows, err := l.rows(ctx, tx, owner)
 	if err != nil {
 		return false, err
@@ -244,14 +258,88 @@ func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs [
 		stored[r.Ref] = r
 	}
 	next := make([]listRow, len(refs))
+	listed := make(map[Ref]bool, len(refs))
 	for i, ref := range refs {
 		r, ok := stored[ref]
 		if !ok {
 			r = listRow{Ref: ref, AddedAt: now, pos: -1}
 		}
-		next[i] = r
+		next[i], listed[ref] = r, true
+	}
+	if len(keep) > 0 {
+		next = withKept(rows, next, listed, l.keptRows(rows, listed, keep, len(next)))
 	}
 	return l.write(ctx, tx, owner, rows, placed(next))
+}
+
+// keptRows is the stored rows (in stored order) a replace listing listed keeps
+// although they are not listed: those keep allows, less the oldest of them
+// (added_at, ties in stored order) while they and the n listed rows would exceed
+// l.max.
+func (l orderedList) keptRows(rows []listRow, listed map[Ref]bool, keep []Scope, n int) []listRow {
+	var idx []int // indexes into rows, in stored order
+	for i, r := range rows {
+		if !listed[r.Ref] && ScopesAllow(keep, r.Ref) {
+			idx = append(idx, i)
+		}
+	}
+	evict := map[int]bool{}
+	if over := n + len(idx) - l.max; over > 0 {
+		for _, i := range oldestOf(rows, slices.Clone(idx), over) {
+			evict[i] = true
+		}
+	}
+	var kept []listRow
+	for _, i := range idx {
+		if !evict[i] {
+			kept = append(kept, rows[i])
+		}
+	}
+	return kept
+}
+
+// withKept merges kept (stored rows a replace keeps unlisted, in stored order)
+// into next (the listed rows, in their new order; listed holds their refs): each
+// kept row goes just after the listed row that last preceded it in the stored
+// order (rows, everything stored now), or first when none did. When the new
+// order of the listed rows would put kept rows out of their stored order, they
+// all go after next instead, in stored order.
+func withKept(rows, next []listRow, listed map[Ref]bool, kept []listRow) []listRow {
+	if len(kept) == 0 {
+		return next
+	}
+	isKept := make(map[Ref]bool, len(kept))
+	for _, r := range kept {
+		isKept[r.Ref] = true
+	}
+	// after[a] is the kept rows following listed row a in stored order; the zero
+	// Ref collects those before any listed row.
+	after := map[Ref][]listRow{}
+	var anchor Ref
+	for _, r := range rows {
+		switch {
+		case listed[r.Ref]:
+			anchor = r.Ref
+		case isKept[r.Ref]:
+			after[anchor] = append(after[anchor], r)
+		}
+	}
+	out := make([]listRow, 0, len(next)+len(kept))
+	out = append(out, after[Ref{}]...)
+	for _, r := range next {
+		out = append(out, r)
+		out = append(out, after[r.Ref]...)
+	}
+	order := 0
+	for _, r := range out {
+		if isKept[r.Ref] {
+			if r.Ref != kept[order].Ref {
+				return append(slices.Clone(next), kept...)
+			}
+			order++
+		}
+	}
+	return out
 }
 
 // placed gives next (in its new order; a row's pos is its stored position, -1
