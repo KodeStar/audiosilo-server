@@ -376,5 +376,39 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
 	}
+	return db.warnNewerMigrations(ctx, names)
+}
+
+// warnNewerMigrations logs a warning when the database records migrations this
+// server does not ship: a newer AudioSilo ran on it (a rollback). This server
+// still starts, but it does not know the newer tables and can lose what they
+// hold (an older scanner indexes a podcast library as books, say).
+func (db *DB) warnNewerMigrations(ctx context.Context, known []string) error {
+	rows, err := db.writer.QueryContext(ctx, `SELECT name FROM schema_migrations ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("read migrations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ship := make(map[string]bool, len(known))
+	for _, n := range known {
+		ship[n] = true
+	}
+	var unknown []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if !ship[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(unknown) > 0 {
+		db.log.Warn("this database was used by a newer AudioSilo server: features it added may not work here and their data can be lost; run the newer version again, or restore a backup made before the upgrade",
+			"unknown_migrations", strings.Join(unknown, ","))
+	}
 	return nil
 }
