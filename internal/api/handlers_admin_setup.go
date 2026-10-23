@@ -23,8 +23,9 @@ type setupEnvelope struct {
 	// already added).
 	ConfigLibraries []string `json:"config_libraries"`
 	// MountHints are folders mounted into the server that may hold books
-	// (library.MountHints; [] off Linux), read only while the flow is not
-	// finished ([] after: only its folder step offers them).
+	// (library.MountHints; [] off Linux), read only while the folder step may
+	// still be shown: the flow is not finished, or its folder step was skipped
+	// (reopened from the Overview card). [] otherwise: only that step offers them.
 	MountHints []string `json:"mount_hints"`
 }
 
@@ -59,7 +60,7 @@ func (a *API) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 		names = append(names, l.Name)
 	}
 	hints := []string{}
-	if !st.Finished {
+	if !st.Finished || st.Steps["folder"] == catalog.SetupStepSkipped {
 		hints = a.mountHints(cfg.DataDir)
 	}
 	writeJSON(w, http.StatusOK, setupEnvelope{
