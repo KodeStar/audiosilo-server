@@ -225,6 +225,25 @@ func TestPlanRepick(t *testing.T) {
 			t.Errorf("%s: repick = %v, want nothing", name, got)
 		}
 	}
+
+	// The run looked B0US000001 up: applied while the book still has it, but a
+	// hand match since (another record, still a community override) keeps its
+	// own ASIN (R-34).
+	found := p
+	found.FoundBy = "asin:B0US000001"
+	if got := PlanRepick(community, found); got["asin"] != "B0UK000001" {
+		t.Errorf("repick of the ASIN it looked up = %v", got)
+	}
+	handMatched := &catalog.MatchState{Fields: map[string]catalog.FieldValue{
+		"asin": {Value: "B0US000999", Source: catalog.SourceCommunity, Locked: true},
+	}}
+	if got := PlanRepick(handMatched, found); len(got) != 0 {
+		t.Errorf("repick over a hand match = %v, want nothing", got)
+	}
+	// An item recorded before FoundBy is judged by the source alone, as before.
+	if got := PlanRepick(handMatched, p); got["asin"] != "B0UK000001" {
+		t.Errorf("repick of an older item = %v", got)
+	}
 }
 
 func TestClassify(t *testing.T) {

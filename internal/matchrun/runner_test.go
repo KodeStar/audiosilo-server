@@ -173,7 +173,7 @@ func TestRunMatchesReviewsAndApplies(t *testing.T) {
 		t.Fatalf("changes = %+v", ch)
 	}
 	review := e.items(t, run, catalog.OutcomeReview)
-	if len(review) != 1 || review[0].Path != "A/Close" {
+	if len(review) != 1 || review[0].Path != "A/Close" || review[0].Detail != "" {
 		t.Fatalf("review = %+v", review)
 	}
 	if errs := e.items(t, run, catalog.OutcomeError); len(errs) != 1 || errs[0].Detail != ErrCodeUnavailable {
@@ -443,6 +443,39 @@ func TestRepick(t *testing.T) {
 	}
 	if run = e.start(t, catalog.MatchModeRepick, "uk"); run.Total != 1 || len(e.items(t, run, "")) != 0 {
 		t.Fatalf("second UK listing = %+v", run)
+	}
+}
+
+// TestRepickKeepsHandMatch: a book matched again by hand after a repick run
+// looked it up (another record: still a community ASIN) keeps that match when
+// the run is applied (R-34).
+func TestRepickKeepsHandMatch(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Community", "Community", "", nil)
+	set := func(asin string) {
+		t.Helper()
+		if err := e.cat.EditBook(ctx, e.lib, "A/Community", catalog.BookEdit{Set: map[string]string{"asin": asin}, Source: catalog.SourceCommunity}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("B0US000001")
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeRepick, "uk")
+	items := e.items(t, run, "")
+	if len(items) != 1 || items[0].Proposal.FoundBy != "asin:B0US000001" {
+		t.Fatalf("items = %+v", items)
+	}
+	set("B0HAND0001") // matched by hand since, from the book page
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if st, _ := e.cat.BookMatchState(ctx, e.lib, "A/Community"); st.Fields["asin"].Value != "B0HAND0001" {
+		t.Fatalf("hand match overwritten: asin %q", st.Fields["asin"].Value)
 	}
 }
 
@@ -740,5 +773,29 @@ func TestRefreshHoldsAnotherEdition(t *testing.T) {
 	run := e.start(t, catalog.MatchModeRefresh, "")
 	if run.Counts.Auto != 0 || run.Counts.Review != 1 {
 		t.Fatalf("refresh run = %+v, want the book held for review", run)
+	}
+	// Held for its length, which the review words with both lengths.
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 1 || review[0].Detail != DetailLengthDiffers || review[0].Book.Duration != 634*60 {
+		t.Fatalf("review = %+v, want length_differs with the book's length", review)
+	}
+}
+
+// TestMatchHoldsAnotherLength: a confident title match whose recording is
+// another length is held for review with the length_differs detail; one held
+// only for its score carries no detail (#134).
+func TestMatchHoldsAnotherLength(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Short", "Martian", "", nil) // 634 min
+	hit := cand("the-martian", 100, "")
+	hit.Recordings[0].RuntimeMin = 300
+	e.matcher.byTitle["Martian"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 1 || review[0].Detail != DetailLengthDiffers || review[0].Book.Duration != 634*60 ||
+		review[0].Proposal.RuntimeMin != 300 {
+		t.Fatalf("review = %+v, want length_differs", review)
 	}
 }

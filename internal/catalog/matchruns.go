@@ -107,9 +107,10 @@ type MatchProposal struct {
 	WebURL      string `json:"web_url,omitempty"`
 	CoverURL    string `json:"cover_url,omitempty"`
 	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
-	// FoundBy is the book's own identifier a refresh found the record by,
-	// "asin:<ASIN>" or "isbn:<ISBN>" ("" for any other run): applying it is for
-	// a book that still has it.
+	// FoundBy is the book's own identifier a refresh found the record by, or
+	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>" ("" for a
+	// match run, and a repick recorded before 2.4.0): applying it is for a book
+	// that still has it.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }
@@ -402,8 +403,10 @@ func (c *Catalog) CommunityASINBooks(ctx context.Context, libraryID int64) ([]Bo
 // effective value and source (an admin's own edit is never replaced), and whether
 // it has no cover at all (a scan checked and found none, and none was uploaded).
 type MatchState struct {
-	Title        string
-	Author       string
+	Title  string
+	Author string
+	// Duration is the book's length in seconds (0 unknown).
+	Duration     float64
 	Fields       map[string]FieldValue
 	CoverMissing bool
 }
@@ -416,9 +419,9 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		st MatchState
 	)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.title, b.author, `+issuePredicates[IssueNoCover]+` FROM books b
+		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+` FROM books b
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
-		Scan(&id, &st.Title, &st.Author, &st.CoverMissing)
+		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
