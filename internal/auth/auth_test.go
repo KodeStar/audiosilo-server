@@ -1030,3 +1030,68 @@ func consumePairing(s *Service, ctx context.Context, secret string) (*User, erro
 	u, _, err := s.ConsumePairing(ctx, secret)
 	return u, err
 }
+
+// TestPrunePairingTokens (R-33): the daily retention deletes the pairing tokens
+// that can never pair again (an exchanged unlinked one, one past its expiry, one
+// whose invite is used up or expired) and keeps the live ones, linked or not,
+// whose devices may still pair.
+func TestPrunePairingTokens(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	issue := func(ttl time.Duration) string {
+		t.Helper()
+		tok, err := s.IssueToken(ctx, u.ID, KindPairing, "", ttl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	spent, short, long := issue(time.Hour), issue(time.Minute), issue(time.Hour)
+	if _, err := consumePairing(s, ctx, spent); err != nil {
+		t.Fatal(err)
+	}
+	// A one-use invite paired once (used up) and an open one expiring in a day.
+	other, _ := s.CreateUser(ctx, "o", "", RoleUser)
+	usedUp, _ := s.CreateAuthCode(ctx, other.ID, "one use", 1, 0)
+	usedTok := pairThrough(t, s, ctx, usedUp)
+	if _, err := consumePairing(s, ctx, usedTok); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 24*time.Hour)
+	linked := pairThrough(t, s, ctx, open)
+	session, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	present := func(secret string) bool {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE token_hash = ?`, hashSecret(secret)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	prune := func(want int64) {
+		t.Helper()
+		n, err := s.PrunePairingTokens(ctx)
+		if err != nil || n != want {
+			t.Fatalf("PrunePairingTokens = %d, %v, want %d", n, err, want)
+		}
+	}
+	// Denied: the exchanged token and the used-up invite's go; the live ones stay (allowed).
+	prune(2)
+	if present(spent) || present(usedTok) || !present(short) || !present(long) || !present(linked) {
+		t.Fatalf("after the first prune: spent %v usedUp %v short %v long %v linked %v",
+			present(spent), present(usedTok), present(short), present(long), present(linked))
+	}
+	// Past its minute the short one goes; the hour's and the open invite's stay.
+	*now = now.Add(2 * time.Minute)
+	prune(1)
+	if present(short) || !present(long) || !present(linked) {
+		t.Fatalf("after two minutes: short %v long %v linked %v", present(short), present(long), present(linked))
+	}
+	// Past the hour and the invite's day both go; a session is never touched.
+	*now = now.Add(25 * time.Hour)
+	prune(2)
+	if present(long) || present(linked) || !present(session) {
+		t.Fatalf("after a day: long %v linked %v session %v", present(long), present(linked), present(session))
+	}
+}

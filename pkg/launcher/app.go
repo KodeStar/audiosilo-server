@@ -542,7 +542,8 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 // listening sessions older than sessions() (Settings > General, read at each run)
 // up into per-day totals (dropping their device, app and time of day), blanks the
 // address of signed-out devices, deletes dead cast tokens (expired, or their
-// sender signed out) with the book each was for, drops audit events and feed
+// sender signed out) with the book each was for and spent or expired pairing
+// tokens, drops audit events and feed
 // events past their retention, and trims the community metadata cache to its
 // newest rows.
 func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
@@ -559,6 +560,9 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		}
 		if err := authSvc.PruneCastTokens(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("cast token retention failed", "err", err)
+		}
+		if _, err := authSvc.PrunePairingTokens(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("pairing token retention failed", "err", err)
 		}
 		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows, catalog.MetaCacheWorkRows); err != nil && ctx.Err() == nil {
 			log.Warn("meta cache retention failed", "err", err)

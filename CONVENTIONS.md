@@ -1134,7 +1134,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
   `listening_daily` per local day, listener and book, blanks `last_ip` on signed-out or expired tokens
   (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
-  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that). Migration 0021 backfilled listening from before sessions were
+  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that) and
+  the pairing tokens that can never pair again (`auth.PrunePairingTokens`: revoked, expired, or linked to
+  a used-up or expired code). Migration 0021 backfilled listening from before sessions were
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
