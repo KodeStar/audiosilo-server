@@ -691,7 +691,11 @@ describe('library health', () => {
         .at(-1)
         ?.query.get('across'),
     ).toBeNull();
+    expect(screen.getByText(/^Copies of one book in the same library/)).toBeInTheDocument();
     await user.click(toggle);
+    expect(
+      await screen.findByText(/^Copies of one book, in the same library or in different ones/),
+    ).toBeInTheDocument();
     await waitFor(() => expect(toggle).toBeChecked());
     expect(
       calls

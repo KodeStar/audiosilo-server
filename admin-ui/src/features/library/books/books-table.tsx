@@ -21,7 +21,7 @@ import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { spanIn } from '../series/series-model';
 import { LoadingMore, type BookViewProps } from './book-grid';
-import { shiftHeld } from './use-selection';
+import { keepShiftClickFromSelectingText, shiftHeld } from './use-selection';
 import { useIsPhone, useWindowRows } from './use-layout';
 
 const features = tableFeatures({});
@@ -277,6 +277,7 @@ const BookRow = memo(function BookRow({
   return (
     <tr
       data-selected={selected || undefined}
+      onMouseDown={keepShiftClickFromSelectingText(selecting)}
       onClick={(e) => (selecting ? onToggle(b, e.shiftKey) : onOpen(b))}
       className="cursor-pointer border-b transition-colors duration-(--dur-1) last:border-b-0 hover:bg-muted/70 data-selected:bg-[color-mix(in_oklab,var(--brand)_7%,transparent)] max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-3 max-md:px-3.5"
       style={{ height }}

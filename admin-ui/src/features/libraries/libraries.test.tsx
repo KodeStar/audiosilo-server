@@ -393,7 +393,7 @@ describe('libraries', () => {
     expect(createObjectURL).toHaveBeenCalled();
   });
 
-  it('exports with file paths and tags only after a warning', async () => {
+  it('exports with paths, tags and descriptions only after a warning', async () => {
     vi.stubGlobal(
       'URL',
       Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:export'), revokeObjectURL: vi.fn() }),
@@ -415,7 +415,7 @@ describe('libraries', () => {
     const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
     await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
     await user.click(
-      await screen.findByRole('menuitem', { name: 'Export with file paths and tags...' }),
+      await screen.findByRole('menuitem', { name: 'Export with paths, tags and descriptions...' }),
     );
     const dialog = await screen.findByRole('dialog', {
       name: 'Export Fiction with paths, tags and descriptions',
@@ -425,7 +425,9 @@ describe('libraries', () => {
     ).toBeInTheDocument();
     expect(within(dialog).getByText(/Each copy of a book gets its own row/)).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/admin/libraries/1/export')).toBe(false);
-    await user.click(within(dialog).getByRole('button', { name: 'Export with paths and tags' }));
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Export with paths, tags and descriptions' }),
+    );
     expect(
       await screen.findByText('audiosilo-fiction-2026-10-03-private.json'),
     ).toBeInTheDocument();

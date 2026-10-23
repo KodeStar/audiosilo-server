@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { adminBook } from '@/test/library-fixtures';
 import { refKey } from '@/lib/book-route';
-import { rangeOf, shiftHeld } from './use-selection';
+import { keepShiftClickFromSelectingText, rangeOf, shiftHeld } from './use-selection';
 
 const order = ['a', 'b', 'c', 'd'].map((p) => adminBook({ path: p, title: p }));
 const paths = (bs: { path: string }[]) => bs.map((b) => b.path);
@@ -27,5 +27,21 @@ describe('shiftHeld', () => {
     expect(shiftHeld(new MouseEvent('click'))).toBe(false);
     expect(shiftHeld(new Event('change'))).toBe(false);
     expect(shiftHeld(undefined)).toBe(false);
+  });
+});
+
+describe('keepShiftClickFromSelectingText', () => {
+  const press = (selecting: boolean, shiftKey: boolean) => {
+    let prevented = false;
+    const e = { shiftKey, preventDefault: () => (prevented = true) } as unknown as React.MouseEvent;
+    keepShiftClickFromSelectingText(selecting)(e);
+    return prevented;
+  };
+  it('stops a Shift-mousedown starting a text selection while selecting', () => {
+    expect(press(true, true)).toBe(true);
+  });
+  it('leaves a plain mousedown, and any while not selecting, alone', () => {
+    expect(press(true, false)).toBe(false);
+    expect(press(false, true)).toBe(false);
   });
 });

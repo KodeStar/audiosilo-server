@@ -10,7 +10,7 @@ import { bookRoute } from '@/lib/book-route';
 import { seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { tileFlags, type TileFlag } from './books/books-model';
-import { shiftHeld } from './books/use-selection';
+import { keepShiftClickFromSelectingText, shiftHeld } from './books/use-selection';
 import { spanIn } from './series/series-model';
 
 const FLAG_ICONS: Record<TileFlag, LucideIcon> = {
@@ -70,7 +70,11 @@ export const BookTile = memo(function BookTile({
       : t(`books.flag.${f}`);
 
   return (
-    <div className={cn('tile', className)} data-selected={selected || undefined}>
+    <div
+      className={cn('tile', className)}
+      data-selected={selected || undefined}
+      onMouseDown={keepShiftClickFromSelectingText(selecting)}
+    >
       {onToggle ? (
         <span className="tile-check">
           <Checkbox

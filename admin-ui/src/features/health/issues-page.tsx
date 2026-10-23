@@ -135,7 +135,12 @@ export function IssuesPage() {
                   : t(`health.kind.${cat.kind}`)}
               </h2>
               <span className="text-[13px] text-muted-foreground">
-                {t(`health.about.${cat.kind}`)}
+                {/* Including other libraries, the duplicates are no longer one library's. */}
+                {t(
+                  cat.kind === 'duplicate' && across
+                    ? 'health.about.duplicateAcross'
+                    : `health.about.${cat.kind}`,
+                )}
               </span>
             </div>
             {cat.ignored || ignored || (cat.kind === 'duplicate' && across) ? (

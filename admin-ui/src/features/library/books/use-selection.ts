@@ -26,6 +26,17 @@ export function shiftHeld(e: Event | React.SyntheticEvent | undefined): boolean 
 const NO_ORDER: readonly AdminBook[] = [];
 
 /**
+ * A mousedown handler for a tile or row: while selecting, Shift-mousedown is
+ * kept from starting a text selection across the list (the click still toggles
+ * the range).
+ */
+export function keepShiftClickFromSelectingText(selecting: boolean) {
+  return (e: React.MouseEvent) => {
+    if (selecting && e.shiftKey) e.preventDefault();
+  };
+}
+
+/**
  * The books picked for a bulk action, keyed by identity (library + path). The
  * rows themselves are kept, so the dialogs can show current values and send
  * refs for books that have since scrolled out of the loaded pages.
