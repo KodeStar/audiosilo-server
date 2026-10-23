@@ -290,3 +290,44 @@ func apiWithConfig(c *config.Config) *API {
 	a.live.Store(newLiveConfig(c, c))
 	return a
 }
+
+// CONNECT-18: with cors_origins set, every answer varies on Origin (granted,
+// denied, none, a preflight), so a cached answer made without the grant is
+// never reused for a granted origin's request; with none set, nothing varies
+// and nothing is granted.
+func TestCORSVaryOrigin(t *testing.T) {
+	t.Parallel()
+	listed := apiWithConfig(&config.Config{CORSOrigins: []string{"https://app.example.com"}})
+	wildcard := apiWithConfig(&config.Config{CORSOrigins: []string{"*"}})
+	unset := apiWithConfig(&config.Config{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	for _, c := range []struct {
+		name          string
+		a             *API
+		origin        string
+		vary, granted bool
+	}{
+		{"granted", listed, "https://app.example.com", true, true},
+		{"denied", listed, "https://evil.example.com", true, false},
+		{"no origin", listed, "", true, false},
+		{"wildcard no origin", wildcard, "", true, false},
+		{"unset", unset, "https://app.example.com", false, false},
+		{"unset no origin", unset, "", false, false},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/", nil)
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			c.a.cors(next).ServeHTTP(rec, req)
+			vary := rec.Header().Values("Vary")
+			if c.vary && (len(vary) != 1 || vary[0] != "Origin") || !c.vary && len(vary) != 0 {
+				t.Fatalf("%s %s: Vary = %q", c.name, method, vary)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin") != ""; got != c.granted {
+				t.Fatalf("%s %s: granted = %t", c.name, method, got)
+			}
+		}
+	}
+}

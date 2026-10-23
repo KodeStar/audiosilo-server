@@ -120,13 +120,19 @@ const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 
 // cors applies a strict allow-list CORS policy. With no configured origins,
 // cross-origin browser requests are simply not granted CORS headers (the API
-// still works for native apps and same-origin web clients).
+// still works for native apps and same-origin web clients). Once any origin
+// is configured, every answer (no Origin, a denied one, a preflight) carries
+// Vary: Origin, so a cache never reuses an answer made without the grant for
+// a granted origin's request, or the other way round.
 func (a *API) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := a.config()
+		if cfg.corsOn() {
+			w.Header().Add("Vary", "Origin")
+		}
 		origin := r.Header.Get("Origin")
-		if origin != "" && a.config().allowsOrigin(origin) {
+		if origin != "" && cfg.allowsOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", corsAllowHeaders)
 			w.Header().Set("Access-Control-Expose-Headers", corsExposeHeaders)
