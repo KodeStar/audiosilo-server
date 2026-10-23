@@ -195,7 +195,7 @@ func (c *Catalog) PodcastRetentionCheck(ctx context.Context, lib int64, req Rete
 			return err
 		}
 		var inside bool
-		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM (SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND e.removed_at='' ORDER BY e.published IS NULL,COALESCE(e.published,'') DESC,b.rel_path DESC LIMIT ?) WHERE rel_path=?)`, lib, out.ShowPath, out.Policy.Keep, req.Path).Scan(&inside)
+		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM (SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND e.removed_at='' ORDER BY e.published IS NULL,`+episodeOrderSQL("DESC")+` LIMIT ?) WHERE rel_path=?)`, lib, out.ShowPath, out.Policy.Keep, req.Path).Scan(&inside)
 		if err != nil {
 			return err
 		}

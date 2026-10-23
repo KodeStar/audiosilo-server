@@ -509,3 +509,62 @@ func TestDescribeQueueRules(t *testing.T) {
 		t.Errorf("features = %v", got)
 	}
 }
+
+// R-40: a Bridge resuming a parked job after a restart reports progress that
+// names no park before it hears the park again. The stored park is kept, so
+// neither report is news and the console keeps the reason; a new park, or the
+// job running again, still drops or replaces it.
+func TestUpdateHeldKeepsTheParkAcrossAResume(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	job := q.verify(t, "A", 0)
+	if _, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	update := func(state, progress string) *Job {
+		t.Helper()
+		j, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(state), Progress: json.RawMessage(progress)})
+		if err != nil {
+			t.Fatalf("%s %s: %v", state, progress, err)
+		}
+		return j
+	}
+	update(StateRunning, `{"step":"asr"}`)
+	update(StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`)
+	// The restart: progress without the park, a null one, then the park again.
+	if j := update(StateNeedsAttention, `{"step":"asr"}`); j.ParkCode() != "budget_exceeded" || !strings.Contains(string(j.Progress), `"step":"asr"`) {
+		t.Fatalf("park dropped: %s", j.Progress)
+	}
+	if j := update(StateNeedsAttention, `{"step":"asr","park":null}`); j.ParkCode() != "budget_exceeded" {
+		t.Fatalf("null park dropped it: %s", j.Progress)
+	}
+	// A park with no code reads as none everywhere, so it names none here too.
+	for _, codeless := range []string{`{"step":"asr","park":{}}`, `{"step":"asr","park":{"code":""}}`} {
+		if j := update(StateNeedsAttention, codeless); j.ParkCode() != "budget_exceeded" {
+			t.Fatalf("%s dropped the park: %s", codeless, j.Progress)
+		}
+	}
+	// The kept park neither escapes the report's text nor breaks the cap.
+	if j := update(StateNeedsAttention, `{"step":"asr <1/3> & more"}`); !strings.Contains(string(j.Progress), `"asr <1/3> & more"`) {
+		t.Fatalf("escaped: %s", j.Progress)
+	}
+	full := `{"step":"` + strings.Repeat("x", maxProgressBytes-len(`{"step":""}`)) + `"}`
+	if j := update(StateNeedsAttention, full); j.ParkCode() != "budget_exceeded" || len(j.Progress) > maxProgressBytes {
+		t.Fatalf("near the cap: %d bytes, park %q", len(j.Progress), j.ParkCode())
+	}
+	update(StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`)
+	// A different park is news; running again drops the park.
+	update(StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_credential_refused"}}`)
+	if j := update(StateRunning, `{"step":"fact_pass"}`); j.ParkCode() != "" {
+		t.Fatalf("a running job kept its park: %s", j.Progress)
+	}
+	want := []string{
+		"running>needs_attention:budget_exceeded",
+		"needs_attention>needs_attention:agent_credential_refused",
+	}
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+}

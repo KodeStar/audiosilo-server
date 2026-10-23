@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -98,10 +99,11 @@ type fakeQueue struct {
 	requests []bridge.SubscribeRequest
 	wakes    int
 	err      error
+	failed   map[string]*bridge.Job // by feed URL: the caller's recently failed request
 }
 
 func newFakeQueue() *fakeQueue {
-	return &fakeQueue{kinds: []string{bridge.KindPodcastSubscribe}, nextID: 81, open: map[string]*bridge.Job{}, privacy: map[string]bool{}}
+	return &fakeQueue{kinds: []string{bridge.KindPodcastSubscribe}, nextID: 81, open: map[string]*bridge.Job{}, privacy: map[string]bool{}, failed: map[string]*bridge.Job{}}
 }
 
 func (q *fakeQueue) Online(context.Context) (*bridge.Heartbeat, error) {
@@ -138,6 +140,23 @@ func (q *fakeQueue) Subscribe(_ context.Context, r bridge.SubscribeRequest) (*br
 }
 
 func (q *fakeQueue) WakePodcasts() { q.mu.Lock(); q.wakes++; q.mu.Unlock() }
+
+func (q *fakeQueue) RecentSubscribeFailure(_ context.Context, _, _ int64, norm string, _ time.Duration) (*bridge.Job, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.failed[norm], nil
+}
+
+// fail ends every open request as failed (the Bridge could not read the feed).
+func (q *fakeQueue) fail() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for u, j := range q.open {
+		j.State = bridge.StateFailed
+		q.failed[u] = j
+	}
+	q.open = map[string]*bridge.Job{}
+}
 
 // fixtureFollower is import-context.json's world: library 7 held whole, an
 // online writable Bridge, nothing open, and Fixture One (followed) known by
@@ -464,5 +483,53 @@ func TestNormalizeStable(t *testing.T) {
 	}
 	if _, err := feed.NormalizeStable("ftp://example.org/a"); !errors.Is(err, feed.ErrInvalidFeedURL) {
 		t.Fatal(err)
+	}
+}
+
+// Five dead feeds ahead of three good ones: once the five have failed, the
+// next wave reports them as recently failed (their request ids, nothing
+// queued) and follows the good ones; a single follow still retries one.
+func TestImportSkipsRecentlyFailedFeeds(t *testing.T) {
+	t.Parallel()
+	f, _, q := fixtureFollower(t)
+	doc := &opml.Document{Version: "2.0"}
+	for i, u := range []string{"dead-1", "dead-2", "dead-3", "dead-4", "dead-5", "good-1", "good-2", "good-3"} {
+		doc.Candidates = append(doc.Candidates, opml.Candidate{Index: i + 1, URL: "https://feeds.example.org/" + u + ".xml"})
+	}
+	doc.Outlines = len(doc.Candidates)
+	statuses := func(r ImportResult) string {
+		var s []string
+		for _, row := range r.Rows {
+			s = append(s, row.Status)
+		}
+		return strings.Join(s, ",")
+	}
+	first := f.Import(context.Background(), caller, 7, doc)
+	if got := statuses(first); got != "queued,queued,queued,queued,queued,limited,limited,limited" {
+		t.Fatalf("first wave %s", got)
+	}
+	q.fail()
+	second := f.Import(context.Background(), caller, 7, doc)
+	if got := statuses(second); got != "error,error,error,error,error,queued,queued,queued" {
+		t.Fatalf("second wave %s", got)
+	}
+	for i, row := range second.Rows[:5] {
+		if row.Error == nil || row.Error.Code != "recently_failed" || row.Error.Message == "" || row.RequestID == nil || *row.RequestID != *first.Rows[i].RequestID || row.Feed == nil {
+			t.Fatalf("failed row %+v", row)
+		}
+	}
+	for _, r := range q.requests[len(first.Rows):] {
+		if strings.Contains(r.FeedURL, "dead-") {
+			t.Fatalf("a recently failed feed reached the queue: %+v", r)
+		}
+	}
+	// A third wave changes nothing for the failed five and adopts the rest.
+	if got := statuses(f.Import(context.Background(), caller, 7, doc)); got != "error,error,error,error,error,already_queued,already_queued,already_queued" {
+		t.Fatalf("third wave %s", got)
+	}
+	// The single follow by address always retries.
+	out, err := f.Follow(context.Background(), FollowURL{Caller: caller, LibraryID: 7, FeedURL: "https://feeds.example.org/dead-1.xml"})
+	if err != nil || out.State != StateSubscribing || !out.Created {
+		t.Fatalf("manual retry %+v %v", out, err)
 	}
 }

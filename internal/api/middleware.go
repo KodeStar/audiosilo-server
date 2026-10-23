@@ -63,8 +63,11 @@ const bridgeClaimPath = "/api/v1/bridge/jobs/next"
 // timeout wraps ordinary handlers in http.TimeoutHandler, which cancels the
 // request context at the deadline and emits a 503. Claims retain the context
 // deadline without buffering; streaming routes pass through unbounded.
+// TimeoutHandler gives the handler a header map of its own and copies it over
+// the real one key by key, so the Vary set outside (cors's Origin) is seeded
+// into it first: a handler's own Vary (spa's Accept-Encoding) then adds to it
+// instead of replacing it.
 func (a *API) timeout(next http.Handler) http.Handler {
-	timed := http.TimeoutHandler(next, a.timeoutDur, `{"error":"request timed out"}`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == bridgeClaimPath {
 			// Claims must observe response write failures before returning, so
@@ -81,7 +84,13 @@ func (a *API) timeout(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		timed.ServeHTTP(w, r)
+		vary := slices.Clone(w.Header().Values("Vary"))
+		http.TimeoutHandler(http.HandlerFunc(func(tw http.ResponseWriter, r *http.Request) {
+			for _, v := range vary {
+				tw.Header().Add("Vary", v)
+			}
+			next.ServeHTTP(tw, r)
+		}), a.timeoutDur, `{"error":"request timed out"}`).ServeHTTP(w, r)
 	})
 }
 
@@ -120,13 +129,19 @@ const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 
 // cors applies a strict allow-list CORS policy. With no configured origins,
 // cross-origin browser requests are simply not granted CORS headers (the API
-// still works for native apps and same-origin web clients).
+// still works for native apps and same-origin web clients). Once any origin
+// is configured, every answer (no Origin, a denied one, a preflight) carries
+// Vary: Origin, so a cache never reuses an answer made without the grant for
+// a granted origin's request, or the other way round.
 func (a *API) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := a.config()
+		if cfg.corsOn() {
+			w.Header().Add("Vary", "Origin")
+		}
 		origin := r.Header.Get("Origin")
-		if origin != "" && a.config().allowsOrigin(origin) {
+		if origin != "" && cfg.allowsOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", corsAllowHeaders)
 			w.Header().Set("Access-Control-Expose-Headers", corsExposeHeaders)

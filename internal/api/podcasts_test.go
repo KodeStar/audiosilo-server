@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -42,7 +41,7 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		f.FeedURLSHA256 = feed.FeedURLHash(privateFeed)
 		f.Show.Link = ""
 	}
-	raw, _ := json.Marshal(f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +56,19 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		t.Fatal(err)
 	}
 	b.beat(t, bridge.KindPodcastSubscribe, bridge.KindPodcastPoll)
-	response, body := b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":true}}`)
-	if response.StatusCode != 200 {
-		t.Fatalf("enable %d %s", response.StatusCode, body)
-	}
+	podcastsModule(t, b, true)
 	return b, uid, f
 }
+
+// podcastsModule turns the podcasts module on or off as the admin.
+func podcastsModule(t *testing.T, b *bridgeEnv, on bool) {
+	t.Helper()
+	resp, body := b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, fmt.Sprintf(`{"modules":{"podcasts":%t}}`, on))
+	if resp.StatusCode != 200 {
+		t.Fatalf("podcasts module %t: %d %s", on, resp.StatusCode, body)
+	}
+}
+
 func podcastHeaders() map[string]string {
 	return map[string]string{auth.ClientHeader: "AudioSilo/dev (web)"}
 }
@@ -165,7 +171,7 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	headers := podcastHeaders()
 	episode := f.Episodes[1].Path
 	f.Episodes[1].Fetch.Bytes = 5
-	raw, _ := json.Marshal(f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -217,8 +223,12 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: episode})
-	_ = b.cat.GrantShare(ctx, other, share.ID)
+	if err := b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: episode}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.GrantShare(ctx, other, share.ID); err != nil {
+		t.Fatal(err)
+	}
 	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "item?path="+url.QueryEscape(episode)), otherTok, "", headers)
 	if resp.StatusCode != 403 {
 		t.Fatalf("private nested grant %d %s", resp.StatusCode, out)
@@ -318,10 +328,10 @@ func TestPodcastFollowErrorsAndCoreReads(t *testing.T) {
 		t.Fatalf("check %d %s", resp.StatusCode, out)
 	}
 	if err := b.cat.UnfollowPodcast(context.Background(), uid, b.lib.ID, "Example Show"); err != nil {
-		_ = err
+		t.Fatal(err)
 	}
 	// Turning the module off still permits indexed reads.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	post(fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID), 404, "module_off")
 	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts"), b.userTok, "", h)
 	if resp.StatusCode != 200 {
@@ -347,8 +357,7 @@ func TestPodcastActionDeniedMatrix(t *testing.T) {
 			t.Fatalf("%s %d %s", code, resp.StatusCode, out)
 		}
 	}
-	demo, demoTok := newUserWithSession(t, b.testEnv, "demo-pod", true)
-	_ = demo
+	_, demoTok := newUserWithSession(t, b.testEnv, "demo-pod", true)
 	kid, kidTok := newUserWithSession(t, b.testEnv, "kid-pod", false)
 	if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by=?,member_kind='kid',member_access='all' WHERE id=?`, b.adminID, kid); err != nil {
 		t.Fatal(err)
@@ -363,14 +372,20 @@ func TestPodcastActionDeniedMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: "Example Show"})
-	_ = b.cat.GrantShare(ctx, other, share.ID)
+	if err := b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: "Example Show"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.GrantShare(ctx, other, share.ID); err != nil {
+		t.Fatal(err)
+	}
 	check(partial, request, 403, "no_library_access")
 	books, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Other Books", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.GrantWholeLibrary(ctx, uid, books.ID)
+	if err := b.cat.GrantWholeLibrary(ctx, uid, books.ID); err != nil {
+		t.Fatal(err)
+	}
 	check(b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":"https://example.org/"}`, books.ID), 409, "not_podcast_library")
 	b.beat(t, bridge.KindVerify)
 	check(b.userTok, request, 409, "bridge_unavailable")
@@ -396,7 +411,7 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	if !caps["podcasts"] {
 		t.Fatal("podcasts flag false")
 	}
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	caps = serverCapabilities(t, b.testEnv)
 	if enabled, present := caps["podcasts"]; !present || enabled {
 		t.Fatalf("off capability %+v", caps)
@@ -421,8 +436,12 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	}
 
 	dir := filepath.Join(b.lib.Root, ".audiosilo")
-	_ = os.Mkdir(dir, 0700)
-	_ = os.WriteFile(filepath.Join(dir, "library.json"), []byte(fmt.Sprintf(`{"version":1,"library_id":%d,"nonce":"0123456789abcdef0123456789abcdef"}`, b.lib.ID)), 0600)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "library.json"), []byte(fmt.Sprintf(`{"version":1,"library_id":%d,"nonce":"0123456789abcdef0123456789abcdef"}`, b.lib.ID)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	marker := fmt.Sprintf("/api/v1/bridge/libraries/%d/marker", b.lib.ID)
 	resp, out := b.do(t, "GET", marker, b.bridgeTok, "")
 	if resp.StatusCode != 200 || !strings.Contains(out, "0123456789abcdef") {
@@ -432,7 +451,9 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	if resp.StatusCode != 401 {
 		t.Fatalf("marker auth %d", resp.StatusCode)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "library.json"), []byte(`{"version":1,"library_id":999,"nonce":"0123456789abcdef0123456789abcdef"}`), 0600)
+	if err := os.WriteFile(filepath.Join(dir, "library.json"), []byte(`{"version":1,"library_id":999,"nonce":"0123456789abcdef0123456789abcdef"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	resp, out = b.do(t, "GET", marker, b.bridgeTok, "")
 	if resp.StatusCode != 404 || !strings.Contains(out, "no_marker") {
 		t.Fatalf("marker denied %d %s", resp.StatusCode, out)
@@ -496,7 +517,7 @@ func TestPodcastStatsAndCastGate(t *testing.T) {
 		t.Fatalf("stats %s", out)
 	}
 	resp, out = b.doHeaders(t, "POST", "/api/v1/cast/token", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, f.Episodes[0].Path), h)
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != 403 || !strings.Contains(out, `"code":"not_a_book"`) {
 		t.Fatalf("cast mint %d %s", resp.StatusCode, out)
 	}
 	_, cred, err := b.auth.ResolveRequest(ctx, b.userTok, auth.Presence{}, auth.KindSession)
@@ -535,7 +556,7 @@ func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
 		t.Fatal("the fixture URL must look public")
 	}
 	f.FeedURLSHA256 = feed.FeedURLHash(plain)
-	raw, _ := json.Marshal(f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -607,5 +628,45 @@ func TestPodcastQueueAddUnknownAndHiddenLibrary(t *testing.T) {
 		if resp.StatusCode != want {
 			t.Fatalf("library %d: %d %s, want %d", lib, resp.StatusCode, out, want)
 		}
+	}
+}
+
+// R-1: /next for an episode answers the show's next episode in the episode
+// order (oldest first, whatever the file names), never a series, community
+// work or file-name sibling; the show's last episode has none.
+func TestNextForEpisodes(t *testing.T) {
+	t.Parallel()
+	b, _, f := podcastEnv(t, false)
+	next := func(path string) (string, string) {
+		t.Helper()
+		resp, body := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "next?path="+url.QueryEscape(path)), b.userTok, "", podcastHeaders())
+		if resp.StatusCode != 200 {
+			t.Fatalf("%d %s", resp.StatusCode, body)
+		}
+		var got struct {
+			Source string
+			Next   *catalog.Ref
+		}
+		decodeInto(t, body, &got)
+		if got.Next == nil {
+			return got.Source, ""
+		}
+		return got.Source, got.Next.Path
+	}
+	// feed-v1: 2026-10-19, 2026-10-12, then an undated episode (listed first).
+	undated, older, newer := f.Episodes[2].Path, f.Episodes[1].Path, f.Episodes[0].Path
+	if src, p := next(undated); src != "folder" || p != older {
+		t.Fatalf("after the undated episode: %s %q", src, p)
+	}
+	if src, p := next(older); src != "folder" || p != newer {
+		t.Fatalf("after the older episode: %s %q", src, p)
+	}
+	if src, p := next(newer); src != "none" || p != "" {
+		t.Fatalf("after the last episode: %s %q", src, p)
+	}
+	// An old player's /next is hidden like the rest of the library.
+	resp, _ := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "next?path="+url.QueryEscape(older)), b.userTok, "", map[string]string{auth.ClientHeader: "AudioSilo/2.1.0 (ios)"})
+	if resp.StatusCode == 200 {
+		t.Fatal("a hidden podcast library answered /next")
 	}
 }

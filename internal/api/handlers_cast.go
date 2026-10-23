@@ -15,7 +15,7 @@ import (
 // {token, expires_at}: a cast token for the book at path (a part path resolves to
 // its book, whose path the token then covers), ending with the caller's own
 // token. The caller must be allowed the book (400/403/404 as the media routes
-// answer). Demo accounts may cast (they can play); an API key may not
+// answer); a podcast episode is 403 not_a_book. Demo accounts may cast (they can play); an API key may not
 // (denyAPIKey's containment rule: a key never mints another credential, even a
 // cast token, which would die with it).
 func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +36,9 @@ func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
-		writeError(w, http.StatusForbidden, "no access to this library")
+		// Episodes are not cast (a cast token covers a book): 403 as before,
+		// with a code a player can branch on.
+		writeErrorCode(w, http.StatusForbidden, codeNotABook, "Only books can be cast.")
 		return
 	}
 	book, ok := a.bookAt(w, r, lib, scope, rel, "book not found", "could not load book")

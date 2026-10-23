@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -289,4 +290,67 @@ func apiWithConfig(c *config.Config) *API {
 	a := &API{boot: c}
 	a.live.Store(newLiveConfig(c, c))
 	return a
+}
+
+// CONNECT-18: with cors_origins set, every answer varies on Origin (granted,
+// denied, none, a preflight), so a cached answer made without the grant is
+// never reused for a granted origin's request; with none set, nothing varies
+// and nothing is granted.
+// Through the whole chain: a timed handler's own Vary (spa's Accept-Encoding)
+// adds to cors's Origin instead of replacing it.
+func TestCORSVaryOriginThroughTheChain(t *testing.T) {
+	t.Parallel()
+	on := newTestEnvWith(t, func(c *config.Config) { c.CORSOrigins = []string{"https://app.example.com"} })
+	off := newTestEnvWith(t, nil)
+	for _, c := range []struct {
+		name, path string
+		e          *testEnv
+		want       []string
+	}{
+		{"static", "/assets/connect.js", on, []string{"Origin", "Accept-Encoding"}},
+		{"api", "/api/v1/server", on, []string{"Origin"}},
+		{"static, cors unset", "/assets/connect.js", off, []string{"Accept-Encoding"}},
+	} {
+		resp, _ := c.e.doHeaders(t, "GET", c.path, "", "", map[string]string{"Origin": "https://app.example.com", "Accept-Encoding": "gzip"})
+		if got := resp.Header.Values("Vary"); !slices.Equal(got, c.want) {
+			t.Fatalf("%s: Vary = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestCORSVaryOrigin(t *testing.T) {
+	t.Parallel()
+	listed := apiWithConfig(&config.Config{CORSOrigins: []string{"https://app.example.com"}})
+	wildcard := apiWithConfig(&config.Config{CORSOrigins: []string{"*"}})
+	unset := apiWithConfig(&config.Config{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	for _, c := range []struct {
+		name          string
+		a             *API
+		origin        string
+		vary, granted bool
+	}{
+		{"granted", listed, "https://app.example.com", true, true},
+		{"denied", listed, "https://evil.example.com", true, false},
+		{"no origin", listed, "", true, false},
+		{"wildcard no origin", wildcard, "", true, false},
+		{"unset", unset, "https://app.example.com", false, false},
+		{"unset no origin", unset, "", false, false},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/", nil)
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			c.a.cors(next).ServeHTTP(rec, req)
+			vary := rec.Header().Values("Vary")
+			if c.vary && (len(vary) != 1 || vary[0] != "Origin") || !c.vary && len(vary) != 0 {
+				t.Fatalf("%s %s: Vary = %q", c.name, method, vary)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin") != ""; got != c.granted {
+				t.Fatalf("%s %s: granted = %t", c.name, method, got)
+			}
+		}
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -197,13 +198,13 @@ func TestDiscoveryDeniedMatrix(t *testing.T) {
 		})
 	}
 	// The module off: 404 module_off, the flag false, nothing fetched.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body := b.doHeaders(t, "GET", search, b.userTok, "", h)
 	wantErr(t, resp, body, 404, "module_off")
 	if caps := serverCapabilities(t, b.testEnv); caps["podcast_discovery"] || !caps["podcast_opml"] {
 		t.Fatalf("module off caps %v", caps)
 	}
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":true}}`)
+	podcastsModule(t, b, true)
 	if caps := serverCapabilities(t, b.testEnv); !caps["podcast_discovery"] || !caps["podcast_opml"] {
 		t.Fatalf("module on caps %v", caps)
 	}
@@ -444,7 +445,7 @@ func TestOPMLImportRefusals(t *testing.T) {
 	}
 	// The module off.
 	b.api.opml = newOPMLTransfers()
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body = b.doHeaders(t, "POST", route, b.userTok, valid, h)
 	wantErr(t, resp, body, 404, "module_off")
 }
@@ -466,7 +467,7 @@ func TestOPMLExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The module off and no Bridge: the export still answers.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body = b.doHeaders(t, "GET", "/api/v1/podcasts/opml/export", b.userTok, "", h)
 	wantErr(t, resp, body, 200, "")
 	want := map[string]string{
@@ -575,5 +576,123 @@ func TestPodcastFollowPrivacyConflict(t *testing.T) {
 	wantErr(t, resp, body, 202, "")
 	if openSubscribes(t, b) != 1 {
 		t.Fatal("the adoption made another job")
+	}
+}
+
+// BRIDGE-01: five feeds whose requests failed no longer take every wave's
+// slots. Within the hour they come back as error rows (recently_failed, the
+// failed request's id) and nothing is queued for them, so the good feeds
+// behind them are queued; past the hour, or a single follow, retries.
+func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
+	t.Parallel()
+	b, _, _ := podcastEnv(t, false)
+	ctx := context.Background()
+	var doc strings.Builder
+	doc.WriteString(`<?xml version="1.0"?><opml version="2.0"><body>`)
+	for _, u := range []string{"dead-1", "dead-2", "dead-3", "dead-4", "dead-5", "good-1", "good-2", "good-3"} {
+		fmt.Fprintf(&doc, `<outline type="rss" xmlUrl="https://feeds.example.org/%s.xml"/>`, u)
+	}
+	doc.WriteString(`</body></opml>`)
+	type row struct {
+		Status    string `json:"status"`
+		RequestID *int64 `json:"request_id"`
+		Error     *struct{ Code, Message string }
+	}
+	upload := func() []row {
+		t.Helper()
+		resp, body := opmlPost(t, b, b.userTok, b.lib.ID, doc.String(), "text/x-opml", nil)
+		wantErr(t, resp, body, 200, "")
+		var res struct{ Rows []row }
+		decodeInto(t, body, &res)
+		return res.Rows
+	}
+	statuses := func(rows []row) string {
+		var s []string
+		for _, r := range rows {
+			s = append(s, r.Status)
+		}
+		return strings.Join(s, ",")
+	}
+	first := upload()
+	if got := statuses(first); got != "queued,queued,queued,queued,queued,limited,limited,limited" {
+		t.Fatalf("first wave %s", got)
+	}
+	// The Bridge fails all five.
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_jobs SET state='failed', error='not a feed', result='{"code":"not_a_feed","message":"not a feed"}', finished_at=? WHERE kind=? AND state='queued'`, time.Now().UTC().Format(time.RFC3339), bridge.KindPodcastSubscribe); err != nil {
+		t.Fatal(err)
+	}
+	second := upload()
+	if got := statuses(second); got != "error,error,error,error,error,queued,queued,queued" {
+		t.Fatalf("second wave %s", got)
+	}
+	for i, r := range second[:5] {
+		if r.Error == nil || r.Error.Code != "recently_failed" || r.Error.Message == "" || r.RequestID == nil || *r.RequestID != *first[i].RequestID {
+			t.Fatalf("row %d %+v", i, r)
+		}
+	}
+	if openSubscribes(t, b) != 3 {
+		t.Fatal("a recently failed feed was queued again")
+	}
+	// Another person's failure is theirs: alice's failures never mark bob's rows.
+	otherID, otherTok := newUserWithSession(t, b.testEnv, "bob", false)
+	if err := b.cat.GrantWholeLibrary(ctx, otherID, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := opmlPost(t, b, otherTok, b.lib.ID, `<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" xmlUrl="https://feeds.example.org/dead-1.xml"/></body></opml>`, "text/x-opml", nil)
+	wantErr(t, resp, body, 200, "")
+	if !strings.Contains(body, `"status":"queued"`) {
+		t.Fatalf("another person's failure leaked: %s", body)
+	}
+	// The single follow by address retries at once.
+	resp, body = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":"https://feeds.example.org/dead-1.xml"}`, b.lib.ID), podcastHeaders())
+	wantErr(t, resp, body, 202, "")
+	// Past the hour, an import queues a failed feed again.
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE state='failed'`, time.Now().Add(-2*time.Hour).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	third := upload()
+	if third[1].Status != "queued" {
+		t.Fatalf("an old failure still passed over: %+v", third[1])
+	}
+}
+
+// R-17: the export's two 413s say which limit they hit: too many rows, or a
+// document too large to send.
+func TestOPMLExportLimitMessages(t *testing.T) {
+	t.Parallel()
+	b, uid, _ := podcastEnv(t, false)
+	ctx := context.Background()
+	// seed adds shows from..to-1 ("Show 00042", id %016x), followed by uid,
+	// each feed URL padded by urlLen bytes: two statements, not a row each.
+	seed := func(from, to int, urlLen int) {
+		t.Helper()
+		const n = `WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i+1 FROM n WHERE i+1 < ?2) `
+		if _, err := b.db.ExecContext(ctx, n+`INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
+			SELECT ?3,printf('Show %05d',i),printf('%016x',i),printf('Show %05d',i),'','','','','episodic',0,0,'https://example.org/'||printf('%016x',i)||?4||'.xml','example.org','','','',0,NULL,'','t' FROM n`, from, to, b.lib.ID, strings.Repeat("a", urlLen)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.db.ExecContext(ctx, n+`INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) SELECT ?3,?4,printf('Show %05d',i),printf('%016x',i),'t' FROM n`, from, to, uid, b.lib.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	export := func() string {
+		t.Helper()
+		b.api.opml = newOPMLTransfers()
+		resp, body := b.doHeaders(t, "GET", "/api/v1/podcasts/opml/export", b.userTok, "", podcastHeaders())
+		wantErr(t, resp, body, 413, "opml_export_limit")
+		var e struct{ Error string }
+		decodeInto(t, body, &e)
+		return e.Error
+	}
+	seed(0, 2500, 1800) // about 4.6 MB of outlines
+	if got := export(); got != msgExportTooBig {
+		t.Fatalf("too big: %q", got)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_shows SET feed_url='https://example.org/'||show_id||'.xml' WHERE library_id=?`, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	seed(2500, catalog.MaxPodcastExportRows+1, 0)
+	if got := export(); got != msgExportTooMany {
+		t.Fatalf("too many: %q", got)
 	}
 }

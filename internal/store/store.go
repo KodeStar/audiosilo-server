@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -345,13 +347,16 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 		return err
 	}
 
+	applied, err := appliedMigrations(ctx, db.writer)
+	if err != nil {
+		return fmt.Errorf("read migrations: %w", err)
+	}
+	// unknown ends holding the recorded names this source does not ship.
+	unknown := nameSet(applied)
 	for _, name := range names {
-		var exists int
-		if err := db.writer.QueryRowContext(ctx,
-			`SELECT 1 FROM schema_migrations WHERE name = ?`, name).Scan(&exists); err == nil {
+		if unknown[name] {
+			delete(unknown, name)
 			continue // already applied
-		} else if err != sql.ErrNoRows {
-			return fmt.Errorf("check migration %s: %w", name, err)
 		}
 
 		body, err := fs.ReadFile(source, "migrations/"+name)
@@ -376,5 +381,39 @@ func (db *DB) migrateFrom(ctx context.Context, source fs.FS) error {
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
 	}
+	// A newer AudioSilo ran on this database (a rollback). This server still
+	// starts, but it does not know the newer tables and can lose what they hold
+	// (an older scanner indexes a podcast library as books, say).
+	if len(unknown) > 0 {
+		db.log.Warn("this database was used by a newer AudioSilo server: features it added may not work here and their data can be lost; run the newer version again, or restore a backup made before the upgrade",
+			"unknown_migrations", strings.Join(slices.Sorted(maps.Keys(unknown)), ","))
+	}
 	return nil
+}
+
+// appliedMigrations lists the migrations a database records as applied, in order.
+func appliedMigrations(ctx context.Context, conn *sql.DB) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT name FROM schema_migrations ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// nameSet is names as a set.
+func nameSet(names []string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = true
+	}
+	return out
 }

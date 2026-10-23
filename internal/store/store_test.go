@@ -4,8 +4,12 @@ package store
 // package to exercise it and the transactional migration runner directly.
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -140,5 +144,43 @@ func TestMigrationRunnerRollsBackOnBadBody(t *testing.T) {
 	).Scan(&name)
 	if err == nil {
 		t.Fatalf("rollback_probe table survived a failed migration; transactional rollback did not protect the schema")
+	}
+}
+
+// UPG-02 (b): a database a newer server migrated (a rollback) opens, with a
+// warning naming the migrations this server does not know; a normal reopen
+// warns about nothing.
+func TestOpenWarnsAboutNewerMigrations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+	open := func() string {
+		t.Helper()
+		var logs bytes.Buffer
+		db, err := Open(ctx, path, WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return logs.String()
+	}
+	open()
+	if logs := open(); strings.Contains(logs, "newer AudioSilo") {
+		t.Fatalf("a current database warned: %s", logs)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `INSERT INTO schema_migrations(name, applied_at) VALUES('9999_from_the_future.sql', 't')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if logs := open(); !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "newer AudioSilo") || !strings.Contains(logs, "9999_from_the_future.sql") {
+		t.Fatalf("no warning: %s", logs)
 	}
 }

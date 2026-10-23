@@ -67,6 +67,7 @@ var followErrors = map[string]RowError{
 	"privacy_conflict":     {"privacy_conflict", "An open follow request for this feed has the other privacy."},
 	"no_library_access":    {"no_library_access", "Following a URL needs access to the whole library."},
 	"subscribe_failed":     {"subscribe_failed", "Could not follow this feed."},
+	"recently_failed":      {"recently_failed", "Following this feed failed within the last hour. Follow it on its own to try again."},
 }
 
 // FollowError is a follow refusal's code and message ("" for an unexpected
@@ -88,6 +89,8 @@ func FollowError(err error) (RowError, string) {
 		code, status = "privacy_conflict", RowFailed
 	case errors.Is(err, ErrNoWholeGrant):
 		code, status = "no_library_access", RowFailed
+	case errors.Is(err, ErrRecentlyFailed):
+		code, status = "recently_failed", RowFailed
 	default:
 		return followErrors["subscribe_failed"], ""
 	}
@@ -100,7 +103,10 @@ func FollowError(err error) (RowError, string) {
 // row). Within the upload the first outline with a normalized URL wins, later
 // ones are duplicates of it (even when it failed). Each row commits on its own:
 // a later failure never undoes an earlier row, and re-uploading is the retry.
-// ctx ending stops the rows not yet acted on (they are not reported).
+// ctx ending stops the rows not yet acted on (they are not reported). A feed
+// whose last request by the caller failed within RecentFailureWindow is an
+// error row (recently_failed, request_id the failed request) and is not queued
+// again, so a few dead feeds can't take every wave's slots.
 func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64, doc *opml.Document) ImportResult {
 	out := ImportResult{LibraryID: lib, Rows: []ImportRow{}}
 	first := map[string]int{}
@@ -129,7 +135,7 @@ func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64,
 			continue
 		}
 		first[norm] = c.Index
-		res, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: lib, FeedURL: norm, AdoptOnly: created >= ImportNewRequests})
+		res, err := f.Follow(ctx, FollowURL{Caller: caller, LibraryID: lib, FeedURL: norm, AdoptOnly: created >= ImportNewRequests, SkipRecentFailure: true})
 		if err != nil {
 			if res != nil {
 				// A matched private show's privacy, on a refused row too.
@@ -143,6 +149,10 @@ func (f *Follower) Import(ctx context.Context, caller catalog.Caller, lib int64,
 				}
 			}
 			row.fail(status, e)
+			if errors.Is(err, ErrRecentlyFailed) {
+				id := res.Job.ID
+				row.RequestID = &id
+			}
 			out.Rows = append(out.Rows, row)
 			continue
 		}

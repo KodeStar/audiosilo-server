@@ -9,6 +9,7 @@ import (
 	"errors"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -272,6 +273,34 @@ func (c *Catalog) PrunePodcastShows(ctx context.Context, lib int64, gone []strin
 	})
 }
 
+// nonEpisodeBooks is a podcast library's books rows that are not episodes:
+// only an older server's books scan (a rollback) writes them, as
+// IndexPodcastShow writes an episode's books and podcast_episodes rows together.
+const nonEpisodeBooks = `FROM books b JOIN libraries l ON l.id=b.library_id WHERE b.library_id=? AND l.kind='podcasts' AND NOT EXISTS(SELECT 1 FROM podcast_episodes e WHERE e.book_id=b.id)`
+
+// PruneNonEpisodeBooks removes nonEpisodeBooks (a folder book at a show path,
+// say, which would answer for the show and for an episode gone from the
+// index). The rows are chosen inside the write, never from an older read: an
+// episode indexed meanwhile can take over such a row's id.
+func (c *Catalog) PruneNonEpisodeBooks(ctx context.Context, lib int64) error {
+	var found bool
+	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 `+nonEpisodeBooks+`)`, lib).Scan(&found); err != nil || !found {
+		return err
+	}
+	return c.db.WithTx(ctx, "PruneNonEpisodeBooks", func(tx *sql.Tx) error {
+		ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) }, `SELECT b.id `+nonEpisodeBooks, lib)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := deleteBook(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (c *Catalog) privatePodcastScope(ctx context.Context, user int64, s Scope) (Scope, error) {
 	scanPath := func(r *sql.Rows, p *string) error { return r.Scan(p) }
 	// The common case (no private show this caller doesn't follow) is one
@@ -492,15 +521,14 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		dir, op = "ASC", ">"
 	}
 	if cursor != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
-		var v [4]string
-		if err != nil || json.Unmarshal(raw, &v) != nil || v[0] != show || v[1] != order {
+		k, ok := decodeEpisodeCursor(cursor, show, order)
+		if !ok {
 			return nil, ErrInvalidCursor
 		}
-		q += ` AND (COALESCE(e.published,''),b.rel_path) ` + op + ` (?,?)`
-		args = append(args, v[2], v[3])
+		q += ` AND (` + episodeKeySQL + `) ` + op + ` (?,?,?,?)`
+		args = append(args, k.Published, k.Season, k.Episode, k.Path)
 	}
-	q += ` ORDER BY COALESCE(e.published,'') ` + dir + `,b.rel_path ` + dir + ` LIMIT ?`
+	q += ` ORDER BY ` + episodeOrderSQL(dir) + ` LIMIT ?`
 	args = append(args, limit+1)
 	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
 		return r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
@@ -512,15 +540,118 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	if len(eps) > limit {
 		out.Episodes = eps[:limit]
 		last := out.Episodes[limit-1]
-		published := ""
-		if last.Published != nil {
-			published = *last.Published
-		}
-		b, _ := json.Marshal([4]string{show, order, published, last.Path})
-		v := base64.RawURLEncoding.EncodeToString(b)
+		v := encodeEpisodeCursor(show, order, episodeKeyOf(last.Published, last.Season, last.Episode, last.Path))
 		out.NextCursor = &v
 	}
 	return out, nil
+}
+
+// PodcastEpisodeRows counts the show's indexed episodes (podcast_episodes
+// rows), whatever their files.
+func (c *Catalog) PodcastEpisodeRows(ctx context.Context, lib int64, show string) (int, error) {
+	var n int
+	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show).Scan(&n)
+	return n, err
+}
+
+// NextPodcastEpisode is the episode after the one at path in its show, in the
+// episode order oldest first (what plays next, whether the show lists newest
+// or oldest first), among the episodes in scope that can still play (in the
+// feed, or kept on disk). nil at the show's end, or when path is no episode.
+func (c *Catalog) NextPodcastEpisode(ctx context.Context, lib int64, path string, scope Scope) (*Book, error) {
+	var show string
+	var published *string
+	var season, episode *int
+	err := c.db.QueryRowContext(ctx, `SELECT e.show_path,e.published,e.season,e.episode FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE b.library_id=? AND b.rel_path=?`, lib, path).Scan(&show, &published, &season, &episode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	k := episodeKeyOf(published, season, episode, path)
+	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
+	b, err := scanBook(c.db.QueryRowContext(ctx, `SELECT `+prefixCols("b.")+` FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND (e.removed_at='' OR e.present=1) AND (`+episodeKeySQL+`) > (?,?,?,?) AND `+filter+` ORDER BY `+episodeOrderSQL("ASC")+` LIMIT 1`,
+		append([]any{lib, show, k.Published, k.Season, k.Episode, k.Path}, filterArgs...)...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// An episode's place in its show: when it was published (undated as empty),
+// then its season (none as noSeason) and episode number (none as noEpisode:
+// newest first, numbered before unnumbered), then its path, as the Bridge's
+// feed.json orders newest first (podcast.NewestFirst, but for the path's
+// direction). The numbers order an undated serial (a LibriVox reading, whose
+// episodes the Bridge names by a hash) as its feed numbers it, and same-day
+// episodes too. episodeKeyCols is that key over aliases (ep for
+// podcast_episodes' columns, bk for books'): episodeKeySQL over e and b for a
+// keyset comparison, episodeOrderSQL sorting by it in dir (ASC is oldest
+// first), episodeOrderOn the same over other aliases.
+const noSeason, noEpisode = 0, -1
+
+func episodeKeyCols(ep, bk string) []string {
+	return []string{
+		`COALESCE(` + ep + `published,'')`,
+		`COALESCE(` + ep + `season,` + strconv.Itoa(noSeason) + `)`,
+		`COALESCE(` + ep + `episode,` + strconv.Itoa(noEpisode) + `)`,
+		bk + `rel_path`,
+	}
+}
+
+var episodeKeySQL = strings.Join(episodeKeyCols("e.", "b."), ",")
+
+func episodeOrderSQL(dir string) string { return episodeOrderOn("e.", "b.", dir) }
+
+func episodeOrderOn(ep, bk, dir string) string {
+	return strings.Join(episodeKeyCols(ep, bk), ` `+dir+`,`) + ` ` + dir
+}
+
+// episodeKey is one episode's values of episodeKeySQL (its JSON is the
+// cursor's).
+type episodeKey struct {
+	Published string `json:"p"`
+	Season    int    `json:"n"`
+	Episode   int    `json:"e"`
+	Path      string `json:"r"`
+}
+
+func episodeKeyOf(published *string, season, episode *int, path string) episodeKey {
+	k := episodeKey{Season: noSeason, Episode: noEpisode, Path: path}
+	if published != nil {
+		k.Published = *published
+	}
+	if season != nil {
+		k.Season = *season
+	}
+	if episode != nil {
+		k.Episode = *episode
+	}
+	return k
+}
+
+// episodeCursor is an episode page's opaque cursor: the show, the order and
+// the page's last row's key. A cursor from before the key's season and
+// episode (a four-string array) does not decode, so it is refused.
+type episodeCursor struct {
+	Show  string `json:"s"`
+	Order string `json:"o"`
+	episodeKey
+}
+
+func encodeEpisodeCursor(show, order string, k episodeKey) string {
+	b, _ := json.Marshal(episodeCursor{show, order, k})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeEpisodeCursor(cursor, show, order string) (episodeKey, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	var v episodeCursor
+	if err != nil || json.Unmarshal(raw, &v) != nil || v.Show != show || v.Order != order {
+		return episodeKey{}, false
+	}
+	return v.episodeKey, true
 }
 
 // podcastTimelineSQL selects an episode's timeline_changed flag, NULL (omitted

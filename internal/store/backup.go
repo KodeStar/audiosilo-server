@@ -90,23 +90,15 @@ func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 	if err != nil {
 		return info, err
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT name FROM schema_migrations ORDER BY name`)
+	applied, err := appliedMigrations(ctx, conn)
 	if err != nil {
 		return info, fmt.Errorf("%w: no schema record", ErrNotADatabase)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return info, err
-		}
+	for _, name := range applied {
 		if !known[name] {
 			return info, fmt.Errorf("%w (%s)", ErrNewerDatabase, name)
 		}
 		info.Schema = name
-	}
-	if err := rows.Err(); err != nil {
-		return info, err
 	}
 	if info.Schema == "" {
 		return info, fmt.Errorf("%w: no schema record", ErrNotADatabase)
@@ -123,9 +115,5 @@ func knownMigrations() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(names))
-	for _, n := range names {
-		out[n] = true
-	}
-	return out, nil
+	return nameSet(names), nil
 }

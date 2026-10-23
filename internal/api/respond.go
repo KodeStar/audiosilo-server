@@ -90,6 +90,7 @@ const (
 	codeCurrentDevice      = "current_device"
 	codeInvalidRange       = "invalid_range"
 	codeNoAccess           = "no_access"
+	codeNotABook           = "not_a_book"      // POST /cast/token for a podcast episode (403)
 	codeInvalidSetting     = "invalid_setting" // + "field": the setting it names
 	codeInvalidSetupStep   = "invalid_setup_step"
 	codeSettingLocked      = "setting_locked"    // + "field": set by the environment or the launcher

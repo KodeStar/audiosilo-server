@@ -1294,6 +1294,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		// A field the update leaves out (nil) keeps its value.
 		var progress, result, errText any
 		if u.Progress != nil {
+			if from == StateNeedsAttention && state == StateNeedsAttention {
+				u.Progress = carryPark(u.Progress, cur.Progress)
+			}
 			progress = string(u.Progress)
 		}
 		if u.Result != nil {
@@ -1353,15 +1356,58 @@ func (j *Job) Notable(from, fromCode string) bool {
 	return false
 }
 
+// carryPark is a parked job's new progress with the stored park kept when it
+// names none: a Bridge resuming the job after a restart reports progress
+// before it hears its park again, and a park dropped and restored would read
+// as two new parks (two "job failed" events) and blank the console's reason.
+// A progress that names a park (or one that isn't an object) is kept as sent,
+// and a merge past the progress cap keeps the stored progress (park, reason).
+func carryPark(progress, stored json.RawMessage) json.RawMessage {
+	park := parkOf(stored)
+	if park == nil || parkOf(progress) != nil {
+		return progress
+	}
+	var next map[string]json.RawMessage
+	if json.Unmarshal(progress, &next) != nil || next == nil {
+		return progress
+	}
+	next["park"] = park
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(next) != nil {
+		return progress
+	}
+	if out := bytes.TrimSuffix(b.Bytes(), []byte("\n")); len(out) <= maxProgressBytes {
+		return out
+	}
+	return stored
+}
+
+// parkOf is the park a progress object names, nil when it names none: absent,
+// null, not an object, or a park whose code reads empty (parkCode, the reading
+// Notable and the console use, so a codeless park is never carried or news).
+func parkOf(progress json.RawMessage) json.RawMessage {
+	var p struct {
+		Park json.RawMessage `json:"park"`
+	}
+	if parkCode(progress) == "" || json.Unmarshal(progress, &p) != nil {
+		return nil
+	}
+	return p.Park
+}
+
 // ParkCode is the code of the park a job's progress names (progress.park.code,
 // sidecars.generate's, cleaned), "" when it names none or can't be read.
-func (j *Job) ParkCode() string {
+func (j *Job) ParkCode() string { return parkCode(j.Progress) }
+
+func parkCode(progress json.RawMessage) string {
 	var p struct {
 		Park *struct {
 			Code string `json:"code"`
 		} `json:"park"`
 	}
-	if json.Unmarshal(j.Progress, &p) != nil || p.Park == nil {
+	if json.Unmarshal(progress, &p) != nil || p.Park == nil {
 		return ""
 	}
 	return cleanText(p.Park.Code, maxShortText, false)

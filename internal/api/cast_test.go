@@ -418,3 +418,37 @@ func TestCastCapability(t *testing.T) {
 		t.Fatal("cast capability is off")
 	}
 }
+
+// R-2: an episode is refused with 403 and the code not_a_book; a book in the
+// same person's books library still mints, with no code.
+func TestCastTokenNotABook(t *testing.T) {
+	t.Parallel()
+	b, _, f := podcastEnv(t, false)
+	ctx := context.Background()
+	var books int64 // the fixture library podcastEnv's library joined
+	if err := b.db.QueryRowContext(ctx, `SELECT id FROM libraries WHERE kind='books'`).Scan(&books); err != nil {
+		t.Fatal(err)
+	}
+	uid, tok := newUserWithSession(t, b.testEnv, "caster", false)
+	for _, lib := range []int64{b.lib.ID, books} {
+		if err := b.cat.GrantWholeLibrary(ctx, uid, lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mint := func(lib int64, path string) (int, string) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"library_id": lib, "path": path})
+		resp, out := b.doHeaders(t, "POST", "/api/v1/cast/token", tok, string(body), podcastHeaders())
+		return resp.StatusCode, out
+	}
+	status, out := mint(b.lib.ID, f.Episodes[0].Path)
+	var refused struct{ Error, Code string }
+	decodeInto(t, out, &refused)
+	if status != http.StatusForbidden || refused.Code != "not_a_book" || refused.Error == "" {
+		t.Fatalf("episode %d %s", status, out)
+	}
+	status, out = mint(books, cradleBook)
+	if status != http.StatusCreated || strings.Contains(out, `"code"`) || !strings.Contains(out, `"token"`) {
+		t.Fatalf("book %d %s", status, out)
+	}
+}

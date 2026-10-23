@@ -330,6 +330,13 @@ func (a *API) opmlAdmit(w http.ResponseWriter, d quota.Decision) bool {
 	return false
 }
 
+// The export's two 413 opml_export_limit refusals: more subscriptions than
+// catalog.MaxPodcastExportRows, or a document past opml.MaxExportBytes.
+const (
+	msgExportTooMany = "Too many subscriptions to export (more than 10,000)."
+	msgExportTooBig  = "The subscription list is too large to export (over 4 MiB)."
+)
+
 // handleOPMLExport serves GET /podcasts/opml/export: the caller's followed,
 // visible, public subscriptions as an OPML attachment, with the omission
 // counts in headers. Private shows are never written.
@@ -343,7 +350,7 @@ func (a *API) handleOPMLExport(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.cat.PodcastExport(r.Context(), callerOf(r.Context()))
 	if errors.Is(err, catalog.ErrPodcastExportTooLarge) {
-		writeNoStoreError(w, http.StatusRequestEntityTooLarge, "opml_export_limit", "Too many subscriptions to export.", 0)
+		writeNoStoreError(w, http.StatusRequestEntityTooLarge, "opml_export_limit", msgExportTooMany, 0)
 		return
 	}
 	if err != nil {
@@ -353,7 +360,7 @@ func (a *API) handleOPMLExport(w http.ResponseWriter, r *http.Request) {
 	exp := podcast.BuildExport(rows)
 	out, err := opml.Render(exp.Entries)
 	if err != nil {
-		writeNoStoreError(w, http.StatusRequestEntityTooLarge, "opml_export_limit", "Too many subscriptions to export.", 0)
+		writeNoStoreError(w, http.StatusRequestEntityTooLarge, "opml_export_limit", msgExportTooBig, 0)
 		return
 	}
 	h := w.Header()
