@@ -654,8 +654,12 @@ export const api = {
 
   // Health and Jobs.
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
-  duplicates: (opts: { library_id?: number; ignored?: boolean } = {}) =>
-    request<{ groups: DuplicateGroup[] }>('GET', `/admin/issues/duplicates${bookQuery(opts)}`),
+  /** across: also copies in different libraries (?across=1, #165; an older server ignores it). */
+  duplicates: (opts: { library_id?: number; ignored?: boolean; across?: boolean } = {}) =>
+    request<{ groups: DuplicateGroup[] }>(
+      'GET',
+      `/admin/issues/duplicates${bookQuery({ ...opts, across: opts.across ? 1 : undefined })}`,
+    ),
   /** The series a library's books spell several ways (the open ones, or with `ignored` those with an ignored book). */
   seriesSpellings: (opts: { library_id?: number; ignored?: boolean } = {}) =>
     request<{ groups: SeriesSpellingGroup[] }>(

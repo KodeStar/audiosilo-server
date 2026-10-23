@@ -659,6 +659,52 @@ describe('library health', () => {
     );
   });
 
+  it("groups copies across libraries only when asked, naming each copy's library (#165)", async () => {
+    const across: DuplicateGroup = {
+      reason: 'same_files',
+      ignored: false,
+      books: [
+        { ...adminBook({ path: 'Dune', title: 'Dune', format: 'm4b' }), listeners: 1 },
+        {
+          ...adminBook({ path: 'Dune', title: 'Dune', format: 'm4b' }),
+          library_id: 2,
+          library_name: 'Kids',
+          listeners: 0,
+        },
+      ],
+    };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': (req) => ({
+          body: { groups: req.query.get('across') === '1' ? [across] : [] },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    const toggle = await screen.findByRole('switch', { name: 'Include other libraries' });
+    expect(toggle).not.toBeChecked();
+    expect(await screen.findByText('All clear')).toBeInTheDocument();
+    expect(
+      calls
+        .filter((c) => c.path === '/admin/issues/duplicates')
+        .at(-1)
+        ?.query.get('across'),
+    ).toBeNull();
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(
+      calls
+        .filter((c) => c.path === '/admin/issues/duplicates')
+        .at(-1)
+        ?.query.get('across'),
+    ).toBe('1');
+    const card = (await screen.findByRole('heading', { name: 'Dune' })).closest('section')!;
+    expect(within(card).getAllByText('Library')).toHaveLength(2);
+    expect(within(card).getByText('Kids')).toBeInTheDocument();
+    expect(within(card).getByText(across.books[0].library_name)).toBeInTheDocument();
+  });
+
   it('words each duplicate reason, and suggests no copy to keep when the lengths differ', async () => {
     const pair = (title: string, a: string, b: string, lengths = [36000, 36000]) => [
       { ...adminBook({ path: a, title, duration: lengths[0] }), listeners: 0 },

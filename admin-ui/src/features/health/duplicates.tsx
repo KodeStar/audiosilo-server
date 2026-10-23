@@ -1,13 +1,15 @@
+import { useId, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye } from 'lucide-react';
-import { useDuplicates, useLibraryRoots } from '@/api/hooks';
+import { useDuplicates, useLibraries, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { audioLine } from '@/features/book/book-model';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { formatBytes, formatDuration, formatNumber, formatRelative } from '@/lib/format';
@@ -25,10 +27,34 @@ import { useIssueActions, type IssueActions } from './use-issue-actions';
  * copy is called the one to keep there: the card says what to check instead.
  */
 export function Duplicates({ ignored }: { ignored: boolean }) {
-  const { t } = useTranslation();
-  const groups = useDuplicates(ignored);
+  // Copies in different libraries are usually on purpose: grouped only when asked (#165).
+  const [across, setAcross] = useState(false);
+  const groups = useDuplicates(ignored, across);
   const actions = useIssueActions('duplicate');
   const roots = useLibraryRoots();
+  const libraries = useLibraries();
+  // One tree whatever the state, so the switch keeps its focus while the list loads.
+  const several = (libraries.data?.filter((l) => l.kind !== 'podcasts').length ?? 0) > 1;
+  return (
+    <div className="flex flex-col gap-4">
+      {several ? <AcrossToggle on={across} onChange={setAcross} /> : null}
+      <DuplicateList ignored={ignored} groups={groups} actions={actions} roots={roots} />
+    </div>
+  );
+}
+
+function DuplicateList({
+  ignored,
+  groups,
+  actions,
+  roots,
+}: {
+  ignored: boolean;
+  groups: ReturnType<typeof useDuplicates>;
+  actions: IssueActions;
+  roots: Record<number, string>;
+}) {
+  const { t } = useTranslation();
   if (groups.isError) {
     return (
       <QueryError
@@ -45,18 +71,39 @@ export function Duplicates({ ignored }: { ignored: boolean }) {
   }
   const shown = groups.data; // the server lists the open, or only the ignored, groups
   if (shown.length === 0) return <AllClear ignored={ignored} />;
+  return shown.map((g, i) => (
+    <GroupCard
+      key={refKey(g.books[0])}
+      group={g}
+      index={i}
+      total={shown.length}
+      actions={actions}
+      roots={roots}
+    />
+  ));
+}
+
+/** "Include other libraries": also group copies in different libraries. */
+function AcrossToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  const { t } = useTranslation();
+  const id = useId();
   return (
-    <div className="flex flex-col gap-4">
-      {shown.map((g, i) => (
-        <GroupCard
-          key={refKey(g.books[0])}
-          group={g}
-          index={i}
-          total={shown.length}
-          actions={actions}
-          roots={roots}
-        />
-      ))}
+    <div className="flex items-start gap-3 rounded-xl border bg-card px-4 py-3">
+      <Switch
+        id={id}
+        checked={on}
+        onCheckedChange={onChange}
+        aria-describedby={`${id}-hint`}
+        className="mt-0.5"
+      />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <label htmlFor={id} className="font-medium">
+          {t('health.dup.across')}
+        </label>
+        <span id={`${id}-hint`} className="text-[12.5px] text-muted-foreground">
+          {t('health.dup.acrossHint')}
+        </span>
+      </div>
     </div>
   );
 }
@@ -77,6 +124,8 @@ function GroupCard({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const keep = g.books[0];
+  // Copies in more than one library (?across=1): each names its library.
+  const spans = new Set(g.books.map((b) => b.library_id)).size > 1;
   // Maybe different recordings: no copy is suggested over another.
   const unsure = g.reason === 'id_length_differs';
   return (
@@ -110,6 +159,7 @@ function GroupCard({
             book={b}
             keep={i === 0}
             unsure={unsure}
+            library={spans ? b.library_name : undefined}
             root={roots[b.library_id]}
             lang={lang}
           />
@@ -135,6 +185,7 @@ function CopyColumn({
   book: b,
   keep,
   unsure,
+  library,
   root,
   lang,
 }: {
@@ -142,12 +193,17 @@ function CopyColumn({
   keep: boolean;
   /** Maybe a different recording: neither "worth keeping" nor "another copy". */
   unsure: boolean;
+  /** The copy's library, named when the group's copies are in more than one. */
+  library: string | undefined;
   root: string | undefined;
   lang: string;
 }) {
   const { t } = useTranslation();
   const none = t('health.dup.none');
   const rows: [string, React.ReactNode, boolean?][] = [
+    ...(library !== undefined
+      ? ([[t('health.dup.library'), library]] as [string, React.ReactNode][])
+      : []),
     [t('health.dup.path'), joinLibraryPath(root, b.path), true],
     [t('health.dup.format'), audioLine(b, t)],
     [
