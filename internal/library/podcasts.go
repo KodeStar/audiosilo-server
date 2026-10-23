@@ -76,6 +76,11 @@ func (s *Scanner) scanPodcasts(ctx context.Context, lib catalog.Library, res *Sc
 			return res, err
 		}
 	}
+	// What an older server's books scan left behind (a rollback), whatever
+	// this scan could read.
+	if err := s.cat.PruneNonEpisodeBooks(ctx, lib.ID); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 

@@ -141,7 +141,7 @@ func (q *fakeQueue) Subscribe(_ context.Context, r bridge.SubscribeRequest) (*br
 
 func (q *fakeQueue) WakePodcasts() { q.mu.Lock(); q.wakes++; q.mu.Unlock() }
 
-func (q *fakeQueue) RecentSubscribeFailure(_ context.Context, _, _ int64, norm string, _ time.Time) (*bridge.Job, error) {
+func (q *fakeQueue) RecentSubscribeFailure(_ context.Context, _, _ int64, norm string, _ time.Duration) (*bridge.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.failed[norm], nil
@@ -490,6 +490,7 @@ func TestNormalizeStable(t *testing.T) {
 // next wave reports them as recently failed (their request ids, nothing
 // queued) and follows the good ones; a single follow still retries one.
 func TestImportSkipsRecentlyFailedFeeds(t *testing.T) {
+	t.Parallel()
 	f, _, q := fixtureFollower(t)
 	doc := &opml.Document{Version: "2.0"}
 	for i, u := range []string{"dead-1", "dead-2", "dead-3", "dead-4", "dead-5", "good-1", "good-2", "good-3"} {

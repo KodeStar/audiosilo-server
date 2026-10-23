@@ -58,6 +58,7 @@ func undatedSerial(t *testing.T) (*Catalog, *Library, []string, *feed.File) {
 }
 
 func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
+	t.Parallel()
 	c, lib, paths, _ := undatedSerial(t)
 	ctx := t.Context()
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
@@ -116,6 +117,7 @@ func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
 }
 
 func TestNextPodcastEpisode(t *testing.T) {
+	t.Parallel()
 	c, lib, paths, _ := undatedSerial(t)
 	ctx := t.Context()
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
@@ -141,6 +143,7 @@ func TestNextPodcastEpisode(t *testing.T) {
 // The keep window (Keep 3) of an undated serial, every episode on disk, is
 // its last three episodes by number: E8..E10 are inside, E7 and earlier out.
 func TestPodcastKeepWindowUndatedSerial(t *testing.T) {
+	t.Parallel()
 	c, lib, paths, f := undatedSerial(t)
 	ctx := t.Context()
 	present := map[string]PodcastFile{}

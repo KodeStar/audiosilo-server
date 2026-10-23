@@ -1360,7 +1360,8 @@ func (j *Job) Notable(from, fromCode string) bool {
 // names none: a Bridge resuming the job after a restart reports progress
 // before it hears its park again, and a park dropped and restored would read
 // as two new parks (two "job failed" events) and blank the console's reason.
-// A progress that names a park (or one that isn't an object) is kept as sent.
+// A progress that names a park (or one that isn't an object) is kept as sent,
+// and a merge past the progress cap keeps the stored progress (park, reason).
 func carryPark(progress, stored json.RawMessage) json.RawMessage {
 	park := parkOf(stored)
 	if park == nil || parkOf(progress) != nil {
@@ -1371,20 +1372,26 @@ func carryPark(progress, stored json.RawMessage) json.RawMessage {
 		return progress
 	}
 	next["park"] = park
-	out, err := json.Marshal(next)
-	if err != nil {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(next) != nil {
 		return progress
 	}
-	return out
+	if out := bytes.TrimSuffix(b.Bytes(), []byte("\n")); len(out) <= maxProgressBytes {
+		return out
+	}
+	return stored
 }
 
-// parkOf is the park a progress object names, nil when it names none (absent
-// or null) or isn't an object.
+// parkOf is the park a progress object names, nil when it names none: absent,
+// null, not an object, or a park whose code reads empty (parkCode, the reading
+// Notable and the console use, so a codeless park is never carried or news).
 func parkOf(progress json.RawMessage) json.RawMessage {
 	var p struct {
 		Park json.RawMessage `json:"park"`
 	}
-	if json.Unmarshal(progress, &p) != nil || string(p.Park) == "null" {
+	if parkCode(progress) == "" || json.Unmarshal(progress, &p) != nil {
 		return nil
 	}
 	return p.Park
@@ -1392,13 +1399,15 @@ func parkOf(progress json.RawMessage) json.RawMessage {
 
 // ParkCode is the code of the park a job's progress names (progress.park.code,
 // sidecars.generate's, cleaned), "" when it names none or can't be read.
-func (j *Job) ParkCode() string {
+func (j *Job) ParkCode() string { return parkCode(j.Progress) }
+
+func parkCode(progress json.RawMessage) string {
 	var p struct {
 		Park *struct {
 			Code string `json:"code"`
 		} `json:"park"`
 	}
-	if json.Unmarshal(j.Progress, &p) != nil || p.Park == nil {
+	if json.Unmarshal(progress, &p) != nil || p.Park == nil {
 		return ""
 	}
 	return cleanText(p.Park.Code, maxShortText, false)

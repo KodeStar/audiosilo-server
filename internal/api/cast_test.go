@@ -422,6 +422,7 @@ func TestCastCapability(t *testing.T) {
 // R-2: an episode is refused with 403 and the code not_a_book; a book in the
 // same person's books library still mints, with no code.
 func TestCastTokenNotABook(t *testing.T) {
+	t.Parallel()
 	b, _, f := podcastEnv(t, false)
 	ctx := context.Background()
 	var books int64 // the fixture library podcastEnv's library joined

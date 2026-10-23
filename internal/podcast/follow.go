@@ -23,7 +23,7 @@ type FollowCatalog interface {
 type FollowQueue interface {
 	Online(ctx context.Context) (*bridge.Heartbeat, error)
 	Subscribe(ctx context.Context, r bridge.SubscribeRequest) (*bridge.Job, bool, error)
-	RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, since time.Time) (*bridge.Job, error)
+	RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, within time.Duration) (*bridge.Job, error)
 	WakePodcasts()
 }
 
@@ -144,7 +144,7 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 		return out, ErrBridgeUnavailable
 	}
 	if r.SkipRecentFailure {
-		failed, err := f.Queue.RecentSubscribeFailure(ctx, r.LibraryID, r.Caller.ID, norm, time.Now().Add(-RecentFailureWindow))
+		failed, err := f.Queue.RecentSubscribeFailure(ctx, r.LibraryID, r.Caller.ID, norm, RecentFailureWindow)
 		if err != nil {
 			return out, err
 		}

@@ -584,6 +584,7 @@ func TestPodcastFollowPrivacyConflict(t *testing.T) {
 // failed request's id) and nothing is queued for them, so the good feeds
 // behind them are queued; past the hour, or a single follow, retries.
 func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
+	t.Parallel()
 	b, _, _ := podcastEnv(t, false)
 	ctx := context.Background()
 	var doc strings.Builder
@@ -632,7 +633,7 @@ func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
 	if openSubscribes(t, b) != 3 {
 		t.Fatal("a recently failed feed was queued again")
 	}
-	// Another person's failure is theirs: it never marks alice's rows.
+	// Another person's failure is theirs: alice's failures never mark bob's rows.
 	otherID, otherTok := newUserWithSession(t, b.testEnv, "bob", false)
 	if err := b.cat.GrantWholeLibrary(ctx, otherID, b.lib.ID); err != nil {
 		t.Fatal(err)
@@ -658,20 +659,20 @@ func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
 // R-17: the export's two 413s say which limit they hit: too many rows, or a
 // document too large to send.
 func TestOPMLExportLimitMessages(t *testing.T) {
+	t.Parallel()
 	b, uid, _ := podcastEnv(t, false)
 	ctx := context.Background()
+	// seed adds shows from..to-1 ("Show 00042", id %016x), followed by uid,
+	// each feed URL padded by urlLen bytes: two statements, not a row each.
 	seed := func(from, to int, urlLen int) {
 		t.Helper()
-		pad := strings.Repeat("a", urlLen)
-		for i := from; i < to; i++ {
-			p, sid := fmt.Sprintf("Show %05d", i), fmt.Sprintf("%016x", i)
-			if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
-				VALUES(?,?,?,?,'','','','','episodic',0,0,?,'example.org','','','',0,NULL,'','t')`, b.lib.ID, p, sid, p, "https://example.org/"+sid+pad+".xml"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,?,?,'t')`, uid, b.lib.ID, p, sid); err != nil {
-				t.Fatal(err)
-			}
+		const n = `WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i+1 FROM n WHERE i+1 < ?2) `
+		if _, err := b.db.ExecContext(ctx, n+`INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
+			SELECT ?3,printf('Show %05d',i),printf('%016x',i),printf('Show %05d',i),'','','','','episodic',0,0,'https://example.org/'||printf('%016x',i)||?4||'.xml','example.org','','','',0,NULL,'','t' FROM n`, from, to, b.lib.ID, strings.Repeat("a", urlLen)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.db.ExecContext(ctx, n+`INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) SELECT ?3,?4,printf('Show %05d',i),printf('%016x',i),'t' FROM n`, from, to, uid, b.lib.ID); err != nil {
+			t.Fatal(err)
 		}
 	}
 	export := func() string {

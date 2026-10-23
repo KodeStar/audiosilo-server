@@ -169,9 +169,11 @@ func TestPodcastScannerRejectsInvalidAndLinkedFeeds(t *testing.T) {
 }
 
 // UPG-02: an older server run on this database scans the podcast library as
-// books and removes the episode rows, leaving the show and its feed signature.
-// The next scan re-indexes the show though feed.json is unchanged.
+// books: it removes the episode rows, leaving the show and its feed signature,
+// and indexes the show folder as a book. The next scan re-indexes the show
+// though feed.json is unchanged, and removes that folder book.
 func TestPodcastScanRestoresEpisodesLostToARollback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -198,6 +200,9 @@ func TestPodcastScanRestoresEpisodesLostToARollback(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM books WHERE library_id=?`, lib.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: "Example Show", IsFolder: true, Title: "Example Show", Files: []catalog.BookFile{{RelPath: "Example Show/stray.mp3", Format: "mp3"}}}); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 0 {
 		t.Fatalf("after the rollback: %d %v", n, err)
 	}
@@ -206,6 +211,13 @@ func TestPodcastScanRestoresEpisodesLostToARollback(t *testing.T) {
 	}
 	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 3 {
 		t.Fatalf("after the next scan: %d %v", n, err)
+	}
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "Example Show"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("the older server's folder book is still indexed: %v", err)
+	}
+	var fts int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books_fts WHERE rowid NOT IN (SELECT book_id FROM podcast_episodes)`).Scan(&fts); err != nil || fts != 0 {
+		t.Fatalf("its search row is left: %d %v", fts, err)
 	}
 	listing, err := s.BrowsePodcasts(ctx, *lib, catalog.Scope{LibraryID: lib.ID, AllowAll: true}, 0, "Example Show", 0, 200)
 	if err != nil || listing.Total != 3 {

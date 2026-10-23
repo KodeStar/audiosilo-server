@@ -256,24 +256,29 @@ func TestSubscribeAdoptOnly(t *testing.T) {
 }
 
 // RecentSubscribeFailure is the person's LAST request for the feed in the
-// library, only while it failed within the window and never an expired
-// private request (a server restart, not the feed's failure).
+// library, only while it failed within the window and only when the failure
+// was the feed's (never an expired private request, a lost lease or an
+// unwritable library).
 func TestRecentSubscribeFailure(t *testing.T) {
+	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()
 	feedURL := "https://example.com/dead.xml"
-	since := func() time.Time { return q.now.Add(-time.Hour) }
-	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); err != nil || j != nil {
-		t.Fatalf("no request = %+v %v", j, err)
+	none := func(what, feedURL string, lib int64) {
+		t.Helper()
+		if got, err := q.RecentSubscribeFailure(ctx, lib, q.admin, feedURL, time.Hour); err != nil || got != nil {
+			t.Fatalf("%s = %+v %v", what, got, err)
+		}
 	}
-	fail := func(id int64) {
+	none("no request", feedURL, q.lib)
+	fail := func(id int64, code string) {
 		t.Helper()
 		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
 		if err != nil || claimed == nil || claimed.ID != id {
 			t.Fatalf("claim %+v %v", claimed, err)
 		}
-		state, msg := StateFailed, "not a feed"
-		if _, err := q.UpdateHeld(ctx, id, Update{Attempt: claimed.Attempts, State: &state, Error: &msg, Result: json.RawMessage(`{"code":"not_a_feed","message":"not a feed"}`)}); err != nil {
+		state, msg := StateFailed, "failed"
+		if _, err := q.UpdateHeld(ctx, id, Update{Attempt: claimed.Attempts, State: &state, Error: &msg, Result: json.RawMessage(`{"code":"` + code + `","message":"failed"}`)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,32 +286,47 @@ func TestRecentSubscribeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); err != nil || got != nil {
-		t.Fatalf("open request = %+v %v", got, err)
-	}
-	fail(j.ID)
-	got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since())
+	none("open request", feedURL, q.lib)
+	fail(j.ID, "not_a_feed")
+	got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, time.Hour)
 	if err != nil || got == nil || got.ID != j.ID {
 		t.Fatalf("failed request = %+v %v", got, err)
 	}
-	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/other.xml", since()); got != nil {
-		t.Fatal("another feed's failure")
-	}
-	if got, _ := q.RecentSubscribeFailure(ctx, q.lib+1, q.admin, feedURL, since()); got != nil {
-		t.Fatal("another library's failure")
-	}
+	none("another feed's failure", "https://example.com/other.xml", q.lib)
+	none("another library's failure", feedURL, q.lib+1)
 	q.advance(time.Hour + time.Second)
-	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); got != nil {
-		t.Fatal("a failure past the window")
-	}
+	none("a failure past the window", feedURL, q.lib)
 	// A retry that is open again hides the older failure.
 	again, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
 	if err != nil || again.ID == j.ID {
 		t.Fatalf("retry %+v %v", again, err)
 	}
-	fail(again.ID)
-	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); got == nil || got.ID != again.ID {
-		t.Fatalf("latest failure = %+v", got)
+	fail(again.ID, "not_a_feed")
+	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, time.Hour); err != nil || got == nil || got.ID != again.ID {
+		t.Fatalf("latest failure = %+v %v", got, err)
+	}
+	// A failure on the Bridge's or the library's side is not the feed's.
+	unwritable := "https://example.com/unwritable.xml"
+	u, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, unwritable, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail(u.ID, "library_not_writable")
+	none("an unwritable library", unwritable, q.lib)
+	lost := "https://example.com/lost.xml"
+	l, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, lost, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range MaxAttempts {
+		if claimed, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil || claimed == nil || claimed.ID != l.ID {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		q.advance(Lease + time.Second)
+	}
+	none("a Bridge that stopped reporting", lost, q.lib)
+	if got, err := q.Job(ctx, l.ID); err != nil || got.State != StateFailed {
+		t.Fatalf("lost job %+v %v", got, err)
 	}
 	// An expired private request is not the feed's failure.
 	secret := "https://example.com/private?auth=SECRET123"
@@ -320,14 +340,13 @@ func TestRecentSubscribeFailure(t *testing.T) {
 	if got, err := q.Job(ctx, p.ID); err != nil || got.State != StateFailed {
 		t.Fatalf("expired %+v %v", got, err)
 	}
-	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, secret, since()); err != nil || got != nil {
-		t.Fatalf("expired private request = %+v %v", got, err)
-	}
+	none("expired private request", secret, q.lib)
 }
 
 // R-13: deleting a library cascades its jobs away; PruneSecrets then drops the
 // private URLs held for them and keeps every other library's.
 func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
+	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()
 	res, err := q.db.ExecContext(ctx, `INSERT INTO libraries(name, root, kind, created_at) VALUES('Other', '/other', 'podcasts', 't')`)
@@ -353,7 +372,11 @@ func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
 	if _, err := q.db.ExecContext(ctx, `DELETE FROM libraries WHERE id=?`, q.lib); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.PruneSecrets(ctx); err != nil {
+	// The delete has committed: a request that ended meanwhile (its client
+	// went, its deadline passed) still prunes.
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := q.PruneSecrets(ended); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := q.privateURLs[gone.ID]; ok {
@@ -361,5 +384,14 @@ func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
 	}
 	if q.privateURLs[kept.ID] == "" {
 		t.Fatal("another library's private URL was dropped")
+	}
+	// A URL held for a request that already ended (Subscribe adopting it as it
+	// ended) is dropped too.
+	if _, err := q.Cancel(ctx, kept.ID); err != nil {
+		t.Fatal(err)
+	}
+	q.privateURLs[kept.ID] = "https://example.com/b?auth=SECRET_KEPT"
+	if err := q.PruneSecrets(ctx); err != nil || len(q.privateURLs) != 0 {
+		t.Fatalf("an ended request's URL: %d %v", len(q.privateURLs), err)
 	}
 }

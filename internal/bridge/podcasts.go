@@ -238,57 +238,67 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	return j, created, err
 }
 
+// notFeedFailures are the subscribe failure codes that say nothing about the
+// feed: the Bridge or the library failed (bridge_lost: the lease ran out on
+// every attempt) or a private request lost its URL. Every other code (the
+// feed's answer, its address, the network) is the feed's failure.
+var notFeedFailures = []string{"request_expired", "bridge_lost", "library_not_writable", "not_podcast_library", "write_failed", "feed_secret_missing", "identity_changed"}
+
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
-// it failed at or after since, else nil: an OPML import passes such a feed
-// over instead of queueing it again. A private request that expired with a
-// server restart (request_expired) is not the feed's failure and never counts.
-func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, since time.Time) (*Job, error) {
+// it failed within the last `within` (the Service's clock), else nil: an OPML
+// import passes such a feed over instead of queueing it again. A failure that
+// isn't the feed's (notFeedFailures) never counts.
+func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, within time.Duration) (*Job, error) {
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
 	key := DedupeKey(KindPodcastSubscribe, &lib, nil) + subscribeIdentity(feed.FeedURLHash(norm), user)
-	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND j.dedupe_key=? ORDER BY j.id DESC LIMIT 1`, user, key))
+	// The newest request for the feed that ended inside the window (the window
+	// bounds the read, the person's whole history doesn't)...
+	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.finished_at>=? AND j.dedupe_key=? ORDER BY j.id DESC LIMIT 1`, at(s.now().Add(-within)), key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if j.State != StateFailed || j.FinishedAt == nil || *j.FinishedAt < at(since) {
+	if j.State != StateFailed {
 		return nil, nil
 	}
-	if o, _ := PodcastOutcomeOf(*j); o.Code == "request_expired" {
+	if o, _ := PodcastOutcomeOf(*j); slices.Contains(notFeedFailures, o.Code) {
 		return nil, nil
+	}
+	// ...counts only while it is still the last request for it.
+	var newer bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE kind='`+KindPodcastSubscribe+`' AND requested_by=? AND id>? AND dedupe_key=?)`, user, j.ID, key).Scan(&newer); err != nil || newer {
+		return nil, err
 	}
 	r := RedactedJob(*j)
 	return &r, nil
 }
 
-// PruneSecrets drops the private feed URLs held for jobs that no longer exist
-// (a deleted library's jobs go with it, cascaded), so a credential never
-// outlives its request in memory. The same lock as Subscribe's, so a request
-// being queued is never mistaken for a deleted one.
+// PruneSecrets keeps a private feed URL only while its podcast.subscribe is
+// open, so a credential never outlives its request in memory: a deleted
+// library's jobs go with it (cascaded), and a request that ended while
+// Subscribe was adopting it lets go too. Once called it runs to the end (the
+// delete it follows has committed). The same lock as Subscribe's, so a request
+// being queued is never mistaken for a gone one.
 func (s *Service) PruneSecrets(ctx context.Context) error {
+	ctx = context.WithoutCancel(ctx)
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
 	s.secretMu.Lock()
-	held := slices.Collect(maps.Keys(s.privateURLs))
+	held := len(s.privateURLs)
 	s.secretMu.Unlock()
-	if len(held) == 0 {
+	if held == 0 {
 		return nil
 	}
-	list, err := json.Marshal(held)
-	if err != nil {
-		return err
-	}
-	gone, err := queryIDs(ctx, s.db, `SELECT value FROM json_each(?) WHERE value NOT IN (SELECT id FROM bridge_jobs)`, string(list))
+	open, err := queryIDs(ctx, s.db, `SELECT id FROM bridge_jobs WHERE kind=? AND state IN `+OpenStatesSQL, KindPodcastSubscribe)
 	if err != nil {
 		return err
 	}
 	s.secretMu.Lock()
-	for _, id := range gone {
-		delete(s.privateURLs, id)
-	}
+	maps.DeleteFunc(s.privateURLs, func(id int64, _ string) bool { return !slices.Contains(open, id) })
 	s.secretMu.Unlock()
 	return nil
 }

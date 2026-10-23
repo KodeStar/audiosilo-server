@@ -540,6 +540,20 @@ func TestUpdateHeldKeepsTheParkAcrossAResume(t *testing.T) {
 	if j := update(StateNeedsAttention, `{"step":"asr","park":null}`); j.ParkCode() != "budget_exceeded" {
 		t.Fatalf("null park dropped it: %s", j.Progress)
 	}
+	// A park with no code reads as none everywhere, so it names none here too.
+	for _, codeless := range []string{`{"step":"asr","park":{}}`, `{"step":"asr","park":{"code":""}}`} {
+		if j := update(StateNeedsAttention, codeless); j.ParkCode() != "budget_exceeded" {
+			t.Fatalf("%s dropped the park: %s", codeless, j.Progress)
+		}
+	}
+	// The kept park neither escapes the report's text nor breaks the cap.
+	if j := update(StateNeedsAttention, `{"step":"asr <1/3> & more"}`); !strings.Contains(string(j.Progress), `"asr <1/3> & more"`) {
+		t.Fatalf("escaped: %s", j.Progress)
+	}
+	full := `{"step":"` + strings.Repeat("x", maxProgressBytes-len(`{"step":""}`)) + `"}`
+	if j := update(StateNeedsAttention, full); j.ParkCode() != "budget_exceeded" || len(j.Progress) > maxProgressBytes {
+		t.Fatalf("near the cap: %d bytes, park %q", len(j.Progress), j.ParkCode())
+	}
 	update(StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`)
 	// A different park is news; running again drops the park.
 	update(StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_credential_refused"}}`)

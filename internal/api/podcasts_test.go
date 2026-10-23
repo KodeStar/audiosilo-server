@@ -56,10 +56,7 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		t.Fatal(err)
 	}
 	b.beat(t, bridge.KindPodcastSubscribe, bridge.KindPodcastPoll)
-	response, body := b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":true}}`)
-	if response.StatusCode != 200 {
-		t.Fatalf("enable %d %s", response.StatusCode, body)
-	}
+	podcastsModule(t, b, true)
 	return b, uid, f
 }
 
@@ -638,6 +635,7 @@ func TestPodcastQueueAddUnknownAndHiddenLibrary(t *testing.T) {
 // order (oldest first, whatever the file names), never a series, community
 // work or file-name sibling; the show's last episode has none.
 func TestNextForEpisodes(t *testing.T) {
+	t.Parallel()
 	b, _, f := podcastEnv(t, false)
 	next := func(path string) (string, string) {
 		t.Helper()

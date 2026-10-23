@@ -32,6 +32,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
   migration to arrive later. Phase F1 owns 0053 and podcast downloads own 0054; neither depends on the other.
+  `Open` still starts on a database recording migrations this server doesn't ship (a newer server ran on
+  it: a rollback) and warns once, naming them; a restore refuses one (`Inspect`, `ErrNewerDatabase`).
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear.
@@ -469,7 +471,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the folder, the current book included, is indexed), else `{source:"none"}`. A
   failure to place the caller's books leaves the next entry unplaced (as `/meta`
   degrades). `book` is the list shape; everything `next` names is in the caller's
-  scope.
+  scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
+  show's next episode oldest first in the episode order (`catalog.NextPodcastEpisode`: in scope, in
+  the feed or kept on disk, never by file name), else `none`.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -1347,7 +1351,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never hands over its session token: `POST /cast/token` `{"library_id", "path"}` (strict) mints a
   cast token -> `201 {"token", "expires_at"}` (fixed-width ms UTC). The path resolves through
   `scopedPath` + `bookAt` exactly like the media routes (400 empty path, 403 outside scope, 404 no
-  book; a part path resolves to its book, whose own `rel_path` is stored, so the token covers every
+  book; any path in a podcast library is 403 `not_a_book`, as episodes are never cast; a part path
+  resolves to its book, whose own `rel_path` is stored, so the token covers every
   file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
   containment: a key never mints another credential, even a cast token, which would die with it). A cast token is a
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
@@ -1483,7 +1488,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
   `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
   land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
-  report renews it. `dedupe_key`
+  report renews it. A report that keeps a parked job parked and names no park (absent, null, or with
+  no code, as `ParkCode` reads it) keeps the stored one (`carryPark`; the stored progress whole when the
+  merge would pass the progress cap), so a Bridge resuming after a restart neither blanks the reason
+  nor raises a second park event. `dedupe_key`
   (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
   job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
   &kind=` (`bridge.Service.ClaimFor`) long-polls (at most 25 s, woken by an enqueue; it ends with the
@@ -1669,10 +1677,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   deduplication or book metadata heuristics run, and a metadata source change leaves episodes as feed.json
   wrote them. Presence requires a valid committed Fetch generation, matching regular file size, no
   tombstone and no publication journal. Show and attachment listings extend the feed signature, so
-  audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh. A scan prunes only shows indexed before it
+  audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh, as
+  does a show with fewer episode rows than its `episode_count` (`PodcastEpisodeRows`: an older server
+  scanned the library as books), and every scan removes the library's books rows that are no episode
+  (`PruneNonEpisodeBooks`, that older scan's folder books). A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing
   episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
-  chapters. `/fs` lists indexed titles (serial shows oldest first). Artwork belongs to the show.
+  chapters. `/fs` lists indexed titles (serial shows oldest first). Episodes order by published, season,
+  episode number, path (`episodeKeyCols`: undated as '', no season 0, no number -1, so an undated
+  serial follows its numbers) for episode pages and their cursor (an older four-value cursor is 400),
+  `/fs`, `/next`, the Keep window and the fetch candidates (these put undated episodes last).
+  Artwork belongs to the show.
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
@@ -1701,7 +1716,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `podcast`; reads do not. Five open subscribes per user, deduped by URL hash and user. Private
   URLs live only in the Bridge service's volatile memory and its claim reply; stored params keep
   an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
-  display labels are redacted, and a restart expires unclaimed requests. Podcast
+  display labels are redacted, a restart expires unclaimed requests, and deleting a library keeps only
+  the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
   errors, progress and results are redacted before storage and never notify. The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
   up to ten due followed shows; a job or show that fails is logged and passed over, and a stored
@@ -1814,13 +1830,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `opml_limit`), and the whole document valid (else 400 `invalid_opml`) before any row acts. Rows follow
   in preorder as the caller, at most `ImportNewRequests` (5) new subscribes per upload besides the
   five-open cap (the rest `limited`, the next upload is the retry wave), the module and grant rechecked
-  per row. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
+  per row. A feed whose last subscribe by the caller here failed within `RecentFailureWindow` (1 h, the
+  Bridge service's clock) is an `error` row `recently_failed` (`request_id` the failed request), neither
+  queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
+  isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
+  Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
   `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
   dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an
   allowed origin `cors` exposes those and Retry-After (`corsExposeHeaders`) and grants `Range`
-  (`corsAllowHeaders`), so a cross-origin web player reads them; a denied origin gets nothing. Shared
+  (`corsAllowHeaders`), so a cross-origin web player reads them; a denied origin gets no grant. Once
+  `cors_origins` is set every answer carries `Vary: Origin` (`liveConfig.corsOn`); `timeout` seeds it
+  into TimeoutHandler's own header map, so a handler's Vary (spa's Accept-Encoding) adds to it. Shared
   fixtures: the byte-identical `internal/podcast/testdata/phase2c3/` copy.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
