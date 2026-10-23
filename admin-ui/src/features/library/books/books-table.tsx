@@ -21,6 +21,7 @@ import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { spanIn } from '../series/series-model';
 import { LoadingMore, type BookViewProps } from './book-grid';
+import { shiftHeld } from './use-selection';
 import { useIsPhone, useWindowRows } from './use-layout';
 
 const features = tableFeatures({});
@@ -132,7 +133,7 @@ type Columns = ReturnType<typeof bookColumns>;
  * The table view: TanStack Table for the columns, rows virtualized against the
  * window scroll (spacer rows above and below keep it a real <table>). The header
  * checkbox selects the loaded rows. A row opens its book, or toggles it while a
- * selection is active.
+ * selection is active (Shift-click: every row from the last one clicked).
  */
 export function BooksTable({
   books,
@@ -171,7 +172,7 @@ export function BooksTable({
   const padBottom = items.length ? virtualizer.getTotalSize() - (items.at(-1)!.end - margin) : 0;
   const colCount = columns.length;
 
-  const selecting = selection.size > 0;
+  const selecting = selection.selecting;
   const allOn = books.length > 0 && books.every(selection.isSelected);
   const someOn = !allOn && books.some(selection.isSelected);
   const open = useCallback(
@@ -267,7 +268,7 @@ const BookRow = memo(function BookRow({
   height: number;
   selected: boolean;
   selecting: boolean;
-  onToggle: (b: AdminBook) => void;
+  onToggle: (b: AdminBook, shift?: boolean) => void;
   onOpen: (b: AdminBook) => void;
   series?: string;
 }) {
@@ -276,7 +277,7 @@ const BookRow = memo(function BookRow({
   return (
     <tr
       data-selected={selected || undefined}
-      onClick={() => (selecting ? onToggle(b) : onOpen(b))}
+      onClick={(e) => (selecting ? onToggle(b, e.shiftKey) : onOpen(b))}
       className="cursor-pointer border-b transition-colors duration-(--dur-1) last:border-b-0 hover:bg-muted/70 data-selected:bg-[color-mix(in_oklab,var(--brand)_7%,transparent)] max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-3 max-md:px-3.5"
       style={{ height }}
     >
@@ -291,7 +292,7 @@ const BookRow = memo(function BookRow({
             {id === 'select' ? (
               <Checkbox
                 checked={selected}
-                onCheckedChange={() => onToggle(b)}
+                onCheckedChange={(_, d) => onToggle(b, shiftHeld(d.event))}
                 aria-label={t('books.tile.select', { title: b.title })}
               />
             ) : id === 'title' ? (

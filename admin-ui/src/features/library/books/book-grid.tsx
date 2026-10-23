@@ -54,7 +54,7 @@ export function BookGrid({
     onLoadMore,
   });
 
-  const selecting = selection.size > 0;
+  const selecting = selection.selecting;
   return (
     <>
       <div

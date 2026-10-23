@@ -49,7 +49,7 @@ export function Shelves({
         book={b}
         metadataOn={metadataOn}
         selected={selection.isSelected(b)}
-        selecting={selection.size > 0}
+        selecting={selection.selecting}
         onToggle={selection.toggle}
         note={note}
       />

@@ -10,6 +10,7 @@ import { bookRoute } from '@/lib/book-route';
 import { seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { tileFlags, type TileFlag } from './books/books-model';
+import { shiftHeld } from './books/use-selection';
 import { spanIn } from './series/series-model';
 
 const FLAG_ICONS: Record<TileFlag, LucideIcon> = {
@@ -25,7 +26,7 @@ const FLAG_ICONS: Record<TileFlag, LucideIcon> = {
  * to two flags sit top-right; with `onToggle` a checkbox shows top-left on
  * hover and focus (always, while an ancestor has .selecting). The tile opens
  * the book page, or, while a selection is active (`selecting`), toggles the
- * book in it. `note` replaces the subtitle (and the flags) with one issue in
+ * book in it (Shift extends the selection from the last book clicked). `note` replaces the subtitle (and the flags) with one issue in
  * the warning colour. Memoized: a grid re-renders only the tiles whose props
  * changed (pass a stable `onToggle`).
  */
@@ -45,7 +46,8 @@ export const BookTile = memo(function BookTile({
   metadataOn?: boolean;
   selected?: boolean;
   selecting?: boolean;
-  onToggle?: (book: AdminBook) => void;
+  /** shift: Shift was held (the selection extends from the last book clicked). */
+  onToggle?: (book: AdminBook, shift?: boolean) => void;
   note?: string;
   className?: string;
 }) {
@@ -59,7 +61,7 @@ export const BookTile = memo(function BookTile({
   const toggleInstead = (e: React.MouseEvent) => {
     if (!selecting || !onToggle) return;
     e.preventDefault();
-    onToggle(book);
+    onToggle(book, e.shiftKey);
   };
 
   const flagLabel = (f: TileFlag) =>
@@ -73,7 +75,7 @@ export const BookTile = memo(function BookTile({
         <span className="tile-check">
           <Checkbox
             checked={selected}
-            onCheckedChange={() => onToggle(book)}
+            onCheckedChange={(_, d) => onToggle(book, shiftHeld(d.event))}
             aria-label={t('books.tile.select', { title: book.title })}
           />
         </span>
