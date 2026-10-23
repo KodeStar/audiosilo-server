@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 // S1E1..S1E5 then S2E1..S2E5 in the feed, stored under the Bridge's hash names
 // (which sort in no useful order) and listed in feed.json shuffled. It returns
 // each episode's path in feed order.
-func undatedSerial(t *testing.T) (*Catalog, *Library, []string) {
+func undatedSerial(t *testing.T) (*Catalog, *Library, []string, *feed.File) {
 	t.Helper()
 	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Podcasts", Root: t.TempDir(), Kind: KindPodcasts})
@@ -52,11 +53,11 @@ func undatedSerial(t *testing.T) (*Catalog, *Library, []string) {
 	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "s", "", "", f, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	return c, lib, paths
+	return c, lib, paths, f
 }
 
 func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
-	c, lib, paths := undatedSerial(t)
+	c, lib, paths, _ := undatedSerial(t)
 	ctx := t.Context()
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	list := func(order string) []string {
@@ -115,7 +116,7 @@ func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
 }
 
 func TestNextPodcastEpisode(t *testing.T) {
-	c, lib, paths := undatedSerial(t)
+	c, lib, paths, _ := undatedSerial(t)
 	ctx := t.Context()
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	for i, p := range paths[:9] {
@@ -134,5 +135,33 @@ func TestNextPodcastEpisode(t *testing.T) {
 	}
 	if next, err := c.NextPodcastEpisode(ctx, lib.ID, "Fixture Show/none.mp3", all); err != nil || next != nil {
 		t.Fatalf("no episode: %+v %v", next, err)
+	}
+}
+
+// The keep window (Keep 3) of an undated serial, every episode on disk, is
+// its last three episodes by number: E8..E10 are inside, E7 and earlier out.
+func TestPodcastKeepWindowUndatedSerial(t *testing.T) {
+	c, lib, paths, f := undatedSerial(t)
+	ctx := t.Context()
+	present := map[string]PodcastFile{}
+	for i := range f.Episodes {
+		fetch := feed.Fetch{Generation: 1, SHA256: strings.Repeat("ab", 32), Bytes: 4, DurationMS: 1000, ContentType: "audio/mpeg", FetchedAt: "2026-10-21T08:00:00Z", Codec: "mp3"}
+		f.Episodes[i].Fetch = &fetch
+		present[path.Base(f.Episodes[i].Path)] = PodcastFile{Size: fetch.Bytes}
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Fixture Show", "fetched", "", "", f, present, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetPodcastPolicy(ctx, lib.ID, "Fixture Show", f.ShowID, &Policy{Mode: "keep", Keep: 3, Days: 7}); err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range paths {
+		check, err := c.PodcastRetentionCheck(ctx, lib.ID, RetentionRequest{ShowID: f.ShowID, Path: p, Generation: 1, SHA256: strings.Repeat("ab", 32), Bytes: 4})
+		if err != nil {
+			t.Fatalf("E%d: %v", i+1, err)
+		}
+		if want := i < 7; check.OutsideKeepWindow != want {
+			t.Fatalf("E%d outside the keep window = %t", i+1, check.OutsideKeepWindow)
+		}
 	}
 }

@@ -563,15 +563,17 @@ func (c *Catalog) NextPodcastEpisode(ctx context.Context, lib int64, path string
 }
 
 // An episode's place in its show: when it was published (undated as empty),
-// then its season and episode numbers (unnumbered as -1), then its path. The
+// then its season (none as 0) and episode number (none as -1: newest first,
+// numbered before unnumbered), then its path, as the Bridge's feed.json orders
+// newest first (podcast.NewestFirst, but for the path's direction). The
 // numbers order an undated serial (a LibriVox reading, whose episodes the
 // Bridge names by a hash) as its feed numbers it, and same-day episodes too.
 // episodeKeySQL is that key over podcast_episodes e and books b, for a keyset
 // comparison; episodeOrderSQL sorts by it in dir (ASC is oldest first).
-const episodeKeySQL = `COALESCE(e.published,''),COALESCE(e.season,-1),COALESCE(e.episode,-1),b.rel_path`
+const episodeKeySQL = `COALESCE(e.published,''),COALESCE(e.season,0),COALESCE(e.episode,-1),b.rel_path`
 
 func episodeOrderSQL(dir string) string {
-	return `COALESCE(e.published,'') ` + dir + `,COALESCE(e.season,-1) ` + dir + `,COALESCE(e.episode,-1) ` + dir + `,b.rel_path ` + dir
+	return `COALESCE(e.published,'') ` + dir + `,COALESCE(e.season,0) ` + dir + `,COALESCE(e.episode,-1) ` + dir + `,b.rel_path ` + dir
 }
 
 // episodeKey is one episode's values of episodeKeySQL.
@@ -583,7 +585,7 @@ type episodeKey struct {
 }
 
 func episodeKeyOf(published *string, season, episode *int, path string) episodeKey {
-	k := episodeKey{Season: -1, Episode: -1, Path: path}
+	k := episodeKey{Episode: -1, Path: path}
 	if published != nil {
 		k.Published = *published
 	}
