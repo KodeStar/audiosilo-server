@@ -492,15 +492,14 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 		dir, op = "ASC", ">"
 	}
 	if cursor != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
-		var v [4]string
-		if err != nil || json.Unmarshal(raw, &v) != nil || v[0] != show || v[1] != order {
+		k, ok := decodeEpisodeCursor(cursor, show, order)
+		if !ok {
 			return nil, ErrInvalidCursor
 		}
-		q += ` AND (COALESCE(e.published,''),b.rel_path) ` + op + ` (?,?)`
-		args = append(args, v[2], v[3])
+		q += ` AND (` + episodeKeySQL + `) ` + op + ` (?,?,?,?)`
+		args = append(args, k.Published, k.Season, k.Episode, k.Path)
 	}
-	q += ` ORDER BY COALESCE(e.published,'') ` + dir + `,b.rel_path ` + dir + ` LIMIT ?`
+	q += ` ORDER BY ` + episodeOrderSQL(dir) + ` LIMIT ?`
 	args = append(args, limit+1)
 	eps, err := queryRows(ctx, c.db, func(r *sql.Rows, e *PodcastEpisode) error {
 		return r.Scan(&e.Path, &e.Title, &e.Published, &e.Duration, &e.DurationSource, &e.Season, &e.Episode, &e.EpisodeType, &e.Explicit, &e.Description, &e.Downloaded, &e.Size, &e.Removed, &e.Generation, &e.SHA256, &e.TimelineChanged)
@@ -512,15 +511,104 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	if len(eps) > limit {
 		out.Episodes = eps[:limit]
 		last := out.Episodes[limit-1]
-		published := ""
-		if last.Published != nil {
-			published = *last.Published
-		}
-		b, _ := json.Marshal([4]string{show, order, published, last.Path})
-		v := base64.RawURLEncoding.EncodeToString(b)
+		v := encodeEpisodeCursor(show, order, episodeKeyOf(last.Published, last.Season, last.Episode, last.Path))
 		out.NextCursor = &v
 	}
 	return out, nil
+}
+
+// NextPodcastEpisode is the episode after the one at path in its show, in the
+// episode order oldest first (what plays next, whether the show lists newest
+// or oldest first), among the episodes in scope that can still play (in the
+// feed, or kept on disk). nil at the show's end, or when path is no episode.
+func (c *Catalog) NextPodcastEpisode(ctx context.Context, lib int64, path string, scope Scope) (*Book, error) {
+	var show string
+	var published *string
+	var season, episode *int
+	err := c.db.QueryRowContext(ctx, `SELECT e.show_path,e.published,e.season,e.episode FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE b.library_id=? AND b.rel_path=?`, lib, path).Scan(&show, &published, &season, &episode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	k := episodeKeyOf(published, season, episode, path)
+	filter, filterArgs := pathFilterSQL("b.rel_path", scope)
+	var next string
+	err = c.db.QueryRowContext(ctx, `SELECT b.rel_path FROM podcast_episodes e JOIN books b ON b.id=e.book_id WHERE e.library_id=? AND e.show_path=? AND (e.removed_at='' OR e.present=1) AND (`+episodeKeySQL+`) > (?,?,?,?) AND `+filter+` ORDER BY `+episodeOrderSQL("ASC")+` LIMIT 1`,
+		append([]any{lib, show, k.Published, k.Season, k.Episode, k.Path}, filterArgs...)...).Scan(&next)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	books, err := c.BooksByPaths(ctx, lib, []string{next})
+	if err != nil {
+		return nil, err
+	}
+	b, ok := books[next]
+	if !ok {
+		return nil, nil
+	}
+	return &b, nil
+}
+
+// An episode's place in its show: when it was published (undated as empty),
+// then its season and episode numbers (unnumbered as -1), then its path. The
+// numbers order an undated serial (a LibriVox reading, whose episodes the
+// Bridge names by a hash) as its feed numbers it, and same-day episodes too.
+// episodeKeySQL is that key over podcast_episodes e and books b, for a keyset
+// comparison; episodeOrderSQL sorts by it in dir (ASC is oldest first).
+const episodeKeySQL = `COALESCE(e.published,''),COALESCE(e.season,-1),COALESCE(e.episode,-1),b.rel_path`
+
+func episodeOrderSQL(dir string) string {
+	return `COALESCE(e.published,'') ` + dir + `,COALESCE(e.season,-1) ` + dir + `,COALESCE(e.episode,-1) ` + dir + `,b.rel_path ` + dir
+}
+
+// episodeKey is one episode's values of episodeKeySQL.
+type episodeKey struct {
+	Published string
+	Season    int
+	Episode   int
+	Path      string
+}
+
+func episodeKeyOf(published *string, season, episode *int, path string) episodeKey {
+	k := episodeKey{Season: -1, Episode: -1, Path: path}
+	if published != nil {
+		k.Published = *published
+	}
+	if season != nil {
+		k.Season = *season
+	}
+	if episode != nil {
+		k.Episode = *episode
+	}
+	return k
+}
+
+// An episode page's cursor is the opaque [show, order, published, season,
+// episode, path] of the page's last row.
+func encodeEpisodeCursor(show, order string, k episodeKey) string {
+	b, _ := json.Marshal([]any{show, order, k.Published, k.Season, k.Episode, k.Path})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeEpisodeCursor(cursor, show, order string) (episodeKey, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	var v []json.RawMessage
+	if err != nil || json.Unmarshal(raw, &v) != nil || len(v) != 6 {
+		return episodeKey{}, false
+	}
+	var gotShow, gotOrder string
+	var k episodeKey
+	for i, dst := range []any{&gotShow, &gotOrder, &k.Published, &k.Season, &k.Episode, &k.Path} {
+		if json.Unmarshal(v[i], dst) != nil {
+			return episodeKey{}, false
+		}
+	}
+	return k, gotShow == show && gotOrder == order
 }
 
 // podcastTimelineSQL selects an episode's timeline_changed flag, NULL (omitted

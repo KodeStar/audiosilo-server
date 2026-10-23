@@ -35,7 +35,7 @@ type nextBook struct {
 // handleNext answers what to play after the book at ?path= (the `next_book`
 // capability), so every player follows a series the same way. Scope and path
 // resolution are item's (authorizedScope + bookForPath, the same 400/403/404);
-// resolveNext decides.
+// resolveNext decides for a book, episodeNext for a podcast episode.
 func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 	lib, rel, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -46,7 +46,13 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	next, err := a.resolveNext(r.Context(), lib, scope, book)
+	var next *nextBook
+	var err error
+	if lib.Kind == catalog.KindPodcasts {
+		next, err = a.episodeNext(r.Context(), lib.ID, scope, book)
+	} else {
+		next, err = a.resolveNext(r.Context(), lib, scope, book)
+	}
 	if err != nil {
 		a.writeCatalogError(w, err, "resolve next book failed", "could not find the next book", "library", lib.ID, "path", rel)
 		return
@@ -162,4 +168,17 @@ func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalo
 		return nil, err
 	}
 	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: lib.ID, Path: e.Path}, Book: b}, nil
+}
+
+// episodeNext is what follows a podcast episode: the next episode of its show
+// in the episode order, oldest first (catalog.NextPodcastEpisode), as a folder
+// answer, since the show is the episode's folder; none at the show's end. A
+// show has no series, community work or folder of books to follow, and its
+// episodes' file names (the Bridge's) say nothing about their order.
+func (a *API) episodeNext(ctx context.Context, libraryID int64, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
+	next, err := a.cat.NextPodcastEpisode(ctx, libraryID, book.RelPath, scope)
+	if err != nil || next == nil {
+		return &nextBook{Source: nextNone}, err
+	}
+	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: libraryID, Path: next.RelPath}, Book: next}, nil
 }

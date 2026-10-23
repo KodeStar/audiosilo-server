@@ -609,3 +609,42 @@ func TestPodcastQueueAddUnknownAndHiddenLibrary(t *testing.T) {
 		}
 	}
 }
+
+// R-1: /next for an episode answers the show's next episode in the episode
+// order (oldest first, whatever the file names), never a series, community
+// work or file-name sibling; the show's last episode has none.
+func TestNextForEpisodes(t *testing.T) {
+	b, _, f := podcastEnv(t, false)
+	next := func(path string) (string, string) {
+		t.Helper()
+		resp, body := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "next?path="+url.QueryEscape(path)), b.userTok, "", podcastHeaders())
+		if resp.StatusCode != 200 {
+			t.Fatalf("%d %s", resp.StatusCode, body)
+		}
+		var got struct {
+			Source string
+			Next   *catalog.Ref
+		}
+		decodeInto(t, body, &got)
+		if got.Next == nil {
+			return got.Source, ""
+		}
+		return got.Source, got.Next.Path
+	}
+	// feed-v1: 2026-10-19, 2026-10-12, then an undated episode (listed first).
+	undated, older, newer := f.Episodes[2].Path, f.Episodes[1].Path, f.Episodes[0].Path
+	if src, p := next(undated); src != "folder" || p != older {
+		t.Fatalf("after the undated episode: %s %q", src, p)
+	}
+	if src, p := next(older); src != "folder" || p != newer {
+		t.Fatalf("after the older episode: %s %q", src, p)
+	}
+	if src, p := next(newer); src != "none" || p != "" {
+		t.Fatalf("after the last episode: %s %q", src, p)
+	}
+	// An old player's /next is hidden like the rest of the library.
+	resp, _ := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "next?path="+url.QueryEscape(older)), b.userTok, "", map[string]string{auth.ClientHeader: "AudioSilo/2.1.0 (ios)"})
+	if resp.StatusCode == 200 {
+		t.Fatal("a hidden podcast library answered /next")
+	}
+}
