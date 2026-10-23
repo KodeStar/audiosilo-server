@@ -158,7 +158,7 @@ const (
 )
 
 // directPlayableExpr is media.DirectPlayable in SQL.
-var directPlayableExpr = media.DirectPlayableSQL("b.codec")
+var directPlayableExpr = media.DirectPlayableSQL("b.format", "b.codec")
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.subtitle, b.author,
 	b.narrator, b.series, b.series_index, b.series_index_end, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +

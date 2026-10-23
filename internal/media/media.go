@@ -28,26 +28,43 @@ var browserCodecs = map[string]bool{
 	"flac": true, "opus": true, "vorbis": true, "pcm_s16le": true,
 }
 
-// DirectPlayable reports whether codec plays natively in browsers. An empty
-// codec (ffprobe unavailable / not yet probed) is treated as playable: the
-// client streams directly and can fall back to ?transcode=1 if that fails.
-func DirectPlayable(codec string) bool {
+// containerFormats are the book formats (file extensions, no dot) whose
+// container no browser plays, whatever the codec inside: Matroska audio (#161:
+// MP3 in .mka plays only through ?transcode=1).
+var containerFormats = map[string]bool{"mka": true}
+
+// DirectPlayable reports whether a book of format (its file extension, no dot,
+// as books.format) and codec plays natively in browsers. A container no browser
+// plays (containerFormats) never does. An empty codec (ffprobe unavailable / not
+// yet probed) is otherwise treated as playable: the client streams directly and
+// can fall back to ?transcode=1 if that fails.
+func DirectPlayable(format, codec string) bool {
+	if containerFormats[strings.ToLower(format)] {
+		return false
+	}
 	if codec == "" {
 		return true
 	}
 	return browserCodecs[strings.ToLower(codec)]
 }
 
-// DirectPlayableSQL is DirectPlayable as an SQL condition over the codec column
-// col, for callers that filter on it in a query (the admin catalog). The codec
-// names are this package's constants, inlined as literals.
-func DirectPlayableSQL(col string) string {
-	codecs := make([]string, 0, len(browserCodecs))
-	for c := range browserCodecs {
-		codecs = append(codecs, "'"+c+"'")
+// DirectPlayableSQL is DirectPlayable as an SQL condition over the format column
+// formatCol and the codec column codecCol, for callers that filter on it in a
+// query (the admin catalog). The names are this package's constants, inlined as
+// literals.
+func DirectPlayableSQL(formatCol, codecCol string) string {
+	return "(lower(" + formatCol + ") NOT IN (" + sqlList(containerFormats) + ") AND (" +
+		codecCol + " = '' OR lower(" + codecCol + ") IN (" + sqlList(browserCodecs) + ")))"
+}
+
+// sqlList is the keys of set as a sorted list of SQL string literals.
+func sqlList(set map[string]bool) string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, "'"+k+"'")
 	}
-	sort.Strings(codecs)
-	return "(" + col + " = '' OR lower(" + col + ") IN (" + strings.Join(codecs, ",") + "))"
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 // sniffAudioType inspects the leading bytes of f to identify the audio container
@@ -77,6 +94,8 @@ func sniffAudioType(f *os.File) string {
 		return "audio/mpeg" // MPEG-1/2 Audio Layer III (MP3)
 	case len(b) >= 8 && string(b[4:8]) == "ftyp":
 		return "audio/mp4" // ISO base media (m4a/m4b/mp4) - AAC or ALAC inside
+	case len(b) >= 4 && b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3:
+		return "audio/x-matroska" // EBML header: Matroska (.mka), MP3 or other codecs inside
 	}
 	return ""
 }
@@ -102,6 +121,8 @@ func audioContentType(ext string) string {
 		return "audio/opus"
 	case ".wav", ".wave":
 		return "audio/wav"
+	case ".mka":
+		return "audio/x-matroska"
 	default:
 		return ""
 	}

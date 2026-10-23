@@ -506,13 +506,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book entries with metadata (`is_book` + title/author/…); the client acts on the
   entry's `path`.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
-  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`.
+  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
+  is web-only: served as `audio/x-matroska` (also sniffed from its EBML header `1A 45 DF A3`),
+  its chapters read by ffprobe, and never `direct_playable` whatever the codec
+  (`media.DirectPlayable(format, codec)`'s `containerFormats`), so the web player transcodes it;
+  a native app lists it but has no transcode path.
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
-  expose `direct_playable` (via `media.DirectPlayable`) so a client knows when to
+  expose `direct_playable` (via `media.DirectPlayable`: the book's format and codec) so a client knows when to
   transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library

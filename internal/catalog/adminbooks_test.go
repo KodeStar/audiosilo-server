@@ -538,15 +538,19 @@ func TestAggregatesScoped(t *testing.T) {
 }
 
 // TestDirectPlayableSQLAgreesWithGo: the list's direct_playable (SQL) answers what
-// /item tells players (media.DirectPlayable) for every kind of codec.
+// /item tells players (media.DirectPlayable) for every kind of codec, in a
+// container browsers play and in Matroska.
 func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	codecs := []string{"", "aac", "MP3", "flac", "opus", "vorbis", "pcm_s16le", "ac3", "eac3", "wmav2"}
-	for _, codec := range codecs {
-		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "b/" + codec, Title: codec, Codec: codec, AddedAt: "x"}); err != nil {
-			t.Fatal(err)
+	for _, format := range []string{"m4b", "mka"} {
+		for _, codec := range codecs {
+			if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: format + "/" + codec, Title: codec,
+				Format: format, Codec: codec, AddedAt: "x"}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	page, err := c.ListAdminBooks(ctx, AdminListOptions{Limit: 200})
@@ -554,8 +558,8 @@ func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, b := range page.Books {
-		if want := media.DirectPlayable(b.Codec); b.DirectPlayable != want {
-			t.Errorf("codec %q: SQL says %v, media.DirectPlayable says %v", b.Codec, b.DirectPlayable, want)
+		if want := media.DirectPlayable(b.Format, b.Codec); b.DirectPlayable != want {
+			t.Errorf("%s codec %q: SQL says %v, media.DirectPlayable says %v", b.Format, b.Codec, b.DirectPlayable, want)
 		}
 	}
 }

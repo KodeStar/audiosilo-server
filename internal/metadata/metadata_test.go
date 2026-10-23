@@ -85,7 +85,7 @@ func TestDeriveFromPath(t *testing.T) {
 }
 
 func TestIsAudio(t *testing.T) {
-	if !IsAudio("foo.m4b") || !IsAudio("BAR.MP3") || !IsAudio("part.mp4") {
+	if !IsAudio("foo.m4b") || !IsAudio("BAR.MP3") || !IsAudio("part.mp4") || !IsAudio("book.mka") {
 		t.Error("expected audio extensions recognized")
 	}
 	if IsAudio("cover.jpg") || IsAudio("notes.txt") {

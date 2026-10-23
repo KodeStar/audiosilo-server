@@ -41,7 +41,7 @@ func namesChapter(t string) bool {
 }
 
 var (
-	chapterAudioExt = regexp.MustCompile(`(?i)\.(mp3|m4a|m4b|mp4|aac|ogg|oga|opus|flac|wav|wma|alac|aif|aiff)$`)
+	chapterAudioExt = regexp.MustCompile(`(?i)\.(mp3|m4a|m4b|mp4|mka|aac|ogg|oga|opus|flac|wav|wma|alac|aif|aiff)$`)
 	// A trailing encoder bitrate tag left from a rip's filename ("64kb", "128 kbps").
 	chapterBitrateTail = regexp.MustCompile(`(?i)(^|\s)\d{2,3}\s?(k|kb|kbps)$`)
 )

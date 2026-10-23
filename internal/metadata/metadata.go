@@ -75,9 +75,14 @@ type Metadata struct {
 // next to its converted .m4b would lump both into one book with duplicated chapters
 // and an unplayable track. The manager converts .aax/.aaxc to .m4b before content
 // enters a library, so a library should only ever hold the playable .m4b.
+//
+// .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
+// is in the library for the web player only: no browser or native player plays
+// the container, so media.DirectPlayable is false for it and the web player
+// streams it through ?transcode=1 (#161); a native app lists it but can't play it.
 var AudioExtensions = map[string]bool{
 	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true,
-	".flac": true, ".ogg": true, ".opus": true,
+	".flac": true, ".ogg": true, ".opus": true, ".mka": true,
 }
 
 // IsAudio reports whether path has a recognized audiobook extension.
