@@ -937,6 +937,12 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	// Its scans have nothing left to index into; don't let them hold the queue.
 	a.scanner.CancelLibrary(id)
+	// Its Bridge jobs went with it: so do the private feed URLs held for them.
+	if a.bridge != nil {
+		if err := a.bridge.PruneSecrets(r.Context()); err != nil {
+			a.log.Warn("drop a deleted library's private feed URLs failed", "library", id, "err", err)
+		}
+	}
 	a.audit(r, "library.delete", name, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

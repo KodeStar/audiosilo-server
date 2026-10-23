@@ -257,6 +257,33 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	return &r, nil
 }
 
+// PruneSecrets drops the private feed URLs held for jobs that no longer exist
+// (a deleted library's jobs go with it, cascaded), so a credential never
+// outlives its request in memory. The same lock as Subscribe's, so a request
+// being queued is never mistaken for a deleted one.
+func (s *Service) PruneSecrets(ctx context.Context) error {
+	s.secretFlowMu.Lock()
+	defer s.secretFlowMu.Unlock()
+	s.secretMu.Lock()
+	ids := make([]int64, 0, len(s.privateURLs))
+	for id := range s.privateURLs {
+		ids = append(ids, id)
+	}
+	s.secretMu.Unlock()
+	for _, id := range ids {
+		var exists bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE id=?)`, id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			s.secretMu.Lock()
+			delete(s.privateURLs, id)
+			s.secretMu.Unlock()
+		}
+	}
+	return nil
+}
+
 // ExpirePrivateRequests also runs before claims. It never hands out a private
 // subscription whose credential was lost during a server restart.
 func (s *Service) ExpirePrivateRequests(ctx context.Context) error {

@@ -324,3 +324,42 @@ func TestRecentSubscribeFailure(t *testing.T) {
 		t.Fatalf("expired private request = %+v %v", got, err)
 	}
 }
+
+// R-13: deleting a library cascades its jobs away; PruneSecrets then drops the
+// private URLs held for them and keeps every other library's.
+func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	res, err := q.db.ExecContext(ctx, `INSERT INTO libraries(name, root, kind, created_at) VALUES('Other', '/other', 'podcasts', 't')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := res.LastInsertId()
+	st := Status{Version: "0.9.0", Kinds: []string{KindPodcastSubscribe}, Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}, {LibraryID: other, MountPath: "/other", Mapped: true, Writable: true}}}
+	if err := q.SaveHeartbeat(ctx, q.token, st); err != nil {
+		t.Fatal(err)
+	}
+	gone, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/a?auth=SECRET_GONE", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, _, err := q.EnqueueSubscribe(ctx, other, q.admin, "https://example.com/b?auth=SECRET_KEPT", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.PruneSecrets(ctx); err != nil || len(q.privateURLs) != 2 {
+		t.Fatalf("nothing deleted yet: %d %v", len(q.privateURLs), err)
+	}
+	if _, err := q.db.ExecContext(ctx, `DELETE FROM libraries WHERE id=?`, q.lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.PruneSecrets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.privateURLs[gone.ID]; ok {
+		t.Fatal("a deleted library's private URL is still held")
+	}
+	if q.privateURLs[kept.ID] == "" {
+		t.Fatal("another library's private URL was dropped")
+	}
+}
