@@ -3,6 +3,7 @@ import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/a
 import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
 import { isLoopbackUrl } from '@/features/setup/setup-model';
+import { absoluteBaseName } from '@/lib/paths';
 
 // Settings > Bridge: the small rules the page shows the Bridge and its jobs by
 // (internal/bridge, handlers_bridge.go). Pure: no React, no i18n instance; the
@@ -296,12 +297,7 @@ ${volumes.join('\n')}
 
 /** A placeholder host folder for a library root: its last segment ("/mnt/kids" -> "kids"). */
 function hostFolder(root: string): string {
-  const leaf =
-    root
-      .replace(/[\\/]+$/, '')
-      .split(/[\\/]/)
-      .pop() ?? '';
-  return leaf.replace(/[^A-Za-z0-9._-]/g, '-') || 'audiobooks';
+  return absoluteBaseName(root).replace(/[^A-Za-z0-9._-]/g, '-') || 'audiobooks';
 }
 
 /**

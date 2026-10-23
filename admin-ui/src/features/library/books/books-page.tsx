@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, LoaderCircle, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
+import { BULK_LIMIT } from '@/api/client';
 import { useAdminBooks, useBookFacets, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
@@ -22,7 +23,7 @@ import { ActiveChips, BooksToolbar } from './books-toolbar';
 import { BulkEditDialog } from './bulk-edit-dialog';
 import { FilterSheet } from './filter-sheet';
 import { Shelves } from './shelves';
-import { MAX_BULK_BOOKS, useSelection, type Selection } from './use-selection';
+import { useSelection, type Selection } from './use-selection';
 
 const NO_BOOKS: AdminBook[] = [];
 
@@ -185,7 +186,7 @@ export function BooksPage() {
 /**
  * While selecting: select every book shown (the grid has no header checkbox),
  * and, when the filter matches more than are loaded, every matching book, the
- * rest of the list fetched page by page here, up to MAX_BULK_BOOKS (what one
+ * rest of the list fetched page by page here, up to BULK_LIMIT (what one
  * bulk action takes). A selection past that says so.
  */
 function SelectAllRow({
@@ -206,20 +207,20 @@ function SelectAllRow({
   const [loading, setLoading] = useState(false);
   const allShown = books.every(selection.isSelected);
   const matching = total ?? books.length;
-  const capped = matching > MAX_BULK_BOOKS;
+  const capped = matching > BULK_LIMIT;
 
   const selectMatching = async () => {
     setLoading(true);
     try {
       let all = books;
       let more = hasMore;
-      while (more && all.length < MAX_BULK_BOOKS) {
+      while (more && all.length < BULK_LIMIT) {
         const r = await fetchNextPage();
         if (r.isError) throw r.error;
         all = r.data?.pages.flatMap((p) => p.books ?? []) ?? all;
         more = !!r.hasNextPage;
       }
-      selection.setMany(all.slice(0, MAX_BULK_BOOKS), true);
+      selection.setMany(all.slice(0, BULK_LIMIT), true);
     } catch (err) {
       toastError(t('books.select.failed'), err);
     } finally {
@@ -233,11 +234,11 @@ function SelectAllRow({
         variant="outline"
         size="sm"
         disabled={allShown}
-        onClick={() => selection.setMany(books.slice(0, MAX_BULK_BOOKS), true)}
+        onClick={() => selection.setMany(books.slice(0, BULK_LIMIT), true)}
       >
         {hasMore
-          ? t('books.select.shown', counted(Math.min(books.length, MAX_BULK_BOOKS), lang))
-          : t('books.select.all', counted(Math.min(books.length, MAX_BULK_BOOKS), lang))}
+          ? t('books.select.shown', counted(Math.min(books.length, BULK_LIMIT), lang))
+          : t('books.select.all', counted(Math.min(books.length, BULK_LIMIT), lang))}
       </Button>
       {hasMore ? (
         <Button
@@ -248,13 +249,13 @@ function SelectAllRow({
         >
           {loading ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
           {capped
-            ? t('books.select.first', counted(MAX_BULK_BOOKS, lang))
+            ? t('books.select.first', counted(BULK_LIMIT, lang))
             : t('books.select.matching', counted(matching, lang))}
         </Button>
       ) : null}
-      {capped || selection.size > MAX_BULK_BOOKS ? (
+      {capped || selection.size > BULK_LIMIT ? (
         <span className="text-muted-foreground">
-          {t('books.select.cap', { max: formatNumber(MAX_BULK_BOOKS, lang) })}
+          {t('books.select.cap', { max: formatNumber(BULK_LIMIT, lang) })}
         </span>
       ) : (
         <span className="text-muted-foreground max-md:hidden">{t('books.select.shiftHint')}</span>

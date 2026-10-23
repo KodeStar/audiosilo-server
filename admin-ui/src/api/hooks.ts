@@ -639,10 +639,15 @@ export function useDirs(path: string) {
 /** How long the palette's aggregates stay fresh: it reopens often, and a search needn't refetch them. */
 export const PALETTE_STALE_MS = 5 * 60_000;
 
+/** Every account (the people list); `fetchQuery(usersQuery)` reads it fresh outside a component. */
+export const usersQuery = queryOptions({
+  queryKey: keys.users,
+  queryFn: () => api.users().then((r) => r.users ?? []),
+});
+
 export function useUsers(enabled = true, staleTime?: number) {
   return useQuery({
-    queryKey: keys.users,
-    queryFn: () => api.users().then((r) => r.users ?? []),
+    ...usersQuery,
     enabled,
     staleTime,
   });
@@ -735,9 +740,7 @@ export function useDuplicates(ignored: boolean, across = false) {
   return useQuery({
     queryKey: keys.duplicates(ignored, across),
     queryFn: () =>
-      api
-        .duplicates({ ignored: ignored || undefined, across: across || undefined })
-        .then((r) => r.groups ?? []),
+      api.duplicates({ ignored: ignored || undefined, across }).then((r) => r.groups ?? []),
   });
 }
 

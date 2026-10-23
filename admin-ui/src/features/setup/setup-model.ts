@@ -294,7 +294,7 @@ export function isHomeHost(hostport: string): boolean {
 }
 
 /** A loopback Host (localhost, 127.0.0.0/8, ::1): an address only this machine reaches. */
-export function isLoopbackHost(hostport: string): boolean {
+function isLoopbackHost(hostport: string): boolean {
   const host = hostOf(hostport);
   if (host === null) return false;
   const name = host.toLowerCase().replace(/\.$/, '');

@@ -3,12 +3,6 @@ import type { AdminBook } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 
 /**
- * The most books one bulk action takes (the server's maxBulkBooks,
- * handlers_catalog.go): "Select all matching" stops there.
- */
-export const MAX_BULK_BOOKS = 1000;
-
-/**
  * The books from the last one clicked (`anchor`) to `target` in `order`, both
  * ends included, in list order; just `target` when either isn't in the list.
  */
@@ -91,7 +85,6 @@ export function useSelection(order: readonly AdminBook[] = []) {
     clear,
     isSelected,
     selecting: mode || selected.size > 0,
-    mode,
     setMode,
   };
 }

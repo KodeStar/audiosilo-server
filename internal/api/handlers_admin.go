@@ -6,11 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
@@ -757,7 +759,8 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
-	if req.Name != "" || req.Root != "" {
+	// Only a server whose config declares libraries needs the current row.
+	if (req.Name != "" || req.Root != "") && len(a.config().Libraries) > 0 {
 		cur, err := a.cat.GetLibrary(r.Context(), id)
 		if errors.Is(err, catalog.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "library not found")
@@ -797,12 +800,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 // configLibrary reports whether config.yaml or the environment declares a
 // library by this name (launcher.syncLibraries upserts each by name at start).
 func (a *API) configLibrary(name string) bool {
-	for _, l := range a.config().Libraries {
-		if l.Name == name {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(a.config().Libraries, func(l config.Library) bool { return l.Name == name })
 }
 
 // configFieldChanged reports whether an edit gives a library another name or
@@ -815,7 +813,7 @@ func configFieldChanged(req libraryRequest, cur *catalog.Library) bool {
 		return false
 	}
 	root, err := filepath.Abs(req.Root)
-	return err != nil || filepath.Clean(root) != filepath.Clean(cur.Root)
+	return err != nil || root != filepath.Clean(cur.Root)
 }
 
 // handleReorderLibraries sets the libraries' display order from an ordered list

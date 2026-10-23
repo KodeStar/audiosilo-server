@@ -9,12 +9,13 @@ import { ApiError, api } from '@/api/client';
 import {
   invalidateAfterSourceChange,
   invalidateLibraries,
-  keys,
+  invalidatePeople,
   noteScanStarted,
   useDirs,
   useLibraries,
   useModules,
   useSetup,
+  usersQuery,
 } from '@/api/hooks';
 import {
   METADATA_SOURCES,
@@ -132,10 +133,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const grantEveryone = async (libraryId: number): Promise<{ failed: number | null }> => {
     let users: AdminUser[];
     try {
-      users = await qc.fetchQuery({
-        queryKey: keys.users,
-        queryFn: () => api.users().then((r) => r.users ?? []),
-      });
+      users = await qc.fetchQuery(usersQuery);
     } catch {
       return { failed: null };
     }
@@ -172,7 +170,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       }
       if (rescans) noteScanStarted(qc, saved.id);
       if (granted) {
-        void qc.invalidateQueries({ queryKey: keys.users });
+        invalidatePeople(qc);
         if (granted.failed !== 0) {
           toast.add({
             title:
