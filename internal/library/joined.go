@@ -82,7 +82,7 @@ func joinRoot(overrides map[string]string, rel string, isDiscSet func(string) bo
 // joinedBook builds the book of the joined folder at rootRel from discs, its disc
 // folders (library-relative) with their audio files: the folders in natural order
 // (discOrder: CD2 before CD10), each folder's files in the order a book of that
-// folder alone has them (fileOrder, as audioEntries and the discovery walk read
+// folder alone has them (sortFileOrder, as audioEntries and the discovery walk read
 // them), so a position on a disc book lands on the same file once offset onto the
 // joined book (carryJoinedState). nil when there is no audio.
 func joinedBook(lib catalog.Library, rootRel string, discs map[string][]audioFile) *catalog.Book {
@@ -215,23 +215,19 @@ func discOrder(a, b string) int {
 // hyphens and underscores left out ("CD 2" sorts with "CD2"), except that between
 // two digits they still end a number ("1-10" is 1 then 10, before "2-1"; #160).
 func naturalCompare(a, b string) int {
-	ra, rb := naturalRunes(a), naturalRunes(b)
+	return naturalCompareRunes(naturalRunes(a), naturalRunes(b))
+}
+
+// naturalCompareRunes is naturalCompare of two names already read by naturalRunes.
+func naturalCompareRunes(ra, rb []rune) int {
 	i, j := 0, 0
 	for i < len(ra) && j < len(rb) {
 		if isASCIIDigit(ra[i]) && isASCIIDigit(rb[j]) {
-			si, sj := i, j
-			for i < len(ra) && isASCIIDigit(ra[i]) {
-				i++
-			}
-			for j < len(rb) && isASCIIDigit(rb[j]) {
-				j++
-			}
-			na := strings.TrimLeft(string(ra[si:i]), "0")
-			nb := strings.TrimLeft(string(rb[sj:j]), "0")
+			na, nb := digitRun(ra, &i), digitRun(rb, &j)
 			if len(na) != len(nb) {
 				return cmp.Compare(len(na), len(nb))
 			}
-			if c := strings.Compare(na, nb); c != 0 {
+			if c := slices.Compare(na, nb); c != 0 {
 				return c
 			}
 			continue
@@ -243,6 +239,19 @@ func naturalCompare(a, b string) int {
 		j++
 	}
 	return cmp.Compare(len(ra)-i, len(rb)-j)
+}
+
+// digitRun returns the run of digits in r at *i without its leading zeros (the
+// number's value, by length then digit), moving *i past the run.
+func digitRun(r []rune, i *int) []rune {
+	start := *i
+	for *i < len(r) && isASCIIDigit(r[*i]) {
+		*i++
+	}
+	for start < *i && r[start] == '0' {
+		start++
+	}
+	return r[start:*i]
 }
 
 // naturalRunes is a name as naturalCompare reads it: the separators dropped, but
@@ -264,15 +273,37 @@ func naturalRunes(s string) []rune {
 	return out
 }
 
-// fileOrder orders the audio files of one folder, the order a book plays them
-// in: by name as naturalCompare reads it ("2- Part" before "10- Part", "1.Part"
-// with "1. Part"; #160), then byte for byte, so names that read alike ("01" and
-// "1") keep a stable order.
-func fileOrder(a, b audioFile) int {
-	if c := naturalCompare(a.de.Name(), b.de.Name()); c != 0 {
+// compareFileNames orders two audio files of one folder, a and b with their
+// naturalRunes ka and kb, the order a book plays them in: by name as
+// naturalCompare reads it ("2- Part" before "10- Part", "1.Part" with "1. Part";
+// #160), then byte for byte, so names that read alike ("01" and "1") keep a
+// stable order.
+func compareFileNames(ka []rune, a string, kb []rune, b string) int {
+	if c := naturalCompareRunes(ka, kb); c != 0 {
 		return c
 	}
-	return strings.Compare(a.de.Name(), b.de.Name())
+	return strings.Compare(a, b)
+}
+
+// sortFileOrder sorts one folder's audio files into the order its book plays
+// them (compareFileNames), reading each name once rather than at every
+// comparison (a full scan sorts every folder).
+func sortFileOrder(files []audioFile) {
+	if len(files) < 2 {
+		return
+	}
+	type keyed struct {
+		key []rune
+		f   audioFile
+	}
+	ks := make([]keyed, len(files))
+	for i, f := range files {
+		ks[i] = keyed{naturalRunes(f.de.Name()), f}
+	}
+	slices.SortFunc(ks, func(a, b keyed) int { return compareFileNames(a.key, a.f.de.Name(), b.key, b.f.de.Name()) })
+	for i := range ks {
+		files[i] = ks[i].f
+	}
 }
 
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }

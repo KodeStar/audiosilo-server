@@ -560,7 +560,7 @@ func TestJoinOnlyDiscSets(t *testing.T) {
 }
 
 // Inside a disc, a joined book keeps the order a book of that disc alone has (the
-// scanner's natural name order, fileOrder: 1, 2, 10), so a position on the disc
+// scanner's natural name order, sortFileOrder: 1, 2, 10), so a position on the disc
 // book, offset onto the joined book, lands in the same file.
 func TestJoinKeepsDiscFileOrder(t *testing.T) {
 	t.Parallel()

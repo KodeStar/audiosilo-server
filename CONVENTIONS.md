@@ -569,10 +569,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a series (or its listeners' progress) on upgrade, and nothing is auto-detected
   (re-shaping existing books would orphan progress). Order: the disc folders by
   `discOrder` (natural: CD2 before CD10, "CD 1" = "CD1", ties by path), each disc's files
-  in exactly the order a book of that disc alone has them (`fileOrder`, as
+  in exactly the order a book of that disc alone has them (`sortFileOrder`, as
   `audioEntries`/the walk read them), since the state carry-over maps a disc
   position as offset + position. Every folder book's files play in natural name order
-  (`fileOrder`, #160: `naturalCompare` with a separator between two digits ending the
+  (`sortFileOrder`, #160: `naturalCompare` with a separator between two digits ending the
   number, "1-10" before "2-1"; ties byte-wise); a book indexed in the old byte order is
   re-indexed by the next scan (`Signature.FileOrder`, the stored order's key, differs),
   which moves a listener's whole-book place on it: no remap. Files and chapters keep real paths in the discs

@@ -97,10 +97,7 @@ func (l *limiter) LockedFor(key string) time.Duration {
 	if e == nil {
 		return 0
 	}
-	if d := e.until.Sub(l.now()); d > 0 {
-		return d
-	}
-	return 0
+	return max(e.until.Sub(l.now()), 0)
 }
 
 // setRetryAfter sets Retry-After to d in whole seconds, rounded up (at least 1).

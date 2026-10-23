@@ -449,12 +449,8 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service)
 	if err != nil {
 		return err
 	}
-	banner(cfg, password, code)
-	return nil
-}
-
-func banner(cfg *config.Config, password, code string) {
 	writeBanner(os.Stdout, cfg, password, code)
+	return nil
 }
 
 // writeBanner writes the first-run credentials banner: the console (where the

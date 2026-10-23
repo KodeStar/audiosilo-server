@@ -172,7 +172,7 @@ func TestBestSeriesLessQuery(t *testing.T) {
 		// the correct card shares no title token and must outrank it on the number.
 		5: {Author: "Kevin Hearne", Series: "", Title: "Hammered: The Iron Druid Chronicles, Book 3"},
 		6: {Author: "Kevin Hearne", Series: "Iron Druid Chronicles", SeriesIndex: 8.75, Title: "Oberon's Meaty Mysteries: The Squirrel on the Train"},
-		// Edition decoration only: the residual is a parenthetical matchNoise drops.
+		// Edition decoration only: the residual is a parenthetical stripMatchNoise drops.
 		7: {Author: "Ben Aaronovitch", Series: "Rivers of London", SeriesIndex: 1, Title: "Rivers of London"},
 		// No derivation - the title never names "Destiny Cycle" - so the conflicting
 		// sub-series number stays outranked by matching title words, as before.

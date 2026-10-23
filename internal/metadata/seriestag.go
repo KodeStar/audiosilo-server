@@ -31,15 +31,18 @@ func SplitSeriesTag(tag string) (series string, position float64, ok bool) {
 	return name, n, true
 }
 
+// seriesTagWords are the words that mark a volume in a series tag.
+const seriesTagWords = `book|bk|vol(?:ume)?|no`
+
 // seriesTagPos is the marked position at the end of a series tag: a word for a
 // volume (maybe with "." and "#") or a bare "#", then the number.
-const seriesTagPos = `(?i:\b(?:book|bk|vol(?:ume)?|no)\b\.?\s*#?\s*|#\s*)(\d{1,5}(?:\.\d+)?)`
+const seriesTagPos = `(?i:\b(?:` + seriesTagWords + `)\b\.?\s*#?\s*|#\s*)(\d{1,5}(?:\.\d+)?)`
 
 var (
 	seriesTagPlain = regexp.MustCompile(`^(.+?)[\s,]*` + seriesTagPos + `$`)
 	seriesTagParen = regexp.MustCompile(`^(.+?)\s*[(\[]\s*` + seriesTagPos + `\s*[)\]]$`)
 	// seriesTagMarker is a name that is only the marker ("Book #3"): no series.
-	seriesTagMarker = regexp.MustCompile(`(?i)^(?:book|bk|vol(?:ume)?|no)\.?$`)
+	seriesTagMarker = regexp.MustCompile(`(?i)^(?:` + seriesTagWords + `)\.?$`)
 )
 
 // setSeriesTag sets m's series from a series tag, and its position when the tag

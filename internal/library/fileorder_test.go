@@ -32,7 +32,7 @@ func TestNaturalFileOrder(t *testing.T) {
 		for i, f := range tc.files {
 			got[len(tc.files)-1-i] = audioFile{abs: f, de: fakeEntry(f)}
 		}
-		slices.SortFunc(got, fileOrder)
+		sortFileOrder(got)
 		for i, f := range got {
 			if f.de.Name() != tc.files[i] {
 				t.Errorf("%s: order = %v, want %v", tc.name, names(got), tc.files)
@@ -89,7 +89,7 @@ func TestScanReordersBookIndexedInByteOrder(t *testing.T) {
 	}
 }
 
-// namedEntry is a directory entry that has only a name: all fileOrder reads.
+// namedEntry is a directory entry that has only a name: all sortFileOrder reads.
 type namedEntry struct {
 	fs.DirEntry
 	name string

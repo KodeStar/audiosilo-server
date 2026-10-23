@@ -13,7 +13,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -920,7 +919,7 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 
 // audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
 // root) and returns the folders under it that directly hold audio, library-relative,
-// each with its audio files in natural name order (fileOrder): the files audioEntries
+// each with its audio files in natural name order (sortFileOrder): the files audioEntries
 // would list, read in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
 // skipped, even when its own name begins with a dot. side is the metadata files
@@ -993,7 +992,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		return nil
 	})
 	for _, audio := range dirs {
-		slices.SortFunc(audio, fileOrder)
+		sortFileOrder(audio)
 	}
 	return dirs, side, hadErrors, err
 }
@@ -1103,7 +1102,7 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, in natural name order (fileOrder).
+// absDir, in natural name order (sortFileOrder).
 func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
@@ -1116,7 +1115,7 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}
-	slices.SortFunc(audio, fileOrder)
+	sortFileOrder(audio)
 	return audio
 }
 
@@ -1267,13 +1266,14 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// case-insensitive filesystem (macOS's and Windows' defaults), but the scan
 	// names a book by the folder listings' spelling: indexing the variant would
 	// add a duplicate everyone sees, which the next scan removes (CONNECT-04).
-	if rel := relPathOf(lib.Root, abs); rel != "" && !dirPresent(lib, rel, map[string]map[string]bool{}) {
+	rel := relPathOf(lib.Root, abs)
+	if rel != "" && !dirPresent(lib, rel, map[string]map[string]bool{}) {
 		return nil, fmt.Errorf("%w: %q is not spelled as on disk", ErrNotIndexable, relPath)
 	}
 
 	// What the ignore rules keep out of a scan isn't in the library on demand either.
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	if ignore.Covers(relPathOf(lib.Root, abs), info.IsDir()) {
+	if ignore.Covers(rel, info.IsDir()) {
 		return nil, fmt.Errorf("%w: %q is ignored", ErrNotIndexable, relPath)
 	}
 	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
@@ -1284,7 +1284,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// the book the requested path resolves to: the folder book itself, a
 	// single-file book, or the folder book a clicked part belongs to. Inside a
 	// folder joined into one book, that is the joined book, for a disc folder too.
-	dirRel := relPathOf(lib.Root, abs)
+	dirRel := rel
 	if !info.IsDir() {
 		dirRel = dirOf(dirRel)
 	}
@@ -1412,12 +1412,10 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 
 // bookOnDisk reports whether the book indexed at rel is still on disk: a book
 // resolves at exactly that path, every name along it as the folder listings
-// spell it (so a case-only rename on a case-insensitive disk counts as gone). It
-// errs toward present: a path it can't check keeps its state where it is.
+// spell it (resolveBook's dirPresent check, so a case-only rename on a
+// case-insensitive disk counts as gone). It errs toward present: a path it
+// can't check keeps its state where it is.
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) bool {
-	if !dirPresent(lib, rel, map[string]map[string]bool{}) {
-		return false
-	}
 	// A path that can't be stat'ed, or a folder that can't be listed (a
 	// permission, a flaky share), can't be checked: resolveBook would read it as
 	// no book (it wraps a failed stat as ErrNotIndexable, and lists an unreadable
