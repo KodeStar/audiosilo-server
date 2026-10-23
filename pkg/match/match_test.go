@@ -384,6 +384,18 @@ func TestCleanTitle(t *testing.T) {
 		{"Legion's Fifth Vault: A Fantasy LitRPG Adventure", "Divine Apostasy", "Legion's Fifth Vault"},
 		{"The Ugly Truth", "Diary of a Wimpy Kid", "The Ugly Truth"},
 		{"Shadow's Edge (Unabridged)", "", "Shadow's Edge"},
+		// #41: a genre tail ending in "series" is fluff...
+		{"Seeds of Chaos Omnibus: A GameLit Dark Adventure Series", "", "Seeds of Chaos Omnibus"},
+		{"Caesar's Shadow - A LitRPG Series", "", "Caesar's Shadow"},
+		// ...but not with only format words or alone, where the tail tells an omnibus
+		// from book 1 (the standalone word still goes, as before).
+		{"Air Awakens: The Complete Series", "", "Air Awakens: The Complete"},
+		{"44 Scotland Street: Series 1-3", "", "44 Scotland Street: 1-3"},
+		{"Tangled: The Series", "", "Tangled: The"},
+		// #41: a nested bracket group goes whole, with no orphan bracket.
+		{"Eric (Mundodisco 9) [Eric (Discworld)]", "", "Eric"},
+		{"Dragon Her Heels (A Magical Romantic Comedy (with a body count) Book 23)", "", "Dragon Her Heels"},
+		{"Cuentos (Volumen 1) [Short Stories, Volume 1]]", "", "Cuentos"},
 	}
 	for _, tc := range cases {
 		if got := CleanTitle(tc.title, tc.series); got != tc.want {

@@ -274,13 +274,18 @@ func Best(books []Book, q Query) (int, bool) {
 	return -1, false
 }
 
-// bracketGroup matches one parenthetical/bracketed group. Defined once and shared
-// by matchNoise and parenGroup so the bracket rule has a single definition.
-const bracketGroup = `[\(\[][^\)\]]*[\)\]]`
+// bracketGroup matches one innermost parenthetical/bracketed group (no bracket
+// inside it); stripParenGroups repeats it outward, so a nested group goes whole.
+const bracketGroup = `[\(\[][^\(\)\[\]]*[\)\]]`
 
-// matchNoise strips parenthetical/bracketed groups and "book N"/"vol N" run tokens -
-// the formatting that differs between sources' titles.
-var matchNoise = regexp.MustCompile(`(?i)` + bracketGroup + `|\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*\d+(?:\.\d+)?\b`)
+// runMarker matches "book N"/"vol N" run tokens.
+var runMarker = regexp.MustCompile(`(?i)\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*\d+(?:\.\d+)?\b`)
+
+// stripMatchNoise strips parenthetical/bracketed groups (stripParenGroups) and
+// "book N"/"vol N" run tokens - the formatting that differs between sources' titles.
+func stripMatchNoise(s string) string {
+	return runMarker.ReplaceAllString(stripParenGroups(s), " ")
+}
 
 // fluffWords are standalone words that are noise in a book title (not "book"/"novel",
 // which appear in real titles like "The Book Thief").
@@ -293,7 +298,7 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 func CleanTitle(title, series string) string {
 	t := residualTitle(title, series)
 	if t == "" {
-		t = tidyTitle(matchNoise.ReplaceAllString(title, " "))
+		t = tidyTitle(stripMatchNoise(title))
 	}
 	if t == "" {
 		t = strings.TrimSpace(title)
@@ -307,7 +312,7 @@ func CleanTitle(title, series string) string {
 func residualTitle(title, series string) string {
 	t := stripSeries(title, series)
 	t = dropGenreSubtitle(t)
-	t = matchNoise.ReplaceAllString(t, " ")
+	t = stripMatchNoise(t)
 	t = fluffWords.ReplaceAllString(t, " ")
 	return tidyTitle(t)
 }
@@ -374,11 +379,26 @@ func seriesRefIn(lowerTitle, series string) (string, bool) {
 // the name a library title carries.
 var parenGroup = regexp.MustCompile(bracketGroup)
 
+// stripParenGroups removes the bracketed groups, innermost first until none is
+// left, so a nested one goes whole ("Eric (Mundodisco 9) [Eric (Discworld)]" is
+// "Eric"), then any bracket left without its partner (#41: one pass left "Eric ]").
 func stripParenGroups(s string) string {
 	if !strings.ContainsAny(s, "([") {
 		return s // the common case, kept off the regexp
 	}
-	return parenGroup.ReplaceAllString(s, " ")
+	for {
+		t := parenGroup.ReplaceAllString(s, " ")
+		if t == s {
+			break
+		}
+		s = t
+	}
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune("()[]", r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // dropLeadingArticle removes a leading "the "/"a "/"an ", never emptying the
@@ -606,6 +626,19 @@ var genreFluff = map[string]bool{
 	"mystery": true, "romance": true, "thriller": true, "audible": true,
 	"original": true, "dramatized": true, "adaptation": true, "omnibus": true,
 	"complete": true, "collection": true, "edition": true, "anthology": true,
+	"dark": true,
+}
+
+// formatFluff are the genreFluff words that say what a release is rather than
+// its genre. "series" is fluff only beside genre words alone ("A GameLit Dark
+// Adventure Series", "An Epic Fantasy Series"): with any of these ("The Complete
+// Series", "The Complete LitRPG Series"), or alone ("Series 1-3"), the tail tells
+// an omnibus from its first book and stays. Measured on audiosilo-meta's 259k
+// distinct work titles (#41): with "series" and "dark", 42 more genre tails drop
+// and none of the 400-odd complete-series titles collapses.
+var formatFluff = map[string]bool{
+	"audible": true, "original": true, "dramatized": true, "adaptation": true, "omnibus": true,
+	"complete": true, "collection": true, "edition": true, "anthology": true,
 }
 
 // dropGenreSubtitle removes a trailing ": …" or " - …" segment whose significant
@@ -619,9 +652,13 @@ func dropGenreSubtitle(s string) string {
 	if sep < 0 {
 		return s
 	}
-	any, allFluff := false, true
+	any, allFluff, genre, format, series := false, true, false, false, false
 	for _, w := range strings.FieldsFunc(strings.ToLower(s[sep:]), notAlnum) {
 		if len(w) < 2 || titleStopwords[w] {
+			continue
+		}
+		if w == "series" {
+			series = true
 			continue
 		}
 		any = true
@@ -629,8 +666,9 @@ func dropGenreSubtitle(s string) string {
 			allFluff = false
 			break
 		}
+		genre, format = genre || !formatFluff[w], format || formatFluff[w]
 	}
-	if any && allFluff {
+	if any && allFluff && (!series || (genre && !format)) {
 		return strings.TrimSpace(s[:sep])
 	}
 	return s
