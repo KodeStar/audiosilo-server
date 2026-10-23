@@ -232,6 +232,31 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	return j, created, err
 }
 
+// RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
+// it failed at or after since, else nil: an OPML import passes such a feed
+// over instead of queueing it again. A private request that expired with a
+// server restart (request_expired) is not the feed's failure and never counts.
+func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, since time.Time) (*Job, error) {
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
+	}
+	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND j.library_id=? AND json_extract(j.params,'$.feed_url_sha256')=? ORDER BY j.id DESC LIMIT 1`, user, lib, feed.FeedURLHash(norm)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if j.State != StateFailed || j.FinishedAt == nil || *j.FinishedAt < at(since) {
+		return nil, nil
+	}
+	if o, _ := PodcastOutcomeOf(*j); o.Code == "request_expired" {
+		return nil, nil
+	}
+	r := RedactedJob(*j)
+	return &r, nil
+}
+
 // ExpirePrivateRequests also runs before claims. It never hands out a private
 // subscription whose credential was lost during a server restart.
 func (s *Service) ExpirePrivateRequests(ctx context.Context) error {

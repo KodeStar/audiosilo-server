@@ -254,3 +254,73 @@ func TestSubscribeAdoptOnly(t *testing.T) {
 		t.Fatalf("adopt = %v", err)
 	}
 }
+
+// RecentSubscribeFailure is the person's LAST request for the feed in the
+// library, only while it failed within the window and never an expired
+// private request (a server restart, not the feed's failure).
+func TestRecentSubscribeFailure(t *testing.T) {
+	q := podcastQueue(t)
+	ctx := context.Background()
+	feedURL := "https://example.com/dead.xml"
+	since := func() time.Time { return q.now.Add(-time.Hour) }
+	if j, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); err != nil || j != nil {
+		t.Fatalf("no request = %+v %v", j, err)
+	}
+	fail := func(id int64) {
+		t.Helper()
+		claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+		if err != nil || claimed == nil || claimed.ID != id {
+			t.Fatalf("claim %+v %v", claimed, err)
+		}
+		state, msg := StateFailed, "not a feed"
+		if _, err := q.UpdateHeld(ctx, id, Update{Attempt: claimed.Attempts, State: &state, Error: &msg, Result: json.RawMessage(`{"code":"not_a_feed","message":"not a feed"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); err != nil || got != nil {
+		t.Fatalf("open request = %+v %v", got, err)
+	}
+	fail(j.ID)
+	got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since())
+	if err != nil || got == nil || got.ID != j.ID {
+		t.Fatalf("failed request = %+v %v", got, err)
+	}
+	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, "https://example.com/other.xml", since()); got != nil {
+		t.Fatal("another feed's failure")
+	}
+	if got, _ := q.RecentSubscribeFailure(ctx, q.lib+1, q.admin, feedURL, since()); got != nil {
+		t.Fatal("another library's failure")
+	}
+	q.advance(time.Hour + time.Second)
+	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); got != nil {
+		t.Fatal("a failure past the window")
+	}
+	// A retry that is open again hides the older failure.
+	again, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, feedURL, false, "")
+	if err != nil || again.ID == j.ID {
+		t.Fatalf("retry %+v %v", again, err)
+	}
+	fail(again.ID)
+	if got, _ := q.RecentSubscribeFailure(ctx, q.lib, q.admin, feedURL, since()); got == nil || got.ID != again.ID {
+		t.Fatalf("latest failure = %+v", got)
+	}
+	// An expired private request is not the feed's failure.
+	secret := "https://example.com/private?auth=SECRET123"
+	p, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, secret, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := New(q.db, func() time.Time { return *q.now }).ExpirePrivateRequests(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := q.Job(ctx, p.ID); err != nil || got.State != StateFailed {
+		t.Fatalf("expired %+v %v", got, err)
+	}
+	if got, err := q.RecentSubscribeFailure(ctx, q.lib, q.admin, secret, since()); err != nil || got != nil {
+		t.Fatalf("expired private request = %+v %v", got, err)
+	}
+}

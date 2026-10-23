@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -575,5 +576,81 @@ func TestPodcastFollowPrivacyConflict(t *testing.T) {
 	wantErr(t, resp, body, 202, "")
 	if openSubscribes(t, b) != 1 {
 		t.Fatal("the adoption made another job")
+	}
+}
+
+// BRIDGE-01: five feeds whose requests failed no longer take every wave's
+// slots. Within the hour they come back as error rows (recently_failed, the
+// failed request's id) and nothing is queued for them, so the good feeds
+// behind them are queued; past the hour, or a single follow, retries.
+func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
+	b, _, _ := podcastEnv(t, false)
+	ctx := context.Background()
+	var doc strings.Builder
+	doc.WriteString(`<?xml version="1.0"?><opml version="2.0"><body>`)
+	for _, u := range []string{"dead-1", "dead-2", "dead-3", "dead-4", "dead-5", "good-1", "good-2", "good-3"} {
+		fmt.Fprintf(&doc, `<outline type="rss" xmlUrl="https://feeds.example.org/%s.xml"/>`, u)
+	}
+	doc.WriteString(`</body></opml>`)
+	type row struct {
+		Status    string `json:"status"`
+		RequestID *int64 `json:"request_id"`
+		Error     *struct{ Code, Message string }
+	}
+	upload := func() []row {
+		t.Helper()
+		resp, body := opmlPost(t, b, b.userTok, b.lib.ID, doc.String(), "text/x-opml", nil)
+		wantErr(t, resp, body, 200, "")
+		var res struct{ Rows []row }
+		decodeInto(t, body, &res)
+		return res.Rows
+	}
+	statuses := func(rows []row) string {
+		var s []string
+		for _, r := range rows {
+			s = append(s, r.Status)
+		}
+		return strings.Join(s, ",")
+	}
+	first := upload()
+	if got := statuses(first); got != "queued,queued,queued,queued,queued,limited,limited,limited" {
+		t.Fatalf("first wave %s", got)
+	}
+	// The Bridge fails all five.
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_jobs SET state='failed', error='not a feed', result='{"code":"not_a_feed","message":"not a feed"}', finished_at=? WHERE kind=? AND state='queued'`, time.Now().UTC().Format(time.RFC3339), bridge.KindPodcastSubscribe); err != nil {
+		t.Fatal(err)
+	}
+	second := upload()
+	if got := statuses(second); got != "error,error,error,error,error,queued,queued,queued" {
+		t.Fatalf("second wave %s", got)
+	}
+	for i, r := range second[:5] {
+		if r.Error == nil || r.Error.Code != "recently_failed" || r.Error.Message == "" || r.RequestID == nil || *r.RequestID != *first[i].RequestID {
+			t.Fatalf("row %d %+v", i, r)
+		}
+	}
+	if openSubscribes(t, b) != 3 {
+		t.Fatal("a recently failed feed was queued again")
+	}
+	// Another person's failure is theirs: it never marks alice's rows.
+	otherID, otherTok := newUserWithSession(t, b.testEnv, "bob", false)
+	if err := b.cat.GrantWholeLibrary(ctx, otherID, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := opmlPost(t, b, otherTok, b.lib.ID, `<?xml version="1.0"?><opml version="2.0"><body><outline type="rss" xmlUrl="https://feeds.example.org/dead-1.xml"/></body></opml>`, "text/x-opml", nil)
+	wantErr(t, resp, body, 200, "")
+	if !strings.Contains(body, `"status":"queued"`) {
+		t.Fatalf("another person's failure leaked: %s", body)
+	}
+	// The single follow by address retries at once.
+	resp, body = b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":"https://feeds.example.org/dead-1.xml"}`, b.lib.ID), podcastHeaders())
+	wantErr(t, resp, body, 202, "")
+	// Past the hour, an import queues a failed feed again.
+	if _, err := b.db.ExecContext(ctx, `UPDATE bridge_jobs SET finished_at=? WHERE state='failed'`, time.Now().Add(-2*time.Hour).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	third := upload()
+	if third[1].Status != "queued" {
+		t.Fatalf("an old failure still passed over: %+v", third[1])
 	}
 }

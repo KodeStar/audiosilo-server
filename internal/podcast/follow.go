@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -22,6 +23,7 @@ type FollowCatalog interface {
 type FollowQueue interface {
 	Online(ctx context.Context) (*bridge.Heartbeat, error)
 	Subscribe(ctx context.Context, r bridge.SubscribeRequest) (*bridge.Job, bool, error)
+	RecentSubscribeFailure(ctx context.Context, lib, user int64, norm string, since time.Time) (*bridge.Job, error)
 	WakePodcasts()
 }
 
@@ -52,7 +54,16 @@ type FollowURL struct {
 	// AdoptOnly: a new subscription may not be queued, only an open one
 	// adopted (bridge.ErrNoNewRequest otherwise).
 	AdoptOnly bool
+	// SkipRecentFailure: a feed whose last request by the caller in this
+	// library failed within RecentFailureWindow is not queued again
+	// (ErrRecentlyFailed, the failed request as the outcome's Job). An OPML
+	// import sets it; a single follow always retries.
+	SkipRecentFailure bool
 }
+
+// RecentFailureWindow is how long an OPML import passes over a feed whose
+// follow request failed.
+const RecentFailureWindow = time.Hour
 
 // The FollowOutcome states.
 const (
@@ -77,6 +88,7 @@ var (
 	ErrNoWholeGrant      = errors.New("following a URL needs access to the whole library")
 	ErrBridgeUnavailable = errors.New("no online Bridge runs podcast.subscribe")
 	ErrModuleOff         = errors.New("the podcasts module is off")
+	ErrRecentlyFailed    = errors.New("this feed's follow request failed recently")
 )
 
 // Follow follows r.FeedURL in r.LibraryID as r.Caller. The library is the
@@ -130,6 +142,16 @@ func (f *Follower) Follow(ctx context.Context, r FollowURL) (*FollowOutcome, err
 	}
 	if f.Queue == nil {
 		return out, ErrBridgeUnavailable
+	}
+	if r.SkipRecentFailure {
+		failed, err := f.Queue.RecentSubscribeFailure(ctx, r.LibraryID, r.Caller.ID, norm, time.Now().Add(-RecentFailureWindow))
+		if err != nil {
+			return out, err
+		}
+		if failed != nil {
+			out.Job = failed
+			return out, ErrRecentlyFailed
+		}
 	}
 	h, err := f.Queue.Online(ctx)
 	if err != nil {
