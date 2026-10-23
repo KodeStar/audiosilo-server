@@ -2,13 +2,12 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Globe, Lock, Network, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Globe, Network, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidateLibraries, noteScanStarted, useSystem } from '@/api/hooks';
 import type { MetadataMode } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { SettingRow } from '@/components/setting-row';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -16,13 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { Switch } from '@/components/ui/switch';
 import { SettingBadges } from '@/features/settings/settings-form';
-import {
-  lockLabel,
-  lockOf,
-  METADATA_MODES,
-  outOfRange,
-  type SettingId,
-} from '@/features/settings/settings-model';
+import { METADATA_MODES, outOfRange } from '@/features/settings/settings-model';
 import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
 import { regionOptions } from '@/lib/regions';
@@ -39,23 +32,6 @@ import {
 } from './setup-model';
 import { LockedNote, StepFooter } from './step-parts';
 import { StepStop, useSaveStepSettings, type StepProps } from './step-actions';
-
-/**
- * A setting's badge: what sets it, with a lock, for one the environment or the
- * desktop app sets ("Set by AUDIOSILO_TLS_MODE", as Settings says), else the
- * restart badges Settings shows.
- */
-function Badges({ settings, id }: Pick<StepProps, 'settings'> & { id: SettingId }) {
-  const { t } = useTranslation();
-  const lock = lockOf(settings, id);
-  if (!lock) return <SettingBadges settings={settings} id={id} />;
-  return (
-    <Badge variant="outline">
-      <Lock aria-hidden="true" />
-      {lockLabel(t, lock)}
-    </Badge>
-  );
-}
 
 /**
  * Creates the draft's library (kind books, with the naming step's source) once
@@ -122,7 +98,7 @@ export function MetadataStep(props: StepProps) {
         <div className="divide-y">
           <SettingRow
             title={t('settings.metadata.toggle')}
-            badges={<Badges settings={settings} id="metadata.enabled" />}
+            badges={<SettingBadges settings={settings} id="metadata.enabled" />}
             htmlFor="setup-metadata"
             description={t('setup.metadata.toggleBody')}
             descriptionId="setup-metadata-desc"
@@ -139,7 +115,7 @@ export function MetadataStep(props: StepProps) {
             <>
               <SettingRow
                 title={t('settings.metadata.region')}
-                badges={<Badges settings={settings} id="metadata.region" />}
+                badges={<SettingBadges settings={settings} id="metadata.region" />}
                 htmlFor="setup-region"
                 description={t('setup.metadata.regionBody')}
                 descriptionId="setup-region-desc"
@@ -163,7 +139,7 @@ export function MetadataStep(props: StepProps) {
               <div className="flex flex-col gap-3 py-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <b className="font-semibold">{t('settings.metadata.mode')}</b>
-                  <Badges settings={settings} id="metadata.mode" />
+                  <SettingBadges settings={settings} id="metadata.mode" />
                 </div>
                 <RadioCards
                   label={t('settings.metadata.mode')}
@@ -297,7 +273,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
         <div className="divide-y">
           <SettingRow
             title={t('settings.general.public_url')}
-            badges={<Badges settings={settings} id="general.public_url" />}
+            badges={<SettingBadges settings={settings} id="general.public_url" />}
             htmlFor="setup-public-url"
             description={t('setup.reach.publicBody')}
           >
@@ -312,7 +288,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
           </SettingRow>
           <SettingRow
             title={t('settings.general.lan_url')}
-            badges={<Badges settings={settings} id="general.lan_url" />}
+            badges={<SettingBadges settings={settings} id="general.lan_url" />}
             htmlFor="setup-lan-url"
             description={t('setup.reach.lanBody')}
           >
@@ -367,7 +343,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
             <h3 id="setup-https" className="font-semibold">
               {t('setup.reach.https', { mode: t(`settings.network.mode.${n.tls_mode}`) })}
             </h3>
-            <Badges settings={settings} id="network.tls_mode" />
+            <SettingBadges settings={settings} id="network.tls_mode" />
           </div>
           <p className="text-[13px] text-muted-foreground">
             {t(`setup.reach.phones.${n.tls_mode}`)}
@@ -375,7 +351,7 @@ export function ReachStep({ env, settings, leave, back, last }: StepProps) {
           {n.tls_mode === 'selfsigned' ? (
             <SettingRow
               title={t('settings.network.tls_home_http')}
-              badges={<Badges settings={settings} id="network.tls_home_http" />}
+              badges={<SettingBadges settings={settings} id="network.tls_home_http" />}
               htmlFor="setup-home-http"
               description={t('settings.network.tls_home_httpBody')}
               descriptionId="setup-home-http-desc"
@@ -492,7 +468,7 @@ export function BackupsStep({ settings, leave, back, last }: StepProps) {
         <div className="divide-y">
           <SettingRow
             title={t('settings.backups.schedule')}
-            badges={<Badges settings={settings} id="backups.schedule" />}
+            badges={<SettingBadges settings={settings} id="backups.schedule" />}
             htmlFor="setup-backup-schedule"
             description={t('settings.backups.scheduleBody')}
           >
@@ -505,7 +481,7 @@ export function BackupsStep({ settings, leave, back, last }: StepProps) {
           </SettingRow>
           <SettingRow
             title={t('settings.backups.keep')}
-            badges={<Badges settings={settings} id="backups.keep" />}
+            badges={<SettingBadges settings={settings} id="backups.keep" />}
             htmlFor="setup-backup-keep"
             description={t('settings.backups.keepBody')}
           >
@@ -529,7 +505,7 @@ export function BackupsStep({ settings, leave, back, last }: StepProps) {
           </SettingRow>
           <SettingRow
             title={t('settings.general.update_check')}
-            badges={<Badges settings={settings} id="general.update_check" />}
+            badges={<SettingBadges settings={settings} id="general.update_check" />}
             htmlFor="setup-updates"
             description={t('settings.general.update_checkBody')}
             descriptionId="setup-updates-desc"

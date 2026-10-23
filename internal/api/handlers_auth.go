@@ -293,10 +293,10 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
 // to add another device from an existing session. The token is deliberately
-// UNLINKED (no parent auth code): single-use and 10-minute, since the user is
-// present and can mint another with a tap. An optional JSON body
+// UNLINKED (no parent auth code): single-use and at most 10 minutes, since the
+// user is present and can mint another with a tap. An optional JSON body
 // {ttl_seconds} asks for a shorter life (pairTTL; never a longer one); no body
-// is today's 10 minutes, and a malformed one is 400.
+// is the full 10 minutes, and a malformed one is 400.
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return

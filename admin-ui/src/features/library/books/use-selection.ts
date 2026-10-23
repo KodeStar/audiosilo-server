@@ -22,6 +22,9 @@ export function shiftHeld(e: Event | React.SyntheticEvent | undefined): boolean 
   return !!e && 'shiftKey' in e && !!e.shiftKey;
 }
 
+// A caller with no list to range over: one array, so `order` holds still.
+const NO_ORDER: readonly AdminBook[] = [];
+
 /**
  * The books picked for a bulk action, keyed by identity (library + path). The
  * rows themselves are kept, so the dialogs can show current values and send
@@ -33,7 +36,7 @@ export function shiftHeld(e: Event | React.SyntheticEvent | undefined): boolean 
  * (`setMode`), so a click on a tile or row picks rather than opens; clearing
  * the selection turns the toggle off too.
  */
-export function useSelection(order: readonly AdminBook[] = []) {
+export function useSelection(order: readonly AdminBook[] = NO_ORDER) {
   const [selected, setSelected] = useState<ReadonlyMap<string, AdminBook>>(() => new Map());
   const [mode, setMode] = useState(false);
   const anchor = useRef<string | null>(null);

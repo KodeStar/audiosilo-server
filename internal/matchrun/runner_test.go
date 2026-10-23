@@ -450,6 +450,7 @@ func TestRepick(t *testing.T) {
 // looked it up (another record: still a community ASIN) keeps that match when
 // the run is applied (R-34).
 func TestRepickKeepsHandMatch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.book(t, "A/Community", "Community", "", nil)

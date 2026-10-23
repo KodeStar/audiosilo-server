@@ -2123,7 +2123,7 @@ export interface MatchProposal {
   cover_url?: string;
   /** The proposed ASIN's marketplace. */
   asin_region?: string;
-  /** A refresh's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
+  /** A refresh's or a repick's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
   found_by?: string;
   /** Each field the community has a value for, in stored form. */
   values: Partial<Record<OverrideField, string>>;

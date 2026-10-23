@@ -4,7 +4,7 @@ import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
 import { mockFetch } from '@/test/fetch-mock';
-import { admin, liveSession, member, stats, systemStatus } from '@/test/fixtures';
+import { admin, liveSession, member, settingsWith, stats, systemStatus } from '@/test/fixtures';
 import { signedInRoutes } from '@/test/routes';
 import { renderApp } from '@/test/render-app';
 
@@ -169,6 +169,20 @@ describe('overview', () => {
     renderApp();
     expect(
       await screen.findByRole('heading', { name: "Let's put your audiobooks on the shelf." }),
+    ).toBeInTheDocument();
+  });
+
+  it('says a restart is pending on a server with no libraries (the setup flow saved one)', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/stats': { body: stats({ total_libraries: 0, libraries: [], listening: [] }) },
+        'GET /admin/settings': { body: settingsWith({ restart_pending: ['network.bind'] }) },
+      }),
+    );
+    renderApp();
+    await screen.findByRole('heading', { name: "Let's put your audiobooks on the shelf." });
+    expect(
+      await screen.findByText('Restart AudioSilo to finish applying your changes'),
     ).toBeInTheDocument();
   });
 

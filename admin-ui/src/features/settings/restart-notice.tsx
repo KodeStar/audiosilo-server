@@ -15,7 +15,7 @@ export function RestartNotice({
   settings: AdminSettings;
   actions?: React.ReactNode;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (settings.restart_pending.length === 0) return null;
   return (
     <Notice
@@ -25,7 +25,9 @@ export function RestartNotice({
       role="status"
       actions={actions}
     >
-      {t('settings.restart.body', { list: restartList(t, settings) })}
+      {t('settings.restart.body', {
+        list: restartList(t, settings, i18n.resolvedLanguage ?? 'en'),
+      })}
     </Notice>
   );
 }

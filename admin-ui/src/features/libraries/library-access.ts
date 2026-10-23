@@ -10,8 +10,9 @@ export function everyoneToGrant(users: readonly AdminUser[]): AdminUser[] {
 }
 
 /**
- * Whether config.yaml or the environment declares this library (GET
- * /admin/setup's config_libraries): its name and folder are set there.
+ * Whether the config declares this library (config.yaml, or the app that runs
+ * the server; GET /admin/setup's config_libraries): its name and folder are
+ * set there.
  */
 export function configLibrary(setup: SetupEnvelope | undefined, name: string): boolean {
   return !!setup?.config_libraries.includes(name);

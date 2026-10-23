@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye } from 'lucide-react';
@@ -26,9 +26,16 @@ import { useIssueActions, type IssueActions } from './use-issue-actions';
  * sharing an ASIN/ISBN at different lengths may be different recordings, so no
  * copy is called the one to keep there: the card says what to check instead.
  */
-export function Duplicates({ ignored }: { ignored: boolean }) {
-  // Copies in different libraries are usually on purpose: grouped only when asked (#165).
-  const [across, setAcross] = useState(false);
+export function Duplicates({
+  ignored,
+  across,
+  onAcrossChange,
+}: {
+  ignored: boolean;
+  /** Copies in different libraries are usually on purpose: grouped only when asked (#165). */
+  across: boolean;
+  onAcrossChange: (on: boolean) => void;
+}) {
   const groups = useDuplicates(ignored, across);
   const actions = useIssueActions('duplicate');
   const roots = useLibraryRoots();
@@ -37,7 +44,7 @@ export function Duplicates({ ignored }: { ignored: boolean }) {
   const several = (libraries.data?.filter((l) => l.kind !== 'podcasts').length ?? 0) > 1;
   return (
     <div className="flex flex-col gap-4">
-      {several ? <AcrossToggle on={across} onChange={setAcross} /> : null}
+      {several ? <AcrossToggle on={across} onChange={onAcrossChange} /> : null}
       <DuplicateList ignored={ignored} groups={groups} actions={actions} roots={roots} />
     </div>
   );

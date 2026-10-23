@@ -33,6 +33,7 @@ import { NamingStep } from './naming-step';
 import { BackupsStep, MetadataStep, ReachStep } from './settings-steps';
 import {
   finishMarks,
+  hasBookLibrary,
   nextStep,
   parseDraft,
   previousStep,
@@ -123,7 +124,7 @@ function Flow({
   state: SetupState;
   props: Pick<StepProps, 'env' | 'settings' | 'libraries'>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { step } = useSearch({ from: '/setup' });
@@ -136,7 +137,7 @@ function Flow({
   const [createdId, setCreatedId] = useState<number | null>(null);
   const current =
     step ??
-    resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: props.libraries.length > 0 });
+    resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: hasBookLibrary(props.libraries) });
   const next = nextStep(current, state, draft);
   const prev = previousStep(current);
 
@@ -168,7 +169,7 @@ function Flow({
       // a step another tab recorded since must not be marked skipped over it.
       const fresh = await qc.fetchQuery({ queryKey: keys.setup, queryFn: api.setup });
       await saveSetup(qc, {
-        steps: finishMarks(fresh.state.steps, current, mark, props.libraries.length > 0),
+        steps: finishMarks(fresh.state.steps, current, mark, hasBookLibrary(props.libraries)),
         finished: true,
       });
     } else {
@@ -182,7 +183,9 @@ function Flow({
       toast.add({
         title: t('setup.finished'),
         description: saved.restart_pending.length
-          ? t('setup.finishedRestart', { list: restartList(t, saved) })
+          ? t('setup.finishedRestart', {
+              list: restartList(t, saved, i18n.resolvedLanguage ?? 'en'),
+            })
           : t('setup.finishedBody'),
         type: saved.restart_pending.length ? 'info' : 'success',
       });

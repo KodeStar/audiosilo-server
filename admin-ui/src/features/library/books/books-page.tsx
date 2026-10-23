@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, LoaderCircle, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
@@ -145,6 +145,7 @@ export function BooksPage() {
               selection={selection}
               hasMore={!!list.hasNextPage}
               fetchNextPage={list.fetchNextPage}
+              listKey={JSON.stringify(params)}
             />
           ) : null}
           {content}
@@ -188,6 +189,11 @@ export function BooksPage() {
  * and, when the filter matches more than are loaded, every matching book, the
  * rest of the list fetched page by page here, up to BULK_LIMIT (what one
  * bulk action takes). A selection past that says so.
+ *
+ * `listKey` names the list (its filter and sort): a fetch still running when
+ * it changes, or when the row goes (the selection ended), selects nothing, as
+ * fetchNextPage follows the list as it is now and its pages would be another
+ * filter's books.
  */
 function SelectAllRow({
   books,
@@ -195,12 +201,14 @@ function SelectAllRow({
   selection,
   hasMore,
   fetchNextPage,
+  listKey,
 }: {
   books: AdminBook[];
   total: number | undefined;
   selection: Selection;
   hasMore: boolean;
   fetchNextPage: ReturnType<typeof useAdminBooks>['fetchNextPage'];
+  listKey: string;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -208,21 +216,31 @@ function SelectAllRow({
   const allShown = books.every(selection.isSelected);
   const matching = total ?? books.length;
   const capped = matching > BULK_LIMIT;
+  // Which run may still select: a new list or the row going moves it on.
+  const run = useRef(0);
+  useEffect(
+    () => () => {
+      run.current += 1;
+    },
+    [listKey],
+  );
 
   const selectMatching = async () => {
+    const mine = run.current;
     setLoading(true);
     try {
       let all = books;
       let more = hasMore;
       while (more && all.length < BULK_LIMIT) {
         const r = await fetchNextPage();
+        if (run.current !== mine) return;
         if (r.isError) throw r.error;
         all = r.data?.pages.flatMap((p) => p.books ?? []) ?? all;
         more = !!r.hasNextPage;
       }
       selection.setMany(all.slice(0, BULK_LIMIT), true);
     } catch (err) {
-      toastError(t('books.select.failed'), err);
+      if (run.current === mine) toastError(t('books.select.failed'), err);
     } finally {
       setLoading(false);
     }

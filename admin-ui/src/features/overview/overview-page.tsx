@@ -517,6 +517,8 @@ function FirstRun() {
   const steps = ['add', 'scan', 'invite'] as const;
   return (
     <Page>
+      {/* The setup flow can finish with no library, a restart-only choice saved. */}
+      <PendingRestart />
       <div className="overflow-hidden rounded-xl border bg-card">
         <div className="px-6 py-10 md:px-11 md:py-12">
           <div className="eyebrow">{t('home.firstRun.eyebrow')}</div>

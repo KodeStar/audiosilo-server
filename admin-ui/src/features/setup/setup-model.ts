@@ -4,6 +4,7 @@ import {
   PREVIEW_FIELDS,
   SETUP_STEPS,
   type AdminSettings,
+  type Library,
   type MetadataSource,
   type PreviewNames,
   type PreviewSample,
@@ -31,13 +32,18 @@ export function stepIndex(id: SetupStepId): number {
 }
 
 /**
- * The one rule for the folder step: a library on the server satisfies it,
- * whatever its mark (it was added here, by config, or by an older setup page).
- * Where the flow opens, what Finish marks and what the Overview card lists all
- * follow it.
+ * The one rule for the folder step: a books library on the server satisfies
+ * it, whatever its mark (it was added here, by config, or by an older setup
+ * page); `hasLibraries` is hasBookLibrary's answer. Where the flow opens, what
+ * Finish marks and what the Overview card lists all follow it.
  */
 export function folderSatisfied(hasLibraries: boolean): boolean {
   return hasLibraries;
+}
+
+/** Whether the server has a library of books: a podcast library holds no audiobooks, so it isn't the folder step's. */
+export function hasBookLibrary(libraries: readonly Pick<Library, 'kind'>[]): boolean {
+  return libraries.some((l) => l.kind !== 'podcasts');
 }
 
 /**
@@ -322,14 +328,18 @@ export function reachOffers(hostport: string): ('lan' | 'public')[] {
  * `scheme`:// added when it has none ("192.168.1.20:8080" ->
  * "http://192.168.1.20:8080", as the placeholder shows). "" stays "" (no
  * address). Null when it still isn't a plain http(s) address (another scheme,
- * no host, a ?, # or user name), so the field can say so before the server is
- * asked.
+ * a mistyped one, no host, a ?, # or user name), so the field can say so
+ * before the server is asked.
  */
 export function normalizeAddress(raw: string, scheme: 'http' | 'https'): string | null {
   const s = raw.trim();
   if (s === '') return '';
   // The scheme is judged before trailing slashes go, so "http://" stays no address.
-  const full = (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `${scheme}://${s}`).replace(/\/+$/, '');
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s);
+  // A scheme mistyped ("http:/nas", "http//nas", "ftp:nas") would read as a
+  // host named after it; a port after the host ("nas.local:8080") is no scheme.
+  if (!hasScheme && (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s) || /^https?\/\//i.test(s))) return null;
+  const full = (hasScheme ? s : `${scheme}://${s}`).replace(/\/+$/, '');
   let u: URL;
   try {
     u = new URL(full);

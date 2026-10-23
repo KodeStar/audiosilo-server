@@ -628,6 +628,31 @@ describe('libraries, 2.4.0 fixes', () => {
     expect(grants(calls)[0].body).toEqual({ user_id: sam.id, library_id: 3 });
   });
 
+  it('sends the grants one at a time, so only the first makes the library share', async () => {
+    const lee = { ...sam, id: 6, username: 'lee' };
+    let open = 0;
+    let most = 0;
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries': created,
+        'GET /admin/users': { body: { users: [admin, sam, lee] } },
+        'POST /admin/library-access': async () => {
+          most = Math.max(most, ++open);
+          await new Promise((r) => setTimeout(r, 5));
+          open--;
+          return { status: 204 };
+        },
+      }),
+    );
+    await addPodcasts(true);
+    await waitFor(() => expect(grants(calls)).toHaveLength(2));
+    expect(grants(calls).map((c) => (c.body as { user_id: number }).user_id)).toEqual([
+      sam.id,
+      lee.id,
+    ]);
+    expect(most).toBe(1);
+  });
+
   it('gives it to no one when the box is cleared', async () => {
     const calls = mockFetch(
       routes({
@@ -652,9 +677,10 @@ describe('libraries, 2.4.0 fixes', () => {
   });
 
   it('keeps the name and folder of a library config.yaml declares (UPG-01)', async () => {
-    mockFetch(
+    const calls = mockFetch(
       routes({
         'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+        'PATCH /admin/libraries/1': { body: { id: 1, name: 'Fiction', root: '/media/fiction' } },
       }),
     );
     renderApp('/library/libraries');
@@ -668,6 +694,13 @@ describe('libraries, 2.4.0 fixes', () => {
     expect(within(dialog).getByLabelText('Folder')).toHaveAttribute('readonly');
     expect(within(dialog).getByRole('button', { name: 'Browse' })).toBeDisabled();
     expect(within(dialog).getByText(/set in config.yaml/)).toBeInTheDocument();
+    // A save sends its other settings only: the name and folder stay the config's.
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true));
+    const sent = calls.find((c) => c.method === 'PATCH')!.body as Record<string, unknown>;
+    expect(sent).not.toHaveProperty('name');
+    expect(sent).not.toHaveProperty('root');
+    expect(sent).toHaveProperty('scan_schedule');
   });
 
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
@@ -692,5 +725,6 @@ describe('libraries, 2.4.0 fixes', () => {
     await user.type(name, 'Novels');
     await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(name).toHaveAttribute('aria-invalid', 'true'));
+    expect(within(dialog).getByText(/set in config.yaml/)).toBeInTheDocument();
   });
 });

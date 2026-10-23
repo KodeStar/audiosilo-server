@@ -338,13 +338,10 @@ export const api = {
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
   /**
-   * A single-use, ten-minute pairing token for the signed-in admin, which "Listen in
-   * player" hands the web player (403 for an API key).
-   */
-  /**
-   * A pairing token for this admin (single use). `ttlSeconds` asks the server
-   * for a shorter life than its 10 minutes (clamped to 30 s at the least); an
-   * older server ignores no body and refuses none.
+   * A single-use pairing token for the signed-in admin, which "Listen in
+   * player" hands the web player (403 for an API key). `ttlSeconds` asks for a
+   * shorter life than the server's 10 minutes (30 s at the least); an older
+   * server ignores it and gives the 10 minutes.
    */
   pairSelf: (ttlSeconds?: number) =>
     request<PairToken>(

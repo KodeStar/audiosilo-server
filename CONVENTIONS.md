@@ -52,8 +52,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
   recovery-derived tokens instead last `auth.recoveryPairingTTL` (multi-scan
   within it), and
-  `/auth/pair` + demo tokens stay unlinked/single-use (the console's book page
-  "Listen in player" mints one with `/auth/pair` and opens the same-origin
+  `/auth/pair` + demo tokens stay unlinked/single-use (`/auth/pair`'s optional
+  `{ttl_seconds}` body shortens its 10 minutes, `pairTTL` clamping it to 30 s..10 min,
+  never longer; no body is the full 10 minutes, a malformed one 400; the console's book page
+  "Listen in player" mints a short one with `/auth/pair` and opens the same-origin
   `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
   `web_url`, whose base may be another origin). Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
@@ -888,8 +890,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Writes.after` is the one rule for a field's value once written (both `planSeries`
   and the review use it). A refresh records only books a scope would change (as a
   repick records only books with a new ASIN), so a clean library leaves no items. A refresh
-  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), and
-  applying it is a no-op for a book that no longer has it (matched again since).
+  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), as a
+  repick's names the ASIN it looked up, and applying either is a no-op for a book that no
+  longer has it (matched again since: `stillFoundBy`; a repick recorded before 2.4.0 has none).
   Likewise a match run's book that has an ASIN or ISBN now (`matchedSince`: matched by hand
   from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
   in the review and is skipped with detail `matched_since`, under any scope; a match whose
@@ -903,7 +906,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A community position that is a range ("1-3") is written as one (`series_index` "1-3", a
   `more_series` entry's `position_end`); one the field refuses (a span over 100) is none.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
-  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`). A
+  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a review
+  item whose recording doesn't fit carries detail `length_differs`, which the review words with
+  both lengths). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
@@ -1085,7 +1090,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reindex. `duplicate` is groups within one
   library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN (whatever the lengths),
   or `metaKey` with a length within 1 min / 2% (`sameLength`), an unknown length matching only
-  another unknown one; copies across libraries are deliberate). Each join marks its kind on one
+  another unknown one; copies across libraries are usually deliberate, so they group only with
+  `?across=1` on the duplicates list, never in the Health count: the signals are then not kept
+  per library, and with `?library_id=` only the groups holding one of its books are kept). Each join marks its kind on one
   copy and a group's `reason` is the strongest its joins support (`dupSet.reason`):
   `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
   lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
@@ -2019,7 +2026,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Advertised by the additive `export` capability.
 - **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
-  change; `DELETE /admin/libraries/{id}` removes the library
+  change. A library the config declares (config.yaml, or an embedding app's
+  `launcher.Options.Libraries`; upserted by name at every start) keeps its name and folder: changing
+  either is 409 `config_library`, the same values resent (a folder respelled) write nothing, and
+  another library renamed or added with a declared name at another folder is 409 `name_taken`
+  (the next start would re-root it). `DELETE /admin/libraries/{id}` removes the library
   + its index (files on disk untouched). Both are surfaced in the admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
   in place (one `auth.UpdateUser` transaction); `DELETE /admin/users/{id}`
@@ -2040,7 +2051,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ResolveRequest`, at most once a minute per token unless the request's address or
   app changed: `touchInterval`) - there is no `last_login` column; don't add one.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
-  counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
+  counts (`catalog.CountBooksByLibrary`, each library with its `kind`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
   with `?range=` it answers the Activity page's `activity` block instead (see Phase 4a above).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
@@ -2148,7 +2159,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints}`: `request` is the direct
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
-  `config_libraries` the names config/env declares; `mount_hints` (only while not finished, else `[]`) `library.MountHints` (Linux
+  `config_libraries` the names the config declares (config.yaml, or an embedding app); `mount_hints` (only while not finished or
+  while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
   transaction), returns the state, audited `settings.setup`; 400 `invalid_setup_step`

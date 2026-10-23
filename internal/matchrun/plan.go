@@ -322,9 +322,9 @@ func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != ""
 }
 
-// stillFoundBy reports whether the book still has the identifier a refresh
-// found its record by (Proposal.FoundBy): a book matched again since (by hand,
-// to another record) is not overwritten with the old one's details.
+// stillFoundBy reports whether the book still has the identifier a refresh or
+// a repick found its record by (Proposal.FoundBy): a book matched again since
+// (by hand, to another record) is not overwritten with the old one's details.
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {

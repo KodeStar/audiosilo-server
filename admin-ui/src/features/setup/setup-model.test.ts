@@ -9,6 +9,7 @@ import {
   folderErrorKey,
   isHomeHost,
   isLoopbackUrl,
+  hasBookLibrary,
   normalizeAddress,
   phoneLink,
   isSetupStep,
@@ -389,6 +390,14 @@ describe('how people reach the server', () => {
   });
 });
 
+describe('hasBookLibrary', () => {
+  it('counts a books library, not a podcast one, for the folder step', () => {
+    expect(hasBookLibrary([])).toBe(false);
+    expect(hasBookLibrary([{ kind: 'podcasts' }])).toBe(false);
+    expect(hasBookLibrary([{ kind: 'podcasts' }, { kind: 'books' }])).toBe(true);
+  });
+});
+
 describe('normalizeAddress', () => {
   it('adds the scheme left off, as the placeholders show', () => {
     expect(normalizeAddress('books.example.com', 'https')).toBe('https://books.example.com');
@@ -402,6 +411,16 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('https://books.example.com/?x=1', 'https')).toBeNull();
     expect(normalizeAddress('https://me@books.example.com', 'https')).toBeNull();
     expect(normalizeAddress('http://', 'http')).toBeNull();
+  });
+
+  it('refuses a mistyped scheme rather than reading it as the host', () => {
+    expect(normalizeAddress('http:/192.168.1.20:8080', 'http')).toBeNull();
+    expect(normalizeAddress('http//192.168.1.20:8080', 'http')).toBeNull();
+    expect(normalizeAddress('https:/books.example.com', 'https')).toBeNull();
+    expect(normalizeAddress('ftp:/books.example.com', 'https')).toBeNull();
+    // A host with a port is no scheme.
+    expect(normalizeAddress('nas.local:8080', 'http')).toBe('http://nas.local:8080');
+    expect(normalizeAddress('localhost:8080/', 'http')).toBe('http://localhost:8080');
   });
 });
 

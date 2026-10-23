@@ -19,6 +19,8 @@ const BY_CODE: Record<string, string> = {
   cannot_delete_self: 'errors.deleteSelf',
   folder_unreadable: 'errors.folderUnreadable',
   root_overlaps: 'errors.rootOverlaps',
+  // A library the config declares: its name and folder are set there.
+  config_library: 'libraries.form.configLocked',
   // The console caps bulk edits and share additions at the server's limits, so
   // the one too_large a person can hit is a cover upload.
   too_large: 'book.cover.tooLarge',

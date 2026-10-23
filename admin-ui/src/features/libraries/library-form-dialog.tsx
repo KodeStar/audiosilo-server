@@ -69,6 +69,7 @@ const FIELD_BY_CODE: Partial<Record<string, keyof Values>> = {
   invalid_pattern: 'ignore',
   invalid_metadata_source: 'source',
   config_library: 'name',
+  name_taken: 'name',
 };
 
 /**
@@ -129,7 +130,12 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   });
   const { errors, isSubmitting } = form.formState;
 
-  /** Grants a new library to every listener: how many grants failed, or none known (the people list didn't load). */
+  /**
+   * Grants a new library to every listener: how many grants failed, or none
+   * known (the people list didn't load). One at a time: the first grant makes
+   * the library's whole-library share, and grants sent together would each try
+   * to make it (two get a share, the rest a 409).
+   */
   const grantEveryone = async (libraryId: number): Promise<{ failed: number | null }> => {
     let users: AdminUser[];
     try {
@@ -137,27 +143,33 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
     } catch {
       return { failed: null };
     }
-    const results = await Promise.allSettled(
-      everyoneToGrant(users).map((u) => api.grantLibrary(u.id, libraryId)),
-    );
-    return { failed: results.filter((r) => r.status === 'rejected').length };
+    let failed = 0;
+    for (const u of everyoneToGrant(users)) {
+      try {
+        await api.grantLibrary(u.id, libraryId);
+      } catch {
+        failed++;
+      }
+    }
+    return { failed };
   };
 
   const onSubmit = form.handleSubmit(async (v) => {
     const patterns = textToPatterns(v.ignore);
-    const lib = {
+    const settings = {
       kind: v.kind,
-      name: v.name,
-      root: v.folder,
       scan_schedule: joinSchedule(v.schedule, v.time),
       ...(v.kind === 'books' ? { ignore_patterns: patterns, metadata_source: v.source } : {}),
     };
+    const place = { name: v.name, root: v.folder };
     try {
       // A new library is always scanned; an edit only when the server queued a
-      // scan for it (a new folder or new ignore rules).
+      // scan for it (a new folder or new ignore rules). A library the config
+      // declares sends neither name nor folder: they're shown, not edited (and
+      // the name as the form trims it could read as a rename).
       const saved: Library & { job?: Job } = library
-        ? await api.updateLibrary(library.id, lib)
-        : await api.createLibrary(lib);
+        ? await api.updateLibrary(library.id, fromConfig ? settings : { ...settings, ...place })
+        : await api.createLibrary({ ...settings, ...place });
       const rescans = !library || !!saved.job;
       // A new podcast library is no one's until access is given: "Give
       // everyone access" grants it to each listener now. A refusal says so;

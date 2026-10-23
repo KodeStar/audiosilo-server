@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, ListChecks } from 'lucide-react';
 import { saveSetup, useLibraries, useSetup } from '@/api/hooks';
 import { Button } from '@/components/ui/button';
-import { showFinishCard, skippedSteps } from '@/features/setup/setup-model';
+import { hasBookLibrary, showFinishCard, skippedSteps } from '@/features/setup/setup-model';
 import { toastError } from '@/lib/errors';
 
 /**
@@ -20,7 +20,7 @@ export function FinishSetupCard() {
   const state = useSetup().data?.state;
   const libraries = useLibraries();
   const [busy, setBusy] = useState(false);
-  const hasLibraries = (libraries.data?.length ?? 0) > 0;
+  const hasLibraries = hasBookLibrary(libraries.data ?? []);
   if (!libraries.data || !showFinishCard(state, hasLibraries)) return null;
   const skipped = skippedSteps(state, hasLibraries);
 
