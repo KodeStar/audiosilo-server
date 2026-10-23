@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -325,9 +326,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
+			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) &&
 			!problemCleared(lib, old, s.ffprobePath) {
-			// Unchanged since last scan; only skip the probe when ffprobe is
+			// Unchanged since last scan, its files in the order stored (a book
+			// indexed in byte order before #160 is read again in natural order);
+			// only skip the probe when ffprobe is
 			// disabled, or a prior probe already stored both duration and codec
 			// (so books indexed before the codec column get it backfilled).
 			// Whether it is a disc of a split book turns on its siblings, so it can
@@ -916,8 +920,8 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 
 // audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
 // root) and returns the folders under it that directly hold audio, library-relative,
-// each with its audio files in name order: the files audioEntries would list, read
-// in the same walk rather than again. Hidden and ignored entries are skipped as
+// each with its audio files in natural name order (fileOrder): the files audioEntries
+// would list, read in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
 // skipped, even when its own name begins with a dot. side is the metadata files
 // found in the same walk (sidecarFiles). limit bounds the walk (nil for none):
@@ -988,6 +992,9 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
+	for _, audio := range dirs {
+		slices.SortFunc(audio, fileOrder)
+	}
 	return dirs, side, hadErrors, err
 }
 
@@ -1096,7 +1103,7 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, in the stable name order os.ReadDir provides.
+// absDir, in natural name order (fileOrder).
 func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
@@ -1109,6 +1116,7 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}
+	slices.SortFunc(audio, fileOrder)
 	return audio
 }
 

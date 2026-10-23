@@ -46,6 +46,7 @@ func TestDiscOrder(t *testing.T) {
 		{"CD2", "cd 2", 0},
 		{"a10b", "a9c", 1},
 		{"Track", "Track 1", -1},
+		{"1-10", "2-1", -1}, // a separator between digits ends the number (#160)
 	} {
 		if got := naturalCompare(tc.a, tc.b); got != tc.want {
 			t.Errorf("naturalCompare(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
@@ -559,8 +560,8 @@ func TestJoinOnlyDiscSets(t *testing.T) {
 }
 
 // Inside a disc, a joined book keeps the order a book of that disc alone has (the
-// scanner's name order: 1, 10, 2), so a position on the disc book, offset onto the
-// joined book, lands in the same file; only the disc folders go in natural order.
+// scanner's natural name order, fileOrder: 1, 2, 10), so a position on the disc
+// book, offset onto the joined book, lands in the same file.
 func TestJoinKeepsDiscFileOrder(t *testing.T) {
 	t.Parallel()
 	ffprobe := lookFFprobe(t)
@@ -597,12 +598,12 @@ func TestJoinKeepsDiscFileOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := fileAt(b, 2); got != "A/Book/"+disc+"/10.mp3" {
-			t.Fatalf("%s at 2s plays %q, want its 10.mp3", disc, got)
+		if got := fileAt(b, 4.5); got != "A/Book/"+disc+"/10.mp3" {
+			t.Fatalf("%s at 4.5s plays %q, want its 10.mp3", disc, got)
 		}
 		users[disc] = namedUser(t, db, disc)
 		wantFile[disc] = "A/Book/" + disc + "/10.mp3"
-		if _, err := cat.SaveProgress(ctx, users[disc], catalog.Progress{Ref: ref(b.RelPath), Position: 2}); err != nil {
+		if _, err := cat.SaveProgress(ctx, users[disc], catalog.Progress{Ref: ref(b.RelPath), Position: 4.5}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -617,8 +618,8 @@ func TestJoinKeepsDiscFileOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"A/Book/CD1/1.mp3", "A/Book/CD1/10.mp3", "A/Book/CD1/2.mp3",
-		"A/Book/CD2/1.mp3", "A/Book/CD2/10.mp3", "A/Book/CD2/2.mp3"}
+	want := []string{"A/Book/CD1/1.mp3", "A/Book/CD1/2.mp3", "A/Book/CD1/10.mp3",
+		"A/Book/CD2/1.mp3", "A/Book/CD2/2.mp3", "A/Book/CD2/10.mp3"}
 	if got := filePaths(joined); !slices.Equal(got, want) {
 		t.Fatalf("joined files = %q\nwant %q", got, want)
 	}

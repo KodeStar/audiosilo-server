@@ -82,7 +82,7 @@ func joinRoot(overrides map[string]string, rel string, isDiscSet func(string) bo
 // joinedBook builds the book of the joined folder at rootRel from discs, its disc
 // folders (library-relative) with their audio files: the folders in natural order
 // (discOrder: CD2 before CD10), each folder's files in the order a book of that
-// folder alone has them (audioEntries' name order, as the discovery walk reads
+// folder alone has them (fileOrder, as audioEntries and the discovery walk read
 // them), so a position on a disc book lands on the same file once offset onto the
 // joined book (carryJoinedState). nil when there is no audio.
 func joinedBook(lib catalog.Library, rootRel string, discs map[string][]audioFile) *catalog.Book {
@@ -212,7 +212,8 @@ func discOrder(a, b string) int {
 
 // naturalCompare compares two names the way people number things: case folded,
 // runs of digits by their value ("2" before "10", "01" equal to "1"), and spaces,
-// hyphens and underscores left out ("CD 2" sorts with "CD2").
+// hyphens and underscores left out ("CD 2" sorts with "CD2"), except that between
+// two digits they still end a number ("1-10" is 1 then 10, before "2-1"; #160).
 func naturalCompare(a, b string) int {
 	ra, rb := naturalRunes(a), naturalRunes(b)
 	i, j := 0, 0
@@ -244,16 +245,34 @@ func naturalCompare(a, b string) int {
 	return cmp.Compare(len(ra)-i, len(rb)-j)
 }
 
-// naturalRunes is a name as naturalCompare reads it.
+// naturalRunes is a name as naturalCompare reads it: the separators dropped, but
+// one between two digits kept as a single space, so it ends the first number.
 func naturalRunes(s string) []rune {
 	out := make([]rune, 0, len(s))
+	sep := false
 	for _, r := range strings.ToLower(s) {
 		if r == ' ' || r == '-' || r == '_' || r == '\t' {
+			sep = true
 			continue
 		}
+		if sep && isASCIIDigit(r) && len(out) > 0 && isASCIIDigit(out[len(out)-1]) {
+			out = append(out, ' ')
+		}
+		sep = false
 		out = append(out, r)
 	}
 	return out
+}
+
+// fileOrder orders the audio files of one folder, the order a book plays them
+// in: by name as naturalCompare reads it ("2- Part" before "10- Part", "1.Part"
+// with "1. Part"; #160), then byte for byte, so names that read alike ("01" and
+// "1") keep a stable order.
+func fileOrder(a, b audioFile) int {
+	if c := naturalCompare(a.de.Name(), b.de.Name()); c != 0 {
+		return c
+	}
+	return strings.Compare(a.de.Name(), b.de.Name())
 }
 
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
