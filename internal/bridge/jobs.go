@@ -1294,6 +1294,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		// A field the update leaves out (nil) keeps its value.
 		var progress, result, errText any
 		if u.Progress != nil {
+			if from == StateNeedsAttention && state == StateNeedsAttention {
+				u.Progress = carryPark(u.Progress, cur.Progress)
+			}
 			progress = string(u.Progress)
 		}
 		if u.Result != nil {
@@ -1351,6 +1354,35 @@ func (j *Job) Notable(from, fromCode string) bool {
 		return from != j.State || code != fromCode
 	}
 	return false
+}
+
+// carryPark is a parked job's new progress with the stored park kept when it
+// names none: a Bridge resuming the job after a restart reports progress
+// before it hears its park again, and a park dropped and restored would read
+// as two new parks (two "job failed" events) and blank the console's reason.
+// A progress that names a park (or one that isn't an object) is kept as sent.
+func carryPark(progress, stored json.RawMessage) json.RawMessage {
+	var next map[string]json.RawMessage
+	if json.Unmarshal(progress, &next) != nil || next == nil {
+		return progress
+	}
+	if p, ok := next["park"]; ok && string(p) != "null" {
+		return progress
+	}
+	var old map[string]json.RawMessage
+	if json.Unmarshal(stored, &old) != nil {
+		return progress
+	}
+	park, ok := old["park"]
+	if !ok || string(park) == "null" {
+		return progress
+	}
+	next["park"] = park
+	out, err := json.Marshal(next)
+	if err != nil {
+		return progress
+	}
+	return out
 }
 
 // ParkCode is the code of the park a job's progress names (progress.park.code,
