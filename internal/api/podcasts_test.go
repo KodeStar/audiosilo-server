@@ -42,7 +42,7 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		f.FeedURLSHA256 = feed.FeedURLHash(privateFeed)
 		f.Show.Link = ""
 	}
-	raw, _ := json.Marshal(f)
+	raw := podcastFeedJSON(t, f)
 	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +63,26 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 	}
 	return b, uid, f
 }
+
+// podcastFeedJSON is f as feed.json holds it.
+func podcastFeedJSON(t *testing.T, f *feed.File) []byte {
+	t.Helper()
+	raw, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// podcastsModule turns the podcasts module on or off as the admin.
+func podcastsModule(t *testing.T, b *bridgeEnv, on bool) {
+	t.Helper()
+	resp, body := b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, fmt.Sprintf(`{"modules":{"podcasts":%t}}`, on))
+	if resp.StatusCode != 200 {
+		t.Fatalf("podcasts module %t: %d %s", on, resp.StatusCode, body)
+	}
+}
+
 func podcastHeaders() map[string]string {
 	return map[string]string{auth.ClientHeader: "AudioSilo/dev (web)"}
 }
@@ -165,7 +185,7 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	headers := podcastHeaders()
 	episode := f.Episodes[1].Path
 	f.Episodes[1].Fetch.Bytes = 5
-	raw, _ := json.Marshal(f)
+	raw := podcastFeedJSON(t, f)
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -217,8 +237,12 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: episode})
-	_ = b.cat.GrantShare(ctx, other, share.ID)
+	if err := b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: episode}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.GrantShare(ctx, other, share.ID); err != nil {
+		t.Fatal(err)
+	}
 	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "item?path="+url.QueryEscape(episode)), otherTok, "", headers)
 	if resp.StatusCode != 403 {
 		t.Fatalf("private nested grant %d %s", resp.StatusCode, out)
@@ -318,10 +342,10 @@ func TestPodcastFollowErrorsAndCoreReads(t *testing.T) {
 		t.Fatalf("check %d %s", resp.StatusCode, out)
 	}
 	if err := b.cat.UnfollowPodcast(context.Background(), uid, b.lib.ID, "Example Show"); err != nil {
-		_ = err
+		t.Fatal(err)
 	}
 	// Turning the module off still permits indexed reads.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	post(fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID), 404, "module_off")
 	resp, out = b.doHeaders(t, "GET", podcastRoute(b.lib.ID, "podcasts"), b.userTok, "", h)
 	if resp.StatusCode != 200 {
@@ -347,8 +371,7 @@ func TestPodcastActionDeniedMatrix(t *testing.T) {
 			t.Fatalf("%s %d %s", code, resp.StatusCode, out)
 		}
 	}
-	demo, demoTok := newUserWithSession(t, b.testEnv, "demo-pod", true)
-	_ = demo
+	_, demoTok := newUserWithSession(t, b.testEnv, "demo-pod", true)
 	kid, kidTok := newUserWithSession(t, b.testEnv, "kid-pod", false)
 	if _, err := b.db.ExecContext(ctx, `UPDATE users SET managed_by=?,member_kind='kid',member_access='all' WHERE id=?`, b.adminID, kid); err != nil {
 		t.Fatal(err)
@@ -363,14 +386,20 @@ func TestPodcastActionDeniedMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: "Example Show"})
-	_ = b.cat.GrantShare(ctx, other, share.ID)
+	if err := b.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: b.lib.ID, Path: "Example Show"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.GrantShare(ctx, other, share.ID); err != nil {
+		t.Fatal(err)
+	}
 	check(partial, request, 403, "no_library_access")
 	books, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Other Books", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = b.cat.GrantWholeLibrary(ctx, uid, books.ID)
+	if err := b.cat.GrantWholeLibrary(ctx, uid, books.ID); err != nil {
+		t.Fatal(err)
+	}
 	check(b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":"https://example.org/"}`, books.ID), 409, "not_podcast_library")
 	b.beat(t, bridge.KindVerify)
 	check(b.userTok, request, 409, "bridge_unavailable")
@@ -396,7 +425,7 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	if !caps["podcasts"] {
 		t.Fatal("podcasts flag false")
 	}
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	caps = serverCapabilities(t, b.testEnv)
 	if enabled, present := caps["podcasts"]; !present || enabled {
 		t.Fatalf("off capability %+v", caps)
@@ -421,8 +450,12 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	}
 
 	dir := filepath.Join(b.lib.Root, ".audiosilo")
-	_ = os.Mkdir(dir, 0700)
-	_ = os.WriteFile(filepath.Join(dir, "library.json"), []byte(fmt.Sprintf(`{"version":1,"library_id":%d,"nonce":"0123456789abcdef0123456789abcdef"}`, b.lib.ID)), 0600)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "library.json"), []byte(fmt.Sprintf(`{"version":1,"library_id":%d,"nonce":"0123456789abcdef0123456789abcdef"}`, b.lib.ID)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	marker := fmt.Sprintf("/api/v1/bridge/libraries/%d/marker", b.lib.ID)
 	resp, out := b.do(t, "GET", marker, b.bridgeTok, "")
 	if resp.StatusCode != 200 || !strings.Contains(out, "0123456789abcdef") {
@@ -432,7 +465,9 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	if resp.StatusCode != 401 {
 		t.Fatalf("marker auth %d", resp.StatusCode)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "library.json"), []byte(`{"version":1,"library_id":999,"nonce":"0123456789abcdef0123456789abcdef"}`), 0600)
+	if err := os.WriteFile(filepath.Join(dir, "library.json"), []byte(`{"version":1,"library_id":999,"nonce":"0123456789abcdef0123456789abcdef"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	resp, out = b.do(t, "GET", marker, b.bridgeTok, "")
 	if resp.StatusCode != 404 || !strings.Contains(out, "no_marker") {
 		t.Fatalf("marker denied %d %s", resp.StatusCode, out)
@@ -535,7 +570,7 @@ func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
 		t.Fatal("the fixture URL must look public")
 	}
 	f.FeedURLSHA256 = feed.FeedURLHash(plain)
-	raw, _ := json.Marshal(f)
+	raw := podcastFeedJSON(t, f)
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
