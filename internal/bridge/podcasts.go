@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -174,7 +175,12 @@ func subscribePrivate(raw json.RawMessage) bool {
 func subscribeSuffix(j NewJob) string {
 	var p SubscribeParams
 	_ = json.Unmarshal(j.Params, &p)
-	return "|" + p.FeedURLSHA256 + "|" + fmt.Sprint(j.RequestedBy)
+	return subscribeIdentity(p.FeedURLSHA256, j.RequestedBy)
+}
+
+// subscribeIdentity is a subscribe's dedupe key suffix: its feed hash and requester.
+func subscribeIdentity(feedHash string, user int64) string {
+	return "|" + feedHash + "|" + fmt.Sprint(user)
 }
 
 // SubscribeRequest is one podcast.subscribe to queue or adopt.
@@ -240,7 +246,8 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	if err := s.expireDue(ctx); err != nil {
 		return nil, err
 	}
-	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND j.library_id=? AND json_extract(j.params,'$.feed_url_sha256')=? ORDER BY j.id DESC LIMIT 1`, user, lib, feed.FeedURLHash(norm)))
+	key := DedupeKey(KindPodcastSubscribe, &lib, nil) + subscribeIdentity(feed.FeedURLHash(norm), user)
+	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind='`+KindPodcastSubscribe+`' AND j.requested_by=? AND j.dedupe_key=? ORDER BY j.id DESC LIMIT 1`, user, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -265,22 +272,24 @@ func (s *Service) PruneSecrets(ctx context.Context) error {
 	s.secretFlowMu.Lock()
 	defer s.secretFlowMu.Unlock()
 	s.secretMu.Lock()
-	ids := make([]int64, 0, len(s.privateURLs))
-	for id := range s.privateURLs {
-		ids = append(ids, id)
+	held := slices.Collect(maps.Keys(s.privateURLs))
+	s.secretMu.Unlock()
+	if len(held) == 0 {
+		return nil
+	}
+	list, err := json.Marshal(held)
+	if err != nil {
+		return err
+	}
+	gone, err := queryIDs(ctx, s.db, `SELECT value FROM json_each(?) WHERE value NOT IN (SELECT id FROM bridge_jobs)`, string(list))
+	if err != nil {
+		return err
+	}
+	s.secretMu.Lock()
+	for _, id := range gone {
+		delete(s.privateURLs, id)
 	}
 	s.secretMu.Unlock()
-	for _, id := range ids {
-		var exists bool
-		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE id=?)`, id).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			s.secretMu.Lock()
-			delete(s.privateURLs, id)
-			s.secretMu.Unlock()
-		}
-	}
 	return nil
 }
 
@@ -326,8 +335,10 @@ func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) (
 	}
 	return ended, nil
 }
-func queryIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, q, args...)
+func queryIDs(ctx context.Context, db interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, q string, args ...any) ([]int64, error) {
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

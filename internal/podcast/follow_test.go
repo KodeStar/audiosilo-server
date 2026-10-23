@@ -103,7 +103,7 @@ type fakeQueue struct {
 }
 
 func newFakeQueue() *fakeQueue {
-	return &fakeQueue{kinds: []string{bridge.KindPodcastSubscribe}, nextID: 81, open: map[string]*bridge.Job{}, privacy: map[string]bool{}}
+	return &fakeQueue{kinds: []string{bridge.KindPodcastSubscribe}, nextID: 81, open: map[string]*bridge.Job{}, privacy: map[string]bool{}, failed: map[string]*bridge.Job{}}
 }
 
 func (q *fakeQueue) Online(context.Context) (*bridge.Heartbeat, error) {
@@ -151,9 +151,6 @@ func (q *fakeQueue) RecentSubscribeFailure(_ context.Context, _, _ int64, norm s
 func (q *fakeQueue) fail() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.failed == nil {
-		q.failed = map[string]*bridge.Job{}
-	}
 	for u, j := range q.open {
 		j.State = bridge.StateFailed
 		q.failed[u] = j

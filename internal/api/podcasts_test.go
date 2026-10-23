@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -42,7 +41,7 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		f.FeedURLSHA256 = feed.FeedURLHash(privateFeed)
 		f.Show.Link = ""
 	}
-	raw := podcastFeedJSON(t, f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -62,16 +61,6 @@ func podcastEnv(t *testing.T, private bool) (*bridgeEnv, int64, *feed.File) {
 		t.Fatalf("enable %d %s", response.StatusCode, body)
 	}
 	return b, uid, f
-}
-
-// podcastFeedJSON is f as feed.json holds it.
-func podcastFeedJSON(t *testing.T, f *feed.File) []byte {
-	t.Helper()
-	raw, err := json.Marshal(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
 }
 
 // podcastsModule turns the podcasts module on or off as the admin.
@@ -185,7 +174,7 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 	headers := podcastHeaders()
 	episode := f.Episodes[1].Path
 	f.Episodes[1].Fetch.Bytes = 5
-	raw := podcastFeedJSON(t, f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +559,7 @@ func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
 		t.Fatal("the fixture URL must look public")
 	}
 	f.FeedURLSHA256 = feed.FeedURLHash(plain)
-	raw := podcastFeedJSON(t, f)
+	raw := []byte(mustJSON(t, f))
 	if err := os.WriteFile(filepath.Join(b.lib.Root, "Example Show", "feed.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}

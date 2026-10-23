@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,14 +79,13 @@ func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
 			cursor = *page.NextCursor
 		}
 	}
-	if got := list("oldest"); strings.Join(got, ",") != strings.Join(paths, ",") {
+	if got := list("oldest"); !slices.Equal(got, paths) {
 		t.Fatalf("oldest first:\n%v\nwant\n%v", got, paths)
 	}
 	newest := list("newest")
-	for i, p := range newest {
-		if p != paths[len(paths)-1-i] {
-			t.Fatalf("newest first: %v", newest)
-		}
+	slices.Reverse(newest)
+	if !slices.Equal(newest, paths) {
+		t.Fatalf("newest first, reversed: %v", newest)
 	}
 	// A cursor from before this order (four strings) is refused, not misread.
 	legacy := base64.RawURLEncoding.EncodeToString([]byte(`["Fixture Show","oldest","","` + paths[2] + `"]`))
@@ -105,7 +105,7 @@ func TestPodcastEpisodeOrderUndatedSerial(t *testing.T) {
 	for _, e := range cands {
 		got = append(got, e.Path)
 	}
-	if strings.Join(got, ",") != strings.Join([]string{paths[9], paths[8], paths[7]}, ",") {
+	if !slices.Equal(got, []string{paths[9], paths[8], paths[7]}) {
 		t.Fatalf("keep 3 fetches %v", got)
 	}
 	// Archive starts at the first.

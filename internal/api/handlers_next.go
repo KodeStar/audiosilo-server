@@ -46,13 +46,11 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var next *nextBook
-	var err error
+	resolve := a.resolveNext
 	if lib.Kind == catalog.KindPodcasts {
-		next, err = a.episodeNext(r.Context(), lib.ID, scope, book)
-	} else {
-		next, err = a.resolveNext(r.Context(), lib, scope, book)
+		resolve = a.episodeNext
 	}
+	next, err := resolve(r.Context(), lib, scope, book)
 	if err != nil {
 		a.writeCatalogError(w, err, "resolve next book failed", "could not find the next book", "library", lib.ID, "path", rel)
 		return
@@ -175,10 +173,10 @@ func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalo
 // answer, since the show is the episode's folder; none at the show's end. A
 // show has no series, community work or folder of books to follow, and its
 // episodes' file names (the Bridge's) say nothing about their order.
-func (a *API) episodeNext(ctx context.Context, libraryID int64, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
-	next, err := a.cat.NextPodcastEpisode(ctx, libraryID, book.RelPath, scope)
+func (a *API) episodeNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
+	next, err := a.cat.NextPodcastEpisode(ctx, lib.ID, book.RelPath, scope)
 	if err != nil || next == nil {
 		return &nextBook{Source: nextNone}, err
 	}
-	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: libraryID, Path: next.RelPath}, Book: next}, nil
+	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: lib.ID, Path: next.RelPath}, Book: next}, nil
 }

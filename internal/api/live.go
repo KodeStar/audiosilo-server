@@ -48,7 +48,7 @@ func (l *liveConfig) allowsOrigin(origin string) bool { return l.corsAll || l.co
 
 // corsOn reports whether cors_origins grants any origin: every answer then
 // depends on the request's Origin (cors's Vary).
-func (l *liveConfig) corsOn() bool { return l.corsAll || len(l.corsAllows) > 0 }
+func (l *liveConfig) corsOn() bool { return len(l.corsAllows) > 0 }
 
 // config is the config the server works with now (see liveConfig).
 func (a *API) config() *liveConfig { return a.live.Load() }

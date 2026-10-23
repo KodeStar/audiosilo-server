@@ -1362,19 +1362,12 @@ func (j *Job) Notable(from, fromCode string) bool {
 // as two new parks (two "job failed" events) and blank the console's reason.
 // A progress that names a park (or one that isn't an object) is kept as sent.
 func carryPark(progress, stored json.RawMessage) json.RawMessage {
+	park := parkOf(stored)
+	if park == nil || parkOf(progress) != nil {
+		return progress
+	}
 	var next map[string]json.RawMessage
 	if json.Unmarshal(progress, &next) != nil || next == nil {
-		return progress
-	}
-	if p, ok := next["park"]; ok && string(p) != "null" {
-		return progress
-	}
-	var old map[string]json.RawMessage
-	if json.Unmarshal(stored, &old) != nil {
-		return progress
-	}
-	park, ok := old["park"]
-	if !ok || string(park) == "null" {
 		return progress
 	}
 	next["park"] = park
@@ -1383,6 +1376,18 @@ func carryPark(progress, stored json.RawMessage) json.RawMessage {
 		return progress
 	}
 	return out
+}
+
+// parkOf is the park a progress object names, nil when it names none (absent
+// or null) or isn't an object.
+func parkOf(progress json.RawMessage) json.RawMessage {
+	var p struct {
+		Park json.RawMessage `json:"park"`
+	}
+	if json.Unmarshal(progress, &p) != nil || string(p.Park) == "null" {
+		return nil
+	}
+	return p.Park
 }
 
 // ParkCode is the code of the park a job's progress names (progress.park.code,
