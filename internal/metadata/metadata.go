@@ -135,7 +135,7 @@ func applyTags(m *Metadata, md tag.Metadata) {
 	}
 	if raw := md.Raw(); raw != nil {
 		if v := rawString(raw, "series", "©grp", "show", "TXXX:SERIES"); v != "" {
-			m.Series = strings.TrimSpace(v)
+			m.setSeriesTag(v) // "Discworld, book #40": series Discworld, position 40
 		}
 		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
 			m.Narrator = strings.TrimSpace(v)
