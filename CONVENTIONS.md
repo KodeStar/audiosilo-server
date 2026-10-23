@@ -1110,7 +1110,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
   puts the `auth.Credential` (token id, kind, device id, device name, app; a cast token's book) in the context (`credentialFrom`; every
   context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
-  header. **Sessions are derived from progress saves**, not from the client-posted
+  header (and `Range`, and exposes Retry-After and the OPML counts: see Podcasts). **Sessions are derived from progress saves**, not from the client-posted
   `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
   `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
   session on that book when the save comes within `SessionGap` (10 min), or later when the position
@@ -1818,7 +1818,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
-  dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. Shared
+  dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an
+  allowed origin `cors` exposes those and Retry-After (`corsExposeHeaders`) and grants `Range`
+  (`corsAllowHeaders`), so a cross-origin web player reads them; a denied origin gets nothing. Shared
   fixtures: the byte-identical `internal/podcast/testdata/phase2c3/` copy.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on

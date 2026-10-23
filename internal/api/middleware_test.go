@@ -137,6 +137,24 @@ func TestCORSAllowList(t *testing.T) {
 		t.Fatalf("Allow-Methods = %q, want PATCH in it", got)
 	}
 
+	// An actual (non-preflight) response lets the page read Retry-After and
+	// the OPML export's counts.
+	wantCORSList(t, rec.Header(), "Access-Control-Expose-Headers", corsExposeNames)
+
+	// A preflight that asks for Range (the stream route) passes, and the
+	// grant keeps the three older headers.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("Access-Control-Request-Headers", "authorization, range")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("allowed preflight = %d, want 204", rec.Code)
+	}
+	wantCORSList(t, rec.Header(), "Access-Control-Allow-Headers", []string{"Authorization", "Content-Type", "X-AudioSilo-Client", "Range"})
+	wantCORSList(t, rec.Header(), "Access-Control-Expose-Headers", corsExposeNames)
+
 	// A non-listed origin gets no CORS grant.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
@@ -164,6 +182,75 @@ func TestCORSWildcard(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://anything.example" {
 		t.Fatalf("wildcard ACAO = %q", got)
+	}
+	wantCORSList(t, rec.Header(), "Access-Control-Expose-Headers", corsExposeNames)
+	wantCORSList(t, rec.Header(), "Access-Control-Allow-Headers", []string{"Range"})
+}
+
+// opmlCountNames are the OPML export's count headers and corsExposeNames
+// every response header a cross-origin page must be able to read, spelled
+// out so a renamed constant fails the test.
+var (
+	opmlCountNames  = []string{"X-OPML-Exported", "X-OPML-Omitted-Private", "X-OPML-Omitted-Unavailable"}
+	corsExposeNames = append([]string{"Retry-After"}, opmlCountNames...)
+)
+
+// wantCORSList fails unless the comma-separated header lists every name
+// (case-insensitively, as browsers compare them).
+func wantCORSList(t *testing.T, h http.Header, header string, names []string) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, v := range strings.Split(h.Get(header), ",") {
+		got[strings.ToLower(strings.TrimSpace(v))] = true
+	}
+	for _, n := range names {
+		if !got[strings.ToLower(n)] {
+			t.Fatalf("%s = %q, want %s in it", header, h.Get(header), n)
+		}
+	}
+}
+
+// noCORSHeaders fails if the response carries any Access-Control-* header.
+func noCORSHeaders(t *testing.T, what string, h http.Header) {
+	t.Helper()
+	for k, v := range h {
+		if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+			t.Fatalf("%s: %s = %q, want no CORS headers", what, k, v)
+		}
+	}
+}
+
+// A browser origin the server doesn't grant, a request with no Origin, and a
+// server with no cors_origins all get no CORS headers at all: not the expose
+// list, not the Range grant.
+func TestCORSDeniedNoExposeHeaders(t *testing.T) {
+	t.Parallel()
+	listed := apiWithConfig(&config.Config{CORSOrigins: []string{"https://app.example.com"}})
+	unset := apiWithConfig(&config.Config{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	cases := []struct {
+		name   string
+		a      *API
+		origin string
+	}{
+		{"other origin", listed, "https://evil.example.com"},
+		{"no origin", listed, ""},
+		{"cors_origins unset", unset, "https://app.example.com"},
+	}
+	for _, c := range cases {
+		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/", nil)
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			if method == http.MethodOptions {
+				req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+				req.Header.Set("Access-Control-Request-Headers", "range")
+			}
+			c.a.cors(next).ServeHTTP(rec, req)
+			noCORSHeaders(t, c.name+" "+method, rec.Header())
+		}
 	}
 }
 

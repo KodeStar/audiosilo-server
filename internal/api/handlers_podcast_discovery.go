@@ -37,6 +37,14 @@ const (
 	maxConcurrentOPML = 2
 )
 
+// The OPML export's counts (GET /podcasts/opml/export), named once so the
+// handler and the CORS expose list (corsExposeHeaders) cannot drift.
+const (
+	headerOPMLExported           = "X-OPML-Exported"
+	headerOPMLOmittedPrivate     = "X-OPML-Omitted-Private"
+	headerOPMLOmittedUnavailable = "X-OPML-Omitted-Unavailable"
+)
+
 // opmlTransfers holds the OPML budgets (memory only).
 type opmlTransfers struct {
 	imports *quota.Limiter
@@ -352,9 +360,9 @@ func (a *API) handleOPMLExport(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/x-opml; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="audiosilo-subscriptions.opml"`)
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("X-OPML-Exported", strconv.Itoa(exp.Exported))
-	h.Set("X-OPML-Omitted-Private", strconv.Itoa(exp.OmittedPrivate))
-	h.Set("X-OPML-Omitted-Unavailable", strconv.Itoa(exp.OmittedUnavailable))
+	h.Set(headerOPMLExported, strconv.Itoa(exp.Exported))
+	h.Set(headerOPMLOmittedPrivate, strconv.Itoa(exp.OmittedPrivate))
+	h.Set(headerOPMLOmittedUnavailable, strconv.Itoa(exp.OmittedUnavailable))
 	h.Set("Content-Length", strconv.Itoa(len(out)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)

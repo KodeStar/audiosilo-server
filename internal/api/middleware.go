@@ -105,6 +105,19 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// corsAllowHeaders are the request headers a cross-origin client may send:
+// the bearer token, a JSON or OPML body, the client id (auth.ClientHeader) and
+// Range, for a script's fetch of a stream with the Authorization header (the
+// player's episode probe; an <audio> element's seeks are no-cors and need none).
+const corsAllowHeaders = "Authorization, Content-Type, " + auth.ClientHeader + ", Range"
+
+// corsExposeHeaders are the response headers a cross-origin script may read:
+// Retry-After where a route sends one (the OPML and discovery budgets, a busy
+// transcode, an episode on its way; the general rate limit and the request
+// timeout send none) and the OPML export's counts.
+const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
+	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable
+
 // cors applies a strict allow-list CORS policy. With no configured origins,
 // cross-origin browser requests are simply not granted CORS headers (the API
 // still works for native apps and same-origin web clients).
@@ -115,7 +128,8 @@ func (a *API) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+auth.ClientHeader)
+			w.Header().Set("Access-Control-Allow-Headers", corsAllowHeaders)
+			w.Header().Set("Access-Control-Expose-Headers", corsExposeHeaders)
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {
