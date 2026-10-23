@@ -13,7 +13,7 @@ import (
 //     (audiosilo-frontend src/playback/prettify-title.ts) tidies it: the audio
 //     extension dropped, underscores made spaces, a trailing bitrate tag removed;
 //   - a title that is empty, only a number ("024", "01."), or a track or disc
-//     number ("Track 2-1", "CD1 Track 03": NamesNothing, so a title in another
+//     number ("Track 2-1", "CD1 Track 03": IsGenericTitle, so a title in another
 //     script, "Пролог" or "第1章", stays) is "".
 //
 // A numbered chapter or part ("Chapter 10", "Part 7") is kept as written: in a
@@ -21,7 +21,7 @@ import (
 // the player shows that title, so its own number stands.
 func ChapterTitle(raw string) string {
 	t := strings.TrimSpace(prettifyChapterTitle(raw))
-	if NamesNothing(t) && !namesChapter(t) {
+	if IsGenericTitle(t) && !namesChapter(t) {
 		return ""
 	}
 	return t
@@ -41,7 +41,7 @@ func namesChapter(t string) bool {
 }
 
 var (
-	chapterAudioExt = regexp.MustCompile(`(?i)\.(mp3|m4a|m4b|mp4|aac|ogg|oga|opus|flac|wav|wma|alac|aif|aiff)$`)
+	chapterAudioExt = regexp.MustCompile(`(?i)\.(mp3|m4a|m4b|mp4|mka|aac|ogg|oga|opus|flac|wav|wma|alac|aif|aiff)$`)
 	// A trailing encoder bitrate tag left from a rip's filename ("64kb", "128 kbps").
 	chapterBitrateTail = regexp.MustCompile(`(?i)(^|\s)\d{2,3}\s?(k|kb|kbps)$`)
 )

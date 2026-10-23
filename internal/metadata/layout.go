@@ -109,12 +109,12 @@ func plainVolume(seg string) string {
 // isPartLabel reports whether a path segment names a part of a book rather
 // than the book: IsGenericTitle ("CD1", "Disc 2", "Track 01", "03"), except a
 // bare number of four or more digits, which is a title ("1984") rather than a
-// volume, a name with no digit at all, and a name with a letter outside ASCII
-// (NamesNothing: "Война и мир", "Метро 2033").
+// volume, and a name with no digit at all. A name in another script is a title
+// too ("Метро 2033"): IsGenericTitle reads letters in any script.
 func isPartLabel(seg string) bool {
 	n := strings.TrimSpace(seg)
 	if !strings.ContainsAny(n, "0123456789") || (len(n) >= 4 && strings.Trim(n, "0123456789") == "") {
 		return false
 	}
-	return NamesNothing(seg)
+	return IsGenericTitle(seg)
 }

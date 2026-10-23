@@ -82,7 +82,7 @@ func joinRoot(overrides map[string]string, rel string, isDiscSet func(string) bo
 // joinedBook builds the book of the joined folder at rootRel from discs, its disc
 // folders (library-relative) with their audio files: the folders in natural order
 // (discOrder: CD2 before CD10), each folder's files in the order a book of that
-// folder alone has them (audioEntries' name order, as the discovery walk reads
+// folder alone has them (sortFileOrder, as audioEntries and the discovery walk read
 // them), so a position on a disc book lands on the same file once offset onto the
 // joined book (carryJoinedState). nil when there is no audio.
 func joinedBook(lib catalog.Library, rootRel string, discs map[string][]audioFile) *catalog.Book {
@@ -254,6 +254,91 @@ func naturalRunes(s string) []rune {
 		out = append(out, r)
 	}
 	return out
+}
+
+// sortFileOrder sorts one folder's audio files into the order its book plays
+// them: natural name order (naturalLess, #160: "2- Part" before "10- Part"),
+// each name case folded once rather than at every comparison.
+func sortFileOrder(files []audioFile) {
+	if len(files) < 2 {
+		return
+	}
+	type keyed struct {
+		name, lower string
+		f           audioFile
+	}
+	ks := make([]keyed, len(files))
+	for i, f := range files {
+		ks[i] = keyed{f.de.Name(), strings.ToLower(f.de.Name()), f}
+	}
+	slices.SortStableFunc(ks, func(a, b keyed) int {
+		switch {
+		case naturalLessFolded(a.lower, b.lower, a.name, b.name):
+			return -1
+		case naturalLessFolded(b.lower, a.lower, b.name, a.name):
+			return 1
+		}
+		return 0
+	})
+	for i := range ks {
+		files[i] = ks[i].f
+	}
+}
+
+// naturalLess is audiosilo-meta's scan.NaturalLess, the order the Bridge and the
+// community metadata number a folder book's files in: those numbers are the
+// chapters its sidecars' spoiler positions name, so the book must play its files
+// in exactly that order (NaturalLess's contract: one ordering for every
+// consumer). It is a copy because importing pkg/scan would link the metadata
+// importer into the server; TestNaturalLessIsMetas holds it to the original.
+// Digit runs compare by value (a shorter significant run first: "2" before "10",
+// "02" level with "2"), everything else byte by byte with case folded, and names
+// equal that way by their bytes. Separators count, unlike naturalCompare's: "01 -
+// Prologue" plays before "01a - Interlude" and "1 - One" before "1.5 - Interlude".
+func naturalLess(a, b string) bool {
+	return naturalLessFolded(strings.ToLower(a), strings.ToLower(b), a, b)
+}
+
+// naturalLessFolded is naturalLess of a and b, given them case folded (la, lb).
+func naturalLessFolded(la, lb, a, b string) bool {
+	ia, ib := 0, 0
+	for ia < len(la) && ib < len(lb) {
+		if isASCIIDigit(rune(la[ia])) && isASCIIDigit(rune(lb[ib])) {
+			ra, ea := significantDigits(la, ia)
+			rb, eb := significantDigits(lb, ib)
+			if len(ra) != len(rb) {
+				return len(ra) < len(rb)
+			}
+			if ra != rb {
+				return ra < rb
+			}
+			ia, ib = ea, eb
+			continue
+		}
+		if la[ia] != lb[ib] {
+			return la[ia] < lb[ib]
+		}
+		ia++
+		ib++
+	}
+	switch {
+	case ia == len(la) && ib < len(lb):
+		return true // a is a prefix of b
+	case ib == len(lb) && ia < len(la):
+		return false
+	default:
+		return a < b // alike under the natural compare: by their bytes
+	}
+}
+
+// significantDigits returns the digit run of s at i without its leading zeros,
+// and the index just past the run.
+func significantDigits(s string, i int) (string, int) {
+	start := i
+	for i < len(s) && isASCIIDigit(rune(s[i])) {
+		i++
+	}
+	return strings.TrimLeft(s[start:i], "0"), i
 }
 
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }

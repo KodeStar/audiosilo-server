@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -448,22 +449,27 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service)
 	if err != nil {
 		return err
 	}
-	banner(cfg, password, code)
+	writeBanner(os.Stdout, cfg, password, code)
 	return nil
 }
 
-func banner(cfg *config.Config, password, code string) {
-	fmt.Println("\n========================================================")
-	fmt.Println(" AudioSilo first-run setup - store these now, shown once")
-	fmt.Println("========================================================")
-	fmt.Printf("  Admin username : admin\n")
-	fmt.Printf("  Admin password : %s\n", password)
-	fmt.Printf("  Auth code      : %s\n", code)
-	fmt.Printf("  Config file    : %s\n", config.Path(cfg.DataDir))
-	fmt.Println("--------------------------------------------------------")
-	fmt.Println(" Redeem the auth code at POST /api/v1/auth/redeem to get")
-	fmt.Println(" a QR pairing code, or log in at POST /api/v1/auth/login.")
-	fmt.Println("========================================================")
+// writeBanner writes the first-run credentials banner: the console (where the
+// "Set up your server" flow lives) first, then the connect page for a device.
+func writeBanner(w io.Writer, cfg *config.Config, password, code string) {
+	base := baseURL(cfg)
+	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+	p("\n========================================================\n")
+	p(" AudioSilo first-run setup - store these now, shown once\n")
+	p("========================================================\n")
+	p("  Admin username : admin\n")
+	p("  Admin password : %s\n", password)
+	p("  Auth code      : %s\n", code)
+	p("  Config file    : %s\n", config.Path(cfg.DataDir))
+	p("--------------------------------------------------------\n")
+	p(" Finish setting up: open %s/admin and sign in as admin.\n", base)
+	p(" Connect a device: open %s/ and enter the auth code.\n", base)
+	p(" (API: POST /api/v1/auth/redeem or /api/v1/auth/login.)\n")
+	p("========================================================\n")
 }
 
 // syncLibraries upserts config-declared libraries into the catalog.
@@ -532,7 +538,8 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 // listening sessions older than sessions() (Settings > General, read at each run)
 // up into per-day totals (dropping their device, app and time of day), blanks the
 // address of signed-out devices, deletes dead cast tokens (expired, or their
-// sender signed out) with the book each was for, drops audit events and feed
+// sender signed out) with the book each was for and spent or expired pairing
+// tokens, drops audit events and feed
 // events past their retention, and trims the community metadata cache to its
 // newest rows.
 func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
@@ -549,6 +556,9 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		}
 		if err := authSvc.PruneCastTokens(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("cast token retention failed", "err", err)
+		}
+		if _, err := authSvc.PrunePairingTokens(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("pairing token retention failed", "err", err)
 		}
 		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows, catalog.MetaCacheWorkRows); err != nil && ctx.Err() == nil {
 			log.Warn("meta cache retention failed", "err", err)

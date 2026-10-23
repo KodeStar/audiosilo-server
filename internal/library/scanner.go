@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -325,9 +326,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
+			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) &&
 			!problemCleared(lib, old, s.ffprobePath) {
-			// Unchanged since last scan; only skip the probe when ffprobe is
+			// Unchanged since last scan, its files in the order stored (a book
+			// indexed in byte order before #160 is read again in natural order);
+			// only skip the probe when ffprobe is
 			// disabled, or a prior probe already stored both duration and codec
 			// (so books indexed before the codec column get it backfilled).
 			// Whether it is a disc of a split book turns on its siblings, so it can
@@ -916,8 +920,8 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 
 // audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
 // root) and returns the folders under it that directly hold audio, library-relative,
-// each with its audio files in name order: the files audioEntries would list, read
-// in the same walk rather than again. Hidden and ignored entries are skipped as
+// each with its audio files as a book has them (folderAudio): the files audioEntries
+// would list, read in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
 // skipped, even when its own name begins with a dot. side is the metadata files
 // found in the same walk (sidecarFiles). limit bounds the walk (nil for none):
@@ -988,6 +992,9 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
+	for dir, audio := range dirs {
+		dirs[dir] = folderAudio(audio)
+	}
 	return dirs, side, hadErrors, err
 }
 
@@ -1096,7 +1103,7 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, in the stable name order os.ReadDir provides.
+// absDir, as a book has them (folderAudio).
 func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
@@ -1109,6 +1116,27 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
 	}
+	return folderAudio(audio)
+}
+
+// folderAudio is one folder's audio files as a book has them: in play order
+// (sortFileOrder), less any .mka beside a file of the same name in another audio
+// format. Like an .aax beside its converted .m4b (metadata.AudioExtensions), that
+// .mka is the other's source or copy, ignored before .mka was audio (#161), and
+// reading both would lump them into one book with its chapters twice.
+func folderAudio(audio []audioFile) []audioFile {
+	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
+	isMKA := func(f audioFile) bool { return strings.EqualFold(filepath.Ext(f.de.Name()), ".mka") }
+	if slices.ContainsFunc(audio, isMKA) {
+		others := make(map[string]bool, len(audio))
+		for _, f := range audio {
+			if !isMKA(f) {
+				others[stem(f.de.Name())] = true
+			}
+		}
+		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return isMKA(f) && others[stem(f.de.Name())] })
+	}
+	sortFileOrder(audio)
 	return audio
 }
 
@@ -1255,10 +1283,18 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
 	}
+	// A case or normalization variant of an on-disk path opens on a
+	// case-insensitive filesystem (macOS's and Windows' defaults), but the scan
+	// names a book by the folder listings' spelling: indexing the variant would
+	// add a duplicate everyone sees, which the next scan removes (CONNECT-04).
+	rel := relPathOf(lib.Root, abs)
+	if rel != "" && !dirPresent(lib, rel, map[string]map[string]bool{}) {
+		return nil, fmt.Errorf("%w: %q is not spelled as on disk", ErrNotIndexable, relPath)
+	}
 
 	// What the ignore rules keep out of a scan isn't in the library on demand either.
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	if ignore.Covers(relPathOf(lib.Root, abs), info.IsDir()) {
+	if ignore.Covers(rel, info.IsDir()) {
 		return nil, fmt.Errorf("%w: %q is ignored", ErrNotIndexable, relPath)
 	}
 	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
@@ -1269,7 +1305,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// the book the requested path resolves to: the folder book itself, a
 	// single-file book, or the folder book a clicked part belongs to. Inside a
 	// folder joined into one book, that is the joined book, for a disc folder too.
-	dirRel := relPathOf(lib.Root, abs)
+	dirRel := rel
 	if !info.IsDir() {
 		dirRel = dirOf(dirRel)
 	}
@@ -1307,7 +1343,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	} else {
 		candidates = booksInDir(lib, dirRel, own, overrides)
 	}
-	book := pickBook(candidates, relPathOf(lib.Root, abs))
+	book := pickBook(candidates, rel)
 	if book == nil {
 		return nil, fmt.Errorf("%w: no book at %q", ErrNotIndexable, relPath)
 	}
@@ -1382,7 +1418,8 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 	if nb.ContentHash == "" {
 		nb.ContentHash = fingerprintFile(absOf(lib, primaryPath(nb))) // reused by enrich
 	}
-	if nb.ContentHash == "" || nb.ContentHash != old.ContentHash {
+	if nb.ContentHash == "" || old.ContentHash == "" ||
+		(nb.ContentHash != old.ContentHash && byteFirstFingerprint(lib, nb) != old.ContentHash) {
 		return ignored("the fingerprints differ")
 	}
 	if reclassified(from, catalog.Signature{Size: old.Size, IsFolder: old.IsFolder}, nb) {
@@ -1397,12 +1434,10 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 
 // bookOnDisk reports whether the book indexed at rel is still on disk: a book
 // resolves at exactly that path, every name along it as the folder listings
-// spell it (so a case-only rename on a case-insensitive disk counts as gone). It
-// errs toward present: a path it can't check keeps its state where it is.
+// spell it (resolveBook's dirPresent check, so a case-only rename on a
+// case-insensitive disk counts as gone). It errs toward present: a path it
+// can't check keeps its state where it is.
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) bool {
-	if !dirPresent(lib, rel, map[string]map[string]bool{}) {
-		return false
-	}
 	// A path that can't be stat'ed, or a folder that can't be listed (a
 	// permission, a flaky share), can't be checked: resolveBook would read it as
 	// no book (it wraps a failed stat as ErrNotIndexable, and lists an unreadable
@@ -1546,8 +1581,9 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		if fp == "" {
 			continue
 		}
+		was := byteFirstFingerprint(lib, nb)
 		for oldPath, ofp := range oldFP {
-			if ofp != fp || reclassified(oldPath, sigs[oldPath], nb) {
+			if (ofp != fp && ofp != was) || reclassified(oldPath, sigs[oldPath], nb) {
 				continue
 			}
 			if s.carryMove(ctx, lib, oldPath, nb.RelPath, rl) {
@@ -1559,6 +1595,28 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 	}
 	s.carryFolderFavourites(ctx, lib, moved, rl)
 	return moved
+}
+
+// byteFirstFingerprint is the fingerprint of the file a folder book had first
+// before natural order (#160), when that order puts another first: the first by
+// bytes in its first folder (a joined book's first disc). An index from before
+// stored that file's fingerprint, so a book moved before its first re-index is
+// still found by it. "" when it is the same file.
+func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
+	if !b.IsFolder || len(b.Files) < 2 {
+		return ""
+	}
+	first := b.Files[0].RelPath
+	byteFirst, dir := first, path.Dir(first)
+	for _, f := range b.Files[1:] {
+		if path.Dir(f.RelPath) == dir && f.RelPath < byteFirst {
+			byteFirst = f.RelPath
+		}
+	}
+	if byteFirst == first {
+		return ""
+	}
+	return fingerprintFile(absOf(lib, byteFirst))
 }
 
 // carryMove migrates a moved book's durable state from oldPath to newPath
@@ -1623,7 +1681,7 @@ func renamedFolders(lib catalog.Library, moved map[string]string) map[string]str
 	return out
 }
 
-// dirPresent reports whether a folder at exactly this path is on disk. A
+// dirPresent reports whether a folder (or file) at exactly this path is on disk. A
 // case-insensitive filesystem still answers to the old name of a folder renamed
 // only in case ("WIth" -> "With"), or of any folder under one so renamed, so when
 // the path still answers, each name along it must be in its parent's listing

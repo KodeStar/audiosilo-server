@@ -132,8 +132,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   authenticates like a session acting as its owner (an admin's key passes
   `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
   `/auth/exchange`; a pairing token is never accepted as a bearer credential.
-  Secrets are stored SHA-256-only and shown once; create/list/revoke go through
-  `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
+  Secrets are stored SHA-256-only and shown once; create/revoke go through
+  `gateSelfService` (shared `accountLimiter` + demo refusal; its 429 carries Retry-After), the
+  list through `nonDemoAccount` alone (a read never spends the per-IP mutation budget a NAT
+  household shares). **Containment**: a key
   authenticates as its owner but cannot mint a *fresh durable credential* -
   `ResolveRequest` returns the matched kind (`Credential.Kind`) and `denyAPIKey` refuses an api-key
   caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
@@ -494,20 +496,32 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
   above the requested path must be in the caller's scope too (`library.ErrNotAllowed`,
   answered as the out-of-scope 403 `no access to this path`, nothing read or
-  indexed for that caller); `stream` serves an
+  indexed for that caller). The on-demand index takes a path only in its on-disk
+  spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
+  case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
+  duplicate book everyone sees, so it is a 404. `stream` serves an
   audio file path directly, or transcodes it with `?transcode=1` (see below). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
   `.nfo` are filtered in `BrowseFS` so a click is always playable) and annotates
   book entries with metadata (`is_book` + title/author/…); the client acts on the
   entry's `path`.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
-  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`.
+  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
+  is web-only: served as `audio/x-matroska` (also sniffed from its EBML header `1A 45 DF A3`),
+  its chapters read by ffprobe, and never `direct_playable` whatever the codec
+  (`media.DirectPlayable(format, codec)`'s `containerFormats`), so the web player transcodes it,
+  nor is a folder book with an `.mka` part (`Book.PlaysInBrowsers` checks every file's container,
+  since a folder book's format is its first file's; the SQL twin `directPlayableExpr`);
+  a native app lists it but has no transcode path. An `.mka` beside a file of the same name in
+  another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the
+  book, as an `.aax` does (`library.folderAudio`).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
-  expose `direct_playable` (via `media.DirectPlayable`) so a client knows when to
+  expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
+  codec, and every file's container) so a client knows when to
   transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
@@ -521,7 +535,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
-  durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
+  durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
+  first file's; one indexed in byte order before #160 still matches by the file that order
+  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
@@ -560,9 +576,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a series (or its listeners' progress) on upgrade, and nothing is auto-detected
   (re-shaping existing books would orphan progress). Order: the disc folders by
   `discOrder` (natural: CD2 before CD10, "CD 1" = "CD1", ties by path), each disc's files
-  in exactly the order a book of that disc alone has them (byte-wise name order, as
-  `audioEntries`/the walk read them; NOT natural), since the state carry-over maps a disc
-  position as offset + position. Files and chapters keep real paths in the discs
+  in exactly the order a book of that disc alone has them (`sortFileOrder`, as
+  `audioEntries`/the walk read them), since the state carry-over maps a disc
+  position as offset + position. Every folder book's files play in natural name order
+  (`sortFileOrder`, #160: `naturalLess`, audiosilo-meta's `scan.NaturalLess` copied and held to
+  it by `TestNaturalLessIsMetas`, as the Bridge and the community metadata number a book's files,
+  and so its sidecars' chapters, in that order: digit runs by value, "2-" before "10-", the rest
+  byte by byte case folded, so "01 - Prologue" plays before "01a - Interlude"; ties byte-wise); a
+  book indexed in the old byte order is re-indexed by the next scan (`Signature.FileOrder`, the
+  stored order's key, differs),
+  which moves a listener's whole-book place on it: no remap. Files and chapters keep real paths in the discs
   (`file_path`, a chapter title led by its disc: "CD2 - 01"); the cover is the folder's own
   image, then the first disc's; `IndexPath` resolves the folder, a disc folder or a file in
   it to the joined book, and so does `bookForPath` from the index first (`GetBookHolding`),
@@ -836,7 +859,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `match_query`, the match dialog's search box prefill set by the api: `meta.SearchPrefill`, the
   title + author, except that swapped tags (the title is the author folder, or the cleaned author
   is the path's title; never a tag that matches its own path fact, "Dune/Dune") or a junk title/author
-  (`metadata.NamesNothing`, "Unknown", "Various Artists")
+  (`metadata.IsGenericTitle`, "Unknown", "Various Artists")
   take the folders' facts, `metadata.FromPathLayout`);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
@@ -1129,7 +1152,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
   `listening_daily` per local day, listener and book, blanks `last_ip` on signed-out or expired tokens
   (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
-  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that). Migration 0021 backfilled listening from before sessions were
+  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that) and
+  the pairing tokens that can never pair again (`auth.PrunePairingTokens`: revoked, expired, or linked to
+  a used-up or expired code). Migration 0021 backfilled listening from before sessions were
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
@@ -1150,7 +1175,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   nothing writes nothing, answering the row as it is or 404 with none; no listening session
   recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
   writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
-  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.NamesNothing`, IsGenericTitle for any script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.IsGenericTitle`, which reads every script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
@@ -2104,7 +2129,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the book's folder (a single-file book's is its file name) with no dot segment, size and length; anything else
   fails the file) is a source between the community's and the files': `applyChapterSource` uses it
   (`applyGenerated`) only with NO choice, when the community's don't apply, the list's files equal the book's
-  (`sameChapterFiles`: count, order, book-relative path and size) and `chapteralign.Align` with no Prober
+  (`chaptersOnFiles`: count, book-relative path and size; in the same order, or in another, a list
+  found while the book played in byte order before #160, its chapters then moved with their files by the
+  listed lengths, `movedChapters`, each running to the next start in the new order) and `chapteralign.Align` with no Prober
   answers `fill` (the book has no chapters of its own: no file holding two); then the rows are the fit,
   `chapters_source = "generated"` (`ChaptersFromGenerated`, never a choice an admin makes: `PATCH
   {chapter_source}` still takes files|community|auto) and `chapters_fit` a hash of what it was fitted from (`generatedKey`: the

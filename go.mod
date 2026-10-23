@@ -2,7 +2,7 @@ module github.com/kodestar/audiosilo-server
 
 go 1.26.0
 
-toolchain go1.26.8
+toolchain go1.26.10
 
 // Keep Go tooling (./... in build/vet/test/lint) out of the admin console's
 // npm dependencies: some packages ship Go source (e.g. flatted/golang).

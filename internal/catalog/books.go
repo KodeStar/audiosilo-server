@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"strconv"
 	"strings"
@@ -281,6 +282,32 @@ type Signature struct {
 	// files without re-indexing the book (SetAttachments).
 	AttachmentsSig       string
 	AttachmentsUnchecked bool
+	// FileOrder is FileOrderKey of a folder book's files as stored (0 for a
+	// single-file book), so a scan re-indexes a book whose files it now orders
+	// differently (#160: natural order, where books indexed before it had byte
+	// order) though no file changed.
+	FileOrder uint64
+}
+
+// FileOrderKey is a short key of a folder book's files in their order (the
+// FNV-64a of their paths, one per line); 0 for none.
+func FileOrderKey(files []BookFile) uint64 {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.RelPath
+	}
+	return fileOrderKey(strings.Join(paths, "\n"))
+}
+
+// fileOrderKey is FileOrderKey of the paths joined by newlines, as Signatures
+// reads them.
+func fileOrderKey(joined string) uint64 {
+	if joined == "" {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(joined))
+	return h.Sum64()
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
@@ -290,7 +317,9 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
-		        attachments_sig, `+attachmentsUncheckedExpr+`
+		        attachments_sig, `+attachmentsUncheckedExpr+`,
+		        CASE WHEN is_folder THEN (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
+		                                    FROM book_files f WHERE f.book_id = books.id) END
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -300,12 +329,14 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	for rows.Next() {
 		var rel string
 		var sig Signature
+		var files sql.NullString
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
-			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked); err != nil {
+			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked, &files); err != nil {
 			return nil, err
 		}
+		sig.FileOrder = fileOrderKey(files.String)
 		out[rel] = sig
 	}
 	return out, rows.Err()

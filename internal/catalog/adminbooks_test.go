@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -538,25 +537,49 @@ func TestAggregatesScoped(t *testing.T) {
 }
 
 // TestDirectPlayableSQLAgreesWithGo: the list's direct_playable (SQL) answers what
-// /item tells players (media.DirectPlayable) for every kind of codec.
+// /item tells players (Book.PlaysInBrowsers) for every kind of codec, in a
+// container browsers play and in Matroska, and for a folder whose first part
+// plays but a later one is Matroska (its format is the first part's).
 func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	codecs := []string{"", "aac", "MP3", "flac", "opus", "vorbis", "pcm_s16le", "ac3", "eac3", "wmav2"}
-	for _, codec := range codecs {
-		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "b/" + codec, Title: codec, Codec: codec, AddedAt: "x"}); err != nil {
-			t.Fatal(err)
+	for _, format := range []string{"m4b", "mka"} {
+		for _, codec := range codecs {
+			if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: format + "/" + codec, Title: codec,
+				Format: format, Codec: codec, AddedAt: "x"}); err != nil {
+				t.Fatal(err)
+			}
 		}
+	}
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "mixed", IsFolder: true, Title: "mixed",
+		Format: "mp3", Codec: "mp3", AddedAt: "x", Files: []BookFile{
+			{RelPath: "mixed/01 Intro.mp3", Format: "mp3"}, {RelPath: "mixed/02 Main.mka", Seq: 1, Format: "mka"}}}); err != nil {
+		t.Fatal(err)
 	}
 	page, err := c.ListAdminBooks(ctx, AdminListOptions{Limit: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
+	mixed := false
 	for _, b := range page.Books {
-		if want := media.DirectPlayable(b.Codec); b.DirectPlayable != want {
-			t.Errorf("codec %q: SQL says %v, media.DirectPlayable says %v", b.Codec, b.DirectPlayable, want)
+		full, err := c.GetBookByPath(ctx, lib.ID, b.Path)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if want := full.PlaysInBrowsers(); b.DirectPlayable != want {
+			t.Errorf("%s %s codec %q: SQL says %v, PlaysInBrowsers says %v", b.Path, b.Format, b.Codec, b.DirectPlayable, want)
+		}
+		if b.Path == "mixed" {
+			mixed = true
+			if b.DirectPlayable {
+				t.Errorf("a folder with an .mka part is direct-playable")
+			}
+		}
+	}
+	if !mixed {
+		t.Fatal("the mixed folder is not listed")
 	}
 }
 

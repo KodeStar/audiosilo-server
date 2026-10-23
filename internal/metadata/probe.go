@@ -139,7 +139,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 		m.Narrator = v
 	}
 	if v := firstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {
-		m.Series = v
+		m.setSeriesTag(v)
 	}
 	if v := firstReleaseDate(t["date"], t["year"]); v != "" {
 		m.Released = v

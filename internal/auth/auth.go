@@ -1048,8 +1048,10 @@ const recoveryPairingTTL = 10 * time.Minute
 // code, and the token dies with the code (cascade on delete/supersede, revoke
 // on rotate). Invite-kind tokens carry no expiry of their own - the parent
 // invite's expiry and use cap govern them at exchange, which is what lets
-// ConsumePairing report "invite has expired" rather than a generic token
-// error. Recovery-kind tokens get recoveryPairingTTL instead.
+// ConsumePairing report "invite has expired" (or used up) rather than a generic
+// token error, until the daily retention deletes the token with its dead invite
+// (PrunePairingTokens): a QR scanned after that gets the generic error.
+// Recovery-kind tokens get recoveryPairingTTL instead.
 func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (string, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
@@ -1063,6 +1065,28 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 		return "", err
 	}
 	return secret, nil
+}
+
+// PrunePairingTokens deletes the pairing tokens that can never pair again:
+// spent (an unlinked token is revoked by its exchange, every one by a sign-out
+// or its code's rotation), past their own expiry (minutes after the mint), or
+// linked to a code that is expired or used up (a rotation that revives the code
+// revokes its tokens first, so none of them could pair again either). The rows
+// would otherwise pile up, one per QR shown; a code's own row, its uses and its
+// expiry are untouched. Run by the daily retention beside PruneCastTokens. It
+// reports how many it deleted.
+func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
+	  WHERE kind = '`+KindPairing+`'
+	    AND (revoked = 1 OR expires_at < ?1
+	         OR (auth_code_id IS NOT NULL AND NOT EXISTS (
+	               SELECT 1 FROM auth_codes c WHERE c.id = tokens.auth_code_id
+	                  AND (c.max_uses = 0 OR c.uses < c.max_uses)
+	                  AND (c.expires_at IS NULL OR c.expires_at > ?1))))`, s.ts())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ConsumePairing validates a pairing token and consumes it, returning the

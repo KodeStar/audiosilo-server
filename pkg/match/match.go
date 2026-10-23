@@ -274,13 +274,12 @@ func Best(books []Book, q Query) (int, bool) {
 	return -1, false
 }
 
-// bracketGroup matches one parenthetical/bracketed group. Defined once and shared
-// by matchNoise and parenGroup so the bracket rule has a single definition.
-const bracketGroup = `[\(\[][^\)\]]*[\)\]]`
-
-// matchNoise strips parenthetical/bracketed groups and "book N"/"vol N" run tokens -
-// the formatting that differs between sources' titles.
-var matchNoise = regexp.MustCompile(`(?i)` + bracketGroup + `|\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*\d+(?:\.\d+)?\b`)
+// stripMatchNoise strips parenthetical/bracketed groups (stripParenGroups) and
+// "book N"/"vol N" run tokens (markerSeq) - the formatting that differs between
+// sources' titles.
+func stripMatchNoise(s string) string {
+	return markerSeq.ReplaceAllString(stripParenGroups(s), " ")
+}
 
 // fluffWords are standalone words that are noise in a book title (not "book"/"novel",
 // which appear in real titles like "The Book Thief").
@@ -293,7 +292,7 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 func CleanTitle(title, series string) string {
 	t := residualTitle(title, series)
 	if t == "" {
-		t = tidyTitle(matchNoise.ReplaceAllString(title, " "))
+		t = tidyTitle(stripMatchNoise(title))
 	}
 	if t == "" {
 		t = strings.TrimSpace(title)
@@ -307,7 +306,7 @@ func CleanTitle(title, series string) string {
 func residualTitle(title, series string) string {
 	t := stripSeries(title, series)
 	t = dropGenreSubtitle(t)
-	t = matchNoise.ReplaceAllString(t, " ")
+	t = stripMatchNoise(t)
 	t = fluffWords.ReplaceAllString(t, " ")
 	return tidyTitle(t)
 }
@@ -369,16 +368,31 @@ func seriesRefIn(lowerTitle, series string) (string, bool) {
 	return "", false
 }
 
-// parenGroup matches a parenthetical/bracketed decoration on a series name:
-// "Vorkosigan Saga (chronological)" is the catalog's ordering note, not part of
-// the name a library title carries.
-var parenGroup = regexp.MustCompile(bracketGroup)
+// parenGroup matches one innermost parenthetical/bracketed group (no bracket
+// inside it), such as a decoration on a series name: "Vorkosigan Saga
+// (chronological)" is the catalog's ordering note, not part of the name a library
+// title carries. stripParenGroups repeats it outward, so a nested group goes whole.
+var parenGroup = regexp.MustCompile(`[\(\[][^\(\)\[\]]*[\)\]]`)
 
+// bracketBlank blanks the brackets a group left without its partner.
+var bracketBlank = strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ")
+
+// stripParenGroups removes the bracketed groups, innermost first until none is
+// left, so a nested one goes whole ("Eric (Mundodisco 9) [Eric (Discworld)]" is
+// "Eric"), then any bracket left without its partner (#41: one pass left "Eric ]";
+// a lone closer too, "Short Stories, Volume 1]").
 func stripParenGroups(s string) string {
-	if !strings.ContainsAny(s, "([") {
+	if !strings.ContainsAny(s, "()[]") {
 		return s // the common case, kept off the regexp
 	}
-	return parenGroup.ReplaceAllString(s, " ")
+	for {
+		t := parenGroup.ReplaceAllString(s, " ")
+		if t == s {
+			break
+		}
+		s = t
+	}
+	return bracketBlank.Replace(s)
 }
 
 // dropLeadingArticle removes a leading "the "/"a "/"an ", never emptying the
@@ -443,7 +457,7 @@ func boundedAt(s string, start, end int) bool {
 func isAlnumRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
 
 // markerSeq matches an explicit sequence marker ("Volume 9", "Book 3", "(Book 5)" -
-// the marker half of matchNoise) and captures its number.
+// the run tokens stripMatchNoise drops) and captures its number.
 var markerSeq = regexp.MustCompile(`(?i)\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*(\d+(?:\.\d+)?)\b`)
 
 // bareSeq derives the volume number of a bare "series + number" title from its
@@ -597,14 +611,24 @@ func removeFoldWith(s, sub string, bounded bool) string {
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words
-// as boilerplate to drop - "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure" →
+// (and formatFluff's) as boilerplate to drop - "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure" →
 // "Dungeon Crawler Carl".
 var genreFluff = map[string]bool{
 	"litrpg": true, "gamelit": true, "gamlit": true, "progression": true,
 	"fantasy": true, "epic": true, "novel": true, "novella": true, "saga": true,
 	"adventure": true, "story": true, "tale": true, "tales": true, "cozy": true,
-	"mystery": true, "romance": true, "thriller": true, "audible": true,
-	"original": true, "dramatized": true, "adaptation": true, "omnibus": true,
+	"mystery": true, "romance": true, "thriller": true, "dark": true,
+}
+
+// formatFluff are the fluff words that say what a release is rather than its
+// genre. "series" is fluff only beside genre words alone ("A GameLit Dark
+// Adventure Series", "An Epic Fantasy Series"): with any of these ("The Complete
+// Series", "The Complete LitRPG Series"), or alone ("Series 1-3"), the tail tells
+// an omnibus from its first book and stays. Measured on audiosilo-meta's 259k
+// distinct work titles (#41): with "series" and "dark", 42 more genre tails drop
+// and none of the 400-odd complete-series titles collapses.
+var formatFluff = map[string]bool{
+	"audible": true, "original": true, "dramatized": true, "adaptation": true, "omnibus": true,
 	"complete": true, "collection": true, "edition": true, "anthology": true,
 }
 
@@ -619,18 +643,21 @@ func dropGenreSubtitle(s string) string {
 	if sep < 0 {
 		return s
 	}
-	any, allFluff := false, true
+	any, format, series := false, false, false
 	for _, w := range strings.FieldsFunc(strings.ToLower(s[sep:]), notAlnum) {
-		if len(w) < 2 || titleStopwords[w] {
-			continue
-		}
-		any = true
-		if !genreFluff[w] {
-			allFluff = false
-			break
+		switch {
+		case len(w) < 2 || titleStopwords[w]:
+		case w == "series":
+			series = true
+		case formatFluff[w]:
+			any, format = true, true
+		case genreFluff[w]:
+			any = true
+		default:
+			return s
 		}
 	}
-	if any && allFluff {
+	if any && !(series && format) {
 		return strings.TrimSpace(s[:sep])
 	}
 	return s

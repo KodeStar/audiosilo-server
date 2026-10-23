@@ -75,9 +75,17 @@ type Metadata struct {
 // next to its converted .m4b would lump both into one book with duplicated chapters
 // and an unplayable track. The manager converts .aax/.aaxc to .m4b before content
 // enters a library, so a library should only ever hold the playable .m4b.
+//
+// .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
+// is in the library for the web player only: no browser or native player plays
+// the container, so media.DirectPlayable is false for it and the web player
+// streams it through ?transcode=1 (#161); a native app lists it but can't play it.
+// An .mka beside a file of the same name in another audio format is that file's
+// source or copy, and the scan leaves it out as it does an .aax (library's
+// folderAudio).
 var AudioExtensions = map[string]bool{
 	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true,
-	".flac": true, ".ogg": true, ".opus": true,
+	".flac": true, ".ogg": true, ".opus": true, ".mka": true,
 }
 
 // IsAudio reports whether path has a recognized audiobook extension.
@@ -134,8 +142,10 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		m.Genres = g
 	}
 	if raw := md.Raw(); raw != nil {
-		if v := rawString(raw, "series", "©grp", "show", "TXXX:SERIES"); v != "" {
-			m.Series = strings.TrimSpace(v)
+		// dhowden keys an MP4 atom by its raw name, \xa9 one byte (\xa9grp, the
+		// iTunes grouping), not the UTF-8 "©".
+		if v := rawString(raw, "series", "\xa9grp", "show", "TXXX:SERIES"); v != "" {
+			m.setSeriesTag(v) // "Discworld, book #40": series Discworld, position 40
 		}
 		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
 			m.Narrator = strings.TrimSpace(v)
@@ -167,7 +177,7 @@ func bookTitle(album, title string) string {
 		return firstNonEmpty(a, t)
 	}
 	ca, ct := canonTag(a), canonTag(t)
-	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !isAlnumByte(ct[len(ca)]) {
+	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !startsAlnum(ct[len(ca):]) {
 		if tail := strings.Trim(ct[len(ca):], " -:,;|."); tail != "" && !IsGenericTitle(tail) && !trackMarkerLead(tail) {
 			return t
 		}
@@ -187,8 +197,11 @@ func trackMarkerLead(tail string) bool {
 	return IsGenericTitle(f[0]) || (len(f) > 1 && IsGenericTitle(f[0]+" "+f[1]))
 }
 
-func isAlnumByte(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+// startsAlnum reports whether s starts with a letter or a digit in any script:
+// an album the title merely starts a word with ("Сто" of "Столица") is no prefix.
+func startsAlnum(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // canonTag lowercases a tag and strips bracketed groups ("(Unabridged)") so an
@@ -315,15 +328,18 @@ var discLabels = map[string]bool{"track": true, "chapter": true, "part": true, "
 // number or a "track/chapter/part/disc N"-style label (e.g. "Track 01"). It is
 // token-based, so real titles that merely start with such a word ("Part of Your
 // World") are NOT flagged: every token must be a number or a disc label, with at
-// least one number present. Such a title (common in poorly-tagged files) should
-// not override a path-derived title, nor be used to match two books as the same.
+// least one number present. Letters in any script count, so a title written in
+// another one names something ("Пролог", "Глава 1", "第1章", "Война и мир"). Such a
+// title (common in poorly-tagged files) should not override a path-derived
+// title, nor be used to match two books as the same.
 func IsGenericTitle(title string) bool {
-	// Normalize: lowercase, collapse any run of non-alphanumerics to one space.
+	// Normalize: lowercase, collapse any run of characters that are not letters,
+	// numbers or their marks to one space.
 	var b strings.Builder
 	space := false
 	for _, r := range strings.ToLower(title) {
 		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+		case unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r):
 			b.WriteRune(r)
 			space = false
 		case !space:
@@ -359,25 +375,14 @@ func IsGenericTitle(title string) bool {
 	return hasNumber
 }
 
-// NamesNothing is IsGenericTitle for a label in any script. IsGenericTitle reads
-// only ASCII letters, so it takes a title written in another script for an empty
-// label ("Пролог", "第一章") or a bare number ("Глава 1"); a title with a letter
-// outside ASCII names something.
-func NamesNothing(title string) bool {
-	return !hasNonASCIILetter(title) && IsGenericTitle(title)
-}
-
-// hasNonASCIILetter reports whether s has a letter outside ASCII.
-func hasNonASCIILetter(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) })
-}
-
+// isAllDigits reports whether s is a number in any script ("01", "０１",
+// "٠١"): the runes IsGenericTitle's normalizing keeps as numbers.
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, r := range s {
-		if r < '0' || r > '9' {
+		if !unicode.IsNumber(r) {
 			return false
 		}
 	}

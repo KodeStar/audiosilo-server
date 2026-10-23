@@ -23,6 +23,7 @@ func TestAudioContentType(t *testing.T) {
 		".ogg":     "audio/ogg",
 		".opus":    "audio/opus",
 		".wav":     "audio/wav",
+		".mka":     "audio/x-matroska",
 		".unknown": "",
 	}
 	for ext, want := range cases {
@@ -49,6 +50,7 @@ func TestSniffAudioType(t *testing.T) {
 		{"adts aac", []byte{0xFF, 0xF1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/aac"},
 		// MP3 frame sync (0xFF 0xFB) - must not be misread as ADTS.
 		{"mp3 frame sync", []byte{0xFF, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/mpeg"},
+		{"matroska ebml", []byte{0x1A, 0x45, 0xDF, 0xA3, 0xA3, 0x42, 0x86, 0x81}, "audio/x-matroska"},
 		{"unrecognized", []byte("not audio at all"), ""},
 	}
 	for _, tc := range cases {
@@ -120,13 +122,19 @@ func TestServeFile(t *testing.T) {
 func TestDirectPlayable(t *testing.T) {
 	t.Parallel()
 	for _, codec := range []string{"aac", "MP3", "flac", "opus", "vorbis", ""} {
-		if !DirectPlayable(codec) {
-			t.Errorf("DirectPlayable(%q) = false, want true", codec)
+		if !DirectPlayable("m4b", codec) {
+			t.Errorf("DirectPlayable(m4b, %q) = false, want true", codec)
 		}
 	}
 	for _, codec := range []string{"ac3", "eac3", "dts", "wmav2"} {
-		if DirectPlayable(codec) {
-			t.Errorf("DirectPlayable(%q) = true, want false", codec)
+		if DirectPlayable("m4b", codec) {
+			t.Errorf("DirectPlayable(m4b, %q) = true, want false", codec)
+		}
+	}
+	// Matroska is never direct, whatever the codec inside or none read (#161).
+	for _, codec := range []string{"mp3", "aac", ""} {
+		if DirectPlayable("mka", codec) || DirectPlayable("MKA", codec) {
+			t.Errorf("DirectPlayable(mka, %q) = true, want false", codec)
 		}
 	}
 }
