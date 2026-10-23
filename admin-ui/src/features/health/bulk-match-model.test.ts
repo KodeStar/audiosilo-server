@@ -3,6 +3,7 @@ import { regionName, regionOptions, regionTag } from '@/lib/regions';
 import {
   NO_PICKS,
   applyCount,
+  leaveOutStale,
   applyRequest,
   bulkPhase,
   isChosen,
@@ -108,6 +109,22 @@ describe('picks', () => {
     expect(isPickable(item({ applied: 'applied' }))).toBe(false);
     expect(isPickable(item({ gone: true }))).toBe(false);
     expect(isChosen(item({ applied: 'applied' }), NO_PICKS)).toBe(false);
+  });
+
+  it("doesn't count a loaded confident book the apply would leave alone", () => {
+    const r = run({}, { auto: 4, pending: 3 });
+    const loaded = [
+      item({ id: 11, outcome: 'auto' }),
+      item({ id: 12, outcome: 'auto', matched_since: true }),
+      item({ id: 13, outcome: 'auto', gone: true }),
+      item({ id: 14, outcome: 'auto', matched_since: true, applied: 'applied' }),
+      item({ id: 15, outcome: 'review', matched_since: true }),
+    ];
+    const picks = leaveOutStale(NO_PICKS, loaded);
+    expect([...picks.exclude].sort()).toEqual([12, 13]);
+    expect(applyCount(r, picks)).toBe(1);
+    // Nothing new: the same picks, so a re-render changes nothing.
+    expect(leaveOutStale(picks, loaded)).toBe(picks);
   });
 
   it('counts what an apply takes: pending confident, less left out, plus put in', () => {

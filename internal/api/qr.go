@@ -20,7 +20,8 @@ import (
 // installed app on any self-hosted domain). The pairing token is as redeemable as
 // its origin: redeemed from an invite it inherits the invite's uses and expiry (one
 // QR can pair several devices); from a recovery code it carries a short TTL of its
-// own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL.
+// own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL
+// (/auth/pair's ttl_seconds can shorten it: pairTTL).
 type PairingPayload struct {
 	ServerName string `json:"server_name"`
 	// ServerID is the server's stable id (GET /server's server_id), also carried

@@ -469,4 +469,43 @@ describe('bulk matching', () => {
       ).toEqual({ library_id: 3, mode: 'match' }),
     );
   });
+
+  it('words a review item held for its length with both lengths (R-44)', async () => {
+    const shorter: MatchRunItem = {
+      ...doubtful,
+      detail: 'length_differs',
+      proposal: { ...doubtful.proposal, runtime_min: 300 },
+      book: { title: 'Artemis', author: 'Andy Weir', duration: 634 * 60 },
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [shorter] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const row = (await within(dialog).findByText('Artemis')).closest('li')!;
+    expect(
+      within(row).getByText(/^Held for review: the book is 10h 34m long, this recording 5h/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing about length for an item held only for its score', async () => {
+    mockFetch(routes([run()]));
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const row = (await within(dialog).findByText('Artemis')).closest('li')!;
+    expect(within(row).queryByText(/Held for review/)).toBeNull();
+  });
 });

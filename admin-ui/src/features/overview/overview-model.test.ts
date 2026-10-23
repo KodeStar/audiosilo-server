@@ -1,5 +1,5 @@
 import type { ListeningRow, ListeningSession } from '@/api/types';
-import { RECENT_LIMIT, greetingFor, splitListening } from './overview-model';
+import { RECENT_LIMIT, bookLibraries, greetingFor, splitListening } from './overview-model';
 
 const now = Date.parse('2026-10-03T20:00:00Z');
 
@@ -77,5 +77,16 @@ describe('greetingFor', () => {
     expect(greetingFor(8)).toBe('morning');
     expect(greetingFor(12)).toBe('afternoon');
     expect(greetingFor(18)).toBe('evening');
+  });
+});
+
+describe('bookLibraries', () => {
+  it('leaves podcast libraries out of Books per library', () => {
+    const libs = [
+      { id: 1, name: 'Books', kind: 'books' as const, book_count: 4 },
+      { id: 2, name: 'Podcasts', kind: 'podcasts' as const, book_count: 0 },
+      { id: 3, name: 'Old server', book_count: 2 },
+    ];
+    expect(bookLibraries(libs).map((l) => l.name)).toEqual(['Books', 'Old server']);
   });
 });

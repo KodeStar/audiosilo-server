@@ -322,9 +322,9 @@ func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != ""
 }
 
-// stillFoundBy reports whether the book still has the identifier a refresh
-// found its record by (Proposal.FoundBy): a book matched again since (by hand,
-// to another record) is not overwritten with the old one's details.
+// stillFoundBy reports whether the book still has the identifier a refresh or
+// a repick found its record by (Proposal.FoundBy): a book matched again since
+// (by hand, to another record) is not overwritten with the old one's details.
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {
@@ -336,11 +336,17 @@ func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's
 // ASIN is still the community override the run found (an admin who since edited
-// it, or reverted it to the tags, keeps theirs).
+// it, or reverted it to the tags, keeps theirs), and still the ASIN the run
+// looked up (p.FoundBy): a book matched again since by hand, to another record,
+// is a community override too, and keeps that match. An item recorded before
+// FoundBy was (none) is judged by the source alone.
 func PlanRepick(st *catalog.MatchState, p catalog.MatchProposal) map[string]string {
 	cur := st.Fields[catalog.FieldASIN]
 	asin := p.Values[catalog.FieldASIN]
 	if asin == "" || !cur.Locked || cur.Source != catalog.SourceCommunity || cur.Value == asin {
+		return map[string]string{}
+	}
+	if p.FoundBy != "" && !stillFoundBy(st, p.FoundBy) {
 		return map[string]string{}
 	}
 	return map[string]string{catalog.FieldASIN: asin}

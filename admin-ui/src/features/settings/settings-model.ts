@@ -6,6 +6,7 @@ import type {
   SettingsSection,
   SystemStatus,
 } from '@/api/types';
+import { formatList } from '@/lib/format';
 
 // Server > Settings: which sections exist, what each setting id is called, and
 // the small rules the forms share (locked, restart, list editing, diffs). Each
@@ -165,4 +166,12 @@ export function certificateLook(
   if (days < 0) return { key: 'settings.network.cert.expired', status: 'bad' };
   if (days < 14) return { key: 'settings.network.cert.expiring', status: 'warn', days };
   return { key: 'settings.network.cert.valid', status: 'ok', days };
+}
+
+/** The saved settings the running server doesn't use yet, by name ("Metadata source and HTTPS"). */
+export function restartList(t: TFunction, settings: AdminSettings, lang: string): string {
+  return formatList(
+    settings.restart_pending.map((id) => t(`settings.${id}`)),
+    lang,
+  );
 }

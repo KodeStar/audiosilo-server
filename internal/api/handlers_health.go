@@ -89,7 +89,9 @@ func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 
 // handleDuplicates serves GET /admin/issues/duplicates: groups of books that look
 // like the same book within a library (?library_id= narrows it; ?ignored=true
-// lists instead the groups an admin said are different books).
+// lists instead the groups an admin said are different books). ?across=1 also
+// groups copies in different libraries (each copy names its library_id and
+// library_name), the groups holding one of ?library_id='s books with it (#165).
 func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	libID, ok := parseOptionalID(q.Get("library_id"))
@@ -97,7 +99,8 @@ func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
 	}
-	groups, err := a.cat.DuplicateGroups(r.Context(), libID, q.Get("ignored") == "true")
+	across := q.Get("across") == "1" || q.Get("across") == "true"
+	groups, err := a.cat.DuplicateGroups(r.Context(), libID, q.Get("ignored") == "true", across)
 	if err != nil {
 		a.writeCatalogError(w, err, "duplicates failed", "could not find duplicates")
 		return

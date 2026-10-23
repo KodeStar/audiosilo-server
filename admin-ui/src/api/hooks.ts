@@ -122,7 +122,8 @@ export const keys = {
   /** The Health summary and the duplicate groups (a prefix: a scan or an ignore changes them). */
   issues: ['admin', 'issues'] as const,
   issueSummary: ['admin', 'issues', 'summary'] as const,
-  duplicates: (ignored: boolean) => ['admin', 'issues', 'duplicates', ignored] as const,
+  duplicates: (ignored: boolean, across = false) =>
+    ['admin', 'issues', 'duplicates', ignored, across] as const,
   seriesSpellings: (ignored: boolean) => ['admin', 'issues', 'series-spellings', ignored] as const,
   jobs: ['admin', 'jobs'] as const,
   /** Bulk match runs and every page of their items (a prefix). */
@@ -638,10 +639,15 @@ export function useDirs(path: string) {
 /** How long the palette's aggregates stay fresh: it reopens often, and a search needn't refetch them. */
 export const PALETTE_STALE_MS = 5 * 60_000;
 
+/** Every account (the people list); `fetchQuery(usersQuery)` reads it fresh outside a component. */
+export const usersQuery = queryOptions({
+  queryKey: keys.users,
+  queryFn: () => api.users().then((r) => r.users ?? []),
+});
+
 export function useUsers(enabled = true, staleTime?: number) {
   return useQuery({
-    queryKey: keys.users,
-    queryFn: () => api.users().then((r) => r.users ?? []),
+    ...usersQuery,
     enabled,
     staleTime,
   });
@@ -730,10 +736,11 @@ export function useIssues() {
 }
 
 /** Groups of copies of one book: the open ones, or with `ignored` the ignored ones. */
-export function useDuplicates(ignored: boolean) {
+export function useDuplicates(ignored: boolean, across = false) {
   return useQuery({
-    queryKey: keys.duplicates(ignored),
-    queryFn: () => api.duplicates({ ignored: ignored || undefined }).then((r) => r.groups ?? []),
+    queryKey: keys.duplicates(ignored, across),
+    queryFn: () =>
+      api.duplicates({ ignored: ignored || undefined, across }).then((r) => r.groups ?? []),
   });
 }
 

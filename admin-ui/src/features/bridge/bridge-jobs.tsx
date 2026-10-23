@@ -20,6 +20,7 @@ import {
   kindName,
   progressOf,
   resultSummary,
+  serverScheduled,
   stateLook,
 } from './bridge-model';
 import { isBookKind } from './generate-model';
@@ -143,7 +144,9 @@ function JobRow({
   const meta = [
     job.requested_by
       ? t('bridge.jobs.by', { name: job.requested_by.username })
-      : t('bridge.jobs.byNobody'),
+      : serverScheduled(job.kind)
+        ? t('bridge.jobs.byServer')
+        : t('bridge.jobs.byNobody'),
     t('bridge.jobs.created', { when: formatRelative(job.created_at, lang) }),
   ];
   if (job.updated_at !== job.created_at)

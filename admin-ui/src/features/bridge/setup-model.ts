@@ -75,6 +75,21 @@ export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean |
   return setup.items.find((i) => i.id === 'agent')?.done;
 }
 
+/** The checklist's GitHub step, when it has one. */
+export function githubStep(setup: Pick<BridgeSetup, 'items'>): BridgeSetupItem | undefined {
+  return setup.items.find((i) => i.id === 'github');
+}
+
+/**
+ * Whether "Paid by" means anything yet: there is a credential to pay with (the
+ * checklist's agent step done or, from a Bridge without that step, its agent
+ * ready). Before that the estimates' subscription flag is only a default.
+ */
+export function billingKnown(status: Pick<BridgeStatus, 'setup' | 'estimates'>): boolean {
+  const set = status.setup ? agentCredentialSet(status.setup) : undefined;
+  return set ?? status.estimates?.sidecars?.agent_ready ?? false;
+}
+
 /** The steps generating characters and recaps waits on: the ones it can't run without. */
 export type GenerateNeed = 'asr' | 'agent' | 'libraries';
 

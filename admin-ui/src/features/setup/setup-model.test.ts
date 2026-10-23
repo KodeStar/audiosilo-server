@@ -3,12 +3,15 @@ import type { PreviewSample, SetupRequest, SetupState } from '@/api/types';
 import { settingsWith } from '@/test/fixtures';
 import {
   addressMismatch,
-  bridgeCompose,
   compareField,
   disagreements,
   finishMarks,
   folderErrorKey,
   isHomeHost,
+  isLoopbackUrl,
+  hasBookLibrary,
+  normalizeAddress,
+  phoneLink,
   isSetupStep,
   mergePatches,
   nextStep,
@@ -51,6 +54,9 @@ describe('resumeStep', () => {
 
   it('goes on to naming when the server already has libraries (config-declared ones)', () => {
     expect(resumeStep({ folder: 'done' }, { hasDraft: false, hasLibraries: true })).toBe('naming');
+    expect(
+      resumeStep({ folder: 'done', naming: 'done' }, { hasDraft: false, hasLibraries: true }),
+    ).toBe('metadata');
   });
 
   it('a skipped folder never sends the admin back to it', () => {
@@ -117,7 +123,7 @@ describe('the Finish setting up card', () => {
 
   it('Finish marks every step without a mark as skipped, so the card lists them', () => {
     const marks = { folder: 'skipped', naming: 'done', reach: 'done' } as const;
-    const sent = finishMarks(marks, 'bridge', 'done');
+    const sent = finishMarks(marks, 'bridge', 'done', false);
     expect(sent).toEqual({
       metadata: 'skipped',
       abs: 'skipped',
@@ -126,24 +132,46 @@ describe('the Finish setting up card', () => {
       bridge: 'done',
     });
     const after = state({ finished: true, steps: { ...marks, ...sent } });
-    expect(skippedSteps(after)).toEqual(['folder', 'metadata', 'abs', 'backups', 'phone']);
+    expect(skippedSteps(after, false)).toEqual(['folder', 'metadata', 'abs', 'backups', 'phone']);
     // A stepper jump straight to the end leaves even the folder on the card.
     expect(
-      skippedSteps(state({ finished: true, steps: finishMarks({}, 'bridge', 'skipped') })),
+      skippedSteps(
+        state({ finished: true, steps: finishMarks({}, 'bridge', 'skipped', false) }),
+        false,
+      ),
     ).toEqual(['folder', 'naming', 'metadata', 'reach', 'abs', 'backups', 'phone', 'bridge']);
+  });
+
+  it('a library on the server satisfies the folder step: Finish marks it done, the card leaves it out', () => {
+    expect(finishMarks({}, 'bridge', 'done', true).folder).toBe('done');
+    // Its own mark stands; only an unmarked step is filled in.
+    expect(finishMarks({ folder: 'skipped' }, 'bridge', 'done', true).folder).toBeUndefined();
+    const s = state({ finished: true, steps: { folder: 'skipped', abs: 'skipped' } });
+    expect(skippedSteps(s, true)).toEqual(['abs']);
+    expect(skippedSteps(s, false)).toEqual(['folder', 'abs']);
+    const onlyFolder = state({ finished: true, steps: { folder: 'skipped' } });
+    expect(showFinishCard(onlyFolder, true)).toBe(false);
+    expect(showFinishCard(onlyFolder, false)).toBe(true);
   });
 
   it('shows after the flow while a step is skipped, in flow order', () => {
     const s = state({ finished: true, steps: { bridge: 'skipped', abs: 'skipped' } });
-    expect(showFinishCard(s)).toBe(true);
-    expect(skippedSteps(s)).toEqual(['abs', 'bridge']);
+    expect(showFinishCard(s, true)).toBe(true);
+    expect(skippedSteps(s, true)).toEqual(['abs', 'bridge']);
   });
 
-  it('stays away during the flow, once dismissed, with nothing skipped, or unloaded', () => {
-    expect(showFinishCard(state({ steps: skipped }))).toBe(false);
-    expect(showFinishCard(state({ finished: true, dismissed: true, steps: skipped }))).toBe(false);
-    expect(showFinishCard(state({ finished: true, steps: { folder: 'done' } }))).toBe(false);
-    expect(showFinishCard(undefined)).toBe(false);
+  it('shows while the flow is unfinished ("Finish later"), so there is a way back', () => {
+    expect(showFinishCard(state(), true)).toBe(true);
+    expect(showFinishCard(state({ steps: skipped }), true)).toBe(true);
+  });
+
+  it('stays away once dismissed, with nothing skipped, or unloaded', () => {
+    expect(showFinishCard(state({ dismissed: true }), true)).toBe(false);
+    expect(showFinishCard(state({ finished: true, dismissed: true, steps: skipped }), true)).toBe(
+      false,
+    );
+    expect(showFinishCard(state({ finished: true, steps: { folder: 'done' } }), true)).toBe(false);
+    expect(showFinishCard(undefined, true)).toBe(false);
   });
 });
 
@@ -362,10 +390,64 @@ describe('how people reach the server', () => {
   });
 });
 
-describe('bridgeCompose', () => {
-  it("mounts the library read-write at the server's own path", () => {
-    expect(bridgeCompose('/mnt/books')).toContain('- /path/to/audiobooks:/mnt/books:rw');
-    expect(bridgeCompose('')).toContain('- /path/to/audiobooks:/audiobooks:rw');
-    expect(bridgeCompose('/x')).toContain('image: ghcr.io/kodestar/audiosilo-bridge:latest');
+describe('hasBookLibrary', () => {
+  it('counts a books library, not a podcast one, for the folder step', () => {
+    expect(hasBookLibrary([])).toBe(false);
+    expect(hasBookLibrary([{ kind: 'podcasts' }])).toBe(false);
+    expect(hasBookLibrary([{ kind: 'podcasts' }, { kind: 'books' }])).toBe(true);
+  });
+});
+
+describe('normalizeAddress', () => {
+  it('adds the scheme left off, as the placeholders show', () => {
+    expect(normalizeAddress('books.example.com', 'https')).toBe('https://books.example.com');
+    expect(normalizeAddress(' 192.168.1.20:8080/ ', 'http')).toBe('http://192.168.1.20:8080');
+    expect(normalizeAddress('http://nas.local:8080', 'https')).toBe('http://nas.local:8080');
+    expect(normalizeAddress('', 'http')).toBe('');
+  });
+
+  it('refuses what the server would: another scheme, a query, a user name, no host', () => {
+    expect(normalizeAddress('ftp://books.example.com', 'https')).toBeNull();
+    expect(normalizeAddress('https://books.example.com/?x=1', 'https')).toBeNull();
+    expect(normalizeAddress('https://me@books.example.com', 'https')).toBeNull();
+    expect(normalizeAddress('http://', 'http')).toBeNull();
+  });
+
+  it('refuses a mistyped scheme rather than reading it as the host', () => {
+    expect(normalizeAddress('http:/192.168.1.20:8080', 'http')).toBeNull();
+    expect(normalizeAddress('http//192.168.1.20:8080', 'http')).toBeNull();
+    expect(normalizeAddress('https:/books.example.com', 'https')).toBeNull();
+    expect(normalizeAddress('ftp:/books.example.com', 'https')).toBeNull();
+    // A host with a port is no scheme.
+    expect(normalizeAddress('nas.local:8080', 'http')).toBe('http://nas.local:8080');
+    expect(normalizeAddress('localhost:8080/', 'http')).toBe('http://localhost:8080');
+  });
+});
+
+describe('phoneLink', () => {
+  const link = 'http://127.0.0.1:19297/web/connect?token=abc&sid=s1';
+
+  it('keeps a link a phone can open', () => {
+    const ok = 'https://books.example.com/web/connect?token=abc';
+    expect(phoneLink(ok, 'http://192.168.1.20:8080')).toEqual({ url: ok, via: 'pairing' });
+  });
+
+  it('moves a loopback link to the home address', () => {
+    expect(phoneLink(link, 'http://192.168.1.20:8080/')).toEqual({
+      url: 'http://192.168.1.20:8080/web/connect?token=abc&sid=s1',
+      via: 'home',
+    });
+  });
+
+  it('says so when there is no other address', () => {
+    expect(phoneLink(link, undefined)).toEqual({ url: link, via: 'loopback' });
+    expect(phoneLink(link, 'http://localhost:8080')).toEqual({ url: link, via: 'loopback' });
+  });
+
+  it('knows a loopback address', () => {
+    expect(isLoopbackUrl('http://localhost:8080')).toBe(true);
+    expect(isLoopbackUrl('http://[::1]:8080')).toBe(true);
+    expect(isLoopbackUrl('http://192.168.1.20')).toBe(false);
+    expect(isLoopbackUrl('not a url')).toBe(false);
   });
 });

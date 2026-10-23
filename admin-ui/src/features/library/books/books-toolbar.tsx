@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { LayoutGrid, List, SlidersHorizontal, X } from 'lucide-react';
+import { LayoutGrid, List, ListChecks, SlidersHorizontal, X } from 'lucide-react';
 import { ADMIN_BOOK_SORTS, type AdminBookSort, type AdminLibrary } from '@/api/types';
 import { SearchBox } from '@/components/search-box';
 import { Badge } from '@/components/ui/badge';
@@ -21,18 +21,25 @@ import { chipLabel } from './filter-labels';
 
 /**
  * The sticky row over the list: its heading, the search box, the Filters button
- * (with how many are on), the sort menu and the grid/table switch.
+ * (with how many are on), Select (picking books without a first click on one),
+ * the sort menu and the grid/table switch.
  */
 export function BooksToolbar({
   heading,
   search,
   update,
   onOpenFilters,
+  selecting,
+  onToggleSelect,
 }: {
   heading: string;
   search: LibrarySearch;
   update: Update;
   onOpenFilters: () => void;
+  /** Whether books are being picked (the Select toggle, or a selection). */
+  selecting?: boolean;
+  /** Select starts picking without a first book; Done ends it and clears the selection. */
+  onToggleSelect?: () => void;
 }) {
   const { t } = useTranslation();
   const count = sheetFilterCount(search);
@@ -62,6 +69,18 @@ export function BooksToolbar({
             </Badge>
           ) : null}
         </Button>
+        {onToggleSelect ? (
+          <Button variant={selecting ? 'secondary' : 'outline'} onClick={onToggleSelect}>
+            {selecting ? (
+              t('books.select.done')
+            ) : (
+              <>
+                <ListChecks aria-hidden="true" />
+                {t('books.select.toggle')}
+              </>
+            )}
+          </Button>
+        ) : null}
         <NativeSelect
           className="w-auto"
           aria-label={t('books.sort.label')}

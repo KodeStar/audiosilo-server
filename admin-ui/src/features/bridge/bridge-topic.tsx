@@ -31,6 +31,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { queueJob } from './bridge-actions';
+import { BridgeCompose } from './bridge-compose';
 import { JobsCard } from './bridge-jobs';
 import {
   bridgeTabLink,
@@ -44,7 +45,14 @@ import {
 } from './bridge-model';
 import { PairDialog } from './pair-dialog';
 import { BridgeSetupList } from './setup-list';
-import { ACCOUNTS_TAB, agentCredentialSet, setupComplete, setupProgress } from './setup-model';
+import {
+  ACCOUNTS_TAB,
+  agentCredentialSet,
+  billingKnown,
+  githubStep,
+  setupComplete,
+  setupProgress,
+} from './setup-model';
 import { useBridge, usePairCode } from './use-bridge';
 import { VerifyDialog } from './verify-dialog';
 
@@ -89,7 +97,11 @@ export function BridgeTopic() {
           making={making}
         />
       ) : (
-        <NotPaired onPair={() => void makeCode()} making={making} />
+        <NotPaired
+          roots={status.libraries.map((l) => l.root)}
+          onPair={() => void makeCode()}
+          making={making}
+        />
       )}
       {status.pairing && !shown ? (
         <Notice
@@ -122,14 +134,29 @@ export function BridgeTopic() {
   );
 }
 
-/** What the Bridge is, and Connect a bridge. */
-function NotPaired({ onPair, making }: { onPair: () => void; making: boolean }) {
+/**
+ * What the Bridge is, where to get one (the compose snippet the setup flow's
+ * Bridge step shows, and Running a Bridge), and Connect a bridge.
+ */
+function NotPaired({
+  roots,
+  onPair,
+  making,
+}: {
+  roots: readonly string[];
+  onPair: () => void;
+  making: boolean;
+}) {
   const { t } = useTranslation();
   return (
     <Card aria-labelledby="bridge-title">
       <CardHeader titleId="bridge-title" title={t('bridge.title')} />
       <div className="flex flex-col items-start gap-4 px-5 py-5">
         <p className="max-w-[620px] text-muted-foreground">{t('bridge.about')}</p>
+        <div className="w-full">
+          <BridgeCompose roots={roots} />
+        </div>
+        <p className="max-w-[620px] text-[13px] text-muted-foreground">{t('bridge.thenPair')}</p>
         <Button onClick={onPair} disabled={making}>
           {making ? (
             <LoaderCircle className="animate-spin" aria-hidden="true" />
@@ -265,7 +292,7 @@ function StatusCard({
                 <span className="text-muted-foreground">{t('bridge.status.notYet')}</span>
               ),
             ],
-            ...(sidecars ? estimateRows(sidecars, t, lang) : []),
+            ...(sidecars ? estimateRows(sidecars, t, lang, billingKnown(status)) : []),
           ]}
         />
       </div>
@@ -334,14 +361,7 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
         <BridgeSetupList setup={setup} uiUrl={status.ui_url} />
         <FactList
           rows={[
-            [
-              t('bridge.setup.github'),
-              setup.github_login ? (
-                <span className="font-mono text-[12.5px]">{setup.github_login}</span>
-              ) : (
-                <StatusText tone="off">{t('bridge.setup.notSignedIn')}</StatusText>
-              ),
-            ],
+            [t('bridge.setup.github'), <GitHubAccount key="github" setup={setup} />],
             ...(agent === undefined
               ? []
               : ([
@@ -388,14 +408,39 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
 }
 
 /**
+ * The GitHub account row, agreeing with the checklist's GitHub step: the
+ * account's name; or, when the step is done with no name reported (the gh
+ * CLI's token, say), signed in, in the Bridge's own words; else not signed in.
+ */
+function GitHubAccount({ setup }: { setup: BridgeSetup }) {
+  const { t } = useTranslation();
+  if (setup.github_login) {
+    return <span className="font-mono text-[12.5px]">{setup.github_login}</span>;
+  }
+  const step = githubStep(setup);
+  if (step?.done) {
+    return (
+      <StatusText tone="ok">
+        {step.detail
+          ? t('bridge.setup.signedInVia', { how: step.detail })
+          : t('bridge.setup.signedIn')}
+      </StatusText>
+    );
+  }
+  return <StatusText tone="off">{t('bridge.setup.notSignedIn')}</StatusText>;
+}
+
+/**
  * What the Bridge's last heartbeat says about characters and recaps: its agent
- * (and whether it's ready), how it is paid for, this month's spend against the
- * cap, and how many finished books its estimates come from.
+ * (and whether it's ready), how it is paid for (only once there is a credential
+ * to pay with, `billing`), this month's spend against the cap, and how many
+ * finished books its estimates come from.
  */
 function estimateRows(
   e: SidecarsEstimates,
   t: TFunction,
   lang: string,
+  billing: boolean,
 ): [string, React.ReactNode][] {
   const spent = formatUsd(e.month_spent_usd, lang);
   return [
@@ -412,10 +457,14 @@ function estimateRows(
         <StatusText tone="off">{t('bridge.estimates.agentNone')}</StatusText>
       ),
     ],
-    [
-      t('bridge.estimates.billing'),
-      e.subscription ? t('bridge.estimates.subscription') : t('bridge.estimates.apiKey'),
-    ],
+    ...(billing
+      ? ([
+          [
+            t('bridge.estimates.billing'),
+            e.subscription ? t('bridge.estimates.subscription') : t('bridge.estimates.apiKey'),
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
     [
       t('bridge.estimates.month'),
       e.monthly_budget_usd > 0
@@ -527,7 +576,11 @@ function LibraryRow({
           </dd>
           {m?.checked_path ? (
             <>
-              <dt className="text-muted-foreground">{t('bridge.mapping.checked')}</dt>
+              <dt className="text-muted-foreground">
+                {l.kind === 'podcasts'
+                  ? t('bridge.mapping.checkedMarker')
+                  : t('bridge.mapping.checked')}
+              </dt>
               <dd className="font-mono text-[12px] [overflow-wrap:anywhere]">{m.checked_path}</dd>
             </>
           ) : null}
@@ -536,24 +589,26 @@ function LibraryRow({
           <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{m.error}</p>
         ) : null}
       </div>
-      <div className="flex items-center gap-1">
-        <Button variant="outline" size="sm" disabled={busy} onClick={onVerify}>
-          {busy ? (
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-          ) : (
-            <ScanSearch aria-hidden="true" />
-          )}
-          {t('bridge.verify.action')}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onOptions}
-          aria-label={t('bridge.verify.optionsAria', { name: l.name })}
-        >
-          <SlidersHorizontal aria-hidden="true" />
-        </Button>
-      </div>
+      {l.kind === 'podcasts' ? null : (
+        <div className="flex items-center gap-1">
+          <Button variant="outline" size="sm" disabled={busy} onClick={onVerify}>
+            {busy ? (
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+            ) : (
+              <ScanSearch aria-hidden="true" />
+            )}
+            {t('bridge.verify.action')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOptions}
+            aria-label={t('bridge.verify.optionsAria', { name: l.name })}
+          >
+            <SlidersHorizontal aria-hidden="true" />
+          </Button>
+        </div>
+      )}
     </li>
   );
 }

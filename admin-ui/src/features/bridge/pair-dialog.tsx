@@ -15,7 +15,7 @@ import {
 import { copyWithToast } from '@/lib/clipboard';
 import { formatClock } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { codeExchanged, secondsLeft } from './bridge-model';
+import { bridgeServerUrl, codeExchanged, COMPOSE_SERVER_URL, secondsLeft } from './bridge-model';
 
 /** A code this page made, and the pairing it replaces (to tell when a Bridge takes it). */
 export interface ShownCode extends BridgePairCode {
@@ -85,7 +85,9 @@ function PairBody({
     return () => window.clearInterval(id);
   }, []);
   const left = secondsLeft(shown.expires_at, now);
-  const env = `AUDIOSILO_BRIDGE_SERVER_URL=${shown.server_url}\nAUDIOSILO_BRIDGE_PAIR_CODE=${shown.code}`;
+  // One address, the compose snippet's when the server's own is loopback.
+  const server = bridgeServerUrl(shown.server_url);
+  const env = `AUDIOSILO_BRIDGE_SERVER_URL=${server.url}\nAUDIOSILO_BRIDGE_PAIR_CODE=${shown.code}`;
 
   return (
     <>
@@ -132,11 +134,17 @@ function PairBody({
           </Notice>
         )}
 
-        <CopyField
-          id="bridge-server-url"
-          label={t('bridge.pair.serverUrl')}
-          value={shown.server_url}
-        />
+        <div className="flex flex-col gap-1.5">
+          <CopyField id="bridge-server-url" label={t('bridge.pair.serverUrl')} value={server.url} />
+          <p className="text-[12.5px] text-muted-foreground">
+            {server.loopback
+              ? t('bridge.pair.addressLoopback', {
+                  compose: COMPOSE_SERVER_URL,
+                  loopback: shown.server_url,
+                })
+              : t('bridge.pair.addressHint', { compose: COMPOSE_SERVER_URL })}
+          </p>
+        </div>
 
         <ol className="ml-5 flex list-decimal flex-col gap-1.5 text-[13.5px]">
           <li>{t('bridge.pair.step.start')}</li>

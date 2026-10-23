@@ -130,6 +130,7 @@ export function SettingsForm<S extends SettingsSection>({
   settings,
   section,
   title,
+  savedTitle,
   description,
   fields,
   visible,
@@ -139,6 +140,8 @@ export function SettingsForm<S extends SettingsSection>({
   settings: AdminSettings;
   section: S;
   title: string;
+  /** The save toast's title when "<title> saved" doesn't read (General's "This server"). */
+  savedTitle?: string;
   description?: string;
   fields: FieldSpec[];
   /** Hides a field for the current draft (TLS hosts outside Let's Encrypt, home HTTP outside self-signed). */
@@ -205,7 +208,7 @@ export function SettingsForm<S extends SettingsSection>({
       const next = await save(p);
       const waits = patchIds(p).some((id) => next.restart_pending.includes(id));
       toast.add({
-        title: t('settings.saved', { section: title }),
+        title: savedTitle ?? t('settings.saved', { section: title }),
         description: waits ? t('settings.savedRestart') : t('settings.savedNow'),
         type: 'success',
       });

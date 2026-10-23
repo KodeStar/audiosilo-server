@@ -37,6 +37,7 @@ import { StatusText, type StatusTone } from '@/components/status-text';
 import { Monogram } from '@/components/monogram';
 import { CATEGORY_LOOK } from '@/features/health/issues-model';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
+import { RestartNotice } from '@/features/settings/restart-notice';
 import { Page } from '@/components/page';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -50,7 +51,7 @@ import {
 import { useCurrentUser } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { chapterLabel } from '@/features/activity/live-model';
-import { greetingFor, splitListening } from './overview-model';
+import { bookLibraries, greetingFor, splitListening } from './overview-model';
 import { FinishSetupCard } from './finish-setup-card';
 import { SupportCard } from './support-card';
 
@@ -118,6 +119,7 @@ export function OverviewPage() {
       </div>
 
       <OfflineLibraries />
+      <PendingRestart />
 
       <section aria-labelledby="live-heading">
         <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-2">
@@ -206,6 +208,32 @@ export function OverviewPage() {
         </aside>
       </div>
     </Page>
+  );
+}
+
+/**
+ * Saved settings waiting for a restart (a restart-only choice made in the
+ * setup flow, or in Settings), so it isn't silently pending.
+ */
+function PendingRestart() {
+  const { t } = useTranslation();
+  const settings = useSettings();
+  if (!settings.data?.restart_pending.length) return null;
+  return (
+    <div className="mb-8">
+      <RestartNotice
+        settings={settings.data}
+        actions={
+          <Link
+            to="/server/{-$section}"
+            params={{ section: undefined }}
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
+            {t('home.restart.action')}
+          </Link>
+        }
+      />
+    </div>
   );
 }
 
@@ -365,7 +393,8 @@ function LibrariesCard({
   lang: string;
 }) {
   const { t } = useTranslation();
-  const max = (libraries ?? []).reduce((m, l) => Math.max(m, l.book_count), 1);
+  const shown = libraries ? bookLibraries(libraries) : undefined;
+  const max = (shown ?? []).reduce((m, l) => Math.max(m, l.book_count), 1);
   return (
     <section className="rounded-xl border bg-card" aria-labelledby="libraries-heading">
       <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
@@ -374,9 +403,9 @@ function LibrariesCard({
         </h3>
       </div>
       <div className="flex flex-col gap-3.5 p-5">
-        {!libraries
+        {!shown
           ? [0, 1].map((i) => <div key={i} className="skel h-8" />)
-          : libraries.map((l) => (
+          : shown.map((l) => (
               <div key={l.id} className="flex flex-col gap-1.5">
                 <div className="flex justify-between gap-3 text-[13px]">
                   <span className="truncate font-[550]">{l.name}</span>
@@ -488,6 +517,8 @@ function FirstRun() {
   const steps = ['add', 'scan', 'invite'] as const;
   return (
     <Page>
+      {/* The setup flow can finish with no library, a restart-only choice saved. */}
+      <PendingRestart />
       <div className="overflow-hidden rounded-xl border bg-card">
         <div className="px-6 py-10 md:px-11 md:py-12">
           <div className="eyebrow">{t('home.firstRun.eyebrow')}</div>

@@ -6,6 +6,13 @@ import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 
 /**
+ * How long the token a player tab carries lives (POST /auth/pair ttl_seconds):
+ * it rides the tab's URL and history, and is exchanged within seconds, so two
+ * minutes rather than the server's ten.
+ */
+export const PLAYER_TAB_TTL_SECONDS = 120;
+
+/**
  * Opens the web player in a new tab, signed in as this admin with no second
  * sign-in: a one-time pairing token per click, the tab pointed at `urlFor(token)`
  * once it is back. One token per click: a second click while one is on its way
@@ -30,7 +37,7 @@ export function usePlayerTab(failedTitle: string) {
     inFlight.current = true;
     setBusy(true);
     try {
-      tab.location.href = urlFor(await api.pairSelf());
+      tab.location.href = urlFor(await api.pairSelf(PLAYER_TAB_TTL_SECONDS));
     } catch (err) {
       tab.close();
       toastError(failedTitle, err);

@@ -39,6 +39,10 @@ export function IssuesPage() {
   // Without ?issue= the page opens the first category needing attention and keeps
   // it open: clearing it shows "All clear" rather than jumping to the next one.
   const [opened, setOpened] = useState<IssueKind>();
+  // Duplicates in other libraries too, when asked (#165): kept here so the
+  // ignored view keeps it, and so its ignored groups can be reached when the
+  // count (within each library) has none.
+  const [across, setAcross] = useState(false);
   const firstKind = summary.data
     ? pickCategory(summary.data.categories, undefined)?.kind
     : undefined;
@@ -131,10 +135,15 @@ export function IssuesPage() {
                   : t(`health.kind.${cat.kind}`)}
               </h2>
               <span className="text-[13px] text-muted-foreground">
-                {t(`health.about.${cat.kind}`)}
+                {/* Including other libraries, the duplicates are no longer one library's. */}
+                {t(
+                  cat.kind === 'duplicate' && across
+                    ? 'health.about.duplicateAcross'
+                    : `health.about.${cat.kind}`,
+                )}
               </span>
             </div>
-            {cat.ignored || ignored ? (
+            {cat.ignored || ignored || (cat.kind === 'duplicate' && across) ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -145,7 +154,9 @@ export function IssuesPage() {
               >
                 {ignored
                   ? t('health.showOpen')
-                  : t('health.showIgnored', counted(cat.ignored, lang))}
+                  : cat.kind === 'duplicate' && across
+                    ? t('health.showIgnoredAny')
+                    : t('health.showIgnored', counted(cat.ignored, lang))}
               </Button>
             ) : null}
           </div>
@@ -155,7 +166,7 @@ export function IssuesPage() {
           ) : cat.kind === 'series_spellings' ? (
             <SeriesSpellings ignored={ignored} />
           ) : (
-            <Duplicates ignored={ignored} />
+            <Duplicates ignored={ignored} across={across} onAcrossChange={setAcross} />
           )}
         </section>
       ) : null}

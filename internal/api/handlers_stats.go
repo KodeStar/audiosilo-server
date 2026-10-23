@@ -28,8 +28,11 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type libStat struct {
-		ID        int64  `json:"id"`
-		Name      string `json:"name"`
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+		// Kind is the library's kind (books or podcasts): the dashboard's
+		// "Books per library" lists books libraries only.
+		Kind      string `json:"kind"`
 		BookCount int    `json:"book_count"`
 	}
 	libStats := make([]libStat, 0, len(libs))
@@ -40,7 +43,7 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 			n = counts[l.ID]
 		}
 		total += n
-		libStats = append(libStats, libStat{ID: l.ID, Name: l.Name, BookCount: n})
+		libStats = append(libStats, libStat{ID: l.ID, Name: l.Name, Kind: l.Kind, BookCount: n})
 	}
 
 	users, err := a.auth.ListUsers(ctx)

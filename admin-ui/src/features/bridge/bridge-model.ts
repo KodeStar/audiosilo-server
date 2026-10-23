@@ -2,6 +2,8 @@ import type { ComponentProps } from 'react';
 import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
+import { isLoopbackUrl } from '@/features/setup/setup-model';
+import { absoluteBaseName } from '@/lib/paths';
 
 // Settings > Bridge: the small rules the page shows the Bridge and its jobs by
 // (internal/bridge, handlers_bridge.go). Pure: no React, no i18n instance; the
@@ -230,4 +232,80 @@ export function holdParams(textValue: string): { hold_seconds: number } | undefi
   const n = Number(s);
   if (!Number.isInteger(n) || n < 0 || n > MAX_HOLD_SECONDS) return null;
   return n === 0 ? undefined : { hold_seconds: n };
+}
+
+// --- Adding a Bridge ------------------------------------------------------------
+
+/** "Running a Bridge" in the User Guide: the compose file, the agent container and the checklist. */
+export const RUNNING_A_BRIDGE_DOCS_URL =
+  'https://docs.audiosilo.app/users/getting-started/running-a-bridge';
+
+/**
+ * The server as a Bridge in the same compose file reaches it: its service name
+ * (audiosilo-bridge's compose.example.yaml, and the docs' compose file).
+ */
+export const COMPOSE_SERVER_URL = 'http://audiosilo:8080';
+
+/**
+ * The server address to give a Bridge: the server's own suggestion (its home
+ * address, else the address this page uses), unless that is a loopback one.
+ * From inside a Bridge's container 127.0.0.1 is the Bridge itself, so the
+ * compose service name is offered then (`loopback`), the one the compose
+ * snippet uses.
+ */
+export function bridgeServerUrl(suggested: string): { url: string; loopback: boolean } {
+  return isLoopbackUrl(suggested)
+    ? { url: COMPOSE_SERVER_URL, loopback: true }
+    : { url: suggested, loopback: false };
+}
+
+/**
+ * The Bridge's service for the server's compose file, from audiosilo-bridge's
+ * compose.example.yaml. It mounts every library folder read-write at the
+ * server's own path (`roots`, one volume each), so the Bridge finds each
+ * library with no mapping. The agent container (characters and recaps) is in
+ * Running a Bridge.
+ */
+export function bridgeCompose(roots: readonly string[]): string {
+  const at = [...new Set(roots.map((r) => r.trim()).filter(Boolean))];
+  const volumes = (at.length ? at : ['/audiobooks']).map(
+    (root) => `      - /path/to/${hostFolder(root)}:${root}:rw`,
+  );
+  return `  bridge:
+    image: ghcr.io/kodestar/audiosilo-bridge:latest
+    restart: unless-stopped
+    depends_on: [audiosilo]
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      # The server as the Bridge reaches it on this network (its service name).
+      AUDIOSILO_BRIDGE_SERVER_URL: ${COMPOSE_SERVER_URL}
+      # The Bridge's page as your LAN reaches it (the console links to it).
+      AUDIOSILO_BRIDGE_PUBLIC_URL: http://192.168.1.10:8091
+      AUDIOSILO_BRIDGE_AGENT_STAGING_DIR: /staging
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./bridge-data:/bridge-data
+      # Each library folder, at the same path the server uses:
+${volumes.join('\n')}
+      - staging:/staging
+
+# And under the file's top-level volumes:
+#   staging: {}`;
+}
+
+/** A placeholder host folder for a library root: its last segment ("/mnt/kids" -> "kids"). */
+function hostFolder(root: string): string {
+  return absoluteBaseName(root).replace(/[^A-Za-z0-9._-]/g, '-') || 'audiobooks';
+}
+
+/**
+ * Whether a job of this kind is one the server queues itself (a podcast's feed
+ * checks, episode fetches and retention), so a job with no requester reads
+ * "Scheduled by the server" rather than a deleted account's (BRIDGE-03). A
+ * follow (podcast.subscribe) always has a listener behind it.
+ */
+export function serverScheduled(kind: string): boolean {
+  return kind.startsWith('podcast.') && kind !== 'podcast.subscribe';
 }

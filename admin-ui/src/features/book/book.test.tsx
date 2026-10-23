@@ -712,6 +712,8 @@ describe('listen in player', () => {
     expect(open).toHaveBeenCalledWith('', '_blank');
     expect(tab.opener).toBeNull();
     expect(pairs(calls)).toHaveLength(1);
+    // The token rides the tab's URL: it asks for two minutes, not ten.
+    expect(pairs(calls)[0].body).toEqual({ ttl_seconds: 120 });
     const url = new window.URL(tab.location.href, 'http://admin.test');
     expect(url.origin + url.pathname).toBe('http://admin.test/web/connect');
     expect(Object.fromEntries(url.searchParams)).toEqual({

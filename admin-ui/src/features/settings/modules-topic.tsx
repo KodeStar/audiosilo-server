@@ -125,7 +125,8 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
       </div>
       {enabled && !offered ? (
         <Notice tone="info" icon={EyeOff} role="status" className="mx-5 mb-5">
-          {t('settings.modules.hidden')}
+          {/* An admin-only module (Contributions) isn't hidden from listeners: it waits. */}
+          {t(`settings.module.${m.id}.hidden`, { defaultValue: t('settings.modules.hidden') })}
         </Notice>
       ) : null}
     </Card>

@@ -1,15 +1,14 @@
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   CircleCheck,
-  Copy,
   ExternalLink,
   Headphones,
   Link2,
   LoaderCircle,
   RefreshCw,
+  TriangleAlert,
   Users,
 } from 'lucide-react';
 import { api } from '@/api/client';
@@ -19,25 +18,25 @@ import { Notice } from '@/components/notice';
 import { QrCode } from '@/components/qr-code';
 import { StatusText } from '@/components/status-text';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { BridgeCompose } from '@/features/bridge/bridge-compose';
 import { PairDialog } from '@/features/bridge/pair-dialog';
 import { BridgeSetupList } from '@/features/bridge/setup-list';
 import { useBridge, usePairCode } from '@/features/bridge/use-bridge';
 import { playerConnectUrl } from '@/features/book/book-model';
-import { copyWithToast } from '@/lib/clipboard';
 import { useCurrentUser } from '@/lib/session';
 import { usePlayerTab } from '@/lib/use-player-tab';
-import { bridgeCompose } from './setup-model';
+import { phoneLink } from './setup-model';
 import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
 
 /**
  * Step 5: coming from Audiobookshelf. Points to the listening import (in a new
- * tab, so the flow stays open) and says ABS metadata.json files are read.
- * Skipped by default: Continue records it done only once the import was opened.
+ * tab, so the flow stays open) and says ABS metadata.json files are read. An
+ * info-only step: Continue records it done (someone who never used
+ * Audiobookshelf has nothing left to do here), Skip skipped.
  */
 export function AbsStep({ leave, back, last }: StepProps) {
   const { t } = useTranslation();
-  const [opened, setOpened] = useState(false);
   return (
     <>
       <div className="flex flex-col gap-4">
@@ -54,7 +53,6 @@ export function AbsStep({ leave, back, last }: StepProps) {
             target="_blank"
             rel="noreferrer"
             className={buttonVariants({ variant: 'outline' })}
-            onClick={() => setOpened(true)}
           >
             <ExternalLink aria-hidden="true" />
             {t('setup.abs.open')}
@@ -64,7 +62,7 @@ export function AbsStep({ leave, back, last }: StepProps) {
       <StepFooter
         back={back}
         onSkip={() => leave('skipped')}
-        onContinue={() => leave(opened ? 'done' : 'skipped')}
+        onContinue={() => leave('done')}
         last={last}
       />
     </>
@@ -84,26 +82,29 @@ function connectUrl(p: PairToken): string {
  * ffmpeg is there for formats a browser can't play, and where household
  * members are added.
  */
-export function PhoneStep({ leave, back, last }: StepProps) {
+export function PhoneStep({ settings, leave, back, last }: StepProps) {
   const { t } = useTranslation();
   const server = useServerInfo();
   const system = useSystem();
   const pair = useQuery({
     queryKey: keys.setupPair,
-    queryFn: api.pairSelf,
+    queryFn: () => api.pairSelf(),
     staleTime: Infinity,
     gcTime: 0,
     retry: false,
   });
   const ffmpeg = system.data?.tools.find((x) => x.name === 'ffmpeg');
   const webPlayer = server.data?.capabilities.web_player ?? false;
+  const link = pair.data
+    ? phoneLink(connectUrl(pair.data), pair.data.addresses?.home || settings.general.lan_url)
+    : null;
 
   return (
     <>
       <div className="flex flex-col gap-5">
         <div className="flex flex-wrap items-center gap-5 rounded-xl border px-4 py-4">
-          {pair.data ? (
-            <QrCode text={connectUrl(pair.data)} label={t('setup.phone.qr')} />
+          {link ? (
+            <QrCode text={link.url} label={t('setup.phone.qr')} />
           ) : (
             <span
               className="skel size-[168px] shrink-0 rounded-[10px]"
@@ -119,6 +120,11 @@ export function PhoneStep({ leave, back, last }: StepProps) {
                 {t('setup.phone.failed')}
               </span>
             ) : null}
+            {link?.via === 'home' ? (
+              <span className="text-[13px] text-muted-foreground" role="status">
+                {t('setup.phone.viaHome', { address: new URL(link.url).origin })}
+              </span>
+            ) : null}
             <div>
               <Button
                 variant="outline"
@@ -132,6 +138,26 @@ export function PhoneStep({ leave, back, last }: StepProps) {
             </div>
           </div>
         </div>
+
+        {link?.via === 'loopback' ? (
+          <Notice
+            tone="warn"
+            icon={TriangleAlert}
+            role="status"
+            title={t('setup.phone.loopback', { address: window.location.host })}
+            actions={
+              <Link
+                to="/setup"
+                search={{ step: 'reach' }}
+                className={buttonVariants({ variant: 'outline', size: 'sm' })}
+              >
+                {t('setup.phone.loopbackAction')}
+              </Link>
+            }
+          >
+            {t('setup.phone.loopbackBody')}
+          </Notice>
+        ) : null}
 
         {webPlayer ? <WebPlayerButton /> : null}
 
@@ -187,8 +213,6 @@ export function BridgeStep({ libraries, leave, back, last }: StepProps) {
   const bridge = useBridge();
   const status = bridge.data;
   const { shown, making, makeCode, closeCode } = usePairCode(status);
-  const root = libraries.find((l) => l.kind === 'books')?.root ?? '';
-  const compose = bridgeCompose(root);
 
   return (
     <>
@@ -208,28 +232,7 @@ export function BridgeStep({ libraries, leave, back, last }: StepProps) {
           </div>
         ) : (
           <>
-            <div className="flex flex-col gap-2">
-              <span className="text-[13px] text-muted-foreground">
-                {t('setup.bridge.composeIntro')}
-              </span>
-              <pre className="max-h-[320px] overflow-auto rounded-lg bg-muted px-3 py-2.5 font-mono text-[12px] leading-5">
-                {compose}
-              </pre>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void copyWithToast(compose, t('setup.bridge.composeWhat'))}
-                >
-                  <Copy aria-hidden="true" />
-                  {t('setup.bridge.copy')}
-                </Button>
-                <span className="text-[12.5px] text-muted-foreground">
-                  {t('setup.bridge.agent')}
-                </span>
-              </div>
-            </div>
+            <BridgeCompose roots={libraries.map((l) => l.root)} />
             <div>
               <Button variant="outline" disabled={making} onClick={() => void makeCode()}>
                 {making ? (

@@ -1,14 +1,16 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookOpen, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
+import { BookOpen, LoaderCircle, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
+import { BULK_LIMIT } from '@/api/client';
 import { useAdminBooks, useBookFacets, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Page } from '@/components/page';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { counted } from '@/lib/format';
+import { toastError } from '@/lib/errors';
+import { counted, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { AddToShareDialog } from '../add-to-share-dialog';
@@ -21,7 +23,7 @@ import { ActiveChips, BooksToolbar } from './books-toolbar';
 import { BulkEditDialog } from './bulk-edit-dialog';
 import { FilterSheet } from './filter-sheet';
 import { Shelves } from './shelves';
-import { useSelection } from './use-selection';
+import { useSelection, type Selection } from './use-selection';
 
 const NO_BOOKS: AdminBook[] = [];
 
@@ -50,24 +52,25 @@ export function BooksPage() {
   const facets = useBookFacets(filter);
   const browsing = isBrowsing(search);
 
-  const selection = useSelection();
+  const books = useMemo(
+    () => list.data?.pages.flatMap((p) => p.books ?? []) ?? NO_BOOKS,
+    [list.data],
+  );
+  // The list as shown, for Shift-click ranges.
+  const selection = useSelection(books);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [dialog, setDialog] = useState<'edit' | 'share' | null>(null);
   const { clear } = selection;
   // Esc clears the selection (a dialog or the sheet takes Esc for itself first).
   useEffect(() => {
-    if (!selection.size || dialog || sheetOpen) return;
+    if (!selection.selecting || dialog || sheetOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented) clear();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selection.size, dialog, sheetOpen, clear]);
+  }, [selection.selecting, dialog, sheetOpen, clear]);
 
-  const books = useMemo(
-    () => list.data?.pages.flatMap((p) => p.books ?? []) ?? NO_BOOKS,
-    [list.data],
-  );
   const { fetchNextPage } = list;
   const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
   const libs = libraries.data ?? [];
@@ -123,7 +126,7 @@ export function BooksPage() {
       {empty ? (
         <EmptyLibrary hasLibraries={libs.length > 0} />
       ) : (
-        <div className={cn(selection.size > 0 && 'selecting')}>
+        <div className={cn(selection.selecting && 'selecting')}>
           <LibraryFilter counts={facets.data?.libraries} className="mb-6" />
           {browsing ? <Shelves selection={selection} metadataOn={metadataOn} now={now} /> : null}
           <BooksToolbar
@@ -131,8 +134,20 @@ export function BooksPage() {
             search={search}
             update={update}
             onOpenFilters={() => setSheetOpen(true)}
+            selecting={selection.selecting}
+            onToggleSelect={() => (selection.selecting ? clear() : selection.setMode(true))}
           />
           <ActiveChips search={search} update={update} libraries={libs} />
+          {selection.selecting && books.length > 0 ? (
+            <SelectAllRow
+              books={books}
+              total={total}
+              selection={selection}
+              hasMore={!!list.hasNextPage}
+              fetchNextPage={list.fetchNextPage}
+              listKey={JSON.stringify(params)}
+            />
+          ) : null}
           {content}
         </div>
       )}
@@ -166,6 +181,104 @@ export function BooksPage() {
         onDone={clear}
       />
     </Page>
+  );
+}
+
+/**
+ * While selecting: select every book shown (the grid has no header checkbox),
+ * and, when the filter matches more than are loaded, every matching book, the
+ * rest of the list fetched page by page here, up to BULK_LIMIT (what one
+ * bulk action takes). A selection past that says so.
+ *
+ * `listKey` names the list (its filter and sort): a fetch still running when
+ * it changes, or when the row goes (the selection ended), selects nothing, as
+ * fetchNextPage follows the list as it is now and its pages would be another
+ * filter's books.
+ */
+function SelectAllRow({
+  books,
+  total,
+  selection,
+  hasMore,
+  fetchNextPage,
+  listKey,
+}: {
+  books: AdminBook[];
+  total: number | undefined;
+  selection: Selection;
+  hasMore: boolean;
+  fetchNextPage: ReturnType<typeof useAdminBooks>['fetchNextPage'];
+  listKey: string;
+}) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const [loading, setLoading] = useState(false);
+  const allShown = books.every(selection.isSelected);
+  const matching = total ?? books.length;
+  const capped = matching > BULK_LIMIT;
+  // Which run may still select: a new list or the row going moves it on.
+  const run = useRef(0);
+  useEffect(
+    () => () => {
+      run.current += 1;
+    },
+    [listKey],
+  );
+
+  const selectMatching = async () => {
+    const mine = run.current;
+    setLoading(true);
+    try {
+      let all = books;
+      let more = hasMore;
+      while (more && all.length < BULK_LIMIT) {
+        const r = await fetchNextPage();
+        if (run.current !== mine) return;
+        if (r.isError) throw r.error;
+        all = r.data?.pages.flatMap((p) => p.books ?? []) ?? all;
+        more = !!r.hasNextPage;
+      }
+      selection.setMany(all.slice(0, BULK_LIMIT), true);
+    } catch (err) {
+      if (run.current === mine) toastError(t('books.select.failed'), err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={allShown}
+        onClick={() => selection.setMany(books.slice(0, BULK_LIMIT), true)}
+      >
+        {hasMore
+          ? t('books.select.shown', counted(Math.min(books.length, BULK_LIMIT), lang))
+          : t('books.select.all', counted(Math.min(books.length, BULK_LIMIT), lang))}
+      </Button>
+      {hasMore ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={loading}
+          onClick={() => void selectMatching()}
+        >
+          {loading ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+          {capped
+            ? t('books.select.first', counted(BULK_LIMIT, lang))
+            : t('books.select.matching', counted(matching, lang))}
+        </Button>
+      ) : null}
+      {capped || selection.size > BULK_LIMIT ? (
+        <span className="text-muted-foreground">
+          {t('books.select.cap', { max: formatNumber(BULK_LIMIT, lang) })}
+        </span>
+      ) : (
+        <span className="text-muted-foreground max-md:hidden">{t('books.select.shiftHint')}</span>
+      )}
+    </div>
   );
 }
 

@@ -13,6 +13,7 @@ import {
   FileWarning,
   FolderTree,
   GripVertical,
+  Lock,
   Pencil,
   RefreshCw,
   Split,
@@ -21,7 +22,7 @@ import {
   Unplug,
 } from 'lucide-react';
 import { downloadLibraryExport } from '@/api/client';
-import { useRecentBooks } from '@/api/hooks';
+import { useRecentBooks, useSetup } from '@/api/hooks';
 import type { AdminLibrary, ScanProgress } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -41,6 +42,7 @@ import { formatNumber, formatRelative, progressFraction } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { DeleteLibraryDialog } from './delete-library-dialog';
+import { configLibrary } from './library-access';
 import { DetectionDialog } from './detection-dialog';
 import { LibraryFormDialog } from './library-form-dialog';
 import { OfflineNotice } from './offline-notice';
@@ -71,6 +73,7 @@ export function LibraryCard({
   const queued = !running && !!l.scan.queued;
   // A podcast library has no book tooling (detection, export).
   const isPodcasts = l.kind === 'podcasts';
+  const fromConfig = configLibrary(useSetup().data, l.name);
 
   // Personal, each copy is its own row with its path, tags and description: a
   // file for the admin's own scripts (the menu warns before it is made), never
@@ -136,6 +139,12 @@ export function LibraryCard({
               {l.name}
             </h2>
             {isPodcasts ? <Badge variant="info">{t('libraries.kind.podcasts')}</Badge> : null}
+            {fromConfig ? (
+              <Badge variant="outline" title={t('libraries.form.configLocked')}>
+                <Lock aria-hidden="true" />
+                {t('setup.folder.fromConfig')}
+              </Badge>
+            ) : null}
             {/* A running scan wins: a Retry's scan is the newer news than the
                 availability probe, which the server caches for a few seconds. */}
             {running ? (

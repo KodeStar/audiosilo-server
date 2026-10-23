@@ -1,15 +1,19 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
@@ -719,6 +723,10 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
 		return
 	}
+	if a.takesConfigName(req.Name, req.Root) {
+		writeConfigNameTaken(w)
+		return
+	}
 	p.Apply(&lib)
 	created, err := a.cat.CreateLibrary(r.Context(), lib)
 	if err != nil {
@@ -735,6 +743,15 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 // ignore rules and metadata source. A new root or new ignore rules make the index
 // stale, so either queues a rescan, returned as `job`; browsing still works
 // immediately. A new metadata source re-resolves the books before it answers.
+// A library the config declares (config.yaml, or the app embedding the server:
+// launcher.Options.Libraries) keeps the name and folder declared there: every
+// start upserts it by name (launcher.syncLibraries) and the server never writes
+// a library to config.yaml, so a rename would come back as a second library and
+// a new folder would be put back. Changing either is 409 config_library, and
+// the same values resent write nothing (a respelled folder would be stored as
+// typed and rescanned); its other settings stay editable. Another library
+// renamed to a declared name with another folder is 409 name_taken, as the next
+// start would give it the declared folder.
 func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -750,6 +767,30 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
+	}
+	// Only a server whose config declares libraries needs the current row.
+	if (req.Name != "" || req.Root != "") && len(a.config().Libraries) > 0 {
+		cur, err := a.cat.GetLibrary(r.Context(), id)
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
+			return
+		}
+		switch {
+		case a.configLibrary(cur.Name):
+			if (req.Name != "" && req.Name != cur.Name) || (req.Root != "" && !sameRoot(req.Root, cur.Root)) {
+				writeErrorCode(w, http.StatusConflict, "config_library",
+					"This library is declared in the server's config, so its name and folder are set there. Change them in config.yaml (or the app that runs the server) and restart.")
+				return
+			}
+			p.Name, p.Root = "", ""
+		case req.Name != "" && req.Name != cur.Name && a.takesConfigName(req.Name, cmp.Or(req.Root, cur.Root)):
+			writeConfigNameTaken(w)
+			return
+		}
 	}
 	updated, stale, err := a.cat.UpdateLibrary(r.Context(), id, p)
 	if errors.Is(err, catalog.ErrNotFound) {
@@ -770,6 +811,38 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		resp.Job = &job
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// configLibrary reports whether the config declares a library by this name
+// (launcher.syncLibraries upserts each by name at start).
+func (a *API) configLibrary(name string) bool {
+	return slices.ContainsFunc(a.config().Libraries, func(l config.Library) bool { return l.Name == name })
+}
+
+// takesConfigName reports whether a library added or renamed with this name and
+// folder would be given another folder at the next start: the config declares a
+// library by the name at another folder. (The name reads as free only while the
+// declared library is deleted; the next start puts it back, on that name.)
+func (a *API) takesConfigName(name, root string) bool {
+	for _, l := range a.config().Libraries {
+		if l.Name == name {
+			declared, err := filepath.Abs(l.Root)
+			return err != nil || !sameRoot(root, declared)
+		}
+	}
+	return false
+}
+
+// sameRoot reports whether a folder as sent names the one a library has: the
+// same absolute path, whatever the spelling ("/a/b/" is "/a/b").
+func sameRoot(sent, have string) bool {
+	root, err := filepath.Abs(sent)
+	return err == nil && root == filepath.Clean(have)
+}
+
+func writeConfigNameTaken(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusConflict, codeNameTaken,
+		"The server's config declares a library by this name, with another folder. Pick another name.")
 }
 
 // handleReorderLibraries sets the libraries' display order from an ordered list

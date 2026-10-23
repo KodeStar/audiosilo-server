@@ -184,7 +184,7 @@ func TestDuplicateGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	groups, err := c.DuplicateGroups(ctx, 0, false)
+	groups, err := c.DuplicateGroups(ctx, 0, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestDuplicateGroups(t *testing.T) {
 	if err := c.IgnoreIssue(ctx, IssueDuplicate, ignore, uid); err != nil {
 		t.Fatal(err)
 	}
-	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false); len(groups) != 1 {
+	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false, false); len(groups) != 1 {
 		t.Fatalf("after ignoring a group: %+v", groups)
 	}
 	counts, _ := c.IssueCounts(ctx, []string{IssueDuplicate})
@@ -222,8 +222,63 @@ func TestDuplicateGroups(t *testing.T) {
 		Author: "Andy Weir", Format: "m4b", Duration: 58010}); err != nil {
 		t.Fatal(err)
 	}
-	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false); len(groups) != 2 {
+	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false, false); len(groups) != 2 {
 		t.Fatalf("a new copy didn't bring the group back: %+v", groups)
+	}
+}
+
+// TestDuplicateGroupsAcross: asked for (#165), copies in different libraries
+// group, each naming its library; a library's view keeps only the groups holding
+// one of its books; the Health count stays per library.
+func TestDuplicateGroupsAcross(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/f"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/k"})
+	third, _ := c.CreateLibrary(ctx, Library{Name: "Archive", Root: "/tmp/a"})
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "Dune", Title: "Dune", Author: "Frank Herbert", Format: "m4b", ContentHash: "h1", Size: 100, Duration: 3600},
+		{LibraryID: other.ID, RelPath: "Dune", Title: "Dune", Author: "Frank Herbert", Format: "mp3", ContentHash: "h1", Size: 100, Duration: 3600},
+		// A pair only in the other two libraries.
+		{LibraryID: other.ID, RelPath: "Mort", Title: "Mort", Author: "Terry Pratchett", ASIN: "B000000001", Duration: 30000},
+		{LibraryID: third.ID, RelPath: "Mort", Title: "Mort", Author: "Terry Pratchett", ASIN: "B000000001", Duration: 30000},
+	} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if groups, _ := c.DuplicateGroups(ctx, 0, false, false); len(groups) != 0 {
+		t.Fatalf("without across = %+v, want none", groups)
+	}
+	all, err := c.DuplicateGroups(ctx, 0, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("across = %+v, want 2 groups", all)
+	}
+	dune := all[0]
+	if dune.Books[0].Path != "Dune" || dune.Reason != dupSameFiles {
+		t.Fatalf("dune = %+v", dune)
+	}
+	libs := map[string]bool{}
+	for _, b := range dune.Books {
+		libs[b.LibraryName] = b.LibraryID != 0
+	}
+	if !libs["Fiction"] || !libs["Kids"] {
+		t.Fatalf("dune copies name libraries %v, want Fiction and Kids", libs)
+	}
+	// Fiction's view: only the group one of its books is in.
+	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false, true); len(groups) != 1 || groups[0].Books[0].Path != "Dune" {
+		t.Fatalf("Fiction across = %+v, want Dune only", groups)
+	}
+	if groups, _ := c.DuplicateGroups(ctx, third.ID, false, true); len(groups) != 1 || groups[0].Reason != dupSameID {
+		t.Fatalf("Archive across = %+v, want Mort only", groups)
+	}
+	// The Health count never groups across libraries.
+	counts, _ := c.IssueCounts(ctx, []string{IssueDuplicate})
+	if counts[0].Count != 0 {
+		t.Fatalf("duplicate count = %+v, want 0", counts[0])
 	}
 }
 
@@ -308,7 +363,7 @@ func TestDuplicateReasons(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			groups, err := c.DuplicateGroups(ctx, lib.ID, false)
+			groups, err := c.DuplicateGroups(ctx, lib.ID, false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -386,17 +441,17 @@ func TestDuplicateLengthsAndIgnoredView(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	groups, _ := c.DuplicateGroups(ctx, 0, false)
+	groups, _ := c.DuplicateGroups(ctx, 0, false, false)
 	if len(groups) != 1 || groups[0].Books[0].Title != "Emma" {
 		t.Fatalf("groups = %+v, want only Emma", groups)
 	}
 	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{{LibraryID: lib.ID, Path: "a1"}, {LibraryID: lib.ID, Path: "a2"}}, uid); err != nil {
 		t.Fatal(err)
 	}
-	if open, _ := c.DuplicateGroups(ctx, 0, false); len(open) != 0 {
+	if open, _ := c.DuplicateGroups(ctx, 0, false, false); len(open) != 0 {
 		t.Fatalf("open groups = %+v", open)
 	}
-	if ign, _ := c.DuplicateGroups(ctx, 0, true); len(ign) != 1 || !ign[0].Ignored {
+	if ign, _ := c.DuplicateGroups(ctx, 0, true, false); len(ign) != 1 || !ign[0].Ignored {
 		t.Fatalf("ignored groups = %+v", ign)
 	}
 }

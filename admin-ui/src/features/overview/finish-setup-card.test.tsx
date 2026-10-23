@@ -7,11 +7,15 @@ import { setupEnvelope } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
-// The Overview's "Finish setting up" card: after the first-run flow, while a
-// step is still skipped, until an admin dismisses it.
+// The Overview's "Finish setting up" card: while the first-run flow is
+// unfinished, and after it while a step is still skipped, until an admin
+// dismisses it.
 
 beforeEach(() => setToken('stored'));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
 
 const CARD = { name: 'Finish setting up' };
 
@@ -58,8 +62,38 @@ describe('finish setting up card', () => {
     expect(put?.body).toEqual({ dismissed: true });
   });
 
+  it('while the flow is unfinished ("Finish later"), links back into it', async () => {
+    // This session was already sent to the flow, so the Overview stays.
+    sessionStorage.setItem('audiosilo.setup.redirected', '1');
+    mockFetch(routes({ finished: false, dismissed: false, steps: {} }));
+    renderApp();
+    const card = await screen.findByRole('region', CARD);
+    expect(
+      within(card).getByText("You haven't finished setting up this server yet.", { exact: false }),
+    ).toBeVisible();
+    const link = within(card).getByRole('link', { name: 'Continue setting up' });
+    expect(link).toHaveAttribute('href', '/admin/setup');
+  });
+
+  it('leaves out a skipped folder step once the server has a library', async () => {
+    mockFetch(
+      routes({ finished: true, dismissed: false, steps: { folder: 'skipped', abs: 'skipped' } }),
+    );
+    renderApp();
+    const card = await screen.findByRole('region', CARD);
+    expect(
+      within(card)
+        .getAllByRole('link')
+        .map((l) => l.textContent),
+    ).toEqual(['Coming from Audiobookshelf?']);
+  });
+
   it.each([
     ['dismissed', { finished: true, dismissed: true, steps: { abs: 'skipped' } }],
+    [
+      'only the folder was skipped and a library exists',
+      { finished: true, dismissed: false, steps: { folder: 'skipped' } },
+    ],
     ['nothing was skipped', { finished: true, dismissed: false, steps: { abs: 'done' } }],
   ] as const)('stays away when %s', async (_, state) => {
     mockFetch(routes(state));

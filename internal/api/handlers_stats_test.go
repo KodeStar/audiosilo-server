@@ -44,6 +44,7 @@ func TestAdminStats(t *testing.T) {
 		Libraries      []struct {
 			ID        int64  `json:"id"`
 			Name      string `json:"name"`
+			Kind      string `json:"kind"`
 			BookCount int    `json:"book_count"`
 		} `json:"libraries"`
 		Listening []struct {
@@ -62,7 +63,7 @@ func TestAdminStats(t *testing.T) {
 	if *stats.TotalUsers < 1 {
 		t.Fatalf("total_users = %d, want >=1 (%s)", *stats.TotalUsers, body)
 	}
-	if len(stats.Libraries) != 1 || stats.Libraries[0].Name != "Main" {
+	if len(stats.Libraries) != 1 || stats.Libraries[0].Name != "Main" || stats.Libraries[0].Kind != catalog.KindBooks {
 		t.Fatalf("libraries[] not populated: %s", body)
 	}
 	// The seeded progress surfaces in the cross-user listening feed.

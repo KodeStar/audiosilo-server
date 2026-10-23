@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
@@ -604,6 +604,194 @@ describe('books: selection and bulk actions', () => {
       library: 1,
       path: 'Martha Wells/All Systems Red',
     });
+  });
+});
+
+describe('books: selecting many (#166)', () => {
+  const shift = async (user: ReturnType<typeof userEvent.setup>, el: Element) => {
+    await user.keyboard('{Shift>}');
+    await user.click(el);
+    await user.keyboard('{/Shift}');
+  };
+
+  it('Select picks without a first book; Select all takes the grid; Done clears', async () => {
+    mockFetch(bookRoutes());
+    renderApp('/library');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    // A tile click now picks the book instead of opening it.
+    await user.click(
+      await within(list).findByRole('link', { name: 'All Systems Red by Martha Wells' }),
+    );
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('1 selected');
+    await user.click(screen.getByRole('button', { name: 'Select all 4 books' }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('4 selected');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument();
+  });
+
+  it('Shift-click on a tile selects the run from the last one clicked', async () => {
+    mockFetch(bookRoutes());
+    renderApp('/library');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(
+      await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
+    );
+    await shift(user, within(list).getByRole('link', { name: 'All Systems Red by Martha Wells' }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
+    expect(within(list).getByRole('checkbox', { name: 'Select Words of Radiance' })).toBeChecked();
+    expect(
+      within(list).getByRole('checkbox', { name: 'Select Children of Time' }),
+    ).not.toBeChecked();
+    // A Shift-click on a picked one clears the run back to it.
+    await shift(user, within(list).getByRole('checkbox', { name: 'Select The Way of Kings' }));
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
+  });
+
+  it('Shift-click on a table row selects the rows between', async () => {
+    mockFetch(bookRoutes());
+    renderApp('/library?view=table');
+    const user = userEvent.setup();
+    const table = await screen.findByRole('table', { name: 'All books' });
+    await user.click(within(table).getByRole('checkbox', { name: 'Select Words of Radiance' }));
+    await shift(user, within(table).getByRole('checkbox', { name: 'Select Children of Time' }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
+    expect(
+      within(table).getByRole('checkbox', { name: 'Select The Way of Kings' }),
+    ).not.toBeChecked();
+  });
+
+  it('selects every matching book, fetching the pages not loaded yet', async () => {
+    const more = adminBook({ path: 'x/Elantris', title: 'Elantris' });
+    // The second page waits, so the list hasn't loaded it on its own before the click.
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const calls = mockFetch(
+      bookRoutes(books, {
+        'GET /admin/books': async (req) => {
+          if (req.query.get('cursor') !== 'page2') return { body: { books, next_cursor: 'page2' } };
+          await gate;
+          return { body: { books: [more] } };
+        },
+        'GET /admin/books/facets': { body: facets({ total: 5 }) },
+      }),
+    );
+    renderApp('/library?q=a');
+    const user = userEvent.setup();
+    await allBooks();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    expect(screen.getByRole('button', { name: 'Select the 4 books shown' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Select all 5 matching books' }));
+    release();
+    await waitFor(() =>
+      expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('5 selected'),
+    );
+    expect(calls.some((c) => isList(c) && c.query.get('cursor') === 'page2')).toBe(true);
+  });
+
+  // A select-all still fetching when the selection ends, or when the list
+  // changes under it, selects nothing.
+  function slowSecondPage() {
+    const more = adminBook({ path: 'x/Elantris', title: 'Elantris' });
+    const mort = [adminBook({ path: 'y/Mort', title: 'Mort' })];
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    mockFetch(
+      bookRoutes(books, {
+        'GET /admin/books': async (req) => {
+          if (req.query.get('limit') === '12') return { body: { books: [] } };
+          if (req.query.get('q') === 'mort') return { body: { books: mort } };
+          if (req.query.get('cursor') !== 'page2') return { body: { books, next_cursor: 'page2' } };
+          await gate;
+          return { body: { books: [more] } };
+        },
+        'GET /admin/books/facets': (req) => ({
+          body: facets({ total: req.query.get('q') === 'mort' ? 1 : 5 }),
+        }),
+      }),
+    );
+    return () =>
+      act(async () => {
+        release();
+        await new Promise((r) => setTimeout(r, 50));
+      });
+  }
+
+  it('selects nothing when Done ends the selection while the pages load', async () => {
+    const release = slowSecondPage();
+    renderApp('/library?q=a');
+    const user = userEvent.setup();
+    await allBooks();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    await user.click(screen.getByRole('button', { name: 'Select all 5 matching books' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    await release();
+    expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull();
+  });
+
+  it('selects nothing when the search changes while the pages load', async () => {
+    const release = slowSecondPage();
+    const { router } = renderApp('/library?q=a');
+    const user = userEvent.setup();
+    await allBooks();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    await user.click(screen.getByRole('button', { name: 'Select all 5 matching books' }));
+    await act(() => router.navigate({ to: '/library', search: { q: 'mort' } } as never));
+    await screen.findByRole('link', { name: /Mort by/ });
+    await release();
+    expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull();
+    expect(
+      within(await allBooks()).getByRole('checkbox', { name: 'Select Mort' }),
+    ).not.toBeChecked();
+  });
+
+  it('Shift-click on a shelf tile picks that book alone', async () => {
+    // Adjacent on the Recently added shelf, far apart in the list (by title).
+    const shelf = [books[3], books[0]];
+    mockFetch(
+      bookRoutes(books, {
+        'GET /admin/books': (req) => {
+          if (req.query.get('limit') !== '12') return { body: { books } };
+          const recent = !req.query.get('has_cover') && !req.query.get('matched');
+          return { body: { books: recent ? shelf : [] } };
+        },
+      }),
+    );
+    renderApp('/library');
+    const user = userEvent.setup();
+    await allBooks();
+    const recent = await screen.findByRole('region', { name: 'Recently added' });
+    await user.click(
+      await within(recent).findByRole('checkbox', { name: `Select ${shelf[0].title}` }),
+    );
+    await shift(user, within(recent).getByRole('checkbox', { name: `Select ${shelf[1].title}` }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('2 selected');
+  });
+
+  it('offers the first 1,000 when more match than one bulk action takes', async () => {
+    mockFetch(
+      bookRoutes(books, {
+        // The next page never answers here: only the offer is under test.
+        'GET /admin/books': (req) =>
+          req.query.get('cursor')
+            ? new Promise<never>(() => {})
+            : { body: { books, next_cursor: 'page2' } },
+        'GET /admin/books/facets': { body: facets({ total: 1500 }) },
+      }),
+    );
+    renderApp('/library?q=a');
+    const user = userEvent.setup();
+    await allBooks();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    expect(
+      screen.getByRole('button', { name: 'Select the first 1,000 matching books' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Bulk edits and shares take up to 1,000 books at a time.'),
+    ).toBeVisible();
   });
 });
 

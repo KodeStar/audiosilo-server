@@ -328,8 +328,10 @@ func TestAdminSetupPreviewTwoColumns(t *testing.T) {
 	}
 }
 
-// The mount hints are read only while the flow is open: once it is finished,
-// GET /admin/setup sends [] without reading the mount table.
+// The mount hints are read only while the folder step may still show: while
+// the flow is open, or once finished with the folder step skipped (reopened
+// from the Overview card). A finished flow whose folder step is done sends []
+// without reading the mount table.
 func TestAdminSetupMountHintsWhileOpen(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -361,5 +363,17 @@ func TestAdminSetupMountHintsWhileOpen(t *testing.T) {
 	}
 	if got := hints(); got != "" || reads.Load() != 1 {
 		t.Errorf("finished flow: hints %q after %d reads, want [] and no read", got, reads.Load())
+	}
+	if resp, body := e.do(t, "PUT", "/api/v1/admin/setup", adminTok, `{"steps":{"folder":"skipped"}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT folder skipped = %d %s", resp.StatusCode, body)
+	}
+	if got := hints(); got != "/audiobooks" || reads.Load() != 2 {
+		t.Errorf("finished, folder skipped: hints %q after %d reads, want /audiobooks read again", got, reads.Load())
+	}
+	if resp, body := e.do(t, "PUT", "/api/v1/admin/setup", adminTok, `{"steps":{"folder":"done"}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT folder done = %d %s", resp.StatusCode, body)
+	}
+	if got := hints(); got != "" || reads.Load() != 2 {
+		t.Errorf("finished, folder done: hints %q after %d reads, want [] and no read", got, reads.Load())
 	}
 }

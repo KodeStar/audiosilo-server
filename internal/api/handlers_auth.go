@@ -20,6 +20,23 @@ import (
 // own.
 const pairingTTL = 10 * time.Minute
 
+// minPairingTTL is the shortest life POST /auth/pair gives a token asked for a
+// shorter one (ttl_seconds): enough to open a tab and exchange it.
+const minPairingTTL = 30 * time.Second
+
+// pairTTL is the life of a token POST /auth/pair mints: pairingTTL, or the
+// ttl_seconds asked for, clamped to [minPairingTTL, pairingTTL] (a caller can
+// shorten a token's life, never lengthen it).
+func pairTTL(seconds *int) time.Duration {
+	switch {
+	case seconds == nil || *seconds >= int(pairingTTL/time.Second):
+		return pairingTTL
+	case *seconds <= int(minPairingTTL/time.Second):
+		return minPairingTTL
+	}
+	return time.Duration(*seconds) * time.Second
+}
+
 // handleServerInfo reports server identity and capabilities. Public so a client
 // can discover the server before authenticating; a future federation/directory
 // layer can build on it.
@@ -276,14 +293,25 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
 // to add another device from an existing session. The token is deliberately
-// UNLINKED (no parent auth code): single-use and 10-minute, since the user is
-// present and can mint another with a tap.
+// UNLINKED (no parent auth code): single-use and at most 10 minutes, since the
+// user is present and can mint another with a tap. An optional JSON body
+// {ttl_seconds} asks for a shorter life (pairTTL; never a longer one); no body
+// is the full 10 minutes, and a malformed one is 400.
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
 	}
+	// An optional body: {ttl_seconds} shortens the token's life, for a token
+	// that only rides a URL into a tab (the console's Listen in player).
+	var body struct {
+		TTLSeconds *int `json:"ttl_seconds"`
+	}
+	if err := decodeJSONOptional(r, &body, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
 	u := userFrom(r.Context())
-	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairingTTL)
+	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairTTL(body.TTLSeconds))
 	if writeKidRefusal(w, err) {
 		return
 	}

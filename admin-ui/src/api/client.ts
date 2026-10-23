@@ -338,10 +338,17 @@ export const api = {
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
   /**
-   * A single-use, ten-minute pairing token for the signed-in admin, which "Listen in
-   * player" hands the web player (403 for an API key).
+   * A single-use pairing token for the signed-in admin, which "Listen in
+   * player" hands the web player (403 for an API key). `ttlSeconds` asks for a
+   * shorter life than the server's 10 minutes (30 s at the least); an older
+   * server ignores it and gives the 10 minutes.
    */
-  pairSelf: () => request<PairToken>('POST', '/auth/pair'),
+  pairSelf: (ttlSeconds?: number) =>
+    request<PairToken>(
+      'POST',
+      '/auth/pair',
+      ttlSeconds === undefined ? undefined : { ttl_seconds: ttlSeconds },
+    ),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
   /** Queues a scan (coalesced with one already waiting); answers with the job. */
@@ -644,8 +651,12 @@ export const api = {
 
   // Health and Jobs.
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
-  duplicates: (opts: { library_id?: number; ignored?: boolean } = {}) =>
-    request<{ groups: DuplicateGroup[] }>('GET', `/admin/issues/duplicates${bookQuery(opts)}`),
+  /** across: also copies in different libraries (?across=1, #165; an older server ignores it). */
+  duplicates: (opts: { library_id?: number; ignored?: boolean; across?: boolean } = {}) =>
+    request<{ groups: DuplicateGroup[] }>(
+      'GET',
+      `/admin/issues/duplicates${bookQuery({ ...opts, across: opts.across ? 1 : undefined })}`,
+    ),
   /** The series a library's books spell several ways (the open ones, or with `ignored` those with an ignored book). */
   seriesSpellings: (opts: { library_id?: number; ignored?: boolean } = {}) =>
     request<{ groups: SeriesSpellingGroup[] }>(

@@ -138,10 +138,14 @@ function InviteForm({
       ? libs.map((l) => ({
           value: accessValue({ kind: 'library', id: l.id }),
           title: l.name,
-          description: t('invite.access.libraryBody', {
-            count: l.book_count,
-            formatted: formatNumber(l.book_count, lang),
-          }),
+          // A podcast library holds shows, not books: its book count says nothing.
+          description:
+            l.kind === 'podcasts'
+              ? t('user.access.podcastLibrary')
+              : t('invite.access.libraryBody', {
+                  count: l.book_count,
+                  formatted: formatNumber(l.book_count, lang),
+                }),
         }))
       : []),
     ...named.map((s) => ({

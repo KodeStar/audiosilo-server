@@ -174,7 +174,7 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 			continue
 		}
 		ic := IssueCount{Kind: k, Samples: []IssueSample{}}
-		rows, sets, err := c.duplicateSets(ctx, 0)
+		rows, sets, err := c.duplicateSets(ctx, 0, false)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +194,8 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 	return out, nil
 }
 
-// DuplicateGroup is a set of books in one library that look like the same book.
+// DuplicateGroup is a set of books that look like the same book: in one library,
+// or with across (?across=1) in any (each copy's AdminBook names its library).
 // Books[0] is the copy worth keeping (format, single file, bitrate, listeners),
 // except under dupIDLengthDiffers, where the order says nothing about which to keep.
 type DuplicateGroup struct {
@@ -305,11 +306,18 @@ func sameLength(a, b float64) bool {
 // copy) and author/title/narrator only joins copies of a matching length (an
 // abridged edition is not a copy). A shared ASIN or ISBN joins whatever the
 // lengths, and the group's reason says when any two of its holders differ
-// (dupSet.reason). Copies in different libraries are deliberate,
-// and players already show one, so they never group. The discs of a book split
-// across disc folders look alike (one title, similar lengths) but are listed under
-// their own issue, whose fix joins them, so they never group either.
-func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow, []dupSet, error) {
+// (dupSet.reason). Copies in different libraries are usually deliberate, and
+// players already show one, so they group only with across, which an admin asks
+// for (#165): then the signals are not kept per library, and with a libraryID
+// only the groups holding one of its books are kept (the rows are read from
+// every library). The Health count never asks for across. The discs of a book
+// split across disc folders look alike (one title, similar lengths) but are
+// listed under their own issue, whose fix joins them, so they never group either.
+func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across bool) ([]dupRow, []dupSet, error) {
+	readLib := libraryID
+	if across {
+		readLib = 0
+	}
 	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *dupRow) error {
 		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &r.author, &r.narrator, &r.asin,
 			&r.isbn, &r.hash, &r.format, &r.duration, &r.size, &r.files, &r.listeners, &r.ignored)
@@ -321,7 +329,7 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	      LEFT JOIN (SELECT library_id, rel_path, COUNT(*) AS n FROM progress GROUP BY library_id, rel_path) p
 	             ON p.library_id = b.library_id AND p.rel_path = b.rel_path
 	      LEFT JOIN issue_ignores ii ON ii.library_id = b.library_id AND ii.path = b.rel_path AND ii.kind = ?2
-	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND NOT `+splitDiscExpr, libraryID, IssueDuplicate)
+	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND NOT `+splitDiscExpr, readLib, IssueDuplicate)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -333,6 +341,9 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
+		if across {
+			lib = ""
+		}
 		for _, sig := range identitySignals(r.quality()) {
 			switch {
 			case strings.HasPrefix(sig, "m:"):
@@ -368,6 +379,9 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	var sets []dupSet
 	for _, members := range set.groups() {
 		if len(members) < 2 {
+			continue
+		}
+		if across && libraryID != 0 && !slices.ContainsFunc(members, func(i int) bool { return rows[i].libraryID == libraryID }) {
 			continue
 		}
 		ds := dupSet{members: members, ignored: true}
@@ -409,8 +423,9 @@ func betterCopy(a, b dupRow) bool {
 // DuplicateGroups returns the groups of copies (duplicateSets) with each copy's
 // admin row, at most maxDuplicateGroups: the open ones, or with ignored only the
 // ones every member of which an admin ignored (a new copy brings a group back).
-func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored bool) ([]DuplicateGroup, error) {
-	rows, sets, err := c.duplicateSets(ctx, libraryID)
+// across also groups copies in different libraries (duplicateSets).
+func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored, across bool) ([]DuplicateGroup, error) {
+	rows, sets, err := c.duplicateSets(ctx, libraryID, across)
 	if err != nil {
 		return nil, err
 	}

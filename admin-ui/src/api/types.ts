@@ -147,14 +147,20 @@ export interface LoginResponse {
 export interface PairToken {
   pairing_token: string;
   server_id: string;
+  /** The address the link is built on (the public address, else the one this request used). */
+  base_url?: string;
   /** The player's connect link carrying the token (what the pairing QR encodes). */
   web_url?: string;
+  /** The server's home and away addresses, when known (api.Addresses). */
+  addresses?: { home?: string; away?: string };
 }
 
 /** One library's book count in GET /admin/stats (handlers_stats.go libStat). */
 export interface LibraryStat {
   id: number;
   name: string;
+  /** Absent from a server before 2.4.0. */
+  kind?: Library['kind'];
   book_count: number;
 }
 
@@ -1146,7 +1152,8 @@ export interface DuplicateMember extends AdminBook {
 }
 
 /**
- * catalog.DuplicateGroup: copies of one book in one library; books[0] is the one to
+ * catalog.DuplicateGroup: copies of one book in one library (or, asked for with
+ * ?across=1, in several: each copy's library_id and library_name say which); books[0] is the one to
  * keep, except under `id_length_differs` (one ASIN/ISBN, lengths that don't match:
  * maybe different recordings, so none is suggested).
  */
@@ -2116,7 +2123,7 @@ export interface MatchProposal {
   cover_url?: string;
   /** The proposed ASIN's marketplace. */
   asin_region?: string;
-  /** A refresh's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
+  /** A refresh's or a repick's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
   found_by?: string;
   /** Each field the community has a value for, in stored form. */
   values: Partial<Record<OverrideField, string>>;
@@ -2146,10 +2153,10 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short). */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length. */
   detail?: string;
-  /** The book as it is now. */
-  book: { title: string; author: string };
+  /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
+  book: { title: string; author: string; duration?: number };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /**
@@ -2314,6 +2321,8 @@ export interface BridgeMapping {
 
 /** A server library with the Bridge's mapping of it (null: none reported yet). */
 export interface BridgeLibrary {
+  /** A podcast library's mapping is its marker file (no Verify); absent from an older server. */
+  kind?: Library['kind'];
   id: number;
   name: string;
   root: string;

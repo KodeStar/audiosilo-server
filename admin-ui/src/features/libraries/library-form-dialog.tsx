@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from '@/lib/zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -9,13 +9,24 @@ import { ApiError, api } from '@/api/client';
 import {
   invalidateAfterSourceChange,
   invalidateLibraries,
+  invalidatePeople,
   noteScanStarted,
   useDirs,
   useLibraries,
+  useModules,
+  useSetup,
+  usersQuery,
 } from '@/api/hooks';
-import { METADATA_SOURCES, type AdminLibrary, type Job, type Library } from '@/api/types';
+import {
+  METADATA_SOURCES,
+  type AdminLibrary,
+  type AdminUser,
+  type Job,
+  type Library,
+} from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
 import { describedBy } from '@/lib/a11y';
@@ -25,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { absoluteBaseName, absoluteCrumbs, isAbsolutePath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
+import { configLibrary, everyoneToGrant, podcastsHintKey } from './library-access';
 import {
   SCHEDULE_CHOICES,
   joinSchedule,
@@ -45,6 +57,8 @@ const schema = z.object({
   time: z.string(),
   ignore: z.string(),
   source: z.enum(METADATA_SOURCES),
+  // A new podcast library only: grant it to every listener (BRIDGE-07).
+  everyone: z.boolean(),
 });
 type Values = z.infer<typeof schema>;
 
@@ -54,6 +68,8 @@ const FIELD_BY_CODE: Partial<Record<string, keyof Values>> = {
   invalid_schedule: 'time',
   invalid_pattern: 'ignore',
   invalid_metadata_source: 'source',
+  config_library: 'name',
+  name_taken: 'name',
 };
 
 /**
@@ -94,6 +110,10 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [browsing, setBrowsing] = useState(false);
+  // A library config.yaml declares keeps its name and folder there (the server
+  // refuses changing them, 409 config_library): shown, not editable.
+  const setup = useSetup().data;
+  const fromConfig = !!library && configLibrary(setup, library.name);
   const current = splitSchedule(library?.scan_schedule ?? '');
   const form = useForm<Values>({
     resolver: zodResolver(schema),
@@ -105,31 +125,75 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       time: current.time,
       ignore: patternsToText(library?.ignore_patterns ?? []),
       source: library?.metadata_source ?? 'tags',
+      everyone: true,
     },
   });
   const { errors, isSubmitting } = form.formState;
 
+  /**
+   * Grants a new library to every listener: how many grants failed, or none
+   * known (the people list didn't load). One at a time: the first grant makes
+   * the library's whole-library share, and grants sent together would each try
+   * to make it (two get a share, the rest a 409).
+   */
+  const grantEveryone = async (libraryId: number): Promise<{ failed: number | null }> => {
+    let users: AdminUser[];
+    try {
+      users = await qc.fetchQuery(usersQuery);
+    } catch {
+      return { failed: null };
+    }
+    let failed = 0;
+    for (const u of everyoneToGrant(users)) {
+      try {
+        await api.grantLibrary(u.id, libraryId);
+      } catch {
+        failed++;
+      }
+    }
+    return { failed };
+  };
+
   const onSubmit = form.handleSubmit(async (v) => {
     const patterns = textToPatterns(v.ignore);
-    const lib = {
+    const settings = {
       kind: v.kind,
-      name: v.name,
-      root: v.folder,
       scan_schedule: joinSchedule(v.schedule, v.time),
       ...(v.kind === 'books' ? { ignore_patterns: patterns, metadata_source: v.source } : {}),
     };
+    const place = { name: v.name, root: v.folder };
     try {
       // A new library is always scanned; an edit only when the server queued a
-      // scan for it (a new folder or new ignore rules).
+      // scan for it (a new folder or new ignore rules). A library the config
+      // declares sends neither name nor folder: they're shown, not edited (and
+      // the name as the form trims it could read as a rename).
       const saved: Library & { job?: Job } = library
-        ? await api.updateLibrary(library.id, lib)
-        : await api.createLibrary(lib);
+        ? await api.updateLibrary(library.id, fromConfig ? settings : { ...settings, ...place })
+        : await api.createLibrary({ ...settings, ...place });
       const rescans = !library || !!saved.job;
+      // A new podcast library is no one's until access is given: "Give
+      // everyone access" grants it to each listener now. A refusal says so;
+      // the library stays added.
+      const granted =
+        !library && v.kind === 'podcasts' && v.everyone ? await grantEveryone(saved.id) : undefined;
       invalidateLibraries(qc);
       if (library && v.source !== library.metadata_source) {
         invalidateAfterSourceChange(qc, library.id);
       }
       if (rescans) noteScanStarted(qc, saved.id);
+      if (granted) {
+        invalidatePeople(qc);
+        if (granted.failed !== 0) {
+          toast.add({
+            title:
+              granted.failed === null
+                ? t('libraries.toast.accessFailedAll')
+                : t('libraries.toast.accessFailed', { count: granted.failed }),
+            description: t('libraries.toast.accessFailedBody'),
+            type: 'error',
+          });
+        }
+      }
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
         description: rescans
@@ -166,6 +230,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const sourceError = fieldMessage(errors.source?.message, t);
   const schedule = form.watch('schedule');
   const isPodcasts = form.watch('kind') === 'podcasts';
+  const podcastsModule = useModules().data?.modules.find((m) => m.id === 'podcasts');
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
@@ -173,16 +238,22 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
         <Field
           htmlFor="library-kind"
           label={t('libraries.form.kind')}
-          description={t('libraries.form.kindHint')}
+          description={t(podcastsHintKey(podcastsModule))}
         >
           <NativeSelect id="library-kind" disabled={!!library} {...form.register('kind')}>
             <option value="books">{t('libraries.kind.books')}</option>
             <option value="podcasts">{t('libraries.kind.podcasts')}</option>
           </NativeSelect>
         </Field>
+        {fromConfig ? (
+          <p className="text-[13px] text-muted-foreground" role="note">
+            {t('libraries.form.configLocked')}
+          </p>
+        ) : null}
         <Field htmlFor="library-name" label={t('libraries.form.name')} error={nameError}>
           <Input
             id="library-name"
+            readOnly={fromConfig}
             autoComplete="off"
             placeholder={t(
               isPodcasts
@@ -213,6 +284,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
           <div className="flex gap-2">
             <Input
               id="library-root"
+              readOnly={fromConfig}
               className="font-mono text-[13px]"
               autoComplete="off"
               spellCheck={false}
@@ -224,6 +296,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             <Button
               type="button"
               variant="outline"
+              disabled={fromConfig}
               onClick={() => setBrowsing((b) => !b)}
               aria-expanded={browsing}
             >
@@ -232,7 +305,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             </Button>
           </div>
         </Field>
-        {browsing ? (
+        {browsing && !fromConfig ? (
           <ServerFolderPicker
             start={isAbsolutePath(folderValue.trim()) ? folderValue.trim() : ''}
             selected={folderValue.trim()}
@@ -278,6 +351,28 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             </Field>
           ) : null}
         </div>
+        {isPodcasts && !library ? (
+          <div className="flex flex-col gap-1 border-t pt-4">
+            <label className="flex items-start gap-2 text-[13.5px] font-semibold">
+              <Controller
+                control={form.control}
+                name="everyone"
+                render={({ field }) => (
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={field.value}
+                    onCheckedChange={(c) => field.onChange(Boolean(c))}
+                    aria-describedby="library-everyone-desc"
+                  />
+                )}
+              />
+              {t('libraries.form.everyone')}
+            </label>
+            <p id="library-everyone-desc" className="ml-6 text-[12.5px] text-muted-foreground">
+              {t('libraries.form.everyoneHint')}
+            </p>
+          </div>
+        ) : null}
         {!isPodcasts ? (
           <>
             <Field

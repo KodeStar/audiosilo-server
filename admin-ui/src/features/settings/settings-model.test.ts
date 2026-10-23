@@ -1,5 +1,6 @@
+import i18n from '@/i18n';
 import { settingsWith } from '@/test/fixtures';
-import { outOfRange, SETTINGS_PAGES, visiblePages } from './settings-model';
+import { outOfRange, restartList, SETTINGS_PAGES, visiblePages } from './settings-model';
 
 describe('outOfRange', () => {
   it('refuses what is not a whole number inside the range, and blank', () => {
@@ -37,5 +38,15 @@ describe('visiblePages', () => {
       'modules',
     ]);
     expect(visiblePages(pages, undefined, modulePages)).toEqual(['general', 'modules']);
+  });
+});
+
+describe('restartList', () => {
+  it('names the settings waiting for a restart as a list in the language', () => {
+    const one = settingsWith({ restart_pending: ['metadata.mode'] });
+    const two = settingsWith({ restart_pending: ['metadata.mode', 'network.tls_mode'] });
+    const t = i18n.getFixedT('en');
+    expect(restartList(t, one, 'en')).toBe('Metadata source');
+    expect(restartList(t, two, 'en')).toBe('Metadata source and HTTPS mode');
   });
 });

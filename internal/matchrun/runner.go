@@ -35,6 +35,12 @@ const (
 // know the book's ASIN or ISBN.
 const DetailIdentifierUnknown = "identifier_unknown"
 
+// DetailLengthDiffers is a review item's detail when its recording is more than
+// meta.PlausibleRuntimeOff off the book's length (lengthFits): held for review
+// for that, however confident the match (#134). The review words it with both
+// lengths (ItemBook.Duration, the proposal's runtime_min).
+const DetailLengthDiffers = "length_differs"
+
 // DetailCoverPending is a match item's detail while its fields went in but a stop
 // cut its cover short: still to apply, so the next apply takes the cover, the
 // ASIN or ISBN the book has now being the run's own (not matchedSince).
@@ -261,6 +267,9 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region))
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
+	if item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration) {
+		item.Detail = DetailLengthDiffers
+	}
 	return item, nil
 }
 
@@ -298,8 +307,10 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	}
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
 	item.Proposal = Propose(c, rec)
-	// The ASIN is all a repick changes.
+	// The ASIN is all a repick changes, and only while the book still has the
+	// one looked up here (PlanRepick: a hand match since keeps its own).
 	item.Proposal.Values, item.Proposal.ASINRegion = map[string]string{catalog.FieldASIN: want}, region
+	item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, b.ASIN)
 	return item, nil
 }
 
@@ -331,7 +342,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	// (an unabridged book holding its dramatization's ASIN): its details are not
 	// written unasked.
 	if !lengthFits(item.Proposal, b.Duration) {
-		item.Outcome = catalog.OutcomeReview
+		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
 	// The book keeps its own identifiers (switching marketplace is a repick's):
 	// a proposal without them writes none, and the review shows none of the
@@ -539,10 +550,12 @@ type ItemView struct {
 	Changes      map[string]Change `json:"changes"`
 }
 
-// ItemBook is the book an item is for, as it is now.
+// ItemBook is the book an item is for, as it is now: Duration its length in
+// seconds (omitted when unknown), for a length_differs item's wording.
 type ItemBook struct {
-	Title  string `json:"title"`
-	Author string `json:"author"`
+	Title    string  `json:"title"`
+	Author   string  `json:"author"`
+	Duration float64 `json:"duration,omitempty"`
 }
 
 // itemScopes is the scopes the review shows a run in mode's changes under: its
@@ -572,7 +585,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		case err != nil:
 			return nil, 0, err
 		default:
-			v.Book = ItemBook{Title: st.Title, Author: st.Author}
+			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
 			v.MatchedSince = run.Mode == catalog.MatchModeMatch && it.Applied == "" && matchedSince(st, &it)
 			for _, scope := range scopes {
 				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, &it))
