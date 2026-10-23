@@ -372,7 +372,9 @@ func TestStartRunsAtOnce(t *testing.T) {
 	if !running && last == nil {
 		t.Fatal("not running right after Start")
 	}
-	for range 200 {
+	// A generous deadline: under the full race suite VACUUM INTO can take
+	// well over the 2 s this once allowed.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		if st := e.svc.Status(); !st.Running && st.Last != nil {
 			return
 		}
