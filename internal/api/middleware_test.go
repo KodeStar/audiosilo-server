@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
@@ -153,7 +152,7 @@ func TestCORSAllowList(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("allowed preflight = %d, want 204", rec.Code)
 	}
-	wantCORSList(t, rec.Header(), "Access-Control-Allow-Headers", []string{"Authorization", "Content-Type", auth.ClientHeader, "Range"})
+	wantCORSList(t, rec.Header(), "Access-Control-Allow-Headers", []string{"Authorization", "Content-Type", "X-AudioSilo-Client", "Range"})
 	wantCORSList(t, rec.Header(), "Access-Control-Expose-Headers", corsExposeNames)
 
 	// A non-listed origin gets no CORS grant.
@@ -189,8 +188,8 @@ func TestCORSWildcard(t *testing.T) {
 }
 
 // corsExposeNames are the response headers a cross-origin page must be able
-// to read.
-var corsExposeNames = []string{"Retry-After", headerOPMLExported, headerOPMLOmittedPrivate, headerOPMLOmittedUnavailable}
+// to read, spelled as on the wire so a renamed constant fails the test.
+var corsExposeNames = []string{"Retry-After", "X-OPML-Exported", "X-OPML-Omitted-Private", "X-OPML-Omitted-Unavailable"}
 
 // wantCORSList fails unless the comma-separated header lists every name
 // (case-insensitively, as browsers compare them).

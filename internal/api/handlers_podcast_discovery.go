@@ -37,6 +37,14 @@ const (
 	maxConcurrentOPML = 2
 )
 
+// The OPML export's counts (GET /podcasts/opml/export), named once so the
+// handler and the CORS expose list (corsExposeHeaders) cannot drift.
+const (
+	headerOPMLExported           = "X-OPML-Exported"
+	headerOPMLOmittedPrivate     = "X-OPML-Omitted-Private"
+	headerOPMLOmittedUnavailable = "X-OPML-Omitted-Unavailable"
+)
+
 // opmlTransfers holds the OPML budgets (memory only).
 type opmlTransfers struct {
 	imports *quota.Limiter

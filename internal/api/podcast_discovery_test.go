@@ -532,7 +532,7 @@ func TestOPMLExportCORSExpose(t *testing.T) {
 	h["Origin"] = "http://localhost:8081"
 	resp, body := b.doHeaders(t, "GET", route, b.userTok, "", h)
 	wantErr(t, resp, body, 200, "")
-	for _, k := range []string{headerOPMLExported, headerOPMLOmittedPrivate, headerOPMLOmittedUnavailable} {
+	for _, k := range corsExposeNames[1:] { // the three X-OPML-* counts
 		if resp.Header.Get(k) == "" {
 			t.Fatalf("%s missing", k)
 		}
