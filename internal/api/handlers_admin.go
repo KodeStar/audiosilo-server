@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -735,6 +736,11 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 // ignore rules and metadata source. A new root or new ignore rules make the index
 // stale, so either queues a rescan, returned as `job`; browsing still works
 // immediately. A new metadata source re-resolves the books before it answers.
+// A library config.yaml or the environment declares keeps the name and folder
+// declared there: every start upserts it by name (launcher.syncLibraries) and
+// the server never writes config.yaml, so a rename would come back as a second
+// library and a new folder would be put back. Changing either is 409
+// config_library; its other settings stay editable.
 func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -750,6 +756,22 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
+	}
+	if req.Name != "" || req.Root != "" {
+		cur, err := a.cat.GetLibrary(r.Context(), id)
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		if err != nil {
+			a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
+			return
+		}
+		if a.configLibrary(cur.Name) && configFieldChanged(req, cur) {
+			writeErrorCode(w, http.StatusConflict, "config_library",
+				"This library is declared in the server's config, so its name and folder are set there. Change them in config.yaml (or the environment) and restart.")
+			return
+		}
 	}
 	updated, stale, err := a.cat.UpdateLibrary(r.Context(), id, p)
 	if errors.Is(err, catalog.ErrNotFound) {
@@ -770,6 +792,30 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		resp.Job = &job
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// configLibrary reports whether config.yaml or the environment declares a
+// library by this name (launcher.syncLibraries upserts each by name at start).
+func (a *API) configLibrary(name string) bool {
+	for _, l := range a.config().Libraries {
+		if l.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// configFieldChanged reports whether an edit gives a library another name or
+// another folder than it has (the same values resent are no change).
+func configFieldChanged(req libraryRequest, cur *catalog.Library) bool {
+	if req.Name != "" && req.Name != cur.Name {
+		return true
+	}
+	if req.Root == "" {
+		return false
+	}
+	root, err := filepath.Abs(req.Root)
+	return err != nil || filepath.Clean(root) != filepath.Clean(cur.Root)
 }
 
 // handleReorderLibraries sets the libraries' display order from an ordered list
