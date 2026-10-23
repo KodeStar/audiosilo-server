@@ -307,3 +307,41 @@ func TestAPIKeyWorksAsMediaQueryToken(t *testing.T) {
 		t.Fatalf("stream with api key as ?token= = %d, want 200", resp.StatusCode)
 	}
 }
+
+// TestAPIKeyListDoesNotSpendAccountBudget (PLAYER-01): listing the keys is a
+// read, so opening the Account page over and over (each open lists them) never
+// spends the address's self-service mutation budget (allowed: 20 lists, then a
+// mint, all succeed). The mutations stay metered: past the budget a mint is 429
+// with a Retry-After, and a list still answers (denied).
+func TestAPIKeyListDoesNotSpendAccountBudget(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	tok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+
+	for i := range 20 {
+		if resp, b := e.do(t, "GET", "/api/v1/auth/tokens", tok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("list %d = %d %s, want 200", i+1, resp.StatusCode, b)
+		}
+	}
+	// The whole budget (10 per 15 min) is still there for mutations.
+	for i := range 10 {
+		if resp, b := e.do(t, "POST", "/api/v1/auth/tokens", tok, `{"label":"k`+strconv.Itoa(i)+`"}`); resp.StatusCode != http.StatusOK {
+			t.Fatalf("mint %d = %d %s, want 200", i+1, resp.StatusCode, b)
+		}
+	}
+	resp, b := e.do(t, "POST", "/api/v1/auth/tokens", tok, `{"label":"one too many"}`)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("mint past the budget = %d %s, want 429", resp.StatusCode, b)
+	}
+	ra, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if err != nil || ra < 1 || ra > int((15*time.Minute).Seconds()) {
+		t.Fatalf("429 Retry-After = %q, want 1..900 seconds", resp.Header.Get("Retry-After"))
+	}
+	if resp, b := e.do(t, "DELETE", "/api/v1/auth/tokens/1", tok, ""); resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("revoke past the budget = %d %s, want 429", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "GET", "/api/v1/auth/tokens", tok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list while the mutations are locked out = %d %s, want 200", resp.StatusCode, b)
+	}
+}

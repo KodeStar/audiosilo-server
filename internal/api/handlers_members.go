@@ -122,7 +122,7 @@ func (a *API) memberOwner(w http.ResponseWriter, r *http.Request, limited bool) 
 	if u == nil || refuseMember(w, u) {
 		return nil
 	}
-	if limited && !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
+	if limited && !a.acquireAccountBudget(w, r) {
 		return nil
 	}
 	return u

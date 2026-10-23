@@ -446,12 +446,27 @@ func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
 // success it returns the caller's freshly loaded account; otherwise it has
 // already written the 429/403/500 response and returns nil, so the handler must
 // return. Shared by handleSetPassword, handleGenerateRecovery and the API-key
-// endpoints so the rate-limit + demo-refusal guard lives in one place.
+// mutations so the rate-limit + demo-refusal guard lives in one place. Reads
+// (listing the keys) take nonDemoAccount alone: opening the Account page must
+// not spend the address's mutation budget, which a household behind one NAT
+// shares.
 func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User {
-	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
+	if !a.acquireAccountBudget(w, r) {
 		return nil
 	}
 	return a.nonDemoAccount(w, r)
+}
+
+// acquireAccountBudget spends one of the address's self-service mutations
+// (accountLimiter). When the budget is spent it answers 429 with Retry-After
+// (the seconds until the lockout ends) and reports false.
+func (a *API) acquireAccountBudget(w http.ResponseWriter, r *http.Request) bool {
+	ip := clientIP(r)
+	if a.accountLimiter.Acquire(ip) {
+		return true
+	}
+	setRetryAfter(w, a.accountLimiter.LockedFor(ip))
+	return allowAttempt(w, false)
 }
 
 // nonDemoAccount loads the caller's full account, refusing a demo account (403
@@ -516,7 +531,7 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 // handleListAPITokens returns the signed-in user's live API keys (metadata
 // only - never a secret or hash), newest first.
 func (a *API) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
-	full := a.gateSelfService(w, r)
+	full := a.nonDemoAccount(w, r)
 	if full == nil {
 		return
 	}

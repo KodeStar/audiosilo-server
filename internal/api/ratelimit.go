@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -86,6 +87,29 @@ func (l *limiter) Acquire(key string) bool {
 		e.until = now.Add(l.window)
 	}
 	return true
+}
+
+// LockedFor reports how long key stays locked out (0 when it is not).
+func (l *limiter) LockedFor(key string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.entries[key]
+	if e == nil {
+		return 0
+	}
+	if d := e.until.Sub(l.now()); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// setRetryAfter sets Retry-After to d in whole seconds, rounded up (at least 1).
+func setRetryAfter(w http.ResponseWriter, d time.Duration) {
+	secs := int64((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
 }
 
 // Fail records a failed attempt and locks the key once over the threshold.

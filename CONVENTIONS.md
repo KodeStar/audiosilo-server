@@ -132,8 +132,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   authenticates like a session acting as its owner (an admin's key passes
   `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
   `/auth/exchange`; a pairing token is never accepted as a bearer credential.
-  Secrets are stored SHA-256-only and shown once; create/list/revoke go through
-  `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
+  Secrets are stored SHA-256-only and shown once; create/revoke go through
+  `gateSelfService` (shared `accountLimiter` + demo refusal; its 429 carries Retry-After), the
+  list through `nonDemoAccount` alone (a read never spends the per-IP mutation budget a NAT
+  household shares). **Containment**: a key
   authenticates as its owner but cannot mint a *fresh durable credential* -
   `ResolveRequest` returns the matched kind (`Credential.Kind`) and `denyAPIKey` refuses an api-key
   caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
