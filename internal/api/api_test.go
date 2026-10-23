@@ -329,6 +329,53 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 	}
 }
 
+// TestItemCaseVariantPathNotIndexed (CONNECT-04): on a case-insensitive
+// filesystem (macOS's, Windows' defaults) a case-variant ?path= opens the same
+// folder, but the on-demand index takes only the on-disk spelling, so any user's
+// variant is a 404 and adds no duplicate book (denied); the on-disk spelling
+// resolves (allowed). On a case-sensitive filesystem the variant is simply absent.
+func TestItemCaseVariantPathNotIndexed(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	user, _ := e.auth.CreateUser(ctx, "alex", "alex-password", auth.RoleUser)
+	if err := e.cat.GrantWholeLibrary(ctx, user.ID, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	token, _ := e.auth.IssueToken(ctx, user.ID, auth.KindSession, "t", 0)
+	count := func() int {
+		page, err := e.cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Books)
+	}
+	before := count()
+	item := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/item?path="
+
+	for _, variant := range []string{
+		"WILL WIGHT/Cradle/01 - Unsouled.m4b",
+		"Will Wight/CRADLE/01 - Unsouled.m4b",
+		"Will Wight/Cradle/01 - UNSOULED.m4b",
+		"will wight/cradle",
+	} {
+		if resp, body := e.do(t, "GET", item+url.QueryEscape(variant), token, ""); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("variant %q = %d %s, want 404", variant, resp.StatusCode, body)
+		}
+	}
+	if got := count(); got != before {
+		t.Fatalf("a case-variant path added a book: %d books, had %d", got, before)
+	}
+	if resp, body := e.do(t, "GET", item+url.QueryEscape("Will Wight/Cradle/01 - Unsouled.m4b"), token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("on-disk spelling = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
 func TestItemResolvesOnDemand(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)

@@ -1255,6 +1255,13 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
 	}
+	// A case or normalization variant of an on-disk path opens on a
+	// case-insensitive filesystem (macOS's and Windows' defaults), but the scan
+	// names a book by the folder listings' spelling: indexing the variant would
+	// add a duplicate everyone sees, which the next scan removes (CONNECT-04).
+	if rel := relPathOf(lib.Root, abs); rel != "" && !dirPresent(lib, rel, map[string]map[string]bool{}) {
+		return nil, fmt.Errorf("%w: %q is not spelled as on disk", ErrNotIndexable, relPath)
+	}
 
 	// What the ignore rules keep out of a scan isn't in the library on demand either.
 	ignore := ParseIgnore(lib.IgnorePatterns)
@@ -1623,7 +1630,7 @@ func renamedFolders(lib catalog.Library, moved map[string]string) map[string]str
 	return out
 }
 
-// dirPresent reports whether a folder at exactly this path is on disk. A
+// dirPresent reports whether a folder (or file) at exactly this path is on disk. A
 // case-insensitive filesystem still answers to the old name of a folder renamed
 // only in case ("WIth" -> "With"), or of any folder under one so renamed, so when
 // the path still answers, each name along it must be in its parent's listing
