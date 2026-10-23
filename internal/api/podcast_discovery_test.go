@@ -198,13 +198,13 @@ func TestDiscoveryDeniedMatrix(t *testing.T) {
 		})
 	}
 	// The module off: 404 module_off, the flag false, nothing fetched.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body := b.doHeaders(t, "GET", search, b.userTok, "", h)
 	wantErr(t, resp, body, 404, "module_off")
 	if caps := serverCapabilities(t, b.testEnv); caps["podcast_discovery"] || !caps["podcast_opml"] {
 		t.Fatalf("module off caps %v", caps)
 	}
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":true}}`)
+	podcastsModule(t, b, true)
 	if caps := serverCapabilities(t, b.testEnv); !caps["podcast_discovery"] || !caps["podcast_opml"] {
 		t.Fatalf("module on caps %v", caps)
 	}
@@ -445,7 +445,7 @@ func TestOPMLImportRefusals(t *testing.T) {
 	}
 	// The module off.
 	b.api.opml = newOPMLTransfers()
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body = b.doHeaders(t, "POST", route, b.userTok, valid, h)
 	wantErr(t, resp, body, 404, "module_off")
 }
@@ -467,7 +467,7 @@ func TestOPMLExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The module off and no Bridge: the export still answers.
-	_, _ = b.do(t, "PATCH", "/api/v1/admin/settings", b.adminTok, `{"modules":{"podcasts":false}}`)
+	podcastsModule(t, b, false)
 	resp, body = b.doHeaders(t, "GET", "/api/v1/podcasts/opml/export", b.userTok, "", h)
 	wantErr(t, resp, body, 200, "")
 	want := map[string]string{
@@ -652,5 +652,46 @@ func TestOPMLImportPassesOverRecentlyFailedFeeds(t *testing.T) {
 	third := upload()
 	if third[1].Status != "queued" {
 		t.Fatalf("an old failure still passed over: %+v", third[1])
+	}
+}
+
+// R-17: the export's two 413s say which limit they hit: too many rows, or a
+// document too large to send.
+func TestOPMLExportLimitMessages(t *testing.T) {
+	b, uid, _ := podcastEnv(t, false)
+	ctx := context.Background()
+	seed := func(from, to int, urlLen int) {
+		t.Helper()
+		pad := strings.Repeat("a", urlLen)
+		for i := from; i < to; i++ {
+			p, sid := fmt.Sprintf("Show %05d", i), fmt.Sprintf("%016x", i)
+			if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_shows(library_id,show_path,show_id,title,author,description,link,language,show_type,explicit,private,feed_url,feed_host,feed_url_sha256,podcast_guid,cover_path,episode_count,latest_published,feed_sig,indexed_at)
+				VALUES(?,?,?,?,'','','','','episodic',0,0,?,'example.org','','','',0,NULL,'','t')`, b.lib.ID, p, sid, p, "https://example.org/"+sid+pad+".xml"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_follows(user_id,library_id,show_path,show_id,created_at) VALUES(?,?,?,?,'t')`, uid, b.lib.ID, p, sid); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	export := func() string {
+		t.Helper()
+		b.api.opml = newOPMLTransfers()
+		resp, body := b.doHeaders(t, "GET", "/api/v1/podcasts/opml/export", b.userTok, "", podcastHeaders())
+		wantErr(t, resp, body, 413, "opml_export_limit")
+		var e struct{ Error string }
+		decodeInto(t, body, &e)
+		return e.Error
+	}
+	seed(0, 2500, 1800) // about 4.6 MB of outlines
+	if got := export(); got != msgExportTooBig {
+		t.Fatalf("too big: %q", got)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE podcast_shows SET feed_url='https://example.org/'||show_id||'.xml' WHERE library_id=?`, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	seed(2500, catalog.MaxPodcastExportRows+1, 0)
+	if got := export(); got != msgExportTooMany {
+		t.Fatalf("too many: %q", got)
 	}
 }
