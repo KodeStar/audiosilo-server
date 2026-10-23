@@ -496,7 +496,7 @@ func TestPodcastStatsAndCastGate(t *testing.T) {
 		t.Fatalf("stats %s", out)
 	}
 	resp, out = b.doHeaders(t, "POST", "/api/v1/cast/token", b.userTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, f.Episodes[0].Path), h)
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != 403 || !strings.Contains(out, `"code":"not_a_book"`) {
 		t.Fatalf("cast mint %d %s", resp.StatusCode, out)
 	}
 	_, cred, err := b.auth.ResolveRequest(ctx, b.userTok, auth.Presence{}, auth.KindSession)
