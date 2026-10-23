@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -919,7 +920,7 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 
 // audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
 // root) and returns the folders under it that directly hold audio, library-relative,
-// each with its audio files in natural name order (sortFileOrder): the files audioEntries
+// each with its audio files as a book has them (folderAudio): the files audioEntries
 // would list, read in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
 // skipped, even when its own name begins with a dot. side is the metadata files
@@ -991,8 +992,8 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
-	for _, audio := range dirs {
-		sortFileOrder(audio)
+	for dir, audio := range dirs {
+		dirs[dir] = folderAudio(audio)
 	}
 	return dirs, side, hadErrors, err
 }
@@ -1102,7 +1103,7 @@ type audioFile struct {
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
-// absDir, in natural name order (sortFileOrder).
+// absDir, as a book has them (folderAudio).
 func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
@@ -1114,6 +1115,26 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 		if isAudioEntry(de, relPathOf(root, abs), ignore) {
 			audio = append(audio, audioFile{abs: abs, de: de})
 		}
+	}
+	return folderAudio(audio)
+}
+
+// folderAudio is one folder's audio files as a book has them: in play order
+// (sortFileOrder), less any .mka beside a file of the same name in another audio
+// format. Like an .aax beside its converted .m4b (metadata.AudioExtensions), that
+// .mka is the other's source or copy, ignored before .mka was audio (#161), and
+// reading both would lump them into one book with its chapters twice.
+func folderAudio(audio []audioFile) []audioFile {
+	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
+	isMKA := func(f audioFile) bool { return strings.EqualFold(filepath.Ext(f.de.Name()), ".mka") }
+	if slices.ContainsFunc(audio, isMKA) {
+		others := make(map[string]bool, len(audio))
+		for _, f := range audio {
+			if !isMKA(f) {
+				others[stem(f.de.Name())] = true
+			}
+		}
+		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return isMKA(f) && others[stem(f.de.Name())] })
 	}
 	sortFileOrder(audio)
 	return audio
@@ -1322,7 +1343,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	} else {
 		candidates = booksInDir(lib, dirRel, own, overrides)
 	}
-	book := pickBook(candidates, relPathOf(lib.Root, abs))
+	book := pickBook(candidates, rel)
 	if book == nil {
 		return nil, fmt.Errorf("%w: no book at %q", ErrNotIndexable, relPath)
 	}
@@ -1397,7 +1418,8 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 	if nb.ContentHash == "" {
 		nb.ContentHash = fingerprintFile(absOf(lib, primaryPath(nb))) // reused by enrich
 	}
-	if nb.ContentHash == "" || nb.ContentHash != old.ContentHash {
+	if nb.ContentHash == "" || old.ContentHash == "" ||
+		(nb.ContentHash != old.ContentHash && byteFirstFingerprint(lib, nb) != old.ContentHash) {
 		return ignored("the fingerprints differ")
 	}
 	if reclassified(from, catalog.Signature{Size: old.Size, IsFolder: old.IsFolder}, nb) {
@@ -1559,8 +1581,9 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		if fp == "" {
 			continue
 		}
+		was := byteFirstFingerprint(lib, nb)
 		for oldPath, ofp := range oldFP {
-			if ofp != fp || reclassified(oldPath, sigs[oldPath], nb) {
+			if (ofp != fp && ofp != was) || reclassified(oldPath, sigs[oldPath], nb) {
 				continue
 			}
 			if s.carryMove(ctx, lib, oldPath, nb.RelPath, rl) {
@@ -1572,6 +1595,28 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 	}
 	s.carryFolderFavourites(ctx, lib, moved, rl)
 	return moved
+}
+
+// byteFirstFingerprint is the fingerprint of the file a folder book had first
+// before natural order (#160), when that order puts another first: the first by
+// bytes in its first folder (a joined book's first disc). An index from before
+// stored that file's fingerprint, so a book moved before its first re-index is
+// still found by it. "" when it is the same file.
+func byteFirstFingerprint(lib catalog.Library, b *catalog.Book) string {
+	if !b.IsFolder || len(b.Files) < 2 {
+		return ""
+	}
+	first := b.Files[0].RelPath
+	byteFirst, dir := first, path.Dir(first)
+	for _, f := range b.Files[1:] {
+		if path.Dir(f.RelPath) == dir && f.RelPath < byteFirst {
+			byteFirst = f.RelPath
+		}
+	}
+	if byteFirst == first {
+		return ""
+	}
+	return fingerprintFile(absOf(lib, byteFirst))
 }
 
 // carryMove migrates a moved book's durable state from oldPath to newPath

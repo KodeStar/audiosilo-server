@@ -443,7 +443,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 			book.Episode.Fetch = &st
 		}
 	}
-	dp := media.DirectPlayable(book.Format, book.Codec)
+	dp := book.PlaysInBrowsers()
 	book.DirectPlayable = &dp
 	writeJSON(w, http.StatusOK, book)
 }
@@ -478,7 +478,7 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		"files":           book.Files,
 		"chapters":        book.Chapters,
 		"codec":           book.Codec,
-		"direct_playable": media.DirectPlayable(book.Format, book.Codec),
+		"direct_playable": book.PlaysInBrowsers(),
 	}
 	// Additive: present only when the chapters are a community list fitted onto
 	// the audio ("community") or the ones the Bridge found in the narration

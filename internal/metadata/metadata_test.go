@@ -285,6 +285,7 @@ func TestBookTitle(t *testing.T) {
 		{"numbered chapter-name tail is a track name, keep album", "Book Title", "Book Title 03 - Some Chapter Name", "Book Title"},
 		{"chapter N + name tail is a track name, keep album", "A Game of Thrones", "A Game of Thrones - Chapter 1 - Bran", "A Game of Thrones"},
 		{"mid-word prefix is not an extension, keep album", "Dark", "Darker Days", "Dark"},
+		{"mid-word prefix in another script, keep album", "Сто", "Столица", "Сто"},
 		{"empty album falls back to title", "", "Only Title", "Only Title"},
 		{"empty title falls back to album", "Only Album", "", "Only Album"},
 		{"edition suffix alone keeps album", "Book Title", "Book Title (Unabridged)", "Book Title"},
@@ -300,6 +301,7 @@ func TestIsGenericTitle(t *testing.T) {
 	generic := []string{
 		"", "Track 01", "track 1", "Chapter 12", "Part 3", "Disc 2",
 		"CD 1", "CD1", "disc02", "01", "1", "  07. ", "Track 1 - 2",
+		"０１", "٠٣", "Track ０１", // a number in other digits is still a number
 	}
 	for _, s := range generic {
 		if !IsGenericTitle(s) {

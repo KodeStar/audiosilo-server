@@ -509,14 +509,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   is web-only: served as `audio/x-matroska` (also sniffed from its EBML header `1A 45 DF A3`),
   its chapters read by ffprobe, and never `direct_playable` whatever the codec
-  (`media.DirectPlayable(format, codec)`'s `containerFormats`), so the web player transcodes it;
-  a native app lists it but has no transcode path.
+  (`media.DirectPlayable(format, codec)`'s `containerFormats`), so the web player transcodes it,
+  nor is a folder book with an `.mka` part (`Book.PlaysInBrowsers` checks every file's container,
+  since a folder book's format is its first file's; the SQL twin `directPlayableExpr`);
+  a native app lists it but has no transcode path. An `.mka` beside a file of the same name in
+  another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the
+  book, as an `.aax` does (`library.folderAudio`).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
   re-request). Direct serving + Range stays the default. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
-  expose `direct_playable` (via `media.DirectPlayable`: the book's format and codec) so a client knows when to
+  expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
+  codec, and every file's container) so a client knows when to
   transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
@@ -530,7 +535,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
-  durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
+  durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
+  first file's; one indexed in byte order before #160 still matches by the file that order
+  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
@@ -572,9 +579,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   in exactly the order a book of that disc alone has them (`sortFileOrder`, as
   `audioEntries`/the walk read them), since the state carry-over maps a disc
   position as offset + position. Every folder book's files play in natural name order
-  (`sortFileOrder`, #160: `naturalCompare` with a separator between two digits ending the
-  number, "1-10" before "2-1"; ties byte-wise); a book indexed in the old byte order is
-  re-indexed by the next scan (`Signature.FileOrder`, the stored order's key, differs),
+  (`sortFileOrder`, #160: `naturalLess`, audiosilo-meta's `scan.NaturalLess` copied and held to
+  it by `TestNaturalLessIsMetas`, as the Bridge and the community metadata number a book's files,
+  and so its sidecars' chapters, in that order: digit runs by value, "2-" before "10-", the rest
+  byte by byte case folded, so "01 - Prologue" plays before "01a - Interlude"; ties byte-wise); a
+  book indexed in the old byte order is re-indexed by the next scan (`Signature.FileOrder`, the
+  stored order's key, differs),
   which moves a listener's whole-book place on it: no remap. Files and chapters keep real paths in the discs
   (`file_path`, a chapter title led by its disc: "CD2 - 01"); the cover is the folder's own
   image, then the first disc's; `IndexPath` resolves the folder, a disc folder or a file in
@@ -2119,7 +2129,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the book's folder (a single-file book's is its file name) with no dot segment, size and length; anything else
   fails the file) is a source between the community's and the files': `applyChapterSource` uses it
   (`applyGenerated`) only with NO choice, when the community's don't apply, the list's files equal the book's
-  (`sameChapterFiles`: count, order, book-relative path and size) and `chapteralign.Align` with no Prober
+  (`chaptersOnFiles`: count, book-relative path and size; in the same order, or in another, a list
+  found while the book played in byte order before #160, its chapters then moved with their files by the
+  listed lengths, `movedChapters`, each running to the next start in the new order) and `chapteralign.Align` with no Prober
   answers `fill` (the book has no chapters of its own: no file holding two); then the rows are the fit,
   `chapters_source = "generated"` (`ChaptersFromGenerated`, never a choice an admin makes: `PATCH
   {chapter_source}` still takes files|community|auto) and `chapters_fit` a hash of what it was fitted from (`generatedKey`: the

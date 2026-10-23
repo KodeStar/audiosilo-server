@@ -379,9 +379,10 @@ var bracketBlank = strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ")
 
 // stripParenGroups removes the bracketed groups, innermost first until none is
 // left, so a nested one goes whole ("Eric (Mundodisco 9) [Eric (Discworld)]" is
-// "Eric"), then any bracket left without its partner (#41: one pass left "Eric ]").
+// "Eric"), then any bracket left without its partner (#41: one pass left "Eric ]";
+// a lone closer too, "Short Stories, Volume 1]").
 func stripParenGroups(s string) string {
-	if !strings.ContainsAny(s, "([") {
+	if !strings.ContainsAny(s, "()[]") {
 		return s // the common case, kept off the regexp
 	}
 	for {

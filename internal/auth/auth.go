@@ -1048,8 +1048,10 @@ const recoveryPairingTTL = 10 * time.Minute
 // code, and the token dies with the code (cascade on delete/supersede, revoke
 // on rotate). Invite-kind tokens carry no expiry of their own - the parent
 // invite's expiry and use cap govern them at exchange, which is what lets
-// ConsumePairing report "invite has expired" rather than a generic token
-// error. Recovery-kind tokens get recoveryPairingTTL instead.
+// ConsumePairing report "invite has expired" (or used up) rather than a generic
+// token error, until the daily retention deletes the token with its dead invite
+// (PrunePairingTokens): a QR scanned after that gets the generic error.
+// Recovery-kind tokens get recoveryPairingTTL instead.
 func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (string, error) {
 	secret, hash, err := generateToken()
 	if err != nil {

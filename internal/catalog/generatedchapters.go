@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"path"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/chapteralign"
@@ -19,7 +21,9 @@ import (
 // and above the files' (applyChapterSource): used only when no source was
 // chosen, the community's don't apply, the book has no chapters of its own, the
 // list was found on the files the book has now (each one's path relative to the
-// book and its size, in play order) and it fits their audio
+// book and its size; in play order, or in the byte order a book had before
+// natural file order, #160, its chapters then moved with their files:
+// chaptersOnFiles) and it fits their audio
 // (chapteralign.Align with no snapping, which must answer a fill). Anything else
 // leaves the scan's own, so a list for other audio, or one beside a book that
 // was tagged with chapters since, never stands in.
@@ -55,15 +59,19 @@ func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error
 // scanned_chapters.
 func fitGenerated(ctx context.Context, q rowQuerier, b *Book, raw, snapshot string, files []BookFile) ([]metadata.Chapter, error) {
 	list := decodeAttachment[metadata.ChapterList](raw)
-	if list == nil || !sameChapterFiles(list.Files, files, b.RelPath) {
+	if list == nil {
+		return nil, nil
+	}
+	chapters := chaptersOnFiles(list, files, b.RelPath)
+	if chapters == nil {
 		return nil, nil
 	}
 	own, err := scannedChapters(ctx, q, b.ID, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	remote := make([]chapteralign.Remote, len(list.Chapters))
-	for i, ch := range list.Chapters {
+	remote := make([]chapteralign.Remote, len(chapters))
+	for i, ch := range chapters {
 		remote[i] = chapteralign.Remote(ch)
 	}
 	res, err := chapteralign.Align(ctx, AlignFiles(files), own, remote, nil)
@@ -112,19 +120,105 @@ func generatedKey(raw, snapshot string, files []BookFile, bookPath string) strin
 	return chaptersHash(b.String())
 }
 
-// sameChapterFiles reports whether a chapters.json's files are the book's
-// (files, library relative): as many, in the same order, each the same path
-// relative to the book's folder (bookFileName) and the same size.
-func sameChapterFiles(listed []metadata.ChapterListFile, files []BookFile, bookPath string) bool {
-	if len(listed) == 0 || len(listed) != len(files) {
-		return false
+// chaptersOnFiles is a chapters.json's chapters on the book's files (files,
+// library relative, in play order), or nil when the list was found on other
+// files. Its files must be the book's: as many, each the same path relative to
+// the book's folder (bookFileName) and the same size. In the same order its
+// chapters are as listed; in another (a list the Bridge found while the book
+// played its files in byte order, before #160) they move with their files
+// (movedChapters).
+func chaptersOnFiles(list *metadata.ChapterList, files []BookFile, bookPath string) []metadata.ChapterListEntry {
+	order := listedOrder(list.Files, files, bookPath)
+	if order == nil {
+		return nil
 	}
-	for i, f := range files {
-		if listed[i].Path != bookFileName(f.RelPath, bookPath) || listed[i].Size != f.Size {
-			return false
+	if slices.IsSorted(order) {
+		return list.Chapters
+	}
+	return movedChapters(list, order)
+}
+
+// listedOrder maps the book's files (files, in play order) onto a
+// chapters.json's (listed): order[k] is the listed index of the book's k-th
+// file. nil when the two are not the same files (see chaptersOnFiles).
+func listedOrder(listed []metadata.ChapterListFile, files []BookFile, bookPath string) []int {
+	if len(listed) == 0 || len(listed) != len(files) {
+		return nil
+	}
+	at := make(map[string]int, len(listed))
+	for i, f := range listed {
+		if _, dup := at[f.Path]; dup {
+			return nil
+		}
+		at[f.Path] = i
+	}
+	order := make([]int, len(files))
+	for k, f := range files {
+		i, ok := at[bookFileName(f.RelPath, bookPath)]
+		if !ok || listed[i].Size != f.Size {
+			return nil
+		}
+		order[k] = i
+	}
+	return order
+}
+
+// movedChapters lays a chapters.json's chapters out on its files played in
+// another order (order, as listedOrder has it): each chapter starts at the
+// same place in the same file (by the listed files' lengths), and runs to the
+// next start in the new order. A file's audio before its first chapter start
+// stays with the chapter before it in the new order, as nothing was heard to
+// begin there; the first file's, when no chapter starts at its top, takes the
+// title of the chapter it was in. nil when a listed file has no length (the
+// chapters can't be placed in it) or a chapter would be empty.
+func movedChapters(list *metadata.ChapterList, order []int) []metadata.ChapterListEntry {
+	n := len(list.Files)
+	listedAt := make([]int64, n+1) // where each listed file starts on the listed timeline
+	for i, f := range list.Files {
+		if f.DurationMS <= 0 {
+			return nil
+		}
+		listedAt[i+1] = listedAt[i] + f.DurationMS
+	}
+	playedAt := make([]int64, n) // where each listed file starts in the new order
+	var total int64
+	for _, i := range order {
+		playedAt[i] = total
+		total += list.Files[i].DurationMS
+	}
+	// in is the listed file holding ms on the listed timeline (the last for a
+	// start past its end).
+	in := func(ms int64) int {
+		return min(sort.Search(n, func(i int) bool { return listedAt[i+1] > ms }), n-1)
+	}
+	starts := make([]metadata.ChapterListEntry, 0, len(list.Chapters)+1)
+	opens := false
+	for _, ch := range list.Chapters {
+		i := in(ch.StartMS)
+		at := playedAt[i] + ch.StartMS - listedAt[i]
+		opens = opens || at == 0
+		starts = append(starts, metadata.ChapterListEntry{Title: ch.Title, StartMS: at})
+	}
+	if !opens {
+		first, title := listedAt[order[0]], list.Chapters[0].Title
+		for _, ch := range list.Chapters {
+			if ch.StartMS <= first {
+				title = ch.Title
+			}
+		}
+		starts = append(starts, metadata.ChapterListEntry{Title: title})
+	}
+	slices.SortStableFunc(starts, func(a, b metadata.ChapterListEntry) int { return cmp.Compare(a.StartMS, b.StartMS) })
+	for i := range starts {
+		end := total
+		if i+1 < len(starts) {
+			end = starts[i+1].StartMS
+		}
+		if starts[i].LengthMS = end - starts[i].StartMS; starts[i].LengthMS <= 0 {
+			return nil
 		}
 	}
-	return true
+	return starts
 }
 
 // bookFileName is a book's file (library relative) as a chapters.json names

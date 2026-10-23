@@ -157,8 +157,28 @@ const (
 	hasChaptersExpr = `(` + chapterCountExpr + ` > 1)`
 )
 
-// directPlayableExpr is media.DirectPlayable in SQL.
-var directPlayableExpr = media.DirectPlayableSQL("b.format", "b.codec")
+// directPlayableExpr is media.DirectPlayable in SQL for a whole book (its Go twin
+// is Book.PlaysInBrowsers): the book's format and codec, and no file of it in a
+// container no browser plays, since a folder book's format is only its first
+// file's (an .mka part after .mp3 ones).
+var directPlayableExpr = `(` + media.DirectPlayableSQL("b.format", "b.codec") +
+	` AND NOT EXISTS (SELECT 1 FROM book_files dpf WHERE dpf.book_id = b.id AND NOT ` +
+	media.DirectPlayableSQL("dpf.format", "''") + `))`
+
+// PlaysInBrowsers is media.DirectPlayable for the whole book, what /item and
+// /chapters say as direct_playable (directPlayableExpr in SQL): its format and
+// codec, and every file's container.
+func (b *Book) PlaysInBrowsers() bool {
+	if !media.DirectPlayable(b.Format, b.Codec) {
+		return false
+	}
+	for _, f := range b.Files {
+		if !media.DirectPlayable(f.Format, "") {
+			return false
+		}
+	}
+	return true
+}
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.subtitle, b.author,
 	b.narrator, b.series, b.series_index, b.series_index_end, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +

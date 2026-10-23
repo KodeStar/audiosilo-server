@@ -396,6 +396,7 @@ func TestCleanTitle(t *testing.T) {
 		{"Eric (Mundodisco 9) [Eric (Discworld)]", "", "Eric"},
 		{"Dragon Her Heels (A Magical Romantic Comedy (with a body count) Book 23)", "", "Dragon Her Heels"},
 		{"Cuentos (Volumen 1) [Short Stories, Volume 1]]", "", "Cuentos"},
+		{"Short Stories, Volume 1]", "", "Short Stories"},
 	}
 	for _, tc := range cases {
 		if got := CleanTitle(tc.title, tc.series); got != tc.want {

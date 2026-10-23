@@ -80,6 +80,9 @@ type Metadata struct {
 // is in the library for the web player only: no browser or native player plays
 // the container, so media.DirectPlayable is false for it and the web player
 // streams it through ?transcode=1 (#161); a native app lists it but can't play it.
+// An .mka beside a file of the same name in another audio format is that file's
+// source or copy, and the scan leaves it out as it does an .aax (library's
+// folderAudio).
 var AudioExtensions = map[string]bool{
 	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true,
 	".flac": true, ".ogg": true, ".opus": true, ".mka": true,
@@ -139,7 +142,9 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		m.Genres = g
 	}
 	if raw := md.Raw(); raw != nil {
-		if v := rawString(raw, "series", "©grp", "show", "TXXX:SERIES"); v != "" {
+		// dhowden keys an MP4 atom by its raw name, \xa9 one byte (\xa9grp, the
+		// iTunes grouping), not the UTF-8 "©".
+		if v := rawString(raw, "series", "\xa9grp", "show", "TXXX:SERIES"); v != "" {
 			m.setSeriesTag(v) // "Discworld, book #40": series Discworld, position 40
 		}
 		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
@@ -172,7 +177,7 @@ func bookTitle(album, title string) string {
 		return firstNonEmpty(a, t)
 	}
 	ca, ct := canonTag(a), canonTag(t)
-	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !isAlnumByte(ct[len(ca)]) {
+	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !startsAlnum(ct[len(ca):]) {
 		if tail := strings.Trim(ct[len(ca):], " -:,;|."); tail != "" && !IsGenericTitle(tail) && !trackMarkerLead(tail) {
 			return t
 		}
@@ -192,8 +197,11 @@ func trackMarkerLead(tail string) bool {
 	return IsGenericTitle(f[0]) || (len(f) > 1 && IsGenericTitle(f[0]+" "+f[1]))
 }
 
-func isAlnumByte(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+// startsAlnum reports whether s starts with a letter or a digit in any script:
+// an album the title merely starts a word with ("Сто" of "Столица") is no prefix.
+func startsAlnum(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // canonTag lowercases a tag and strips bracketed groups ("(Unabridged)") so an
@@ -367,12 +375,14 @@ func IsGenericTitle(title string) bool {
 	return hasNumber
 }
 
+// isAllDigits reports whether s is a number in any script ("01", "０１",
+// "٠١"): the runes IsGenericTitle's normalizing keeps as numbers.
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, r := range s {
-		if r < '0' || r > '9' {
+		if !unicode.IsNumber(r) {
 			return false
 		}
 	}

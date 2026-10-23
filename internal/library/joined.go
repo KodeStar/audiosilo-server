@@ -212,22 +212,25 @@ func discOrder(a, b string) int {
 
 // naturalCompare compares two names the way people number things: case folded,
 // runs of digits by their value ("2" before "10", "01" equal to "1"), and spaces,
-// hyphens and underscores left out ("CD 2" sorts with "CD2"), except that between
-// two digits they still end a number ("1-10" is 1 then 10, before "2-1"; #160).
+// hyphens and underscores left out ("CD 2" sorts with "CD2").
 func naturalCompare(a, b string) int {
-	return naturalCompareRunes(naturalRunes(a), naturalRunes(b))
-}
-
-// naturalCompareRunes is naturalCompare of two names already read by naturalRunes.
-func naturalCompareRunes(ra, rb []rune) int {
+	ra, rb := naturalRunes(a), naturalRunes(b)
 	i, j := 0, 0
 	for i < len(ra) && j < len(rb) {
 		if isASCIIDigit(ra[i]) && isASCIIDigit(rb[j]) {
-			na, nb := digitRun(ra, &i), digitRun(rb, &j)
+			si, sj := i, j
+			for i < len(ra) && isASCIIDigit(ra[i]) {
+				i++
+			}
+			for j < len(rb) && isASCIIDigit(rb[j]) {
+				j++
+			}
+			na := strings.TrimLeft(string(ra[si:i]), "0")
+			nb := strings.TrimLeft(string(rb[sj:j]), "0")
 			if len(na) != len(nb) {
 				return cmp.Compare(len(na), len(nb))
 			}
-			if c := slices.Compare(na, nb); c != 0 {
+			if c := strings.Compare(na, nb); c != 0 {
 				return c
 			}
 			continue
@@ -241,69 +244,101 @@ func naturalCompareRunes(ra, rb []rune) int {
 	return cmp.Compare(len(ra)-i, len(rb)-j)
 }
 
-// digitRun returns the run of digits in r at *i without its leading zeros (the
-// number's value, by length then digit), moving *i past the run.
-func digitRun(r []rune, i *int) []rune {
-	start := *i
-	for *i < len(r) && isASCIIDigit(r[*i]) {
-		*i++
-	}
-	for start < *i && r[start] == '0' {
-		start++
-	}
-	return r[start:*i]
-}
-
-// naturalRunes is a name as naturalCompare reads it: the separators dropped, but
-// one between two digits kept as a single space, so it ends the first number.
+// naturalRunes is a name as naturalCompare reads it.
 func naturalRunes(s string) []rune {
 	out := make([]rune, 0, len(s))
-	sep := false
 	for _, r := range strings.ToLower(s) {
 		if r == ' ' || r == '-' || r == '_' || r == '\t' {
-			sep = true
 			continue
 		}
-		if sep && isASCIIDigit(r) && len(out) > 0 && isASCIIDigit(out[len(out)-1]) {
-			out = append(out, ' ')
-		}
-		sep = false
 		out = append(out, r)
 	}
 	return out
 }
 
-// compareFileNames orders two audio files of one folder, a and b with their
-// naturalRunes ka and kb, the order a book plays them in: by name as
-// naturalCompare reads it ("2- Part" before "10- Part", "1.Part" with "1. Part";
-// #160), then byte for byte, so names that read alike ("01" and "1") keep a
-// stable order.
-func compareFileNames(ka []rune, a string, kb []rune, b string) int {
-	if c := naturalCompareRunes(ka, kb); c != 0 {
-		return c
-	}
-	return strings.Compare(a, b)
-}
-
 // sortFileOrder sorts one folder's audio files into the order its book plays
-// them (compareFileNames), reading each name once rather than at every
-// comparison (a full scan sorts every folder).
+// them: natural name order (naturalLess, #160: "2- Part" before "10- Part"),
+// each name case folded once rather than at every comparison.
 func sortFileOrder(files []audioFile) {
 	if len(files) < 2 {
 		return
 	}
 	type keyed struct {
-		key []rune
-		f   audioFile
+		name, lower string
+		f           audioFile
 	}
 	ks := make([]keyed, len(files))
 	for i, f := range files {
-		ks[i] = keyed{naturalRunes(f.de.Name()), f}
+		ks[i] = keyed{f.de.Name(), strings.ToLower(f.de.Name()), f}
 	}
-	slices.SortFunc(ks, func(a, b keyed) int { return compareFileNames(a.key, a.f.de.Name(), b.key, b.f.de.Name()) })
+	slices.SortStableFunc(ks, func(a, b keyed) int {
+		switch {
+		case naturalLessFolded(a.lower, b.lower, a.name, b.name):
+			return -1
+		case naturalLessFolded(b.lower, a.lower, b.name, a.name):
+			return 1
+		}
+		return 0
+	})
 	for i := range ks {
 		files[i] = ks[i].f
 	}
+}
+
+// naturalLess is audiosilo-meta's scan.NaturalLess, the order the Bridge and the
+// community metadata number a folder book's files in: those numbers are the
+// chapters its sidecars' spoiler positions name, so the book must play its files
+// in exactly that order (NaturalLess's contract: one ordering for every
+// consumer). It is a copy because importing pkg/scan would link the metadata
+// importer into the server; TestNaturalLessIsMetas holds it to the original.
+// Digit runs compare by value (a shorter significant run first: "2" before "10",
+// "02" level with "2"), everything else byte by byte with case folded, and names
+// equal that way by their bytes. Separators count, unlike naturalCompare's: "01 -
+// Prologue" plays before "01a - Interlude" and "1 - One" before "1.5 - Interlude".
+func naturalLess(a, b string) bool {
+	return naturalLessFolded(strings.ToLower(a), strings.ToLower(b), a, b)
+}
+
+// naturalLessFolded is naturalLess of a and b, given them case folded (la, lb).
+func naturalLessFolded(la, lb, a, b string) bool {
+	ia, ib := 0, 0
+	for ia < len(la) && ib < len(lb) {
+		if isASCIIDigit(rune(la[ia])) && isASCIIDigit(rune(lb[ib])) {
+			ra, ea := significantDigits(la, ia)
+			rb, eb := significantDigits(lb, ib)
+			if len(ra) != len(rb) {
+				return len(ra) < len(rb)
+			}
+			if ra != rb {
+				return ra < rb
+			}
+			ia, ib = ea, eb
+			continue
+		}
+		if la[ia] != lb[ib] {
+			return la[ia] < lb[ib]
+		}
+		ia++
+		ib++
+	}
+	switch {
+	case ia == len(la) && ib < len(lb):
+		return true // a is a prefix of b
+	case ib == len(lb) && ia < len(la):
+		return false
+	default:
+		return a < b // alike under the natural compare: by their bytes
+	}
+}
+
+// significantDigits returns the digit run of s at i without its leading zeros,
+// and the index just past the run.
+func significantDigits(s string, i int) (string, int) {
+	start := i
+	for i < len(s) && isASCIIDigit(rune(s[i])) {
+		i++
+	}
+	return strings.TrimLeft(s[start:i], "0"), i
 }
 
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }

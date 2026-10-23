@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -333,12 +334,17 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 // filesystem (macOS's, Windows' defaults) a case-variant ?path= opens the same
 // folder, but the on-demand index takes only the on-disk spelling, so any user's
 // variant is a 404 and adds no duplicate book (denied); the on-disk spelling
-// resolves (allowed). On a case-sensitive filesystem the variant is simply absent.
+// resolves (allowed). On a case-sensitive filesystem (Linux CI) the variant is
+// simply absent and the test proves nothing, so it skips there; the spelling
+// check itself is library's TestDirPresentSpelling, on any filesystem.
 func TestItemCaseVariantPathNotIndexed(t *testing.T) {
 	t.Parallel()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	if _, err := os.Stat(filepath.Join(root, "WILL WIGHT")); err != nil {
+		t.Skip("case-sensitive filesystem: a case variant opens nothing")
+	}
 	e := newTestEnv(t)
 	ctx := context.Background()
-	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
 		t.Fatal(err)

@@ -202,13 +202,65 @@ func TestGeneratedChaptersAcrossFiles(t *testing.T) {
 	if ch := got.Chapters[3]; ch.FilePath != p+"/CD2/01.mp3" || ch.FileIndex != 1 || ch.Start != 900 || ch.BookOffset != 2700 {
 		t.Fatalf("chapter 3 = %+v", ch)
 	}
-	// The same files (each its own size) in another play order are other files.
+	// The same files in another play order (a list found while the book played
+	// in byte order, before #160): the chapters move with their files.
 	b.Files = []BookFile{{RelPath: p + "/CD2/01.mp3", Seq: 0, Duration: 1800, Size: 20}, {RelPath: p + "/CD1/01.mp3", Seq: 1, Duration: 1800, Size: 10}}
 	b.Chapters = []metadata.Chapter{{Index: 0, Title: "01", FilePath: p + "/CD2/01.mp3", End: 1800},
 		{Index: 1, Title: "01", FileIndex: 1, FilePath: p + "/CD1/01.mp3", End: 1800, BookOffset: 1800}}
 	upsert(t, c, b)
+	got = mustBook(t, c, ctx, lib.ID, p)
+	if want := []string{"Chapter 2", "Chapter 3", "Prologue", "Chapter 1"}; got.ChaptersSource != ChaptersFromGenerated ||
+		!slices.Equal(titlesOf(got), want) {
+		t.Fatalf("reordered: %q from %q, want %q", titlesOf(got), got.ChaptersSource, want)
+	}
+	if ch := got.Chapters[3]; ch.FilePath != p+"/CD1/01.mp3" || ch.FileIndex != 1 || ch.Start != 900 || ch.BookOffset != 2700 {
+		t.Fatalf("reordered chapter 1 = %+v", ch)
+	}
+	// Files of another size are other files.
+	b.Files[0].Size = 21
+	upsert(t, c, b)
 	if got := mustBook(t, c, ctx, lib.ID, p); got.ChaptersSource != "" || len(got.Chapters) != 2 {
 		t.Fatalf("other files: %q from %q", titlesOf(got), got.ChaptersSource)
+	}
+}
+
+// movedChapters (#160): a list found on a book's files in byte order ("1-",
+// "10-", "2-") is laid out in natural order, each chapter at its place in its
+// file; a file's audio before its first chapter start stays with the chapter
+// before it, and the new first file opens with the chapter it was in.
+func TestMovedChapters(t *testing.T) {
+	t.Parallel()
+	list := &metadata.ChapterList{
+		Files: []metadata.ChapterListFile{{Path: "1-.mp3", DurationMS: 1000}, {Path: "10-.mp3", DurationMS: 1000}, {Path: "2-.mp3", DurationMS: 1000}},
+		Chapters: []metadata.ChapterListEntry{
+			{Title: "One", StartMS: 0, LengthMS: 1500},    // 1- and the top of 10-
+			{Title: "Ten", StartMS: 1500, LengthMS: 1000}, // inside 10-, on into 2-
+			{Title: "Two", StartMS: 2500, LengthMS: 500},  // inside 2-
+		},
+	}
+	// Played 1-, 2-, 10-: listed indexes 0, 2, 1.
+	got := movedChapters(list, []int{0, 2, 1})
+	want := []metadata.ChapterListEntry{
+		{Title: "One", StartMS: 0, LengthMS: 1500},    // 1-, then 2-'s top
+		{Title: "Two", StartMS: 1500, LengthMS: 1000}, // 2- from its heading, then 10-'s top
+		{Title: "Ten", StartMS: 2500, LengthMS: 500},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("moved = %+v\nwant %+v", got, want)
+	}
+	// A new first file with no chapter at its top opens with the one it was in.
+	got = movedChapters(list, []int{1, 0, 2})
+	want = []metadata.ChapterListEntry{
+		{Title: "One", StartMS: 0, LengthMS: 500}, {Title: "Ten", StartMS: 500, LengthMS: 500},
+		{Title: "One", StartMS: 1000, LengthMS: 1500}, {Title: "Two", StartMS: 2500, LengthMS: 500},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("moved, first file mid-chapter = %+v\nwant %+v", got, want)
+	}
+	// A file with no length can't place its chapters.
+	list.Files[1].DurationMS = 0
+	if got := movedChapters(list, []int{0, 2, 1}); got != nil {
+		t.Fatalf("moved with a file of no length = %+v, want nil", got)
 	}
 }
 

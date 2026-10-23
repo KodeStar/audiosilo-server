@@ -46,7 +46,6 @@ func TestDiscOrder(t *testing.T) {
 		{"CD2", "cd 2", 0},
 		{"a10b", "a9c", 1},
 		{"Track", "Track 1", -1},
-		{"1-10", "2-1", -1}, // a separator between digits ends the number (#160)
 	} {
 		if got := naturalCompare(tc.a, tc.b); got != tc.want {
 			t.Errorf("naturalCompare(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)

@@ -50,13 +50,22 @@ func mkaFixture(t *testing.T, root, rel string) string {
 // TestMatroskaAudioPlaysThroughTranscode (D3a, #161): an .mka of MP3 is indexed
 // with its container chapters, served as audio/x-matroska, and marked not
 // direct-playable on /item and /chapters (no browser plays the container, MP3
-// inside or not), so the web player asks ?transcode=1, which serves MP3.
+// inside or not), so the web player asks ?transcode=1, which serves MP3; so is a
+// folder book with an .mka part after an .mp3 one.
 func TestMatroskaAudioPlaysThroughTranscode(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root := t.TempDir()
 	ffprobe := mkaFixture(t, root, "Some Author/Matroska Book/book.mka")
+	// A folder whose first part plays in browsers and whose second is Matroska: its
+	// format is the first part's, but it still isn't direct-playable.
+	mkaFixture(t, root, "Some Author/Mixed Book/02 Main.mka")
+	mp3 := filepath.Join(root, "Some Author", "Mixed Book", "01 Intro.mp3")
+	if out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
+		"-t", "2", "-c:a", "libmp3lame", "-q:a", "9", "-y", mp3).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not write an .mp3: %v\n%s", err, out)
+	}
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if _, err := library.NewScanner(e.cat, ffprobe, slog.Default()).Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
@@ -94,6 +103,16 @@ func TestMatroskaAudioPlaysThroughTranscode(t *testing.T) {
 	if resp, body := e.do(t, "GET", base+"/chapters?path="+book, token, ""); resp.StatusCode != http.StatusOK ||
 		json.Unmarshal([]byte(body), &chapters) != nil || chapters.DirectPlayable {
 		t.Fatalf("chapters = %d %s, want direct_playable false", resp.StatusCode, body)
+	}
+
+	mixed := url.QueryEscape("Some Author/Mixed Book")
+	if resp, body := e.do(t, "GET", base+"/item?path="+mixed, token, ""); resp.StatusCode != http.StatusOK ||
+		json.Unmarshal([]byte(body), &item) != nil || item.Format != "mp3" || item.DirectPlayable == nil || *item.DirectPlayable {
+		t.Fatalf("mixed item = %d %s, want format mp3 and direct_playable false", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", base+"/chapters?path="+mixed, token, ""); resp.StatusCode != http.StatusOK ||
+		json.Unmarshal([]byte(body), &chapters) != nil || chapters.DirectPlayable {
+		t.Fatalf("mixed chapters = %d %s, want direct_playable false", resp.StatusCode, body)
 	}
 
 	if resp, _ := e.do(t, "GET", base+"/stream?path="+file, token, ""); resp.StatusCode != http.StatusOK ||

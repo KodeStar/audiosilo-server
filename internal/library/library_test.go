@@ -1061,3 +1061,32 @@ func TestRenamedFolders(t *testing.T) {
 		})
 	}
 }
+
+// TestDirPresentSpelling (CONNECT-04): dirPresent answers by the folder
+// listings' spelling, whatever the filesystem says to a stat, so a case variant
+// that opens on a case-insensitive disk is not present (denied) and the on-disk
+// spelling is (allowed). The listings are given, as a case-insensitive disk
+// would list them, so the check runs the same on a case-sensitive one.
+func TestDirPresentSpelling(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib := catalog.Library{Root: root}
+	listed := func(author, book string) map[string]map[string]bool {
+		return map[string]map[string]bool{".": {author: true}, "Author": {book: true}}
+	}
+	if !dirPresent(lib, "Author/Book", listed("Author", "Book")) {
+		t.Error("the on-disk spelling is not present")
+	}
+	if dirPresent(lib, "Author/Book", listed("Author", "BOOK")) {
+		t.Error("a folder listed as BOOK is present as Book")
+	}
+	if dirPresent(lib, "Author/Book", listed("author", "Book")) {
+		t.Error("an author listed as author is present as Author")
+	}
+	if dirPresent(lib, "Author/Missing", listed("Author", "Missing")) {
+		t.Error("a path that is not on disk is present")
+	}
+}
