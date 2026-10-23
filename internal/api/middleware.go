@@ -107,11 +107,14 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 
 // corsAllowHeaders are the request headers a cross-origin client may send:
 // the bearer token, a JSON or OPML body, the client id (auth.ClientHeader) and
-// Range for seeking in a stream.
+// Range, for a script's fetch of a stream with the Authorization header (the
+// player's episode probe; an <audio> element's seeks are no-cors and need none).
 const corsAllowHeaders = "Authorization, Content-Type, " + auth.ClientHeader + ", Range"
 
 // corsExposeHeaders are the response headers a cross-origin script may read:
-// Retry-After on any throttled 429/503 and the OPML export's counts.
+// Retry-After where a route sends one (the OPML and discovery budgets, a busy
+// transcode, an episode on its way; the general rate limit and the request
+// timeout send none) and the OPML export's counts.
 const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable
 

@@ -520,8 +520,9 @@ func TestOPMLExport(t *testing.T) {
 	}
 }
 
-// A cross-origin web player (cors_origins) can read the export's counts: the
-// grant exposes them. Another origin gets the same body but no grant.
+// A cross-origin web player (cors_origins) can read the export's counts and a
+// refusal's Retry-After: the grant exposes them. Another origin gets the same
+// body but no grant.
 func TestOPMLExportCORSExpose(t *testing.T) {
 	b, _, _ := podcastEnv(t, false)
 	c := *b.api.config().Config
@@ -532,7 +533,7 @@ func TestOPMLExportCORSExpose(t *testing.T) {
 	h["Origin"] = "http://localhost:8081"
 	resp, body := b.doHeaders(t, "GET", route, b.userTok, "", h)
 	wantErr(t, resp, body, 200, "")
-	for _, k := range corsExposeNames[1:] { // the three X-OPML-* counts
+	for _, k := range opmlCountNames {
 		if resp.Header.Get(k) == "" {
 			t.Fatalf("%s missing", k)
 		}
@@ -542,6 +543,15 @@ func TestOPMLExportCORSExpose(t *testing.T) {
 	resp, body = b.doHeaders(t, "GET", route, b.userTok, "", h)
 	wantErr(t, resp, body, 200, "")
 	noCORSHeaders(t, "other origin", resp.Header)
+	// The burst of two is spent: the third is 429 with a Retry-After the
+	// allowed origin may read.
+	h["Origin"] = "http://localhost:8081"
+	resp, body = b.doHeaders(t, "GET", route, b.userTok, "", h)
+	wantErr(t, resp, body, 429, "opml_rate_limited")
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("429 without Retry-After")
+	}
+	wantCORSList(t, resp.Header, "Access-Control-Expose-Headers", corsExposeNames)
 }
 
 // The single follow keeps its envelopes over the shared follower, and a

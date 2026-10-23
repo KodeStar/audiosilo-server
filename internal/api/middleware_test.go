@@ -187,9 +187,13 @@ func TestCORSWildcard(t *testing.T) {
 	wantCORSList(t, rec.Header(), "Access-Control-Allow-Headers", []string{"Range"})
 }
 
-// corsExposeNames are the response headers a cross-origin page must be able
-// to read, spelled as on the wire so a renamed constant fails the test.
-var corsExposeNames = []string{"Retry-After", "X-OPML-Exported", "X-OPML-Omitted-Private", "X-OPML-Omitted-Unavailable"}
+// opmlCountNames are the OPML export's count headers and corsExposeNames
+// every response header a cross-origin page must be able to read, spelled
+// out so a renamed constant fails the test.
+var (
+	opmlCountNames  = []string{"X-OPML-Exported", "X-OPML-Omitted-Private", "X-OPML-Omitted-Unavailable"}
+	corsExposeNames = append([]string{"Retry-After"}, opmlCountNames...)
+)
 
 // wantCORSList fails unless the comma-separated header lists every name
 // (case-insensitively, as browsers compare them).

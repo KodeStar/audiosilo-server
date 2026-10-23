@@ -1110,7 +1110,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
   puts the `auth.Credential` (token id, kind, device id, device name, app; a cast token's book) in the context (`credentialFrom`; every
   context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
-  header. **Sessions are derived from progress saves**, not from the client-posted
+  header (and `Range`, and exposes Retry-After and the OPML counts: see Podcasts). **Sessions are derived from progress saves**, not from the client-posted
   `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
   `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
   session on that book when the save comes within `SessionGap` (10 min), or later when the position
