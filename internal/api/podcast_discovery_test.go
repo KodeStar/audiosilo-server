@@ -520,6 +520,30 @@ func TestOPMLExport(t *testing.T) {
 	}
 }
 
+// A cross-origin web player (cors_origins) can read the export's counts: the
+// grant exposes them. Another origin gets the same body but no grant.
+func TestOPMLExportCORSExpose(t *testing.T) {
+	b, _, _ := podcastEnv(t, false)
+	c := *b.api.config().Config
+	c.CORSOrigins = []string{"http://localhost:8081"}
+	b.api.live.Store(newLiveConfig(&c, &c))
+	const route = "/api/v1/podcasts/opml/export"
+	h := podcastHeaders()
+	h["Origin"] = "http://localhost:8081"
+	resp, body := b.doHeaders(t, "GET", route, b.userTok, "", h)
+	wantErr(t, resp, body, 200, "")
+	for _, k := range []string{headerOPMLExported, headerOPMLOmittedPrivate, headerOPMLOmittedUnavailable} {
+		if resp.Header.Get(k) == "" {
+			t.Fatalf("%s missing", k)
+		}
+	}
+	wantCORSList(t, resp.Header, "Access-Control-Expose-Headers", corsExposeNames)
+	h["Origin"] = "http://evil.example"
+	resp, body = b.doHeaders(t, "GET", route, b.userTok, "", h)
+	wantErr(t, resp, body, 200, "")
+	noCORSHeaders(t, "other origin", resp.Header)
+}
+
 // The single follow keeps its envelopes over the shared follower, and a
 // request for an open feed at the other privacy is refused.
 func TestPodcastFollowPrivacyConflict(t *testing.T) {

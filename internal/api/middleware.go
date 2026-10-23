@@ -105,6 +105,26 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// The OPML export's counts (GET /podcasts/opml/export), named once so the
+// handler and the CORS expose list cannot drift.
+const (
+	headerOPMLExported           = "X-OPML-Exported"
+	headerOPMLOmittedPrivate     = "X-OPML-Omitted-Private"
+	headerOPMLOmittedUnavailable = "X-OPML-Omitted-Unavailable"
+)
+
+// corsAllowHeaders are the request headers a cross-origin client may send:
+// Authorization and Content-Type everywhere, the client id (auth.ClientHeader)
+// on every call, and Range on the stream route (GET /libraries/{id}/stream).
+var corsAllowHeaders = strings.Join([]string{"Authorization", "Content-Type", auth.ClientHeader, "Range"}, ", ")
+
+// corsExposeHeaders are the response headers a cross-origin script may read:
+// Retry-After on a 429/503 (the discovery search, OPML import and export, the
+// podcast demand routes, a busy transcode) and the OPML export's counts.
+var corsExposeHeaders = strings.Join([]string{
+	"Retry-After", headerOPMLExported, headerOPMLOmittedPrivate, headerOPMLOmittedUnavailable,
+}, ", ")
+
 // cors applies a strict allow-list CORS policy. With no configured origins,
 // cross-origin browser requests are simply not granted CORS headers (the API
 // still works for native apps and same-origin web clients).
@@ -115,7 +135,8 @@ func (a *API) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+auth.ClientHeader)
+			w.Header().Set("Access-Control-Allow-Headers", corsAllowHeaders)
+			w.Header().Set("Access-Control-Expose-Headers", corsExposeHeaders)
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {
