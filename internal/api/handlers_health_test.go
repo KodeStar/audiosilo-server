@@ -35,6 +35,7 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 	}{
 		{"GET", "/api/v1/admin/issues", "", 200},
 		{"GET", "/api/v1/admin/issues/duplicates", "", 200},
+		{"GET", "/api/v1/admin/issues/duplicates?across=1", "", 200},
 		{"GET", "/api/v1/admin/issues/series-spellings", "", 200},
 		{"POST", "/api/v1/admin/issues/ignore", ignore, 204},
 		{"DELETE", "/api/v1/admin/issues/ignore", ignore, 204},
@@ -55,6 +56,65 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 		if resp, body := e.do(t, tc.method, tc.path, adminTok, tc.body); resp.StatusCode != tc.ok {
 			t.Errorf("admin %s %s = %d %s, want %d", tc.method, tc.path, resp.StatusCode, body, tc.ok)
 		}
+	}
+}
+
+// ?across=1 groups copies in different libraries, each naming its library;
+// without it they never group (#165).
+func TestDuplicatesAcrossLibraries(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	var libs []int64
+	for _, name := range []string{"Fiction", "Kids"} {
+		l, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: name, Root: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		libs = append(libs, l.ID)
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: l.ID, RelPath: "Dune", Title: "Dune",
+			Author: "Frank Herbert", Format: "m4b", ContentHash: "h1", Size: 100, Duration: 3600}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out struct {
+		Groups []struct {
+			Books []struct {
+				LibraryID   int64  `json:"library_id"`
+				LibraryName string `json:"library_name"`
+				Path        string `json:"path"`
+			} `json:"books"`
+		} `json:"groups"`
+	}
+	get := func(q string) {
+		t.Helper()
+		resp, body := e.do(t, "GET", "/api/v1/admin/issues/duplicates"+q, adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", q, resp.StatusCode, body)
+		}
+		out.Groups = nil
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get("")
+	if len(out.Groups) != 0 {
+		t.Fatalf("without across = %+v, want none", out.Groups)
+	}
+	get("?across=1&library_id=" + strconv.FormatInt(libs[1], 10))
+	if len(out.Groups) != 1 || len(out.Groups[0].Books) != 2 {
+		t.Fatalf("across = %+v, want one group of two", out.Groups)
+	}
+	names := map[string]int64{}
+	for _, b := range out.Groups[0].Books {
+		names[b.LibraryName] = b.LibraryID
+	}
+	if names["Fiction"] != libs[0] || names["Kids"] != libs[1] {
+		t.Fatalf("copies name %v, want Fiction and Kids", names)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/issues/duplicates?across=1&library_id=x", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad library_id = %d, want 400", resp.StatusCode)
 	}
 }
 

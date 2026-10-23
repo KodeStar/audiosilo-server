@@ -345,7 +345,7 @@ func TestSplitDiscsIssue(t *testing.T) {
 	}
 	// The other alike books (the settled discs too) still group as duplicates; the
 	// Dragonese discs don't.
-	groups, _ := c.DuplicateGroups(ctx, lib.ID, false)
+	groups, _ := c.DuplicateGroups(ctx, lib.ID, false, false)
 	grouped := map[string]bool{}
 	for _, g := range groups {
 		for _, m := range g.Books {
