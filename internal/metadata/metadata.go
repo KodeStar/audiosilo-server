@@ -315,15 +315,18 @@ var discLabels = map[string]bool{"track": true, "chapter": true, "part": true, "
 // number or a "track/chapter/part/disc N"-style label (e.g. "Track 01"). It is
 // token-based, so real titles that merely start with such a word ("Part of Your
 // World") are NOT flagged: every token must be a number or a disc label, with at
-// least one number present. Such a title (common in poorly-tagged files) should
-// not override a path-derived title, nor be used to match two books as the same.
+// least one number present. Letters in any script count, so a title written in
+// another one names something ("Пролог", "Глава 1", "第1章", "Война и мир"). Such a
+// title (common in poorly-tagged files) should not override a path-derived
+// title, nor be used to match two books as the same.
 func IsGenericTitle(title string) bool {
-	// Normalize: lowercase, collapse any run of non-alphanumerics to one space.
+	// Normalize: lowercase, collapse any run of characters that are not letters,
+	// numbers or their marks to one space.
 	var b strings.Builder
 	space := false
 	for _, r := range strings.ToLower(title) {
 		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+		case unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r):
 			b.WriteRune(r)
 			space = false
 		case !space:
@@ -357,19 +360,6 @@ func IsGenericTitle(title string) bool {
 		}
 	}
 	return hasNumber
-}
-
-// NamesNothing is IsGenericTitle for a label in any script. IsGenericTitle reads
-// only ASCII letters, so it takes a title written in another script for an empty
-// label ("Пролог", "第一章") or a bare number ("Глава 1"); a title with a letter
-// outside ASCII names something.
-func NamesNothing(title string) bool {
-	return !hasNonASCIILetter(title) && IsGenericTitle(title)
-}
-
-// hasNonASCIILetter reports whether s has a letter outside ASCII.
-func hasNonASCIILetter(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) })
 }
 
 func isAllDigits(s string) bool {

@@ -24,7 +24,7 @@ import (
 //   - both tags when they are swapped: the title is the author folder's name, or
 //     the author, cleaned of series and numbering (match.CleanTitle), is the
 //     path's title ("Bernard Cornwell" by "Sharpe's Eagle (Sharpe 08)");
-//   - a junk title ("Track 01", "03": metadata.NamesNothing; "Unknown",
+//   - a junk title ("Track 01", "03": metadata.IsGenericTitle; "Unknown",
 //     "Untitled") or a junk author ("Unknown", "Various Artists"), each alone.
 //
 // A fact the path doesn't give keeps the tag's value (for swapped tags, the
@@ -64,7 +64,7 @@ func junkTitle(t string) bool {
 	case "unknown", "untitled", "unknown title", "unknown album", "no title":
 		return true
 	}
-	return metadata.NamesNothing(t)
+	return metadata.IsGenericTitle(t)
 }
 
 // junkAuthor reports whether an author tag names nobody.

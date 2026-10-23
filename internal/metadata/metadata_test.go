@@ -310,6 +310,8 @@ func TestIsGenericTitle(t *testing.T) {
 	real := []string{
 		"A Christmas Carol", "Unsouled", "How to Train Your Dragon",
 		"Part of Your World", "Chapter and Verse", "Track Changes", "CD Projekt",
+		// Letters outside ASCII count (R-38): a title in another script names something.
+		"Война и мир", "Пролог", "Глава 1", "第1章", "Метро 2033", "Część 1", "Ἰλιάς",
 	}
 	for _, s := range real {
 		if IsGenericTitle(s) {

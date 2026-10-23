@@ -15,7 +15,7 @@ func TestChapterTitle(t *testing.T) {
 		"Chapter 024": "Chapter 024",
 		"Part 7":      "Part 7",
 		"chapter12":   "chapter12",
-		// A title in another script names something (IsGenericTitle reads ASCII only).
+		// A title in another script names something (IsGenericTitle reads every script).
 		"Пролог":  "Пролог",
 		"Глава 1": "Глава 1",
 		"第1章":     "第1章",
