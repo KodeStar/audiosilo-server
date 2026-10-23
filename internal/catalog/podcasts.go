@@ -517,6 +517,14 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 	return out, nil
 }
 
+// PodcastEpisodeRows counts the show's indexed episodes (podcast_episodes
+// rows), whatever their files.
+func (c *Catalog) PodcastEpisodeRows(ctx context.Context, lib int64, show string) (int, error) {
+	var n int
+	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show).Scan(&n)
+	return n, err
+}
+
 // NextPodcastEpisode is the episode after the one at path in its show, in the
 // episode order oldest first (what plays next, whether the show lists newest
 // or oldest first), among the episodes in scope that can still play (in the

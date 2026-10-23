@@ -126,11 +126,22 @@ func (s *Scanner) indexPodcastShow(ctx context.Context, lib catalog.Library, sho
 	}
 	if !force {
 		old, err := s.cat.PodcastShow(ctx, lib.ID, show, 0)
-		if err == nil && old.FeedSig == sig {
-			return old.EpisodeCount, false, nil
-		}
 		if err != nil && !errors.Is(err, catalog.ErrNotFound) {
 			return 0, false, err
+		}
+		if err == nil && old.FeedSig == sig {
+			// An unchanged feed.json is skipped only while its episodes are
+			// still indexed: an older server run on this database (a rollback)
+			// scans the library as books and removes them, leaving the show.
+			rows, err := s.cat.PodcastEpisodeRows(ctx, lib.ID, show)
+			if err != nil {
+				return 0, false, err
+			}
+			if rows >= old.EpisodeCount {
+				return old.EpisodeCount, false, nil
+			}
+			s.log.Info("re-indexing a podcast show whose episodes are missing from the index", "library", lib.ID, "indexed", rows, "listed", old.EpisodeCount)
+			force = true
 		}
 	}
 	f, err := feed.ReadFile(filename, show, s.log)

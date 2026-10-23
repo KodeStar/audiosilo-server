@@ -167,3 +167,52 @@ func TestPodcastScannerRejectsInvalidAndLinkedFeeds(t *testing.T) {
 		})
 	}
 }
+
+// UPG-02: an older server run on this database scans the podcast library as
+// books and removes the episode rows, leaving the show and its feed signature.
+// The next scan re-indexes the show though feed.json is unchanged.
+func TestPodcastScanRestoresEpisodesLostToARollback(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	dir := filepath.Join(root, "Example Show")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../podcast/testdata/feed-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Podcasts", Root: root, Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, "a-probe-that-must-never-run", slog.Default())
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 3 {
+		t.Fatalf("scan: %+v %v", res, err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM books WHERE library_id=?`, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 0 {
+		t.Fatalf("after the rollback: %d %v", n, err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 3 {
+		t.Fatalf("after the next scan: %d %v", n, err)
+	}
+	listing, err := s.BrowsePodcasts(ctx, *lib, catalog.Scope{LibraryID: lib.ID, AllowAll: true}, 0, "Example Show", 0, 200)
+	if err != nil || listing.Total != 3 {
+		t.Fatalf("browse %+v %v", listing, err)
+	}
+	// Indexed again, an unchanged show is skipped as before.
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 0 || res.Updated != 0 {
+		t.Fatalf("unchanged: %+v %v", res, err)
+	}
+}
