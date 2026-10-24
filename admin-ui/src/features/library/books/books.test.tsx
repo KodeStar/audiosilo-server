@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { fictionGrant, kidsShare, serverInfo } from '@/test/fixtures';
+import { fictionGrant, kidsShare, libraries, podcastLibrary, serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, facets } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -131,6 +131,93 @@ describe('books: browsing', () => {
     expect(screen.queryByRole('region', { name: 'Recently added' })).toBeNull();
     expect(await screen.findByRole('heading', { name: '4 books' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove Library: Kids' })).toBeInTheDocument();
+  });
+});
+
+describe('books: podcast libraries', () => {
+  const withPodcasts = (libs = libraries()) => ({
+    'GET /admin/libraries': { body: { libraries: [...libs, podcastLibrary] } },
+  });
+
+  it('leaves a podcast library out of the filter and the sheet: its episodes are not books', async () => {
+    mockFetch(bookRoutes(books, withPodcasts()));
+    renderApp('/library');
+    const group = await screen.findByRole('group', { name: 'Library' });
+    expect(within(group).getByRole('button', { name: /^Kids/ })).toBeInTheDocument();
+    expect(within(group).queryByRole('button', { name: /Podcasts/ })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    const library = within(sheet).getByRole('region', { name: 'Library' });
+    expect(within(library).getByRole('button', { name: /^Fiction/ })).toBeInTheDocument();
+    expect(within(library).queryByRole('button', { name: /Podcasts/ })).toBeNull();
+  });
+
+  it('shows no filter for one book library beside a podcast library', async () => {
+    mockFetch(bookRoutes(books, withPodcasts(libraries().slice(0, 1))));
+    renderApp('/library');
+    await allBooks();
+    expect(screen.queryByRole('group', { name: 'Library' })).toBeNull();
+  });
+
+  it("reads a podcast library's id in the link as all libraries", async () => {
+    const calls = mockFetch(bookRoutes(books, withPodcasts()));
+    renderApp('/library?library=3');
+    const group = await screen.findByRole('group', { name: 'Library' });
+    await waitFor(() =>
+      expect(within(group).getByRole('button', { name: /^All/ })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    );
+    const list = await allBooks();
+    expect(await within(list).findAllByRole('listitem')).toHaveLength(4);
+    expect(calls.filter(isList).at(-1)!.query.get('library_id')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remove Library/ })).toBeNull();
+  });
+});
+
+describe('books: scroll', () => {
+  // Where the list's top is: the page scrolled past it, or above it.
+  function placeList(top: number) {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect');
+    rect.mockReturnValue({ top } as DOMRect);
+    const into = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    return { into, scrollTo };
+  }
+  afterEach(() => vi.restoreAllMocks());
+  const toTop = (into: ReturnType<typeof placeList>['into']) =>
+    into.mock.calls.filter(([opts]) => (opts as ScrollIntoViewOptions)?.block === 'start');
+
+  it('brings the list back to its top after a view switch made scrolled past it', async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library');
+    await allBooks();
+    const { into, scrollTo } = placeList(-800);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Table' }));
+    await screen.findByRole('table', { name: 'All books' });
+    expect(router.state.location.search).toEqual({ view: 'table' });
+    expect(toTop(into)).toHaveLength(1);
+    // Not the router's reset to the top of the page (the table's virtualizer
+    // scrolls to where the page already is, which names no left).
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 0, left: 0 }));
+    // A sort is a change to the list too.
+    await user.click(screen.getByRole('button', { name: 'Cover grid' }));
+    await waitFor(() => expect(toTop(into)).toHaveLength(2));
+  });
+
+  it('leaves the page where it is when the change is made above the list', async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library');
+    await allBooks();
+    const { into, scrollTo } = placeList(400);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Table' }));
+    await screen.findByRole('table', { name: 'All books' });
+    expect(router.state.location.search).toEqual({ view: 'table' });
+    expect(toTop(into)).toHaveLength(0);
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 0, left: 0 }));
   });
 });
 

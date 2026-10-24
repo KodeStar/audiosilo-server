@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +21,7 @@ import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { rescanLibrary } from '@/features/libraries/rescan';
+import { isBookLibrary } from '@/lib/library-kind';
 import { LibraryFilter } from '../library-filter';
 import { useUpdateSearch } from '../library-param';
 import type { LibrarySearch } from '../library-search';
@@ -34,6 +35,9 @@ import { treeRows, visibleListings, withAncestors, type ListingState } from './f
  * override that corrects it. `?library=` and `?folder=` deep-link the
  * selection; the book page links here with both. A finished rescan (which can
  * change which folders are books) refetches the listings (the scan watcher).
+ * Book libraries only: a podcast library's listing is its shows, read from
+ * their feeds, with no folders to read as books (a podcast library's id in
+ * `?library=` opens the first book library).
  */
 export function FoldersPage() {
   const { t } = useTranslation();
@@ -41,7 +45,7 @@ export function FoldersPage() {
   const libraries = useLibraries();
   const search = useSearch({ strict: false }) as LibrarySearch;
   const update = useUpdateSearch();
-  const all = libraries.data ?? [];
+  const all = useMemo(() => libraries.data?.filter(isBookLibrary) ?? [], [libraries.data]);
   const library = all.find((l) => l.id === search.library) ?? all[0];
   const go = (next: Pick<LibrarySearch, 'library' | 'folder'>) =>
     update((prev) => ({ ...prev, ...next }));

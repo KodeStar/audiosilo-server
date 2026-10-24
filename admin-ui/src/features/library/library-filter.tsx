@@ -1,11 +1,10 @@
 import { useTranslation } from 'react-i18next';
-import { useLibraries } from '@/api/hooks';
 import type { BookFacets } from '@/api/types';
 import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { useLibraryParam } from './library-param';
+import { useBookLibraries, useLibraryParam } from './library-param';
 
 /** Up to this many libraries pick from a segmented control; more from a select. */
 const SEGMENTED_MAX = 4;
@@ -13,7 +12,9 @@ const SEGMENTED_MAX = 4;
 /**
  * One library, or all of them (Books, Authors, Narrators, Series, Folders): a
  * segmented control, a select once there are many, hidden with a single
- * library, where it would filter nothing. With `counts` (the facets', which
+ * library, where it would filter nothing. Only book libraries are choices (a
+ * podcast library has no books here), so one book library and a podcast
+ * library show no filter. With `counts` (the facets', which
  * ignore the library filter) each choice shows its books; an unreachable
  * library reads "offline" instead. It drives `?library=` unless given a
  * `value` and `onChange` of its own.
@@ -34,7 +35,7 @@ export function LibraryFilter({
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const libraries = useLibraries().data ?? [];
+  const libraries = useBookLibraries() ?? [];
   const [param, setParam] = useLibraryParam();
   if (libraries.length < 2) return null;
 

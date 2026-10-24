@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { FolderMode, FsEntry } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { libraries } from '@/test/fixtures';
+import { libraries, podcastLibrary } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -257,6 +257,20 @@ describe('folders', () => {
     expect(await screen.findByRole('treeitem', { name: 'Picture books' })).toBeInTheDocument();
     expect(router.state.location.search).toEqual({ library: 2 });
     expect(calls.some((c) => c.path === '/libraries/2/fs')).toBe(true);
+  });
+
+  it("leaves a podcast library out (its shows aren't folders), and opens a book library for its id", async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': { body: { libraries: [...libraries(), podcastLibrary] } },
+      }),
+    );
+    renderApp('/library/folders?library=3');
+    await screen.findByRole('tree', { name: 'Folders in Fiction' });
+    const picker = screen.getByRole('group', { name: 'Library' });
+    expect(within(picker).getByRole('button', { name: 'Kids' })).toBeInTheDocument();
+    expect(within(picker).queryByRole('button', { name: 'Podcasts' })).toBeNull();
+    expect(calls.some((c) => c.path === '/libraries/3/fs')).toBe(false);
   });
 
   it('celebrates the safety stop for a library whose folder is unreachable', async () => {
