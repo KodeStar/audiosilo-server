@@ -45,7 +45,11 @@ export function FoldersPage() {
   const search = useSearch({ strict: false }) as LibrarySearch;
   const update = useUpdateSearch();
   const all = useBookLibraries() ?? [];
-  const library = all.find((l) => l.id === search.library) ?? all[0];
+  const asked = all.find((l) => l.id === search.library);
+  const library = asked ?? all[0];
+  // `?folder=` is a folder of the library the link names: one that opened
+  // another library instead (a podcast library's id, one gone) doesn't take it.
+  const folder = asked || search.library === undefined ? search.folder || undefined : undefined;
   const go = (next: Pick<LibrarySearch, 'library' | 'folder'>) =>
     update((prev) => ({ ...prev, ...next }));
 
@@ -102,7 +106,7 @@ export function FoldersPage() {
         <FolderExplorer
           key={library.id}
           library={library}
-          folder={search.folder || undefined}
+          folder={folder}
           onSelect={(folder) => go({ folder })}
         />
       )}

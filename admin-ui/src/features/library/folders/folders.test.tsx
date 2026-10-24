@@ -261,12 +261,15 @@ describe('folders', () => {
 
   it("leaves a podcast library out (its shows aren't folders), and opens a book library for its id", async () => {
     const calls = mockFetch(routes(withPodcastLibrary()));
-    renderApp('/library/folders?library=3');
+    renderApp('/library/folders?library=3&folder=A%20Show');
     await screen.findByRole('tree', { name: 'Folders in Fiction' });
     const picker = screen.getByRole('group', { name: 'Library' });
     expect(within(picker).getByRole('button', { name: 'Kids' })).toBeInTheDocument();
     expect(within(picker).queryByRole('button', { name: 'Podcasts' })).toBeNull();
     expect(calls.some((c) => c.path === '/libraries/3/fs')).toBe(false);
+    // The podcast library's folder isn't looked for in the library opened instead.
+    expect(screen.getByText('Pick a folder to see how AudioSilo reads it')).toBeInTheDocument();
+    expect(calls.some((c) => c.query.get('path') === 'A Show')).toBe(false);
   });
 
   it('celebrates the safety stop for a library whose folder is unreachable', async () => {

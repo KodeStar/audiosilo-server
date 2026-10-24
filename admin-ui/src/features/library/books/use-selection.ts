@@ -59,10 +59,12 @@ export function useSelection(order: readonly AdminBook[] = NO_ORDER) {
     shown.current = order;
   }, [order]);
 
-  const toggle = useCallback((b: AdminBook, shift = false) => {
+  // `anchored` false: a pick outside `order` (a shelf's), which leaves where the
+  // list's next Shift-click range starts as it was.
+  const toggle = useCallback((b: AdminBook, shift = false, anchored = true) => {
     const k = refKey(b);
     const from = anchor.current;
-    anchor.current = k;
+    if (anchored) anchor.current = k;
     setSelected((prev) => {
       const next = new Map(prev);
       const on = !prev.has(k);

@@ -185,8 +185,8 @@ describe('Shift-click ranges', () => {
   });
 
   it('leaves an item already in the state alone', () => {
-    const picks = togglePickRange(NO_PICKS, shown, 1, shown[1]);
-    // Item 2 flips out, so 1 goes out with it; nothing is put in.
+    // 1 already left out; Shift on 2 leaves 2 out too, and 1 stays out (a flip would put it back).
+    const picks = togglePickRange(togglePick(NO_PICKS, shown[0]), shown, 1, shown[1]);
     expect([...picks.exclude].sort()).toEqual([1, 2]);
     expect(picks.include.size).toBe(0);
   });

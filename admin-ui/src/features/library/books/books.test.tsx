@@ -201,7 +201,8 @@ describe('books: scroll', () => {
     // scrolls to where the page already is, which names no left).
     expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 0, left: 0 }));
     // A sort is a change to the list too.
-    await user.click(screen.getByRole('button', { name: 'Cover grid' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Sort' }), 'added');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ sort: 'added' }));
     await waitFor(() => expect(toTop(into)).toHaveLength(2));
   });
 
@@ -846,7 +847,7 @@ describe('books: selecting many (#166)', () => {
     );
     renderApp('/library');
     const user = userEvent.setup();
-    await allBooks();
+    const list = await allBooks();
     const recent = await screen.findByRole('region', { name: 'Recently added' });
     await user.click(
       await within(recent).findByRole('checkbox', { name: `Select ${shelf[0].title}` }),
@@ -856,6 +857,16 @@ describe('books: selecting many (#166)', () => {
       within(recent).getByRole('checkbox', { name: `Select ${shelf[1].title}` }),
     );
     expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('2 selected');
+    // Nor does a shelf's pick start the list's next range: no book of the list
+    // was clicked, so a Shift-click there picks that book alone too.
+    await shiftClick(
+      user,
+      await within(list).findByRole('checkbox', { name: `Select ${books[2].title}` }),
+    );
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
+    expect(
+      within(list).getByRole('checkbox', { name: `Select ${books[1].title}` }),
+    ).not.toBeChecked();
   });
 
   it('offers the first 1,000 when more match than one bulk action takes', async () => {

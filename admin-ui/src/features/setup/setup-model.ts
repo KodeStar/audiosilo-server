@@ -17,6 +17,7 @@ import {
   type SetupStepId,
 } from '@/api/types';
 import { lockOf, sectionPatch, type SettingId } from '@/features/settings/settings-model';
+import { isBookLibrary } from '@/lib/library-kind';
 
 // The first-run flow (FIRST-RUN-PLAN.md Phase F1): which step comes next, where
 // a return visit picks up, what the Overview card lists, and the small rules
@@ -43,7 +44,7 @@ export function folderSatisfied(hasLibraries: boolean): boolean {
 
 /** Whether the server has a library of books: a podcast library holds no audiobooks, so it isn't the folder step's. */
 export function hasBookLibrary(libraries: readonly Pick<Library, 'kind'>[]): boolean {
-  return libraries.some((l) => l.kind !== 'podcasts');
+  return libraries.some(isBookLibrary);
 }
 
 /**

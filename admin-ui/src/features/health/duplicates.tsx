@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye } from 'lucide-react';
-import { useDuplicates, useLibraries, useLibraryRoots } from '@/api/hooks';
+import { useBookLibraries, useDuplicates, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { QueryError } from '@/components/query-error';
@@ -39,9 +39,9 @@ export function Duplicates({
   const groups = useDuplicates(ignored, across);
   const actions = useIssueActions('duplicate');
   const roots = useLibraryRoots();
-  const libraries = useLibraries();
+  const bookLibraries = useBookLibraries();
   // One tree whatever the state, so the switch keeps its focus while the list loads.
-  const several = (libraries.data?.filter((l) => l.kind !== 'podcasts').length ?? 0) > 1;
+  const several = (bookLibraries?.length ?? 0) > 1;
   return (
     <div className="flex flex-col gap-4">
       {several ? <AcrossToggle on={across} onChange={onAcrossChange} /> : null}
