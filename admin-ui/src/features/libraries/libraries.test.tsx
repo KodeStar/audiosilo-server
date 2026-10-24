@@ -705,6 +705,72 @@ describe('libraries, 2.4.0 fixes', () => {
     expect(sent).toHaveProperty('scan_schedule');
   });
 
+  it('keeps a library config.yaml declares from being deleted, with the reason (server#176)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+        'DELETE /admin/libraries/2': { status: 204 },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    const locked = await screen.findByRole('menuitem', { name: /Delete library\.\.\./ });
+    expect(locked).toHaveAttribute('aria-disabled', 'true');
+    expect(within(locked).getByText(/remove it there and restart/)).toBeInTheDocument();
+    await user.click(locked);
+    expect(screen.queryByRole('dialog', { name: 'Delete Fiction?' })).toBeNull();
+    await user.keyboard('{Escape}');
+    // A library the console added still deletes.
+    const kids = screen.getByRole('listitem', { name: 'Kids' });
+    await user.click(within(kids).getByRole('button', { name: 'Actions for Kids' }));
+    const item = await screen.findByRole('menuitem', { name: 'Delete library...' });
+    expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    await user.click(item);
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Kids?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Kids');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
+    expect(await screen.findByText('Deleted Kids')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/libraries/1')).toBe(false);
+  });
+
+  it("says why the server refused a config library's delete the console didn't know of, and locks it", async () => {
+    // The console read the setup before the config declared Fiction.
+    let declared: string[] = [];
+    const calls = mockFetch(
+      routes({
+        'GET /admin/setup': () => ({ body: setupEnvelope({}, { config_libraries: declared }) }),
+        'DELETE /admin/libraries/1': () => {
+          declared = ['Fiction'];
+          return {
+            status: 409,
+            body: {
+              error: "This library is declared in the server's config.",
+              code: 'config_library',
+            },
+          };
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Fiction?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Fiction');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
+    // The delete's own reason, not the rename's "Change them there".
+    expect(
+      await within(dialog).findByText(/^Declared in config\.yaml .*remove it there and restart/),
+    ).toBeInTheDocument();
+    // The setup is read again: the card now says where the library comes from.
+    expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
+  });
+
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
     mockFetch(
       routes({

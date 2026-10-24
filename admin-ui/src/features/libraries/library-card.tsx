@@ -242,9 +242,22 @@ export function LibraryCard({
                 {t('libraries.menu.exportPaths')}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={() => setDialog('delete')}>
+              {/* A library the config declares would come back, empty, at the
+                  next start (the server refuses it, 409 config_library). */}
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={fromConfig}
+                onClick={() => setDialog('delete')}
+              >
                 <Trash2 aria-hidden="true" />
-                {t('libraries.menu.delete')}
+                <span className="flex flex-col">
+                  {t('libraries.menu.delete')}
+                  {fromConfig ? (
+                    <span className="max-w-[240px] text-[12px] text-muted-foreground">
+                      {t('libraries.menu.deleteConfigLocked')}
+                    </span>
+                  ) : null}
+                </span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -94,6 +94,12 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	// Backups and notifications as the launcher wires them (deliveries need Run;
 	// tests that send start it).
 	backups := backup.New(db, cfg.DataDir, "", slog.Default())
+	// A backup a request started (POST /admin/backups answers before it is made)
+	// finishes before the data folder goes: cleanups run last-registered first,
+	// so this runs after the server closes and before t.TempDir's removal
+	// (server#189: one outliving its test failed mid-write, or left the folder
+	// not empty to remove).
+	t.Cleanup(backups.Wait)
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	a.SetBridge(bridge.New(db, time.Now))

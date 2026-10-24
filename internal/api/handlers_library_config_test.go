@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -96,5 +97,64 @@ func TestUpdateConfigLibrary(t *testing.T) {
 		if code, _ := patch(memberTok, id, `{"name":"Mine"}`); code != http.StatusForbidden {
 			t.Errorf("member PATCH library %d = %d, want 403", id, code)
 		}
+	}
+}
+
+// A library config.yaml declares can't be deleted from the console (server#176):
+// the next start would add it back empty, everyone's progress in it gone. DELETE
+// answers 409 config_library and drops nothing; a library the console added
+// still deletes, and so does any library on a server whose config declares none.
+func TestDeleteConfigLibrary(t *testing.T) {
+	t.Parallel()
+	kidsRoot := t.TempDir()
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.Libraries = []config.Library{{Name: "Kids", Root: kidsRoot}}
+	})
+	adminTok, memberTok := opsTokens(t, e)
+	ctx := context.Background()
+	kids, err := e.cat.UpsertLibraryByName(ctx, catalog.Library{Name: "Kids", Root: kidsRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Own", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	del := func(tok string, id int64) (int, string) {
+		t.Helper()
+		resp, out := e.do(t, "DELETE", fmt.Sprintf("/api/v1/admin/libraries/%d", id), tok, "")
+		return resp.StatusCode, out
+	}
+
+	// Denied: the config library, and a member for either.
+	if code, out := del(adminTok, kids.ID); code != http.StatusConflict || !strings.Contains(out, `"code":"config_library"`) {
+		t.Errorf("DELETE config library = %d %s, want 409 config_library", code, out)
+	}
+	for _, id := range []int64{kids.ID, own.ID} {
+		if code, _ := del(memberTok, id); code != http.StatusForbidden {
+			t.Errorf("member DELETE library %d = %d, want 403", id, code)
+		}
+	}
+	if got, err := e.cat.GetLibrary(ctx, kids.ID); err != nil || got.Name != "Kids" {
+		t.Errorf("after the refusal: %v %v, want Kids kept", got, err)
+	}
+
+	// Allowed: a library the console added.
+	if code, out := del(adminTok, own.ID); code != http.StatusNoContent {
+		t.Errorf("DELETE console library = %d %s, want 204", code, out)
+	}
+	if _, err := e.cat.GetLibrary(ctx, own.ID); !errors.Is(err, catalog.ErrNotFound) {
+		t.Errorf("console library after delete: %v, want not found", err)
+	}
+
+	// Allowed: a library by that name on a server whose config declares none.
+	plain := newTestEnv(t)
+	lib, err := plain.cat.CreateLibrary(ctx, catalog.Library{Name: "Kids", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/api/v1/admin/libraries/%d", lib.ID)
+	if resp, out := plain.do(t, "DELETE", path, adminSession(t, plain), ""); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("DELETE with no config libraries = %d %s, want 204", resp.StatusCode, out)
 	}
 }
