@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Trash2 } from 'lucide-react';
-import { api } from '@/api/client';
-import { invalidateLibraries } from '@/api/hooks';
+import { ApiError, api } from '@/api/client';
+import { invalidateLibraries, keys } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { formatNumber } from '@/lib/format';
@@ -36,7 +36,19 @@ export function DeleteLibraryDialog({
       confirmLabel={t('libraries.delete.confirm')}
       typeToConfirm={l.name}
       onConfirm={async () => {
-        await api.deleteLibrary(l.id);
+        try {
+          await api.deleteLibrary(l.id);
+        } catch (err) {
+          // The config declares it, which the console's copy of the setup (read
+          // once) didn't know yet: say why in the delete's own words (the code's
+          // usual copy is about a rename), and read the setup again so the card
+          // locks its Delete.
+          if (err instanceof ApiError && err.code === 'config_library') {
+            void qc.invalidateQueries({ queryKey: keys.setup });
+            throw new ApiError(err.status, t('libraries.menu.deleteConfigLocked'));
+          }
+          throw err;
+        }
         invalidateLibraries(qc);
         toast.add({
           title: t('libraries.toast.deleted', { name: l.name }),

@@ -60,6 +60,8 @@ trusted_proxies: []                                 # [AUDIOSILO_TRUSTED_PROXIES
 
 # Allowed browser origins for CORS. Empty = no cross-origin CORS headers granted
 # (native apps and same-origin web clients still work). "*" disables the check.
+# Once set, covers and audio answer with a cross-origin resource policy, so a web
+# player on another site can show and play them.
 cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
 
 # Maximum request/upload body size in bytes (uploads land in Phase B).

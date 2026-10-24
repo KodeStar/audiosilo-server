@@ -253,16 +253,30 @@ func TestPodcastStreamWaitEnvelopeAndNearCompletion(t *testing.T) {
 		t.Fatalf("near completion %d bytes %d", resp.StatusCode, len(body))
 	}
 }
+
+// A listener who leaves while the stream waits keeps the fetch they asked for.
+// The budget is a minute here: the wait ends when the listener leaves (After
+// cancels), and the 2 s wall-clock default ran out before the request was
+// queued on a loaded machine (server#189).
 func TestPodcastWaiterDisconnectKeepsIntent(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	path := f.Episodes[2].Path
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	b.api.podcastDemand.After = func(time.Duration) (<-chan time.Time, func()) { cancel(); return make(chan time.Time), func() {} }
+	b.api.podcastDemand.Budget = time.Minute
+	var waited atomic.Bool
+	b.api.podcastDemand.After = func(time.Duration) (<-chan time.Time, func()) {
+		waited.Store(true)
+		cancel()
+		return make(chan time.Time), func() {}
+	}
 	req := httptest.NewRequest("GET", podcastRoute(b.lib.ID, "stream?path="+url.QueryEscape(path)), nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+b.userTok)
 	req.Header.Set(auth.ClientHeader, "AudioSilo/dev (web)")
 	b.srv.Config.Handler.ServeHTTP(httptest.NewRecorder(), req)
+	if !waited.Load() {
+		t.Fatal("the stream never waited, so the listener never left during the wait")
+	}
 	var n int
 	if err := b.db.QueryRowContext(context.Background(), `SELECT count(*) FROM bridge_jobs WHERE kind='podcast.fetch' AND rel_path=? AND state='queued' AND cancel_requested=0`, path).Scan(&n); err != nil || n != 1 {
 		t.Fatal(n, err)

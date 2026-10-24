@@ -73,10 +73,13 @@ export function FoldersPage() {
       ) : !libraries.data ? (
         <div className="skel h-[320px] rounded-xl" role="status" aria-label={t('common.loading')} />
       ) : !library ? (
+        // Podcast libraries only: there are libraries, just none with folders to read.
         <EmptyState
           icon={LibraryBig}
-          title={t('folders.noLibraries.title')}
-          body={t('folders.noLibraries.body')}
+          title={t(
+            libraries.data.length ? 'folders.podcastsOnly.title' : 'folders.noLibraries.title',
+          )}
+          body={t(libraries.data.length ? 'folders.podcastsOnly.body' : 'folders.noLibraries.body')}
           action={
             <Link
               to="/library/{-$section}"

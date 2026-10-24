@@ -71,6 +71,8 @@ import {
   leaveOutStale,
   togglePick,
   togglePickRange,
+  withId,
+  withoutId,
   type Picks,
 } from './bulk-match-model';
 
@@ -354,7 +356,10 @@ function ReviewDialog({
   // The book being matched by hand, in a dialog over the review (which keeps its
   // tab, picks and loaded pages underneath).
   const [byHand, setByHand] = useState<MatchRunItem>();
-  // The ids matched by hand since the review opened: a Shift-click range passes over them.
+  // The ids matched by hand whose rows wait for their list to read again: a
+  // Shift-click range passes over them until it has (their rows then say what
+  // the server makes of them: no checkbox once matched since, a checkbox again
+  // otherwise).
   const [matchedByHand, setMatchedByHand] = useState<ReadonlySet<number>>(() => new Set());
   // Each opening starts afresh (the run may have changed since).
   const [wasOpen, setWasOpen] = useState(open);
@@ -371,17 +376,21 @@ function ReviewDialog({
   // A book matched by hand leaves the apply, and the Health page under the review
   // reads its issues again. A match run's book that took an ASIN or ISBN is one
   // the server now calls matched since (matchrun.matchedSince): its row reads so
-  // at once, without asking again for every page the review has loaded. Any
-  // other (another mode, an applied item, a hand match that took no identifier)
-  // the server says what applying would do now.
+  // at once (no checkbox, so a range passes over it with nothing to wait for),
+  // without asking again for every page the review has loaded. Any other
+  // (another mode, an applied item, a hand match that took no identifier) the
+  // server says what applying would do now, and its row may show a checkbox
+  // until the list has read again.
   const onMatchedByHand = (item: MatchRunItem) => {
     setPicks((p) => leaveOut(p, item));
-    setMatchedByHand((ids) => new Set(ids).add(item.id));
     invalidateIssues(qc);
     const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
     if (run.mode !== 'match' || item.applied || !(book?.asin || book?.isbn)) {
-      void qc.invalidateQueries({ queryKey: itemsKey });
+      setMatchedByHand((ids) => withId(ids, item.id));
+      void qc
+        .invalidateQueries({ queryKey: itemsKey })
+        .then(() => setMatchedByHand((ids) => withoutId(ids, item.id)));
       return;
     }
     const now = { title: book.title, author: book.author };
@@ -616,11 +625,13 @@ function ItemList({
         ))}
       </ul>
       {list.hasNextPage ? (
+        // Not while the list reads again either: a next page then would cancel that
+        // read, and the pages already loaded would keep what they said before.
         <Button
           variant="outline"
           className="self-center"
           onClick={() => void list.fetchNextPage()}
-          disabled={list.isFetchingNextPage}
+          disabled={list.isFetching}
         >
           {list.isFetchingNextPage ? t('common.loading') : t('health.more')}
         </Button>

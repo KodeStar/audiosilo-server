@@ -111,13 +111,9 @@ func TestBackupLifecycle(t *testing.T) {
 	if resp, body := e.do(t, "POST", "/api/v1/admin/backups", adminTok, ""); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("create = %d %s", resp.StatusCode, body)
 	}
-	var env backupsEnv
-	for range 100 {
-		if env = e.backupList(t, adminTok); len(env.Backups) == 1 && !env.Status.Running {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The backup itself, not a deadline (server#189).
+	e.backups.Wait()
+	env := e.backupList(t, adminTok)
 	if len(env.Backups) != 1 || env.Backups[0].Kind != "manual" || env.Status.Last == nil || !env.Status.Last.OK {
 		t.Fatalf("after create = %+v", env)
 	}

@@ -301,6 +301,22 @@ describe('folders', () => {
     expect(await screen.findByRole('treeitem', { name: 'A' })).toBeInTheDocument();
   });
 
+  it('says podcast libraries have no folders when there are only those (server#194)', async () => {
+    mockFetch(routes(withPodcastLibrary([])));
+    renderApp('/library/folders');
+    expect(
+      await screen.findByRole('heading', { name: 'No book libraries yet' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/their shows are browsed in the player/)).toBeInTheDocument();
+    expect(screen.queryByText('No libraries yet')).toBeNull();
+  });
+
+  it('says there are no libraries yet when there are none', async () => {
+    mockFetch(routes({ 'GET /admin/libraries': { body: { libraries: [] } } }));
+    renderApp('/library/folders');
+    expect(await screen.findByRole('heading', { name: 'No libraries yet' })).toBeInTheDocument();
+  });
+
   it('says so when a library has no folders', async () => {
     mockFetch(
       routes({
