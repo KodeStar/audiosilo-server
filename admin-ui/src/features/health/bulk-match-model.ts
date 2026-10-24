@@ -83,7 +83,9 @@ export function togglePick(picks: Picks, item: MatchRunItem): Picks {
 /**
  * A Shift-click on `item`: every pickable item from the last one clicked
  * (`anchor`, an item id) to this one, in `shown` (the tab's list as shown),
- * takes the state this one takes; the ones in between with no checkbox are
+ * takes the state this one takes; the ones in between with no checkbox, or
+ * matched by hand from the review (`byHand`, ids: leaveOut took them out and
+ * their rows may still show a checkbox until the list reads again), are
  * skipped. Just this one flips when the anchor isn't in the list (none yet,
  * or clicked on another tab).
  */
@@ -92,12 +94,13 @@ export function togglePickRange(
   shown: readonly MatchRunItem[],
   anchor: number | undefined,
   item: MatchRunItem,
+  byHand: ReadonlySet<number> = new Set(),
 ): Picks {
   const chosen = !isChosen(item, picks);
   const exclude = new Set(picks.exclude);
   const include = new Set(picks.include);
   for (const it of rangeOf(shown, anchor, item, (x) => x.id)) {
-    if (!isPickable(it)) continue;
+    if (!isPickable(it) || (it !== item && byHand.has(it.id))) continue;
     // A confident one is in unless left out; a review one is out unless put in.
     const [ids, on] = it.outcome === 'auto' ? [exclude, !chosen] : [include, chosen];
     if (on) ids.add(it.id);

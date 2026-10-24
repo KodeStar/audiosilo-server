@@ -354,6 +354,8 @@ function ReviewDialog({
   // The book being matched by hand, in a dialog over the review (which keeps its
   // tab, picks and loaded pages underneath).
   const [byHand, setByHand] = useState<MatchRunItem>();
+  // The ids matched by hand since the review opened: a Shift-click range passes over them.
+  const [matchedByHand, setMatchedByHand] = useState<ReadonlySet<number>>(() => new Set());
   // Each opening starts afresh (the run may have changed since).
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
@@ -363,6 +365,7 @@ function ReviewDialog({
       setPicks(NO_PICKS);
       setScope('fill');
       setByHand(undefined);
+      setMatchedByHand(new Set());
     }
   }
   // A book matched by hand leaves the apply, and the Health page under the review
@@ -373,6 +376,7 @@ function ReviewDialog({
   // the server says what applying would do now.
   const onMatchedByHand = (item: MatchRunItem) => {
     setPicks((p) => leaveOut(p, item));
+    setMatchedByHand((ids) => new Set(ids).add(item.id));
     invalidateIssues(qc);
     const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
@@ -494,6 +498,7 @@ function ReviewDialog({
                 scope={repick ? 'ids' : scope}
                 picks={picks}
                 onPick={setPicks}
+                matchedByHand={matchedByHand}
                 onMatchByHand={setByHand}
                 onLoaded={onLoaded}
               />
@@ -535,6 +540,7 @@ function ItemList({
   scope,
   picks,
   onPick,
+  matchedByHand,
   onMatchByHand,
   onLoaded,
 }: {
@@ -543,6 +549,8 @@ function ItemList({
   scope: MatchScope;
   picks: Picks;
   onPick: (change: (picks: Picks) => Picks) => void;
+  /** Ids matched by hand from the review, which a range leaves as they are. */
+  matchedByHand: ReadonlySet<number>;
   onMatchByHand: (item: MatchRunItem) => void;
   /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
   onLoaded: (items: MatchRunItem[]) => void;
@@ -560,7 +568,9 @@ function ItemList({
   const toggle = (item: MatchRunItem, shift: boolean) => {
     const from = anchor.current;
     anchor.current = item.id;
-    onPick((p) => (shift ? togglePickRange(p, items, from, item) : togglePick(p, item)));
+    onPick((p) =>
+      shift ? togglePickRange(p, items, from, item, matchedByHand) : togglePick(p, item),
+    );
   };
   if (list.isError) {
     return (

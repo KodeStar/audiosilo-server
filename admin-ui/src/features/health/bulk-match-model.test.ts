@@ -190,6 +190,14 @@ describe('Shift-click ranges', () => {
     expect([...picks.exclude].sort()).toEqual([1, 2]);
     expect(picks.include.size).toBe(0);
   });
+
+  it('passes over a book matched by hand, which the apply leaves alone', () => {
+    // Confident 2 matched by hand (left out); 1 and 6 out, then Shift on 6 from 1: back in.
+    const out = togglePick(togglePick(leaveOut(NO_PICKS, shown[1]), shown[0]), shown[5]);
+    const range = togglePickRange(out, shown, 1, shown[5], new Set([2]));
+    expect(chosen(range)).toEqual([1, 5, 6]);
+    expect([...range.exclude]).toEqual([2]);
+  });
 });
 
 describe('regions', () => {
