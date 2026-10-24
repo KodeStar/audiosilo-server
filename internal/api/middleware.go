@@ -309,11 +309,19 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			return
 		}
 		cred := credentialFrom(ctx)
-		if cred.Kind == auth.KindCast {
-			// The receiver is a web app on another site (gstatic.com) loading
-			// these as <audio>/<img>, no-cors requests that secureHeaders'
-			// same-site resource policy would make the browser block. Only a
-			// cast token's answers, which reach one book's media, opt out.
+		if cred.Kind == auth.KindCast || a.config().corsOn() {
+			// secureHeaders' same-site resource policy makes the browser block
+			// a no-cors <img>/<audio> load from another site, and two kinds of
+			// caller are one. A cast receiver is a web app on gstatic.com; a
+			// player the operator serves on another site lists its origin in
+			// cors_origins (server#188). No-cors requests carry no Origin to
+			// check against that list, so the answer opts out for any caller
+			// once one is configured. That is safe because the policy guards
+			// against another site loading a resource with the browser's
+			// ambient credentials, and media has none: authenticate takes the
+			// token only from ?token= or Authorization (bearerToken; no cookie
+			// is ever read), so a page that can load the answer already holds
+			// the credential that fetches it anywhere.
 			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		}
 		// Every credential is a tokens row, so its id is its bucket.

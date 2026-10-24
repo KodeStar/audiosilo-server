@@ -1414,9 +1414,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   context then carries the token's user and a `Credential{Kind: auth.KindCast, ID: <its tokens id>,
   DeviceID: <the sender's token id>, Book: <its grant's path>}`, and the handler's `authorizedPath` checks the person's
   CURRENT scope as for every request (a revoked share is a 403). `mediaAuth` sets
-  `Cross-Origin-Resource-Policy: cross-origin` only when the credential is a cast token (the
+  `Cross-Origin-Resource-Policy: cross-origin` when the credential is a cast token (the
   receiver, a gstatic.com web app, loads them as no-cors `<audio>`/`<img>`; `secureHeaders'`
-  `same-site` would make the browser block them); the media limiter keys every credential by its
+  `same-site` would make the browser block them), and on every authenticated media answer once
+  `cors_origins` is set (server#188: a player on another site loads covers the same way; a no-cors
+  request has no Origin to check, and media takes only an explicit token, never a cookie, so the
+  policy's ambient-credential guard has nothing to guard; a failed auth and every non-media route
+  stay `same-site`); the media limiter keys every credential by its
   token id (one id space, so a cast token has its own bucket). A cast token is never a device:
   `ListDevices` (`/me/devices`, `/admin/devices`) and the device sign-outs take only session and
   API-key kinds, like pairing tokens. **Transcode**: a cast token authenticates `?transcode=1&t=`
