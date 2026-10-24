@@ -4,12 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
-	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
@@ -23,17 +21,10 @@ import (
 // credential), and every non-media route.
 func TestMediaResourcePolicy(t *testing.T) {
 	t.Parallel()
-	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	const book = "Will Wight/Cradle/01 - Unsouled.m4b"
 	env := func(origins []string) (*testEnv, string, string) {
 		e := newTestEnvWith(t, func(c *config.Config) { c.CORSOrigins = origins })
-		ctx := context.Background()
-		lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
-		if err != nil {
-			t.Fatal(err)
-		}
-		scanFixture(t, e, lib)
-		tok, err := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+		lib := newFixtureLibrary(t, e)
+		tok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +32,7 @@ func TestMediaResourcePolicy(t *testing.T) {
 	}
 	on, onLib, onTok := env([]string{"http://localhost:8081"})
 	off, offLib, offTok := env(nil)
-	q := "?path=" + url.QueryEscape(book)
+	q := "?path=" + url.QueryEscape(cradlePart)
 	cookie := map[string]string{"Cookie": "token=" + onTok + "; session=" + onTok}
 
 	for _, c := range []struct {

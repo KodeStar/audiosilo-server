@@ -358,16 +358,6 @@ function ReviewDialog({
   // over them until their list reads again (its rows then say what the server
   // makes of them: no checkbox once matched since, a checkbox again otherwise).
   const [matchedByHand, setMatchedByHand] = useState<ReadonlySet<number>>(() => new Set());
-  const onReloaded = useCallback(
-    (items: MatchRunItem[]) =>
-      setMatchedByHand((ids) => {
-        if (!items.some((it) => ids.has(it.id))) return ids;
-        const left = new Set(ids);
-        for (const it of items) left.delete(it.id);
-        return left;
-      }),
-    [],
-  );
   // Each opening starts afresh (the run may have changed since).
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
@@ -393,7 +383,13 @@ function ReviewDialog({
     const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
     if (run.mode !== 'match' || item.applied || !(book?.asin || book?.isbn)) {
-      void qc.invalidateQueries({ queryKey: itemsKey });
+      void qc.invalidateQueries({ queryKey: itemsKey }).then(() =>
+        setMatchedByHand((ids) => {
+          const left = new Set(ids);
+          left.delete(item.id);
+          return left;
+        }),
+      );
       return;
     }
     const now = { title: book.title, author: book.author };
@@ -513,7 +509,6 @@ function ReviewDialog({
                 matchedByHand={matchedByHand}
                 onMatchByHand={setByHand}
                 onLoaded={onLoaded}
-                onReloaded={onReloaded}
               />
             </DialogBody>
             <DialogFooter>
@@ -556,7 +551,6 @@ function ItemList({
   matchedByHand,
   onMatchByHand,
   onLoaded,
-  onReloaded,
 }: {
   run: MatchRun;
   outcome: MatchOutcome;
@@ -568,8 +562,6 @@ function ItemList({
   onMatchByHand: (item: MatchRunItem) => void;
   /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
   onLoaded: (items: MatchRunItem[]) => void;
-  /** Each time the whole list has been read again (not a next page): its items. */
-  onReloaded: (items: MatchRunItem[]) => void;
 }) {
   const { t } = useTranslation();
   const list = useMatchRunItems(run.id, outcome);
@@ -579,13 +571,6 @@ function ItemList({
   useEffect(() => {
     if (items.length) onLoaded(items);
   }, [items, onLoaded]);
-  // A refetch (an invalidation reads every loaded page again) that has landed.
-  const reloading = list.isRefetching && !list.isFetchingNextPage;
-  const wasReloading = useRef(false);
-  useEffect(() => {
-    if (wasReloading.current && !reloading && list.isSuccess) onReloaded(items);
-    wasReloading.current = reloading;
-  }, [reloading, list.isSuccess, items, onReloaded]);
   // The last item clicked, where a Shift-click's range starts (each tab its own list).
   const anchor = useRef<number | undefined>(undefined);
   const toggle = (item: MatchRunItem, shift: boolean) => {

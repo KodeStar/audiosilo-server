@@ -52,9 +52,10 @@ func (d Demand) timer(t time.Duration) (<-chan time.Time, func()) {
 // Fetch queues authorized work and returns an opened committed generation if it
 // becomes ready. The caller has already checked the exact path and read scope.
 func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by int64, noNew bool) (*os.File, *feed.Fetch, bridge.FetchStatus, error) {
-	deadline := d.now().Add(d.budget())
+	wait := d.budget()
+	deadline := d.now().Add(wait)
 	// Leave a small part of the same budget for the final presence/status check.
-	budget, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.budget())
+	budget, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	status := bridge.FetchStatus{State: "absent"}
 	pin, err := d.Catalog.PodcastPin(budget, lib.ID, rel)

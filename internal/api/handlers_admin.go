@@ -1006,19 +1006,19 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), id) // read before it's gone
-	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+	var name string // read before it's gone
+	switch lib, err := a.cat.GetLibrary(r.Context(), id); {
+	case err == nil && a.configLibrary(lib.Name):
+		writeErrorCode(w, http.StatusConflict, "config_library",
+			"This library is declared in the server's config, so deleting it here would only empty it until the next start. Remove it from config.yaml (or the app that runs the server) and restart.")
+		return
+	case err == nil:
+		name = lib.Name
+	case errors.Is(err, catalog.ErrNotFound):
+		name = orID("", err, id)
+	default:
 		a.writeCatalogError(w, err, "delete library failed", "could not delete library", "library", id)
 		return
-	}
-	name := orID("", err, id)
-	if lib != nil {
-		if a.configLibrary(lib.Name) {
-			writeErrorCode(w, http.StatusConflict, "config_library",
-				"This library is declared in the server's config, so deleting it here would only empty it until the next start. Remove it from config.yaml (or the app that runs the server) and restart.")
-			return
-		}
-		name = lib.Name
 	}
 	if err := a.cat.DeleteLibrary(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete library")
