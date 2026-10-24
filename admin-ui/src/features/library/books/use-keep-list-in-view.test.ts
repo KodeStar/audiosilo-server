@@ -38,6 +38,8 @@ function setup() {
 }
 
 afterEach(() => {
+  top = 0;
+  scrollY = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -109,12 +111,39 @@ describe('keep list in view: a landing the page was too short for', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves a reader who scrolled with no wheel or key (a scrollbar drag)', () => {
+    const { scrollTo, ro } = clamped();
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(5000);
+    scrollY = 40;
+    ro.fire();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(ro.disconnect).toHaveBeenCalled();
+  });
+
+  it('lands again when the page got shorter and pulled the scroll up (not the reader)', () => {
+    const { scrollTo, ro } = clamped();
+    // jsdom's window is 768 tall: the page's bottom is now at a scroll of 40.
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(808);
+    scrollY = 40;
+    ro.fire();
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(ro.disconnect).not.toHaveBeenCalled();
+  });
+
   it('takes a scrolling key as the reader scrolling, but not typing in a field', () => {
     const { ro } = clamped();
     const field = document.createElement('input');
     document.body.append(field);
     field.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
     field.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    // Nor a key a widget took for itself (a menu's arrows).
+    const taken = new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      bubbles: true,
+      cancelable: true,
+    });
+    taken.preventDefault();
+    document.body.dispatchEvent(taken);
     expect(ro.disconnect).not.toHaveBeenCalled();
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
     expect(ro.disconnect).toHaveBeenCalled();
@@ -126,6 +155,12 @@ describe('keep list in view: a landing the page was too short for', () => {
     vi.advanceTimersByTime(4999);
     expect(ro.disconnect).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
+    expect(ro.disconnect).toHaveBeenCalled();
+  });
+
+  it('takes a press anywhere as the reader taking over', () => {
+    const { ro } = clamped();
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     expect(ro.disconnect).toHaveBeenCalled();
   });
 

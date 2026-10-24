@@ -29,14 +29,26 @@ function land(el: Element): boolean {
 const SETTLE_MS = 5000;
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
 
-/** A key that scrolls the page: not one typed into a field. */
+/** A key that scrolls the page: not one typed into a field, nor one a widget took (a menu's arrows). */
 function scrollKey(e: KeyboardEvent): boolean {
-  if (!SCROLL_KEYS.has(e.key)) return false;
+  if (e.defaultPrevented || !SCROLL_KEYS.has(e.key)) return false;
   const t = e.target;
   return !(
     t instanceof HTMLElement &&
     (t.isContentEditable || t.matches('input, textarea, select, [role="combobox"]'))
   );
+}
+
+/**
+ * Whether the page moved off where the last landing left it for a reason other
+ * than the browser pulling it up to the bottom of a page that got shorter: the
+ * reader's scroll that no listener saw (a scrollbar drag, a Tab or find-in-page
+ * jump).
+ */
+function movedSince(landedAt: number): boolean {
+  const y = window.scrollY;
+  const bottom = document.documentElement.scrollHeight - window.innerHeight;
+  return Math.abs(y - landedAt) >= 1 && y < bottom - 1;
 }
 
 /**
@@ -49,9 +61,12 @@ export function landAndSettle(el: Element): () => void {
   if (land(el)) return () => {};
   const watch = new AbortController();
   const { signal } = watch;
+  let landedAt = window.scrollY;
   const ro = new ResizeObserver(() => {
     // A size change already queued when the watch stopped is not a reason to land.
-    if (!signal.aborted && land(el)) stop();
+    if (signal.aborted) return;
+    if (movedSince(landedAt) || land(el)) return stop();
+    landedAt = window.scrollY;
   });
   const timer = window.setTimeout(stop, SETTLE_MS);
   function stop() {
@@ -61,7 +76,6 @@ export function landAndSettle(el: Element): () => void {
   }
   const opts = { signal, passive: true };
   window.addEventListener('wheel', stop, opts);
-  window.addEventListener('touchstart', stop, opts);
   window.addEventListener('pointerdown', stop, opts);
   window.addEventListener('keydown', (e) => scrollKey(e) && stop(), opts);
   ro.observe(el.parentElement ?? document.body);
@@ -85,8 +99,9 @@ export function useKeepListInView(update: Update, search: LibrarySearch) {
   const current = useRef(search);
   useLayoutEffect(() => {
     current.current = search;
-    if (!pin.current || !anchor.current) return;
+    const pinned = pin.current;
     pin.current = false;
+    if (!pinned || !anchor.current) return;
     settling.current?.();
     settling.current = landAndSettle(anchor.current);
   }, [search]);
