@@ -175,46 +175,49 @@ describe('books: podcast libraries', () => {
 });
 
 describe('books: scroll', () => {
-  // Where the list's top is: the page scrolled past it, or above it.
+  // Where the list's top is: the page scrolled to 1800 and the list's top past
+  // the header (no CSS here, so the anchor's scroll margin reads 0), or below it.
   function placeList(top: number) {
     const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect');
     rect.mockReturnValue({ top } as DOMRect);
-    const into = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(1800);
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
-    return { into, scrollTo };
+    return scrollTo;
   }
   afterEach(() => vi.restoreAllMocks());
-  const toTop = (into: ReturnType<typeof placeList>['into']) =>
-    into.mock.calls.filter(([opts]) => (opts as ScrollIntoViewOptions)?.block === 'start');
+  // The keep-in-view's landings: a scroll by the list top's offset, named by top alone.
+  const landings = (scrollTo: ReturnType<typeof placeList>) =>
+    scrollTo.mock.calls.filter(([opts]) => JSON.stringify(opts) === JSON.stringify({ top: 1000 }));
 
   it('brings the list back to its top after a view switch made scrolled past it', async () => {
     mockFetch(bookRoutes());
     const { router } = renderApp('/library');
     await allBooks();
-    const { into, scrollTo } = placeList(-800);
+    const scrollTo = placeList(-800);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Table' }));
     await screen.findByRole('table', { name: 'All books' });
     expect(router.state.location.search).toEqual({ view: 'table' });
-    expect(toTop(into)).toHaveLength(1);
+    expect(landings(scrollTo)).toHaveLength(1);
     // Not the router's reset to the top of the page (the table's virtualizer
     // scrolls to where the page already is, which names no left).
     expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 0, left: 0 }));
     // A sort is a change to the list too.
     await user.selectOptions(screen.getByRole('combobox', { name: 'Sort' }), 'added');
     await waitFor(() => expect(router.state.location.search).toMatchObject({ sort: 'added' }));
-    await waitFor(() => expect(toTop(into)).toHaveLength(2));
+    await waitFor(() => expect(landings(scrollTo)).toHaveLength(2));
   });
 
   it('leaves the page where it is when the change is made above the list', async () => {
     mockFetch(bookRoutes());
     const { router } = renderApp('/library');
     await allBooks();
-    const { into, scrollTo } = placeList(400);
+    const scrollTo = placeList(400);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Table' }));
     await screen.findByRole('table', { name: 'All books' });
     expect(router.state.location.search).toEqual({ view: 'table' });
-    expect(toTop(into)).toHaveLength(0);
+    // No landing (1800 + 400 would put the list's top under the header).
+    expect(scrollTo).not.toHaveBeenCalledWith({ top: 2200 });
     expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 0, left: 0 }));
   });
 });
