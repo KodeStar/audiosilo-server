@@ -15,9 +15,14 @@ export function offsetFromLanding(el: Element): number {
   return el.getBoundingClientRect().top - margin;
 }
 
-/** Scrolls the page so `el` sits on its landing spot (the browser clamps to what the page can reach). */
-function land(el: Element) {
-  window.scrollTo({ top: window.scrollY + offsetFromLanding(el) });
+/**
+ * Scrolls the page so `el` sits on its landing spot (the browser clamps to what
+ * the page can reach). Returns whether it got there.
+ */
+function land(el: Element): boolean {
+  const target = window.scrollY + offsetFromLanding(el);
+  window.scrollTo({ top: target });
+  return Math.abs(window.scrollY - target) < 1;
 }
 
 // How long a landing that came up short waits for the page to grow to reach it.
@@ -26,11 +31,12 @@ const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'Ar
 
 /** A key that scrolls the page: not one typed into a field. */
 function scrollKey(e: KeyboardEvent): boolean {
+  if (!SCROLL_KEYS.has(e.key)) return false;
   const t = e.target;
-  const editable =
+  return !(
     t instanceof HTMLElement &&
-    (t.isContentEditable || t.matches('input, textarea, select, [role="combobox"]'));
-  return SCROLL_KEYS.has(e.key) && !editable;
+    (t.isContentEditable || t.matches('input, textarea, select, [role="combobox"]'))
+  );
 }
 
 /**
@@ -40,33 +46,24 @@ function scrollKey(e: KeyboardEvent): boolean {
  * until it gets there, the reader scrolls, or SETTLE_MS pass. Returns the stop.
  */
 export function landAndSettle(el: Element): () => void {
-  land(el);
-  if (Math.abs(offsetFromLanding(el)) < 1) return () => {};
-  let stopped = false;
-  const onKey = (e: KeyboardEvent) => {
-    if (scrollKey(e)) stop();
-  };
+  if (land(el)) return () => {};
+  const watch = new AbortController();
+  const { signal } = watch;
   const ro = new ResizeObserver(() => {
     // A size change already queued when the watch stopped is not a reason to land.
-    if (stopped) return;
-    land(el);
-    if (Math.abs(offsetFromLanding(el)) < 1) stop();
+    if (!signal.aborted && land(el)) stop();
   });
-  const timer = window.setTimeout(() => stop(), SETTLE_MS);
+  const timer = window.setTimeout(stop, SETTLE_MS);
   function stop() {
-    if (stopped) return;
-    stopped = true;
+    watch.abort();
     ro.disconnect();
     window.clearTimeout(timer);
-    window.removeEventListener('wheel', stop);
-    window.removeEventListener('touchstart', stop);
-    window.removeEventListener('pointerdown', stop);
-    window.removeEventListener('keydown', onKey);
   }
-  window.addEventListener('wheel', stop, { passive: true });
-  window.addEventListener('touchstart', stop, { passive: true });
-  window.addEventListener('pointerdown', stop);
-  window.addEventListener('keydown', onKey);
+  const opts = { signal, passive: true };
+  window.addEventListener('wheel', stop, opts);
+  window.addEventListener('touchstart', stop, opts);
+  window.addEventListener('pointerdown', stop, opts);
+  window.addEventListener('keydown', (e) => scrollKey(e) && stop(), opts);
   ro.observe(el.parentElement ?? document.body);
   return stop;
 }

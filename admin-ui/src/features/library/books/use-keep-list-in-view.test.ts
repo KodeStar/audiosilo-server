@@ -4,7 +4,19 @@ import { landAndSettle, offsetFromLanding } from './use-keep-list-in-view';
 // scroll are set by hand, and the ResizeObserver is one the test can fire.
 let top = 0;
 let scrollY = 0;
-let observers: { fire: () => void; disconnect: ReturnType<typeof vi.fn>; target?: Element }[] = [];
+class FakeObserver {
+  disconnect = vi.fn();
+  target?: Element;
+  fire: () => void;
+  constructor(cb: ResizeObserverCallback) {
+    this.fire = () => cb([], this as unknown as ResizeObserver);
+    observers.push(this);
+  }
+  observe(el: Element) {
+    this.target = el;
+  }
+}
+let observers: FakeObserver[] = [];
 
 function setup() {
   const list = document.createElement('div');
@@ -21,21 +33,7 @@ function setup() {
   vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY);
   const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   observers = [];
-  vi.stubGlobal(
-    'ResizeObserver',
-    class {
-      disconnect = vi.fn();
-      target?: Element;
-      constructor(cb: ResizeObserverCallback) {
-        observers.push(this as never);
-        (this as unknown as { fire: () => void }).fire = () =>
-          cb([], this as unknown as ResizeObserver);
-      }
-      observe(el: Element) {
-        this.target = el;
-      }
-    },
-  );
+  vi.stubGlobal('ResizeObserver', FakeObserver);
   return { anchor, list, scrollTo };
 }
 
@@ -94,8 +92,6 @@ describe('keep list in view: a landing the page was too short for', () => {
     const { list, scrollTo, ro } = clamped();
     expect(ro.target).toBe(list);
     // The real view rendered: the page is tall enough now.
-    top = 724;
-    scrollY = 76;
     ro.fire();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 76 + 610 });
     expect(scrollTo).toHaveBeenCalledTimes(2);

@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { deepEqual } from '@tanstack/react-router';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -187,7 +188,7 @@ describe('books: scroll', () => {
   afterEach(() => vi.restoreAllMocks());
   // The keep-in-view's landings: a scroll by the list top's offset, named by top alone.
   const landings = (scrollTo: ReturnType<typeof placeList>) =>
-    scrollTo.mock.calls.filter(([opts]) => JSON.stringify(opts) === JSON.stringify({ top: 1000 }));
+    scrollTo.mock.calls.filter(([opts]) => deepEqual(opts, { top: 1000 }));
 
   it('brings the list back to its top after a view switch made scrolled past it', async () => {
     mockFetch(bookRoutes());
