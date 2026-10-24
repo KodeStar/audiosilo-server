@@ -11,6 +11,7 @@ import {
   leaveOut,
   runFraction,
   togglePick,
+  togglePickRange,
 } from './bulk-match-model';
 
 function run(over: Partial<MatchRun> = {}, counts: Partial<MatchRun['counts']> = {}): MatchRun {
@@ -142,6 +143,52 @@ describe('picks', () => {
     expect(isPickable(item({ matched_since: true }))).toBe(false);
     // One already applied isn't pending, so leaving it out doesn't lower the count.
     expect(leaveOut(NO_PICKS, item({ applied: 'applied' }))).toBe(NO_PICKS);
+  });
+});
+
+describe('Shift-click ranges', () => {
+  // A tab's list as shown: confident ones, one applied and one gone between them.
+  const shown = [
+    item({ id: 1 }),
+    item({ id: 2 }),
+    item({ id: 3, applied: 'applied' }),
+    item({ id: 4, gone: true }),
+    item({ id: 5 }),
+    item({ id: 6 }),
+  ];
+  const chosen = (picks: Parameters<typeof isChosen>[1]) =>
+    shown.filter((it) => isChosen(it, picks)).map((it) => it.id);
+
+  it('gives every pickable item from the last clicked to this one the state this one takes', () => {
+    // Clicked 1 (left out), then Shift on 5: 2 and 5 are left out too, 3 and 4 skipped.
+    const one = togglePick(NO_PICKS, shown[0]);
+    const range = togglePickRange(one, shown, 1, shown[4]);
+    expect(chosen(range)).toEqual([6]);
+    expect([...range.exclude].sort()).toEqual([1, 2, 5]);
+    // Clicked 6 (left out), then Shift back on 2 (out): 2 to 6 go back in.
+    const back = togglePickRange(togglePick(range, shown[5]), shown, 6, shown[1]);
+    expect(chosen(back)).toEqual([2, 5, 6]);
+    expect([...back.exclude]).toEqual([1]);
+  });
+
+  it('puts review items in, as their own toggle does', () => {
+    const review = shown.map((it) => ({ ...it, outcome: 'review' as const }));
+    const range = togglePickRange(togglePick(NO_PICKS, review[5]), review, 6, review[0]);
+    expect([...range.include].sort()).toEqual([1, 2, 5, 6]);
+    expect(range.exclude.size).toBe(0);
+  });
+
+  it('flips just the one item without an anchor in the list', () => {
+    expect(chosen(togglePickRange(NO_PICKS, shown, undefined, shown[4]))).toEqual([1, 2, 6]);
+    // The anchor clicked on another tab isn't in this one.
+    expect(chosen(togglePickRange(NO_PICKS, shown, 99, shown[4]))).toEqual([1, 2, 6]);
+  });
+
+  it('leaves an item already in the state alone, keeping its set as it was', () => {
+    const picks = togglePickRange(NO_PICKS, shown, 1, shown[1]);
+    // Item 2 flips out, so 1 goes out with it; nothing is put in.
+    expect([...picks.exclude].sort()).toEqual([1, 2]);
+    expect(picks.include).toBe(NO_PICKS.include);
   });
 });
 

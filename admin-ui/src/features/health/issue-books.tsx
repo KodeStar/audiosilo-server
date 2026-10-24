@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
@@ -9,7 +9,11 @@ import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { QueryError } from '@/components/query-error';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useSelection } from '@/features/library/books/use-selection';
+import {
+  keepShiftClickFromSelectingText,
+  shiftHeld,
+  useSelection,
+} from '@/features/library/books/use-selection';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
@@ -35,7 +39,8 @@ const PAGE = 50;
 
 /**
  * One category's books (STYLEGUIDE.md "Health triage"): cover, title, why, where,
- * Ignore and the category's one fix; select several for the floating bar. With
+ * Ignore and the category's one fix; select several for the floating bar
+ * (Shift-click selects the run from the last one clicked, as on Books). With
  * `ignored`, the books an admin ignored, each with Show again.
  */
 export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: boolean }) {
@@ -48,7 +53,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
     order: 'desc',
     limit: PAGE,
   });
-  const selection = useSelection();
+  const books = useMemo(() => list.data?.pages.flatMap((p) => p.books ?? []) ?? [], [list.data]);
+  // The list as shown, for Shift-click ranges.
+  const selection = useSelection(books);
   // The books Detect chapters asks about (its confirmation is open while set),
   // and whether they are the bar's selection.
   const [detecting, setDetecting] = useState<{ books: AdminBook[]; fromBar: boolean } | null>(null);
@@ -57,7 +64,6 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   });
   const roots = useLibraryRoots();
   const server = useServerInfo().data;
-  const books = list.data?.pages.flatMap((p) => p.books ?? []) ?? [];
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
   // Rendered whatever the list shows, keyed so each branch's fragment keeps the
   // same instance: a refetch that fails or empties the list mustn't take an
@@ -139,10 +145,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
           const chosenNote = detectChosenNote(fix, b);
           const ownFix = rowFix(fix, b);
           return (
-            <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
+            <li
+              key={refKey(b)}
+              className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]"
+              onMouseDown={keepShiftClickFromSelectingText(selection.selecting)}
+            >
               <Checkbox
                 checked={selection.isSelected(b)}
-                onCheckedChange={() => selection.toggle(b)}
+                onCheckedChange={(_, d) => selection.toggle(b, shiftHeld(d.event))}
                 aria-label={t('health.select', { title: b.title || b.path })}
               />
               <Link

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook, BridgeJob, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
@@ -147,6 +147,40 @@ describe('library health', () => {
         ],
       }),
     );
+  });
+
+  it('Shift-click selects the run of books from the last one clicked, as on Books', async () => {
+    const four = ['One', 'Two', 'Three', 'Four'].map((n) =>
+      adminBook({ path: `A/${n}`, title: `Book ${n}`, has_cover: false }),
+    );
+    mockFetch(
+      routes({
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('issue') === 'no_cover' ? four : [] },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=no_cover');
+    const box = (n: string) => screen.getByRole('checkbox', { name: `Select Book ${n}` });
+    await screen.findByText('Book One');
+    await user.click(box('Two'));
+    // While selecting, Shift-mousedown on a row starts no text selection across the rows.
+    const row = box('Four').closest('li')!;
+    expect(fireEvent.mouseDown(row, { shiftKey: true })).toBe(false);
+    expect(fireEvent.mouseDown(row)).toBe(true);
+    await user.keyboard('{Shift>}');
+    await user.click(box('Four'));
+    await user.keyboard('{/Shift}');
+    const bar = screen.getByRole('toolbar', { name: 'Actions for the selected books' });
+    expect(within(bar).getByText('3 selected')).toBeInTheDocument();
+    expect(box('One')).not.toBeChecked();
+    expect(box('Three')).toBeChecked();
+    // A Shift-click on a selected one clears the run back to it.
+    await user.keyboard('{Shift>}');
+    await user.click(box('Two'));
+    await user.keyboard('{/Shift}');
+    for (const n of ['Two', 'Three', 'Four']) expect(box(n)).not.toBeChecked();
   });
 
   it('reads an unreadable book again and says whether that fixed it', async () => {

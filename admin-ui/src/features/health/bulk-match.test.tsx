@@ -1,9 +1,9 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { issuesSummary } from '@/test/fixtures';
+import { issuesSummary, libraries, podcastLibrary } from '@/test/fixtures';
 import { bookDetail, books } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -434,6 +434,68 @@ describe('bulk matching', () => {
       'title',
       '/mnt/tank/fiction/Andy Weir/Project Hail Mary',
     );
+  });
+
+  it('Shift-click picks the run of books from the last one clicked, passing over an applied one', async () => {
+    const book = (id: number, title: string, over: Partial<MatchRunItem> = {}): MatchRunItem => ({
+      ...confident,
+      id,
+      path: `Andy Weir/${title}`,
+      book: { title, author: 'Andy Weir' },
+      ...over,
+    });
+    const items = [
+      book(20, 'One'),
+      book(21, 'Two'),
+      book(22, 'Three', { applied: 'applied' }),
+      book(23, 'Four'),
+      book(24, 'Five'),
+    ];
+    const calls = mockFetch(
+      routes([run({ counts: { ...run().counts, auto: 5, pending: 4 } })], {
+        'GET /admin/match-runs/5/items': { body: { items, next_after: 0 } },
+        'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Review matches' });
+    const box = (title: string) =>
+      within(dialog).getByRole('checkbox', { name: `Apply to ${title}` });
+    await user.click(await within(dialog).findByRole('checkbox', { name: 'Apply to One' }));
+    // Shift-mousedown on a row starts no text selection across the rows.
+    const row = box('Four').closest('li')!;
+    expect(fireEvent.mouseDown(row, { shiftKey: true })).toBe(false);
+    expect(fireEvent.mouseDown(row)).toBe(true);
+    await user.keyboard('{Shift>}');
+    await user.click(box('Four'));
+    await user.keyboard('{/Shift}');
+    for (const title of ['One', 'Two', 'Four']) expect(box(title)).not.toBeChecked();
+    expect(box('Five')).toBeChecked();
+    // The applied one has no checkbox, so the range passes over it.
+    expect(within(dialog).queryByRole('checkbox', { name: 'Apply to Three' })).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,
+      ).toEqual({ scope: 'fill', exclude: [20, 21, 23], include: [] }),
+    );
+  });
+
+  it('offers only book libraries to match (a podcast library has no books to match)', async () => {
+    mockFetch(
+      routes([], {
+        'GET /admin/libraries': { body: { libraries: [...libraries(), podcastLibrary] } },
+      }),
+    );
+    renderApp('/health?issue=unmatched');
+    const select = await screen.findByRole('combobox', { name: 'Library' });
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['All libraries', 'Fiction', 'Kids']);
   });
 
   it('says how the last run ended', async () => {

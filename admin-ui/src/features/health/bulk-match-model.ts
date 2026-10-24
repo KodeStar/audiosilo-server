@@ -79,6 +79,38 @@ export function togglePick(picks: Picks, item: MatchRunItem): Picks {
     : { ...picks, include: flip(picks.include) };
 }
 
+/** Puts the item in the apply (`chosen`) or leaves it out, whichever its outcome. */
+function setPick(picks: Picks, item: MatchRunItem, chosen: boolean): Picks {
+  const set = (ids: ReadonlySet<number>, on: boolean) =>
+    on === ids.has(item.id) ? ids : on ? withId(ids, item.id) : withoutId(ids, item.id);
+  return item.outcome === 'auto'
+    ? { ...picks, exclude: set(picks.exclude, !chosen) }
+    : { ...picks, include: set(picks.include, chosen) };
+}
+
+/**
+ * A Shift-click on `item`: every pickable item from the last one clicked
+ * (`anchor`, an item id) to this one, in `shown` (the tab's list as shown),
+ * takes the state this one takes; the ones in between with no checkbox are
+ * skipped. Just this one flips when the anchor isn't in the list (none yet,
+ * or clicked on another tab).
+ */
+export function togglePickRange(
+  picks: Picks,
+  shown: readonly MatchRunItem[],
+  anchor: number | undefined,
+  item: MatchRunItem,
+): Picks {
+  const to = shown.findIndex((it) => it.id === item.id);
+  const from = anchor === undefined ? -1 : shown.findIndex((it) => it.id === anchor);
+  if (to < 0 || from < 0) return togglePick(picks, item);
+  const chosen = !isChosen(item, picks);
+  return shown
+    .slice(Math.min(from, to), Math.max(from, to) + 1)
+    .filter(isPickable)
+    .reduce((p, it) => setPick(p, it, chosen), picks);
+}
+
 /**
  * Leaves an item out of the apply, as a book matched by hand from the review is
  * (the server leaves it alone anyway: this keeps the apply's count true). One
