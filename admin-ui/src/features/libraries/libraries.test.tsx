@@ -800,6 +800,8 @@ describe('libraries, 2.4.0 fixes', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
     expect(await within(dialog).findByText('The database is busy.')).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Delete Kids?' })).toBeInTheDocument();
+    // Armed again: this one can be retried.
+    expect(within(dialog).getByRole('button', { name: 'Delete library' })).toBeEnabled();
     expect(screen.queryByText('Deleted Kids')).toBeNull();
   });
 
