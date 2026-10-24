@@ -146,4 +146,15 @@ func TestDeleteConfigLibrary(t *testing.T) {
 	if _, err := e.cat.GetLibrary(ctx, own.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("console library after delete: %v, want not found", err)
 	}
+
+	// Allowed: a library by that name on a server whose config declares none.
+	plain := newTestEnv(t)
+	lib, err := plain.cat.CreateLibrary(ctx, catalog.Library{Name: "Kids", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/api/v1/admin/libraries/%d", lib.ID)
+	if resp, out := plain.do(t, "DELETE", path, adminSession(t, plain), ""); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("DELETE with no config libraries = %d %s, want 204", resp.StatusCode, out)
+	}
 }

@@ -190,7 +190,7 @@
   "libraries.menu.exporting": "Exporting...",
   "libraries.menu.exportPaths": "Export with paths, tags and descriptions...",
   "libraries.menu.delete": "Delete library...",
-  "libraries.menu.deleteConfigLocked": "Declared in config.yaml: remove it there and restart to delete it.",
+  "libraries.menu.deleteConfigLocked": "Declared in config.yaml (or by the app that runs the server): remove it there and restart to delete it.",
   "libraries.safety.title": "Safety stop: nothing was deleted",
   "libraries.safety.body_one": "AudioSilo can't read {{root}}, so it kept its {{formatted}} book and everyone's progress. If it's a network share, mount it, then retry.",
   "libraries.safety.body_other": "AudioSilo can't read {{root}}, so it kept all {{formatted}} books and everyone's progress. If it's a network share, mount it, then retry.",

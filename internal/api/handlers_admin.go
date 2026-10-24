@@ -782,7 +782,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case a.configLibrary(cur.Name):
 			if (req.Name != "" && req.Name != cur.Name) || (req.Root != "" && !sameRoot(req.Root, cur.Root)) {
-				writeErrorCode(w, http.StatusConflict, "config_library",
+				writeErrorCode(w, http.StatusConflict, codeConfigLibrary,
 					"This library is declared in the server's config, so its name and folder are set there. Change them in config.yaml (or the app that runs the server) and restart.")
 				return
 			}
@@ -1009,7 +1009,7 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 	var name string // read before it's gone
 	switch lib, err := a.cat.GetLibrary(r.Context(), id); {
 	case err == nil && a.configLibrary(lib.Name):
-		writeErrorCode(w, http.StatusConflict, "config_library",
+		writeErrorCode(w, http.StatusConflict, codeConfigLibrary,
 			"This library is declared in the server's config, so deleting it here would only empty it until the next start. Remove it from config.yaml (or the app that runs the server) and restart.")
 		return
 	case err == nil:

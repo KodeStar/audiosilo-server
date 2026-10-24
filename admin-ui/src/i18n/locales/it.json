@@ -194,7 +194,7 @@
   "libraries.menu.exporting": "Esportazione...",
   "libraries.menu.exportPaths": "Esporta con i percorsi dei file, le etichette e le descrizioni...",
   "libraries.menu.delete": "Elimina libreria...",
-  "libraries.menu.deleteConfigLocked": "Dichiarata in config.yaml: rimuovila da lì e riavvia per eliminarla.",
+  "libraries.menu.deleteConfigLocked": "Dichiarata in config.yaml (o dall’app che esegue il server): rimuovila da lì e riavvia per eliminarla.",
   "libraries.safety.title": "Arresto di sicurezza: non è stato eliminato nulla",
   "libraries.safety.body_one": "AudioSilo non riesce a leggere {{root}}, quindi ha conservato il suo {{formatted}} libro e i progressi di tutti. Se è un'unità di rete, montala e riprova.",
   "libraries.safety.body_other": "AudioSilo non riesce a leggere {{root}}, quindi ha conservato tutti i suoi {{formatted}} libri e i progressi di tutti. Se è un'unità di rete, montala e riprova.",

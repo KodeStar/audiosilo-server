@@ -70,6 +70,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 const (
 	codeUsernameTaken      = "username_taken"
 	codeNameTaken          = "name_taken"
+	codeConfigLibrary      = "config_library" // a library the config declares: renamed, moved or deleted here
 	codeLastAdmin          = "last_admin"
 	codeAdminNeedsPassword = "admin_needs_password"
 	codePasswordTooShort   = "password_too_short"

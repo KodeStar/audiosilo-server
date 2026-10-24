@@ -45,8 +45,8 @@ export interface Picks {
 
 export const NO_PICKS: Picks = { exclude: new Set(), include: new Set() };
 
-const withId = (set: ReadonlySet<number>, id: number) => new Set(set).add(id);
-const withoutId = (set: ReadonlySet<number>, id: number) => {
+export const withId = (set: ReadonlySet<number>, id: number) => new Set(set).add(id);
+export const withoutId = (set: ReadonlySet<number>, id: number) => {
   const next = new Set(set);
   next.delete(id);
   return next;

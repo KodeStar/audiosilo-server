@@ -1,6 +1,7 @@
 package podcast
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,13 +29,6 @@ type Demand struct {
 	Budget time.Duration
 }
 
-func (d Demand) budget() time.Duration {
-	if d.Budget > 0 {
-		return d.Budget
-	}
-	return StreamWait
-}
-
 func (d Demand) now() time.Time {
 	if d.Now != nil {
 		return d.Now()
@@ -52,7 +46,7 @@ func (d Demand) timer(t time.Duration) (<-chan time.Time, func()) {
 // Fetch queues authorized work and returns an opened committed generation if it
 // becomes ready. The caller has already checked the exact path and read scope.
 func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by int64, noNew bool) (*os.File, *feed.Fetch, bridge.FetchStatus, error) {
-	wait := d.budget()
+	wait := cmp.Or(d.Budget, StreamWait)
 	deadline := d.now().Add(wait)
 	// Leave a small part of the same budget for the final presence/status check.
 	budget, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)

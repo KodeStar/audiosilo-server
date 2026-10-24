@@ -163,6 +163,23 @@ describe('books: podcast libraries', () => {
     expect(within(sheet).queryByRole('region', { name: 'Library' })).toBeNull();
   });
 
+  it('shows the one book library on in the sheet when a link set it, as the badge counts it', async () => {
+    mockFetch(bookRoutes(books, withPodcastLibrary(libraries().slice(0, 1))));
+    renderApp('/library?library=1');
+    await allBooks();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^Filters\s*1$/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    const library = within(sheet).getByRole('region', { name: 'Library' });
+    const fiction = within(library).getByRole('button', { name: /^Fiction/ });
+    expect(fiction).toHaveAttribute('aria-pressed', 'true');
+    // Turning it off there takes it out of the link, and the group goes with it.
+    await user.click(fiction);
+    await waitFor(() =>
+      expect(within(sheet).queryByRole('region', { name: 'Library' })).toBeNull(),
+    );
+  });
+
   it("reads a podcast library's id in the link as all libraries", async () => {
     const calls = mockFetch(bookRoutes(books, withPodcastLibrary()));
     renderApp('/library?library=3');
