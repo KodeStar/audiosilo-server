@@ -1,6 +1,7 @@
 import type { LibraryStat, ListeningRow, ListeningSession } from '@/api/types';
 import { liveSummary, sortLive } from '@/features/activity/live-model';
 import { refKey } from '@/lib/book-route';
+import { isBookLibrary } from '@/lib/library-kind';
 
 /** The recent-listening list on Overview shows at most this many rows. */
 export const RECENT_LIMIT = 8;
@@ -47,5 +48,5 @@ export function greetingFor(hour: number): Greeting {
 
 /** The libraries "Books per library" lists: books libraries (a podcast library has no books). */
 export function bookLibraries(libraries: readonly LibraryStat[]): LibraryStat[] {
-  return libraries.filter((l) => l.kind !== 'podcasts');
+  return libraries.filter(isBookLibrary);
 }

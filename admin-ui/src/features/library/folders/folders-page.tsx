@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useLibraries } from '@/api/hooks';
+import { keys, useBookLibraries, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Notice } from '@/components/notice';
@@ -34,6 +34,9 @@ import { treeRows, visibleListings, withAncestors, type ListingState } from './f
  * override that corrects it. `?library=` and `?folder=` deep-link the
  * selection; the book page links here with both. A finished rescan (which can
  * change which folders are books) refetches the listings (the scan watcher).
+ * Book libraries only: a podcast library's listing is its shows, read from
+ * their feeds, with no folders to read as books (a podcast library's id in
+ * `?library=` opens the first book library).
  */
 export function FoldersPage() {
   const { t } = useTranslation();
@@ -41,8 +44,12 @@ export function FoldersPage() {
   const libraries = useLibraries();
   const search = useSearch({ strict: false }) as LibrarySearch;
   const update = useUpdateSearch();
-  const all = libraries.data ?? [];
-  const library = all.find((l) => l.id === search.library) ?? all[0];
+  const all = useBookLibraries() ?? [];
+  const asked = all.find((l) => l.id === search.library);
+  const library = asked ?? all[0];
+  // `?folder=` is a folder of the library the link names: one that opened
+  // another library instead (a podcast library's id, one gone) doesn't take it.
+  const folder = asked || search.library === undefined ? search.folder || undefined : undefined;
   const go = (next: Pick<LibrarySearch, 'library' | 'folder'>) =>
     update((prev) => ({ ...prev, ...next }));
 
@@ -99,7 +106,7 @@ export function FoldersPage() {
         <FolderExplorer
           key={library.id}
           library={library}
-          folder={search.folder || undefined}
+          folder={folder}
           onSelect={(folder) => go({ folder })}
         />
       )}

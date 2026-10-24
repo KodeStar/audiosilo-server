@@ -1,11 +1,11 @@
 import { useTranslation } from 'react-i18next';
-import { useLibraries } from '@/api/hooks';
+import { useBookLibraries } from '@/api/hooks';
 import { NativeSelect } from '@/components/ui/native-select';
 
 /**
  * Which library an action works on, or all of them (0): Match automatically,
- * Clear community matches. Hidden with a single library, where there is no
- * choice to make.
+ * Clear community matches. Book libraries only (a podcast library has no books
+ * to match); hidden with a single one, where there is no choice to make.
  */
 export function LibrarySelect({
   value,
@@ -17,7 +17,7 @@ export function LibrarySelect({
   label: string;
 }) {
   const { t } = useTranslation();
-  const libraries = useLibraries().data ?? [];
+  const libraries = useBookLibraries() ?? [];
   if (libraries.length < 2) return null;
   return (
     <NativeSelect

@@ -44,9 +44,9 @@ export function Shelves({
   );
   const thisWeek = week.data?.total ?? 0;
   // One book per click: a Shift-click range runs over the full list below,
-  // whose order isn't a shelf's.
+  // whose order isn't a shelf's, so a shelf's pick doesn't move where it starts.
   const { toggle } = selection;
-  const pick = useCallback((b: AdminBook) => toggle(b), [toggle]);
+  const pick = useCallback((b: AdminBook) => toggle(b, false, false), [toggle]);
 
   const tile = (b: AdminBook, note?: string) => (
     <li key={refKey(b)} className="min-w-0">

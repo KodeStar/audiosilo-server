@@ -1,10 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearch } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, LoaderCircle, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
 import { BULK_LIMIT } from '@/api/client';
-import { useAdminBooks, useBookFacets, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBook } from '@/api/types';
+import { useAdminBooks, useBookFacets, useBookLibraries, useServerInfo } from '@/api/hooks';
+import type { AdminBook, AdminLibrary } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Page } from '@/components/page';
 import { QueryError } from '@/components/query-error';
@@ -15,17 +15,18 @@ import { cn } from '@/lib/utils';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { AddToShareDialog } from '../add-to-share-dialog';
 import { LibraryFilter } from '../library-filter';
-import { useUpdateSearch } from '../library-param';
-import type { LibrarySearch } from '../library-search';
+import { useLibrarySearch, useUpdateSearch } from '../library-param';
 import { BookGrid, GridSkeleton } from './book-grid';
 import { bookFilter, isBrowsing, listParams, withoutFilters } from './books-model';
 import { ActiveChips, BooksToolbar } from './books-toolbar';
 import { BulkEditDialog } from './bulk-edit-dialog';
 import { FilterSheet } from './filter-sheet';
 import { Shelves } from './shelves';
+import { useKeepListInView } from './use-keep-list-in-view';
 import { useSelection, type Selection } from './use-selection';
 
 const NO_BOOKS: AdminBook[] = [];
+const NO_LIBRARIES: AdminLibrary[] = [];
 
 // The cover grid is the default view: the table (and TanStack Table) loads on first use.
 const BooksTable = lazy(() => import('./books-table').then((m) => ({ default: m.BooksTable })));
@@ -35,17 +36,20 @@ const BooksTable = lazy(() => import('./books-table').then((m) => ({ default: m.
  * shows two shelves above the full list; the list filters by library, text and
  * facets (all in the URL, so every view deep-links), sorts, switches between
  * the cover grid and a table, and selects books for bulk edits and shares.
+ * A change to the list made while scrolled past its toolbar brings the
+ * toolbar back to the top (useKeepListInView). Podcast libraries aren't here:
+ * their episodes aren't books.
  */
 export function BooksPage() {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const search = useSearch({ strict: false }) as LibrarySearch;
-  const update = useUpdateSearch();
+  const search = useLibrarySearch();
+  const { anchor, update } = useKeepListInView(useUpdateSearch(), search);
 
   // "Added in the last 7 days" counts from when the page opened, so the query key holds still.
   const [now] = useState(() => Date.now());
   const metadataOn = !!useServerInfo().data?.capabilities.metadata;
-  const libraries = useLibraries();
+  const libs = useBookLibraries() ?? NO_LIBRARIES;
   const params = useMemo(() => listParams(search, now), [search, now]);
   const filter = useMemo(() => bookFilter(search, now), [search, now]);
   const list = useAdminBooks(params);
@@ -73,7 +77,6 @@ export function BooksPage() {
 
   const { fetchNextPage } = list;
   const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
-  const libs = libraries.data ?? [];
   const empty = browsing && !!list.data && !list.isPlaceholderData && books.length === 0;
   const total = facets.data?.total;
   const heading = browsing
@@ -129,6 +132,12 @@ export function BooksPage() {
         <div className={cn(selection.selecting && 'selecting')}>
           <LibraryFilter counts={facets.data?.libraries} className="mb-6" />
           {browsing ? <Shelves selection={selection} metadataOn={metadataOn} now={now} /> : null}
+          {/* Where the list starts: a change to it while scrolled past brings this back up. */}
+          <div
+            ref={anchor}
+            aria-hidden="true"
+            className="scroll-mt-[calc(var(--topbar-h)+var(--subbar-h)+2px)]"
+          />
           <BooksToolbar
             heading={heading}
             search={search}

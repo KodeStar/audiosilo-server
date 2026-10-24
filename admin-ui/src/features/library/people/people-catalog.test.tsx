@@ -6,7 +6,7 @@ import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { libraries } from '@/test/fixtures';
 import { adminBook, authors, books, facets, narrators } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
@@ -91,6 +91,29 @@ describe('authors', () => {
       expect(
         calls.some((c) => c.path === '/admin/authors' && c.query.get('library_id') === '2'),
       ).toBe(true),
+    );
+  });
+
+  it('leaves a podcast library out of the filter, and reads its id in the link as all', async () => {
+    const calls = mockFetch(routes(withPodcastLibrary()));
+    renderApp('/library/authors?library=3');
+    await screen.findByRole('list', { name: 'Authors' });
+    const filter = screen.getByRole('group', { name: 'Library' });
+    expect(within(filter).getByRole('button', { name: 'Kids' })).toBeInTheDocument();
+    expect(within(filter).queryByRole('button', { name: 'Podcasts' })).toBeNull();
+    await waitFor(() =>
+      expect(within(filter).getByRole('button', { name: 'All' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        calls
+          .filter((c) => c.path === '/admin/authors')
+          .at(-1)!
+          .query.get('library_id'),
+      ).toBeNull(),
     );
   });
 

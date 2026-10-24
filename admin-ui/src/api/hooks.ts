@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   keepPreviousData,
   queryOptions,
@@ -11,6 +11,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 import { refKey, refOf } from '@/lib/book-route';
+import { isBookLibrary } from '@/lib/library-kind';
 import { compact } from '@/lib/utils';
 import {
   api,
@@ -510,6 +511,12 @@ export function useLibraries() {
     staleTime: 30_000,
     refetchInterval: (q) => (q.state.data?.some(scanActive) ? 1000 : 60_000),
   });
+}
+
+/** The book libraries, in their order (undefined until the libraries load). */
+export function useBookLibraries(): AdminLibrary[] | undefined {
+  const data = useLibraries().data;
+  return useMemo(() => data?.filter(isBookLibrary), [data]);
 }
 
 /** Whether a library's scan runs or waits in the job queue. */

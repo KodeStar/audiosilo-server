@@ -447,6 +447,17 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
   return base.map((l, i) => ({ ...l, ...over[i] }));
 }
 
+/** A podcast library (id 3): its count is episodes, and the Library screens leave it out. */
+export const podcastLibrary: AdminLibrary = {
+  ...libraries()[0],
+  id: 3,
+  name: 'Podcasts',
+  root: '/mnt/tank/podcasts',
+  kind: 'podcasts',
+  sort_order: 2,
+  book_count: 113,
+};
+
 export const sam: AdminUser = {
   ...member,
   has_password: false,

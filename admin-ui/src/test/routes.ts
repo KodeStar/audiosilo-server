@@ -4,6 +4,7 @@ import {
   admin,
   issuesSummary,
   libraries,
+  podcastLibrary,
   serverInfo,
   settings,
   setupEnvelope,
@@ -66,4 +67,9 @@ export function patchEcho(base: AdminSettings, extra: Partial<AdminSettings> = {
     }
     return { body: next };
   };
+}
+
+/** The libraries route with a podcast library (id 3) after `libs`. */
+export function withPodcastLibrary(libs = libraries()): Record<string, MockRoute> {
+  return { 'GET /admin/libraries': { body: { libraries: [...libs, podcastLibrary] } } };
 }

@@ -580,7 +580,8 @@ placeholders exactly in the grid slot (no layout shift), shimmer 1.4s (off with 
 - **Safety stops**: unavailable roots are shown with the shield, the count of preserved books and
   listeners, and the fix ("Mount /mnt/nas/lectures and retry").
 - **Health triage**: category cards (count, icon, fanned covers) → queue with cover, reason, path, one
-  fix button + Ignore (Undo), bulk select. Duplicates use a side-by-side compare.
+  fix button + Ignore (Undo), bulk select (Shift-click takes a range, as on Books and in Match
+  review). Duplicates use a side-by-side compare.
 
 ---
 

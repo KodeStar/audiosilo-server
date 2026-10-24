@@ -41,6 +41,7 @@ import {
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { MatchDialog } from '@/features/book/match-dialog';
+import { keepShiftClickFromSelectingText, shiftHeld } from '@/features/library/books/use-selection';
 import { scoreTone } from '@/features/book/match-model';
 import { moreSeriesRefs, seriesRef } from '@/features/book/more-series';
 import { bookRoute } from '@/lib/book-route';
@@ -69,6 +70,7 @@ import {
   runProgress,
   leaveOutStale,
   togglePick,
+  togglePickRange,
   type Picks,
 } from './bulk-match-model';
 
@@ -352,6 +354,8 @@ function ReviewDialog({
   // The book being matched by hand, in a dialog over the review (which keeps its
   // tab, picks and loaded pages underneath).
   const [byHand, setByHand] = useState<MatchRunItem>();
+  // The ids matched by hand since the review opened: a Shift-click range passes over them.
+  const [matchedByHand, setMatchedByHand] = useState<ReadonlySet<number>>(() => new Set());
   // Each opening starts afresh (the run may have changed since).
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
@@ -361,6 +365,7 @@ function ReviewDialog({
       setPicks(NO_PICKS);
       setScope('fill');
       setByHand(undefined);
+      setMatchedByHand(new Set());
     }
   }
   // A book matched by hand leaves the apply, and the Health page under the review
@@ -371,6 +376,7 @@ function ReviewDialog({
   // the server says what applying would do now.
   const onMatchedByHand = (item: MatchRunItem) => {
     setPicks((p) => leaveOut(p, item));
+    setMatchedByHand((ids) => new Set(ids).add(item.id));
     invalidateIssues(qc);
     const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
@@ -491,7 +497,8 @@ function ReviewDialog({
                 outcome={tab}
                 scope={repick ? 'ids' : scope}
                 picks={picks}
-                onToggle={(item) => setPicks((p) => togglePick(p, item))}
+                onPick={setPicks}
+                matchedByHand={matchedByHand}
                 onMatchByHand={setByHand}
                 onLoaded={onLoaded}
               />
@@ -522,13 +529,18 @@ function ReviewDialog({
   );
 }
 
-/** One outcome's books, a page at a time. */
+/**
+ * One outcome's books, a page at a time. A click on a checkbox flips that
+ * book's pick; a Shift-click gives every book from the last one clicked to
+ * this one the pick this one takes (togglePickRange).
+ */
 function ItemList({
   run,
   outcome,
   scope,
   picks,
-  onToggle,
+  onPick,
+  matchedByHand,
   onMatchByHand,
   onLoaded,
 }: {
@@ -536,7 +548,9 @@ function ItemList({
   outcome: MatchOutcome;
   scope: MatchScope;
   picks: Picks;
-  onToggle: (item: MatchRunItem) => void;
+  onPick: (change: (picks: Picks) => Picks) => void;
+  /** Ids matched by hand from the review, which a range leaves as they are. */
+  matchedByHand: ReadonlySet<number>;
   onMatchByHand: (item: MatchRunItem) => void;
   /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
   onLoaded: (items: MatchRunItem[]) => void;
@@ -549,6 +563,15 @@ function ItemList({
   useEffect(() => {
     if (items.length) onLoaded(items);
   }, [items, onLoaded]);
+  // The last item clicked, where a Shift-click's range starts (each tab its own list).
+  const anchor = useRef<number | undefined>(undefined);
+  const toggle = (item: MatchRunItem, shift: boolean) => {
+    const from = anchor.current;
+    anchor.current = item.id;
+    onPick((p) =>
+      shift ? togglePickRange(p, items, from, item, matchedByHand) : togglePick(p, item),
+    );
+  };
   if (list.isError) {
     return (
       <QueryError
@@ -587,7 +610,7 @@ function ItemList({
             root={roots[item.library_id]}
             scope={scope}
             chosen={isChosen(item, picks)}
-            onToggle={() => onToggle(item)}
+            onToggle={(shift) => toggle(item, shift)}
             onMatchByHand={() => onMatchByHand(item)}
           />
         ))}
@@ -620,7 +643,7 @@ function ItemRow({
   root: string | undefined;
   scope: MatchScope;
   chosen: boolean;
-  onToggle: () => void;
+  onToggle: (shift: boolean) => void;
   onMatchByHand: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -670,12 +693,14 @@ function ItemRow({
         'flex items-start gap-3 px-3 py-3',
         chosen && 'bg-[color-mix(in_oklab,var(--brand)_7%,transparent)]',
       )}
+      // A Shift-click picks a range: it mustn't select the rows' text too.
+      onMouseDown={keepShiftClickFromSelectingText(true)}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
         {isPickable(item) ? (
           <Checkbox
             checked={chosen}
-            onCheckedChange={onToggle}
+            onCheckedChange={(_, d) => onToggle(shiftHeld(d.event))}
             aria-label={t('health.bulkMatch.pick', { title })}
             aria-describedby={pathLine}
           />
