@@ -16,12 +16,23 @@ import (
 const StreamWait = 2 * time.Second
 
 // Demand keeps the absolute media budget around enqueue, observation and wait.
-// The clock and wake timer can be replaced by deterministic tests.
+// The clock and wake timer can be replaced by deterministic tests, and so can
+// the budget: it is wall-clock time (a context deadline), which a loaded
+// machine can spend before the request is even queued (server#189).
 type Demand struct {
 	Catalog *catalog.Catalog
 	Bridge  *bridge.Service
 	Now     func() time.Time
 	After   func(time.Duration) (<-chan time.Time, func())
+	// Budget is the whole wait, StreamWait when zero.
+	Budget time.Duration
+}
+
+func (d Demand) budget() time.Duration {
+	if d.Budget > 0 {
+		return d.Budget
+	}
+	return StreamWait
 }
 
 func (d Demand) now() time.Time {
@@ -41,9 +52,9 @@ func (d Demand) timer(t time.Duration) (<-chan time.Time, func()) {
 // Fetch queues authorized work and returns an opened committed generation if it
 // becomes ready. The caller has already checked the exact path and read scope.
 func (d Demand) Fetch(ctx context.Context, lib catalog.Library, rel string, by int64, noNew bool) (*os.File, *feed.Fetch, bridge.FetchStatus, error) {
-	deadline := d.now().Add(StreamWait)
+	deadline := d.now().Add(d.budget())
 	// Leave a small part of the same budget for the final presence/status check.
-	budget, cancel := context.WithTimeout(context.WithoutCancel(ctx), StreamWait)
+	budget, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.budget())
 	defer cancel()
 	status := bridge.FetchStatus{State: "absent"}
 	pin, err := d.Catalog.PodcastPin(budget, lib.ID, rel)

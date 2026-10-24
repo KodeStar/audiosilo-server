@@ -120,6 +120,9 @@ type Service struct {
 	// OnFailure, when set, hears about every backup that failed (notifications).
 	OnFailure func(r Result)
 
+	// started counts the backups Start is making in the background (Wait).
+	started sync.WaitGroup
+
 	mu       sync.Mutex
 	schedule Schedule
 	keep     int
@@ -282,9 +285,14 @@ func (s *Service) Start(ctx context.Context, trigger string) error {
 	if !s.begin(trigger) {
 		return ErrBusy
 	}
-	go func() { _, _ = s.make(ctx, trigger) }()
+	s.started.Go(func() { _, _ = s.make(ctx, trigger) })
 	return nil
 }
+
+// Wait returns once every backup Start began has finished and recorded its
+// outcome: a caller that waits on one waits for the backup itself, never for a
+// time (server#189: a deadline flakes on a loaded machine).
+func (s *Service) Wait() { s.started.Wait() }
 
 // Create makes a backup now (trigger is KindScheduled or KindManual) and, after a
 // scheduled one, removes scheduled backups past the newest `keep`.

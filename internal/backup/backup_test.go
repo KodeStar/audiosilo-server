@@ -372,15 +372,13 @@ func TestStartRunsAtOnce(t *testing.T) {
 	if !running && last == nil {
 		t.Fatal("not running right after Start")
 	}
-	// A generous deadline: under the full race suite VACUUM INTO can take
-	// well over the 2 s this once allowed.
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
-		if st := e.svc.Status(); !st.Running && st.Last != nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Waits for the backup itself, not for a time: under the full race suite
+	// on a loaded machine VACUUM INTO outran every deadline this once had
+	// (server#189).
+	e.svc.Wait()
+	if st := e.svc.Status(); st.Running || st.Last == nil || !st.Last.OK {
+		t.Fatalf("after the backup: running %v, last %+v", st.Running, st.Last)
 	}
-	t.Fatal("the backup never finished")
 }
 
 // Retention never removes the backup a restore is waiting for.
