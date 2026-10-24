@@ -2078,7 +2078,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   either is 409 `config_library`, the same values resent (a folder respelled) write nothing, and
   another library renamed or added with a declared name at another folder is 409 `name_taken`
   (the next start would re-root it). `DELETE /admin/libraries/{id}` removes the library
-  + its index (files on disk untouched). Both are surfaced in the admin console.
+  + its index (files on disk untouched), except a library the config declares: 409
+  `config_library` (the next start would add it back empty, everyone's progress in it gone;
+  server#176), and the console disables its delete with the reason. Both are surfaced in the
+  admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
   in place (one `auth.UpdateUser` transaction); `DELETE /admin/users/{id}`
   (`auth.DeleteUser` → `handleDeleteUser`) permanently removes an account and all

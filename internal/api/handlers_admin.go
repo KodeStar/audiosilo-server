@@ -996,14 +996,30 @@ func (a *API) handleDeleteFolderOverride(w http.ResponseWriter, r *http.Request)
 }
 
 // handleDeleteLibrary removes a library and everything indexed under it. The
-// audio files on disk are not touched.
+// audio files on disk are not touched. A library the config declares is 409
+// config_library: the next start would add it back, empty, with everyone's
+// progress, bookmarks and notes in it gone (server#176), so it is removed from
+// config.yaml (or the app that runs the server) instead.
 func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	name := a.libraryName(r, id) // read before it's gone
+	lib, err := a.cat.GetLibrary(r.Context(), id) // read before it's gone
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+		a.writeCatalogError(w, err, "delete library failed", "could not delete library", "library", id)
+		return
+	}
+	name := orID("", err, id)
+	if lib != nil {
+		if a.configLibrary(lib.Name) {
+			writeErrorCode(w, http.StatusConflict, "config_library",
+				"This library is declared in the server's config, so deleting it here would only empty it until the next start. Remove it from config.yaml (or the app that runs the server) and restart.")
+			return
+		}
+		name = lib.Name
+	}
 	if err := a.cat.DeleteLibrary(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete library")
 		return

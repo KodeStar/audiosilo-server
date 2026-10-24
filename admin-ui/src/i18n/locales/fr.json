@@ -194,6 +194,7 @@
   "libraries.menu.exporting": "Exportation...",
   "libraries.menu.exportPaths": "Exporter avec les chemins des fichiers, les étiquettes et les descriptions...",
   "libraries.menu.delete": "Supprimer la bibliothèque...",
+  "libraries.menu.deleteConfigLocked": "Déclarée dans config.yaml : retirez-la de ce fichier, puis redémarrez pour la supprimer.",
   "libraries.safety.title": "Arrêt de sécurité : rien n'a été supprimé",
   "libraries.safety.body_one": "AudioSilo ne peut pas lire {{root}}, il a donc conservé son {{formatted}} livre et la progression de chacun. S'il s'agit d'un lecteur réseau, montez-le, puis réessayez.",
   "libraries.safety.body_other": "AudioSilo ne peut pas lire {{root}}, il a donc conservé ses {{formatted}} livres et la progression de chacun. S'il s'agit d'un lecteur réseau, montez-le, puis réessayez.",

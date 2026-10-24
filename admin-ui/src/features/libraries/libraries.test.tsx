@@ -705,6 +705,37 @@ describe('libraries, 2.4.0 fixes', () => {
     expect(sent).toHaveProperty('scan_schedule');
   });
 
+  it('keeps a library config.yaml declares from being deleted, with the reason (server#176)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/setup': { body: setupEnvelope({}, { config_libraries: ['Fiction'] }) },
+        'DELETE /admin/libraries/2': { status: 204 },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    const locked = await screen.findByRole('menuitem', { name: /Delete library\.\.\./ });
+    expect(locked).toHaveAttribute('aria-disabled', 'true');
+    expect(within(locked).getByText(/remove it there and restart/)).toBeInTheDocument();
+    await user.click(locked);
+    expect(screen.queryByRole('dialog', { name: 'Delete Fiction?' })).toBeNull();
+    await user.keyboard('{Escape}');
+    // A library the console added still deletes.
+    const kids = screen.getByRole('listitem', { name: 'Kids' });
+    await user.click(within(kids).getByRole('button', { name: 'Actions for Kids' }));
+    const item = await screen.findByRole('menuitem', { name: 'Delete library...' });
+    expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    await user.click(item);
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Kids?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Kids');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
+    expect(await screen.findByText('Deleted Kids')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/libraries/1')).toBe(false);
+  });
+
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {
     mockFetch(
       routes({

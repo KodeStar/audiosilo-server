@@ -190,6 +190,7 @@
   "libraries.menu.exporting": "Wird exportiert...",
   "libraries.menu.exportPaths": "Mit Dateipfaden, Schlagwörtern und Beschreibungen exportieren...",
   "libraries.menu.delete": "Bibliothek löschen...",
+  "libraries.menu.deleteConfigLocked": "In config.yaml festgelegt: entferne sie dort und starte neu, um sie zu löschen.",
   "libraries.safety.title": "Sicherheitsstopp: Es wurde nichts gelöscht",
   "libraries.safety.body_one": "AudioSilo kann {{root}} nicht lesen und hat deshalb {{formatted}} Buch und den Fortschritt aller behalten. Ist es ein Netzlaufwerk, binde es ein und versuche es dann erneut.",
   "libraries.safety.body_other": "AudioSilo kann {{root}} nicht lesen und hat deshalb alle {{formatted}} Bücher und den Fortschritt aller behalten. Ist es ein Netzlaufwerk, binde es ein und versuche es dann erneut.",
