@@ -87,7 +87,8 @@ export function FilterSheet({
     {
       key: 'library',
       title: t('books.facet.library'),
-      options: libraries.map((l) => ({
+      // Hidden below two book libraries, as LibraryFilter is: one choice filters nothing.
+      options: (libraries.length < 2 ? [] : libraries).map((l) => ({
         value: String(l.id),
         label: l.name,
         count: facets?.libraries.find((c) => c.library_id === l.id)?.count ?? 0,

@@ -413,6 +413,51 @@ describe('bulk matching', () => {
     expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
+  it('lets a Shift-click range take a book matched by hand once its list reads again (server#194)', async () => {
+    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const book = (id: number, title: string): MatchRunItem => ({
+      ...confident,
+      id,
+      path: `Andy Weir/${title}`,
+      book: { title, author: 'Andy Weir' },
+    });
+    const calls = mockFetch(
+      routes([run({ counts: { ...run().counts, auto: 3, pending: 3 } })], {
+        'GET /admin/match-runs/5/items': {
+          body: { items: [book(20, 'One'), confident, book(24, 'Five')], next_after: 0 },
+        },
+        'GET /admin/libraries/1/book': { body: unmatched },
+        'PATCH /admin/libraries/1/book': { body: unmatched },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const review = await screen.findByRole('dialog', { name: 'Review matches' });
+    const box = (title: string) =>
+      within(review).getByRole('checkbox', { name: `Apply to ${title}` });
+    const row = (
+      await within(review).findByRole('checkbox', { name: 'Apply to The Martian' })
+    ).closest('li')!;
+    const asked = autoAsked();
+    await matchByHand(user, row);
+    // Still unmatched to the server: the list reads again and shows its checkbox, left out.
+    await waitFor(() => expect(autoAsked()).toBeGreaterThan(asked));
+    await waitFor(() => expect(box('The Martian')).not.toBeChecked());
+    // One and Five out, then a Shift-click on One puts the whole run back in,
+    // the book matched by hand with it: its row says what the server makes of it now.
+    await user.click(box('One'));
+    await user.click(box('Five'));
+    await shiftClick(user, box('One'));
+    for (const title of ['One', 'The Martian', 'Five']) expect(box(title)).toBeChecked();
+    expect(within(review).getByRole('button', { name: 'Apply to 3 books' })).toBeEnabled();
+  });
+
   it("shows a gone book's path once, as its title", async () => {
     const gone: MatchRunItem = {
       ...confident,

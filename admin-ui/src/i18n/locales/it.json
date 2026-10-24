@@ -1160,6 +1160,8 @@
   "folders.noLibraries.title": "Ancora nessuna libreria",
   "folders.noLibraries.body": "Aggiungi una libreria e le sue cartelle compariranno qui.",
   "folders.noLibraries.action": "Vai alle librerie",
+  "folders.podcastsOnly.title": "Ancora nessuna libreria di libri",
+  "folders.podcastsOnly.body": "Le librerie di podcast non hanno cartelle da leggere come libri: i loro programmi si sfogliano nel player. Aggiungi una libreria di libri e le sue cartelle compariranno qui.",
   "folders.offline.title": "{{root}} non è raggiungibile. Non è stato eliminato nulla.",
   "folders.offline.body": "AudioSilo ha conservato tutti i libri e i progressi di tutti. Monta la cartella, poi riprova per vedere qui le sue cartelle.",
   "folders.offline.retry": "Riprova",

@@ -156,6 +156,11 @@ describe('books: podcast libraries', () => {
     renderApp('/library');
     await allBooks();
     expect(screen.queryByRole('group', { name: 'Library' })).toBeNull();
+    // Nor does the Filters sheet: a single choice would filter nothing (server#194).
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    expect(within(sheet).getByRole('region', { name: 'Cover' })).toBeInTheDocument();
+    expect(within(sheet).queryByRole('region', { name: 'Library' })).toBeNull();
   });
 
   it("reads a podcast library's id in the link as all libraries", async () => {
@@ -207,6 +212,45 @@ describe('books: scroll', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'Sort' }), 'added');
     await waitFor(() => expect(router.state.location.search).toMatchObject({ sort: 'added' }));
     await waitFor(() => expect(landings(scrollTo)).toHaveLength(2));
+  });
+
+  it('brings the list back to its top after a change from the Filters sheet or a chip (server#194)', async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library');
+    await allBooks();
+    const scrollTo = placeList(-800);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    const cover = within(sheet).getByRole('region', { name: 'Cover' });
+    await user.click(within(cover).getByRole('button', { name: 'Missing cover 1' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ cover: 'no' }));
+    await waitFor(() => expect(landings(scrollTo)).toHaveLength(1));
+    await user.click(within(sheet).getByRole('button', { name: /^Show \d+ book/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // Removing it from its chip is a change to the list too.
+    const chips = screen.getByRole('list', { name: 'Active filters' });
+    await user.click(within(chips).getByRole('button', { name: 'Remove Missing cover' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    await waitFor(() => expect(landings(scrollTo)).toHaveLength(2));
+  });
+
+  it('leaves no landing behind for an update that changes nothing (server#194)', async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library');
+    await allBooks();
+    const scrollTo = placeList(-800);
+    const user = userEvent.setup();
+    // Clear all with no filters set: the search stays as it is, so nothing lands...
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    await user.click(within(sheet).getByRole('button', { name: 'Clear all' }));
+    expect(router.state.location.search).toEqual({});
+    expect(landings(scrollTo)).toHaveLength(0);
+    // ...nor later, when the search changes from outside the list (a link).
+    await act(() => router.navigate({ to: '/library', search: { q: 'mort' } } as never));
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'mort' }));
+    expect(landings(scrollTo)).toHaveLength(0);
   });
 
   it('leaves the page where it is when the change is made above the list', async () => {

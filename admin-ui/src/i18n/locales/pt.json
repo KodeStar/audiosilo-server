@@ -1160,6 +1160,8 @@
   "folders.noLibraries.title": "Ainda não há bibliotecas",
   "folders.noLibraries.body": "Adicione uma biblioteca e as suas pastas aparecem aqui.",
   "folders.noLibraries.action": "Ir para Bibliotecas",
+  "folders.podcastsOnly.title": "Ainda não há bibliotecas de livros",
+  "folders.podcastsOnly.body": "As bibliotecas de podcasts não têm pastas para ler como livros: os seus programas exploram-se no leitor. Adicione uma biblioteca de livros e as suas pastas aparecem aqui.",
   "folders.offline.title": "Não é possível aceder a {{root}}. Nada foi eliminado.",
   "folders.offline.body": "O AudioSilo manteve todos os livros e o progresso de todos. Monte a pasta e tente novamente para ver as suas pastas aqui.",
   "folders.offline.retry": "Tentar novamente",

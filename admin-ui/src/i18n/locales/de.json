@@ -1086,6 +1086,8 @@
   "folders.noLibraries.title": "Noch keine Bibliotheken",
   "folders.noLibraries.body": "Füge eine Bibliothek hinzu, dann erscheinen ihre Ordner hier.",
   "folders.noLibraries.action": "Zu den Bibliotheken",
+  "folders.podcastsOnly.title": "Noch keine Buchbibliotheken",
+  "folders.podcastsOnly.body": "Podcast-Bibliotheken haben keine Ordner, die als Bücher gelesen werden: ihre Sendungen durchsuchst du im Player. Füge eine Buchbibliothek hinzu, dann erscheinen ihre Ordner hier.",
   "folders.offline.title": "{{root}} ist nicht erreichbar. Es wurde nichts gelöscht.",
   "folders.offline.body": "AudioSilo hat alle Bücher und den Fortschritt aller behalten. Binde den Ordner ein und versuche es erneut, um seine Ordner hier zu sehen.",
   "folders.offline.retry": "Erneut versuchen",

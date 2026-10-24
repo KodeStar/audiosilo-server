@@ -1160,6 +1160,8 @@
   "folders.noLibraries.title": "Aucune bibliothèque pour l'instant",
   "folders.noLibraries.body": "Ajoutez une bibliothèque et ses dossiers apparaîtront ici.",
   "folders.noLibraries.action": "Aller aux bibliothèques",
+  "folders.podcastsOnly.title": "Aucune bibliothèque de livres pour l’instant",
+  "folders.podcastsOnly.body": "Les bibliothèques de podcasts n’ont pas de dossiers à lire comme des livres : leurs émissions se parcourent dans le lecteur. Ajoutez une bibliothèque de livres et ses dossiers apparaîtront ici.",
   "folders.offline.title": "{{root}} est inaccessible. Rien n'a été supprimé.",
   "folders.offline.body": "AudioSilo a conservé tous les livres et la progression de chacun. Montez le dossier, puis réessayez pour voir ses dossiers ici.",
   "folders.offline.retry": "Réessayer",

@@ -1086,6 +1086,8 @@
   "folders.noLibraries.title": "No libraries yet",
   "folders.noLibraries.body": "Add a library, and its folders show up here.",
   "folders.noLibraries.action": "Go to Libraries",
+  "folders.podcastsOnly.title": "No book libraries yet",
+  "folders.podcastsOnly.body": "Podcast libraries have no folders to read as books: their shows are browsed in the player. Add a book library, and its folders show up here.",
   "folders.offline.title": "{{root}} isn't reachable. Nothing was deleted.",
   "folders.offline.body": "AudioSilo kept every book and everyone's progress. Mount the folder, then retry to see its folders here.",
   "folders.offline.retry": "Retry",
