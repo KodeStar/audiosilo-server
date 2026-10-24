@@ -1808,7 +1808,7 @@
   "settings.network.trusted_proxies": "Vertrauenswürdige Proxys",
   "settings.network.trusted_proxiesBody": "Reverse-Proxys, deren X-Forwarded-For-Header geglaubt wird, eine Adresse oder ein Bereich pro Zeile. Nötig für korrekte Adressen bei Geräten und Sitzungen.",
   "settings.network.cors_origins": "Erlaubte Web-Ursprünge",
-  "settings.network.cors_originsBody": "Andere Websites, die die API dieses Servers aufrufen dürfen, eine pro Zeile. Meist leer.",
+  "settings.network.cors_originsBody": "Andere Websites, die die API dieses Servers aufrufen, seine Cover anzeigen und sein Audio abspielen dürfen, eine pro Zeile. Meist leer.",
   "settings.players.card": "Web-Player",
   "settings.players.web_player": "Web-Player unter /web",
   "settings.players.source.embedded": "Eingebaut",

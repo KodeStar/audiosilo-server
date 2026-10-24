@@ -1945,7 +1945,7 @@
   "settings.network.trusted_proxies": "Proxy attendibili",
   "settings.network.trusted_proxiesBody": "Reverse proxy il cui header X-Forwarded-For è considerato attendibile, un indirizzo o intervallo per riga. Necessario per avere indirizzi corretti su dispositivi e sessioni.",
   "settings.network.cors_origins": "Origini web consentite",
-  "settings.network.cors_originsBody": "Altri siti web autorizzati a chiamare l'API di questo server, uno per riga. Di solito vuoto.",
+  "settings.network.cors_originsBody": "Altri siti web autorizzati a chiamare l'API di questo server, mostrarne le copertine e riprodurne l'audio, uno per riga. Di solito vuoto.",
   "settings.players.card": "Lettore web",
   "settings.players.web_player": "Lettore web su /web",
   "settings.players.source.embedded": "Integrato",

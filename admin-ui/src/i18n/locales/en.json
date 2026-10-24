@@ -1808,7 +1808,7 @@
   "settings.network.trusted_proxies": "Trusted proxies",
   "settings.network.trusted_proxiesBody": "Reverse proxies whose X-Forwarded-For header is believed, one address or range per line. Needed for correct addresses on devices and sessions.",
   "settings.network.cors_origins": "Allowed web origins",
-  "settings.network.cors_originsBody": "Other websites allowed to call this server's API, one per line. Usually empty.",
+  "settings.network.cors_originsBody": "Other websites allowed to call this server's API, show its covers and play its audio, one per line. Usually empty.",
   "settings.players.card": "Web player",
   "settings.players.web_player": "Web player at /web",
   "settings.players.source.embedded": "Built in",
