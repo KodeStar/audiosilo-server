@@ -38,23 +38,24 @@ export function DeleteLibraryDialog({
       onConfirm={async () => {
         try {
           await api.deleteLibrary(l.id);
+          invalidateLibraries(qc);
+          toast.add({
+            title: t('libraries.toast.deleted', { name: l.name }),
+            description: t('libraries.toast.deletedBody'),
+            type: 'success',
+          });
         } catch (err) {
           // The config declares it, which the console's copy of the setup (read
-          // once) didn't know yet: say why in the delete's own words (the code's
-          // usual copy is about a rename), and read the setup again so the card
-          // locks its Delete.
+          // once) didn't know yet. Retrying can't help, so close the dialog, say
+          // why in the delete's own words (the code's usual copy is about a
+          // rename), and read the setup again so the card locks its Delete.
           if (err instanceof ApiError && err.code === 'config_library') {
             void qc.invalidateQueries({ queryKey: keys.setup });
-            throw new ApiError(err.status, t('libraries.menu.deleteConfigLocked'));
+            toast.add({ title: t('libraries.menu.deleteConfigLocked'), type: 'error' });
+            return;
           }
           throw err;
         }
-        invalidateLibraries(qc);
-        toast.add({
-          title: t('libraries.toast.deleted', { name: l.name }),
-          description: t('libraries.toast.deletedBody'),
-          type: 'success',
-        });
       }}
     />
   );

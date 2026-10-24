@@ -762,13 +762,47 @@ describe('libraries, 2.4.0 fixes', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Delete Fiction?' });
     await user.type(within(dialog).getByRole('textbox'), 'Fiction');
     await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
-    // The delete's own reason, not the rename's "Change them there".
+    // Retrying can't help: the dialog closes and a toast gives the delete's own
+    // reason, not the rename's "Change them there".
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Delete Fiction?' })).toBeNull(),
+    );
     expect(
-      await within(dialog).findByText(/^Declared in config\.yaml .*remove it there and restart/),
+      await screen.findByText(/^Declared in config\.yaml .*remove it there and restart/),
     ).toBeInTheDocument();
+    expect(screen.queryByText('Deleted Fiction')).toBeNull();
     // The setup is read again: the card now says where the library comes from.
     expect(await within(fiction).findByText('From your config')).toBeInTheDocument();
     expect(calls.filter((c) => c.path === '/admin/setup').length).toBeGreaterThan(1);
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    expect(await screen.findByRole('menuitem', { name: /Delete library\.\.\./ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it("keeps the delete dialog open with the server's reason on another error", async () => {
+    mockFetch(
+      routes({
+        'DELETE /admin/libraries/2': {
+          status: 500,
+          body: { error: 'The database is busy.' },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const kids = await screen.findByRole('listitem', { name: 'Kids' });
+    await user.click(within(kids).getByRole('button', { name: 'Actions for Kids' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Kids?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Kids');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
+    expect(await within(dialog).findByText('The database is busy.')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Delete Kids?' })).toBeInTheDocument();
+    // Armed again: this one can be retried.
+    expect(within(dialog).getByRole('button', { name: 'Delete library' })).toBeEnabled();
+    expect(screen.queryByText('Deleted Kids')).toBeNull();
   });
 
   it("lets a library the console added be renamed, and puts the server's config refusal on the name", async () => {

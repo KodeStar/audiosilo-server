@@ -40,7 +40,10 @@ export function ConfirmDialog({
   confirmLabel: string;
   destructive?: boolean;
   typeToConfirm?: string;
-  /** Resolves when done (the dialog closes) or throws a message to show. */
+  /**
+   * Resolves when done (the dialog closes) or throws a message to show. A
+   * failure that retrying can't fix may resolve too, after saying why itself.
+   */
   onConfirm: () => Promise<void>;
   children?: React.ReactNode;
 }) {

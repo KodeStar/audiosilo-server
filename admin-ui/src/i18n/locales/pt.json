@@ -1945,7 +1945,7 @@
   "settings.network.trusted_proxies": "Proxies fiáveis",
   "settings.network.trusted_proxiesBody": "Proxies inversos cujo cabeçalho X-Forwarded-For é aceite, um endereço ou intervalo por linha. Necessário para endereços corretos em dispositivos e sessões.",
   "settings.network.cors_origins": "Origens web permitidas",
-  "settings.network.cors_originsBody": "Outros sites autorizados a chamar a API deste servidor, um por linha. Normalmente vazio.",
+  "settings.network.cors_originsBody": "Outros sites autorizados a chamar a API deste servidor, mostrar as suas capas e reproduzir o seu áudio, um por linha. Normalmente vazio.",
   "settings.players.card": "Leitor web",
   "settings.players.web_player": "Leitor web em /web",
   "settings.players.source.embedded": "Integrado",
