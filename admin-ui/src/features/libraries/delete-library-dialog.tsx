@@ -40,12 +40,13 @@ export function DeleteLibraryDialog({
           await api.deleteLibrary(l.id);
         } catch (err) {
           // The config declares it, which the console's copy of the setup (read
-          // once) didn't know yet: say why in the delete's own words (the code's
-          // usual copy is about a rename), and read the setup again so the card
-          // locks its Delete.
+          // once) didn't know yet. Retrying can't help, so close the dialog, say
+          // why in the delete's own words (the code's usual copy is about a
+          // rename), and read the setup again so the card locks its Delete.
           if (err instanceof ApiError && err.code === 'config_library') {
             void qc.invalidateQueries({ queryKey: keys.setup });
-            throw new ApiError(err.status, t('libraries.menu.deleteConfigLocked'));
+            toast.add({ title: t('libraries.menu.deleteConfigLocked'), type: 'error' });
+            return;
           }
           throw err;
         }
