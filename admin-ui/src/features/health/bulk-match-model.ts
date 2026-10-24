@@ -1,4 +1,5 @@
 import type { MatchRun, MatchRunItem, MatchScope } from '@/api/types';
+import { rangeOf } from '@/features/library/books/use-selection';
 
 // Bulk matching on Health > Not matched (STYLEGUIDE.md "Health triage"): what the
 // card shows for the newest run, which books an apply takes, and how a
@@ -79,15 +80,6 @@ export function togglePick(picks: Picks, item: MatchRunItem): Picks {
     : { ...picks, include: flip(picks.include) };
 }
 
-/** Puts the item in the apply (`chosen`) or leaves it out, whichever its outcome. */
-function setPick(picks: Picks, item: MatchRunItem, chosen: boolean): Picks {
-  const set = (ids: ReadonlySet<number>, on: boolean) =>
-    on === ids.has(item.id) ? ids : on ? withId(ids, item.id) : withoutId(ids, item.id);
-  return item.outcome === 'auto'
-    ? { ...picks, exclude: set(picks.exclude, !chosen) }
-    : { ...picks, include: set(picks.include, chosen) };
-}
-
 /**
  * A Shift-click on `item`: every pickable item from the last one clicked
  * (`anchor`, an item id) to this one, in `shown` (the tab's list as shown),
@@ -101,14 +93,17 @@ export function togglePickRange(
   anchor: number | undefined,
   item: MatchRunItem,
 ): Picks {
-  const to = shown.findIndex((it) => it.id === item.id);
-  const from = anchor === undefined ? -1 : shown.findIndex((it) => it.id === anchor);
-  if (to < 0 || from < 0) return togglePick(picks, item);
   const chosen = !isChosen(item, picks);
-  return shown
-    .slice(Math.min(from, to), Math.max(from, to) + 1)
-    .filter(isPickable)
-    .reduce((p, it) => setPick(p, it, chosen), picks);
+  const exclude = new Set(picks.exclude);
+  const include = new Set(picks.include);
+  for (const it of rangeOf(shown, anchor, item, (x) => x.id)) {
+    if (!isPickable(it)) continue;
+    // A confident one is in unless left out; a review one is out unless put in.
+    const [ids, on] = it.outcome === 'auto' ? [exclude, !chosen] : [include, chosen];
+    if (on) ids.add(it.id);
+    else ids.delete(it.id);
+  }
+  return { ...picks, exclude, include };
 }
 
 /**

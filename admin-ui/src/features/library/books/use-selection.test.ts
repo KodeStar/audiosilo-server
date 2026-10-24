@@ -8,16 +8,16 @@ const paths = (bs: { path: string }[]) => bs.map((b) => b.path);
 
 describe('rangeOf', () => {
   it('runs from the last book clicked to this one, either way, in list order', () => {
-    expect(paths(rangeOf(order, refKey(order[0]), order[2]))).toEqual(['a', 'b', 'c']);
-    expect(paths(rangeOf(order, refKey(order[3]), order[1]))).toEqual(['b', 'c', 'd']);
-    expect(paths(rangeOf(order, refKey(order[1]), order[1]))).toEqual(['b']);
+    expect(paths(rangeOf(order, refKey(order[0]), order[2], refKey))).toEqual(['a', 'b', 'c']);
+    expect(paths(rangeOf(order, refKey(order[3]), order[1], refKey))).toEqual(['b', 'c', 'd']);
+    expect(paths(rangeOf(order, refKey(order[1]), order[1], refKey))).toEqual(['b']);
   });
 
   it('is just this book with no anchor, or one the list no longer holds', () => {
-    expect(paths(rangeOf(order, null, order[2]))).toEqual(['c']);
-    expect(paths(rangeOf(order, '9:gone', order[2]))).toEqual(['c']);
+    expect(paths(rangeOf(order, null, order[2], refKey))).toEqual(['c']);
+    expect(paths(rangeOf(order, '9:gone', order[2], refKey))).toEqual(['c']);
     const shelf = adminBook({ path: 'shelf-only', title: 's' });
-    expect(paths(rangeOf(order, refKey(order[0]), shelf))).toEqual(['shelf-only']);
+    expect(paths(rangeOf(order, refKey(order[0]), shelf, refKey))).toEqual(['shelf-only']);
   });
 });
 

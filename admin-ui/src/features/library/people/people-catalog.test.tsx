@@ -3,10 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { libraries, podcastLibrary } from '@/test/fixtures';
+import { libraries } from '@/test/fixtures';
 import { adminBook, authors, books, facets, narrators } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
@@ -95,11 +95,7 @@ describe('authors', () => {
   });
 
   it('leaves a podcast library out of the filter, and reads its id in the link as all', async () => {
-    const calls = mockFetch(
-      routes({
-        'GET /admin/libraries': { body: { libraries: [...libraries(), podcastLibrary] } },
-      }),
-    );
+    const calls = mockFetch(routes(withPodcastLibrary()));
     renderApp('/library/authors?library=3');
     await screen.findByRole('list', { name: 'Authors' });
     const filter = screen.getByRole('group', { name: 'Library' });

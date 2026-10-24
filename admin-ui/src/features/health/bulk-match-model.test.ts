@@ -184,11 +184,11 @@ describe('Shift-click ranges', () => {
     expect(chosen(togglePickRange(NO_PICKS, shown, 99, shown[4]))).toEqual([1, 2, 6]);
   });
 
-  it('leaves an item already in the state alone, keeping its set as it was', () => {
+  it('leaves an item already in the state alone', () => {
     const picks = togglePickRange(NO_PICKS, shown, 1, shown[1]);
     // Item 2 flips out, so 1 goes out with it; nothing is put in.
     expect([...picks.exclude].sort()).toEqual([1, 2]);
-    expect(picks.include).toBe(NO_PICKS.include);
+    expect(picks.include.size).toBe(0);
   });
 });
 

@@ -3,16 +3,19 @@ import type { AdminBook } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 
 /**
- * The books from the last one clicked (`anchor`) to `target` in `order`, both
- * ends included, in list order; just `target` when either isn't in the list.
+ * The items from the last one clicked (`anchor`, its `key`) to `target` in
+ * `order`, both ends included, in list order; just `target` when either isn't
+ * in the list (a Shift-click's range, on Books, Health and Match review).
  */
-export function rangeOf(
-  order: readonly AdminBook[],
-  anchor: string | null,
-  target: AdminBook,
-): AdminBook[] {
-  const to = order.findIndex((b) => refKey(b) === refKey(target));
-  const from = anchor === null ? -1 : order.findIndex((b) => refKey(b) === anchor);
+export function rangeOf<T, K>(
+  order: readonly T[],
+  anchor: K | null | undefined,
+  target: T,
+  key: (item: T) => K,
+): T[] {
+  const k = key(target);
+  const to = order.findIndex((x) => key(x) === k);
+  const from = anchor == null ? -1 : order.findIndex((x) => key(x) === anchor);
   if (to < 0 || from < 0) return [target];
   return order.slice(Math.min(from, to), Math.max(from, to) + 1);
 }
@@ -63,7 +66,7 @@ export function useSelection(order: readonly AdminBook[] = NO_ORDER) {
     setSelected((prev) => {
       const next = new Map(prev);
       const on = !prev.has(k);
-      for (const x of shift ? rangeOf(shown.current, from, b) : [b]) {
+      for (const x of shift ? rangeOf(shown.current, from, b, refKey) : [b]) {
         if (on) next.set(refKey(x), x);
         else next.delete(refKey(x));
       }

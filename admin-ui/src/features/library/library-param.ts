@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useLibraries } from '@/api/hooks';
+import { useBookLibraries, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { isBookLibrary } from '@/lib/library-kind';
 import { compact } from '@/lib/utils';
@@ -23,12 +23,6 @@ export function useUpdateSearch(): Update {
       }),
     [navigate],
   );
-}
-
-/** The book libraries, in their order (undefined until the libraries load). */
-export function useBookLibraries(): AdminLibrary[] | undefined {
-  const data = useLibraries().data;
-  return useMemo(() => data?.filter(isBookLibrary), [data]);
 }
 
 /**

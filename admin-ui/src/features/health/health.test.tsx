@@ -7,6 +7,7 @@ import { issuesSummary, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
+import { shiftClick } from '@/test/user';
 
 // Health > Issues: categories, the triage queue, ignore with Undo, fixes,
 // duplicates and the offline safety stop.
@@ -169,17 +170,13 @@ describe('library health', () => {
     const row = box('Four').closest('li')!;
     expect(fireEvent.mouseDown(row, { shiftKey: true })).toBe(false);
     expect(fireEvent.mouseDown(row)).toBe(true);
-    await user.keyboard('{Shift>}');
-    await user.click(box('Four'));
-    await user.keyboard('{/Shift}');
+    await shiftClick(user, box('Four'));
     const bar = screen.getByRole('toolbar', { name: 'Actions for the selected books' });
     expect(within(bar).getByText('3 selected')).toBeInTheDocument();
     expect(box('One')).not.toBeChecked();
     expect(box('Three')).toBeChecked();
     // A Shift-click on a selected one clears the run back to it.
-    await user.keyboard('{Shift>}');
-    await user.click(box('Two'));
-    await user.keyboard('{/Shift}');
+    await shiftClick(user, box('Two'));
     for (const n of ['Two', 'Three', 'Four']) expect(box(n)).not.toBeChecked();
   });
 

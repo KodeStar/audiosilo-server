@@ -1,10 +1,11 @@
 import { useTranslation } from 'react-i18next';
+import { useBookLibraries } from '@/api/hooks';
 import type { BookFacets } from '@/api/types';
 import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { useBookLibraries, useLibraryParam } from './library-param';
+import { useLibraryParam } from './library-param';
 
 /** Up to this many libraries pick from a segmented control; more from a select. */
 const SEGMENTED_MAX = 4;

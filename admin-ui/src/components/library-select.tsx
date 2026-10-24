@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import { useLibraries } from '@/api/hooks';
+import { useBookLibraries } from '@/api/hooks';
 import { NativeSelect } from '@/components/ui/native-select';
-import { isBookLibrary } from '@/lib/library-kind';
 
 /**
  * Which library an action works on, or all of them (0): Match automatically,
@@ -18,7 +17,7 @@ export function LibrarySelect({
   label: string;
 }) {
   const { t } = useTranslation();
-  const libraries = (useLibraries().data ?? []).filter(isBookLibrary);
+  const libraries = useBookLibraries() ?? [];
   if (libraries.length < 2) return null;
   return (
     <NativeSelect

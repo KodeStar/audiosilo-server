@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
+import { deepEqual } from '@tanstack/react-router';
 import { compact } from '@/lib/utils';
 import type { LibrarySearch, Update } from '../library-search';
 
@@ -6,17 +7,10 @@ import type { LibrarySearch, Update } from '../library-search';
  * Whether the page is scrolled past `el`: its top is above where
  * scrollIntoView puts it (under the sticky header, its scroll-margin-top).
  */
-export function scrolledPast(el: Element | null): boolean {
+function scrolledPast(el: Element | null): boolean {
   if (!el) return false;
   const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
   return el.getBoundingClientRect().top < margin;
-}
-
-/** The same params, whatever order their keys are in. */
-function sameSearch(a: LibrarySearch, b: LibrarySearch): boolean {
-  const key = (s: LibrarySearch) =>
-    JSON.stringify(Object.entries(compact(s)).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
-  return key(a) === key(b);
 }
 
 /**
@@ -44,7 +38,7 @@ export function useKeepListInView(update: Update, search: LibrarySearch) {
     (fn) => {
       // A change that changes nothing renders nothing, so it can't leave a pin behind.
       const prev = current.current;
-      pin.current = scrolledPast(anchor.current) && !sameSearch(fn(prev), prev);
+      pin.current = !deepEqual(compact(fn(prev)), compact(prev)) && scrolledPast(anchor.current);
       update(fn);
     },
     [update],

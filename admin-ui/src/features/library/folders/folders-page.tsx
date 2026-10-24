@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useLibraries } from '@/api/hooks';
+import { keys, useBookLibraries, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Notice } from '@/components/notice';
@@ -21,7 +21,6 @@ import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { rescanLibrary } from '@/features/libraries/rescan';
-import { isBookLibrary } from '@/lib/library-kind';
 import { LibraryFilter } from '../library-filter';
 import { useUpdateSearch } from '../library-param';
 import type { LibrarySearch } from '../library-search';
@@ -45,7 +44,7 @@ export function FoldersPage() {
   const libraries = useLibraries();
   const search = useSearch({ strict: false }) as LibrarySearch;
   const update = useUpdateSearch();
-  const all = useMemo(() => libraries.data?.filter(isBookLibrary) ?? [], [libraries.data]);
+  const all = useBookLibraries() ?? [];
   const library = all.find((l) => l.id === search.library) ?? all[0];
   const go = (next: Pick<LibrarySearch, 'library' | 'folder'>) =>
     update((prev) => ({ ...prev, ...next }));

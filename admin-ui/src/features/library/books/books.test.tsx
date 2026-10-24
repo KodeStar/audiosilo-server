@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { fictionGrant, kidsShare, libraries, podcastLibrary, serverInfo } from '@/test/fixtures';
+import { fictionGrant, kidsShare, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, facets } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
+import { shiftClick } from '@/test/user';
 
 /** The full list's requests (the shelves ask for 12 books, the list for a page of 60). */
 const isList = (c: MockRequest) => c.path === '/admin/books' && c.query.get('limit') === '60';
@@ -135,12 +136,8 @@ describe('books: browsing', () => {
 });
 
 describe('books: podcast libraries', () => {
-  const withPodcasts = (libs = libraries()) => ({
-    'GET /admin/libraries': { body: { libraries: [...libs, podcastLibrary] } },
-  });
-
   it('leaves a podcast library out of the filter and the sheet: its episodes are not books', async () => {
-    mockFetch(bookRoutes(books, withPodcasts()));
+    mockFetch(bookRoutes(books, withPodcastLibrary()));
     renderApp('/library');
     const group = await screen.findByRole('group', { name: 'Library' });
     expect(within(group).getByRole('button', { name: /^Kids/ })).toBeInTheDocument();
@@ -154,14 +151,14 @@ describe('books: podcast libraries', () => {
   });
 
   it('shows no filter for one book library beside a podcast library', async () => {
-    mockFetch(bookRoutes(books, withPodcasts(libraries().slice(0, 1))));
+    mockFetch(bookRoutes(books, withPodcastLibrary(libraries().slice(0, 1))));
     renderApp('/library');
     await allBooks();
     expect(screen.queryByRole('group', { name: 'Library' })).toBeNull();
   });
 
   it("reads a podcast library's id in the link as all libraries", async () => {
-    const calls = mockFetch(bookRoutes(books, withPodcasts()));
+    const calls = mockFetch(bookRoutes(books, withPodcastLibrary()));
     renderApp('/library?library=3');
     const group = await screen.findByRole('group', { name: 'Library' });
     await waitFor(() =>
@@ -695,12 +692,6 @@ describe('books: selection and bulk actions', () => {
 });
 
 describe('books: selecting many (#166)', () => {
-  const shift = async (user: ReturnType<typeof userEvent.setup>, el: Element) => {
-    await user.keyboard('{Shift>}');
-    await user.click(el);
-    await user.keyboard('{/Shift}');
-  };
-
   it('Select picks without a first book; Select all takes the grid; Done clears', async () => {
     mockFetch(bookRoutes());
     renderApp('/library');
@@ -727,14 +718,17 @@ describe('books: selecting many (#166)', () => {
     await user.click(
       await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
     );
-    await shift(user, within(list).getByRole('link', { name: 'All Systems Red by Martha Wells' }));
+    await shiftClick(
+      user,
+      within(list).getByRole('link', { name: 'All Systems Red by Martha Wells' }),
+    );
     expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
     expect(within(list).getByRole('checkbox', { name: 'Select Words of Radiance' })).toBeChecked();
     expect(
       within(list).getByRole('checkbox', { name: 'Select Children of Time' }),
     ).not.toBeChecked();
     // A Shift-click on a picked one clears the run back to it.
-    await shift(user, within(list).getByRole('checkbox', { name: 'Select The Way of Kings' }));
+    await shiftClick(user, within(list).getByRole('checkbox', { name: 'Select The Way of Kings' }));
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
   });
 
@@ -744,7 +738,10 @@ describe('books: selecting many (#166)', () => {
     const user = userEvent.setup();
     const table = await screen.findByRole('table', { name: 'All books' });
     await user.click(within(table).getByRole('checkbox', { name: 'Select Words of Radiance' }));
-    await shift(user, within(table).getByRole('checkbox', { name: 'Select Children of Time' }));
+    await shiftClick(
+      user,
+      within(table).getByRole('checkbox', { name: 'Select Children of Time' }),
+    );
     expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
     expect(
       within(table).getByRole('checkbox', { name: 'Select The Way of Kings' }),
@@ -854,7 +851,10 @@ describe('books: selecting many (#166)', () => {
     await user.click(
       await within(recent).findByRole('checkbox', { name: `Select ${shelf[0].title}` }),
     );
-    await shift(user, within(recent).getByRole('checkbox', { name: `Select ${shelf[1].title}` }));
+    await shiftClick(
+      user,
+      within(recent).getByRole('checkbox', { name: `Select ${shelf[1].title}` }),
+    );
     expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('2 selected');
   });
 

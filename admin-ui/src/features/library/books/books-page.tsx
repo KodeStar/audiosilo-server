@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, LoaderCircle, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
 import { BULK_LIMIT } from '@/api/client';
-import { useAdminBooks, useBookFacets, useServerInfo } from '@/api/hooks';
+import { useAdminBooks, useBookFacets, useBookLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBook, AdminLibrary } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Page } from '@/components/page';
@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { AddToShareDialog } from '../add-to-share-dialog';
 import { LibraryFilter } from '../library-filter';
-import { useBookLibraries, useLibrarySearch, useUpdateSearch } from '../library-param';
+import { useLibrarySearch, useUpdateSearch } from '../library-param';
 import { BookGrid, GridSkeleton } from './book-grid';
 import { bookFilter, isBrowsing, listParams, withoutFilters } from './books-model';
 import { ActiveChips, BooksToolbar } from './books-toolbar';
@@ -49,7 +49,7 @@ export function BooksPage() {
   // "Added in the last 7 days" counts from when the page opened, so the query key holds still.
   const [now] = useState(() => Date.now());
   const metadataOn = !!useServerInfo().data?.capabilities.metadata;
-  const libraries = useBookLibraries();
+  const libs = useBookLibraries() ?? NO_LIBRARIES;
   const params = useMemo(() => listParams(search, now), [search, now]);
   const filter = useMemo(() => bookFilter(search, now), [search, now]);
   const list = useAdminBooks(params);
@@ -77,7 +77,6 @@ export function BooksPage() {
 
   const { fetchNextPage } = list;
   const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
-  const libs = libraries ?? NO_LIBRARIES;
   const empty = browsing && !!list.data && !list.isPlaceholderData && books.length === 0;
   const total = facets.data?.total;
   const heading = browsing

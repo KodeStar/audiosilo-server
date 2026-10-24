@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { issuesSummary, libraries, podcastLibrary } from '@/test/fixtures';
+import { issuesSummary } from '@/test/fixtures';
 import { bookDetail, books } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
+import { shiftClick } from '@/test/user';
 
 // Health > Not matched: the bulk match card, from starting a run to reviewing
 // and applying it.
@@ -468,9 +469,7 @@ describe('bulk matching', () => {
     const row = box('Four').closest('li')!;
     expect(fireEvent.mouseDown(row, { shiftKey: true })).toBe(false);
     expect(fireEvent.mouseDown(row)).toBe(true);
-    await user.keyboard('{Shift>}');
-    await user.click(box('Four'));
-    await user.keyboard('{/Shift}');
+    await shiftClick(user, box('Four'));
     for (const title of ['One', 'Two', 'Four']) expect(box(title)).not.toBeChecked();
     expect(box('Five')).toBeChecked();
     // The applied one has no checkbox, so the range passes over it.
@@ -484,11 +483,7 @@ describe('bulk matching', () => {
   });
 
   it('offers only book libraries to match (a podcast library has no books to match)', async () => {
-    mockFetch(
-      routes([], {
-        'GET /admin/libraries': { body: { libraries: [...libraries(), podcastLibrary] } },
-      }),
-    );
+    mockFetch(routes([], withPodcastLibrary()));
     renderApp('/health?issue=unmatched');
     const select = await screen.findByRole('combobox', { name: 'Library' });
     expect(

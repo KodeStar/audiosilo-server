@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { FolderMode, FsEntry } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { libraries, podcastLibrary } from '@/test/fixtures';
+import { libraries } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
 const dir = (path: string, over: Partial<FsEntry> = {}): FsEntry => ({
   name: path.split('/').pop()!,
@@ -260,11 +260,7 @@ describe('folders', () => {
   });
 
   it("leaves a podcast library out (its shows aren't folders), and opens a book library for its id", async () => {
-    const calls = mockFetch(
-      routes({
-        'GET /admin/libraries': { body: { libraries: [...libraries(), podcastLibrary] } },
-      }),
-    );
+    const calls = mockFetch(routes(withPodcastLibrary()));
     renderApp('/library/folders?library=3');
     await screen.findByRole('tree', { name: 'Folders in Fiction' });
     const picker = screen.getByRole('group', { name: 'Library' });
