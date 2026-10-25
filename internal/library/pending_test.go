@@ -106,7 +106,7 @@ func TestMarkPendingBooks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		MarkPendingBooks(t.Context(), lib, listing.Entries, overrides, holding, allow)
+		MarkPendingBooks(t.Context(), lib, listing.Entries, overrides, holding, allow, ignore)
 		out := map[string]bool{}
 		for _, e := range listing.Entries {
 			if e.PendingBook {

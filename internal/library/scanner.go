@@ -1140,9 +1140,8 @@ func folderAudio(audio []audioFile) []audioFile {
 	for i, f := range audio {
 		names[i] = f.de.Name()
 	}
-	if shadowed := shadowedMKA(names); len(shadowed) > 0 {
-		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return shadowed[f.de.Name()] })
-	}
+	shadowed := shadowedMKA(names)
+	audio = slices.DeleteFunc(audio, func(f audioFile) bool { return shadowed[f.de.Name()] })
 	sortFileOrder(audio)
 	return audio
 }
@@ -1150,7 +1149,7 @@ func folderAudio(audio []audioFile) []audioFile {
 // shadowedMKA returns the names among one folder's audio files that are an .mka
 // beside a file of the same name in another audio format (folderAudio's rule):
 // the files a book of the folder leaves out, and so the folder listing too
-// (listDir). nil when there are none.
+// (listDir). nil when the folder holds no .mka.
 func shadowedMKA(names []string) map[string]bool {
 	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
 	isMKA := func(name string) bool { return strings.EqualFold(filepath.Ext(name), ".mka") }
@@ -1163,12 +1162,9 @@ func shadowedMKA(names []string) map[string]bool {
 			others[stem(n)] = true
 		}
 	}
-	var out map[string]bool
+	out := map[string]bool{}
 	for _, n := range names {
 		if isMKA(n) && others[stem(n)] {
-			if out == nil {
-				out = map[string]bool{}
-			}
 			out[n] = true
 		}
 	}

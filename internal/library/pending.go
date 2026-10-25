@@ -2,9 +2,12 @@ package library
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"maps"
+	"os"
 	"path"
+	"slices"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -27,9 +30,9 @@ const (
 // (the caller's scope, nil for all: a folder listed only as the way down to a
 // grant is no book of theirs) with no indexed book at or below it (holding,
 // catalog.FoldersHoldingBooks: such a folder is the index's to describe, and
-// costs no disk read). overrides are the library's folder overrides.
-func MarkPendingBooks(ctx context.Context, lib catalog.Library, entries []Entry, overrides map[string]string, holding map[string]bool, allow func(string) bool) {
-	ignore := ParseIgnore(lib.IgnorePatterns)
+// costs no disk read). overrides are the library's folder overrides, ignore its
+// ignore rules (ParseIgnore, as the listing was read with).
+func MarkPendingBooks(ctx context.Context, lib catalog.Library, entries []Entry, overrides map[string]string, holding map[string]bool, allow func(string) bool, ignore *Ignore) {
 	for i := range entries {
 		e := &entries[i]
 		if !e.IsDir || e.IsBook || holding[e.Path] || (allow != nil && !allow(e.Path)) {
@@ -52,13 +55,28 @@ func pendingBook(ctx context.Context, lib catalog.Library, rel string, overrides
 	if parent := dirOf(rel); parent != "" && overrides[parent] == catalog.OverrideBook && isDiscFolder(path.Base(rel)) {
 		return false
 	}
-	if len(audioEntries(lib.Root, absOf(lib, rel), ignore)) > 0 {
+	abs := absOf(lib, rel)
+	if hasAudio(abs, rel, ignore) {
 		return true
 	}
 	if overrides[rel] != catalog.OverrideBook {
 		return false
 	}
 	limit := &walkCap{dirs: pendingWalkDirs, until: time.Now().Add(pendingWalkTime)}
-	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, rel), rel, ignore, slog.New(slog.DiscardHandler), nil, limit)
+	dirs, _, _, err := audioDirs(ctx, lib, abs, rel, ignore, slog.New(slog.DiscardHandler), nil, limit)
 	return err == nil && discSets(maps.Keys(dirs))[rel]
+}
+
+// hasAudio reports whether the folder abs (at library-relative rel) directly
+// holds an audio file discovery reads (isAudioEntry): audioEntries' question
+// without building, filtering or sorting the list (a shadowed .mka has its
+// shadowing file beside it, so any audio entry answers it).
+func hasAudio(abs, rel string, ignore *Ignore) bool {
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(entries, func(de fs.DirEntry) bool {
+		return isAudioEntry(de, path.Join(rel, de.Name()), ignore)
+	})
 }

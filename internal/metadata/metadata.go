@@ -5,7 +5,6 @@ package metadata
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -129,8 +128,8 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 	// an MP4 (or a file named as one dhowden could not read: its walk is bounded
 	// and a stranger simply has no moov).
 	if (terr == nil && md.Format() == tag.MP4) || (terr != nil && mp4Extensions[m.Format]) {
-		if _, err := f.Seek(0, io.SeekStart); err == nil {
-			if n := readMP4Narrator(f); n != "" {
+		if st, err := f.Stat(); err == nil {
+			if n := readMP4Narrator(f, st.Size()); n != "" {
 				m.Narrator, m.narratorExplicit = n, true
 			}
 		}

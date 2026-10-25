@@ -227,7 +227,8 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 	}
 	type listed struct {
 		Entry
-		de fs.DirEntry
+		lower string // Name case folded once, for the sort
+		de    fs.DirEntry
 	}
 	entries := make([]listed, 0, len(dirEntries))
 	// The canonical rel path prefixes each entry's Path; scope checks and
@@ -261,21 +262,16 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
-		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, de})
+		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, strings.ToLower(name), de})
 	}
 	slices.SortStableFunc(entries, func(a, b listed) int {
-		switch {
-		case a.IsDir != b.IsDir:
+		if a.IsDir != b.IsDir {
 			if a.IsDir {
 				return -1 // dirs first
 			}
 			return 1
-		case naturalLess(a.Name, b.Name):
-			return -1
-		case naturalLess(b.Name, a.Name):
-			return 1
 		}
-		return 0
+		return naturalCmpFolded(a.lower, b.lower, a.Name, b.Name)
 	})
 	out := make([]Entry, len(entries))
 	des := make([]fs.DirEntry, len(entries))

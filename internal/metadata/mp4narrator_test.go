@@ -95,7 +95,7 @@ func ilstFile(items ...[]byte) []byte {
 // a non-text value, too long a value) yields "" without an error or a panic.
 func TestReadMP4NarratorBounded(t *testing.T) {
 	t.Parallel()
-	read := func(b []byte) string { return readMP4Narrator(bytes.NewReader(b)) }
+	read := func(b []byte) string { return readMP4Narrator(bytes.NewReader(b), int64(len(b))) }
 	good := ilstFile(box("\xa9nam", narratorData(1, "Title")), box("\xa9nrt", narratorData(1, " Kate Reading ")))
 	if got := read(good); got != "Kate Reading" {
 		t.Fatalf("iTunes meta: %q", got)
