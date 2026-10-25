@@ -35,7 +35,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { copyText } from '@/lib/clipboard';
+import { copyWithToast } from '@/lib/clipboard';
 import { toastError } from '@/lib/errors';
 import {
   formatBytes,
@@ -372,14 +372,6 @@ function MoreMenu({
       toastError(t('book.more.rescanFailed'), err);
     }
   };
-  const copy = async () => {
-    const ok = await copyText(joinLibraryPath(root, detail.book.path));
-    toast.add(
-      ok
-        ? { title: t('book.more.copied'), type: 'success' }
-        : { title: t('book.more.copyFailed'), type: 'error' },
-    );
-  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -389,7 +381,9 @@ function MoreMenu({
         <Ellipsis className="size-4" aria-hidden="true" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => void copy()}>
+        <DropdownMenuItem
+          onClick={() => void copyWithToast(joinLibraryPath(root, b.path), t('book.more.pathWhat'))}
+        >
           <Copy aria-hidden="true" />
           {t('book.more.copyPath')}
         </DropdownMenuItem>

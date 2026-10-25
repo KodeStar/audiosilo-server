@@ -57,7 +57,12 @@ function ToastList() {
         <ToastIcon type={t.type} />
         <div className="flex min-w-0 flex-1 flex-col gap-px">
           <ToastPrimitive.Title className="text-[13.5px] font-[650]" />
-          <ToastPrimitive.Description className="text-[12.5px] opacity-75" />
+          {/* Selectable, and a drag across it selects instead of swiping the toast
+              away: a failed copy puts the text to copy by hand here. */}
+          <ToastPrimitive.Description
+            data-base-ui-swipe-ignore=""
+            className="text-[12.5px] break-words opacity-75 select-text"
+          />
         </div>
         <ToastPrimitive.Action className="shrink-0 rounded-sm bg-[color-mix(in_oklab,var(--primary-foreground)_14%,transparent)] px-2.5 py-1 text-[12.5px] font-[650] whitespace-nowrap" />
         <ToastPrimitive.Close

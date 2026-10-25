@@ -53,5 +53,6 @@ export async function copyText(text: string): Promise<boolean> {
 export async function copyWithToast(text: string, what: string): Promise<void> {
   const t = i18n.t;
   if (await copyText(text)) toast.add({ title: t('common.copied', { what }), type: 'success' });
-  else toast.add({ title: t('common.copyFailed'), description: text, type: 'warning' });
+  // No timeout: it stays until closed, so there is time to select the text.
+  else toast.add({ title: t('common.copyFailed'), description: text, type: 'warning', timeout: 0 });
 }

@@ -1,13 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { copyText } from './clipboard';
+import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
+import { copyText, copyWithToast } from './clipboard';
+import { toast } from './toast';
 
-// jsdom has no execCommand and is not a secure context, so copyText takes the
-// textarea fallback; each test supplies the execCommand it needs.
-function stubExecCommand(impl: (command: string) => boolean) {
-  const spy = vi.fn(impl);
-  Object.defineProperty(document, 'execCommand', { value: spy, configurable: true });
-  return spy;
-}
+describe('copyWithToast', () => {
+  afterEach(() => {
+    unstubExecCommand();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the refused-copy warning open until closed, showing the text', async () => {
+    stubExecCommand(() => false);
+    const add = vi.spyOn(toast, 'add');
+    await copyWithToast('/books/Dune', 'Path');
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ description: '/books/Dune', type: 'warning', timeout: 0 }),
+    );
+  });
+});
 
 describe('copyText', () => {
   let button: HTMLButtonElement;
@@ -20,7 +30,7 @@ describe('copyText', () => {
 
   afterEach(() => {
     button.remove();
-    Reflect.deleteProperty(document, 'execCommand');
+    unstubExecCommand();
   });
 
   it('copies through a hidden textarea and takes it out again', async () => {
