@@ -239,6 +239,35 @@ func TestMatroskaMP3IsRemuxed(t *testing.T) {
 	}
 }
 
+// TestMatroskaRemuxUnavailableTranscodes: when the remux can't be had (the disk
+// guard refuses), an MP3-in-MKA the API called direct_playable is transcoded
+// live rather than served as Matroska no browser opens; ?original=1 still
+// returns the stored bytes.
+func TestMatroskaRemuxUnavailableTranscodes(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	m.api.remux.FakeFreeSpaceForTests(0)
+
+	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
+		resp.Header.Get("Accept-Ranges") != "none" || body == "" {
+		t.Fatalf("stream = %d %q %q (%d bytes), want the live transcode", resp.StatusCode,
+			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"), len(body))
+	}
+	if n := m.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files under the disk guard, want none", n)
+	}
+	stored, err := os.ReadFile(filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, original := m.do(t, "GET", m.url("stream", mkaFile)+"&original=1", m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/x-matroska" || original != string(stored) {
+		t.Fatalf("original = %d %q (%d bytes, stored %d)", resp.StatusCode, resp.Header.Get("Content-Type"), len(original), len(stored))
+	}
+}
+
 // TestMatroskaRemuxDenied: the remux runs only after the access checks; a
 // caller outside the grant, a traversal and a cast token for another book are
 // refused and leave nothing in the cache.

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/diskspace"
@@ -113,6 +114,16 @@ func NewRemuxer(dir string, log *slog.Logger) (*Remuxer, error) {
 	}
 	m.evict("")
 	return m, nil
+}
+
+// FakeFreeSpaceForTests makes the disk guard read free bytes free on the
+// cache's disk, for tests of what is served when it refuses. It panics outside
+// a test binary (as auth.UseCheapHashingForTests does).
+func (m *Remuxer) FakeFreeSpaceForTests(free uint64) {
+	if !testing.Testing() {
+		panic("media.FakeFreeSpaceForTests called outside a test binary")
+	}
+	m.freeSpace = func(string) (uint64, bool) { return free, true }
 }
 
 // remuxKey names abs's cached copy: its path, size and mtime, hashed.

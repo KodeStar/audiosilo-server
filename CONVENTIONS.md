@@ -524,11 +524,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `audio/mpeg` with Range, Last-Modified the source's, `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds play it with no change. The cache is
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700; `.part` then rename; `.part` swept at
-  start; LRU by mtime, a hit touches it, 8 GiB cap swept after each remux, the new copy kept; skipped
+  start; LRU by mtime, a hit touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
   under 1 GiB free after it, `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`) is remembered per key in memory and the stored bytes served,
-  so those still play on web only, through `?transcode=1`. `/item` and `/chapters` say
+  so those still play on web only, through `?transcode=1`. A remux that can't be had now (the disk
+  guard, a failure other than that refusal) answers the plain URL with the live transcode instead
+  (`serveRemuxed`), since `direct_playable` told the web player not to ask for one. `/item` and `/chapters` say
   `direct_playable: true` for a book `PlaysInBrowsers` or, while remux is on, `PlaysRemuxed` (codec
   `mp3`, every file a browser container or `.mka`): `API.directPlayable`. An `.mka` beside a file of the same name in
   another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the

@@ -593,8 +593,11 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // re-requesting). An .mka holding MP3 is served, at this same URL, as its
 // lossless remux to plain MP3 (server#174: no browser and no iOS player opens
 // Matroska) while ffmpeg is configured, unless ?original=1 asks for the stored
-// bytes; one ffmpeg can't remux (another codec inside) is served as stored. The
-// path is the actual audio file (a chapter's file_path).
+// bytes; one ffmpeg can't remux (another codec inside) is served as stored, and
+// one whose remux can't be had now (low disk, an ffmpeg failure) is transcoded
+// live, as ?transcode=1 would, since direct_playable told the web player it
+// needn't ask for that. The path is the actual audio file (a chapter's
+// file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	lib, rel, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -622,37 +625,48 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("transcode") == "1" {
-		done, start, ok := a.beginTranscode(w, r, lib.ID, rel)
-		if !ok {
-			return
-		}
-		defer done()
-		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
+		a.serveTranscode(w, r, lib.ID, rel, abs)
 		return
 	}
 	download := r.URL.Query().Get("download") == "1"
 	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
-		if a.serveRemuxed(w, r, abs, download) {
+		if a.serveRemuxed(w, r, lib.ID, rel, abs, download) {
 			return
 		}
 	}
 	media.ServeFile(w, r, abs, download)
 }
 
+// serveTranscode answers with the live MP3 transcode of the library file abs
+// (rel in library lib) from ?t=, in one of the transcode slots.
+func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string) {
+	done, start, ok := a.beginTranscode(w, r, lib, rel)
+	if !ok {
+		return
+	}
+	defer done()
+	media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
+}
+
 // serveRemuxed answers with abs's remuxed MP3 (media.Remuxer), Range and
-// validators included (Last-Modified is the source's). It reports false, having
-// written nothing, when the stored file should be served instead; true also when
-// the request went away while waiting.
-func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, abs string, download bool) bool {
+// validators included (Last-Modified is the source's), or, when the remux can't
+// be had now (ErrRemuxUnavailable, an ffmpeg failure), with its live transcode.
+// It reports false, having written nothing, when the stored file should be
+// served instead (not MP3 inside, or gone); true also when the request went
+// away while waiting.
+func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool) bool {
 	f, src, err := a.remux.Open(r.Context(), a.baseCtx, a.ffmpeg, abs)
 	if err != nil {
-		if r.Context().Err() != nil {
+		switch {
+		case r.Context().Err() != nil:
 			return true
+		case errors.Is(err, media.ErrNotRemuxable), errors.Is(err, fs.ErrNotExist):
+			return false
+		case !errors.Is(err, media.ErrRemuxUnavailable):
+			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
-		if !errors.Is(err, media.ErrNotRemuxable) && !errors.Is(err, media.ErrRemuxUnavailable) && !errors.Is(err, fs.ErrNotExist) {
-			a.log.Warn("remux failed: serving Matroska as stored", "path", abs, "err", err)
-		}
-		return false
+		a.serveTranscode(w, r, lib, rel, abs)
+		return true
 	}
 	defer f.Close()
 	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
