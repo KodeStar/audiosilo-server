@@ -79,6 +79,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		ffprobePath: ffprobePath,
 		log:         log,
 		progress:    map[int64]ScanProgress{},
+		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
 	}
@@ -1278,10 +1279,8 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 // accepts (nil: every path). The book relPath resolves to can lie above it (the
 // folder book of a part, the joined book of a disc folder); when allow refuses the
 // book's path, it returns ErrNotAllowed before probing or indexing anything.
-//
-// Each caller resolves the book and is checked against allow on its own; only
-// then do concurrent callers for the same book share one read of it
-// (indexShared).
+// Each caller is checked against allow before concurrent callers for the same
+// book share one read of it (indexShared).
 func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, allow)
 	if err != nil {
@@ -1316,23 +1315,11 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 		f, waiting := s.flights[key]
 		if !waiting {
 			f = &indexFlight{done: make(chan struct{})}
-			if s.flights == nil {
-				s.flights = map[bookKey]*indexFlight{}
-			}
 			s.flights[key] = f
 		}
 		s.flightMu.Unlock()
 		if !waiting {
-			indexed, err := s.indexBook(ctx, lib, book)
-			if err == nil {
-				f.id = indexed.ID
-			}
-			f.err = err
-			s.flightMu.Lock()
-			delete(s.flights, key)
-			s.flightMu.Unlock()
-			close(f.done)
-			return indexed, err
+			return s.leadIndex(ctx, lib, book, key, f)
 		}
 		select {
 		case <-ctx.Done():
@@ -1348,6 +1335,22 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 			return nil, f.err
 		}
 	}
+}
+
+// leadIndex is the read of flight f's book (indexShared's leader): it records
+// the outcome on f, then ends the flight for its waiters.
+func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight) (indexed *catalog.Book, err error) {
+	defer func() {
+		if indexed != nil {
+			f.id = indexed.ID
+		}
+		f.err = err
+		s.flightMu.Lock()
+		delete(s.flights, key)
+		s.flightMu.Unlock()
+		close(f.done)
+	}()
+	return s.indexBook(ctx, lib, book)
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the
