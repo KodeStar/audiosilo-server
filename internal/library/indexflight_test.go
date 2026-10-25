@@ -2,11 +2,14 @@ package library
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -16,40 +19,10 @@ import (
 // of it, a part's path and the book's own alike, and each gets the stored book.
 func TestIndexPathSharesOneRead(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("the stand-in ffprobe is a shell script")
-	}
-	cat, _, ctx := newScanEnv(t)
-	root := t.TempDir()
-	for _, f := range []string{"A/Book/01.mp3", "A/Book/02.mp3", "A/Twin/01.mp3", "A/Twin/02.mp3"} {
-		writeFile(t, root, f, []byte("x"))
-	}
-	// A slow ffprobe that notes each run, so the two requests overlap.
-	runs := filepath.Join(t.TempDir(), "runs")
-	probe := filepath.Join(t.TempDir(), "ffprobe")
-	script := "#!/bin/sh\necho run >> '" + runs + "'\nsleep 0.5\necho '{}'\n"
-	if err := os.WriteFile(probe, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s := NewScanner(cat, probe, nil)
-	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := func() int {
-		t.Helper()
-		b, err := os.ReadFile(runs)
-		if os.IsNotExist(err) {
-			return 0
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return bytes.Count(b, []byte("run\n"))
-	}
+	s, lib, ctx, count := newSlowProbeEnv(t)
 
 	// One read of a book like it, alone: the probes a read makes.
-	if _, err := s.IndexPath(ctx, *lib, "A/Twin"); err != nil {
+	if _, err := s.IndexPath(ctx, lib, "A/Twin"); err != nil {
 		t.Fatal(err)
 	}
 	once := count()
@@ -61,7 +34,7 @@ func TestIndexPathSharesOneRead(t *testing.T) {
 	books := make([]*catalog.Book, 2)
 	errs := make([]error, 2)
 	for i, p := range []string{"A/Book", "A/Book/02.mp3"} {
-		wg.Go(func() { books[i], errs[i] = s.IndexPath(ctx, *lib, p) })
+		wg.Go(func() { books[i], errs[i] = s.IndexPath(ctx, lib, p) })
 	}
 	wg.Wait()
 	for i := range books {
@@ -78,4 +51,80 @@ func TestIndexPathSharesOneRead(t *testing.T) {
 	if got := count() - once; got != once {
 		t.Errorf("the two requests probed %d times; one read probes %d", got, once)
 	}
+}
+
+// TestIndexPathLeaderCancelled: when the request that leads a shared read ends
+// before the book is stored, a request waiting on it still gets the book (it
+// reads the book itself), and the ended request gets its context error.
+func TestIndexPathLeaderCancelled(t *testing.T) {
+	t.Parallel()
+	s, lib, ctx, count := newSlowProbeEnv(t)
+
+	leadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	leadErr := make(chan error, 1)
+	go func() {
+		_, err := s.IndexPath(leadCtx, lib, "A/Book")
+		leadErr <- err
+	}()
+	// The leader is probing: join it, then end the leader's request.
+	for deadline := time.Now().Add(10 * time.Second); count() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the stand-in ffprobe never ran")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := make(chan *catalog.Book, 1)
+	errs := make(chan error, 1)
+	go func() {
+		b, err := s.IndexPath(ctx, lib, "A/Book/02.mp3")
+		got <- b
+		errs <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	if err := <-leadErr; !errors.Is(err, context.Canceled) {
+		t.Errorf("leader: got %v, want context.Canceled", err)
+	}
+	if b, err := <-got, <-errs; err != nil || b == nil || b.RelPath != "A/Book" {
+		t.Fatalf("waiter: %+v, %v", b, err)
+	}
+}
+
+// newSlowProbeEnv is a scanner whose stand-in ffprobe takes half a second and
+// notes each run (count), so on-demand indexes overlap, over a library holding
+// two two-file books, A/Book and A/Twin.
+func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, func() int) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in ffprobe is a shell script")
+	}
+	cat, _, ctx := newScanEnv(t)
+	root := t.TempDir()
+	for _, f := range []string{"A/Book/01.mp3", "A/Book/02.mp3", "A/Twin/01.mp3", "A/Twin/02.mp3"} {
+		writeFile(t, root, f, []byte("x"))
+	}
+	runs := filepath.Join(t.TempDir(), "runs")
+	probe := filepath.Join(t.TempDir(), "ffprobe")
+	script := "#!/bin/sh\necho run >> '" + runs + "'\nsleep 0.5\necho '{}'\n"
+	if err := os.WriteFile(probe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		t.Helper()
+		b, err := os.ReadFile(runs)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes.Count(b, []byte("run\n"))
+	}
+	return NewScanner(cat, probe, nil), *lib, ctx, count
 }

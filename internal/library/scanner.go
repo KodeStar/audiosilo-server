@@ -1330,27 +1330,38 @@ func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *ca
 		case f.err == nil:
 			return s.cat.GetBook(ctx, f.id)
 		case errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded):
-			continue // the leader's request ended, not this one: read it here
+			// The leader's request ended: read the book here, unless this request
+			// has ended too (the probes don't stop for a context).
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			continue
 		default:
 			return nil, f.err
 		}
 	}
 }
 
+// errIndexAborted is a shared read's outcome when its leader never returned (a
+// panic in indexBook): its waiters fail rather than load a book it never stored.
+var errIndexAborted = errors.New("library: the shared index of this book did not finish")
+
 // leadIndex is the read of flight f's book (indexShared's leader): it records
 // the outcome on f, then ends the flight for its waiters.
-func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight) (indexed *catalog.Book, err error) {
+func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight) (*catalog.Book, error) {
+	f.err = errIndexAborted // until indexBook returns
 	defer func() {
-		if indexed != nil {
-			f.id = indexed.ID
-		}
-		f.err = err
 		s.flightMu.Lock()
 		delete(s.flights, key)
 		s.flightMu.Unlock()
 		close(f.done)
 	}()
-	return s.indexBook(ctx, lib, book)
+	indexed, err := s.indexBook(ctx, lib, book)
+	if err == nil {
+		f.id = indexed.ID
+	}
+	f.err = err
+	return indexed, err
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the
