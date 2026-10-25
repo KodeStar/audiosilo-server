@@ -38,6 +38,12 @@ type Scanner struct {
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
 
+	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
+	// request for the same book waits on the one read rather than reading the
+	// book again (a book page asks for the item and its chapters at once).
+	flightMu sync.Mutex
+	flights  map[bookKey]*indexFlight
+
 	// OnRunFinished, when set before Start, hears how each scan job ended (the
 	// notifications). ctx outlives the server's, like the run's own record.
 	OnRunFinished func(ctx context.Context, r RunReport)
@@ -1272,12 +1278,76 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 // accepts (nil: every path). The book relPath resolves to can lie above it (the
 // folder book of a part, the joined book of a disc folder); when allow refuses the
 // book's path, it returns ErrNotAllowed before probing or indexing anything.
+//
+// Each caller resolves the book and is checked against allow on its own; only
+// then do concurrent callers for the same book share one read of it
+// (indexShared).
 func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, allow)
 	if err != nil {
 		return nil, err
 	}
-	return s.indexBook(ctx, lib, book)
+	return s.indexShared(ctx, lib, book)
+}
+
+// bookKey names a book across libraries: (library_id, rel_path).
+type bookKey struct {
+	libraryID int64
+	relPath   string
+}
+
+// indexFlight is one on-demand index of a book under way: done closes once it
+// has ended, with the indexed book's id or the error.
+type indexFlight struct {
+	done chan struct{}
+	id   int64
+	err  error
+}
+
+// indexShared is indexBook of a resolved book, read once for every caller that
+// asks for it while a read is under way: the others wait for that read and load
+// the book it stored, each its own copy. A waiter whose own request ends stops
+// waiting; one whose leader's request ended (a context error) while its own goes
+// on reads the book itself.
+func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
+	key := bookKey{lib.ID, book.RelPath}
+	for {
+		s.flightMu.Lock()
+		f, waiting := s.flights[key]
+		if !waiting {
+			f = &indexFlight{done: make(chan struct{})}
+			if s.flights == nil {
+				s.flights = map[bookKey]*indexFlight{}
+			}
+			s.flights[key] = f
+		}
+		s.flightMu.Unlock()
+		if !waiting {
+			indexed, err := s.indexBook(ctx, lib, book)
+			if err == nil {
+				f.id = indexed.ID
+			}
+			f.err = err
+			s.flightMu.Lock()
+			delete(s.flights, key)
+			s.flightMu.Unlock()
+			close(f.done)
+			return indexed, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.done:
+		}
+		switch {
+		case f.err == nil:
+			return s.cat.GetBook(ctx, f.id)
+		case errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded):
+			continue // the leader's request ended, not this one: read it here
+		default:
+			return nil, f.err
+		}
+	}
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the

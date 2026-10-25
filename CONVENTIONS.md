@@ -502,7 +502,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
   above the requested path must be in the caller's scope too (`library.ErrNotAllowed`,
   answered as the out-of-scope 403 `no access to this path`, nothing read or
-  indexed for that caller). The on-demand index takes a path only in its on-disk
+  indexed for that caller). Concurrent on-demand indexes of one book (a book page's
+  `item` and `chapters` at once) share one read (`Scanner.indexShared`, keyed by
+  library and book path), each request scope-checked before it joins. The on-demand index takes a path only in its on-disk
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
