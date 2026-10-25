@@ -39,13 +39,15 @@ const (
 )
 
 var (
-	// ErrNotRemuxable: ffmpeg refused the file (not one MP3 stream in Matroska:
-	// the mp3 muxer takes exactly one MP3 audio stream). Remembered for this
-	// file's size and mtime, so it is not tried again until the file changes.
+	// ErrNotRemuxable: the file is not one to remux, so its stored bytes are the
+	// answer. Either ffmpeg refused it (not one MP3 stream in Matroska: the mp3
+	// muxer takes exactly one MP3 audio stream), which is remembered for this
+	// file's size and mtime so it is not tried again until the file changes, or
+	// there is no regular file at the path (gone, a folder).
 	ErrNotRemuxable = errors.New("media: not remuxable to mp3")
 	// ErrRemuxUnavailable: the remux was skipped (too little free disk for it,
-	// the source changed while it waited, or its cached copy went before it
-	// could be opened).
+	// the source changed while it waited or while ffmpeg read it, or its cached
+	// copy went before it could be opened).
 	ErrRemuxUnavailable = errors.New("media: remux unavailable")
 )
 
@@ -141,20 +143,26 @@ func (m *Remuxer) cachePath(key string) string { return filepath.Join(m.dir, key
 // deterministic). The caller closes the file. A cold key remuxes under runCtx
 // (the server's lifetime, bounded by the remux timeout) while this call waits
 // on ctx: a request that leaves doesn't stop the remux the others wait for.
-// The errors are ErrNotRemuxable, ErrRemuxUnavailable, ctx's, or a failure to
-// read abs or to run ffmpeg (serve the stored bytes for any of them).
+// The errors are ErrNotRemuxable (serve the stored bytes), ctx's, or one that
+// says the remux can't be had now: ErrRemuxUnavailable, runCtx's, or a
+// failure to read abs, run ffmpeg or write the cache.
 func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, os.FileInfo, error) {
 	info, err := os.Stat(abs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("media: remux source %s is not a regular file", abs)
+	switch {
+	case err != nil:
+		// Nothing to remux: the stored file's answer (a 404) is the right one.
+		return nil, nil, fmt.Errorf("%w: %v", ErrNotRemuxable, err)
+	case !info.Mode().IsRegular():
+		return nil, nil, fmt.Errorf("%w: %s is not a regular file", ErrNotRemuxable, abs)
 	}
 	key := remuxKey(abs, info)
 
-	// The hit check runs under mu, so a leader (which renames its copy into
-	// place before leaving inflight) is never missed between the two.
+	// A hit needs no lock (players send many Range requests). A miss is checked
+	// again under mu, so a leader that renamed its copy into place and left
+	// inflight in between is never missed.
+	if f, ok := m.hit(key); ok {
+		return f, info, nil
+	}
 	m.mu.Lock()
 	if f, ok := m.hit(key); ok {
 		m.mu.Unlock()
@@ -223,21 +231,27 @@ func (m *Remuxer) lead(runCtx context.Context, ffmpegPath, key, abs string, info
 	close(fl.done)
 }
 
-// remux writes key's copy: a temporary .part file renamed into place once
-// ffmpeg succeeds, then a sweep that keeps it.
+// remux writes key's copy: a temporary .part file, synced and renamed into
+// place once ffmpeg succeeds on a source that didn't change meanwhile, then a
+// sweep that keeps it.
 func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo) error {
-	ctx, cancel := context.WithTimeout(runCtx, remuxTimeout)
-	defer cancel()
 	select {
 	case m.sem <- struct{}{}:
 		defer func() { <-m.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-runCtx.Done():
+		return runCtx.Err()
+	}
+	// The timeout bounds the run, not the wait for a slot.
+	ctx, cancel := context.WithTimeout(runCtx, remuxTimeout)
+	defer cancel()
+	// Made again if it went (<data>/cache cleared while the server runs).
+	if err := os.MkdirAll(m.dir, 0o700); err != nil {
+		return err
 	}
 	size := uint64(info.Size())
 	if free, ok := m.freeSpace(m.dir); ok && (free < size || free-size < remuxMinFree) {
 		if !m.lowDisk.Swap(true) {
-			m.log.Warn("remux skipped: too little free disk for the remux cache; serving Matroska as stored",
+			m.log.Warn("remux skipped: too little free disk for the remux cache; transcoding Matroska live",
 				"dir", m.dir, "free_bytes", free, "needed_bytes", size+remuxMinFree)
 		}
 		return ErrRemuxUnavailable
@@ -245,13 +259,14 @@ func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, inf
 	m.lowDisk.Store(false)
 
 	// Opened only once a slot is free, so queued remuxes hold no descriptor;
-	// a source that changed since the key was made is not cached under it.
+	// a source that changed since the key was made, or while ffmpeg read it,
+	// is not cached under it.
 	src, err := os.Open(abs)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
-	if now, err := src.Stat(); err != nil || !now.Mode().IsRegular() || now.Size() != info.Size() || !now.ModTime().Equal(info.ModTime()) {
+	if !unchanged(src, info) {
 		return ErrRemuxUnavailable
 	}
 
@@ -266,13 +281,17 @@ func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, inf
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Only ffmpeg's own refusal is the file's; one that didn't start is not.
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
+		if !refused(err, tmpName) {
 			return err
 		}
 		m.log.Info("not remuxed: serving Matroska as stored", "path", src.Name(), "err", err)
 		return fmt.Errorf("%w: %v", ErrNotRemuxable, err)
+	}
+	if !unchanged(src, info) {
+		return ErrRemuxUnavailable
+	}
+	if err := syncFile(tmpName); err != nil {
+		return err
 	}
 	if err := os.Rename(tmpName, m.cachePath(key)); err != nil {
 		return err
@@ -281,16 +300,54 @@ func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, inf
 	return nil
 }
 
+// unchanged reports whether the open source still has the size and mtime its
+// key was made from.
+func unchanged(src *os.File, info os.FileInfo) bool {
+	now, err := src.Stat()
+	return err == nil && now.Mode().IsRegular() && now.Size() == info.Size() && now.ModTime().Equal(info.ModTime())
+}
+
+// refused reports whether ffmpeg's failure err is its refusal of the file: an
+// exit status before it wrote anything to out (the mp3 muxer checks the
+// streams as it starts). A run that didn't start, was killed, or failed
+// partway (a full disk, a read error) is not the file's, so it isn't
+// remembered.
+func refused(err error, out string) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() <= 0 {
+		return false
+	}
+	written, serr := os.Stat(out)
+	return serr == nil && written.Size() == 0
+}
+
+// syncFile flushes path's bytes to disk before the rename that names it, so a
+// power cut can't leave the cache's name on a copy that never reached the
+// disk (as jsonfile.Write does).
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // remuxArgs is the ffmpeg command line that copies the first audio stream of
 // the Matroska on stdin (in) into an MP3 at out, chapters included. The demuxer
 // is forced and the input may only be the descriptor, so crafted bytes can't
-// make ffmpeg open other files; bitexact output is byte-identical every run,
+// make ffmpeg open other files; -xerror fails the run on a read error, where
+// ffmpeg would otherwise end the input there and exit 0 with a short copy (a
+// network mount's hiccup). Bitexact output is byte-identical every run,
 // so an If-Range resume holds across a re-remux. ID3v2.3 carries the chapters
 // as CHAP frames, and the muxer writes a Xing/Info header (a real duration for
 // iOS).
 func remuxArgs(in inputSpec, out string) []string {
 	return []string{
-		"-nostdin", "-loglevel", "error",
+		"-nostdin", "-loglevel", "error", "-xerror",
 		"-protocol_whitelist", in.proto,
 		"-f", "matroska", "-i", in.url,
 		"-map", "0:a:0", "-c:a", "copy", "-map_chapters", "0",

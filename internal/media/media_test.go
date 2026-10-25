@@ -373,3 +373,33 @@ func TestTranscodeOpened(t *testing.T) {
 		}
 	}
 }
+
+// TestTranscodeHEAD: a HEAD gets the transcode's headers without an ffmpeg run
+// (net/http would discard the whole encode).
+func TestTranscodeHEAD(t *testing.T) {
+	t.Parallel()
+	src := filepath.Join(t.TempDir(), "book.m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	// No ffmpeg at this path: a run would fail with a 500.
+	Transcode(rec, httptest.NewRequest(http.MethodHead, "/", nil), src, filepath.Join(t.TempDir(), "no-ffmpeg"), 0, nil)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
+		rec.Header().Get("Accept-Ranges") != "none" || rec.Body.Len() != 0 {
+		t.Fatalf("HEAD = %d %v (%d bytes), want the transcode's headers and no run", rec.Code, rec.Header(), rec.Body.Len())
+	}
+}
+
+// TestInputForRetriesAFailedProbe: a probe that couldn't run is no answer to
+// keep, so the path is asked again next time.
+func TestInputForRetriesAFailedProbe(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "no-ffmpeg")
+	if in := inputFor(missing); in != pipeInput {
+		t.Fatalf("inputFor(missing) = %+v, want pipe:0", in)
+	}
+	if _, kept := fdSupport.Load(missing); kept {
+		t.Fatal("a probe that couldn't run was kept")
+	}
+}

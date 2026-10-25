@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -650,18 +649,22 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 
 // serveRemuxed answers with abs's remuxed MP3 (media.Remuxer), Range and
 // validators included (Last-Modified is the source's), or, when the remux can't
-// be had now (ErrRemuxUnavailable, an ffmpeg failure), with its live transcode.
-// It reports false, having written nothing, when the stored file should be
-// served instead (not MP3 inside, or gone); true also when the request went
-// away while waiting.
+// be had now (ErrRemuxUnavailable, an ffmpeg or cache failure), with its live
+// transcode. It reports false, having written nothing, when the stored file
+// should be served instead (ErrNotRemuxable: not MP3 inside, or no regular
+// file there); true also when the request went away while waiting.
 func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool) bool {
 	f, src, err := a.remux.Open(r.Context(), a.baseCtx, a.ffmpeg, abs)
 	if err != nil {
 		switch {
 		case r.Context().Err() != nil:
 			return true
-		case errors.Is(err, media.ErrNotRemuxable), errors.Is(err, fs.ErrNotExist):
+		case errors.Is(err, media.ErrNotRemuxable):
 			return false
+		case a.baseCtx.Err() != nil:
+			// The server is stopping, and its remux with it: no new transcode now.
+			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
+			return true
 		case !errors.Is(err, media.ErrRemuxUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}

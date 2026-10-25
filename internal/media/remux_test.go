@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -108,7 +109,7 @@ func countingRemuxer(t *testing.T, gate chan struct{}) (*Remuxer, *atomic.Int32)
 func TestRemuxArgs(t *testing.T) {
 	t.Parallel()
 	got := remuxArgs(fdInput, "/cache/k.1.part")
-	want := []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd",
+	want := []string{"-nostdin", "-loglevel", "error", "-xerror", "-protocol_whitelist", "fd",
 		"-f", "matroska", "-i", "fd:", "-map", "0:a:0", "-c:a", "copy", "-map_chapters", "0",
 		"-fflags", "+bitexact", "-id3v2_version", "3", "-f", "mp3", "-y", "file:/cache/k.1.part"}
 	if !slices.Equal(got, want) {
@@ -302,8 +303,105 @@ func TestRemuxerDiskGuard(t *testing.T) {
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) || runs.Load() != 0 {
 		t.Fatalf("open = %v after %d runs, want ErrRemuxUnavailable and no run", err, runs.Load())
 	}
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", filepath.Join(t.TempDir(), "missing.mka")); err == nil {
-		t.Fatal("open of a missing source succeeded")
+	// No regular file at the path: not remuxable, so the stored file's answer
+	// (a 404) is given.
+	folder := filepath.Join(t.TempDir(), "folder.mka")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(t.TempDir(), "missing.mka"), folder} {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", p); !errors.Is(err, ErrNotRemuxable) || runs.Load() != 0 {
+			t.Fatalf("open %s = %v after %d runs, want ErrNotRemuxable and no run", p, err, runs.Load())
+		}
+	}
+}
+
+// fakeRemuxer is a Remuxer over a fresh cache dir whose ffmpeg run is run (given
+// the source and the copy's path), with a source file of a few bytes at src.
+func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *Remuxer, src string) {
+	t.Helper()
+	src = filepath.Join(t.TempDir(), "book.mka")
+	if err := os.WriteFile(src, []byte("matroska bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewRemuxer(filepath.Join(t.TempDir(), "remux"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.run = func(_ context.Context, _ string, args []string, _ *os.File) error {
+		return run(src, strings.TrimPrefix(args[len(args)-1], "file:"))
+	}
+	return m, src
+}
+
+// TestRemuxerFailurePartwayIsNotARefusal: a run that wrote some of the copy
+// and then exited with an error (a full disk, a read error) is not the file's
+// refusal: it isn't remembered, so the next request tries again.
+func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	// A real exit status: this test binary run with a flag it doesn't know.
+	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
+	if exit := (*exec.ExitError)(nil); !errors.As(status, &exit) || exit.ExitCode() <= 0 {
+		t.Fatalf("want an exit status, got %v", status)
+	}
+	var runs atomic.Int32
+	m, src := fakeRemuxer(t, func(_, out string) error {
+		runs.Add(1)
+		if err := os.WriteFile(out, []byte("ID3 partial"), 0o600); err != nil {
+			return err
+		}
+		return status
+	})
+	ctx := context.Background()
+	for range 2 {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrNotRemuxable) {
+			t.Fatalf("open = %v, want a failure that is not a refusal", err)
+		}
+	}
+	if n := runs.Load(); n != 2 {
+		t.Fatalf("%d runs, want the failure not remembered", n)
+	}
+	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
+		t.Fatalf("cache holds %d files after failed runs, want none", len(entries))
+	}
+}
+
+// TestRemuxerRecreatesItsDir: a cache folder removed while the server runs is
+// made again by the next remux.
+func TestRemuxerRecreatesItsDir(t *testing.T) {
+	t.Parallel()
+	m, src := fakeRemuxer(t, func(_, out string) error { return os.WriteFile(out, []byte("ID3 copy"), 0o600) })
+	if err := os.RemoveAll(m.dir); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	if err != nil {
+		t.Fatalf("open after the cache folder went = %v", err)
+	}
+	f.Close()
+	if fi, err := os.Stat(m.dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("cache folder = %v %v, want it made again 0700", fi, err)
+	}
+}
+
+// TestRemuxerSourceChangedWhileRead: a source rewritten while ffmpeg read it
+// is not cached under the key made from its old size and mtime.
+func TestRemuxerSourceChangedWhileRead(t *testing.T) {
+	t.Parallel()
+	m, src := fakeRemuxer(t, func(src, out string) error {
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(src, later, later); err != nil {
+			return err
+		}
+		return os.WriteFile(out, []byte("ID3 copy"), 0o600)
+	})
+	ctx := context.Background()
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) {
+		t.Fatalf("open = %v, want ErrRemuxUnavailable", err)
+	}
+	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
+		t.Fatalf("cache holds %d files, want none", len(entries))
 	}
 }
 

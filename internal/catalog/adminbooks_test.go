@@ -623,6 +623,12 @@ func TestPlaysRemuxed(t *testing.T) {
 		{"upper case", Book{Format: "MKA", Codec: "MP3", Files: files("MKA")}, true},
 		{"aac in mka", Book{Format: "mka", Codec: "aac", Files: files("mka")}, false},
 		{"unknown codec", Book{Format: "mka", Codec: "", Files: files("mka")}, false},
+		// A folder book's codec is its first part's: each .mka part is judged by
+		// its own, the book's when it has none recorded.
+		{"mp3 then aac in mka", Book{Format: "mp3", Codec: "mp3",
+			Files: []BookFile{{Format: "mp3", Codec: "mp3"}, {Format: "mka", Codec: "aac"}}}, false},
+		{"mp3 then mp3 in mka", Book{Format: "mp3", Codec: "mp3",
+			Files: []BookFile{{Format: "mp3", Codec: "mp3"}, {Format: "mka", Codec: "mp3"}}}, true},
 	} {
 		if got := tc.book.PlaysRemuxed(); got != tc.want {
 			t.Errorf("%s: PlaysRemuxed = %v, want %v", tc.name, got, tc.want)

@@ -268,6 +268,32 @@ func TestMatroskaRemuxUnavailableTranscodes(t *testing.T) {
 	}
 }
 
+// TestMatroskaRemuxCacheRemoved: a remux cache folder removed while the server
+// runs is made again, so an MP3-in-MKA is still served as its remux rather than
+// as the stored Matroska; a folder named .mka is a 404, as it was.
+func TestMatroskaRemuxCacheRemoved(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	if err := os.RemoveAll(filepath.Join(m.api.boot.DataDir, "cache", "remux")); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := m.do(t, "GET", m.url("stream", mkaFile), m.token, ""); resp.StatusCode != http.StatusOK ||
+		resp.Header.Get("Content-Type") != "audio/mpeg" || resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("stream = %d %q %q, want the remux", resp.StatusCode,
+			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"))
+	}
+	if n := m.cachedFiles(t); n != 1 {
+		t.Fatalf("%d cached files, want the remux in the folder made again", n)
+	}
+	if err := os.Mkdir(filepath.Join(m.lib.Root, filepath.FromSlash(mkaBook), "folder.mka"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := m.do(t, "GET", m.url("stream", mkaBook+"/folder.mka"), m.token, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("folder stream = %d %s, want 404", resp.StatusCode, body)
+	}
+}
+
 // TestMatroskaRemuxDenied: the remux runs only after the access checks; a
 // caller outside the grant, a traversal and a cast token for another book are
 // refused and leave nothing in the cache.

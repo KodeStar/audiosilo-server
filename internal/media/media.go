@@ -233,33 +233,42 @@ var (
 )
 
 // fdSupport remembers, per ffmpeg path, whether its input protocols include
-// fd (a sync.OnceValue over probeFD), so each binary is asked once per
-// process, however many first requests arrive together.
+// fd (an *fdProbe), so each binary is asked once per process, however many
+// first requests arrive together. A probe that couldn't run (its 5 s timeout,
+// a failed start) is no answer: it is dropped, and the next request asks again.
 var fdSupport sync.Map
+
+// fdProbe is one ffmpeg binary's answer, settled once by probeFD.
+type fdProbe struct {
+	once    sync.Once
+	fd, ran bool
+}
 
 // inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
 // the fd input protocol, else pipe:0.
 func inputFor(ffmpegPath string) inputSpec {
-	v, ok := fdSupport.Load(ffmpegPath)
-	if !ok {
-		v, _ = fdSupport.LoadOrStore(ffmpegPath, sync.OnceValue(func() bool { return probeFD(ffmpegPath) }))
+	v, _ := fdSupport.LoadOrStore(ffmpegPath, &fdProbe{})
+	p := v.(*fdProbe)
+	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath) })
+	if !p.ran {
+		fdSupport.CompareAndDelete(ffmpegPath, p)
 	}
-	if v.(func() bool)() {
+	if p.fd {
 		return fdInput
 	}
 	return pipeInput
 }
 
 // probeFD asks ffmpegPath for its protocols (5 s at most) and reports whether
-// the Input section lists fd. Any failure reads as no.
-func probeFD(ffmpegPath string) bool {
+// the Input section lists fd, and whether the probe ran at all.
+func probeFD(ffmpegPath string) (fd, ran bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-protocols").Output()
 	if err != nil {
-		return false
+		return false, false
 	}
-	return listsInputProtocol(string(out), "fd")
+	return listsInputProtocol(string(out), "fd"), true
 }
 
 // listsInputProtocol reports whether ffmpeg -protocols output lists name in its
@@ -314,6 +323,12 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 	if log == nil {
 		log = slog.Default()
 	}
+	if r.Method == http.MethodHead {
+		// net/http discards a HEAD's body: answer its headers without running
+		// ffmpeg over the whole file for nothing.
+		writeTranscodeHeader(w)
+		return
+	}
 	logPath := in.url
 	cmd := exec.CommandContext(r.Context(), ffmpegPath, transcodeArgs(in, startSec)...)
 	if in.file != nil {
@@ -331,12 +346,7 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
 		return
 	}
-	// Headers must go out before the body; no Accept-Ranges since the stream is
-	// not byte-seekable.
-	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Accept-Ranges", "none")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
+	writeTranscodeHeader(w) // before the body
 	if _, err := io.Copy(w, stdout); err != nil {
 		// Client disconnect / broken pipe is normal (seek, pause, navigate away).
 		log.Debug("transcode copy ended", "path", logPath, "err", err)
@@ -345,6 +355,15 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpeg
 		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
 		log.Warn("ffmpeg transcode failed", "path", logPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+}
+
+// writeTranscodeHeader sends a transcode's status and headers: MP3, never
+// cached, and no Accept-Ranges since the stream is not byte-seekable.
+func writeTranscodeHeader(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Accept-Ranges", "none")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
 }
 
 // HasFFmpeg reports whether an ffmpeg binary is resolvable at ffmpegPath (or on
