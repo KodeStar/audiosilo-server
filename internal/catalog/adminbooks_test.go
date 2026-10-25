@@ -601,3 +601,31 @@ func TestMergeSuggestionPrefersNaturalOrder(t *testing.T) {
 		}
 	}
 }
+
+// PlaysRemuxed: MP3 books whose files are all browser containers or .mka play
+// in browsers once the server remuxes the .mka parts; any other codec does not.
+func TestPlaysRemuxed(t *testing.T) {
+	t.Parallel()
+	files := func(formats ...string) []BookFile {
+		out := make([]BookFile, len(formats))
+		for i, f := range formats {
+			out[i].Format = f
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		book Book
+		want bool
+	}{
+		{"single mka of mp3", Book{Format: "mka", Codec: "mp3", Files: files("mka")}, true},
+		{"mp3 then mka", Book{Format: "mp3", Codec: "mp3", Files: files("mp3", "mka")}, true},
+		{"upper case", Book{Format: "MKA", Codec: "MP3", Files: files("MKA")}, true},
+		{"aac in mka", Book{Format: "mka", Codec: "aac", Files: files("mka")}, false},
+		{"unknown codec", Book{Format: "mka", Codec: "", Files: files("mka")}, false},
+	} {
+		if got := tc.book.PlaysRemuxed(); got != tc.want {
+			t.Errorf("%s: PlaysRemuxed = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

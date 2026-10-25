@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -443,7 +445,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 			book.Episode.Fetch = &st
 		}
 	}
-	dp := book.PlaysInBrowsers()
+	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
 	writeJSON(w, http.StatusOK, book)
 }
@@ -478,7 +480,7 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		"files":           book.Files,
 		"chapters":        book.Chapters,
 		"codec":           book.Codec,
-		"direct_playable": book.PlaysInBrowsers(),
+		"direct_playable": a.directPlayable(book),
 	}
 	// Additive: present only when the chapters are a community list fitted onto
 	// the audio ("community") or the ones the Bridge found in the narration
@@ -577,11 +579,22 @@ func coverETag(updatedAt string) string {
 	return `"cover-` + strconv.FormatInt(modified.UnixNano(), 36) + `"`
 }
 
+// directPlayable is what /item and /chapters say as direct_playable: the book
+// plays in browsers as stored, or it is MP3 in Matroska and this server serves
+// that as its remuxed MP3 (handleStream).
+func (a *API) directPlayable(book *catalog.Book) bool {
+	return book.PlaysInBrowsers() || (a.remuxOn() && book.PlaysRemuxed())
+}
+
 // handleStream serves an audio file by path. By default it streams the file with
 // Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
 // to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
 // transcode mid-file (transcoded output is not byte-seekable, so seeking is by
-// re-requesting). The path is the actual audio file (a chapter's file_path).
+// re-requesting). An .mka holding MP3 is served, at this same URL, as its
+// lossless remux to plain MP3 (server#174: no browser and no iOS player opens
+// Matroska) while ffmpeg is configured, unless ?original=1 asks for the stored
+// bytes; one ffmpeg can't remux (another codec inside) is served as stored. The
+// path is the actual audio file (a chapter's file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	lib, rel, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -617,7 +630,39 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 		return
 	}
-	media.ServeFile(w, r, abs, r.URL.Query().Get("download") == "1")
+	download := r.URL.Query().Get("download") == "1"
+	if a.remuxOn() && strings.EqualFold(filepath.Ext(rel), ".mka") && r.URL.Query().Get("original") != "1" {
+		if a.serveRemuxed(w, r, abs, download) {
+			return
+		}
+	}
+	media.ServeFile(w, r, abs, download)
+}
+
+// serveRemuxed answers with abs's remuxed MP3 (media.Remuxer), Range and
+// validators included (Last-Modified is the source's). It reports false, having
+// written nothing, when the stored file should be served instead; true also when
+// the request went away while waiting.
+func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, abs string, download bool) bool {
+	f, src, err := a.remux.Open(r.Context(), a.baseCtx, a.ffmpeg, abs)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return true
+		}
+		if !errors.Is(err, media.ErrNotRemuxable) && !errors.Is(err, media.ErrRemuxUnavailable) && !errors.Is(err, fs.ErrNotExist) {
+			a.log.Warn("remux failed: serving Matroska as stored", "path", abs, "err", err)
+		}
+		return false
+	}
+	defer f.Close()
+	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
+	if download {
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+	}
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, name, src.ModTime(), f)
+	return true
 }
 
 // beginTranscode admits one ?transcode=1 request for the file at rel: 503 when

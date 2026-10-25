@@ -1,12 +1,14 @@
 package media
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -270,5 +272,110 @@ func TestCoverMIMESniffsTheBytes(t *testing.T) {
 		if ok != tc.ok || (ok && mime != tc.mime) {
 			t.Errorf("%s: coverMIME = %q, %v; want %q, %v", name, mime, ok, tc.mime, tc.ok)
 		}
+	}
+}
+
+func TestTranscodeArgs(t *testing.T) {
+	t.Parallel()
+	tail := []string{"-vn", "-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", "pipe:1"}
+	for _, tc := range []struct {
+		name string
+		in   inputSpec
+		want []string
+	}{
+		// A path and the seekable descriptor seek on the input side.
+		{"path", inputSpec{url: "/b/x.m4b"}, []string{"-nostdin", "-loglevel", "error", "-ss", "8.500", "-i", "/b/x.m4b"}},
+		{"fd", fdInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "fd", "-ss", "8.500", "-i", "fd:"}},
+		// A pipe can't seek: -ss after -i decodes up to it.
+		{"pipe", pipeInput, []string{"-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-ss", "8.500"}},
+	} {
+		if got := transcodeArgs(tc.in, 8.5); !slices.Equal(got, append(tc.want, tail...)) {
+			t.Errorf("%s: transcodeArgs = %q\nwant %q", tc.name, got, append(tc.want, tail...))
+		}
+	}
+	if got := transcodeArgs(fdInput, 0); slices.Contains(got, "-ss") {
+		t.Errorf("transcodeArgs from 0 = %q, want no -ss", got)
+	}
+}
+
+func TestListsInputProtocol(t *testing.T) {
+	t.Parallel()
+	out := "Supported file protocols:\nInput:\n  async\n  fd\n  file\nOutput:\n  file\n"
+	if !listsInputProtocol(out, "fd") {
+		t.Error("fd in Input not found")
+	}
+	if listsInputProtocol("Input:\n  file\n  pipe\nOutput:\n  fd\n", "fd") {
+		t.Error("fd only in Output read as an input protocol")
+	}
+	if listsInputProtocol("", "fd") {
+		t.Error("empty output read as listing fd")
+	}
+}
+
+// transcodeOpened runs TranscodeOpened over src from start and returns the
+// output's ffprobe duration.
+func transcodeOpened(t *testing.T, ffprobe, src string, start float64) float64 {
+	t.Helper()
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// A moved offset must not matter: TranscodeOpened starts at the top.
+	if _, err := f.Seek(100, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	TranscodeOpened(rec, httptest.NewRequest(http.MethodGet, "/", nil), f, "ffmpeg", start, nil)
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("transcode = %d with %d bytes", rec.Code, rec.Body.Len())
+	}
+	out := filepath.Join(t.TempDir(), "out.mp3")
+	if err := os.WriteFile(out, rec.Body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return ffprobeOf(t, ffprobe, out).duration(t)
+}
+
+// nonFaststartM4A writes a 10-second AAC .m4a whose moov box follows its mdat
+// (ffmpeg's default without +faststart), which only a seekable input demuxes.
+func nonFaststartM4A(t *testing.T) string {
+	t.Helper()
+	needFFmpeg(t)
+	if inputFor("ffmpeg") != fdInput {
+		t.Skip("this ffmpeg has no fd: input protocol (older than 6.1)")
+	}
+	src := filepath.Join(t.TempDir(), "episode.m4a")
+	if out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=10",
+		"-c:a", "aac", "-b:a", "64k", "-y", src).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not write an .m4a: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moov, mdat := bytes.Index(data, []byte("moov")), bytes.Index(data, []byte("mdat")); moov < mdat {
+		t.Fatalf("fixture moov at %d, mdat at %d: want the index at the end", moov, mdat)
+	}
+	return src
+}
+
+// TestTranscodeOpenedNonFaststart (server#181): a podcast m4a with its index at
+// the end transcodes from a descriptor (pipe:0 could not demux it).
+func TestTranscodeOpenedNonFaststart(t *testing.T) {
+	t.Parallel()
+	ffprobe := needFFmpeg(t)
+	if d := transcodeOpened(t, ffprobe, nonFaststartM4A(t), 0); d < 9.5 || d > 10.5 {
+		t.Fatalf("transcoded duration = %v, want about 10", d)
+	}
+}
+
+// TestTranscodeOpenedSeeks (server#181): ?t= is an input seek on the
+// descriptor: from 8 s of 10 the output is the last 2 s.
+func TestTranscodeOpenedSeeks(t *testing.T) {
+	t.Parallel()
+	ffprobe := needFFmpeg(t)
+	if d := transcodeOpened(t, ffprobe, nonFaststartM4A(t), 8); d < 1.5 || d > 2.5 {
+		t.Fatalf("transcoded duration from 8 s = %v, want about 2", d)
 	}
 }

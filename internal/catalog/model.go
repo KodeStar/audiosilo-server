@@ -170,9 +170,10 @@ type Book struct {
 	ChaptersSource string `json:"chapters_source,omitempty"`
 
 	// DirectPlayable, when set, reports whether the audio plays natively in
-	// browsers (so the client knows when to request ?transcode=1): PlaysInBrowsers,
-	// its format, codec and every file's container. Computed by the API for
-	// single-book responses; nil/omitted in list views.
+	// browsers as the server serves it (so the client knows when to request
+	// ?transcode=1): PlaysInBrowsers, its format, codec and every file's
+	// container, or PlaysRemuxed while the server remuxes MP3 in Matroska.
+	// Computed by the API for single-book responses; nil/omitted in list views.
 	DirectPlayable *bool `json:"direct_playable,omitempty"`
 
 	// DedupKey groups copies of the same logical book (across libraries, and later
