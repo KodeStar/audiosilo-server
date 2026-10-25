@@ -37,16 +37,16 @@ describe('copyText', () => {
     expect(document.activeElement).toBe(button);
   });
 
-  it('reports a refused copy as a failure', async () => {
-    stubExecCommand(() => false);
-    expect(await copyText('x')).toBe(false);
-    expect(document.querySelector('textarea')).toBeNull();
-  });
-
-  it('removes the textarea and reports failure when execCommand throws', async () => {
-    stubExecCommand(() => {
-      throw new Error('denied');
-    });
+  it.each([
+    ['refuses', () => false],
+    [
+      'throws',
+      () => {
+        throw new Error('denied');
+      },
+    ],
+  ])('removes the textarea and reports failure when execCommand %s', async (_, impl) => {
+    stubExecCommand(impl);
     expect(await copyText('x')).toBe(false);
     expect(document.querySelector('textarea')).toBeNull();
     expect(document.activeElement).toBe(button);
