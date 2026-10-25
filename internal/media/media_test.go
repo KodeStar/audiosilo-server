@@ -360,22 +360,16 @@ func nonFaststartM4A(t *testing.T) string {
 	return src
 }
 
-// TestTranscodeOpenedNonFaststart (server#181): a podcast m4a with its index at
-// the end transcodes from a descriptor (pipe:0 could not demux it).
-func TestTranscodeOpenedNonFaststart(t *testing.T) {
+// TestTranscodeOpened (server#181): a podcast m4a with its index at the end
+// transcodes from a descriptor (pipe:0 could not demux it), and ?t= is an
+// input seek on it: from 8 s of 10 the output is the last 2 s.
+func TestTranscodeOpened(t *testing.T) {
 	t.Parallel()
 	ffprobe := needFFmpeg(t)
-	if d := transcodeOpened(t, ffprobe, nonFaststartM4A(t), 0); d < 9.5 || d > 10.5 {
-		t.Fatalf("transcoded duration = %v, want about 10", d)
-	}
-}
-
-// TestTranscodeOpenedSeeks (server#181): ?t= is an input seek on the
-// descriptor: from 8 s of 10 the output is the last 2 s.
-func TestTranscodeOpenedSeeks(t *testing.T) {
-	t.Parallel()
-	ffprobe := needFFmpeg(t)
-	if d := transcodeOpened(t, ffprobe, nonFaststartM4A(t), 8); d < 1.5 || d > 2.5 {
-		t.Fatalf("transcoded duration from 8 s = %v, want about 2", d)
+	src := nonFaststartM4A(t)
+	for _, tc := range []struct{ start, want float64 }{{0, 10}, {8, 2}} {
+		if d := transcodeOpened(t, ffprobe, src, tc.start); d < tc.want-0.5 || d > tc.want+0.5 {
+			t.Errorf("transcoded duration from %v s = %v, want about %v", tc.start, d, tc.want)
+		}
 	}
 }

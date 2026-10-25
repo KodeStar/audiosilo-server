@@ -656,12 +656,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, abs string, d
 	}
 	defer f.Close()
 	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
-	if download {
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
-	}
-	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, name, src.ModTime(), f)
+	media.ServeOpenedAs(w, r, f, name, src.ModTime(), download)
 	return true
 }
 

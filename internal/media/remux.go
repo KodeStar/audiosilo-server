@@ -25,13 +25,16 @@ import (
 // by mtime, which a hit bumps), the free space a remux must leave on the cache's
 // disk, how many run at once (an I/O-bound stream copy, not an encoder: its own
 // limit, apart from the transcode slots), how long one may take, and how many
-// refused files are remembered.
+// refused files are remembered. A hit bumps its copy's mtime at most once per
+// remuxTouchEvery: a player's run of Range requests is one use, not one inode
+// write each.
 const (
 	remuxCacheBytes = 8 << 30
 	remuxMinFree    = 1 << 30
 	remuxConcurrent = 2
 	remuxTimeout    = 30 * time.Minute
 	remuxFailedMax  = 1024
+	remuxTouchEvery = 10 * time.Minute
 )
 
 var (
@@ -40,7 +43,8 @@ var (
 	// file's size and mtime, so it is not tried again until the file changes.
 	ErrNotRemuxable = errors.New("media: not remuxable to mp3")
 	// ErrRemuxUnavailable: the remux was skipped (too little free disk for it,
-	// or its cached copy went before it could be opened).
+	// the source changed while it waited, or its cached copy went before it
+	// could be opened).
 	ErrRemuxUnavailable = errors.New("media: remux unavailable")
 )
 
@@ -61,8 +65,6 @@ func Remuxable(format, codec string) bool {
 type Remuxer struct {
 	dir      string
 	maxBytes int64
-	minFree  uint64
-	timeout  time.Duration
 	log      *slog.Logger
 	sem      chan struct{}
 	// freeSpace reads the free space on dir's disk (diskspace.Of); run starts
@@ -95,7 +97,7 @@ func NewRemuxer(dir string, log *slog.Logger) (*Remuxer, error) {
 		return nil, err
 	}
 	m := &Remuxer{
-		dir: dir, maxBytes: remuxCacheBytes, minFree: remuxMinFree, timeout: remuxTimeout, log: log,
+		dir: dir, maxBytes: remuxCacheBytes, log: log,
 		sem:       make(chan struct{}, remuxConcurrent),
 		freeSpace: func(path string) (uint64, bool) { _, free, ok := diskspace.Of(path); return free, ok },
 		run:       runFFmpeg,
@@ -131,48 +133,33 @@ func (m *Remuxer) cachePath(key string) string { return filepath.Join(m.dir, key
 // The errors are ErrNotRemuxable, ErrRemuxUnavailable, ctx's, or a failure to
 // read abs or to run ffmpeg (serve the stored bytes for any of them).
 func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, os.FileInfo, error) {
-	src, err := os.Open(abs)
+	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, nil, err
 	}
-	info, err := src.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		src.Close()
+	if !info.Mode().IsRegular() {
 		return nil, nil, fmt.Errorf("media: remux source %s is not a regular file", abs)
 	}
 	key := remuxKey(abs, info)
+
+	// The hit check runs under mu, so a leader (which renames its copy into
+	// place before leaving inflight) is never missed between the two.
+	m.mu.Lock()
 	if f, ok := m.hit(key); ok {
-		src.Close()
+		m.mu.Unlock()
 		return f, info, nil
 	}
-
-	m.mu.Lock()
 	if _, refused := m.failed[key]; refused {
 		m.mu.Unlock()
-		src.Close()
 		return nil, nil, ErrNotRemuxable
 	}
 	fl, waiting := m.inflight[key]
 	if !waiting {
-		// A leader that finished since the hit check above renamed its copy into
-		// place before leaving inflight: look again before starting another.
-		if _, err := os.Stat(m.cachePath(key)); err == nil {
-			m.mu.Unlock()
-			src.Close()
-			if f, ok := m.hit(key); ok {
-				return f, info, nil
-			}
-			return nil, nil, ErrRemuxUnavailable
-		}
 		fl = &remuxFlight{done: make(chan struct{})}
 		m.inflight[key] = fl
+		go m.lead(runCtx, ffmpegPath, key, abs, info, fl)
 	}
 	m.mu.Unlock()
-	if waiting {
-		src.Close()
-	} else {
-		go m.lead(runCtx, ffmpegPath, key, src, info.Size(), fl)
-	}
 
 	select {
 	case <-fl.done:
@@ -191,23 +178,24 @@ func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os
 }
 
 // hit opens key's cached copy if it is there and marks it used (its mtime is
-// the LRU's clock).
+// the LRU's clock, bumped at most once per remuxTouchEvery).
 func (m *Remuxer) hit(key string) (*os.File, bool) {
 	path := m.cachePath(key)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false
 	}
-	now := time.Now()
-	_ = os.Chtimes(path, now, now)
+	if fi, err := f.Stat(); err == nil && time.Since(fi.ModTime()) > remuxTouchEvery {
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
+	}
 	return f, true
 }
 
-// lead runs key's remux from src (which it closes) and settles fl for every
-// waiter.
-func (m *Remuxer) lead(runCtx context.Context, ffmpegPath, key string, src *os.File, size int64, fl *remuxFlight) {
-	defer src.Close()
-	err := m.remux(runCtx, ffmpegPath, key, src, size)
+// lead runs key's remux of abs (info is what the key was made from) and
+// settles fl for every waiter.
+func (m *Remuxer) lead(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo, fl *remuxFlight) {
+	err := m.remux(runCtx, ffmpegPath, key, abs, info)
 	m.mu.Lock()
 	if errors.Is(err, ErrNotRemuxable) {
 		if len(m.failed) >= remuxFailedMax {
@@ -226,8 +214,8 @@ func (m *Remuxer) lead(runCtx context.Context, ffmpegPath, key string, src *os.F
 
 // remux writes key's copy: a temporary .part file renamed into place once
 // ffmpeg succeeds, then a sweep that keeps it.
-func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key string, src *os.File, size int64) error {
-	ctx, cancel := context.WithTimeout(runCtx, m.timeout)
+func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo) error {
+	ctx, cancel := context.WithTimeout(runCtx, remuxTimeout)
 	defer cancel()
 	select {
 	case m.sem <- struct{}{}:
@@ -235,14 +223,26 @@ func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key string, src *os.
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if free, ok := m.freeSpace(m.dir); ok && (free < uint64(size) || free-uint64(size) < m.minFree) {
+	size := uint64(info.Size())
+	if free, ok := m.freeSpace(m.dir); ok && (free < size || free-size < remuxMinFree) {
 		if !m.lowDisk.Swap(true) {
 			m.log.Warn("remux skipped: too little free disk for the remux cache; serving Matroska as stored",
-				"dir", m.dir, "free_bytes", free, "needed_bytes", uint64(size)+m.minFree)
+				"dir", m.dir, "free_bytes", free, "needed_bytes", size+remuxMinFree)
 		}
 		return ErrRemuxUnavailable
 	}
 	m.lowDisk.Store(false)
+
+	// Opened only once a slot is free, so queued remuxes hold no descriptor;
+	// a source that changed since the key was made is not cached under it.
+	src, err := os.Open(abs)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if now, err := src.Stat(); err != nil || !now.Mode().IsRegular() || now.Size() != info.Size() || !now.ModTime().Equal(info.ModTime()) {
+		return ErrRemuxUnavailable
+	}
 
 	tmp, err := os.CreateTemp(m.dir, key+".*.part")
 	if err != nil {

@@ -159,9 +159,16 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 		http.Error(w, "not found", 404)
 		return
 	}
-	absPath := f.Name()
+	ServeOpenedAs(w, r, f, filepath.Base(f.Name()), info.ModTime(), download)
+}
+
+// ServeOpenedAs serves the open file f with Range under the name name (the
+// download filename and the extension fallback for its type) and modTime as
+// its Last-Modified: a remuxed copy is served as the source's stem with .mp3
+// and the source's mtime.
+func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name string, modTime time.Time, download bool) {
 	if download {
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(absPath)))
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	// Set an explicit audio Content-Type so strict players (iOS AVPlayer) accept
@@ -170,14 +177,14 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 	// actual bytes, falling back to the extension.
 	ct := sniffAudioType(f)
 	if ct == "" {
-		ct = audioContentType(filepath.Ext(absPath))
+		ct = audioContentType(filepath.Ext(name))
 	}
 	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	// ServeContent negotiates Range, sets Content-Type from the extension (unless
 	// already set above), and handles conditional/partial responses.
-	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+	http.ServeContent(w, r, name, modTime, f)
 }
 
 // Transcode streams absPath re-encoded to MP3 via ffmpeg, starting startSec into
@@ -193,7 +200,7 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	transcodeInput(w, r, inputSpec{url: absPath}, nil, ffmpegPath, startSec, log)
+	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, log)
 }
 
 // TranscodeOpened transcodes an already verified descriptor (a podcast
@@ -207,13 +214,18 @@ func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegP
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
 		return
 	}
-	transcodeInput(w, r, inputFor(ffmpegPath), f, ffmpegPath, startSec, log)
+	in := inputFor(ffmpegPath)
+	in.file = f
+	transcodeInput(w, r, in, ffmpegPath, startSec, log)
 }
 
 // inputSpec is how ffmpeg reads its input: a path (proto ""), or the
-// descriptor handed over as its stdin through the fd: protocol (seekable) or
-// pipe:0 (not seekable, for an ffmpeg older than 6.1).
-type inputSpec struct{ proto, url string }
+// descriptor file handed over as its stdin through the fd: protocol (seekable)
+// or pipe:0 (not seekable, for an ffmpeg older than 6.1).
+type inputSpec struct {
+	proto, url string
+	file       *os.File
+}
 
 var (
 	fdInput   = inputSpec{proto: "fd", url: "fd:"}
@@ -221,7 +233,8 @@ var (
 )
 
 // fdSupport remembers, per ffmpeg path, whether its input protocols include
-// fd (probeFD), so each binary is asked once per process.
+// fd (a sync.OnceValue over probeFD), so each binary is asked once per
+// process, however many first requests arrive together.
 var fdSupport sync.Map
 
 // inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
@@ -229,9 +242,9 @@ var fdSupport sync.Map
 func inputFor(ffmpegPath string) inputSpec {
 	v, ok := fdSupport.Load(ffmpegPath)
 	if !ok {
-		v, _ = fdSupport.LoadOrStore(ffmpegPath, probeFD(ffmpegPath))
+		v, _ = fdSupport.LoadOrStore(ffmpegPath, sync.OnceValue(func() bool { return probeFD(ffmpegPath) }))
 	}
-	if v.(bool) {
+	if v.(func() bool)() {
 		return fdInput
 	}
 	return pipeInput
@@ -279,16 +292,14 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 	if in.proto != "" {
 		args = append(args, "-protocol_whitelist", in.proto)
 	}
-	seek := []string{}
+	var seek []string
 	if startSec > 0 {
 		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}
 	}
-	if in.proto != "pipe" {
-		args = append(args, seek...)
-	}
-	args = append(args, "-i", in.url)
 	if in.proto == "pipe" {
-		args = append(args, seek...)
+		args = append(append(args, "-i", in.url), seek...)
+	} else {
+		args = append(append(args, seek...), "-i", in.url)
 	}
 	return append(args,
 		"-vn",                // drop any cover-art/video stream
@@ -299,17 +310,15 @@ func transcodeArgs(in inputSpec, startSec float64) []string {
 	)
 }
 
-func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, input *os.File, ffmpegPath string, startSec float64, log *slog.Logger) {
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
 	logPath := in.url
-	if input != nil {
-		logPath = input.Name()
-	}
 	cmd := exec.CommandContext(r.Context(), ffmpegPath, transcodeArgs(in, startSec)...)
-	if input != nil {
-		cmd.Stdin = input
+	if in.file != nil {
+		logPath = in.file.Name()
+		cmd.Stdin = in.file
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

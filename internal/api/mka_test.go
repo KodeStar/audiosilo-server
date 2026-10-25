@@ -121,12 +121,10 @@ func (m *mkaEnv) directPlayable(t *testing.T, book string) bool {
 	return chapters.DirectPlayable
 }
 
-// remuxDir is the env's remux cache folder.
-func (m *mkaEnv) remuxDir() string { return filepath.Join(m.api.boot.DataDir, "cache", "remux") }
-
+// cachedFiles counts the files in the env's remux cache folder.
 func (m *mkaEnv) cachedFiles(t *testing.T) int {
 	t.Helper()
-	entries, err := os.ReadDir(m.remuxDir())
+	entries, err := os.ReadDir(filepath.Join(m.api.boot.DataDir, "cache", "remux"))
 	if err != nil {
 		t.Fatal(err)
 	}
