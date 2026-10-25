@@ -522,7 +522,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.Remuxer`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
-  `audio/mpeg` with Range, Last-Modified the source's, `download=1` named `<stem>.mp3`; `original=1`
+  `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
+  copy's mtime, never the source's: a 2.4.x client's If-Range / If-Modified-Since for the stored
+  Matroska gets the whole MP3, never a 304 or a spliced range), `download=1` named `<stem>.mp3`; `original=1`
   serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
   download under `.mka`, which AVFoundation won't open offline). The cache is
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
@@ -533,10 +535,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
   failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
   as they are for no regular file at the path (a 404),
-  so those still play on web only, through `?transcode=1`. A remux that can't be had now (the disk
-  guard, a failure other than that refusal) answers the plain URL with the live transcode instead
-  (`serveRemuxed`), since `direct_playable` told the web player not to ask for one (a 503 while the
-  server stops). `/item` and `/chapters` say
+  so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
+  running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
+  timeout; the disk guard; a failure other than that refusal) answers the plain URL with the live
+  transcode instead (`serveRemuxed`; `download=1` still named `<stem>.mp3`), the remux going on for
+  the next request, since `direct_playable` told the web player not to ask for one (a 503 while the
+  server stops). `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
+  `Remuxer.WarmAll`: in the background under `baseCtx`, one at a time so one book holds at most one
+  of the 2 slots, the cached and known refusals skipped; never blocks the answer), so the first
+  stream is usually a hit. `/item` and `/chapters` say
   `direct_playable: true` for a book `PlaysInBrowsers` or, while remux is on, `PlaysRemuxed` (codec
   `mp3`, every file a browser container or an `.mka` whose own codec, else the book's, is MP3):
   `API.directPlayable`. An `.mka` beside a file of the same name in

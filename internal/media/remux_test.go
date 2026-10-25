@@ -145,12 +145,12 @@ func TestRemuxerOpen(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	ctx := context.Background()
 
-	f, info, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f, etag, err := m.Open(ctx, ctx, "ffmpeg", src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want, _ := os.Stat(src); !info.ModTime().Equal(want.ModTime()) || info.Size() != want.Size() {
-		t.Fatalf("source info = %v %d, want the source's", info.ModTime(), info.Size())
+	if want := `"remux-` + strings.TrimSuffix(filepath.Base(f.Name()), ".mp3") + `"`; etag != want {
+		t.Fatalf("etag = %s, want the strong %s", etag, want)
 	}
 	if ct := sniffAudioType(f); ct != "audio/mpeg" {
 		t.Fatalf("remuxed file sniffs %q, want audio/mpeg", ct)
@@ -168,12 +168,12 @@ func TestRemuxerOpen(t *testing.T) {
 		t.Fatalf("cache dir mode = %v, want 0700", fi.Mode().Perm())
 	}
 
-	f2, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f2, etag2, err := m.Open(ctx, ctx, "ffmpeg", src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f2.Close()
-	if n := runs.Load(); n != 1 || f2.Name() != f.Name() {
+	if n := runs.Load(); n != 1 || f2.Name() != f.Name() || etag2 != etag {
 		t.Fatalf("second open: %d runs, %s vs %s; want a hit", n, f2.Name(), f.Name())
 	}
 
@@ -181,17 +181,17 @@ func TestRemuxerOpen(t *testing.T) {
 	if err := os.Chtimes(src, later, later); err != nil {
 		t.Fatal(err)
 	}
-	f3, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	f3, etag3, err := m.Open(ctx, ctx, "ffmpeg", src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	again, _ := io.ReadAll(f3)
 	f3.Close()
-	if n := runs.Load(); n != 2 || f3.Name() == f.Name() {
+	if n := runs.Load(); n != 2 || f3.Name() == f.Name() || etag3 == etag {
 		t.Fatalf("after touching the source: %d runs, same file %v; want a new remux", n, f3.Name() == f.Name())
 	}
-	// Bitexact: the same source remuxes to the same bytes, so a Range resume
-	// (If-Range on Last-Modified) holds across a re-remux.
+	// Bitexact: the same audio remuxes to the same bytes, so the ETag of a key
+	// re-remuxed after an eviction still names its bytes.
 	if !bytes.Equal(first, again) {
 		t.Fatal("re-remux of the same audio differs")
 	}
@@ -443,5 +443,78 @@ func TestRemuxerEvicts(t *testing.T) {
 	}
 	if want := []string{"a.mp3", "d.mp3"}; !slices.Equal(left, want) {
 		t.Fatalf("after the sweep: %q, want %q", left, want)
+	}
+}
+
+// TestRemuxerWarmAll: the warm remuxes a book's files in the background, one
+// at a time, skipping the cached and the refused, and a request after it is a
+// hit.
+func TestRemuxerWarmAll(t *testing.T) {
+	t.Parallel()
+	needFFmpeg(t)
+	dir := t.TempDir()
+	one, two, aac := filepath.Join(dir, "1.mka"), filepath.Join(dir, "2.mka"), filepath.Join(dir, "aac.mka")
+	writeMKA(t, one, "mp3")
+	writeMKA(t, two, "mp3")
+	writeMKA(t, aac, "aac")
+	m, runs := countingRemuxer(t, nil)
+	var most, now atomic.Int32
+	run := m.run
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+		n := now.Add(1)
+		defer now.Add(-1)
+		for {
+			if cur := most.Load(); n <= cur || most.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		return run(ctx, ffmpegPath, args, stdin)
+	}
+	ctx := context.Background()
+	m.WarmAll(ctx, "ffmpeg", []string{one, aac, two})
+	m.Wait()
+	if n := runs.Load(); n != 3 || most.Load() != 1 {
+		t.Fatalf("%d runs, at most %d at once; want 3, one at a time", n, most.Load())
+	}
+	m.WarmAll(ctx, "ffmpeg", []string{one, aac, two, filepath.Join(dir, "missing.mka")})
+	m.Wait()
+	if n := runs.Load(); n != 3 {
+		t.Fatalf("second warm ran ffmpeg %d more times, want none", n-3)
+	}
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if n := runs.Load(); n != 3 {
+		t.Fatalf("open after the warm ran ffmpeg again (%d runs)", n)
+	}
+}
+
+// TestRemuxerHeldWaiterTimesOut: a waiter that stops waiting (its bounded
+// wait) leaves the held remux running, and it caches once let go.
+func TestRemuxerHeldWaiterTimesOut(t *testing.T) {
+	t.Parallel()
+	needFFmpeg(t)
+	src := filepath.Join(t.TempDir(), "book.mka")
+	writeMKA(t, src, "mp3")
+	m, runs := countingRemuxer(t, nil)
+	gate := make(chan struct{})
+	m.HoldRemuxesForTests(gate)
+	wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, _, err := m.Open(wait, context.Background(), "ffmpeg", src); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bounded wait = %v, want DeadlineExceeded", err)
+	}
+	close(gate)
+	m.Wait()
+	ctx := context.Background()
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("%d runs, want the held one only", n)
 	}
 }

@@ -100,6 +100,10 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	// (server#189: one outliving its test failed mid-write, or left the folder
 	// not empty to remove).
 	t.Cleanup(backups.Wait)
+	// A remux or warm a request started finishes before the data folder goes.
+	if a.remux != nil {
+		t.Cleanup(a.remux.Wait)
+	}
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	a.SetBridge(bridge.New(db, time.Now))

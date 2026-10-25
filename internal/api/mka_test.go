@@ -10,7 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -121,14 +124,34 @@ func (m *mkaEnv) directPlayable(t *testing.T, book string) bool {
 	return chapters.DirectPlayable
 }
 
-// cachedFiles counts the files in the env's remux cache folder.
+// cachedFiles counts the remuxed copies in the env's remux cache folder (not
+// the .part files of remuxes under way).
 func (m *mkaEnv) cachedFiles(t *testing.T) int {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(m.api.boot.DataDir, "cache", "remux"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(entries)
+	n := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".mp3") {
+			n++
+		}
+	}
+	return n
+}
+
+// holdRemuxes holds the env's remuxes until the returned release is called
+// (also at cleanup, before the env waits for its remuxes, so a failed test
+// never hangs).
+func (m *mkaEnv) holdRemuxes(t *testing.T) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	m.api.remux.HoldRemuxesForTests(gate)
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	return release
 }
 
 // TestMatroskaAudioWithoutFFmpeg (D3a, #161): with ffmpeg off an .mka of MP3 is
@@ -195,8 +218,9 @@ func TestMatroskaMP3IsRemuxed(t *testing.T) {
 	if body[:3] != "ID3" {
 		t.Fatalf("remuxed stream starts %q, want an ID3 tag", body[:3])
 	}
-	if n := m.cachedFiles(t); n != 1 {
-		t.Fatalf("%d cached files after the remux, want 1", n)
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 2 {
+		t.Fatalf("%d cached files after the remux and the warms of /item, want the two MP3-in-MKA files", n)
 	}
 
 	resp, part := m.doHeaders(t, "GET", m.url("stream", mkaFile), m.token, "", map[string]string{"Range": "bytes=0-99"})
@@ -347,5 +371,127 @@ func TestMatroskaRemuxDenied(t *testing.T) {
 	if resp, _ := m.do(t, "GET", m.url("stream", mkaFile), readerTok, ""); resp.StatusCode != http.StatusOK ||
 		resp.Header.Get("Content-Type") != "audio/mpeg" {
 		t.Fatalf("reader's book = %d %q, want the remux", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
+// TestMatroskaRemuxWarmsOnItem: /item and /chapters start the remuxes of a
+// book's MP3-in-MKA files in the background without waiting for them, and skip
+// a book whose .mka holds AAC.
+func TestMatroskaRemuxWarmsOnItem(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	release := m.holdRemuxes(t)
+
+	// Held remuxes: the answers still come back at once.
+	if resp, body := m.do(t, "GET", m.url("item", mkaMixed), m.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("item = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := m.do(t, "GET", m.url("chapters", mkaBook), m.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("chapters = %d %s", resp.StatusCode, body)
+	}
+	if n := m.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files while held, want none yet", n)
+	}
+	release()
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 2 {
+		t.Fatalf("%d cached files after the warm, want the two MP3-in-MKA files", n)
+	}
+	if resp, _ := m.do(t, "GET", m.url("item", mkaAACBook), m.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("aac item = %d", resp.StatusCode)
+	}
+	m.api.remux.Wait()
+	if n := m.cachedFiles(t); n != 2 {
+		t.Fatalf("%d cached files after the AAC book's item, want still 2", n)
+	}
+	// The first stream is a hit: the remux's Range answer, not the transcode.
+	if resp, _ := m.do(t, "GET", m.url("stream", mkaMixedPart), m.token, ""); resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("stream after the warm = %d %q, want the cached remux", resp.StatusCode, resp.Header.Get("Accept-Ranges"))
+	}
+
+	// With ffmpeg off nothing is warmed.
+	m2 := newMKAEnv(t)
+	if resp, _ := m2.do(t, "GET", m2.url("item", mkaBook), m2.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("item without ffmpeg = %d", resp.StatusCode)
+	}
+	m2.api.remux.Wait()
+	if n := m2.cachedFiles(t); n != 0 {
+		t.Fatalf("%d cached files with ffmpeg off, want none", n)
+	}
+}
+
+// TestMatroskaColdRemuxTranscodes: a stream that finds its remux still running
+// after the bounded wait is transcoded live (a download still named .mp3), the
+// remux goes on, and the next request gets the cached copy.
+func TestMatroskaColdRemuxTranscodes(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	m.api.remuxWait = 20 * time.Millisecond
+	release := m.holdRemuxes(t)
+
+	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
+		resp.Header.Get("Accept-Ranges") != "none" || body == "" {
+		t.Fatalf("cold stream = %d %q %q (%d bytes), want the live transcode", resp.StatusCode,
+			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"), len(body))
+	}
+	resp, _ = m.do(t, "GET", m.url("stream", mkaFile)+"&download=1", m.token, "")
+	if cd := resp.Header.Get("Content-Disposition"); resp.Header.Get("Accept-Ranges") != "none" || cd != `attachment; filename="book.mp3"` {
+		t.Fatalf("cold download = %q %q, want the transcode named book.mp3", resp.Header.Get("Accept-Ranges"), cd)
+	}
+	release()
+	m.api.remux.Wait()
+	resp, _ = m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("stream after the remux = %d %q, want the cached remux", resp.StatusCode, resp.Header.Get("Accept-Ranges"))
+	}
+	if n := m.cachedFiles(t); n != 1 {
+		t.Fatalf("%d cached files, want the one remux", n)
+	}
+}
+
+// TestMatroskaRemuxValidators: the remux carries its own validators (a strong
+// ETag, the copy's mtime as Last-Modified), so the If-Range and
+// If-Modified-Since a 2.4.x client kept from the stored Matroska get the whole
+// MP3, never a 304 or MP3 bytes for a Matroska range; its own validators work.
+func TestMatroskaRemuxValidators(t *testing.T) {
+	t.Parallel()
+	m := newMKAEnv(t)
+	m.api.ffmpeg = "ffmpeg"
+	src := filepath.Join(m.lib.Root, filepath.FromSlash(mkaFile))
+	stored := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(src, stored, stored); err != nil {
+		t.Fatal(err)
+	}
+	// What a 2.4.x server sent for the stored .mka.
+	resp, _ := m.do(t, "GET", m.url("stream", mkaFile)+"&original=1", m.token, "")
+	oldLM := resp.Header.Get("Last-Modified")
+	if oldLM != stored.UTC().Format(http.TimeFormat) {
+		t.Fatalf("stored Last-Modified = %q", oldLM)
+	}
+
+	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
+	etag, lm := resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(etag, `"remux-`) || lm == "" || lm == oldLM {
+		t.Fatalf("remux = %d ETag %q Last-Modified %q (stored %q), want a strong ETag and the copy's mtime", resp.StatusCode, etag, lm, oldLM)
+	}
+
+	for _, c := range []struct {
+		name    string
+		headers map[string]string
+		status  int
+		length  int
+	}{
+		{"2.4.x If-Range", map[string]string{"Range": "bytes=0-99", "If-Range": oldLM}, http.StatusOK, len(body)},
+		{"2.4.x If-Modified-Since", map[string]string{"If-Modified-Since": oldLM}, http.StatusOK, len(body)},
+		{"own If-Range", map[string]string{"Range": "bytes=0-99", "If-Range": etag}, http.StatusPartialContent, 100},
+		{"own If-None-Match", map[string]string{"If-None-Match": etag}, http.StatusNotModified, 0},
+	} {
+		resp, got := m.doHeaders(t, "GET", m.url("stream", mkaFile), m.token, "", c.headers)
+		if resp.StatusCode != c.status || len(got) != c.length || (c.length > 0 && got != body[:c.length]) {
+			t.Errorf("%s = %d with %d bytes, want %d with %d", c.name, resp.StatusCode, len(got), c.status, c.length)
+		}
 	}
 }

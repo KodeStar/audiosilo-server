@@ -82,6 +82,8 @@ type Remuxer struct {
 	// refusing, so it warns once per spell.
 	evictMu sync.Mutex
 	lowDisk atomic.Bool
+	// running counts the remuxes and background warms under way (Wait).
+	running sync.WaitGroup
 }
 
 // remuxFlight is one remux in progress: done closes once err is set.
@@ -128,6 +130,33 @@ func (m *Remuxer) FakeFreeSpaceForTests(free uint64) {
 	m.freeSpace = func(string) (uint64, bool) { return free, true }
 }
 
+// HoldRemuxesForTests makes every remux wait for gate to close before ffmpeg
+// runs, for tests of a request that finds its remux cold. It panics outside a
+// test binary.
+func (m *Remuxer) HoldRemuxesForTests(gate <-chan struct{}) {
+	if !testing.Testing() {
+		panic("media.HoldRemuxesForTests called outside a test binary")
+	}
+	run := m.run
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return run(ctx, ffmpegPath, args, stdin)
+	}
+}
+
+// Wait blocks until the remuxes and background warms under way have ended
+// (tests, before their data folder goes).
+func (m *Remuxer) Wait() { m.running.Wait() }
+
+// remuxETag is the strong validator of key's copy: the key names the source's
+// path, size and mtime, and the remux is bitexact, so the same key is always
+// the same bytes, across a re-remux after an eviction too.
+func remuxETag(key string) string { return `"remux-` + key + `"` }
+
 // remuxKey names abs's cached copy: its path, size and mtime, hashed.
 func remuxKey(abs string, info os.FileInfo) string {
 	sum := sha256.Sum256([]byte(abs + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" +
@@ -138,22 +167,71 @@ func remuxKey(abs string, info os.FileInfo) string {
 func (m *Remuxer) cachePath(key string) string { return filepath.Join(m.dir, key+".mp3") }
 
 // Open returns the remuxed MP3 of the Matroska file abs (the caller has
-// SafeJoined it) and the source's FileInfo, whose mtime is the response's
-// Last-Modified (so validators outlive an eviction: the remux is
-// deterministic). The caller closes the file. A cold key remuxes under runCtx
-// (the server's lifetime, bounded by the remux timeout) while this call waits
-// on ctx: a request that leaves doesn't stop the remux the others wait for.
+// SafeJoined it) and its strong ETag (remuxETag); the copy's own mtime is its
+// Last-Modified, never the source's, so a validator a client kept for the
+// stored Matroska never matches it. The caller closes the file. A cold key
+// remuxes under runCtx (the server's lifetime, bounded by the remux timeout)
+// while this call waits on ctx: a request that leaves, or stops waiting,
+// doesn't stop the remux the others wait for.
 // The errors are ErrNotRemuxable (serve the stored bytes), ctx's, or one that
 // says the remux can't be had now: ErrRemuxUnavailable, runCtx's, or a
 // failure to read abs, run ffmpeg or write the cache.
-func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, os.FileInfo, error) {
+func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
+	f, key, fl, err := m.begin(runCtx, ffmpegPath, abs)
+	if err != nil {
+		return nil, "", err
+	}
+	if f == nil {
+		select {
+		case <-fl.done:
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		}
+		if fl.err != nil {
+			return nil, "", fl.err
+		}
+		if f, err = os.Open(m.cachePath(key)); err != nil {
+			// Evicted between the rename and this open (another remux's sweep).
+			return nil, "", ErrRemuxUnavailable
+		}
+	}
+	return f, remuxETag(key), nil
+}
+
+// WarmAll remuxes the Matroska files paths in the background under runCtx, one
+// after another (so a book's warm holds at most one of the remux slots), each
+// skipped when its copy is cached, it is known not to remux, or it is being
+// remuxed already (it is then waited for). It returns at once.
+func (m *Remuxer) WarmAll(runCtx context.Context, ffmpegPath string, paths []string) {
+	m.running.Add(1)
+	go func() {
+		defer m.running.Done()
+		for _, abs := range paths {
+			f, _, fl, err := m.begin(runCtx, ffmpegPath, abs)
+			switch {
+			case f != nil:
+				f.Close()
+			case err == nil:
+				select {
+				case <-fl.done:
+				case <-runCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+}
+
+// begin returns abs's cached copy (f) and its key, or, when there is none, the
+// flight that makes it, started here when none runs.
+func (m *Remuxer) begin(runCtx context.Context, ffmpegPath, abs string) (*os.File, string, *remuxFlight, error) {
 	info, err := os.Stat(abs)
 	switch {
 	case err != nil:
 		// Nothing to remux: the stored file's answer (a 404) is the right one.
-		return nil, nil, fmt.Errorf("%w: %v", ErrNotRemuxable, err)
+		return nil, "", nil, fmt.Errorf("%w: %v", ErrNotRemuxable, err)
 	case !info.Mode().IsRegular():
-		return nil, nil, fmt.Errorf("%w: %s is not a regular file", ErrNotRemuxable, abs)
+		return nil, "", nil, fmt.Errorf("%w: %s is not a regular file", ErrNotRemuxable, abs)
 	}
 	key := remuxKey(abs, info)
 
@@ -161,39 +239,24 @@ func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os
 	// again under mu, so a leader that renamed its copy into place and left
 	// inflight in between is never missed.
 	if f, ok := m.hit(key); ok {
-		return f, info, nil
+		return f, key, nil, nil
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if f, ok := m.hit(key); ok {
-		m.mu.Unlock()
-		return f, info, nil
+		return f, key, nil, nil
 	}
 	if _, refused := m.failed[key]; refused {
-		m.mu.Unlock()
-		return nil, nil, ErrNotRemuxable
+		return nil, "", nil, ErrNotRemuxable
 	}
 	fl, waiting := m.inflight[key]
 	if !waiting {
 		fl = &remuxFlight{done: make(chan struct{})}
 		m.inflight[key] = fl
+		m.running.Add(1)
 		go m.lead(runCtx, ffmpegPath, key, abs, info, fl)
 	}
-	m.mu.Unlock()
-
-	select {
-	case <-fl.done:
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
-	}
-	if fl.err != nil {
-		return nil, nil, fl.err
-	}
-	f, err := os.Open(m.cachePath(key))
-	if err != nil {
-		// Evicted between the rename and this open (another remux's sweep).
-		return nil, nil, ErrRemuxUnavailable
-	}
-	return f, info, nil
+	return nil, key, fl, nil
 }
 
 // hit opens key's cached copy if it is there and marks it used (its mtime is
@@ -214,6 +277,7 @@ func (m *Remuxer) hit(key string) (*os.File, bool) {
 // lead runs key's remux of abs (info is what the key was made from) and
 // settles fl for every waiter.
 func (m *Remuxer) lead(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo, fl *remuxFlight) {
+	defer m.running.Done()
 	err := m.remux(runCtx, ffmpegPath, key, abs, info)
 	m.mu.Lock()
 	if errors.Is(err, ErrNotRemuxable) {

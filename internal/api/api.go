@@ -134,6 +134,9 @@ type API struct {
 	// (server#174), served at the same stream URL while ffmpeg is configured
 	// (remuxOn). nil without a data dir.
 	remux *media.Remuxer
+	// remuxWait is how long a stream waits for a cold remux before it is
+	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
+	remuxWait time.Duration
 
 	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
 	// batch); coverReads bounds the art being read or waiting to be decoded and
@@ -206,6 +209,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		ipLimiter:      newRateLimiter(50, 200),        // ~50 req/s, burst 200, per IP
 		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
+		remuxWait:      remuxColdWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
