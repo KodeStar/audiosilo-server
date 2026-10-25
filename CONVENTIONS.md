@@ -545,19 +545,53 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the book's path (`bookAt`).
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
-  is web-only: served as `audio/x-matroska` (also sniffed from its EBML header `1A 45 DF A3`),
-  its chapters read by ffprobe, and never `direct_playable` whatever the codec
-  (`media.DirectPlayable(format, codec)`'s `containerFormats`), so the web player transcodes it,
-  nor is a folder book with an `.mka` part (`Book.PlaysInBrowsers` checks every file's container,
-  since a folder book's format is its first file's; the SQL twin `directPlayableExpr`);
-  a native app lists it but has no transcode path. An `.mka` beside a file of the same name in
+  has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML
+  header `1A 45 DF A3`) and never plays in browsers or on iOS (`media.DirectPlayable(format, codec)`'s
+  `containerFormats`; `Book.PlaysInBrowsers` checks every file's container, since a folder book's
+  format is its first file's; the SQL twin `directPlayableExpr`, the console's Playback column, stays
+  "as stored"). **Remux (server#174)**: while ffmpeg is configured (`API.remuxOn`: `a.ffmpeg != ""`
+  and the cache opened; no capability flag), `GET stream` of an `.mka` (with or without `download=1`,
+  not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.Remuxer`: `-f matroska`
+  forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
+  copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
+  `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
+  copy's mtime, never the source's: a 2.4.x client's If-Range / If-Modified-Since for the stored
+  Matroska gets the whole MP3, never a 304 or a spliced range), `download=1` named `<stem>.mp3`; `original=1`
+  serves the stored bytes. Old native builds stream it with no change (an old iOS build saves a
+  download under `.mka`, which AVFoundation won't open offline). The cache is
+  `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
+  renamed, never under the key when the source changed while read; `.part` swept at
+  start; LRU by mtime, a hit (no lock) touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
+  under 1 GiB free after it and the other remux still writing, `internal/diskspace`); single-flight per key, 2 at once, run under
+  `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
+  MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
+  failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
+  as they are for no regular file at the path (a 404),
+  so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
+  running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
+  timeout; the disk guard; a failure other than that refusal) answers the plain URL with the live
+  transcode instead (`serveRemuxed`; `download=1` still named `<stem>.mp3`), the remux going on for
+  the next request, since `direct_playable` told the web player not to ask for one (a 503 while the
+  server stops). `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
+  `Remuxer.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
+  server so warms hold at most one of the 2 slots, a book warmed once while queued, at most 16 queued
+  (more dropped), the cached (not marked used) and known refusals skipped, never a podcast library;
+  never blocks the answer; the launcher waits for them at shutdown), so the first
+  stream is usually a hit. `/item` and `/chapters` say
+  `direct_playable: true` for a book `PlaysInBrowsers` or, while remux is on, `PlaysRemuxed` (codec
+  `mp3`, every file a browser container or an `.mka` whose own codec, else the book's, is MP3):
+  `API.directPlayable`. An `.mka` beside a file of the same name in
   another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the
   book, as an `.aax` does (`library.folderAudio`), and out of the `/fs` listing too
   (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed.
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
-  re-request). Direct serving + Range stays the default. The scanner records each
+  re-request). Direct serving + Range stays the default. A podcast episode's verified descriptor
+  (`media.TranscodeOpened`, server#181) is ffmpeg's stdin read seekably as `fd:` (input seek, and a
+  non-faststart m4a demuxes) when the ffmpeg lists the fd input protocol (`inputFor`: probed once
+  per ffmpeg path, `-protocols`, 5 s, asked again after a probe that couldn't run), else the old
+  `pipe:0` with an output seek. A HEAD gets the transcode's headers without an ffmpeg run. The scanner records each
   book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to

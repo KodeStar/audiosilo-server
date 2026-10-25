@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
 // handleExportLibrary serves a library's book list as a downloadable JSON file
@@ -80,9 +80,7 @@ func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	// strconv.Quote gives the quoted-string form browsers expect (same convention
-	// as media.ServeFile's download header).
-	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(exp.Filename()))
+	media.SetAttachment(w.Header(), exp.Filename())
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(exp); err != nil {
 		// The status and headers are already out; all that is left is a log line.

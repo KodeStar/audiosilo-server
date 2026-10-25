@@ -254,7 +254,15 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}()
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
-	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
+	// Bind work detached from a request (a book's re-read, a remux) to the
+	// server's lifetime: ended with Run even when the server fails while ctx
+	// lives on (an embedding app's), and waited for, so no ffmpeg outlives it.
+	baseCtx, stopBase := context.WithCancel(ctx)
+	a.SetBaseContext(baseCtx)
+	defer func() {
+		stopBase()
+		a.WaitRemuxes()
+	}()
 	a.StartChapterChecks(ctx)
 	a.StartModules(ctx)
 	// Before the database closes, and even when the server fails while ctx

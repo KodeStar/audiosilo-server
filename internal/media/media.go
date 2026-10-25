@@ -1,10 +1,12 @@
 // Package media serves audiobook bytes to clients. It uses http.ServeContent so
 // HTTP Range requests (seek/scrub, resumable downloads) work out of the box, and
 // extracts embedded cover art on demand. For files whose codec a browser can't
-// decode it can transcode to MP3 on the fly via ffmpeg (see Transcode).
+// decode it can transcode to MP3 on the fly via ffmpeg (see Transcode), and it
+// remuxes MP3 in Matroska into a cached plain MP3 (see Remuxer).
 package media
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/dhowden/tag"
 )
@@ -29,8 +33,10 @@ var browserCodecs = map[string]bool{
 }
 
 // containerFormats are the book formats (file extensions, no dot) whose
-// container no browser plays, whatever the codec inside: Matroska audio (#161:
-// MP3 in .mka plays only through ?transcode=1).
+// container no browser plays, whatever the codec inside: Matroska audio (#161).
+// DirectPlayable is about the stored bytes; MP3 in .mka is served as its remux
+// to MP3 while ffmpeg is configured (Remuxer, Remuxable), which the API's
+// direct_playable takes into account.
 var containerFormats = map[string]bool{"mka": true}
 
 // DirectPlayable reports whether a book of format (its file extension, no dot,
@@ -153,9 +159,22 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 		http.Error(w, "not found", 404)
 		return
 	}
-	absPath := f.Name()
+	ServeOpenedAs(w, r, f, filepath.Base(f.Name()), info.ModTime(), download)
+}
+
+// SetAttachment makes the response a download saved as name (strconv.Quote
+// gives the quoted-string form browsers expect).
+func SetAttachment(h http.Header, name string) {
+	h.Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+}
+
+// ServeOpenedAs serves the open file f with Range under the name name (the
+// download filename and the extension fallback for its type) and modTime as
+// its Last-Modified: a remuxed copy is served as the source's stem with .mp3
+// and the copy's own mtime.
+func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name string, modTime time.Time, download bool) {
 	if download {
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(absPath)))
+		SetAttachment(w.Header(), name)
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	// Set an explicit audio Content-Type so strict players (iOS AVPlayer) accept
@@ -164,14 +183,14 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 	// actual bytes, falling back to the extension.
 	ct := sniffAudioType(f)
 	if ct == "" {
-		ct = audioContentType(filepath.Ext(absPath))
+		ct = audioContentType(filepath.Ext(name))
 	}
 	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	// ServeContent negotiates Range, sets Content-Type from the extension (unless
 	// already set above), and handles conditional/partial responses.
-	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+	http.ServeContent(w, r, name, modTime, f)
 }
 
 // Transcode streams absPath re-encoded to MP3 via ffmpeg, starting startSec into
@@ -187,41 +206,140 @@ func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	transcodeInput(w, r, absPath, nil, ffmpegPath, startSec, log)
+	transcodeInput(w, r, inputSpec{url: absPath}, ffmpegPath, startSec, log)
 }
 
-// TranscodeOpened feeds the verified generation through an owned pipe on every OS.
+// TranscodeOpened transcodes an already verified descriptor (a podcast
+// episode's committed generation) without reopening its path: f is ffmpeg's
+// stdin, read seekably through the fd: protocol when this ffmpeg has it (so
+// -ss is a fast input seek and a file whose index sits at its end, a
+// non-faststart m4a, demuxes), else as the old non-seekable pipe:0.
 func TranscodeOpened(w http.ResponseWriter, r *http.Request, f *os.File, ffmpegPath string, startSec float64, log *slog.Logger) {
-	transcodeInput(w, r, "pipe:0", f, ffmpegPath, startSec, log)
+	// The child shares this descriptor's offset: start it at the top.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, "transcode failed", http.StatusInternalServerError)
+		return
+	}
+	in := inputFor(ffmpegPath)
+	in.file = f
+	transcodeInput(w, r, in, ffmpegPath, startSec, log)
 }
-func transcodeInput(w http.ResponseWriter, r *http.Request, absPath string, input *os.File, ffmpegPath string, startSec float64, log *slog.Logger) {
-	if log == nil {
-		log = slog.Default()
+
+// inputSpec is how ffmpeg reads its input: a path (proto ""), or the
+// descriptor file handed over as its stdin through the fd: protocol (seekable)
+// or pipe:0 (not seekable, for an ffmpeg older than 6.1).
+type inputSpec struct {
+	proto, url string
+	file       *os.File
+}
+
+var (
+	fdInput   = inputSpec{proto: "fd", url: "fd:"}
+	pipeInput = inputSpec{proto: "pipe", url: "pipe:0"}
+)
+
+// fdSupport remembers, per ffmpeg path, whether its input protocols include
+// fd (an *fdProbe), so each binary is asked once per process, however many
+// first requests arrive together. A probe that couldn't run (its 5 s timeout,
+// a failed start) is no answer: it is dropped, and the next request asks again.
+var fdSupport sync.Map
+
+// fdProbe is one ffmpeg binary's answer, settled once by probeFD.
+type fdProbe struct {
+	once    sync.Once
+	fd, ran bool
+}
+
+// inputFor is the stdin input spec for ffmpegPath: fd: when that ffmpeg lists
+// the fd input protocol, else pipe:0.
+func inputFor(ffmpegPath string) inputSpec {
+	v, _ := fdSupport.LoadOrStore(ffmpegPath, &fdProbe{})
+	p := v.(*fdProbe)
+	p.once.Do(func() { p.fd, p.ran = probeFD(ffmpegPath) })
+	if !p.ran {
+		fdSupport.CompareAndDelete(ffmpegPath, p)
 	}
+	if p.fd {
+		return fdInput
+	}
+	return pipeInput
+}
+
+// probeFD asks ffmpegPath for its protocols (5 s at most) and reports whether
+// the Input section lists fd, and whether the probe ran at all.
+func probeFD(ffmpegPath string) (fd, ran bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-protocols").Output()
+	if err != nil {
+		return false, false
+	}
+	return listsInputProtocol(string(out), "fd"), true
+}
+
+// listsInputProtocol reports whether ffmpeg -protocols output lists name in its
+// Input section (the lines between "Input:" and "Output:").
+func listsInputProtocol(out, name string) bool {
+	input := false
+	for line := range strings.SplitSeq(out, "\n") {
+		switch line = strings.TrimSpace(line); line {
+		case "Input:":
+			input = true
+		case "Output:":
+			input = false
+		default:
+			if input && line == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// transcodeArgs is the ffmpeg command line that re-encodes in to MP3 on
+// stdout from startSec. A path or the seekable fd: input seeks on the input
+// side (-ss before -i: ffmpeg jumps near startSec before decoding); pipe:0
+// can't seek, so there -ss follows -i and decodes up to it. A descriptor input
+// is the only thing ffmpeg may open (-protocol_whitelist): publisher bytes that
+// probe as a playlist may not open secondary local files.
+func transcodeArgs(in inputSpec, startSec float64) []string {
 	args := []string{"-nostdin", "-loglevel", "error"}
-	if startSec > 0 && input == nil {
-		// Input-side seek (fast): ffmpeg jumps near startSec before decoding.
-		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
+	if in.proto != "" {
+		args = append(args, "-protocol_whitelist", in.proto)
 	}
-	if input != nil {
-		// The opened descriptor is the only input: publisher bytes that probe
-		// as a playlist may not open secondary local files.
-		args = append(args, "-protocol_whitelist", "pipe")
+	var seek []string
+	if startSec > 0 {
+		seek = []string{"-ss", strconv.FormatFloat(startSec, 'f', 3, 64)}
 	}
-	args = append(args, "-i", absPath)
-	if input != nil && startSec > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
+	if in.proto == "pipe" {
+		args = append(append(args, "-i", in.url), seek...)
+	} else {
+		args = append(append(args, seek...), "-i", in.url)
 	}
-	args = append(args,
+	return append(args,
 		"-vn",                // drop any cover-art/video stream
 		"-c:a", "libmp3lame", // broadly compatible output
 		"-b:a", "128k",
 		"-f", "mp3",
 		"pipe:1",
 	)
-	cmd := exec.CommandContext(r.Context(), ffmpegPath, args...)
-	if input != nil {
-		cmd.Stdin = input
+}
+
+func transcodeInput(w http.ResponseWriter, r *http.Request, in inputSpec, ffmpegPath string, startSec float64, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	if r.Method == http.MethodHead {
+		// net/http discards a HEAD's body: answer its headers without running
+		// ffmpeg over the whole file for nothing.
+		writeTranscodeHeader(w)
+		return
+	}
+	logPath := in.url
+	cmd := exec.CommandContext(r.Context(), ffmpegPath, transcodeArgs(in, startSec)...)
+	if in.file != nil {
+		logPath = in.file.Name()
+		cmd.Stdin = in.file
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -234,20 +352,24 @@ func transcodeInput(w http.ResponseWriter, r *http.Request, absPath string, inpu
 		http.Error(w, "transcode failed", http.StatusInternalServerError)
 		return
 	}
-	// Headers must go out before the body; no Accept-Ranges since the stream is
-	// not byte-seekable.
+	writeTranscodeHeader(w) // before the body
+	if _, err := io.Copy(w, stdout); err != nil {
+		// Client disconnect / broken pipe is normal (seek, pause, navigate away).
+		log.Debug("transcode copy ended", "path", logPath, "err", err)
+	}
+	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
+		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
+		log.Warn("ffmpeg transcode failed", "path", logPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
+	}
+}
+
+// writeTranscodeHeader sends a transcode's status and headers: MP3, never
+// cached, and no Accept-Ranges since the stream is not byte-seekable.
+func writeTranscodeHeader(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, stdout); err != nil {
-		// Client disconnect / broken pipe is normal (seek, pause, navigate away).
-		log.Debug("transcode copy ended", "path", absPath, "err", err)
-	}
-	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
-		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
-		log.Warn("ffmpeg transcode failed", "path", absPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
-	}
 }
 
 // HasFFmpeg reports whether an ffmpeg binary is resolvable at ffmpegPath (or on

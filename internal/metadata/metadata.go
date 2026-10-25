@@ -82,9 +82,11 @@ type Metadata struct {
 // enters a library, so a library should only ever hold the playable .m4b.
 //
 // .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
-// is in the library for the web player only: no browser or native player plays
-// the container, so media.DirectPlayable is false for it and the web player
-// streams it through ?transcode=1 (#161); a native app lists it but can't play it.
+// is in the library too, though no browser or iOS player opens the container:
+// with ffmpeg configured an .mka holding MP3 is served as its lossless remux to
+// MP3 at the same stream URL (media.Remuxer, server#174), so every client plays
+// it; one holding another codec plays only in the web player, through
+// ?transcode=1 (#161).
 // An .mka beside a file of the same name in another audio format is that file's
 // source or copy, and the scan leaves it out as it does an .aax (library's
 // folderAudio).

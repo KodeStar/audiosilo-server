@@ -310,9 +310,9 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 	b, f := podcastStorageEnv(t)
 	ep := f.Episodes[0]
 	req := catalog.RetentionRequest{ShowID: f.ShowID, Path: ep.Path, Generation: ep.Fetch.Generation, SHA256: ep.Fetch.SHA256, Bytes: ep.Fetch.Bytes}
-	for _, suffix := range []string{"", "&download=1", "&transcode=1"} {
+	for _, suffix := range []string{"", "&download=1", "&transcode=1", "&transcode=1&t=1"} {
 		t.Run(suffix, func(t *testing.T) {
-			if suffix == "&transcode=1" && !media.HasFFmpeg("ffmpeg") {
+			if strings.HasPrefix(suffix, "&transcode=1") && !media.HasFFmpeg("ffmpeg") {
 				t.Skip("ffmpeg not installed")
 			}
 			b.api.ffmpeg = "ffmpeg"
@@ -331,7 +331,7 @@ func TestPodcastStreamMarksCoverEveryMediaBranch(t *testing.T) {
 			if w.Code != 200 || !observed || w.Body.Len() == 0 {
 				t.Fatalf("media branch: %d %s", w.Code, w.Body.String())
 			}
-			if suffix == "&transcode=1" && (w.Header().Get("ETag") != "" || w.Header().Get("Accept-Ranges") != "none") {
+			if strings.HasPrefix(suffix, "&transcode=1") && (w.Header().Get("ETag") != "" || w.Header().Get("Accept-Ranges") != "none") {
 				t.Fatal("transformed source validator")
 			}
 			check, err := b.cat.PodcastRetentionCheck(context.Background(), b.lib.ID, req)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -129,6 +130,13 @@ type API struct {
 	// (or any demo visitor) opening many ?transcode=1 streams could exhaust CPU on a
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
+	// remux is the cache of Matroska files holding MP3 copied into plain MP3
+	// (server#174), served at the same stream URL while ffmpeg is configured
+	// (remuxOn). nil without a data dir.
+	remux *media.Remuxer
+	// remuxWait is how long a stream waits for a cold remux before it is
+	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
+	remuxWait time.Duration
 
 	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
 	// batch); coverReads bounds the art being read or waiting to be decoded and
@@ -201,12 +209,20 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		ipLimiter:      newRateLimiter(50, 200),        // ~50 req/s, burst 200, per IP
 		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
+		remuxWait:      remuxColdWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
 		opml:           newOPMLTransfers(),
+	}
+	if cfg.DataDir != "" {
+		if rm, err := media.NewRemuxer(filepath.Join(cfg.DataDir, "cache", "remux"), log); err != nil {
+			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)
+		} else {
+			a.remux = rm
+		}
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
 	// The runner exists without a service too, for clearing matches: its runs
@@ -229,6 +245,19 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	a.playerSource = web.PlayerSource(cfg.WebDir)
 	a.rt.StartedAt = time.Now()
 	return a
+}
+
+// remuxOn reports whether an .mka holding MP3 is served as its remuxed MP3:
+// ffmpeg configured (read per request; tests flip it) and the cache open.
+func (a *API) remuxOn() bool { return a.remux != nil && a.ffmpeg != "" }
+
+// WaitRemuxes waits for the remuxes and warms under way to end (the launcher
+// defers it, so once shutdown cancels the base context their ffmpeg is killed
+// and its .part removed before the process exits).
+func (a *API) WaitRemuxes() {
+	if a.remux != nil {
+		a.remux.Wait()
+	}
 }
 
 // maxConcurrentTranscodes caps simultaneous ffmpeg transcodes across all clients.
