@@ -36,6 +36,9 @@ const (
 	remuxTimeout    = 30 * time.Minute
 	remuxFailedMax  = 1024
 	remuxTouchEvery = 10 * time.Minute
+	// remuxWarmQueue bounds the books whose warm (WarmAll) is under way or
+	// queued: past it a warm is dropped (its first stream remuxes as before).
+	remuxWarmQueue = 16
 )
 
 var (
@@ -82,8 +85,17 @@ type Remuxer struct {
 	// refusing, so it warns once per spell.
 	evictMu sync.Mutex
 	lowDisk atomic.Bool
+	// reserved is the source bytes of the remuxes past the disk guard and
+	// still writing, which the guard counts as taken.
+	reserved atomic.Int64
 	// running counts the remuxes and background warms under way (Wait).
 	running sync.WaitGroup
+	// warming holds the warms under way or queued, by their first path (so a
+	// book's /item and /chapters warm it once); warmSlot lets one remux at a
+	// time, so warms hold at most one of the remux slots and a stream the other.
+	warmMu   sync.Mutex
+	warming  map[string]struct{}
+	warmSlot chan struct{}
 }
 
 // remuxFlight is one remux in progress: done closes once err is set.
@@ -108,6 +120,8 @@ func NewRemuxer(dir string, log *slog.Logger) (*Remuxer, error) {
 		run:       runFFmpeg,
 		inflight:  map[string]*remuxFlight{},
 		failed:    map[string]struct{}{},
+		warming:   map[string]struct{}{},
+		warmSlot:  make(chan struct{}, 1),
 	}
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
@@ -149,7 +163,8 @@ func (m *Remuxer) HoldRemuxesForTests(gate <-chan struct{}) {
 }
 
 // Wait blocks until the remuxes and background warms under way have ended
-// (tests, before their data folder goes).
+// (the launcher at shutdown, once their context is cancelled; tests, before
+// their data folder goes).
 func (m *Remuxer) Wait() { m.running.Wait() }
 
 // remuxETag is the strong validator of key's copy: the key names the source's
@@ -228,20 +243,57 @@ func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os
 }
 
 // WarmAll remuxes the Matroska files paths in the background under runCtx, one
-// after another (so a book's warm holds at most one of the remux slots), each
-// skipped when its copy is cached, it is known not to remux, or it is being
-// remuxed already (it is then waited for). It returns at once.
+// after another and one warm at a time (so warms hold at most one of the remux
+// slots), each skipped when its copy is cached (not marked used: a book looked
+// at is not one played), it is known not to remux, or it is being remuxed
+// already (it is then waited for). It returns at once, and does nothing when
+// the same paths are being warmed already or remuxWarmQueue warms are.
 func (m *Remuxer) WarmAll(runCtx context.Context, ffmpegPath string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	id := paths[0]
+	m.warmMu.Lock()
+	if _, dup := m.warming[id]; dup || len(m.warming) >= remuxWarmQueue {
+		m.warmMu.Unlock()
+		return
+	}
+	m.warming[id] = struct{}{}
+	m.warmMu.Unlock()
 	m.running.Go(func() {
+		defer func() {
+			m.warmMu.Lock()
+			delete(m.warming, id)
+			m.warmMu.Unlock()
+		}()
+		select {
+		case m.warmSlot <- struct{}{}:
+			defer func() { <-m.warmSlot }()
+		case <-runCtx.Done():
+			return
+		}
 		for _, abs := range paths {
-			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
-				f.Close()
-			}
 			if runCtx.Err() != nil {
 				return
 			}
+			if m.cached(abs) {
+				continue
+			}
+			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
+				f.Close()
+			}
 		}
 	})
+}
+
+// cached reports whether abs's copy is in the cache, without marking it used.
+func (m *Remuxer) cached(abs string) bool {
+	info, err := os.Stat(abs)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	_, err = os.Stat(m.cachePath(remuxKey(abs, info)))
+	return err == nil
 }
 
 // hit opens key's cached copy if it is there and marks it used (its mtime is
@@ -297,11 +349,16 @@ func (m *Remuxer) remux(runCtx context.Context, ffmpegPath, key, abs string, inf
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
 		return err
 	}
-	size := uint64(info.Size())
-	if free, ok := m.freeSpace(m.dir); ok && (free < size || free-size < remuxMinFree) {
+	// The guard counts the other remux still writing as taken (all of it: the
+	// part it wrote already is counted twice, on the safe side), so two at once
+	// can't each pass on the same free space.
+	size := info.Size()
+	need := uint64(m.reserved.Add(size))
+	defer m.reserved.Add(-size)
+	if free, ok := m.freeSpace(m.dir); ok && (free < need || free-need < remuxMinFree) {
 		if !m.lowDisk.Swap(true) {
 			m.log.Warn("remux skipped: too little free disk for the remux cache; transcoding Matroska live",
-				"dir", m.dir, "free_bytes", free, "needed_bytes", size+remuxMinFree)
+				"dir", m.dir, "free_bytes", free, "needed_bytes", need+remuxMinFree)
 		}
 		return ErrRemuxUnavailable
 	}

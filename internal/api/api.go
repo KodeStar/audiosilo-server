@@ -251,6 +251,15 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 // ffmpeg configured (read per request; tests flip it) and the cache open.
 func (a *API) remuxOn() bool { return a.remux != nil && a.ffmpeg != "" }
 
+// WaitRemuxes waits for the remuxes and warms under way to end (the launcher
+// defers it, so once shutdown cancels the base context their ffmpeg is killed
+// and its .part removed before the process exits).
+func (a *API) WaitRemuxes() {
+	if a.remux != nil {
+		a.remux.Wait()
+	}
+}
+
 // maxConcurrentTranscodes caps simultaneous ffmpeg transcodes across all clients.
 const maxConcurrentTranscodes = 4
 

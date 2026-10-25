@@ -530,7 +530,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
   renamed, never under the key when the source changed while read; `.part` swept at
   start; LRU by mtime, a hit (no lock) touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
-  under 1 GiB free after it, `internal/diskspace`); single-flight per key, 2 at once, run under
+  under 1 GiB free after it and the other remux still writing, `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
   failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
@@ -541,8 +541,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transcode instead (`serveRemuxed`; `download=1` still named `<stem>.mp3`), the remux going on for
   the next request, since `direct_playable` told the web player not to ask for one (a 503 while the
   server stops). `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
-  `Remuxer.WarmAll`: in the background under `baseCtx`, one at a time so one book holds at most one
-  of the 2 slots, the cached and known refusals skipped; never blocks the answer), so the first
+  `Remuxer.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
+  server so warms hold at most one of the 2 slots, a book warmed once while queued, at most 16 queued
+  (more dropped), the cached (not marked used) and known refusals skipped, never a podcast library;
+  never blocks the answer; the launcher waits for them at shutdown), so the first
   stream is usually a hit. `/item` and `/chapters` say
   `direct_playable: true` for a book `PlaysInBrowsers` or, while remux is on, `PlaysRemuxed` (codec
   `mp3`, every file a browser container or an `.mka` whose own codec, else the book's, is MP3):

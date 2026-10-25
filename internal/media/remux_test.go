@@ -303,6 +303,15 @@ func TestRemuxerDiskGuard(t *testing.T) {
 	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) || runs.Load() != 0 {
 		t.Fatalf("open = %v after %d runs, want ErrRemuxUnavailable and no run", err, runs.Load())
 	}
+	// Room for this remux alone, but another one still writing has taken it.
+	m.freeSpace = func(string) (uint64, bool) { return 2 * remuxMinFree, true }
+	m.reserved.Store(remuxMinFree)
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) || runs.Load() != 0 {
+		t.Fatalf("open beside a remux writing = %v after %d runs, want ErrRemuxUnavailable", err, runs.Load())
+	}
+	if n := m.reserved.Load(); n != remuxMinFree {
+		t.Fatalf("reserved = %d after the refusal, want %d (its own released)", n, int64(remuxMinFree))
+	}
 	// No regular file at the path: not remuxable, so the stored file's answer
 	// (a 404) is given.
 	folder := filepath.Join(t.TempDir(), "folder.mka")
@@ -516,5 +525,32 @@ func TestRemuxerHeldWaiterTimesOut(t *testing.T) {
 	f.Close()
 	if n := runs.Load(); n != 1 {
 		t.Fatalf("%d runs, want the held one only", n)
+	}
+}
+
+// TestRemuxerWarmBounded: a book's second warm while its first is queued does
+// nothing, and past remuxWarmQueue queued warms the rest are dropped.
+func TestRemuxerWarmBounded(t *testing.T) {
+	t.Parallel()
+	m, runs := countingRemuxer(t, nil)
+	m.warmSlot <- struct{}{} // a warm under way: the next ones queue
+	ctx := context.Background()
+	missing := func(i int) []string { return []string{filepath.Join(t.TempDir(), strconv.Itoa(i)+".mka")} }
+	book := missing(0)
+	m.WarmAll(ctx, "ffmpeg", book)
+	m.WarmAll(ctx, "ffmpeg", book)
+	for i := 1; i < 2*remuxWarmQueue; i++ {
+		m.WarmAll(ctx, "ffmpeg", missing(i))
+	}
+	m.warmMu.Lock()
+	n := len(m.warming)
+	m.warmMu.Unlock()
+	if n != remuxWarmQueue {
+		t.Fatalf("%d warms queued, want %d", n, remuxWarmQueue)
+	}
+	<-m.warmSlot
+	m.Wait()
+	if len(m.warming) != 0 || runs.Load() != 0 {
+		t.Fatalf("%d warms left, %d runs; want none", len(m.warming), runs.Load())
 	}
 }

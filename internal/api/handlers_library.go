@@ -591,9 +591,10 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // files while the remux is on, so the player's first stream finds them cached
 // (a cold remux of a long file takes seconds, past a player's stall timer). It
 // never blocks: media.Remuxer.WarmAll runs them one at a time under the
-// server's context, skipping the cached and the known refusals.
+// server's context, skipping the cached and the known refusals. A podcast
+// library's episodes are not warmed: their stream never remuxes.
 func (a *API) warmRemux(lib *catalog.Library, book *catalog.Book) {
-	if !a.remuxOn() {
+	if !a.remuxOn() || lib.Kind == catalog.KindPodcasts {
 		return
 	}
 	var paths []string
