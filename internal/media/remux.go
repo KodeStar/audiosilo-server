@@ -177,23 +177,52 @@ func (m *Remuxer) cachePath(key string) string { return filepath.Join(m.dir, key
 // says the remux can't be had now: ErrRemuxUnavailable, runCtx's, or a
 // failure to read abs, run ffmpeg or write the cache.
 func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
-	f, key, fl, err := m.begin(runCtx, ffmpegPath, abs)
-	if err != nil {
-		return nil, "", err
+	info, err := os.Stat(abs)
+	switch {
+	case err != nil:
+		// Nothing to remux: the stored file's answer (a 404) is the right one.
+		return nil, "", fmt.Errorf("%w: %v", ErrNotRemuxable, err)
+	case !info.Mode().IsRegular():
+		return nil, "", fmt.Errorf("%w: %s is not a regular file", ErrNotRemuxable, abs)
 	}
-	if f == nil {
-		select {
-		case <-fl.done:
-		case <-ctx.Done():
-			return nil, "", ctx.Err()
-		}
-		if fl.err != nil {
-			return nil, "", fl.err
-		}
-		if f, err = os.Open(m.cachePath(key)); err != nil {
-			// Evicted between the rename and this open (another remux's sweep).
-			return nil, "", ErrRemuxUnavailable
-		}
+	key := remuxKey(abs, info)
+
+	// A hit needs no lock (players send many Range requests). A miss is checked
+	// again under mu, so a leader that renamed its copy into place and left
+	// inflight in between is never missed.
+	if f, ok := m.hit(key); ok {
+		return f, remuxETag(key), nil
+	}
+	m.mu.Lock()
+	if f, ok := m.hit(key); ok {
+		m.mu.Unlock()
+		return f, remuxETag(key), nil
+	}
+	if _, refused := m.failed[key]; refused {
+		m.mu.Unlock()
+		return nil, "", ErrNotRemuxable
+	}
+	fl, waiting := m.inflight[key]
+	if !waiting {
+		fl = &remuxFlight{done: make(chan struct{})}
+		m.inflight[key] = fl
+		m.running.Add(1)
+		go m.lead(runCtx, ffmpegPath, key, abs, info, fl)
+	}
+	m.mu.Unlock()
+
+	select {
+	case <-fl.done:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
+	if fl.err != nil {
+		return nil, "", fl.err
+	}
+	f, err := os.Open(m.cachePath(key))
+	if err != nil {
+		// Evicted between the rename and this open (another remux's sweep).
+		return nil, "", ErrRemuxUnavailable
 	}
 	return f, remuxETag(key), nil
 }
@@ -203,60 +232,16 @@ func (m *Remuxer) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os
 // skipped when its copy is cached, it is known not to remux, or it is being
 // remuxed already (it is then waited for). It returns at once.
 func (m *Remuxer) WarmAll(runCtx context.Context, ffmpegPath string, paths []string) {
-	m.running.Add(1)
-	go func() {
-		defer m.running.Done()
+	m.running.Go(func() {
 		for _, abs := range paths {
-			f, _, fl, err := m.begin(runCtx, ffmpegPath, abs)
-			switch {
-			case f != nil:
+			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
 				f.Close()
-			case err == nil:
-				select {
-				case <-fl.done:
-				case <-runCtx.Done():
-					return
-				}
+			}
+			if runCtx.Err() != nil {
+				return
 			}
 		}
-	}()
-}
-
-// begin returns abs's cached copy (f) and its key, or, when there is none, the
-// flight that makes it, started here when none runs.
-func (m *Remuxer) begin(runCtx context.Context, ffmpegPath, abs string) (*os.File, string, *remuxFlight, error) {
-	info, err := os.Stat(abs)
-	switch {
-	case err != nil:
-		// Nothing to remux: the stored file's answer (a 404) is the right one.
-		return nil, "", nil, fmt.Errorf("%w: %v", ErrNotRemuxable, err)
-	case !info.Mode().IsRegular():
-		return nil, "", nil, fmt.Errorf("%w: %s is not a regular file", ErrNotRemuxable, abs)
-	}
-	key := remuxKey(abs, info)
-
-	// A hit needs no lock (players send many Range requests). A miss is checked
-	// again under mu, so a leader that renamed its copy into place and left
-	// inflight in between is never missed.
-	if f, ok := m.hit(key); ok {
-		return f, key, nil, nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if f, ok := m.hit(key); ok {
-		return f, key, nil, nil
-	}
-	if _, refused := m.failed[key]; refused {
-		return nil, "", nil, ErrNotRemuxable
-	}
-	fl, waiting := m.inflight[key]
-	if !waiting {
-		fl = &remuxFlight{done: make(chan struct{})}
-		m.inflight[key] = fl
-		m.running.Add(1)
-		go m.lead(runCtx, ffmpegPath, key, abs, info, fl)
-	}
-	return nil, key, fl, nil
+	})
 }
 
 // hit opens key's cached copy if it is there and marks it used (its mtime is

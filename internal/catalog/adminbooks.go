@@ -194,11 +194,18 @@ func (b *Book) PlaysRemuxed() bool {
 		return false
 	}
 	for _, f := range b.Files {
-		if !plays(f.Format, cmp.Or(f.Codec, b.Codec)) {
+		if !media.DirectPlayable(f.Format, "") && !b.FileRemuxable(f) {
 			return false
 		}
 	}
 	return true
+}
+
+// FileRemuxable reports whether the book's file f is an .mka holding MP3, judged
+// by its own codec or, for a part indexed before per-file codecs were recorded,
+// the book's (PlaysRemuxed; the remux warm-up picks its files by it too).
+func (b *Book) FileRemuxable(f BookFile) bool {
+	return media.Remuxable(f.Format, cmp.Or(f.Codec, b.Codec))
 }
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.subtitle, b.author,

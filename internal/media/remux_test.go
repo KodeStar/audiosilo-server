@@ -149,7 +149,7 @@ func TestRemuxerOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `"remux-` + strings.TrimSuffix(filepath.Base(f.Name()), ".mp3") + `"`; etag != want {
+	if want := remuxETag(strings.TrimSuffix(filepath.Base(f.Name()), ".mp3")); etag != want {
 		t.Fatalf("etag = %s, want the strong %s", etag, want)
 	}
 	if ct := sniffAudioType(f); ct != "audio/mpeg" {

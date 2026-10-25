@@ -162,13 +162,19 @@ func ServeOpened(w http.ResponseWriter, r *http.Request, f *os.File, download bo
 	ServeOpenedAs(w, r, f, filepath.Base(f.Name()), info.ModTime(), download)
 }
 
+// SetAttachment makes the response a download saved as name (strconv.Quote
+// gives the quoted-string form browsers expect).
+func SetAttachment(h http.Header, name string) {
+	h.Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+}
+
 // ServeOpenedAs serves the open file f with Range under the name name (the
 // download filename and the extension fallback for its type) and modTime as
 // its Last-Modified: a remuxed copy is served as the source's stem with .mp3
-// and the source's mtime.
+// and the copy's own mtime.
 func ServeOpenedAs(w http.ResponseWriter, r *http.Request, f *os.File, name string, modTime time.Time, download bool) {
 	if download {
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+		SetAttachment(w.Header(), name)
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	// Set an explicit audio Content-Type so strict players (iOS AVPlayer) accept

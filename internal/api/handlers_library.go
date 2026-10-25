@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -599,7 +598,7 @@ func (a *API) warmRemux(lib *catalog.Library, book *catalog.Book) {
 	}
 	var paths []string
 	for _, f := range book.Files {
-		if !media.Remuxable(f.Format, cmp.Or(f.Codec, book.Codec)) {
+		if !book.FileRemuxable(f) {
 			continue
 		}
 		if abs, err := library.SafeJoin(lib.Root, f.RelPath); err == nil {
@@ -678,7 +677,7 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	}
 	defer done()
 	if downloadName != "" {
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(downloadName))
+		media.SetAttachment(w.Header(), downloadName)
 	}
 	media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 }
