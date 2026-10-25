@@ -5,6 +5,7 @@ import { setToken } from '@/api/token';
 import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairToken } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
+import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -789,5 +790,41 @@ describe('listen in player', () => {
     // The hero's other actions are there: only this one is missing.
     expect(screen.getByRole('button', { name: 'Compare with community' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Listen in player' })).not.toBeInTheDocument();
+  });
+});
+
+describe('copy path', () => {
+  const FULL_PATH = `/mnt/tank/fiction/${BOOK_PATH}`;
+
+  afterEach(unstubExecCommand);
+
+  async function copyPath() {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'More book actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Copy path' }));
+  }
+
+  it("copies the book's full path on disk and says so", async () => {
+    let copied = '';
+    stubExecCommand(() => {
+      copied = (document.activeElement as HTMLTextAreaElement).value;
+      return true;
+    });
+    await copyPath();
+    expect(await screen.findByText('Path copied')).toBeInTheDocument();
+    expect(copied).toBe(FULL_PATH);
+  });
+
+  it('shows the path to copy by hand when the browser refuses', async () => {
+    stubExecCommand(() => false);
+    await copyPath();
+    const title = await screen.findByText("Couldn't copy. Select it and copy it yourself.");
+    // The toast itself carries the path (Files on disk shows it too).
+    const toast = title.closest<HTMLElement>('[data-slot="toast"]');
+    if (!toast) throw new Error('the title is not inside a toast');
+    // A drag across it selects the text instead of swiping the toast away.
+    expect(within(toast).getByText(FULL_PATH)).toHaveAttribute('data-base-ui-swipe-ignore');
   });
 });

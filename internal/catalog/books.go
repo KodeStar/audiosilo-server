@@ -50,6 +50,12 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	if b.Attachments.Unread {
 		attachmentsReadAt = nil
 	}
+	// A folder book's file order key, recorded with this upsert's indexed_at
+	// (fileOrderExpr).
+	var fileOrderAt any
+	if b.IsFolder {
+		fileOrderAt = indexedAt
+	}
 	// has_cover holds whenever there is a sibling cover; the scanner reports
 	// embedded art. Unknown (nil) stays NULL until a scan checks.
 	hasCover := b.HasCover
@@ -66,8 +72,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
 			     released, released_checked, genres_checked,
 			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
-			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?)
+			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
+			     file_order, file_order_indexed_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -88,7 +95,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
 			     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
 			                          ELSE excluded.attachments_sig END,
-			     attachments_indexed_at=excluded.attachments_indexed_at
+			     attachments_indexed_at=excluded.attachments_indexed_at,
+			     file_order=excluded.file_order, file_order_indexed_at=excluded.file_order_indexed_at
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -98,7 +106,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.Published, b.Description, hasCover, scanned,
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
-			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt).Scan(&id); err != nil {
+			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -285,8 +293,29 @@ type Signature struct {
 	// FileOrder is FileOrderKey of a folder book's files as stored (0 for a
 	// single-file book), so a scan re-indexes a book whose files it now orders
 	// differently (#160: natural order, where books indexed before it had byte
-	// order) though no file changed.
+	// order) though no file changed. It is books.file_order (0055) where it holds
+	// (fileOrderExpr), else, for a folder book indexed before it or since by an
+	// older server (FileOrderUnset), read from its book_files.
 	FileOrder uint64
+	// FileOrderUnset: a folder book whose key isn't recorded, which a scan that
+	// leaves the book be records (SetFileOrders).
+	FileOrderUnset bool
+}
+
+// fileOrderExpr is books.file_order where it holds: recorded with the row's own
+// index (file_order_indexed_at, as abs_indexed_at is for abs_file), else NULL.
+// An older server run against this database (a rollback) re-indexes a row
+// without it: it writes book_files in its own order (byte order, before #160)
+// and leaves the key of the order before.
+const fileOrderExpr = `CASE WHEN file_order_indexed_at IS indexed_at THEN file_order END`
+
+// storedFileOrder is books.file_order for b: its files' FileOrderKey bit-cast to
+// SQLite's signed integer, NULL for a single-file book.
+func storedFileOrder(b *Book) any {
+	if !b.IsFolder {
+		return nil
+	}
+	return int64(FileOrderKey(b.Files))
 }
 
 // FileOrderKey is a short key of a folder book's files in their order (the
@@ -317,9 +346,10 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
-		        attachments_sig, `+attachmentsUncheckedExpr+`,
-		        CASE WHEN is_folder THEN (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
-		                                    FROM book_files f WHERE f.book_id = books.id) END
+		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
+		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
+		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
+		                FROM book_files f WHERE f.book_id = books.id) END
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -329,17 +359,47 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	for rows.Next() {
 		var rel string
 		var sig Signature
+		var stored sql.NullInt64
 		var files sql.NullString
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
-			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked, &files); err != nil {
+			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
+			&stored, &files); err != nil {
 			return nil, err
 		}
-		sig.FileOrder = fileOrderKey(files.String)
+		switch {
+		case !sig.IsFolder:
+		case stored.Valid:
+			sig.FileOrder = uint64(stored.Int64)
+		default:
+			sig.FileOrder, sig.FileOrderUnset = fileOrderKey(files.String), true
+		}
 		out[rel] = sig
 	}
 	return out, rows.Err()
+}
+
+// SetFileOrders records, by path, the file order key (FileOrderKey) of folder
+// books a scan found unchanged whose key wasn't recorded (indexed before
+// migration 0055, or since by an older server: fileOrderExpr), with the row's
+// indexed_at, in one transaction. A key recorded meanwhile (the book indexed on
+// demand since the scan read it) is left as it is.
+func (c *Catalog) SetFileOrders(ctx context.Context, libraryID int64, keys map[string]uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetFileOrders", func(tx *sql.Tx) error {
+		for relPath, key := range keys {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET file_order = ?, file_order_indexed_at = indexed_at
+				  WHERE library_id = ? AND rel_path = ? AND is_folder AND `+fileOrderExpr+` IS NULL`,
+				int64(key), libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // SetHasCover records whether books have cover art, by path, in one transaction
@@ -434,6 +494,46 @@ func (c *Catalog) SplitFolders(ctx context.Context, libraryID int64, folders []s
 	rows, err := c.db.QueryContext(ctx, `SELECT DISTINCT split_parent FROM books
 		WHERE library_id = ? AND split_parent <> '' AND split_parent IN (`+
 		strings.Repeat("?,", len(folders)-1)+`?)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+// FoldersHoldingBooks reports which of folders (library-relative) hold an
+// indexed book at or below them: the book's path is the folder's or under it.
+// The folder listing reads no folder that does from disk to tell whether it
+// would be a book (library.MarkPendingBooks): in an indexed library an author's
+// or a series' folder costs no disk read. Each folder is two seeks of the
+// (library_id, rel_path) index, its own path and its descendants' range ('/'
+// then '0' bound them, so LIKE wildcards in a name are plain characters), as two
+// EXISTS: joined by an OR in one, SQLite (no ANALYZE statistics here) seeks on
+// library_id alone and reads the library's books for every folder. The folders
+// are bound as they are, not as JSON, which would turn a name that isn't valid
+// UTF-8 into another (see pathsJSONFilterSQL).
+func (c *Catalog) FoldersHoldingBooks(ctx context.Context, libraryID int64, folders []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(folders) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(folders)+2)
+	for _, f := range folders {
+		args = append(args, f)
+	}
+	args = append(args, libraryID, libraryID)
+	rows, err := c.db.QueryContext(ctx, `WITH f(path) AS (VALUES `+strings.Repeat("(?),", len(folders)-1)+`(?))
+		SELECT DISTINCT path FROM f
+		 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = ? AND b.rel_path = f.path)
+		    OR EXISTS (SELECT 1 FROM books b WHERE b.library_id = ?
+		                 AND b.rel_path > f.path || '/' AND b.rel_path < f.path || '0')`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +676,7 @@ func (c *Catalog) GetBookByPath(ctx context.Context, libraryID int64, relPath st
 // client still holds after a join (a disc folder's) from the index, where
 // GetBookByPath, by the book's own path, finds nothing.
 func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath string) (*Book, error) {
-	id, _, err := c.bookHolding(ctx, libraryID, relPath)
+	id, _, err := c.bookHolding(ctx, libraryID, relPath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -584,8 +684,10 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 }
 
 // bookHolding is GetBookHolding's lookup: the id and path of the innermost
-// indexed folder book holding relPath, ErrNotFound when none does.
-func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string) (int64, string, error) {
+// indexed folder book holding relPath, ErrNotFound when none does. With
+// fileOnly, relPath must be one of the book's files: a folder inside it (a disc
+// folder of a joined book) is not held.
+func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string, fileOnly bool) (int64, string, error) {
 	args := []any{libraryID}
 	for d := path.Dir(relPath); d != "." && d != "/"; d = path.Dir(d) {
 		args = append(args, d)
@@ -594,7 +696,12 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 		return 0, "", ErrNotFound
 	}
 	n := len(args) - 1
-	args = append(args, relPath, escapeLike(relPath)+"/%")
+	held := `f.rel_path = ?`
+	args = append(args, relPath)
+	if !fileOnly {
+		held = `(f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\')`
+		args = append(args, escapeLike(relPath)+"/%")
+	}
 	var (
 		id   int64
 		book string
@@ -602,8 +709,7 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 	err := c.db.QueryRowContext(ctx,
 		`SELECT b.id, b.rel_path FROM books b
 		  WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(n)+`)
-		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id
-		                  AND (f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\'))
+		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id AND `+held+`)
 		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id, &book)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", ErrNotFound
@@ -618,6 +724,18 @@ func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath stri
 // folder ("Series/Book 2/01.m4b" is Book 2's, not Series's), which is how a cast
 // token is kept to its one book (api.castOwnBook).
 func (c *Catalog) BookPathAt(ctx context.Context, libraryID int64, relPath string) (string, error) {
+	return c.bookPathAt(ctx, libraryID, relPath, false)
+}
+
+// BookPathOfFile is BookPathAt for a book's own path or one of its files only:
+// the book at relPath, else the innermost folder book one of whose files relPath
+// is; ErrNotFound for anything else, a folder inside a book (a disc folder of a
+// joined book) among them.
+func (c *Catalog) BookPathOfFile(ctx context.Context, libraryID int64, relPath string) (string, error) {
+	return c.bookPathAt(ctx, libraryID, relPath, true)
+}
+
+func (c *Catalog) bookPathAt(ctx context.Context, libraryID int64, relPath string, fileOnly bool) (string, error) {
 	_, err := bookIDByPath(ctx, c.db, libraryID, relPath)
 	if err == nil {
 		return relPath, nil
@@ -625,7 +743,7 @@ func (c *Catalog) BookPathAt(ctx context.Context, libraryID int64, relPath strin
 	if !errors.Is(err, ErrNotFound) {
 		return "", err
 	}
-	_, book, err := c.bookHolding(ctx, libraryID, relPath)
+	_, book, err := c.bookHolding(ctx, libraryID, relPath, fileOnly)
 	return book, err
 }
 
