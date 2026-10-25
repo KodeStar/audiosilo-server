@@ -79,21 +79,93 @@ func TestScanReordersBookIndexedInByteOrder(t *testing.T) {
 	if got := order(); !slices.Equal(got, want) {
 		t.Fatalf("first scan order = %q, want %q", got, want)
 	}
-	// As an index from before natural order has it: 1-, 10-, 2-.
-	for seq, f := range []string{want[0], want[2], want[1]} {
-		if _, err := db.ExecContext(ctx, `UPDATE book_files SET seq = ? WHERE rel_path = ?`, seq, f); err != nil {
+	byteOrder := []string{want[0], want[2], want[1]} // 1-, 10-, 2-
+	// As an index from before natural order has it: 1-, 10-, 2-; and from before
+	// 0055 (no stored key), or with the key of that order stored.
+	for _, storedKey := range []bool{false, true} {
+		for seq, f := range byteOrder {
+			if _, err := db.ExecContext(ctx, `UPDATE book_files SET seq = ? WHERE rel_path = ?`, seq, f); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var key any // NULL
+		if storedKey {
+			files := make([]catalog.BookFile, len(byteOrder))
+			for i, f := range byteOrder {
+				files[i] = catalog.BookFile{RelPath: f}
+			}
+			key = int64(catalog.FileOrderKey(files))
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE books SET file_order = ? WHERE rel_path = 'A/Book'`, key); err != nil {
 			t.Fatal(err)
 		}
+		res, err := s.Scan(ctx, *lib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := order(); !slices.Equal(got, want) || res.Updated != 1 {
+			t.Fatalf("stored key %v: rescan order = %q (updated %d), want %q (updated 1)", storedKey, got, res.Updated, want)
+		}
+		if res, err = s.Scan(ctx, *lib); err != nil || res.Updated != 0 || res.Added != 0 {
+			t.Fatalf("stored key %v: a scan of a book in order = %+v, %v; want nothing re-indexed", storedKey, res.ScanCounts, err)
+		}
+	}
+}
+
+// TestScanRecordsFileOrderWithoutReindex (#177, 0055): a folder book indexed
+// before its file order was stored (file_order NULL), its files in the order
+// the scan finds them, is not read again: the scan records the key, and from
+// then on reads it off the row, never the book's files.
+func TestScanRecordsFileOrderWithoutReindex(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	for _, f := range []string{"A/Book/1 - a.mp3", "A/Book/2 - b.mp3", "A/Book/10 - c.mp3", "A/Other/01.mp3", "Loose.mp3"} {
+		writeFile(t, root, f, []byte("not really audio: "+f))
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, "", slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	unset := func() int {
+		t.Helper()
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE is_folder AND file_order IS NULL`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := unset(); n != 0 {
+		t.Fatalf("after the first scan %d folder books have no file_order", n)
+	}
+	// As an index from before 0055 has it.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET file_order = NULL`); err != nil {
+		t.Fatal(err)
 	}
 	res, err := s.Scan(ctx, *lib)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := order(); !slices.Equal(got, want) || res.Updated != 1 {
-		t.Fatalf("rescan order = %q (updated %d), want %q (updated 1)", got, res.Updated, want)
+	if res.Updated != 0 || res.Added != 0 {
+		t.Fatalf("the upgrade scan re-indexed: %+v", res.ScanCounts)
+	}
+	if n := unset(); n != 0 {
+		t.Fatalf("the upgrade scan left %d folder books without file_order", n)
+	}
+	var loose any
+	if err := db.QueryRowContext(ctx, `SELECT file_order FROM books WHERE rel_path = 'Loose.mp3'`).Scan(&loose); err != nil || loose != nil {
+		t.Fatalf("a single-file book's file_order = %v, %v; want NULL", loose, err)
+	}
+	// The next scan reads the stored key, not the files: book_files scrambled
+	// behind its back change nothing.
+	if _, err := db.ExecContext(ctx, `UPDATE book_files SET seq = 2 - seq WHERE rel_path LIKE 'A/Book/%'`); err != nil {
+		t.Fatal(err)
 	}
 	if res, err = s.Scan(ctx, *lib); err != nil || res.Updated != 0 || res.Added != 0 {
-		t.Fatalf("a scan of a book in order = %+v, %v; want nothing re-indexed", res.ScanCounts, err)
+		t.Fatalf("a scan after the key was recorded = %+v, %v; want nothing re-indexed", res.ScanCounts, err)
 	}
 }
 

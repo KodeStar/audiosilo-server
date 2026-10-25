@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -30,12 +31,36 @@ func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"progress": items})
 }
 
+// progressPath is the path a caller's progress on path is kept under (#199):
+// the path of the indexed book path addresses (catalog.BookPathAt: the book at
+// it, else the innermost folder book holding it, a part or a disc folder of a
+// joined book) when the caller's scope allows that book, else path itself as
+// before (a navigation folder, a book not indexed yet, a book above a grant
+// that reaches only its part). No book is read on demand, so a save costs one
+// or two index lookups.
+func (a *API) progressPath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) string {
+	book, err := a.cat.BookPathAt(ctx, lib.ID, path)
+	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) {
+			a.log.Warn("resolve progress path failed", "library", lib.ID, "path", path, "err", err)
+		}
+		return path
+	}
+	if book != path && !scope.Allows(book) {
+		return path
+	}
+	return book
+}
+
+// handleGetProgress answers the caller's progress on the book path addresses
+// (progressPath: a part path reads its book's row).
 func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
+	path = a.progressPath(r.Context(), lib, scope, path)
 	u := userFrom(r.Context())
 	p, err := a.cat.GetProgress(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path})
 	if err != nil {
@@ -45,9 +70,10 @@ func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"progress": p})
 }
 
-// handlePutProgress upserts progress using last-write-wins reconciliation.
+// handlePutProgress upserts progress using last-write-wins reconciliation, on
+// the book path addresses (progressPath), as is its listening session.
 func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -57,7 +83,7 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	in.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
+	in.Ref = catalog.Ref{LibraryID: lib.ID, Path: a.progressPath(r.Context(), lib, scope, path)}
 	u := userFrom(r.Context())
 	saved, err := a.cat.SaveProgress(r.Context(), u.ID, in)
 	if err != nil {
@@ -75,13 +101,14 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 // the position, set or clear the start and finish dates. The admin's edit
 // (catalog.EditProgress) with the caller's scope: a path outside it is 403, and a
 // new row is created only for an indexed book. It is not playback, so it records
-// no listening session.
+// no listening session. A part path edits its book's row (progressPath).
 func (a *API) handleEditMyProgress(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
+	path = a.progressPath(r.Context(), lib, scope, path)
 	body := decodeProgressEdit(w, r)
 	if body == nil {
 		return

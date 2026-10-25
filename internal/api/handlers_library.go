@@ -315,17 +315,21 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "directory not found")
 		return
 	}
-	a.annotateWithBooks(r, lib.ID, listing)
+	a.annotateWithBooks(r, lib, scope, listing)
 	writeJSON(w, http.StatusOK, listing)
 }
 
 // annotateWithBooks turns the raw filesystem listing into the hybrid view by
 // attaching indexed metadata to entries that are books, so a browsing client
-// sees titles/authors/durations alongside the raw tree.
-func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *library.Listing) {
+// sees titles/authors/durations alongside the raw tree, and marking the folders
+// the scanner would read as books it hasn't indexed yet (pending_book) for any
+// caller, within their scope. A books library's listing only: a podcast
+// library's is BrowsePodcasts'.
+func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope catalog.Scope, listing *library.Listing) {
 	if len(listing.Entries) == 0 {
 		return
 	}
+	libraryID := lib.ID
 	paths := make([]string, len(listing.Entries))
 	for i, e := range listing.Entries {
 		paths[i] = e.Path
@@ -358,6 +362,37 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 		}
 		e.SplitDiscs = e.IsDir && split[e.Path]
 	}
+	// Without the overrides a `collection` folder would read as a pending book:
+	// none are marked then, as the listing was before.
+	if overrides != nil {
+		a.markPendingBooks(r.Context(), lib, scope, listing.Entries, overrides)
+	}
+}
+
+// markPendingBooks is annotateWithBooks' pending_book pass (library.
+// MarkPendingBooks), best-effort like the rest of the annotations: the folders
+// holding an indexed book are read from the index first, so only the others
+// are looked at on disk.
+func (a *API) markPendingBooks(ctx context.Context, lib *catalog.Library, scope catalog.Scope, entries []library.Entry, overrides map[string]string) {
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir && !e.IsBook {
+			dirs = append(dirs, e.Path)
+		}
+	}
+	if len(dirs) == 0 {
+		return
+	}
+	holding, err := a.cat.FoldersHoldingBooks(ctx, lib.ID, dirs)
+	if err != nil {
+		a.log.Warn("annotate fs pending books failed", "library", lib.ID, "err", err)
+		return
+	}
+	var allow func(string) bool
+	if !scope.AllowAll {
+		allow = scope.Allows
+	}
+	library.MarkPendingBooks(ctx, *lib, entries, overrides, holding, allow)
 }
 
 // handleListBooks serves the computed/hybrid view from the index, scoped to the

@@ -282,6 +282,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books whose .audiosilo/ attachments are new, changed, gone or never read,
 	// while their audio is unchanged: likewise (SetAttachments).
 	attachBackfill := map[string]catalog.AttachmentsReading{}
+	// Folder books found unchanged whose file order key isn't stored yet (indexed
+	// before 0055; Signatures read it from their files this once): recorded
+	// without a re-index (SetFileOrders), so the next scan reads none of their files.
+	orderBackfill := map[string]uint64{}
 	// The path, genre, ABS and attachments backfills are written as they go: a large one
 	// (most of a library laid out Author/Title, or every folder book of a library
 	// ABS has managed, read once after an upgrade) can take a while, and a scan
@@ -304,6 +308,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record .audiosilo attachments failed", "library", lib.Name, "err", err)
 		}
 		clear(attachBackfill)
+		if err := s.cat.SetFileOrders(context.WithoutCancel(ctx), lib.ID, orderBackfill); err != nil {
+			s.log.Warn("record file orders failed", "library", lib.Name, "err", err)
+		}
+		clear(orderBackfill)
 	}
 	lastLog := time.Now()
 	report := func(done int) {
@@ -338,6 +346,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
 				splitBackfill[b.RelPath] = b.SplitParent
+			}
+			if b.IsFolder && old.FileOrderUnset {
+				orderBackfill[b.RelPath] = old.FileOrder // the order found, as the check above says
 			}
 			if old.ContentHash != "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
@@ -398,7 +409,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 							Was: &catalog.AttachmentsState{Sig: old.AttachmentsSig, Unchecked: old.AttachmentsUnchecked}}
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill) >= pathFlushEvery {
+				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill)+len(orderBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
 				continue
@@ -1125,19 +1136,43 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 // .mka is the other's source or copy, ignored before .mka was audio (#161), and
 // reading both would lump them into one book with its chapters twice.
 func folderAudio(audio []audioFile) []audioFile {
-	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
-	isMKA := func(f audioFile) bool { return strings.EqualFold(filepath.Ext(f.de.Name()), ".mka") }
-	if slices.ContainsFunc(audio, isMKA) {
-		others := make(map[string]bool, len(audio))
-		for _, f := range audio {
-			if !isMKA(f) {
-				others[stem(f.de.Name())] = true
-			}
-		}
-		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return isMKA(f) && others[stem(f.de.Name())] })
+	names := make([]string, len(audio))
+	for i, f := range audio {
+		names[i] = f.de.Name()
+	}
+	if shadowed := shadowedMKA(names); len(shadowed) > 0 {
+		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return shadowed[f.de.Name()] })
 	}
 	sortFileOrder(audio)
 	return audio
+}
+
+// shadowedMKA returns the names among one folder's audio files that are an .mka
+// beside a file of the same name in another audio format (folderAudio's rule):
+// the files a book of the folder leaves out, and so the folder listing too
+// (listDir). nil when there are none.
+func shadowedMKA(names []string) map[string]bool {
+	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
+	isMKA := func(name string) bool { return strings.EqualFold(filepath.Ext(name), ".mka") }
+	if !slices.ContainsFunc(names, isMKA) {
+		return nil
+	}
+	others := make(map[string]bool, len(names))
+	for _, n := range names {
+		if !isMKA(n) {
+			others[stem(n)] = true
+		}
+	}
+	var out map[string]bool
+	for _, n := range names {
+		if isMKA(n) && others[stem(n)] {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[n] = true
+		}
+	}
+	return out
 }
 
 // fileBooksIn builds one single-file book per audio file.

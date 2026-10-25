@@ -9,8 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -88,6 +89,13 @@ type Entry struct {
 	// one (see discSets). Surfaced so the admin console offers that only here; set
 	// for an admin's request only (annotateWithBooks), never on a player's listing.
 	SplitDiscs bool `json:"split_discs,omitempty"`
+
+	// PendingBook marks a folder the scanner would read as a book that the index
+	// doesn't hold yet (MarkPendingBooks, #193), so a player opens it as a book
+	// (indexed on demand) rather than as a folder. Never set with IsBook, nor in a
+	// podcast library's listing; absent (not false) otherwise, and an older server
+	// never sends it.
+	PendingBook bool `json:"pending_book,omitempty"`
 }
 
 // Listing is a page of directory entries.
@@ -195,8 +203,11 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 // ListDir is a directory within a library root as the player browses it, whole
 // and without Size or ModTime: hidden and non-audio files left out, and so is
 // whatever allow refuses (a share's path rules; nil allows everything) or the
-// library's ignore rules skip, as the scanner skips it. Directories sort before
-// files, both by name, case folded, a stable order for paging.
+// library's ignore rules skip, as the scanner skips it, and an .mka a book of
+// the folder leaves out (shadowedMKA: beside a file of its name in another
+// format). Directories sort before files, each in natural name order
+// (naturalLess), so the files list in the order a book of the folder plays them
+// (sortFileOrder) and the order is stable for paging.
 func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
 	entries, _, err := listDir(root, relPath, allow, ignore)
 	return entries, err
@@ -222,6 +233,15 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 	// The canonical rel path prefixes each entry's Path; scope checks and
 	// persisted path keys rely on this same form (see catalog.CleanRelPath).
 	cleanRel := catalog.CleanRelPath(relPath)
+	// The .mka a book of this folder leaves out, judged on the audio the scanner
+	// sees there (not hidden, not ignored), whatever the caller's scope.
+	var audioNames []string
+	for _, de := range dirEntries {
+		if isAudioEntry(de, path.Join(cleanRel, de.Name()), ignore) {
+			audioNames = append(audioNames, de.Name())
+		}
+	}
+	shadowed := shadowedMKA(audioNames)
 	for _, de := range dirEntries {
 		name := de.Name()
 		if isHidden(name) {
@@ -235,19 +255,27 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 			continue // outside the caller's share scope
 		}
 		isDir := de.IsDir()
-		if !isDir && !metadata.IsAudio(name) {
-			continue // hide non-audio files; clicking one can't open a book
+		if !isDir && (!metadata.IsAudio(name) || shadowed[name]) {
+			continue // hide non-audio files (clicking one can't open a book) and a book's left-out .mka
 		}
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
 		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, de})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir != entries[j].IsDir {
-			return entries[i].IsDir // dirs first
+	slices.SortStableFunc(entries, func(a, b listed) int {
+		switch {
+		case a.IsDir != b.IsDir:
+			if a.IsDir {
+				return -1 // dirs first
+			}
+			return 1
+		case naturalLess(a.Name, b.Name):
+			return -1
+		case naturalLess(b.Name, a.Name):
+			return 1
 		}
-		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		return 0
 	})
 	out := make([]Entry, len(entries))
 	des := make([]fs.DirEntry, len(entries))
