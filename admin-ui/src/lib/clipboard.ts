@@ -26,6 +26,9 @@ export async function copyText(text: string): Promise<boolean> {
     ta.value = text;
     ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
+    // top too: inside a transformed popup "fixed" is relative to the popup, and
+    // an unset top would leave it at the end of the host (a scroll target).
+    ta.style.top = '0';
     ta.style.left = '-9999px';
     ta.style.opacity = '0';
     (host ?? document.body).append(ta);
