@@ -341,9 +341,9 @@ func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope cat
 	}
 	// Per-folder detection overrides let the console show/toggle a folder's
 	// classification; best-effort, so a failure here doesn't drop the listing.
-	overrides, err := a.cat.FolderOverrides(r.Context(), lib.ID)
-	if err != nil {
-		a.log.Warn("annotate fs overrides failed", "library", lib.ID, "err", err)
+	overrides, overridesErr := a.cat.FolderOverrides(r.Context(), lib.ID)
+	if overridesErr != nil {
+		a.log.Warn("annotate fs overrides failed", "library", lib.ID, "err", overridesErr)
 	}
 	// Which folders a `book` override would join from their disc folders; likewise.
 	// For an admin only (the console's Folders screen offers the join there): it is
@@ -362,9 +362,10 @@ func (a *API) annotateWithBooks(r *http.Request, lib *catalog.Library, scope cat
 		}
 		e.SplitDiscs = e.IsDir && split[e.Path]
 	}
-	// Without the overrides a `collection` folder would read as a pending book:
-	// none are marked then, as the listing was before.
-	if overrides != nil {
+	// Without the overrides (or with only some: a read can fail part way) a
+	// `collection` folder would read as a pending book: none are marked then, as
+	// the listing was before.
+	if overridesErr == nil {
 		a.markPendingBooks(r.Context(), lib, scope, ignore, listing.Entries, overrides)
 	}
 }

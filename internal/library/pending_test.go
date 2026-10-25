@@ -1,11 +1,11 @@
 package library
 
 import (
+	"context"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -66,10 +66,11 @@ func TestBrowseFSNaturalOrderAndShadowedMKA(t *testing.T) {
 }
 
 // TestMarkPendingBooks (#193): a folder the scanner would read as a book that
-// the index doesn't hold is pending_book, by the scanner's own rules; anything
-// else is not (a navigation folder, artwork, a collection, a disc of a joined
-// book, a folder the caller reaches only as the way down, a folder holding an
-// indexed book).
+// the index doesn't hold is pending_book, by the scanner's own rules (a disc
+// folder below a `book` override that joins nothing is a book of its own);
+// anything else is not (a navigation folder, artwork, a collection, a disc of a
+// joined book, a folder the caller reaches only as the way down, a folder
+// holding an indexed book, which is not read).
 func TestMarkPendingBooks(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -84,10 +85,17 @@ func TestMarkPendingBooks(t *testing.T) {
 		"A/Joined/CD1/01.mp3",         // a disc set with a book override: the folder the book
 		"A/Joined/CD2/01.mp3",         //
 		"A/Forced/Sub/01.mp3",         // a book override on a folder that is no disc set
+		"A/Single/CD1/01.mp3",         // a book override on one disc: no disc set, the disc a book
+		"A/Mixed/intro.mp3",           // a book override on a folder with audio of its own: the
+		"A/Mixed/CD1/01.mp3",          // folder a book, and each disc one (no disc set)
+		"A/Mixed/CD2/01.mp3",          //
+		"A/Box/Disc 1/CD1/01.mp3",     // book overrides on Box and on its disc set Disc 1:
+		"A/Box/Disc 1/CD2/01.mp3",     // Disc 1 the joined book
 		"A/Hidden/.secret.mp3",        // a hidden file is no audio
 		"A/Ignored/01.mp3",            // an ignored folder is not listed
 		"A/IgnoredFile/skip.mp3",      // an ignored file is no audio
-		"A/Indexed Below/Book/01.mp3", // a book indexed below
+		"A/Indexed Below/bonus.mp3",   // audio of its own, and a book indexed below
+		"A/Indexed Below/Book/01.mp3", //
 		"A/Scoped/01.mp3",             // reached only on the way down
 		"A/Scoped/Granted/01.mp3",     //
 	} {
@@ -96,17 +104,26 @@ func TestMarkPendingBooks(t *testing.T) {
 	lib := catalog.Library{ID: 1, Name: "L", Root: root, IgnorePatterns: []string{"/A/Ignored/", "skip.mp3"}}
 	ignore := ParseIgnore(lib.IgnorePatterns)
 	overrides := map[string]string{
-		"A/Loose":  catalog.OverrideCollection,
-		"A/Joined": catalog.OverrideBook,
-		"A/Forced": catalog.OverrideBook,
+		"A/Loose":      catalog.OverrideCollection,
+		"A/Joined":     catalog.OverrideBook,
+		"A/Forced":     catalog.OverrideBook,
+		"A/Single":     catalog.OverrideBook,
+		"A/Mixed":      catalog.OverrideBook,
+		"A/Box":        catalog.OverrideBook,
+		"A/Box/Disc 1": catalog.OverrideBook,
 	}
-	pending := func(rel string, holding map[string]bool, allow func(string) bool) map[string]bool {
+	// The listing and the marking as handleBrowseFS has them, for scope (nil: all).
+	pendingIn := func(ctx context.Context, rel string, holding map[string]bool, scope *catalog.Scope) map[string]bool {
 		t.Helper()
-		listing, err := BrowseFS(root, rel, 0, 200, nil, ignore)
+		var visible, allow func(string) bool
+		if scope != nil {
+			visible, allow = scope.VisibleInBrowse, scope.Allows
+		}
+		listing, err := BrowseFS(root, rel, 0, 200, visible, ignore)
 		if err != nil {
 			t.Fatal(err)
 		}
-		MarkPendingBooks(t.Context(), lib, listing.Entries, overrides, holding, allow, ignore)
+		MarkPendingBooks(ctx, lib, listing.Entries, overrides, holding, allow, ignore)
 		out := map[string]bool{}
 		for _, e := range listing.Entries {
 			if e.PendingBook {
@@ -118,9 +135,13 @@ func TestMarkPendingBooks(t *testing.T) {
 		}
 		return out
 	}
+	pending := func(rel string, holding map[string]bool, scope *catalog.Scope) map[string]bool {
+		t.Helper()
+		return pendingIn(t.Context(), rel, holding, scope)
+	}
 	holding := map[string]bool{"A/Indexed Below": true}
 	got := pending("A", holding, nil)
-	want := []string{"A/Joined", "A/New Book", "A/Scoped"}
+	want := []string{"A/Joined", "A/Mixed", "A/New Book", "A/Scoped"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Fatalf("pending in A = %q, want %q", keys, want)
 	}
@@ -137,28 +158,41 @@ func TestMarkPendingBooks(t *testing.T) {
 	if keys := slices.Sorted(maps.Keys(pending("A/Forced", nil, nil))); !slices.Equal(keys, []string{"A/Forced/Sub"}) {
 		t.Errorf("pending in A/Forced = %q", keys)
 	}
+	// A disc folder below a `book` override that is no disc set (one disc, or a
+	// folder with audio of its own) is a book of its own, as the scan reads it.
+	if keys := slices.Sorted(maps.Keys(pending("A/Single", nil, nil))); !slices.Equal(keys, []string{"A/Single/CD1"}) {
+		t.Errorf("pending in A/Single = %q, want the lone disc", keys)
+	}
+	if keys := slices.Sorted(maps.Keys(pending("A/Mixed", nil, nil))); !slices.Equal(keys, []string{"A/Mixed/CD1", "A/Mixed/CD2"}) {
+		t.Errorf("pending in A/Mixed = %q, want both discs", keys)
+	}
+	// A disc-named folder that is itself a joined disc set is the joined book.
+	if keys := slices.Sorted(maps.Keys(pending("A/Box", nil, nil))); !slices.Equal(keys, []string{"A/Box/Disc 1"}) {
+		t.Errorf("pending in A/Box = %q, want the joined Disc 1", keys)
+	}
 
 	// Denied: a scope granting only A/Scoped/Granted sees A/Scoped on the way down
 	// (VisibleInBrowse) but may not open it, so it is no pending book of theirs;
 	// allowed: the granted folder is.
-	allow := func(p string) bool { return p == "A/Scoped/Granted" || strings.HasPrefix(p, "A/Scoped/Granted/") }
-	if got := pending("A", holding, allow); len(got) != 0 {
+	scope := &catalog.Scope{LibraryID: lib.ID, Paths: []string{"A/Scoped/Granted"}}
+	if got := pending("A", holding, scope); len(got) != 0 {
 		t.Errorf("scoped caller in A: %v, want nothing pending", got)
 	}
-	if got := pending("A/Scoped", nil, allow); !got["A/Scoped/Granted"] {
+	if got := pending("A/Scoped", nil, scope); !got["A/Scoped/Granted"] {
 		t.Errorf("scoped caller in A/Scoped: %v, want the granted folder pending", got)
 	}
 
-	// A folder holding an indexed book is not read from disk at all: one made
-	// unreadable reads the same.
-	if err := os.Chmod(filepath.Join(root, "A", "Indexed Below"), 0); err != nil {
-		t.Fatal(err)
+	// A folder holding an indexed book is the index's to describe and is not
+	// read: A/Indexed Below, which has audio of its own, is pending only when
+	// nothing says so (above, holding does).
+	if got := pending("A", nil, nil); !got["A/Indexed Below"] {
+		t.Error("without holding, a folder with audio of its own was not marked: the holding skip went untested")
 	}
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, "A", "Indexed Below"), 0o755) })
-	if got := pending("A", holding, nil); got["A/Indexed Below"] {
-		t.Error("a folder holding an indexed book was marked")
-	}
-	if got := pending("A", nil, nil); got["A/Indexed Below"] {
-		t.Error("a folder with only subfolders was marked")
+
+	// The caller gone (or the pass out of time): nothing more is read or marked.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := pendingIn(ctx, "A", nil, nil); len(got) != 0 {
+		t.Errorf("with the request's context done: %v, want nothing marked", got)
 	}
 }

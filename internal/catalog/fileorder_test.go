@@ -8,8 +8,9 @@ import (
 
 // TestSignaturesStoredFileOrder (#177, 0055): a folder book's file order key is
 // stored on the row, and Signatures reads it from there; a row indexed before
-// the column existed (NULL) falls back to its book_files and says so, until
-// SetFileOrders records it. A single-file book has none.
+// the column existed (NULL), or since by an older server (another indexed_at),
+// falls back to its book_files and says so, until SetFileOrders records it. A
+// single-file book has none.
 func TestSignaturesStoredFileOrder(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -53,13 +54,22 @@ func TestSignaturesStoredFileOrder(t *testing.T) {
 		t.Fatalf("single-file book: %+v", s)
 	}
 
-	// A row from before 0055: the key read from its book_files (in the order they
-	// now hold, reversed above), flagged unset.
-	if _, err := c.db.ExecContext(ctx, `UPDATE books SET file_order = NULL`); err != nil {
-		t.Fatal(err)
-	}
+	// A row an older server re-indexed (a rollback): its book_files in the order
+	// they now hold (reversed above) under a new indexed_at, the key left as it
+	// was. The key is not trusted: read from book_files, flagged unset.
 	reversed := slices.Clone(files)
 	slices.Reverse(reversed)
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET indexed_at = '2020-01-02T00:00:00Z'`); err != nil {
+		t.Fatal(err)
+	}
+	if s := sig("A/Book"); s.FileOrder != FileOrderKey(reversed) || !s.FileOrderUnset {
+		t.Fatalf("re-indexed by an older server: FileOrder %d unset %v; want %d from book_files", s.FileOrder, s.FileOrderUnset, FileOrderKey(reversed))
+	}
+
+	// A row from before 0055: likewise.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET file_order = NULL, file_order_indexed_at = NULL`); err != nil {
+		t.Fatal(err)
+	}
 	if s := sig("A/Book"); s.FileOrder != FileOrderKey(reversed) || !s.FileOrderUnset {
 		t.Fatalf("NULL key: FileOrder %d unset %v; want %d from book_files", s.FileOrder, s.FileOrderUnset, FileOrderKey(reversed))
 	}
@@ -67,14 +77,21 @@ func TestSignaturesStoredFileOrder(t *testing.T) {
 		t.Fatalf("single-file book with a NULL key: %+v, want nothing to record", s)
 	}
 
-	// SetFileOrders records it (a key with the high bit set round-trips), and
-	// never on a single-file book.
+	// SetFileOrders records it with the row's index (a key with the high bit set
+	// round-trips), and never on a single-file book.
 	const high = uint64(1)<<63 | 12345
 	if err := c.SetFileOrders(ctx, lib.ID, map[string]uint64{"A/Book": high, "Loose.m4b": 7}); err != nil {
 		t.Fatal(err)
 	}
 	if s := sig("A/Book"); s.FileOrder != high || s.FileOrderUnset {
 		t.Fatalf("after SetFileOrders: %d unset %v; want %d", s.FileOrder, s.FileOrderUnset, high)
+	}
+	// Once recorded, the key stands: a backfill read before it was changes nothing.
+	if err := c.SetFileOrders(ctx, lib.ID, map[string]uint64{"A/Book": 99}); err != nil {
+		t.Fatal(err)
+	}
+	if s := sig("A/Book"); s.FileOrder != high {
+		t.Fatalf("a later SetFileOrders replaced the recorded key: %d, want %d", s.FileOrder, high)
 	}
 	if err := c.db.QueryRowContext(ctx, `SELECT file_order FROM books WHERE rel_path = 'Loose.m4b'`).Scan(&stored); err != nil || stored != nil {
 		t.Fatalf("SetFileOrders wrote a single-file book: %v, %v", stored, err)
@@ -86,13 +103,14 @@ func TestSignaturesStoredFileOrder(t *testing.T) {
 
 // TestFoldersHoldingBooks: a folder holds a book when the book is at it or below
 // it, by whole segments ("A/B" holds nothing of "A/B2"), with LIKE's wildcards
-// plain characters in a name, and only in the library asked about.
+// plain characters in a name, a name that isn't UTF-8 matched by its bytes, and
+// only in the library asked about.
 func TestFoldersHoldingBooks(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	other, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/tmp/m"})
-	for _, p := range []string{"A/B2/Book", "Author/Series/Book", "Pct%/Book", "Under_score/Book", "Flat.m4b", "X/Joined"} {
+	for _, p := range []string{"A/B2/Book", "Author/Series/Book", "Pct%/Book", "Under_score/Book", "Flat.m4b", "X/Joined", "Caf\xe9/Book"} {
 		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: p, AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
@@ -103,11 +121,12 @@ func TestFoldersHoldingBooks(t *testing.T) {
 	got, err := c.FoldersHoldingBooks(ctx, lib.ID, []string{
 		"A/B", "A/B2", "A", "Author", "Author/Series", "Author/Series/Book", "Author/Ser",
 		"Pct%", "Pct", "P%", "Under_score", "UnderXscore", "Under", "X/Joined", "Elsewhere", "Nothing",
+		"Caf\xe9", "Caf\u00e9",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"A", "A/B2", "Author", "Author/Series", "Author/Series/Book", "Pct%", "Under_score", "X/Joined"}
+	want := []string{"A", "A/B2", "Author", "Author/Series", "Author/Series/Book", "Caf\xe9", "Pct%", "Under_score", "X/Joined"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Fatalf("FoldersHoldingBooks = %q, want %q", keys, want)
 	}

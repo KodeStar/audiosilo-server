@@ -168,8 +168,9 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		}
 		// A narrator tag beats composer: Vorbis "narrator" (dhowden lowercases its
 		// keys) and an iTunes "----" item named NARRATOR (dhowden keys one by its
-		// name). The \xa9nrt item is read by Extract (readMP4Narrator).
-		if v := strings.TrimSpace(rawString(raw, "narrator", "NARRATOR")); v != "" {
+		// name, its value led by the data box's locale bytes: tagText). The \xa9nrt
+		// item is read by Extract (readMP4Narrator).
+		if v := tagText(rawString(raw, "narrator", "NARRATOR")); v != "" {
 			m.Narrator, m.narratorExplicit = v, true
 		}
 		// The date where the format keeps one (MP4 \xa9day, ID3 TDRC/TYER, Vorbis
@@ -288,6 +289,13 @@ func firstReleaseDate(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// tagText is a tag's text as the index keeps it: trimmed, and with no NUL. An
+// MP4 item's value can carry them: dhowden leaves a "----" item's four locale
+// bytes (NULs) in front of it, and a writer may end the text with one.
+func tagText(v string) string {
+	return strings.TrimSpace(strings.ReplaceAll(v, "\x00", ""))
 }
 
 func firstNonEmpty(vals ...string) string {

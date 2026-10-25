@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -234,15 +233,10 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 	// The canonical rel path prefixes each entry's Path; scope checks and
 	// persisted path keys rely on this same form (see catalog.CleanRelPath).
 	cleanRel := catalog.CleanRelPath(relPath)
-	// The .mka a book of this folder leaves out, judged on the audio the scanner
-	// sees there (not hidden, not ignored), whatever the caller's scope.
+	// The audio the scanner sees here (not hidden, not ignored: isAudioEntry's
+	// rule), whatever the caller's scope: what decides the .mka a book of this
+	// folder leaves out (shadowedMKA, below).
 	var audioNames []string
-	for _, de := range dirEntries {
-		if isAudioEntry(de, path.Join(cleanRel, de.Name()), ignore) {
-			audioNames = append(audioNames, de.Name())
-		}
-	}
-	shadowed := shadowedMKA(audioNames)
 	for _, de := range dirEntries {
 		name := de.Name()
 		if isHidden(name) {
@@ -252,17 +246,23 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 		if cleanRel != "" {
 			childRel = cleanRel + "/" + name
 		}
-		if allow != nil && !allow(childRel) {
-			continue // outside the caller's share scope
-		}
 		isDir := de.IsDir()
-		if !isDir && (!metadata.IsAudio(name) || shadowed[name]) {
-			continue // hide non-audio files (clicking one can't open a book) and a book's left-out .mka
+		if !isDir && !metadata.IsAudio(name) {
+			continue // hide non-audio files: clicking one can't open a book
 		}
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
+		if !isDir {
+			audioNames = append(audioNames, name)
+		}
+		if allow != nil && !allow(childRel) {
+			continue // outside the caller's share scope
+		}
 		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, strings.ToLower(name), de})
+	}
+	if shadowed := shadowedMKA(audioNames); shadowed != nil {
+		entries = slices.DeleteFunc(entries, func(e listed) bool { return !e.IsDir && shadowed[e.Name] })
 	}
 	slices.SortStableFunc(entries, func(a, b listed) int {
 		if a.IsDir != b.IsDir {

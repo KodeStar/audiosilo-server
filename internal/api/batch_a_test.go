@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -30,9 +29,9 @@ func writeTree(t *testing.T, root string, rels ...string) {
 
 // fsEntries GETs /fs?path= as tok and returns its entries as raw JSON objects by
 // name, so an absent field reads as absent.
-func fsEntries(t *testing.T, e *testEnv, tok string, libID int64, rel string, headers map[string]string) map[string]map[string]json.RawMessage {
+func fsEntries(t *testing.T, e *testEnv, tok string, libID int64, rel string) map[string]map[string]json.RawMessage {
 	t.Helper()
-	resp, body := e.doHeaders(t, "GET", bookURL(libID, "fs", rel), tok, "", headers)
+	resp, body := e.do(t, "GET", bookURL(libID, "fs", rel), tok, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("fs %q = %d %s", rel, resp.StatusCode, body)
 	}
@@ -72,9 +71,9 @@ func TestBrowseFSPendingBook(t *testing.T) {
 	if err := e.cat.SetFolderOverride(ctx, lib.ID, "Author X/Loose", catalog.OverrideCollection); err != nil {
 		t.Fatal(err)
 	}
-	admin, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	admin := adminSession(t, e)
 
-	entries := fsEntries(t, e, admin, lib.ID, "Author X", nil)
+	entries := fsEntries(t, e, admin, lib.ID, "Author X")
 	if got := string(entries["New Book"]["pending_book"]); got != "true" {
 		t.Fatalf("New Book pending_book = %q, want true (%v)", got, entries["New Book"])
 	}
@@ -89,7 +88,7 @@ func TestBrowseFSPendingBook(t *testing.T) {
 			t.Errorf("%s carries pending_book: %v", name, entries[name])
 		}
 	}
-	files := fsEntries(t, e, admin, lib.ID, "Author X/New Book", nil)
+	files := fsEntries(t, e, admin, lib.ID, "Author X/New Book")
 	for name, en := range files {
 		if _, ok := en["pending_book"]; ok {
 			t.Errorf("file %s carries pending_book", name)
@@ -101,7 +100,7 @@ func TestBrowseFSPendingBook(t *testing.T) {
 	if err := e.cat.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(fsEntries(t, e, tok, lib.ID, "Author X", nil)["New Book"]["pending_book"]); got != "true" {
+	if got := string(fsEntries(t, e, tok, lib.ID, "Author X")["New Book"]["pending_book"]); got != "true" {
 		t.Fatalf("a listener's New Book pending_book = %q", got)
 	}
 
@@ -115,7 +114,7 @@ func TestBrowseFSPendingBook(t *testing.T) {
 	if err := e.cat.GrantShare(ctx, kid, share.ID); err != nil {
 		t.Fatal(err)
 	}
-	scoped := fsEntries(t, e, kidTok, lib.ID, "Author X", nil)
+	scoped := fsEntries(t, e, kidTok, lib.ID, "Author X")
 	if en, ok := scoped["Shared"]; !ok {
 		t.Fatalf("the way down is not listed: %v", scoped)
 	} else if _, flagged := en["pending_book"]; flagged {
@@ -124,7 +123,7 @@ func TestBrowseFSPendingBook(t *testing.T) {
 	if _, ok := scoped["New Book"]; ok {
 		t.Fatal("an ungranted folder is listed")
 	}
-	if got := string(fsEntries(t, e, kidTok, lib.ID, "Author X/Shared", nil)["Granted"]["pending_book"]); got != "true" {
+	if got := string(fsEntries(t, e, kidTok, lib.ID, "Author X/Shared")["Granted"]["pending_book"]); got != "true" {
 		t.Fatalf("allowed: the granted folder's pending_book = %q", got)
 	}
 	// The admin sees Shared (it has audio of its own) as pending.
@@ -224,9 +223,11 @@ func (e *progressEnv) stored(t *testing.T, uid int64, path string) *catalog.Prog
 }
 
 // TestProgressPartPathKeysTheBook (#199, security): a part path's progress is the
-// book's, read and written under the book's path; a disc folder's is its joined
-// book's; a single-file book, a navigation folder and a path no scan has seen
-// keep the path given, as before. The heartbeat's session is the book's too.
+// book's, read and written under the book's path, a file in a joined book's disc
+// folder too; a disc folder itself (written to by a download of that disc, on the
+// disc's own timeline), a single-file book, a navigation folder and a path no
+// scan has seen keep the path given, as before. The heartbeat's session is the
+// book's too.
 func TestProgressPartPathKeysTheBook(t *testing.T) {
 	t.Parallel()
 	e := newProgressEnv(t)
@@ -273,20 +274,51 @@ func TestProgressPartPathKeysTheBook(t *testing.T) {
 		t.Fatalf("PATCH wrote a row at the part path: %+v", p)
 	}
 
-	// A disc folder of a joined book, and a file in it, are the joined book.
-	for _, path := range []string{pDisc2, pDisc2 + "/01.mp3"} {
-		if status, got := e.put(t, tok, path, 77); status != http.StatusOK || got != pJoined {
-			t.Errorf("PUT %s = %d path %q, want %q", path, status, got, pJoined)
-		}
+	// A file in a disc folder of a joined book is the joined book's.
+	if status, got := e.put(t, tok, pDisc2+"/01.mp3", 77); status != http.StatusOK || got != pJoined {
+		t.Errorf("PUT a file of a disc = %d path %q, want %q", status, got, pJoined)
 	}
-	// Unchanged: a single-file book, a navigation folder, a path no scan has seen.
-	for _, path := range []string{pSingle, pNav, pUnseen} {
+	// Unchanged: a disc folder (its position is on the disc's timeline, not the
+	// joined book's), a single-file book, a navigation folder, a path no scan has
+	// seen.
+	for _, path := range []string{pDisc2, pSingle, pNav, pUnseen} {
 		if status, got := e.put(t, tok, path, 9); status != http.StatusOK || got != path {
 			t.Errorf("PUT %s = %d path %q, want its own path", path, status, got)
 		}
 		if p := e.stored(t, uid, path); p == nil || p.Position != 9 {
 			t.Errorf("%s row = %+v, want 9 at its own path", path, p)
 		}
+	}
+	if p := e.stored(t, uid, pJoined); p == nil || p.Position != 77 {
+		t.Errorf("joined book row = %+v, want 77: the disc folder's save is not the book's", p)
+	}
+}
+
+// TestProgressPathLookupFails (#199): when the index can't say which book a path
+// is, progress answers 500 rather than reading or saving under the path given.
+func TestProgressPathLookupFails(t *testing.T) {
+	t.Parallel()
+	e := newProgressEnv(t)
+	ctx := context.Background()
+	uid, tok := newUserWithSession(t, e.testEnv, "sam", false)
+	if err := e.cat.GrantWholeLibrary(ctx, uid, e.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A part path is looked up in book_files: without the table the lookup fails.
+	if _, err := e.db.ExecContext(ctx, `ALTER TABLE book_files RENAME TO book_files_gone`); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := e.put(t, tok, pPart2, 5); status != http.StatusInternalServerError {
+		t.Errorf("PUT part with the lookup failing = %d, want 500", status)
+	}
+	if status, _ := e.get(t, tok, pPart2); status != http.StatusInternalServerError {
+		t.Errorf("GET part with the lookup failing = %d, want 500", status)
+	}
+	if resp, _ := e.do(t, "PATCH", bookURL(e.lib.ID, "progress", pPart2), tok, `{"position":5}`); resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("PATCH part with the lookup failing = %d, want 500", resp.StatusCode)
+	}
+	if p := e.stored(t, uid, pPart2); p != nil {
+		t.Errorf("a row was saved at the part path: %+v", p)
 	}
 }
 

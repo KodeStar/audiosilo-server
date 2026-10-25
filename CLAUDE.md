@@ -270,8 +270,9 @@ checked `chapters.json`, Phase 1d, a chapter source of its own: see Generated ch
 `0053` inserts `server_state('setup_state')` as finished and dismissed on a server that already has a
 library or a second account (not a demo or member), so an upgraded server never shows the first-run flow.
 `0055` adds `books.file_order` (a folder book's file order key, `catalog.FileOrderKey` bit-cast to a
-signed integer; NULL = not recorded, filled by the next scan without a re-index; derived; see Auto
-book/folder detection in CONVENTIONS.md).
+signed integer) and `file_order_indexed_at` (the index it was recorded with; NULL or another index's,
+an older server's re-index, = not recorded, filled by the next scan without a re-index; derived; see
+Auto book/folder detection in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

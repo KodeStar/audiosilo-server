@@ -52,7 +52,8 @@ func TestNaturalFileOrder(t *testing.T) {
 
 // TestScanReordersBookIndexedInByteOrder (D2): a folder book indexed before
 // natural order (its files stored in byte order) is read again in natural order
-// by the next scan though no file changed; once in order, a scan leaves it be.
+// by the next scan though no file changed, whatever key the row holds; once in
+// order, a scan leaves it be.
 func TestScanReordersBookIndexedInByteOrder(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -80,21 +81,32 @@ func TestScanReordersBookIndexedInByteOrder(t *testing.T) {
 		t.Fatalf("first scan order = %q, want %q", got, want)
 	}
 	byteOrder := []string{want[0], want[2], want[1]} // 1-, 10-, 2-
-	// As an index from before natural order has it: 1-, 10-, 2-; and from before
-	// 0055 (no stored key), or with the key of that order stored.
-	for _, storedKey := range []bool{false, true} {
+	keyOf := func(paths []string) int64 {
+		files := make([]catalog.BookFile, len(paths))
+		for i, f := range paths {
+			files[i] = catalog.BookFile{RelPath: f}
+		}
+		return int64(catalog.FileOrderKey(files))
+	}
+	// As an index from before natural order has it: 1-, 10-, 2-; from before 0055
+	// (no stored key), with the key of that order stored, or as an older server
+	// run against this database (a rollback) re-indexes it: a new indexed_at, its
+	// own order, and the natural order's key it knows nothing of left as it was.
+	for _, storedKey := range []string{"none", "byte order", "older server"} {
 		for seq, f := range byteOrder {
 			if _, err := db.ExecContext(ctx, `UPDATE book_files SET seq = ? WHERE rel_path = ?`, seq, f); err != nil {
 				t.Fatal(err)
 			}
 		}
 		var key any // NULL
-		if storedKey {
-			files := make([]catalog.BookFile, len(byteOrder))
-			for i, f := range byteOrder {
-				files[i] = catalog.BookFile{RelPath: f}
+		switch storedKey {
+		case "byte order":
+			key = keyOf(byteOrder)
+		case "older server":
+			key = keyOf(want)
+			if _, err := db.ExecContext(ctx, `UPDATE books SET indexed_at = '2020-01-02T00:00:00Z' WHERE rel_path = 'A/Book'`); err != nil {
+				t.Fatal(err)
 			}
-			key = int64(catalog.FileOrderKey(files))
 		}
 		if _, err := db.ExecContext(ctx, `UPDATE books SET file_order = ? WHERE rel_path = 'A/Book'`, key); err != nil {
 			t.Fatal(err)
@@ -104,10 +116,10 @@ func TestScanReordersBookIndexedInByteOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := order(); !slices.Equal(got, want) || res.Updated != 1 {
-			t.Fatalf("stored key %v: rescan order = %q (updated %d), want %q (updated 1)", storedKey, got, res.Updated, want)
+			t.Fatalf("stored key %q: rescan order = %q (updated %d), want %q (updated 1)", storedKey, got, res.Updated, want)
 		}
 		if res, err = s.Scan(ctx, *lib); err != nil || res.Updated != 0 || res.Added != 0 {
-			t.Fatalf("stored key %v: a scan of a book in order = %+v, %v; want nothing re-indexed", storedKey, res.ScanCounts, err)
+			t.Fatalf("stored key %q: a scan of a book in order = %+v, %v; want nothing re-indexed", storedKey, res.ScanCounts, err)
 		}
 	}
 }

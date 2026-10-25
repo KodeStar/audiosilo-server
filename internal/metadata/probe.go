@@ -138,7 +138,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	// An explicit narrator tag (this one, or one the tags read) beats composer.
 	if v := strings.TrimSpace(t["narrator"]); v != "" {
 		m.Narrator, m.narratorExplicit = v, true
-	} else if v := t["composer"]; v != "" && !m.narratorExplicit {
+	} else if v := strings.TrimSpace(t["composer"]); v != "" && !m.narratorExplicit {
 		m.Narrator = v
 	}
 	if v := firstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {

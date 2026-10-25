@@ -282,15 +282,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books whose .audiosilo/ attachments are new, changed, gone or never read,
 	// while their audio is unchanged: likewise (SetAttachments).
 	attachBackfill := map[string]catalog.AttachmentsReading{}
-	// Folder books found unchanged whose file order key isn't stored yet (indexed
-	// before 0055; Signatures read it from their files this once): recorded
-	// without a re-index (SetFileOrders), so the next scan reads none of their files.
+	// Folder books found unchanged whose file order key isn't recorded (indexed
+	// before 0055, or since by an older server; Signatures read it from their
+	// files this once): recorded without a re-index (SetFileOrders), so the next
+	// scan reads none of their files.
 	orderBackfill := map[string]uint64{}
-	// The path, genre, ABS and attachments backfills are written as they go: a large one
-	// (most of a library laid out Author/Title, or every folder book of a library
-	// ABS has managed, read once after an upgrade) can take a while, and a scan
-	// stopped part way keeps what it read (written past the Stop: at most
-	// pathFlushEvery books).
+	// The path, genre, ABS, attachments and file order backfills are written as
+	// they go: a large one (most of a library laid out Author/Title, or every
+	// folder book of a library ABS has managed, read once after an upgrade) can
+	// take a while, and a scan stopped part way keeps what it read (written past
+	// the Stop: at most pathFlushEvery books).
 	flushBackfills := func() {
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)

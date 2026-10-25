@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
 	"math"
 	"strings"
@@ -25,8 +24,6 @@ const (
 	mp4UTF8 = 1
 )
 
-var errMP4Box = errors.New("malformed mp4 box")
-
 // readMP4Narrator returns the \xa9nrt item of the MP4 r holds (size bytes long),
 // trimmed; "" when there is none, it is not text, or the file is not an MP4 or is
 // malformed.
@@ -35,24 +32,14 @@ func readMP4Narrator(r io.ReaderAt, size int64) string {
 	if !ok {
 		return ""
 	}
-	meta, metaEnd, ok := findMP4Box(r, moov, moovEnd, "udta")
-	if ok {
-		meta, metaEnd, ok = findMP4Box(r, meta, metaEnd, "meta")
-	}
+	meta, metaEnd, ok := findMP4Path(r, moov, moovEnd, "udta", "meta")
 	if !ok {
-		if meta, metaEnd, ok = findMP4Box(r, moov, moovEnd, "meta"); !ok {
-			return ""
-		}
+		meta, metaEnd, ok = findMP4Box(r, moov, moovEnd, "meta")
 	}
-	ilst, ilstEnd, ok := findMP4Box(r, metaChildren(r, meta, metaEnd), metaEnd, "ilst")
 	if !ok {
 		return ""
 	}
-	item, itemEnd, ok := findMP4Box(r, ilst, ilstEnd, "\xa9nrt")
-	if !ok {
-		return ""
-	}
-	data, dataEnd, ok := findMP4Box(r, item, itemEnd, "data")
+	data, dataEnd, ok := findMP4Path(r, metaChildren(r, meta, metaEnd), metaEnd, "ilst", "\xa9nrt", "data")
 	if !ok || dataEnd-data < 8 || dataEnd-data-8 > maxNarratorData {
 		return ""
 	}
@@ -64,7 +51,7 @@ func readMP4Narrator(r io.ReaderAt, size int64) string {
 	if binary.BigEndian.Uint32(buf[:4])&0xFFFFFF != mp4UTF8 {
 		return ""
 	}
-	return strings.TrimSpace(strings.ToValidUTF8(string(buf[8:]), ""))
+	return tagText(strings.ToValidUTF8(string(buf[8:]), ""))
 }
 
 // metaChildren is where a meta box's children start: after its four bytes of
@@ -81,20 +68,30 @@ func metaChildren(r io.ReaderAt, body, end int64) int64 {
 	return body + 4
 }
 
+// findMP4Path finds the box at the end of names, each one among the children of
+// the one before it (the first among the boxes between start and end), returning
+// its body's start and its end.
+func findMP4Path(r io.ReaderAt, start, end int64, names ...string) (body, boxEnd int64, ok bool) {
+	body, boxEnd = start, end
+	for _, name := range names {
+		if body, boxEnd, ok = findMP4Box(r, body, boxEnd, name); !ok {
+			return 0, 0, false
+		}
+	}
+	return body, boxEnd, true
+}
+
 // findMP4Box finds the first box named want among the boxes between start and
 // end (one container's children), returning its body's start and its end.
 func findMP4Box(r io.ReaderAt, start, end int64, want string) (body, boxEnd int64, ok bool) {
 	at := start
 	for range maxMP4Boxes {
-		if at >= end {
-			return 0, 0, false
-		}
-		name, body, next, err := nextMP4Box(r, at, end)
-		if err != nil {
+		name, childBody, next, read := nextMP4Box(r, at, end)
+		if !read {
 			return 0, 0, false
 		}
 		if name == want {
-			return body, next, true
+			return childBody, next, true
 		}
 		at = next
 	}
@@ -104,14 +101,15 @@ func findMP4Box(r io.ReaderAt, start, end int64, want string) (body, boxEnd int6
 // nextMP4Box reads the box header at at, inside a container ending at end: its
 // name, where its body starts and where the box ends. A size of 1 is the 64-bit
 // size that follows the name, 0 runs to the container's end; a box shorter than
-// its header or longer than what is left of its container is errMP4Box.
-func nextMP4Box(r io.ReaderAt, at, end int64) (name string, body, next int64, err error) {
+// its header or longer than what is left of its container, or one that can't be
+// read, is not ok.
+func nextMP4Box(r io.ReaderAt, at, end int64) (name string, body, next int64, ok bool) {
 	var h [16]byte
 	if end-at < 8 {
-		return "", 0, 0, errMP4Box
+		return "", 0, 0, false
 	}
 	if _, err := r.ReadAt(h[:8], at); err != nil {
-		return "", 0, 0, err
+		return "", 0, 0, false
 	}
 	size := int64(binary.BigEndian.Uint32(h[:4]))
 	name, body = string(h[4:8]), at+8
@@ -120,19 +118,19 @@ func nextMP4Box(r io.ReaderAt, at, end int64) (name string, body, next int64, er
 		size = end - at
 	case 1:
 		if end-at < 16 {
-			return "", 0, 0, errMP4Box
+			return "", 0, 0, false
 		}
 		if _, err := r.ReadAt(h[8:], at+8); err != nil {
-			return "", 0, 0, err
+			return "", 0, 0, false
 		}
 		large := binary.BigEndian.Uint64(h[8:])
 		if large > math.MaxInt64 {
-			return "", 0, 0, errMP4Box
+			return "", 0, 0, false
 		}
 		size, body = int64(large), at+16
 	}
 	if size < body-at || size > end-at {
-		return "", 0, 0, errMP4Box
+		return "", 0, 0, false
 	}
-	return name, body, at + size, nil
+	return name, body, at + size, true
 }

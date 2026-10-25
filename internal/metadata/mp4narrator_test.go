@@ -69,6 +69,45 @@ func TestComposerStillNarratesWithoutNarratorTag(t *testing.T) {
 	if m.Narrator != "Probe Narrator" {
 		t.Errorf("after ffprobe's narrator: Narrator = %q", m.Narrator)
 	}
+
+	// ffprobe's composer is trimmed, and a blank one replaces nothing.
+	m = &Metadata{}
+	applyTags(m, fakeTags{composer: "Comp"})
+	applyProbe(m, &probeResult{Tags: map[string]string{"composer": " Comp Probe \n"}})
+	if m.Narrator != "Comp Probe" {
+		t.Errorf("padded ffprobe composer: Narrator = %q", m.Narrator)
+	}
+	applyProbe(m, &probeResult{Tags: map[string]string{"composer": "   "}})
+	if m.Narrator != "Comp Probe" {
+		t.Errorf("blank ffprobe composer: Narrator = %q, want the one read before", m.Narrator)
+	}
+}
+
+// TestExtractReadsFreeformNarrator: an iTunes "----" item named NARRATOR is the
+// narrator, read without ffprobe as dhowden returns it (its value led by the
+// data box's four locale bytes, NULs): clean, over the composer; an empty one
+// leaves the composer.
+func TestExtractReadsFreeformNarrator(t *testing.T) {
+	t.Parallel()
+	freeform := func(value string) []byte {
+		return box("----",
+			box("mean", []byte{0, 0, 0, 0}, []byte("com.apple.iTunes")),
+			box("name", []byte{0, 0, 0, 0}, []byte("NARRATOR")),
+			narratorData(1, value))
+	}
+	for value, want := range map[string]string{" Kate Reading ": "Kate Reading", "": "A Composer", " ": "A Composer"} {
+		p := filepath.Join(t.TempDir(), "freeform.m4b")
+		if err := os.WriteFile(p, ilstFile(box("\xa9wrt", narratorData(1, "A Composer")), freeform(value)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := Extract(p, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Narrator != want {
+			t.Errorf("NARRATOR item %q: Narrator = %q, want %q", value, m.Narrator, want)
+		}
+	}
 }
 
 // box is an MP4 box: a 32-bit size, its name, its body.
@@ -99,6 +138,10 @@ func TestReadMP4NarratorBounded(t *testing.T) {
 	good := ilstFile(box("\xa9nam", narratorData(1, "Title")), box("\xa9nrt", narratorData(1, " Kate Reading ")))
 	if got := read(good); got != "Kate Reading" {
 		t.Fatalf("iTunes meta: %q", got)
+	}
+	// A value written with a trailing NUL.
+	if got := read(ilstFile(box("\xa9nrt", narratorData(1, "Kate Reading\x00")))); got != "Kate Reading" {
+		t.Errorf("NUL-terminated: %q", got)
 	}
 	// QuickTime meta: no version/flags, hdlr straight away.
 	qt := append(box("ftyp", []byte("qt  ")), box("moov", box("meta", box("hdlr", make([]byte, 25)),
