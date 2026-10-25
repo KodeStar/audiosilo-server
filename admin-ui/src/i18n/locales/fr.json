@@ -137,7 +137,7 @@
   "common.loading": "Chargement",
   "common.allLibraries": "Toutes les bibliothèques",
   "common.copy": "Copier",
-  "common.copied": "{{what}} copié",
+  "common.copied": "Copié : {{what}}",
   "common.copyFailed": "Impossible de copier. Sélectionnez le texte et copiez-le vous-même.",
   "confirm.typeBefore": "Saisissez",
   "confirm.typeAfter": "pour confirmer",

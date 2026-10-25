@@ -1,6 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
-import { copyText } from './clipboard';
+import { copyText, copyWithToast } from './clipboard';
+import { toast } from './toast';
+
+describe('copyWithToast', () => {
+  afterEach(() => {
+    unstubExecCommand();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the refused-copy warning open until closed, showing the text', async () => {
+    stubExecCommand(() => false);
+    const add = vi.spyOn(toast, 'add');
+    await copyWithToast('/books/Dune', 'Path');
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ description: '/books/Dune', type: 'warning', timeout: 0 }),
+    );
+  });
+});
 
 describe('copyText', () => {
   let button: HTMLButtonElement;

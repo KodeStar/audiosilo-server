@@ -137,7 +137,7 @@
   "common.loading": "Cargando",
   "common.allLibraries": "Todas las bibliotecas",
   "common.copy": "Copiar",
-  "common.copied": "{{what}} copiado",
+  "common.copied": "Copiado: {{what}}",
   "common.copyFailed": "No se pudo copiar. Selecciónalo y cópialo tú.",
   "confirm.typeBefore": "Escribe",
   "confirm.typeAfter": "para confirmar",

@@ -822,7 +822,9 @@ describe('copy path', () => {
     await copyPath();
     const title = await screen.findByText("Couldn't copy. Select it and copy it yourself.");
     // The toast itself carries the path (Files on disk shows it too).
-    const toast = title.closest('[data-slot="toast"]') as HTMLElement;
-    expect(within(toast).getByText(FULL_PATH)).toBeInTheDocument();
+    const toast = title.closest<HTMLElement>('[data-slot="toast"]');
+    if (!toast) throw new Error('the title is not inside a toast');
+    // A drag across it selects the text instead of swiping the toast away.
+    expect(within(toast).getByText(FULL_PATH)).toHaveAttribute('data-base-ui-swipe-ignore');
   });
 });
