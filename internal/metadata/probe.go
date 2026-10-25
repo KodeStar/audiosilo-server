@@ -135,7 +135,10 @@ func applyProbe(m *Metadata, p *probeResult) {
 	if v := firstNonEmpty(t["album_artist"], t["artist"], t["author"]); v != "" {
 		m.Author = v
 	}
-	if v := firstNonEmpty(t["narrator"], t["composer"]); v != "" {
+	// An explicit narrator tag (this one, or one the tags read) beats composer.
+	if v := strings.TrimSpace(t["narrator"]); v != "" {
+		m.Narrator, m.narratorExplicit = v, true
+	} else if v := t["composer"]; v != "" && !m.narratorExplicit {
 		m.Narrator = v
 	}
 	if v := firstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {

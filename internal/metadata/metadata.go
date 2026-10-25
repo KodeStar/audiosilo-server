@@ -5,6 +5,7 @@ package metadata
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,6 +65,11 @@ type Metadata struct {
 	// make Extract fail; the scanner records them for the Health page.
 	OpenErr  error `json:"-"` // the file couldn't be opened
 	ProbeErr error `json:"-"` // ffprobe was configured and couldn't read it
+
+	// narratorExplicit: Narrator came from a narrator tag (\xa9nrt, a NARRATOR
+	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
+	// when there is none, never replaces (applyProbe).
+	narratorExplicit bool
 }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
@@ -87,6 +93,9 @@ var AudioExtensions = map[string]bool{
 	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true,
 	".flac": true, ".ogg": true, ".opus": true, ".mka": true,
 }
+
+// mp4Extensions are the AudioExtensions an MP4 container carries.
+var mp4Extensions = map[string]bool{"m4b": true, "m4a": true, "mp4": true}
 
 // IsAudio reports whether path has a recognized audiobook extension.
 func IsAudio(path string) bool {
@@ -112,8 +121,19 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
 	}
-	if md, terr := tag.ReadFrom(f); terr == nil {
+	md, terr := tag.ReadFrom(f)
+	if terr == nil {
 		applyTags(m, md)
+	}
+	// The iTunes narrator item, which neither dhowden nor ffprobe reads. Asked of
+	// an MP4 (or a file named as one dhowden could not read: its walk is bounded
+	// and a stranger simply has no moov).
+	if (terr == nil && md.Format() == tag.MP4) || (terr != nil && mp4Extensions[m.Format]) {
+		if _, err := f.Seek(0, io.SeekStart); err == nil {
+			if n := readMP4Narrator(f); n != "" {
+				m.Narrator, m.narratorExplicit = n, true
+			}
+		}
 	}
 	f.Close()
 
@@ -147,8 +167,11 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		if v := rawString(raw, "series", "\xa9grp", "show", "TXXX:SERIES"); v != "" {
 			m.setSeriesTag(v) // "Discworld, book #40": series Discworld, position 40
 		}
-		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
-			m.Narrator = strings.TrimSpace(v)
+		// A narrator tag beats composer: Vorbis "narrator" (dhowden lowercases its
+		// keys) and an iTunes "----" item named NARRATOR (dhowden keys one by its
+		// name). The \xa9nrt item is read by Extract (readMP4Narrator).
+		if v := strings.TrimSpace(rawString(raw, "narrator", "NARRATOR")); v != "" {
+			m.Narrator, m.narratorExplicit = v, true
 		}
 		// The date where the format keeps one (MP4 \xa9day, ID3 TDRC/TYER, Vorbis
 		// date): the same tags tag.Metadata.Year reads, but with month and day.
