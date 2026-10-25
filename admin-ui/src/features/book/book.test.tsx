@@ -791,3 +791,45 @@ describe('listen in player', () => {
     expect(screen.queryByRole('button', { name: 'Listen in player' })).not.toBeInTheDocument();
   });
 });
+
+describe('copy path', () => {
+  const FULL_PATH = `/mnt/tank/fiction/${BOOK_PATH}`;
+
+  // jsdom is not a secure context, so the copy takes the textarea fallback.
+  function stubExecCommand(ok: boolean) {
+    let copied = '';
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn(() => {
+        copied = (document.activeElement as HTMLTextAreaElement).value;
+        return ok;
+      }),
+      configurable: true,
+    });
+    return () => copied;
+  }
+  afterEach(() => Reflect.deleteProperty(document, 'execCommand'));
+
+  async function copyPath() {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'More book actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Copy path' }));
+  }
+
+  it("copies the book's full path on disk and says so", async () => {
+    const copied = stubExecCommand(true);
+    await copyPath();
+    expect(await screen.findByText('Path copied')).toBeInTheDocument();
+    expect(copied()).toBe(FULL_PATH);
+  });
+
+  it('shows the path to copy by hand when the browser refuses', async () => {
+    stubExecCommand(false);
+    await copyPath();
+    const title = await screen.findByText("Couldn't copy. Select it and copy it yourself.");
+    // The toast itself carries the path (Files on disk shows it too).
+    const toast = title.closest('[data-slot="toast"]') as HTMLElement;
+    expect(within(toast).getByText(FULL_PATH)).toBeInTheDocument();
+  });
+});
