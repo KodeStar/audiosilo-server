@@ -38,6 +38,12 @@ type Scanner struct {
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
 
+	// The on-demand indexes under way (IndexPathWithin), by book: a concurrent
+	// request for the same book waits on the one read rather than reading the
+	// book again (a book page asks for the item and its chapters at once).
+	flightMu sync.Mutex
+	flights  map[bookKey]*indexFlight
+
 	// OnRunFinished, when set before Start, hears how each scan job ended (the
 	// notifications). ctx outlives the server's, like the run's own record.
 	OnRunFinished func(ctx context.Context, r RunReport)
@@ -73,6 +79,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		ffprobePath: ffprobePath,
 		log:         log,
 		progress:    map[int64]ScanProgress{},
+		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
 	}
@@ -282,11 +289,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books whose .audiosilo/ attachments are new, changed, gone or never read,
 	// while their audio is unchanged: likewise (SetAttachments).
 	attachBackfill := map[string]catalog.AttachmentsReading{}
-	// The path, genre, ABS and attachments backfills are written as they go: a large one
-	// (most of a library laid out Author/Title, or every folder book of a library
-	// ABS has managed, read once after an upgrade) can take a while, and a scan
-	// stopped part way keeps what it read (written past the Stop: at most
-	// pathFlushEvery books).
+	// Folder books found unchanged whose file order key isn't recorded (indexed
+	// before 0055, or since by an older server; Signatures read it from their
+	// files this once): recorded without a re-index (SetFileOrders), so the next
+	// scan reads none of their files.
+	orderBackfill := map[string]uint64{}
+	// The path, genre, ABS, attachments and file order backfills are written as
+	// they go: a large one (most of a library laid out Author/Title, or every
+	// folder book of a library ABS has managed, read once after an upgrade) can
+	// take a while, and a scan stopped part way keeps what it read (written past
+	// the Stop: at most pathFlushEvery books).
 	flushBackfills := func() {
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
@@ -304,6 +316,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record .audiosilo attachments failed", "library", lib.Name, "err", err)
 		}
 		clear(attachBackfill)
+		if err := s.cat.SetFileOrders(context.WithoutCancel(ctx), lib.ID, orderBackfill); err != nil {
+			s.log.Warn("record file orders failed", "library", lib.Name, "err", err)
+		}
+		clear(orderBackfill)
 	}
 	lastLog := time.Now()
 	report := func(done int) {
@@ -338,6 +354,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
 				splitBackfill[b.RelPath] = b.SplitParent
+			}
+			if b.IsFolder && old.FileOrderUnset {
+				orderBackfill[b.RelPath] = old.FileOrder // the order found, as the check above says
 			}
 			if old.ContentHash != "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
@@ -398,7 +417,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 							Was: &catalog.AttachmentsState{Sig: old.AttachmentsSig, Unchecked: old.AttachmentsUnchecked}}
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill) >= pathFlushEvery {
+				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill)+len(orderBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
 				continue
@@ -1125,19 +1144,39 @@ func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 // .mka is the other's source or copy, ignored before .mka was audio (#161), and
 // reading both would lump them into one book with its chapters twice.
 func folderAudio(audio []audioFile) []audioFile {
-	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
-	isMKA := func(f audioFile) bool { return strings.EqualFold(filepath.Ext(f.de.Name()), ".mka") }
-	if slices.ContainsFunc(audio, isMKA) {
-		others := make(map[string]bool, len(audio))
-		for _, f := range audio {
-			if !isMKA(f) {
-				others[stem(f.de.Name())] = true
-			}
-		}
-		audio = slices.DeleteFunc(audio, func(f audioFile) bool { return isMKA(f) && others[stem(f.de.Name())] })
+	names := make([]string, len(audio))
+	for i, f := range audio {
+		names[i] = f.de.Name()
 	}
+	shadowed := shadowedMKA(names)
+	audio = slices.DeleteFunc(audio, func(f audioFile) bool { return shadowed[f.de.Name()] })
 	sortFileOrder(audio)
 	return audio
+}
+
+// shadowedMKA returns the names among one folder's audio files that are an .mka
+// beside a file of the same name in another audio format (folderAudio's rule):
+// the files a book of the folder leaves out, and so the folder listing too
+// (listDir). nil when the folder holds no .mka.
+func shadowedMKA(names []string) map[string]bool {
+	stem := func(name string) string { return strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) }
+	isMKA := func(name string) bool { return strings.EqualFold(filepath.Ext(name), ".mka") }
+	if !slices.ContainsFunc(names, isMKA) {
+		return nil
+	}
+	others := make(map[string]bool, len(names))
+	for _, n := range names {
+		if !isMKA(n) {
+			others[stem(n)] = true
+		}
+	}
+	out := map[string]bool{}
+	for _, n := range names {
+		if isMKA(n) && others[stem(n)] {
+			out[n] = true
+		}
+	}
+	return out
 }
 
 // fileBooksIn builds one single-file book per audio file.
@@ -1240,12 +1279,89 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 // accepts (nil: every path). The book relPath resolves to can lie above it (the
 // folder book of a part, the joined book of a disc folder); when allow refuses the
 // book's path, it returns ErrNotAllowed before probing or indexing anything.
+// Each caller is checked against allow before concurrent callers for the same
+// book share one read of it (indexShared).
 func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	book, err := s.resolveBook(ctx, lib, relPath, allow)
 	if err != nil {
 		return nil, err
 	}
-	return s.indexBook(ctx, lib, book)
+	return s.indexShared(ctx, lib, book)
+}
+
+// bookKey names a book across libraries: (library_id, rel_path).
+type bookKey struct {
+	libraryID int64
+	relPath   string
+}
+
+// indexFlight is one on-demand index of a book under way: done closes once it
+// has ended, with the indexed book's id or the error.
+type indexFlight struct {
+	done chan struct{}
+	id   int64
+	err  error
+}
+
+// indexShared is indexBook of a resolved book, read once for every caller that
+// asks for it while a read is under way: the others wait for that read and load
+// the book it stored, each its own copy. A waiter whose own request ends stops
+// waiting; one whose leader's request ended (a context error) while its own goes
+// on reads the book itself.
+func (s *Scanner) indexShared(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
+	key := bookKey{lib.ID, book.RelPath}
+	for {
+		s.flightMu.Lock()
+		f, waiting := s.flights[key]
+		if !waiting {
+			f = &indexFlight{done: make(chan struct{})}
+			s.flights[key] = f
+		}
+		s.flightMu.Unlock()
+		if !waiting {
+			return s.leadIndex(ctx, lib, book, key, f)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.done:
+		}
+		switch {
+		case f.err == nil:
+			return s.cat.GetBook(ctx, f.id)
+		case errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded):
+			// The leader's request ended: read the book here, unless this request
+			// has ended too (the probes don't stop for a context).
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			continue
+		default:
+			return nil, f.err
+		}
+	}
+}
+
+// errIndexAborted is a shared read's outcome when its leader never returned (a
+// panic in indexBook): its waiters fail rather than load a book it never stored.
+var errIndexAborted = errors.New("library: the shared index of this book did not finish")
+
+// leadIndex is the read of flight f's book (indexShared's leader): it records
+// the outcome on f, then ends the flight for its waiters.
+func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *catalog.Book, key bookKey, f *indexFlight) (*catalog.Book, error) {
+	f.err = errIndexAborted // until indexBook returns
+	defer func() {
+		s.flightMu.Lock()
+		delete(s.flights, key)
+		s.flightMu.Unlock()
+		close(f.done)
+	}()
+	indexed, err := s.indexBook(ctx, lib, book)
+	if err == nil {
+		f.id = indexed.ID
+	}
+	f.err = err
+	return indexed, err
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the

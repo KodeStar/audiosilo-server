@@ -128,6 +128,20 @@ func TestCastTokenMint(t *testing.T) {
 	if resp := c.media(t, c.lib, "stream", cradlePart2, part, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("a part-path token on the book's other part = %d", resp.StatusCode)
 	}
+	// The grant a part path mints (the newest) is the book's path (#199), never
+	// the part's.
+	var granted string
+	if err := c.db.QueryRowContext(context.Background(),
+		`SELECT rel_path FROM cast_grants ORDER BY token_id DESC LIMIT 1`).Scan(&granted); err != nil || granted != cradleBook {
+		t.Fatalf("a part-path mint's grant = %q, %v; want %q", granted, err, cradleBook)
+	}
+	// Denied: that token reaches no other book's files, the prefix sibling's
+	// included.
+	for _, other := range []string{cradleTwoF, mistbornBook + "/01 - The Final Empire.m4b"} {
+		if resp := c.media(t, c.lib, "stream", other, part, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("a part-path token on %s = %d; want 401", other, resp.StatusCode)
+		}
+	}
 	// Allowed: a demo account can cast (it can play).
 	if status, body := c.mint(t, c.demoTok, c.lib, cradleBook); status != http.StatusCreated {
 		t.Fatalf("demo mint = %d %s", status, body)

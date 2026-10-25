@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -88,6 +88,13 @@ type Entry struct {
 	// one (see discSets). Surfaced so the admin console offers that only here; set
 	// for an admin's request only (annotateWithBooks), never on a player's listing.
 	SplitDiscs bool `json:"split_discs,omitempty"`
+
+	// PendingBook marks a folder the scanner would read as a book that the index
+	// doesn't hold yet (MarkPendingBooks, #193), so a player opens it as a book
+	// (indexed on demand) rather than as a folder. Never set with IsBook, nor in a
+	// podcast library's listing; absent (not false) otherwise, and an older server
+	// never sends it.
+	PendingBook bool `json:"pending_book,omitempty"`
 }
 
 // Listing is a page of directory entries.
@@ -195,8 +202,11 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 // ListDir is a directory within a library root as the player browses it, whole
 // and without Size or ModTime: hidden and non-audio files left out, and so is
 // whatever allow refuses (a share's path rules; nil allows everything) or the
-// library's ignore rules skip, as the scanner skips it. Directories sort before
-// files, both by name, case folded, a stable order for paging.
+// library's ignore rules skip, as the scanner skips it, and an .mka a book of
+// the folder leaves out (shadowedMKA: beside a file of its name in another
+// format). Directories sort before files, each in natural name order
+// (naturalLess), so the files list in the order a book of the folder plays them
+// (sortFileOrder) and the order is stable for paging.
 func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
 	entries, _, err := listDir(root, relPath, allow, ignore)
 	return entries, err
@@ -216,12 +226,17 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 	}
 	type listed struct {
 		Entry
-		de fs.DirEntry
+		lower string // Name case folded once, for the sort
+		de    fs.DirEntry
 	}
 	entries := make([]listed, 0, len(dirEntries))
 	// The canonical rel path prefixes each entry's Path; scope checks and
 	// persisted path keys rely on this same form (see catalog.CleanRelPath).
 	cleanRel := catalog.CleanRelPath(relPath)
+	// The audio the scanner sees here (not hidden, not ignored: isAudioEntry's
+	// rule), whatever the caller's scope: what decides the .mka a book of this
+	// folder leaves out (shadowedMKA, below).
+	var audioNames []string
 	for _, de := range dirEntries {
 		name := de.Name()
 		if isHidden(name) {
@@ -231,23 +246,32 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 		if cleanRel != "" {
 			childRel = cleanRel + "/" + name
 		}
-		if allow != nil && !allow(childRel) {
-			continue // outside the caller's share scope
-		}
 		isDir := de.IsDir()
 		if !isDir && !metadata.IsAudio(name) {
-			continue // hide non-audio files; clicking one can't open a book
+			continue // hide non-audio files: clicking one can't open a book
 		}
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
-		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, de})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir != entries[j].IsDir {
-			return entries[i].IsDir // dirs first
+		if !isDir {
+			audioNames = append(audioNames, name)
 		}
-		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		if allow != nil && !allow(childRel) {
+			continue // outside the caller's share scope
+		}
+		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, strings.ToLower(name), de})
+	}
+	if shadowed := shadowedMKA(audioNames); shadowed != nil {
+		entries = slices.DeleteFunc(entries, func(e listed) bool { return !e.IsDir && shadowed[e.Name] })
+	}
+	slices.SortStableFunc(entries, func(a, b listed) int {
+		if a.IsDir != b.IsDir {
+			if a.IsDir {
+				return -1 // dirs first
+			}
+			return 1
+		}
+		return naturalCmpFolded(a.lower, b.lower, a.Name, b.Name)
 	})
 	out := make([]Entry, len(entries))
 	des := make([]fs.DirEntry, len(entries))

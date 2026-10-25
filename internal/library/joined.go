@@ -271,15 +271,7 @@ func sortFileOrder(files []audioFile) {
 	for i, f := range files {
 		ks[i] = keyed{f.de.Name(), strings.ToLower(f.de.Name()), f}
 	}
-	slices.SortStableFunc(ks, func(a, b keyed) int {
-		switch {
-		case naturalLessFolded(a.lower, b.lower, a.name, b.name):
-			return -1
-		case naturalLessFolded(b.lower, a.lower, b.name, a.name):
-			return 1
-		}
-		return 0
-	})
+	slices.SortStableFunc(ks, func(a, b keyed) int { return naturalCmpFolded(a.lower, b.lower, a.name, b.name) })
 	for i := range ks {
 		files[i] = ks[i].f
 	}
@@ -297,6 +289,19 @@ func sortFileOrder(files []audioFile) {
 // Prologue" plays before "01a - Interlude" and "1 - One" before "1.5 - Interlude".
 func naturalLess(a, b string) bool {
 	return naturalLessFolded(strings.ToLower(a), strings.ToLower(b), a, b)
+}
+
+// naturalCmpFolded is naturalLess as a three-way comparison, given a and b case
+// folded (la, lb): the one comparator a book's files and a folder's listing sort
+// with (sortFileOrder, listDir).
+func naturalCmpFolded(la, lb, a, b string) int {
+	switch {
+	case naturalLessFolded(la, lb, a, b):
+		return -1
+	case naturalLessFolded(lb, la, b, a):
+		return 1
+	}
+	return 0
 }
 
 // naturalLessFolded is naturalLess of a and b, given them case folded (la, lb).

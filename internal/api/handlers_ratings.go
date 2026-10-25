@@ -12,8 +12,8 @@ import (
 // star rating and note on a book, path-keyed like progress. Transport only; the
 // rules live in catalog/ratings.go.
 
-// handleGetRating answers the caller's rating of the book at ?path= (exact, like
-// progress): {"rating": Rating | null}.
+// handleGetRating answers the caller's rating of the book at ?path= (exact):
+// {"rating": Rating | null}.
 func (a *API) handleGetRating(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {

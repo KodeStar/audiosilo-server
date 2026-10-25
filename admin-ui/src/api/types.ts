@@ -1191,6 +1191,11 @@ export interface FsEntry {
    * read as its own book: "Always one book" joins them (library.discSets).
    */
   split_discs?: boolean;
+  /**
+   * A folder the scanner would read as a book that the index doesn't hold yet
+   * (library.MarkPendingBooks, #193); never with is_book.
+   */
+  pending_book?: boolean;
 }
 
 /** library.Listing (internal/library/fsview.go). */
