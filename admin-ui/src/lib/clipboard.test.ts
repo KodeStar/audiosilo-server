@@ -37,6 +37,23 @@ describe('copyText', () => {
     expect(document.activeElement).toBe(button);
   });
 
+  it('places the textarea beside the focused element, inside its popup', async () => {
+    const popup = document.createElement('div');
+    popup.setAttribute('role', 'dialog');
+    document.body.append(popup);
+    popup.append(button);
+    button.focus();
+    let parent: Element | null = null;
+    stubExecCommand(() => {
+      parent = document.activeElement?.parentElement ?? null;
+      return true;
+    });
+    expect(await copyText('x')).toBe(true);
+    expect(parent).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    popup.remove();
+  });
+
   it.each([
     ['refuses', () => false],
     [
