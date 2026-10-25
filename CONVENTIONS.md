@@ -508,9 +508,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   duplicate book everyone sees, so it is a 404. `stream` serves an
   audio file path directly, or transcodes it with `?transcode=1` (see below). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
-  `.nfo` are filtered in `BrowseFS` so a click is always playable) and annotates
+  `.nfo` are filtered in `BrowseFS` so a click is always playable, and so is an `.mka` a book of
+  the folder leaves out: `library.shadowedMKA`, shared with `folderAudio`; `ListDir`, the next
+  book's listing, the same), directories first, then files, each in **natural order**
+  (`naturalLess`, so a book's files list in the order they play), and annotates
   book entries with metadata (`is_book` + title/author/…); the client acts on the
-  entry's `path`.
+  entry's `path`. A folder the scanner would read as a book that the index doesn't hold yet
+  is `pending_book: true` (#193, `library.MarkPendingBooks`, from `annotateWithBooks`): it holds
+  audio of its own (hidden and ignore rules applied) and has no `collection` override and is no
+  disc folder in a folder with a `book` override, or it has a `book` override and is a disc set
+  (walked only then, bounded); never with `is_book`, never in a podcast library, for any caller
+  but only on a folder their scope `Allows` (a folder seen only on the way down to a grant is
+  none); absent otherwise, no capability (an old player ignores it). Cost: a folder with an
+  indexed book at or below it is not read from disk (`catalog.FoldersHoldingBooks`, one indexed
+  range read), so only unindexed folders cost a directory read. The player opens such a folder
+  as a book (indexed on demand by `bookForPath`).
+  **Progress is the book's** (#199): `GET`/`PUT`/`PATCH .../progress?path=` key the row (and
+  PUT's listening session) on the path of the indexed book the path addresses
+  (`api.progressPath` over `catalog.BookPathAt`: the book at it, else the innermost folder book
+  holding it, a part or a disc folder of a joined book), when the caller's scope allows that
+  book; otherwise on the path as given, as before (a navigation folder, a book not indexed yet,
+  a grant reaching only a part). No on-demand index on a save. Rows old clients already wrote
+  under a part path stay where they are (not merged), and bookmarks, notes, history,
+  favourites and the queue are not canonicalized (follow-ups). `POST /cast/token` already grants
+  the book's path (`bookAt`).
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   is web-only: served as `audio/x-matroska` (also sniffed from its EBML header `1A 45 DF A3`),
@@ -520,7 +541,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   since a folder book's format is its first file's; the SQL twin `directPlayableExpr`);
   a native app lists it but has no transcode path. An `.mka` beside a file of the same name in
   another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the
-  book, as an `.aax` does (`library.folderAudio`).
+  book, as an `.aax` does (`library.folderAudio`), and out of the `/fs` listing too
+  (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed.
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -591,7 +613,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   byte by byte case folded, so "01 - Prologue" plays before "01a - Interlude"; ties byte-wise); a
   book indexed in the old byte order is re-indexed by the next scan (`Signature.FileOrder`, the
   stored order's key, differs),
-  which moves a listener's whole-book place on it: no remap. Files and chapters keep real paths in the discs
+  which moves a listener's whole-book place on it: no remap. The key is stored on the row
+  (`books.file_order`, `0055`, written by `UpsertBook`, NULL for a single-file book), so a scan
+  reads no `book_files`: `Signatures` falls back to them only for a folder book whose key is NULL
+  (indexed before `0055`, `Signature.FileOrderUnset`), and a scan that finds such a book
+  unchanged records the key (`SetFileOrders`, in `flushBackfills`) with no re-index. Files and chapters keep real paths in the discs
   (`file_path`, a chapter title led by its disc: "CD2 - 01"); the cover is the folder's own
   image, then the first disc's; `IndexPath` resolves the folder, a disc folder or a file in
   it to the joined book, and so does `bookForPath` from the index first (`GetBookHolding`),
