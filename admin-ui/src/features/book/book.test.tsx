@@ -5,6 +5,7 @@ import { setToken } from '@/api/token';
 import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairToken } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
+import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -795,19 +796,7 @@ describe('listen in player', () => {
 describe('copy path', () => {
   const FULL_PATH = `/mnt/tank/fiction/${BOOK_PATH}`;
 
-  // jsdom is not a secure context, so the copy takes the textarea fallback.
-  function stubExecCommand(ok: boolean) {
-    let copied = '';
-    Object.defineProperty(document, 'execCommand', {
-      value: vi.fn(() => {
-        copied = (document.activeElement as HTMLTextAreaElement).value;
-        return ok;
-      }),
-      configurable: true,
-    });
-    return () => copied;
-  }
-  afterEach(() => Reflect.deleteProperty(document, 'execCommand'));
+  afterEach(unstubExecCommand);
 
   async function copyPath() {
     mockFetch(routes(bookDetail()));
@@ -818,14 +807,18 @@ describe('copy path', () => {
   }
 
   it("copies the book's full path on disk and says so", async () => {
-    const copied = stubExecCommand(true);
+    let copied = '';
+    stubExecCommand(() => {
+      copied = (document.activeElement as HTMLTextAreaElement).value;
+      return true;
+    });
     await copyPath();
     expect(await screen.findByText('Path copied')).toBeInTheDocument();
-    expect(copied()).toBe(FULL_PATH);
+    expect(copied).toBe(FULL_PATH);
   });
 
   it('shows the path to copy by hand when the browser refuses', async () => {
-    stubExecCommand(false);
+    stubExecCommand(() => false);
     await copyPath();
     const title = await screen.findByText("Couldn't copy. Select it and copy it yourself.");
     // The toast itself carries the path (Files on disk shows it too).

@@ -1,13 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
 import { copyText } from './clipboard';
-
-// jsdom has no execCommand and is not a secure context, so copyText takes the
-// textarea fallback; each test supplies the execCommand it needs.
-function stubExecCommand(impl: (command: string) => boolean) {
-  const spy = vi.fn(impl);
-  Object.defineProperty(document, 'execCommand', { value: spy, configurable: true });
-  return spy;
-}
 
 describe('copyText', () => {
   let button: HTMLButtonElement;
@@ -20,7 +13,7 @@ describe('copyText', () => {
 
   afterEach(() => {
     button.remove();
-    Reflect.deleteProperty(document, 'execCommand');
+    unstubExecCommand();
   });
 
   it('copies through a hidden textarea and takes it out again', async () => {
