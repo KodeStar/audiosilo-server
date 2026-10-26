@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -383,5 +384,66 @@ func TestAdminLibrariesCarryScanProgress(t *testing.T) {
 	_, body := e.do(t, "GET", "/api/v1/admin/libraries", adminTok, "")
 	if !strings.Contains(body, `"scan":{"running":false`) || !strings.Contains(body, `"unavailable":true`) {
 		t.Fatalf("libraries = %s, want each library's scan progress", body)
+	}
+}
+
+// TestLibraryAccessLeavesAnAdminShareAlone (server#223): granting a library
+// whole through POST /admin/library-access never widens an admin's own share
+// that happens to be named "Library: <name>"; its holder keeps exactly its
+// folder, and the grant goes to a share of its own.
+func TestLibraryAccessLeavesAnAdminShareAlone(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, _, _ := adminAndMember(t, e)
+	lib := newFixtureLibrary(t, e)
+	child, childTok := newUserWithSession(t, e, "child", false)
+	guest, guestTok := newUserWithSession(t, e, "guest", false)
+	mine, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Library: Main",
+		Paths: []catalog.PathRule{{LibraryID: lib.ID, Path: "Will Wight"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, child, mine.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"user_id":%d,"library_id":%d}`, guest, lib.ID)
+	if resp, b := e.do(t, "POST", "/api/v1/admin/library-access", adminTok, body); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /admin/library-access = %d %s", resp.StatusCode, b)
+	}
+
+	// Denied: the admin's share keeps its one rule, unmarked; the child still
+	// reaches only that folder.
+	got, err := e.cat.GetShare(ctx, mine.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WholeLibraryID != nil || len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}) {
+		t.Fatalf("admin's share after the grant = %+v", got)
+	}
+	item := func(tok, rel string) int {
+		resp, _ := e.do(t, "GET", bookURL(lib.ID, "item", rel), tok, "")
+		return resp.StatusCode
+	}
+	if code := item(childTok, mistbornBook); code != http.StatusForbidden {
+		t.Fatalf("the child reaches a book outside their share after the grant: %d", code)
+	}
+	if code := item(childTok, cradleBook); code != http.StatusOK {
+		t.Fatalf("the child's own book = %d", code)
+	}
+	// Allowed: the guest gets the whole library through a new, marked grant.
+	if code := item(guestTok, mistbornBook); code != http.StatusOK {
+		t.Fatalf("the guest's whole library = %d", code)
+	}
+	shares, _ := e.cat.ListShares(ctx)
+	var grant *catalog.Share
+	for i := range shares {
+		if shares[i].Name == fmt.Sprintf("Library: Main (%d)", lib.ID) {
+			grant = &shares[i]
+		}
+	}
+	if len(shares) != 2 || grant == nil || grant.WholeLibraryID == nil || *grant.WholeLibraryID != lib.ID {
+		t.Fatalf("shares = %+v; want the admin's and a marked grant", shares)
 	}
 }

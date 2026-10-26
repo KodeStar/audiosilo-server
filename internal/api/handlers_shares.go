@@ -237,8 +237,8 @@ func (a *API) handleGrantWholeLibrary(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "library not found")
 			return
 		}
-		// ErrNameTaken (its "Library: <name>" share is another library's grant)
-		// -> 409 name_taken; anything else is logged and a 500.
+		// ErrNameTaken (both "Library: <name>" and "Library: <name> (<id>)" are
+		// other shares' names) -> 409 name_taken; anything else is logged and a 500.
 		a.writeCatalogError(w, err, "grant library failed", "could not grant library", "library", req.LibraryID)
 		return
 	}

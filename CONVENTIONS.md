@@ -605,7 +605,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   nil = the admin's unscoped view). Every content handler authorizes
   the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`, except in a
   podcast library, where the old-client gate and private shows apply to them too (see Podcasts).
-  Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
+  Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share, marked with
+  `shares.whole_library_id`). Its unmarked-by-name fallback (`wholeLibraryShare`, for grants made
+  before 0015) adopts a "Library: <name>" share only when it can only be an old grant: description
+  "Whole library" and no rule but that library's `""` (or none); an admin's own share with the name
+  keeps its rules and holders, and the grant becomes "Library: <name> (<id>)" (server#223).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
