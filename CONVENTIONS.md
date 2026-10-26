@@ -606,10 +606,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`, except in a
   podcast library, where the old-client gate and private shows apply to them too (see Podcasts).
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share, marked with
-  `shares.whole_library_id`). Its unmarked-by-name fallback (`wholeLibraryShare`, for grants made
-  before 0015) adopts a "Library: <name>" share only when it can only be an old grant: description
-  "Whole library" and no rule but that library's `""` (or none); an admin's own share with the name
-  keeps its rules and holders, and the grant becomes "Library: <name> (<id>)" (server#223).
+  `shares.whole_library_id`). `wholeLibraryShare` reuses the share marked with the library, else an
+  unmarked one with the description "Whole library" named "Library: <name>" (a grant made before
+  0015) or "Library: <name> (<id>)" (one an interrupted grant left), and either only while it holds
+  no rule but that library's `""` (or none), since the grant adds that rule and hands the share out:
+  an admin's own share with the name (server#223), a grant since narrowed to a folder or given another
+  library's folders, and a same-named share marked for another library all keep their rules and
+  holders, and the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
@@ -1363,10 +1366,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **Privacy rules (all in catalog; each has an allowed and a denied test)**: reciprocal (`listening`
   is `[]` unless the CALLER shares); other people only (never the caller), enabled, not demo, sharing
   on; per person ONE row, their newest session with listening in it (`listening_sessions`,
-  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h) and saved at or after
-  they last turned sharing on (`household_sharing.updated_at`, which moves only when the choice
-  changes, so a repeated PUT of the same choice keeps it; listening done while sharing was off never
-  shows, server#221); that book must pass
+  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h) and started at or
+  after they last turned sharing on (`household_sharing.updated_at`, which moves only when the choice
+  changes, so a repeated PUT of the same choice keeps it; stamped inside the write transaction, once
+  the writer is held, so a save that committed before the switch is never dated after it;
+  `RecordHeartbeat` never continues a session started before it, so no session holds listening from
+  both sides of the switch and a save after it with no listening in it can't bring older listening
+  into view; listening done while sharing was off never shows, server#221); that book must pass
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`

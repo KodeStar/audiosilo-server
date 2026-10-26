@@ -395,10 +395,9 @@ func TestLibraryAccessLeavesAnAdminShareAlone(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
-	adminTok, _, _ := adminAndMember(t, e)
+	adminTok, guestTok, guest := adminAndMember(t, e)
 	lib := newFixtureLibrary(t, e)
 	child, childTok := newUserWithSession(t, e, "child", false)
-	guest, guestTok := newUserWithSession(t, e, "guest", false)
 	mine, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Library: Main",
 		Paths: []catalog.PathRule{{LibraryID: lib.ID, Path: "Will Wight"}}})
 	if err != nil {
@@ -413,33 +412,23 @@ func TestLibraryAccessLeavesAnAdminShareAlone(t *testing.T) {
 		t.Fatalf("POST /admin/library-access = %d %s", resp.StatusCode, b)
 	}
 
-	// Denied: the admin's share keeps its one rule, unmarked; the child still
-	// reaches only that folder.
-	got, err := e.cat.GetShare(ctx, mine.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.WholeLibraryID != nil || len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}) {
-		t.Fatalf("admin's share after the grant = %+v", got)
-	}
+	// Denied: the child still reaches only their folder (the share's own rules are
+	// catalog's TestGrantWholeLibraryNeverAdoptsAnAdminShare).
 	if code := e.item(t, childTok, lib.ID, mistbornBook); code != http.StatusForbidden {
 		t.Fatalf("the child reaches a book outside their share after the grant: %d", code)
 	}
 	if code := e.item(t, childTok, lib.ID, cradleBook); code != http.StatusOK {
 		t.Fatalf("the child's own book = %d", code)
 	}
-	// Allowed: the guest gets the whole library through a new, marked grant.
+	// Allowed: the guest gets the whole library through a marked grant of its own.
 	if code := e.item(t, guestTok, lib.ID, mistbornBook); code != http.StatusOK {
 		t.Fatalf("the guest's whole library = %d", code)
 	}
-	shares, _ := e.cat.ListShares(ctx)
-	var grant *catalog.Share
-	for i := range shares {
-		if shares[i].Name == fmt.Sprintf("Library: Main (%d)", lib.ID) {
-			grant = &shares[i]
-		}
+	held, err := e.cat.UserShares(ctx, guest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(shares) != 2 || grant == nil || grant.WholeLibraryID == nil || *grant.WholeLibraryID != lib.ID {
-		t.Fatalf("shares = %+v; want the admin's and a marked grant", shares)
+	if len(held) != 1 || held[0].ID == mine.ID || held[0].WholeLibraryID == nil || *held[0].WholeLibraryID != lib.ID {
+		t.Fatalf("the guest's shares = %+v; want one marked grant, not the admin's", held)
 	}
 }

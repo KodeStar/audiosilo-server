@@ -20,10 +20,13 @@ import (
 //     household_sharing row (auth clears it when someone becomes a kid, and the
 //     route refuses a kid's PUT), so the opt-in rule already leaves them out;
 //   - only a session recorded on this server (not imported, not backfilled) with
-//     listening in it, the newest per person, within houseWindow, and saved at or
-//     after the person last turned sharing on (household_sharing.updated_at, which
-//     moves only when the choice changes): listening done while sharing was off
-//     never shows, even when it is turned back on within the window;
+//     listening in it, the newest per person, within houseWindow, and started at
+//     or after the person last turned sharing on (household_sharing.updated_at,
+//     which moves only when the choice changes): listening done while sharing was
+//     off never shows, even when it is turned back on within the window. A session
+//     never runs across turning it on (RecordHeartbeat starts a new one), so a
+//     save after the switch, even one with no listening in it, can't bring an
+//     earlier session's listening into view;
 //   - only a book the CALLER may see: a person's newest book outside the caller's
 //     scopes drops that person, never falls back to an older book;
 //   - never a device, an address, an app or a token: HouseListeningRow has no
@@ -81,21 +84,27 @@ func (c *Catalog) SetHouseholdSharing(ctx context.Context, userID int64, share b
 	}
 	// A kid never shares (the rules above rely on no kid having a row): refused
 	// in the write itself, so a request racing the owner's switch to kid can't
-	// leave one behind.
-	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO household_sharing(user_id, share_listening, updated_at)
-		 SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ?1 AND `+isKidSQL+`)
-		 ON CONFLICT(user_id) DO UPDATE SET share_listening = excluded.share_listening,
-		     updated_at = CASE WHEN share_listening <> excluded.share_listening
-		                       THEN excluded.updated_at ELSE updated_at END`,
-		userID, share, c.stamp())
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return cmp.Or(err, ErrKidAccount)
-	}
-	return nil
+	// leave one behind. The stamp is taken in the transaction, once the writer is
+	// held: writes waiting for it go in no set order, so a stamp taken before the
+	// wait could date "sharing on since" before a switch that committed earlier
+	// (or before a progress save already waiting), letting listening done while
+	// sharing was off show.
+	return c.db.WithTx(ctx, "SetHouseholdSharing", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO household_sharing(user_id, share_listening, updated_at)
+			 SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ?1 AND `+isKidSQL+`)
+			 ON CONFLICT(user_id) DO UPDATE SET share_listening = excluded.share_listening,
+			     updated_at = CASE WHEN share_listening <> excluded.share_listening
+			                       THEN excluded.updated_at ELSE updated_at END`,
+			userID, share, c.stamp())
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return cmp.Or(err, ErrKidAccount)
+		}
+		return nil
+	})
 }
 
 // ErrKidAccount is a write a kid can't make, refused inside it
@@ -120,13 +129,15 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	}
 	// Driven from household_sharing: the caller's own row (reciprocal), then each
 	// other sharer, their account, and their newest session with listening in it
-	// saved since the later of the window's start and when they turned sharing on
-	// (h.updated_at, the same fixed-width stamp as last_at, so the string compare
-	// and MAX are time order; the scalar subquery walks idx_sessions_user_last
-	// newest first from that bound and stops at the first match); the books join
-	// runs only for those winners. CROSS JOIN keeps that order: without it, and
-	// with no ANALYZE statistics, the planner starts from idx_users_demo and
-	// visits every account. Verified plan (TestHouseListeningPlan):
+	// that started since they turned sharing on (h.updated_at) and was saved since
+	// the later of that and the window's start (h.updated_at is the same
+	// fixed-width stamp as started_at and last_at, so the string compares and MAX
+	// are time order). The scalar subquery seeks the person's newest entry in
+	// idx_sessions_user_last and walks back toward that bound, stopping at the
+	// first match; the books join runs only for those winners. CROSS JOIN keeps
+	// that order: without it, and with no ANALYZE statistics, the planner starts
+	// from idx_users_demo and visits every account. Verified plan
+	// (TestHouseListeningPlan checks its load-bearing lines):
 	//
 	//	SEARCH me USING INTEGER PRIMARY KEY (rowid=?)
 	//	SCAN h
@@ -180,6 +191,7 @@ SELECT h.user_id, u.username, w.library_id, w.rel_path, COALESCE(b.title, ''), N
   JOIN listening_sessions w ON w.id = (
        SELECT s.id FROM listening_sessions s
         WHERE s.user_id = h.user_id AND s.last_at >= MAX(?1, h.updated_at)
+          AND s.started_at >= h.updated_at
           AND s.import_id = 0 AND s.backfilled = 0 AND ` + listenedSQL + `
         ORDER BY s.last_at DESC, s.id DESC LIMIT 1)
   LEFT JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.rel_path

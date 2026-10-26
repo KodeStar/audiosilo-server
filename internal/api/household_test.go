@@ -214,27 +214,40 @@ func TestHouseListening(t *testing.T) {
 		}
 	}
 
-	// Denied: kid's listening from before kid shared doesn't show to the admin;
-	// once kid listens while sharing, it does.
+	// Denied: kid's listening from before kid shared doesn't show to the admin,
+	// not even through a save since that adds none (the same place).
 	h.setShare(t, h.adminTok, true)
 	got, body = h.house(t, h.adminTok)
 	if names := usernames(got.Listening); strings.Join(names, ",") != "pat,sam" {
 		t.Fatalf("admin's house before kid listened while sharing = %v (%s)", names, body)
 	}
-	h.listen(t, h.kidTok, cradleBook)
+	if resp, b := h.do(t, "PUT", bookURL(h.libID, "progress", cradleBook), h.kidTok, `{"position":20,"duration":120}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("kid's save at the same place = %d %s", resp.StatusCode, b)
+	}
+	got, body = h.house(t, h.adminTok)
+	if names := usernames(got.Listening); strings.Join(names, ",") != "pat,sam" {
+		t.Fatalf("admin's house after kid's save with no listening = %v (%s)", names, body)
+	}
 
-	// Allowed: the admin (whole library, sharing) sees kid, pat and sam; not the
-	// demo, not the disabled account.
+	// Allowed: once kid listens while sharing, the admin (whole library, sharing)
+	// sees kid, pat and sam; not the demo, not the disabled account.
+	h.listen(t, h.kidTok, cradleBook)
 	got, body = h.house(t, h.adminTok)
 	if names := usernames(got.Listening); strings.Join(names, ",") != "kid,pat,sam" {
 		t.Fatalf("admin's house = %v (%s)", names, body)
 	}
 
-	// Denied: a housemate who stops sharing leaves; a caller who stops sharing
-	// sees nobody again.
+	// Denied: a housemate who stops sharing leaves, and stays out while listening
+	// on (a book outside kid's scope, so the admin's house checks it); a caller who
+	// stops sharing sees nobody again.
 	h.setShare(t, h.samTok, false)
 	if got, body = h.house(t, h.kidTok); len(got.Listening) != 0 {
 		t.Fatalf("kid after sam stopped = %s", body)
+	}
+	h.listen(t, h.samTok, mistbornBook)
+	got, body = h.house(t, h.adminTok)
+	if names := usernames(got.Listening); strings.Join(names, ",") != "kid,pat" {
+		t.Fatalf("admin's house after sam stopped and listened on = %v (%s)", names, body)
 	}
 	h.setShare(t, h.adminTok, false)
 	if got, body = h.house(t, h.adminTok); got.Sharing || len(got.Listening) != 0 {
