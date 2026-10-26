@@ -33,6 +33,7 @@ const requestTimeout = 30 * time.Second
 // incl. transcoding), a backup's download and the web player's static asset mount.
 func isStreamingPath(p string) bool {
 	return isLibraryMedia(p) ||
+		isLibraryEbook(p) ||
 		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
 }
@@ -47,6 +48,19 @@ func isLibraryMedia(p string) bool {
 	}
 	id, leaf, ok := strings.Cut(rest, "/")
 	return ok && id != "" && (leaf == "cover" || leaf == "stream")
+}
+
+// isLibraryEbook reports whether p is GET /libraries/{id}/ebook: a book's
+// ebook, tens of megabytes for an illustrated one, which a slow phone link
+// fetches for longer than the request timeout. It stays header-auth only and
+// under the general rate limit (no media route).
+func isLibraryEbook(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
+	if !ok {
+		return false
+	}
+	id, leaf, ok := strings.Cut(rest, "/")
+	return ok && id != "" && leaf == "ebook"
 }
 
 // isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's

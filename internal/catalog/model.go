@@ -160,8 +160,14 @@ type Book struct {
 	// signature from the scan's walk, then what they say from enrich. Set by the
 	// scanner; UpsertBook records them (books.attachments_*, book_attachments).
 	Attachments AttachmentsReading `json:"-"`
-	Files       []BookFile         `json:"files,omitempty"`
-	Chapters    []metadata.Chapter `json:"chapters,omitempty"`
+	// Ebook is the book's ebook (books.ebook_path, Bridge Phase 3b), set on every
+	// read of a book; nil, and omitted, when it has none. EbookFile is the scan's
+	// reading of it (the walk's candidate, then checked: library.checkEbook);
+	// UpsertBook records it.
+	Ebook     *Ebook             `json:"ebook,omitempty"`
+	EbookFile EbookReading       `json:"-"`
+	Files     []BookFile         `json:"files,omitempty"`
+	Chapters  []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list
 	// fitted onto the audio, "generated" when they are the chapters the Bridge
 	// found in the narration (its chapters.json), rather than the files' own

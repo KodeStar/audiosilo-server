@@ -114,7 +114,7 @@ func TestTimeoutMiddlewareBoundsUploads(t *testing.T) {
 	}
 }
 
-// Only a book's own media and a backup's download outlive the request timeout:
+// Only a book's own media, its ebook and a backup's download outlive the request timeout:
 // a community cover is a bounded thumbnail, and an admin route ending in /cover
 // or /stream is no media.
 func TestStreamingPaths(t *testing.T) {
@@ -126,6 +126,10 @@ func TestStreamingPaths(t *testing.T) {
 		"/api/v1/libraries//cover":        false,
 		"/api/v1/admin/libraries/1/cover": false,
 		"/api/v1/libraries/1/books":       false,
+		// A book's ebook (a large epub over a slow link), not the reading progress.
+		"/api/v1/libraries/1/ebook":            true,
+		"/api/v1/libraries/1/reading-progress": false,
+		"/api/v1/admin/libraries/1/ebook":      false,
 	} {
 		if got := isStreamingPath(p); got != want {
 			t.Errorf("isStreamingPath(%q) = %v, want %v", p, got, want)

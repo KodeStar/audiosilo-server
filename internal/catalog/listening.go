@@ -193,12 +193,19 @@ func plausibleUpdatedAt(v string, now time.Time) bool {
 // IsNewer reports whether candidate should replace current under last-write-wins
 // (newer updated_at wins; version breaks ties for same-timestamp updates).
 func IsNewer(candidate, current Progress) bool {
-	ct, err1 := time.Parse(time.RFC3339, candidate.UpdatedAt)
-	pt, err2 := time.Parse(time.RFC3339, current.UpdatedAt)
+	return newerStamp(candidate.UpdatedAt, candidate.Version, current.UpdatedAt, current.Version)
+}
+
+// newerStamp is last-write-wins' order of two saves, each by its updated_at
+// (RFC3339) and version: the later time wins, the version breaks a tie (or
+// decides when either time doesn't parse). IsNewer and ResolvePlace share it.
+func newerStamp(candidateAt string, candidateVersion int64, currentAt string, currentVersion int64) bool {
+	ct, err1 := time.Parse(time.RFC3339, candidateAt)
+	pt, err2 := time.Parse(time.RFC3339, currentAt)
 	if err1 == nil && err2 == nil && !ct.Equal(pt) {
 		return ct.After(pt)
 	}
-	return candidate.Version > current.Version
+	return candidateVersion > currentVersion
 }
 
 // ListProgress returns a user's progress rows scoped to paths they can still
@@ -312,7 +319,8 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
 // favourite lands once; an up-next entry or collection item already on into
 // stays (with its position) and the carried one goes; a rating already on into
-// is replaced only by a newer one (updated_at; a tie keeps into's).
+// is replaced only by a newer one (updated_at; a tie keeps into's), and so is a
+// reader's place in the ebook (reading_progress).
 //
 // This is the one list of per-user path-keyed tables: add a table -> add a line
 // (and, if it can be keyed on a folder, see carryFavourites).
@@ -362,6 +370,24 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		     created_at = excluded.created_at, updated_at = excluded.updated_at
 		   WHERE excluded.updated_at > ratings.updated_at`,
 		`DELETE FROM ratings WHERE library_id = ?4 AND rel_path = ?5`,
+		// A reader's place in the ebook: the newer updated_at wins, whole, as a
+		// rating does (a tie keeps into's), under a version above both, so a save
+		// that saw either row diverges from the carried one.
+		`INSERT INTO reading_progress(user_id, library_id, rel_path, cfi, progression, version,
+		     device_id, device_name, updated_at)
+		 SELECT user_id, library_id, ?1, cfi, progression, version, device_id, device_name, updated_at
+		   FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5
+		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+		     cfi = CASE WHEN excluded.updated_at > reading_progress.updated_at THEN excluded.cfi ELSE reading_progress.cfi END,
+		     progression = CASE WHEN excluded.updated_at > reading_progress.updated_at
+		                        THEN excluded.progression ELSE reading_progress.progression END,
+		     device_id = CASE WHEN excluded.updated_at > reading_progress.updated_at
+		                      THEN excluded.device_id ELSE reading_progress.device_id END,
+		     device_name = CASE WHEN excluded.updated_at > reading_progress.updated_at
+		                        THEN excluded.device_name ELSE reading_progress.device_name END,
+		     updated_at = MAX(excluded.updated_at, reading_progress.updated_at),
+		     version = MAX(excluded.version, reading_progress.version) + 1`,
+		`DELETE FROM reading_progress WHERE library_id = ?4 AND rel_path = ?5`,
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
