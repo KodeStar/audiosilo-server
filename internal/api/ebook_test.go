@@ -2,15 +2,18 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -258,6 +261,69 @@ func TestEbookDenied(t *testing.T) {
 	}
 }
 
+// An ebook that is there but can't be read right now (a permission, a flaky
+// mount) is a 500, logged, never 404 "this book has no ebook", which the player
+// would show as gone until the next scan.
+func TestEbookUnreadableIs500(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions that bind (not root)")
+	}
+	t.Parallel()
+	e := newEbookEnv(t)
+	p := filepath.Join(e.root, filepath.FromSlash(ebookFile))
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+	if resp, body := e.do(t, "GET", e.at("ebook", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("an unreadable ebook = %d %.60s, want 500", resp.StatusCode, body)
+	}
+}
+
+// The ebook's bytes outlive the request timeout, but its lookup doesn't: with the
+// one writer held (a stalled write), a book indexed on demand is answered at the
+// request timeout instead of waiting for as long as the writer is held.
+func TestEbookLookupBounded(t *testing.T) {
+	t.Parallel()
+	e := newEbookEnv(t)
+	ctx := context.Background()
+	e.api.timeoutDur = 300 * time.Millisecond
+	// The caller's token was just used (its last-seen touch, a write, is skipped
+	// for a minute), and the book isn't indexed: the lookup indexes it on demand.
+	if resp, _ := e.do(t, "GET", e.at("item", looseBook), e.annTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("warm up = %d", resp.StatusCode)
+	}
+	if err := e.cat.DeleteBookAt(ctx, e.lib.ID, ebookBook); err != nil {
+		t.Fatal(err)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	stalled := make(chan struct{})
+	go func() {
+		defer close(stalled)
+		_ = e.db.WithTx(ctx, "stall", func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	t.Cleanup(func() { close(release); <-stalled })
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", e.srv.URL+e.at("ebook", ebookBook), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+e.annTok)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET ebook with the writer held: %v (want an answer at the request timeout)", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("GET ebook with the writer held = %d, want 500", resp.StatusCode)
+	}
+}
+
 // Denied: a podcast episode has no ebook and no reading progress.
 func TestEbookPodcastRefused(t *testing.T) {
 	t.Parallel()
@@ -410,11 +476,17 @@ func TestReadingProgressValidation(t *testing.T) {
 		"below 0":           func(m map[string]any) { m["progression"] = -0.1 },
 		"above 1":           func(m map[string]any) { m["progression"] = 1.5 },
 		"progression text":  func(m map[string]any) { m["progression"] = "0.5" },
+		"no progression":    func(m map[string]any) { delete(m, "progression") }, // never read as 0
+		"null progression":  func(m map[string]any) { m["progression"] = nil },
+		"year -1 in UTC":    func(m map[string]any) { m["updated_at"] = "0000-01-01T00:00:00+01:00" },
 		"bad updated_at":    func(m map[string]any) { m["updated_at"] = "yesterday" },
 		"no updated_at":     func(m map[string]any) { delete(m, "updated_at") },
 		"negative base":     func(m map[string]any) { m["base_version"] = -1 },
 		"unknown field":     func(m map[string]any) { m["bogus"] = 1 },
 		"device id too big": func(m map[string]any) { m["device_id"] = strings.Repeat("d", 201) },
+		// Two saves with no device would read as one device's and never diverge.
+		"no device id":    func(m map[string]any) { delete(m, "device_id") },
+		"empty device id": func(m map[string]any) { m["device_id"] = "" },
 	} {
 		if resp, out := e.do(t, "PUT", e.at("reading-progress", ebookBook), e.annTok, body(mod)); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: PUT = %d %s, want 400", name, resp.StatusCode, out)

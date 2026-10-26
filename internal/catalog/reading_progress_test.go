@@ -136,13 +136,17 @@ func TestCheckReadingSave(t *testing.T) {
 		t.Fatalf("a good save: %v", err)
 	}
 	for name, mod := range map[string]func(*ReadingSave){
-		"no cfi":           func(s *ReadingSave) { s.CFI = "" },
-		"not a cfi":        func(s *ReadingSave) { s.CFI = "/6/4!/4" },
-		"cfi too long":     func(s *ReadingSave) { s.CFI = "epubcfi(" + strings.Repeat("1", maxCFIBytes) + ")" },
-		"below 0":          func(s *ReadingSave) { s.Progression = -0.01 },
-		"above 1":          func(s *ReadingSave) { s.Progression = 1.01 },
-		"bad time":         func(s *ReadingSave) { s.UpdatedAt = "yesterday" },
-		"no time":          func(s *ReadingSave) { s.UpdatedAt = "" },
+		"no cfi":       func(s *ReadingSave) { s.CFI = "" },
+		"not a cfi":    func(s *ReadingSave) { s.CFI = "/6/4!/4" },
+		"cfi too long": func(s *ReadingSave) { s.CFI = "epubcfi(" + strings.Repeat("1", maxCFIBytes) + ")" },
+		"below 0":      func(s *ReadingSave) { s.Progression = -0.01 },
+		"above 1":      func(s *ReadingSave) { s.Progression = 1.01 },
+		"bad time":     func(s *ReadingSave) { s.UpdatedAt = "yesterday" },
+		"no time":      func(s *ReadingSave) { s.UpdatedAt = "" },
+		// Year -1 in UTC: its stored form would be no RFC3339 time, and the save
+		// would win last-write-wins on its version alone.
+		"before year 1":    func(s *ReadingSave) { s.UpdatedAt = "0000-01-01T00:00:00+01:00" },
+		"no device":        func(s *ReadingSave) { s.DeviceID = "" },
 		"device too long":  func(s *ReadingSave) { s.DeviceID = strings.Repeat("d", maxDeviceIDBytes+1) },
 		"negative version": func(s *ReadingSave) { s.BaseVersion = base(-1) },
 	} {

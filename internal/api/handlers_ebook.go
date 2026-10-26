@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
-	"os"
 	"path"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -23,49 +25,46 @@ const ebookCSP = "sandbox; default-src 'none'"
 // path), with Range and validators. It is header-auth only (requireAuth: a
 // session or an API key, never ?token=, and there is no URL token for it): the
 // web player fetches it with its bearer header and hands the bytes to the
-// reader. Only the file the scan recorded for the book is served, joined again
-// under the library root and opened fresh: a book with none, a path that names
+// reader. Only the file the scan recorded for the book is served, opened fresh
+// by library.OpenEbook (a regular file inside the library, the very one its path
+// leads to; a folder book's never a link): a book with none, a path that names
 // anything but a book (a track, the epub itself, a folder above), a podcast, or
-// a file gone since the scan is 404; a book outside the caller's scope is 403.
+// a file gone or changed into anything else since the scan is 404; a book
+// outside the caller's scope is 403; a file that can't be read right now is 500,
+// logged.
 func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
-	lib, rel, scope, status, msg := a.authorizedScope(r)
+	// The bytes outlive the request timeout (isLibraryMedia), but the lookup
+	// before them is bounded like any request: a book indexed on demand waits for
+	// the one writer, which a stalled write could hold indefinitely.
+	lookup, cancel := context.WithTimeout(r.Context(), a.timeoutDur)
+	defer cancel()
+	lr := r.WithContext(lookup)
+	lib, rel, scope, status, msg := a.authorizedScope(lr)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	book, ok := a.ebookBook(w, r, lib, scope, rel, "could not load the ebook")
+	book, ok := a.ebookBook(w, lr, lib, scope, rel, "could not load the ebook")
 	if !ok {
 		return
 	}
+	cancel()
 	if book.RelPath != rel {
 		// The ebook is addressed by its book alone (a part's path is no handle on it).
 		writeError(w, http.StatusNotFound, msgNoEbook)
 		return
 	}
-	full, err := library.ContentJoin(lib.Root, book.Ebook.Path)
-	if err != nil {
+	f, info, err := library.OpenEbook(lib.Root, book.Ebook.Path, book.IsFolder)
+	switch {
+	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
 		writeError(w, http.StatusNotFound, msgNoEbook)
 		return
-	}
-	if book.IsFolder {
-		// A folder book's ebook is never a link (the rule's), even one swapped in
-		// since the scan.
-		if info, err := os.Lstat(full); err != nil || !info.Mode().IsRegular() {
-			writeError(w, http.StatusNotFound, msgNoEbook)
-			return
-		}
-	}
-	f, err := os.Open(full) //nolint:gosec // ContentJoin'd under the library root; the path the scan recorded
-	if err != nil {
-		writeError(w, http.StatusNotFound, msgNoEbook)
+	case err != nil:
+		a.log.Warn("open ebook failed", "library", lib.ID, "path", book.Ebook.Path, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load the ebook")
 		return
 	}
 	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		writeError(w, http.StatusNotFound, msgNoEbook)
-		return
-	}
 	h := w.Header()
 	h.Set("Content-Type", "application/epub+zip")
 	h.Set("Content-Security-Policy", ebookCSP)
@@ -119,15 +118,18 @@ func (a *API) handleGetReadingProgress(w http.ResponseWriter, r *http.Request) {
 
 // readingBody is PUT /reading-progress's body. base_version is a pointer: absent
 // is a save that never diverges (catalog.ResolvePlace), 0 is "saw none".
-// device_name is accepted so a client that echoes a stored row's fields isn't
-// refused, and never read: the name is the caller's token's.
+// progression is one too, so an absent or null one is refused rather than read
+// as 0 (the place the conflict rule compares). device_name is accepted and
+// never read (the name is the caller's token's), so a body carrying one, such as
+// an echoed other_place, isn't refused; a whole stored row still is (its
+// library_id, path and version are unknown fields).
 type readingBody struct {
-	CFI         string  `json:"cfi"`
-	Progression float64 `json:"progression"`
-	DeviceID    string  `json:"device_id"`
-	DeviceName  any     `json:"device_name"`
-	UpdatedAt   string  `json:"updated_at"`
-	BaseVersion *int64  `json:"base_version"`
+	CFI         string   `json:"cfi"`
+	Progression *float64 `json:"progression"`
+	DeviceID    string   `json:"device_id"`
+	DeviceName  any      `json:"device_name"`
+	UpdatedAt   string   `json:"updated_at"`
+	BaseVersion *int64   `json:"base_version"`
 }
 
 // handlePutReadingProgress saves the caller's place in the ebook of the book at
@@ -148,7 +150,11 @@ func (a *API) handlePutReadingProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	save := catalog.ReadingSave{CFI: body.CFI, Progression: body.Progression, DeviceID: body.DeviceID,
+	if body.Progression == nil {
+		writeError(w, http.StatusBadRequest, "progression must be from 0 to 1")
+		return
+	}
+	save := catalog.ReadingSave{CFI: body.CFI, Progression: *body.Progression, DeviceID: body.DeviceID,
 		UpdatedAt: body.UpdatedAt, BaseVersion: body.BaseVersion,
 		DeviceName: credentialFrom(r.Context()).DeviceName}
 	// Checked before bookAt, which may read an unindexed book from disk.

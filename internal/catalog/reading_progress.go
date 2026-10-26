@@ -59,31 +59,32 @@ const (
 )
 
 // CheckReadingSave checks a save's fields before anything is read: a CFI that
-// starts "epubcfi(" and is at most 2048 bytes, a progression in [0, 1], an
-// updated_at in RFC3339, a device id of at most 200 bytes and a base version
-// that isn't negative. Its error is the reason (the handler's 400 message).
+// starts "epubcfi(" and is at most 2048 bytes, a progression in [0, 1], a device
+// id that is sent (ResolvePlace tells devices apart by it: two saves with none
+// would read as one device's, so a save that never saw the other's row would
+// move the place back silently) and at most 200 bytes, a base version that isn't
+// negative and an updated_at in RFC3339 from year 1 on in UTC (an earlier one's
+// stored form, formatSessionTime's, is no RFC3339 time: it would neither parse
+// back nor order as text). Its error is the reason (the handler's 400 message).
 func CheckReadingSave(in ReadingSave) error {
-	reason := ""
 	switch {
 	case !strings.HasPrefix(in.CFI, "epubcfi("):
-		reason = "cfi must be an EPUB CFI"
+		return errors.New("cfi must be an EPUB CFI")
 	case len(in.CFI) > maxCFIBytes:
-		reason = "cfi is too long"
+		return errors.New("cfi is too long")
 	case math.IsNaN(in.Progression) || in.Progression < 0 || in.Progression > 1:
-		reason = "progression must be from 0 to 1"
+		return errors.New("progression must be from 0 to 1")
+	case in.DeviceID == "":
+		return errors.New("device_id is required")
 	case len(in.DeviceID) > maxDeviceIDBytes:
-		reason = "device_id is too long"
+		return errors.New("device_id is too long")
 	case in.BaseVersion != nil && *in.BaseVersion < 0:
-		reason = "base_version must not be negative"
-	default:
-		if _, err := time.Parse(time.RFC3339, in.UpdatedAt); err != nil {
-			reason = "updated_at must be an RFC3339 time"
-		}
+		return errors.New("base_version must not be negative")
 	}
-	if reason == "" {
-		return nil
+	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err != nil || t.UTC().Year() < 1 {
+		return errors.New("updated_at must be an RFC3339 time")
 	}
-	return errors.New(reason)
+	return nil
 }
 
 // readingColumns are the columns of a ReadingProgress, in scanReading's order.

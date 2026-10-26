@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// A book's ebook (Bridge Phase 3b, migration 0056): the one DRM-free .epub beside
-// its audio that the reader opens, found by library.BookEbook's rule. It is index
+// A book's ebook (Bridge Phase 3b, migration 0056): the one .epub beside its
+// audio that the reader opens, found by library.BookEbook's rule. It is index
 // data like cover_path, derived from the files and never parsed: books.ebook_path
 // is the readable file's library-relative path ('' for none) and books.ebook_sig
 // the signature of the file the rule names (EbookSig, '' for none), which the scan
@@ -27,10 +27,24 @@ type Ebook struct {
 
 // EbookReading is a book's ebook as a scan records it (books.ebook_path,
 // ebook_sig): Sig the signature of the file BookEbook's rule names ("" for none),
-// Path that file when it is a readable epub ("" when none or unreadable).
+// Path that file when it is a readable epub ("" when none or unreadable). Unread:
+// it couldn't be read right now, so UpsertBook keeps what is stored (a new row
+// gets none, which the next scan reads again). Was is for SetEbooks.
 type EbookReading struct {
-	Path string
-	Sig  string
+	Path   string
+	Sig    string
+	Unread bool
+	Was    *EbookState
+}
+
+// EbookState is a book row as a scan read it (Signature.EbookSig and IndexedAt)
+// before taking an EbookReading: SetEbooks records the reading only while the row
+// still holds it (compare and set), so a reading an index of the book recorded
+// since (on demand: the console's Rescan book, the Bridge's IndexMoved), newer
+// than the scan's walk, stays.
+type EbookState struct {
+	Sig       string
+	IndexedAt string
 }
 
 // EbookSig is the signature of the ebook file name (its base name) with info:
@@ -46,22 +60,29 @@ func ebookOf(path, sig string) *Ebook {
 	if path == "" {
 		return nil
 	}
-	size, _ := strconv.ParseInt(strings.SplitN(sig, ":", 2)[0], 10, 64)
+	head, _, _ := strings.Cut(sig, ":")
+	size, _ := strconv.ParseInt(head, 10, 64)
 	return &Ebook{Path: path, Size: size}
 }
 
 // SetEbooks records, by book path, the ebook a scan found for books it left
 // unchanged (a new, changed or gone .epub beside unchanged audio), in one
-// transaction, with no re-index.
+// transaction, with no re-index. A reading with Was is recorded only while the
+// row still holds that state (compare and set), else skipped: the book was
+// indexed since the scan read it, recording a newer reading.
 func (c *Catalog) SetEbooks(ctx context.Context, libraryID int64, readings map[string]EbookReading) error {
 	if len(readings) == 0 {
 		return nil
 	}
 	return c.db.WithTx(ctx, "SetEbooks", func(tx *sql.Tx) error {
 		for relPath, r := range readings {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE books SET ebook_path = ?, ebook_sig = ? WHERE library_id = ? AND rel_path = ?`,
-				r.Path, r.Sig, libraryID, relPath); err != nil {
+			q, args := `UPDATE books SET ebook_path = ?, ebook_sig = ? WHERE library_id = ? AND rel_path = ?`,
+				[]any{r.Path, r.Sig, libraryID, relPath}
+			if r.Was != nil {
+				q += ` AND ebook_sig = ? AND indexed_at = ?`
+				args = append(args, r.Was.Sig, r.Was.IndexedAt)
+			}
+			if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 				return err
 			}
 		}

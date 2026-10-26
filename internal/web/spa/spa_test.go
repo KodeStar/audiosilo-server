@@ -106,6 +106,33 @@ func TestCSPPerKind(t *testing.T) {
 	}
 }
 
+// A .html name in another case, which a case-insensitive web_dir opens (macOS,
+// Windows), is still a document: served under DocumentCSP, never under FileCSP
+// or, as the player's is empty, none.
+func TestCSPDocumentAnyCase(t *testing.T) {
+	h := Handler(Config{
+		FS: fstest.MapFS{
+			"index.html": {Data: []byte("<p>root</p>")},
+			"page.HTML":  {Data: []byte("<p>page</p>")},
+		},
+		Prefix:      "/x",
+		DocumentCSP: docCSP,
+	})
+	rec := req(h, http.MethodGet, "/x/page.HTML")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /x/page.HTML = %d, want 200", rec.Code)
+	}
+	if got, want := rec.Header().Get("Content-Security-Policy"), docCSP([]byte("<p>page</p>")); got != want {
+		t.Errorf("CSP = %q, want the document's %q", got, want)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", cc)
+	}
+}
+
 func TestHead(t *testing.T) {
 	rec := req(app(), http.MethodHead, "/web/assets/app-1.js")
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {

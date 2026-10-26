@@ -26,18 +26,29 @@ import (
 type attachmentFiles map[string]fs.FileInfo
 
 // attachmentsPlace is where a book's attachments live: the library-relative
-// folder holding its .audiosilo folder, and the prefix of each name in it. A
-// folder book's (a joined disc set's included) are in its own folder with no
-// prefix; a single-file book's are beside it, named after its stem
+// folder holding its .audiosilo folder (sidecarDir), and the prefix of each name
+// in it. A folder book's (a joined disc set's included) are in its own folder
+// with no prefix; a single-file book's are beside it, named after its stem
 // ("Book.m4b" -> "Book.characters.json").
 func attachmentsPlace(b *catalog.Book) (dir, prefix string) {
 	if b.IsFolder {
-		if b.RelPath == "." { // a `book` override on the library root
-			return "", ""
-		}
-		return b.RelPath, ""
+		return sidecarDir(b.RelPath, true), ""
 	}
-	return dirOf(b.RelPath), stemOf(b.RelPath) + "."
+	return sidecarDir(b.RelPath, false), stemOf(b.RelPath) + "."
+}
+
+// sidecarDir is the library-relative folder holding the files that sit beside a
+// book (its .audiosilo folder, its ebook): a folder book's own ("" for a `book`
+// override on the library root), a single-file book's.
+func sidecarDir(relPath string, folder bool) string {
+	switch {
+	case !folder:
+		return dirOf(relPath)
+	case relPath == ".": // a `book` override on the library root
+		return ""
+	default:
+		return relPath
+	}
 }
 
 // stemOf is the file name at rel without its last extension ("A/Book.m4b" ->

@@ -97,7 +97,10 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			                          ELSE excluded.attachments_sig END,
 			     attachments_indexed_at=excluded.attachments_indexed_at,
 			     file_order=excluded.file_order, file_order_indexed_at=excluded.file_order_indexed_at,
-			     ebook_path=excluded.ebook_path, ebook_sig=excluded.ebook_sig
+			     -- An ebook that could not be read right now (EbookReading.Unread)
+			     -- keeps the stored reading.
+			     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
+			     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -108,7 +111,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
 			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-			b.EbookFile.Path, b.EbookFile.Sig).Scan(&id); err != nil {
+			b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -305,6 +308,10 @@ type Signature struct {
 	// EbookSig is books.ebook_sig as stored, so a scan records a new, changed or
 	// gone ebook beside unchanged audio without re-indexing the book (SetEbooks).
 	EbookSig string
+	// IndexedAt is books.indexed_at as stored: with EbookSig, the row a scan's
+	// ebook reading is recorded over (EbookState), so one an index of the book
+	// recorded since stays.
+	IndexedAt string
 }
 
 // fileOrderExpr is books.file_order where it holds: recorded with the row's own
@@ -354,7 +361,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
-		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig
+		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -370,7 +377,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig); err != nil {
+			&stored, &files, &sig.EbookSig, &sig.IndexedAt); err != nil {
 			return nil, err
 		}
 		switch {

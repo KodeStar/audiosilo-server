@@ -3,6 +3,7 @@ package library
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -175,7 +176,7 @@ func TestScanBackfillsEbookWithoutReindex(t *testing.T) {
 		t.Fatalf("changed: ebook = %+v, want size %d", e, len(bigger))
 	}
 
-	// Made unreadable (a DRM'd or corrupt replacement): none.
+	// Made unreadable (a corrupt replacement): none.
 	if err := os.WriteFile(epubPath, []byte(strings.Repeat("x", 64)), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -220,4 +221,156 @@ func TestScanBackfillsEbookWithoutReindex(t *testing.T) {
 	if e := ebook(); e != nil {
 		t.Fatalf("removed: ebook = %+v, want none", e)
 	}
+}
+
+// A single-file book's "<stem>.epub" is what the disk opens by that name, as the
+// Bridge's os.Stat finds it: "Six.EPUB" beside "Six.m4b" is its ebook on a
+// case-insensitive disk (recorded as "Six.epub") and none on a case-sensitive
+// one, the scan, an on-demand index and BookEbook agreeing either way.
+func TestEbookCaseVariantBesideSingleFile(t *testing.T) {
+	t.Parallel()
+	cat, s, ctx := newScanEnv(t)
+	root := t.TempDir()
+	epub := epubBytes(t, minimalEpub...)
+	copyFixtureM4B(t, filepath.Join(root, "Six.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Seven.m4b"))
+	writeFile(t, root, "Six.EPUB", epub)
+	writeFile(t, root, "seven.epub", epub)
+	want := map[string]string{"Six.m4b": "", "Seven.m4b": ""}
+	if _, err := os.Stat(filepath.Join(root, "Six.epub")); err == nil { // a case-insensitive disk
+		want = map[string]string{"Six.m4b": "Six.epub", "Seven.m4b": "Seven.epub"}
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "E", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	path := func(e *catalog.Ebook) string {
+		if e == nil {
+			return ""
+		}
+		return e.Path
+	}
+	for book, w := range want {
+		if got := BookEbook(root, book, false); got != w {
+			t.Errorf("BookEbook(%q) = %q, want %q", book, got, w)
+		}
+		b, err := cat.GetBookByPath(ctx, lib.ID, book)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := path(b.Ebook); got != w {
+			t.Errorf("scan: %s ebook = %q, want %q", book, got, w)
+		}
+		ib, err := s.IndexPath(ctx, *lib, book)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := path(ib.Ebook); got != w {
+			t.Errorf("on demand: %s ebook = %q, want %q", book, got, w)
+		}
+	}
+}
+
+// A single-file book's ebook that is a link inside the library whose target goes
+// is none from the next scan on (recorded by the link's own signature), not the
+// recorded path the reader would 404 on; its target back, the scan after records
+// it again.
+func TestScanEbookLinkToNothing(t *testing.T) {
+	t.Parallel()
+	cat, s, ctx := newScanEnv(t)
+	root := t.TempDir()
+	epub := epubBytes(t, minimalEpub...)
+	copyFixtureM4B(t, filepath.Join(root, "One.m4b"))
+	writeFile(t, root, "Ebooks/real.epub", epub)
+	if err := os.Symlink(filepath.Join(root, "Ebooks", "real.epub"), filepath.Join(root, "One.epub")); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "E", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFor := func(when, want string) {
+		t.Helper()
+		if _, err := s.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+		b, err := cat.GetBookByPath(ctx, lib.ID, "One.m4b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case want == "" && b.Ebook != nil:
+			t.Fatalf("%s: ebook = %+v, want none", when, b.Ebook)
+		case want != "" && (b.Ebook == nil || b.Ebook.Path != want):
+			t.Fatalf("%s: ebook = %+v, want %s", when, b.Ebook, want)
+		}
+		if got := BookEbook(root, "One.m4b", false); got != want {
+			t.Fatalf("%s: BookEbook = %q, want %q", when, got, want)
+		}
+	}
+	scanFor("the link's target there", "One.epub")
+	if err := os.Remove(filepath.Join(root, "Ebooks", "real.epub")); err != nil {
+		t.Fatal(err)
+	}
+	scanFor("the target gone", "")
+	scanFor("the target still gone", "")
+	writeFile(t, root, "Ebooks/real.epub", epub)
+	scanFor("the target back", "One.epub")
+}
+
+// An ebook that can't be read when its book is indexed again (a permission, a
+// flaky mount) keeps what is stored, on demand and in a scan that re-indexes the
+// book, rather than taking the reader's ebook away until the next scan.
+func TestIndexKeepsEbookItCantRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions that bind (not root)")
+	}
+	t.Parallel()
+	cat, s, ctx := newScanEnv(t)
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Author", "Book", "01.m4b"))
+	writeFile(t, root, "Author/Book/Book.epub", epubBytes(t, minimalEpub...))
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "E", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	kept := func(when string) {
+		t.Helper()
+		b, err := cat.GetBookByPath(ctx, lib.ID, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.Ebook == nil || b.Ebook.Path != "Author/Book/Book.epub" {
+			t.Fatalf("%s: ebook = %+v, want the stored Author/Book/Book.epub", when, b.Ebook)
+		}
+	}
+	kept("first scan")
+	epubPath := filepath.Join(root, "Author", "Book", "Book.epub")
+	if err := os.Chmod(epubPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(epubPath, 0o644) })
+	if _, err := s.IndexPath(ctx, *lib, "Author/Book"); err != nil {
+		t.Fatal(err)
+	}
+	kept("IndexPath")
+	// The audio changed: the scan re-indexes the book.
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(root, "Author", "Book", "01.m4b"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Updated != 1 {
+		t.Fatalf("the book wasn't re-indexed: %+v", res.ScanCounts)
+	}
+	kept("a scan's re-index")
 }

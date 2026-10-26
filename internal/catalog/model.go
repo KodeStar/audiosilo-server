@@ -163,7 +163,7 @@ type Book struct {
 	// Ebook is the book's ebook (books.ebook_path, Bridge Phase 3b), set on every
 	// read of a book; nil, and omitted, when it has none. EbookFile is the scan's
 	// reading of it (the walk's candidate, then checked: library.checkEbook);
-	// UpsertBook records it.
+	// UpsertBook records it, or keeps what is stored when it is Unread.
 	Ebook     *Ebook             `json:"ebook,omitempty"`
 	EbookFile EbookReading       `json:"-"`
 	Files     []BookFile         `json:"files,omitempty"`
