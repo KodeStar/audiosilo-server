@@ -812,9 +812,8 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		return err
 	}
 	// Always ensure the whole-library rule exists, not just on creation: a
-	// reused share may be a rule-less one nobody holds (wholeLibraryShare never
-	// returns a held one), left by an interrupted grant. AddSharePath is INSERT
-	// OR IGNORE, so re-running is cheap.
+	// reused share may lack it (an unheld one an interrupted grant left).
+	// AddSharePath is INSERT OR IGNORE, so re-running is cheap.
 	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
 		return err
 	}
@@ -841,18 +840,14 @@ func wholeLibraryIDName(name string, libraryID int64) string {
 // with it (which survives a library rename), else an unmarked one with the
 // description GrantWholeLibrary gives it, named "Library: <name>" (made before
 // whole_library_id existed) or "Library: <name> (<id>)" (one an interrupted
-// grant created and couldn't mark). Either way only a share with no path rule but
-// this library's whole-library one qualifies, or none at all while nobody holds
-// it (a share an interrupted grant left), because GrantWholeLibrary adds the ""
-// rule to it and grants it: a share with any other rule - an admin's own share
-// that happens to carry the name (server#223), a grant since narrowed to a
-// folder, or one that also holds another library's folders - would widen its
-// holders to the whole library or hand those folders to the new holder, and so
-// would a rule-less one someone holds (an admin's empty share, or an old grant
-// whose rule is gone: the people holding it may not be meant to have the library
-// now). user_share_access is the only thing that holds a share. The caller then
-// creates a share of its own. A same-named
-// share marked for another library is never reused either, for the same reason.
+// grant created and couldn't mark). Either way it qualifies only while its sole
+// rule is this library's "", or it has no rule and no holder (one an interrupted
+// grant left). GrantWholeLibrary adds the "" rule and hands the share out, so
+// reusing anything else - an admin's own share with the name (server#223), a
+// grant since narrowed or given another library's folders, a rule-less share
+// someone holds, or a same-named share marked for another library - would widen
+// its holders or hand their folders to the new one. The caller then creates a
+// share of its own.
 func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
 	var id int64
 	err := c.db.QueryRowContext(ctx,

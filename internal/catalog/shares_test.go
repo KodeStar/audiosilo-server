@@ -131,14 +131,12 @@ func TestSharesAndUserScope(t *testing.T) {
 	}
 }
 
-// TestGrantWholeLibraryHealsRulelessShare guards the case observed in production:
-// a "Library: <name>" share exists but has lost its "" path rule (however it
-// arose - a server/schema update, a manual edit, an FK cascade). Such a share
-// grants nothing, so re-granting whole-library access must give the library
-// again rather than just hand out the rule-less share. Someone holds it, so it
-// isn't healed (re-adding the rule would hand the library to every holder,
-// server#223): the grant gets a share of its own and the rule-less one stays.
-func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
+// TestGrantWholeLibraryRegrantsPastAHeldRulelessShare guards the case observed in
+// production: a "Library: <name>" share has lost its "" path rule and grants
+// nothing, so re-granting must give the library again. Someone holds it, so it
+// isn't healed (that would widen every holder, server#223): the grant gets a
+// share of its own.
+func TestGrantWholeLibraryRegrantsPastAHeldRulelessShare(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "audiobooks", Root: "/tmp"})
@@ -524,17 +522,30 @@ func TestGrantWholeLibraryNeverAdoptsAHeldRulelessShare(t *testing.T) {
 			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
 			held := seedUserNamed(t, c, ctx, "held")
 			guest := seedUserNamed(t, c, ctx, "guest")
-			empty, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: wholeLibraryShareDescription})
-			if err != nil {
-				t.Fatal(err)
-			}
+			// Marked: a real grant whose rule is gone. Unmarked: an admin's empty
+			// share with the grant's name and description.
+			var empty *Share
 			if marked {
-				if _, err := c.db.ExecContext(ctx, `UPDATE shares SET whole_library_id = ? WHERE id = ?`, kids.ID, empty.ID); err != nil {
+				if err := c.GrantWholeLibrary(ctx, held, kids.ID); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if err := c.GrantShare(ctx, held, empty.ID); err != nil {
-				t.Fatal(err)
+				s, err := c.shareByName(ctx, "Library: Kids")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.RemoveSharePath(ctx, s.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+					t.Fatal(err)
+				}
+				empty = s
+			} else {
+				s, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: wholeLibraryShareDescription})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.GrantShare(ctx, held, s.ID); err != nil {
+					t.Fatal(err)
+				}
+				empty = s
 			}
 
 			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
