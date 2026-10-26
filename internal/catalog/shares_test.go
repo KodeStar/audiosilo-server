@@ -584,6 +584,59 @@ func TestGrantWholeLibraryNeverAdoptsAHeldRulelessShare(t *testing.T) {
 	}
 }
 
+// A held rule-less grant marked for the library never shadows an adoptable one
+// under the "(<id>)" name (an interrupted grant, with or without its rule): the
+// marked share is skipped, not picked first and then refused, so the grant finishes
+// the adoptable one rather than failing on the taken names or making a third share.
+func TestGrantWholeLibraryHeldRulelessGrantNeverShadowsAnAdoptableOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		whole bool
+	}{{"no rule yet", false}, {"rule, not marked", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			held := seedUserNamed(t, c, ctx, "held")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			if err := c.GrantWholeLibrary(ctx, held, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+			dead, err := c.shareByName(ctx, "Library: Kids")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.RemoveSharePath(ctx, dead.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+				t.Fatal(err)
+			}
+			left := Share{Name: wholeLibraryIDName("Library: Kids", kids.ID), Description: wholeLibraryShareDescription}
+			if tc.whole {
+				left.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
+			}
+			orphan, err := c.CreateShare(ctx, left)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatalf("granting past a held rule-less grant: %v", err)
+			}
+			if mine, _ := c.UserShares(ctx, guest); len(mine) != 1 || mine[0].ID != orphan.ID ||
+				mine[0].WholeLibraryID == nil || *mine[0].WholeLibraryID != kids.ID ||
+				!slices.Equal(mine[0].Paths, []PathRule{{LibraryID: kids.ID, Path: ""}}) {
+				t.Fatalf("guest's shares = %+v; want the interrupted grant, finished", mine)
+			}
+			if got, _ := c.GetShare(ctx, dead.ID); got == nil || len(got.Paths) != 0 {
+				t.Fatalf("the held rule-less grant = %+v; want it as it was", got)
+			}
+			if shares, _ := c.ListShares(ctx); len(shares) != 2 {
+				t.Fatalf("shares = %+v; want the held rule-less grant and the finished one", shares)
+			}
+		})
+	}
+}
+
 // A library's grant share an admin has changed since - narrowed to a folder, or
 // given another library's folder too - is never reused for a new grant: adding
 // the whole-library rule back would widen its holders again, and handing it out
