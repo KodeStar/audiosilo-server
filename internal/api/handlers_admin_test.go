@@ -422,18 +422,14 @@ func TestLibraryAccessLeavesAnAdminShareAlone(t *testing.T) {
 	if got.WholeLibraryID != nil || len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}) {
 		t.Fatalf("admin's share after the grant = %+v", got)
 	}
-	item := func(tok, rel string) int {
-		resp, _ := e.do(t, "GET", bookURL(lib.ID, "item", rel), tok, "")
-		return resp.StatusCode
-	}
-	if code := item(childTok, mistbornBook); code != http.StatusForbidden {
+	if code := e.item(t, childTok, lib.ID, mistbornBook); code != http.StatusForbidden {
 		t.Fatalf("the child reaches a book outside their share after the grant: %d", code)
 	}
-	if code := item(childTok, cradleBook); code != http.StatusOK {
+	if code := e.item(t, childTok, lib.ID, cradleBook); code != http.StatusOK {
 		t.Fatalf("the child's own book = %d", code)
 	}
 	// Allowed: the guest gets the whole library through a new, marked grant.
-	if code := item(guestTok, mistbornBook); code != http.StatusOK {
+	if code := e.item(t, guestTok, lib.ID, mistbornBook); code != http.StatusOK {
 		t.Fatalf("the guest's whole library = %d", code)
 	}
 	shares, _ := e.cat.ListShares(ctx)

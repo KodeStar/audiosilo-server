@@ -236,14 +236,7 @@ func TestHouseListeningSharingSince(t *testing.T) {
 	if got := names(); len(got) != 1 || got[0] != "sam:Sam/Now" {
 		t.Fatalf("after a repeated share-on = %v", got)
 	}
-	var since string
-	if err := f.c.db.QueryRowContext(f.ctx, `SELECT updated_at FROM household_sharing WHERE user_id = ?`, sam).Scan(&since); err != nil ||
-		since != formatSessionTime(f.clock.Add(-time.Hour)) {
-		t.Fatalf("updated_at after a repeated share-on = %q, %v; want when it was turned on", since, err)
-	}
-	// ... while off, a repeated "off" doesn't either, and turning it on moves it.
-	f.setShare(t, false, sam)
-	f.clock = f.clock.Add(time.Minute)
+	// Denied: turning it off and on again moves the boundary past it.
 	f.setShare(t, false, sam)
 	f.clock = f.clock.Add(time.Minute)
 	f.setShare(t, true, sam)

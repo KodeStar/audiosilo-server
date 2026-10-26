@@ -378,13 +378,13 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 		{"a sub-path rule", "", func(kids, _ int64) []PathRule {
 			return []PathRule{{LibraryID: kids, Path: "Kids/Picture books"}}
 		}},
-		{"a sub-path rule, grant's description", "Whole library", func(kids, _ int64) []PathRule {
+		{"a sub-path rule, grant's description", wholeLibraryShareDescription, func(kids, _ int64) []PathRule {
 			return []PathRule{{LibraryID: kids, Path: "Kids/Picture books"}}
 		}},
-		{"whole plus a sub-path", "Whole library", func(kids, _ int64) []PathRule {
+		{"whole plus a sub-path", wholeLibraryShareDescription, func(kids, _ int64) []PathRule {
 			return []PathRule{{LibraryID: kids, Path: ""}, {LibraryID: kids, Path: "Kids/Picture books"}}
 		}},
-		{"another library's rule", "Whole library", func(_, other int64) []PathRule {
+		{"another library's rule", wholeLibraryShareDescription, func(_, other int64) []PathRule {
 			return []PathRule{{LibraryID: other, Path: ""}}
 		}},
 		{"its own description, whole rule", "Everything for the kids", func(kids, _ int64) []PathRule {
@@ -399,7 +399,8 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 			other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
 			child := seedUserNamed(t, c, ctx, "child")
 			guest := seedUserNamed(t, c, ctx, "guest")
-			mine, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: tc.description, Paths: tc.rules(kids.ID, other.ID)})
+			rules := tc.rules(kids.ID, other.ID)
+			mine, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: tc.description, Paths: rules})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -417,12 +418,12 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.WholeLibraryID != nil || len(got.Paths) != len(tc.rules(kids.ID, other.ID)) {
+			if got.WholeLibraryID != nil || len(got.Paths) != len(rules) {
 				t.Fatalf("admin's share after the grant = %+v; want its own rules, unmarked", got)
 			}
-			for _, r := range tc.rules(kids.ID, other.ID) {
+			for _, r := range rules {
 				if !slices.Contains(got.Paths, r) {
-					t.Fatalf("admin's share rules = %+v; want %+v", got.Paths, tc.rules(kids.ID, other.ID))
+					t.Fatalf("admin's share rules = %+v; want %+v", got.Paths, rules)
 				}
 			}
 			after, _ := c.UserScope(ctx, child, kids.ID, false)
@@ -472,7 +473,7 @@ func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
 			old := seedUserNamed(t, c, ctx, "old")
 			guest := seedUserNamed(t, c, ctx, "guest")
-			s := Share{Name: "Library: Kids", Description: "Whole library"}
+			s := Share{Name: "Library: Kids", Description: wholeLibraryShareDescription}
 			if tc.whole {
 				s.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
 			}
