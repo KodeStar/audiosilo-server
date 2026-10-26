@@ -609,10 +609,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `shares.whole_library_id`). `wholeLibraryShare` reuses the share marked with the library, else an
   unmarked one with the description "Whole library" named "Library: <name>" (a grant made before
   0015) or "Library: <name> (<id>)" (one an interrupted grant left), and either only while it holds
-  no rule but that library's `""` (or none), since the grant adds that rule and hands the share out:
-  an admin's own share with the name (server#223), a grant since narrowed to a folder or given another
-  library's folders, and a same-named share marked for another library all keep their rules and
-  holders, and the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken.
+  no rule but that library's `""`, or no rule at all and no holder (`user_share_access`, the only
+  thing that holds a share), since the grant adds that rule and hands the share out: an admin's own
+  share with the name (server#223), a grant since narrowed to a folder or given another library's
+  folders, a rule-less share someone holds (marked or not), and a same-named share marked for another
+  library all keep their rules and holders, and the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its

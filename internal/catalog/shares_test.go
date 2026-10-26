@@ -134,8 +134,10 @@ func TestSharesAndUserScope(t *testing.T) {
 // TestGrantWholeLibraryHealsRulelessShare guards the case observed in production:
 // a "Library: <name>" share exists but has lost its "" path rule (however it
 // arose - a server/schema update, a manual edit, an FK cascade). Such a share
-// grants nothing, so re-granting whole-library access must re-add the rule rather
-// than just hand out the rule-less share.
+// grants nothing, so re-granting whole-library access must give the library
+// again rather than just hand out the rule-less share. Someone holds it, so it
+// isn't healed (re-adding the rule would hand the library to every holder,
+// server#223): the grant gets a share of its own and the rule-less one stays.
 func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -157,9 +159,12 @@ func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
 		t.Fatalf("precondition: rule-less share should grant nothing, got %+v", sc)
 	}
 
-	// Re-granting whole-library access must heal the share.
+	// Re-granting whole-library access gives the library again.
 	if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
 		t.Fatal(err)
+	}
+	if got, _ := c.GetShare(ctx, share.ID); got == nil || len(got.Paths) != 0 {
+		t.Fatalf("the held rule-less share was healed: %+v", got)
 	}
 	if sc, _ := c.UserScope(ctx, uid, lib.ID, false); !sc.AllowAll {
 		t.Fatalf("re-grant should yield AllowAll, got %+v", sc)
@@ -459,15 +464,15 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
 }
 
 // An unmarked share that can only be an old grant (made before
-// whole_library_id): the grant's description and only the library's "" rule, or
-// no rule at all (its library was deleted and recreated) - is still adopted,
-// marked and healed, keeping its holders.
+// whole_library_id): the grant's description and only the library's "" rule
+// (held or not), or no rule at all while nobody holds it (one an interrupted
+// grant left) - is still adopted, marked and healed, keeping its holders.
 func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		whole bool
-	}{{"whole rule", true}, {"no rule", false}} {
+	}{{"whole rule, held", true}, {"no rule, unheld", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c, ctx := newTestCatalog(t)
@@ -482,8 +487,12 @@ func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.GrantShare(ctx, old, share.ID); err != nil {
-				t.Fatal(err)
+			holders := []int64{guest}
+			if tc.whole {
+				if err := c.GrantShare(ctx, old, share.ID); err != nil {
+					t.Fatal(err)
+				}
+				holders = append(holders, old)
 			}
 			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
 				t.Fatal(err)
@@ -493,10 +502,72 @@ func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
 				len(shares[0].Paths) != 1 || shares[0].Paths[0] != (PathRule{LibraryID: kids.ID, Path: ""}) {
 				t.Fatalf("shares = %+v; want the old grant adopted and marked", shares)
 			}
-			for _, u := range []int64{old, guest} {
+			for _, u := range holders {
 				if sc, _ := c.UserScope(ctx, u, kids.ID, false); !sc.AllowAll {
 					t.Fatalf("user %d's Kids scope = %+v; want the whole library", u, sc)
 				}
+			}
+		})
+	}
+}
+
+// A rule-less share someone holds is never adopted, marked or not: adding the
+// whole-library rule to it would hand the library to its holders (an admin's
+// empty "Library: X" share with the grant's description, or a grant whose rule
+// is gone). It stays as it is and the new holder gets a grant of its own.
+func TestGrantWholeLibraryNeverAdoptsAHeldRulelessShare(t *testing.T) {
+	t.Parallel()
+	for _, marked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marked=%v", marked), func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			held := seedUserNamed(t, c, ctx, "held")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			empty, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: wholeLibraryShareDescription})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marked {
+				if _, err := c.db.ExecContext(ctx, `UPDATE shares SET whole_library_id = ? WHERE id = ?`, kids.ID, empty.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.GrantShare(ctx, held, empty.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			// Denied: the held share stays rule-less (and unmarked, if it was), so
+			// its holder still reaches nothing in Kids.
+			got, err := c.GetShare(ctx, empty.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Paths) != 0 || (got.WholeLibraryID != nil) != marked {
+				t.Fatalf("held rule-less share after the grant = %+v", got)
+			}
+			if sc, _ := c.UserScope(ctx, held, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+				t.Fatalf("the holder's Kids scope = %+v; want nothing", sc)
+			}
+			if members, _ := c.ShareMembers(ctx); len(members[empty.ID]) != 1 || members[empty.ID][0] != held {
+				t.Fatalf("held share's holders = %v; want only the holder", members[empty.ID])
+			}
+			// Allowed: the guest gets the whole library through a new, marked grant.
+			if sc, _ := c.UserScope(ctx, guest, kids.ID, false); !sc.AllowAll {
+				t.Fatalf("guest's Kids scope = %+v; want the whole library", sc)
+			}
+			grant, err := c.wholeLibraryShare(ctx, kids.ID, "Library: Kids")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if grant.ID == empty.ID || grant.Name != wholeLibraryIDName("Library: Kids", kids.ID) ||
+				grant.WholeLibraryID == nil || *grant.WholeLibraryID != kids.ID ||
+				len(grant.Paths) != 1 || grant.Paths[0] != (PathRule{LibraryID: kids.ID, Path: ""}) {
+				t.Fatalf("the grant = %+v", grant)
 			}
 		})
 	}
