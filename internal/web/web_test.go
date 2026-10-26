@@ -552,3 +552,119 @@ func TestStaticCompression(t *testing.T) {
 		t.Errorf("/admin/: %v", admin.Header())
 	}
 }
+
+// readerHTML is a reader document as the frontend emits it: one inline style,
+// one inline script, a meta policy.
+const readerHTML = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'">` +
+	`<style>body{margin:0}</style></head><body><div id="book"></div><script>window.reader=1</script></body></html>`
+
+// readerPolicy is readerCSP for a document whose one inline script is body.
+func readerPolicy(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return "default-src 'none'; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; " +
+		"style-src 'unsafe-inline' blob:; img-src blob: data:; font-src blob: data:; frame-src blob:; " +
+		"media-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; " +
+		"frame-ancestors 'self'"
+}
+
+// TestReaderCSP pins the reader document's policy exactly: scripts only by the
+// hash of its own inline scripts (none for an external one, 'none' with no
+// inline script), no requests, framed only by this origin.
+func TestReaderCSP(t *testing.T) {
+	t.Parallel()
+	if got, want := readerCSP([]byte(readerHTML)), readerPolicy("window.reader=1"); got != want {
+		t.Fatalf("readerCSP =\n%s\nwant\n%s", got, want)
+	}
+	// Denied: an external script is never allowed, by hash or by origin.
+	got := readerCSP([]byte(`<script src="/web/x.js"></script>`))
+	if !strings.Contains(got, "script-src 'none';") || strings.Count(got, "'self'") != 1 {
+		t.Fatalf("an external script only: %s", got)
+	}
+	for _, bad := range []string{"'unsafe-eval'", "connect-src 'self'", "script-src 'self'", "frame-ancestors 'none'", "*", "https:"} {
+		if strings.Contains(readerCSP([]byte(readerHTML)), bad) {
+			t.Errorf("the reader policy holds %q", bad)
+		}
+	}
+}
+
+// TestReaderDocument: GET /web/reader.html is the player's reader.html under its
+// own policy (the hash of what is served), framable by this origin only, and
+// every other path that would name it (no extension, any case, a trailing
+// slash) gets the same; /web/'s own policy is unchanged; without the file (an
+// older web build) it is a 404, never the app shell.
+func TestReaderDocument(t *testing.T) {
+	t.Parallel()
+	dir := fakePlayer(t)
+	writeFile(t, dir, "reader.html", readerHTML)
+	mux := http.NewServeMux()
+	if err := Register(mux, dir); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	get := func(p string) (*http.Response, string) {
+		t.Helper()
+		resp, err := ts.Client().Get(ts.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, string(b)
+	}
+	for _, p := range []string{"/web/reader.html", "/web/reader", "/web/reader/", "/web/reader.html/", "/web/READER.html", "/web/Reader"} {
+		resp, body := get(p)
+		if resp.StatusCode != http.StatusOK || body != readerHTML {
+			t.Errorf("GET %s = %d %.40q, want the reader document", p, resp.StatusCode, body)
+			continue
+		}
+		h := resp.Header
+		if got := h.Get("Content-Security-Policy"); got != readerPolicy("window.reader=1") {
+			t.Errorf("GET %s policy = %s", p, got)
+		}
+		if h.Get("X-Frame-Options") != "SAMEORIGIN" || h.Get("Cache-Control") != "no-cache" ||
+			h.Get("X-Content-Type-Options") != "nosniff" || !strings.HasPrefix(h.Get("Content-Type"), "text/html") {
+			t.Errorf("GET %s headers = %v", p, h)
+		}
+	}
+	// Revalidation: a 304 for the same version.
+	resp, _ := get("/web/reader.html")
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/web/reader.html", nil)
+	req.Header.Set("If-None-Match", resp.Header.Get("ETag"))
+	if r2, err := ts.Client().Do(req); err != nil || r2.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidation = %v %v, want 304", r2, err)
+	}
+	// The player's own documents keep their policy, byte for byte.
+	index, _ := os.ReadFile(filepath.Join(dir, "index.html"))
+	for _, p := range []string{"/web/", "/web/connect", "/web/library/1"} {
+		resp, _ := get(p)
+		if got := resp.Header.Get("Content-Security-Policy"); got != htmlCSP(index) {
+			t.Errorf("GET %s policy = %s, want the player's", p, got)
+		}
+		if resp.Header.Get("X-Frame-Options") != "" {
+			t.Errorf("GET %s sets X-Frame-Options itself", p)
+		}
+	}
+	// A path that merely starts with the name is the player's.
+	if resp, _ := get("/web/readers"); resp.Header.Get("Content-Security-Policy") != htmlCSP(index) {
+		t.Errorf("/web/readers is not the player's route")
+	}
+
+	// Denied: no reader.html in the export is a 404, not the app shell.
+	mux2 := http.NewServeMux()
+	if err := Register(mux2, fakePlayer(t)); err != nil {
+		t.Fatal(err)
+	}
+	ts2 := httptest.NewServer(mux2)
+	defer ts2.Close()
+	for _, p := range []string{"/web/reader.html", "/web/reader"} {
+		resp, err := ts2.Client().Get(ts2.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s with no reader.html = %d, want 404", p, resp.StatusCode)
+		}
+	}
+}

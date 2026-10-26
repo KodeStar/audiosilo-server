@@ -61,6 +61,7 @@ func Asset(name string) ([]byte, error) {
 //	GET /admin[/...]      admin console (package adminui; the API enforces the admin role)
 //	GET /assets/...       static CSS/JS of the connect and setup pages
 //	GET /web/...          web player, served from webDir (only if non-empty)
+//	GET /web/reader.html  the player's reader document, under its own policy (readerCSP)
 //
 // API routes registered on the same mux take precedence because ServeMux prefers
 // more specific patterns.
@@ -103,14 +104,79 @@ func Register(mux *http.ServeMux, webDir string) error {
 	})})
 
 	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
-		static.Handle("GET /web/", spa.Handler(spa.Config{
+		player := spa.Handler(spa.Config{
 			FS:          fsys,
 			Prefix:      "/web",
 			AssetDirs:   []string{"_expo", "assets"},
 			DocumentCSP: htmlCSP,
+		})
+		reader := readerDocument(fsys)
+		static.Handle("GET /web/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isReaderPath(r.URL.Path) {
+				reader.ServeHTTP(w, r)
+				return
+			}
+			player.ServeHTTP(w, r)
 		}))
 	}
 	return nil
+}
+
+// readerFile is the player's reader document (Bridge Phase 3b), which the web
+// player's reader screen frames: foliate-js and the reader in one inline script,
+// no subresources (the frontend's public/reader.html, exported beside the app).
+const readerFile = "reader.html"
+
+// isReaderPath reports whether a /web request names the reader document: the
+// paths the player's handler would answer with it (spa's "<p>.html"; any case,
+// as a case-insensitive disk opens any), so the reader is never served under
+// the player's policy. Its route is GET /web/reader.html.
+func isReaderPath(p string) bool {
+	rel := strings.Trim(strings.TrimPrefix(p, "/web"), "/")
+	return strings.EqualFold(rel, readerFile) || strings.EqualFold(rel, strings.TrimSuffix(readerFile, ".html"))
+}
+
+// readerDocument serves the reader document from the player's files (404 when
+// the export has none: an older web build) under its own policy (readerCSP)
+// instead of the player's. It is framed only by the player's own pages, so it
+// replaces the site-wide X-Frame-Options DENY with SAMEORIGIN (frame-ancestors
+// 'self' in the policy says the same to browsers that read it). Revalidated on
+// each request (no-cache), like the player's documents.
+func readerDocument(fsys fs.FS) http.Handler {
+	files := spa.NewFiles()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		files.ServeDocument(w, r, fsys, readerFile, readerCSP)
+	})
+}
+
+// readerCSP is the reader document's Content-Security-Policy (READ-ALONG-RESEARCH
+// "Reader recipe"), inherited by the EPUB's blob: section frames: scripts only by
+// the sha256 of the document's own inline scripts (inlineScriptHashes; none
+// means none run), styles inline and from blob:, images and fonts from blob: and
+// data:, frames only blob: (foliate's sections), no media, no requests at all
+// (connect-src 'none': the host posts the book's bytes), no plugins, base or
+// forms, and framed only by this origin (the player).
+func readerCSP(html []byte) string {
+	scriptSrc := "'none'"
+	if hashes := inlineScriptHashes(html); len(hashes) > 0 {
+		scriptSrc = strings.Join(hashes, " ")
+	}
+	return strings.Join([]string{
+		"default-src 'none'",
+		"script-src " + scriptSrc,
+		"style-src 'unsafe-inline' blob:",
+		"img-src blob: data:",
+		"font-src blob: data:",
+		"frame-src blob:",
+		"media-src 'none'",
+		"connect-src 'none'",
+		"object-src 'none'",
+		"base-uri 'none'",
+		"form-action 'none'",
+		"frame-ancestors 'self'",
+	}, "; ")
 }
 
 // playerFS chooses where to serve the web player from: a player embedded in the
@@ -205,15 +271,7 @@ var castSenderScripts = []string{
 // 'unsafe-inline' because react-native-web/Uniwind inject styles at runtime,
 // which cannot be hashed ahead of time. Everything else is same-origin.
 func htmlCSP(html []byte) string {
-	hashes := map[string]struct{}{}
-	for _, m := range inlineScriptRE.FindAllSubmatch(html, -1) {
-		if bytes.Contains(bytes.ToLower(m[1]), []byte("src=")) {
-			continue // external script; covered by 'self'
-		}
-		sum := sha256.Sum256(m[2])
-		hashes["'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'"] = struct{}{}
-	}
-	scriptSrc := append(append([]string{"'self'"}, castSenderScripts...), sortedKeys(hashes)...)
+	scriptSrc := append(append([]string{"'self'"}, castSenderScripts...), inlineScriptHashes(html)...)
 	return strings.Join([]string{
 		"default-src 'self'",
 		"img-src 'self' data: blob:",
@@ -225,6 +283,20 @@ func htmlCSP(html []byte) string {
 		"base-uri 'none'",
 		"frame-ancestors 'none'",
 	}, "; ")
+}
+
+// inlineScriptHashes are the CSP sources of an HTML document's inline scripts
+// ('sha256-<base64>', sorted, each once); a script with a src is no inline one.
+func inlineScriptHashes(html []byte) []string {
+	hashes := map[string]struct{}{}
+	for _, m := range inlineScriptRE.FindAllSubmatch(html, -1) {
+		if bytes.Contains(bytes.ToLower(m[1]), []byte("src=")) {
+			continue // external script
+		}
+		sum := sha256.Sum256(m[2])
+		hashes["'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'"] = struct{}{}
+	}
+	return sortedKeys(hashes)
 }
 
 func sortedKeys(m map[string]struct{}) []string {
