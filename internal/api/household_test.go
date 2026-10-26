@@ -159,10 +159,9 @@ func TestHouseListening(t *testing.T) {
 	t.Parallel()
 	h := newHouseEnv(t)
 	ctx := context.Background()
-	h.listen(t, h.samTok, cradleBook)   // in kid's scope
-	h.listen(t, h.patTok, mistbornBook) // outside kid's scope
-	h.listen(t, h.demoTok, cradleBook)
-	h.listen(t, h.doraTok, cradleBook)
+	// Only listening done while sharing is on shows (server#221), so each
+	// housemate turns sharing on first. kid listens before sharing: hidden from
+	// the others until kid listens again once sharing.
 	h.listen(t, h.kidTok, cradleBook)
 	h.setShare(t, h.samTok, true)
 	h.setShare(t, h.patTok, true)
@@ -171,6 +170,10 @@ func TestHouseListening(t *testing.T) {
 	if err := h.cat.SetHouseholdSharing(ctx, h.demo, true); err != nil {
 		t.Fatal(err)
 	}
+	h.listen(t, h.samTok, cradleBook)   // in kid's scope
+	h.listen(t, h.patTok, mistbornBook) // outside kid's scope
+	h.listen(t, h.demoTok, cradleBook)
+	h.listen(t, h.doraTok, cradleBook)
 	if err := h.auth.UpdateUser(ctx, h.dora, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,9 +214,17 @@ func TestHouseListening(t *testing.T) {
 		}
 	}
 
-	// Allowed: the admin (whole library, sharing) sees kid, pat and sam (kid shares
-	// now too); not the demo, not the disabled account.
+	// Denied: kid's listening from before kid shared doesn't show to the admin;
+	// once kid listens while sharing, it does.
 	h.setShare(t, h.adminTok, true)
+	got, body = h.house(t, h.adminTok)
+	if names := usernames(got.Listening); strings.Join(names, ",") != "pat,sam" {
+		t.Fatalf("admin's house before kid listened while sharing = %v (%s)", names, body)
+	}
+	h.listen(t, h.kidTok, cradleBook)
+
+	// Allowed: the admin (whole library, sharing) sees kid, pat and sam; not the
+	// demo, not the disabled account.
 	got, body = h.house(t, h.adminTok)
 	if names := usernames(got.Listening); strings.Join(names, ",") != "kid,pat,sam" {
 		t.Fatalf("admin's house = %v (%s)", names, body)

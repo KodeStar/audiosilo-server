@@ -1,15 +1,26 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
-// share turns sharing on for each of ids.
+// share turns sharing on for each of ids, as of two windows ago, so every
+// session a test records counts as listening done while sharing was on.
 func (f *sessionFixture) share(t *testing.T, ids ...int64) {
 	t.Helper()
+	now := f.clock
+	f.clock = now.Add(-2 * houseWindow)
+	defer func() { f.clock = now }()
+	f.setShare(t, true, ids...)
+}
+
+// setShare saves the sharing choice on for each of ids, at the fixture's clock.
+func (f *sessionFixture) setShare(t *testing.T, on bool, ids ...int64) {
+	t.Helper()
 	for _, id := range ids {
-		if err := f.c.SetHouseholdSharing(f.ctx, id, true); err != nil {
+		if err := f.c.SetHouseholdSharing(f.ctx, id, on); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,5 +181,94 @@ func TestHouseState(t *testing.T) {
 		if got := houseState(c.age); got != c.want {
 			t.Errorf("houseState(%v) = %q, want %q", c.age, got, c.want)
 		}
+	}
+}
+
+// Listening done while sharing was off never shows, even after sharing is turned
+// back on within houseWindow (server#221); listening after it is turned on does,
+// and saving "on" again while on doesn't move that boundary.
+func TestHouseListeningSharingSince(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	all := []Scope{{LibraryID: f.lib, AllowAll: true}}
+	me := f.addUser(t, "me", "2025-01-01T00:00:00Z", false)
+	sam := f.addUser(t, "sam", "2025-01-01T00:00:00Z", false)
+	f.share(t, me)
+	names := func() []string {
+		var out []string
+		for _, r := range f.house(t, me, all) {
+			out = append(out, r.Username+":"+r.Path)
+		}
+		return out
+	}
+
+	// sam shares, listens, stops sharing, listens to another book, turns it back on.
+	f.setShare(t, true, sam)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, "Sam/On", 0, 100)
+	f.clock = f.clock.Add(time.Minute)
+	f.setShare(t, false, sam)
+	f.clock = f.clock.Add(time.Minute)
+	f.houseSession(t, sam, "Sam/Off", 0, 100)
+	f.clock = f.clock.Add(time.Minute)
+	f.setShare(t, true, sam)
+
+	// Denied: neither the off-time book nor an older on-time one stands in.
+	if got := names(); len(got) != 0 {
+		t.Fatalf("after turning sharing back on = %v; want nobody", got)
+	}
+	// Denied: a session that only ended while sharing was off, the moment before
+	// turning it on, stays hidden too.
+	f.houseSession(t, sam, "Sam/JustBefore", time.Millisecond, 100)
+	if got := names(); len(got) != 0 {
+		t.Fatalf("a save just before sharing = %v; want nobody", got)
+	}
+
+	// Allowed: listening after sharing is turned on shows (saved the same moment counts).
+	f.houseSession(t, sam, "Sam/Now", 0, 100)
+	if got := names(); len(got) != 1 || got[0] != "sam:Sam/Now" {
+		t.Fatalf("after listening while sharing = %v", got)
+	}
+
+	// Allowed: saving "on" again later doesn't hide what sam listened to since.
+	f.clock = f.clock.Add(time.Hour)
+	f.setShare(t, true, sam)
+	if got := names(); len(got) != 1 || got[0] != "sam:Sam/Now" {
+		t.Fatalf("after a repeated share-on = %v", got)
+	}
+	var since string
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT updated_at FROM household_sharing WHERE user_id = ?`, sam).Scan(&since); err != nil ||
+		since != formatSessionTime(f.clock.Add(-time.Hour)) {
+		t.Fatalf("updated_at after a repeated share-on = %q, %v; want when it was turned on", since, err)
+	}
+	// ... while off, a repeated "off" doesn't either, and turning it on moves it.
+	f.setShare(t, false, sam)
+	f.clock = f.clock.Add(time.Minute)
+	f.setShare(t, false, sam)
+	f.clock = f.clock.Add(time.Minute)
+	f.setShare(t, true, sam)
+	if got := names(); len(got) != 0 {
+		t.Fatalf("after off and on again = %v; want nobody", got)
+	}
+}
+
+// The plan HouseListening's comment records: driven from the caller's row, one
+// index walk per sharer from the later bound (server#221 kept it).
+func TestHouseListeningPlan(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	got := queryPlan(t, f.c, houseListeningSQL, []any{formatSessionTime(f.clock), int64(1)})
+	want := []string{
+		"SEARCH me USING INTEGER PRIMARY KEY (rowid=?)",
+		"SCAN h",
+		"SEARCH u USING INTEGER PRIMARY KEY (rowid=?)",
+		"SEARCH w USING INTEGER PRIMARY KEY (rowid=?)",
+		"CORRELATED SCALAR SUBQUERY 1",
+		"SEARCH s USING INDEX idx_sessions_user_last (user_id=? AND last_at>?)",
+		"SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?) LEFT-JOIN",
+		"USE TEMP B-TREE FOR ORDER BY",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("plan:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

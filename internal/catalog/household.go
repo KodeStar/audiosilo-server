@@ -20,7 +20,10 @@ import (
 //     household_sharing row (auth clears it when someone becomes a kid, and the
 //     route refuses a kid's PUT), so the opt-in rule already leaves them out;
 //   - only a session recorded on this server (not imported, not backfilled) with
-//     listening in it, the newest per person, within houseWindow;
+//     listening in it, the newest per person, within houseWindow, and saved at or
+//     after the person last turned sharing on (household_sharing.updated_at, which
+//     moves only when the choice changes): listening done while sharing was off
+//     never shows, even when it is turned back on within the window;
 //   - only a book the CALLER may see: a person's newest book outside the caller's
 //     scopes drops that person, never falls back to an older book;
 //   - never a device, an address, an app or a token: HouseListeningRow has no
@@ -69,6 +72,9 @@ func (c *Catalog) HouseholdSharing(ctx context.Context, userID int64) (bool, err
 
 // SetHouseholdSharing records whether userID shares their listening. The caller
 // refuses demo accounts (a public demo must not show up in anyone's house).
+// updated_at is when the choice last changed: a repeated save of the same choice
+// keeps it, so HouseListening's "sharing on since" boundary moves only when
+// sharing is actually turned on.
 func (c *Catalog) SetHouseholdSharing(ctx context.Context, userID int64, share bool) error {
 	if userID <= 0 {
 		return errNoUser
@@ -79,7 +85,9 @@ func (c *Catalog) SetHouseholdSharing(ctx context.Context, userID int64, share b
 	res, err := c.db.ExecContext(ctx,
 		`INSERT INTO household_sharing(user_id, share_listening, updated_at)
 		 SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ?1 AND `+isKidSQL+`)
-		 ON CONFLICT(user_id) DO UPDATE SET share_listening = excluded.share_listening, updated_at = excluded.updated_at`,
+		 ON CONFLICT(user_id) DO UPDATE SET share_listening = excluded.share_listening,
+		     updated_at = CASE WHEN share_listening <> excluded.share_listening
+		                       THEN excluded.updated_at ELSE updated_at END`,
 		userID, share, c.stamp())
 	if err != nil {
 		return err
@@ -112,10 +120,13 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	}
 	// Driven from household_sharing: the caller's own row (reciprocal), then each
 	// other sharer, their account, and their newest session with listening in it
-	// (the scalar subquery walks idx_sessions_user_last newest first and stops at
-	// the first match); the books join runs only for those winners. CROSS JOIN
-	// keeps that order: without it, and with no ANALYZE statistics, the planner
-	// starts from idx_users_demo and visits every account. Verified plan:
+	// saved since the later of the window's start and when they turned sharing on
+	// (h.updated_at, the same fixed-width stamp as last_at, so the string compare
+	// and MAX are time order; the scalar subquery walks idx_sessions_user_last
+	// newest first from that bound and stops at the first match); the books join
+	// runs only for those winners. CROSS JOIN keeps that order: without it, and
+	// with no ANALYZE statistics, the planner starts from idx_users_demo and
+	// visits every account. Verified plan (TestHouseListeningPlan):
 	//
 	//	SEARCH me USING INTEGER PRIMARY KEY (rowid=?)
 	//	SCAN h
@@ -131,19 +142,7 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *row) error {
 		return rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.Author,
 			&r.Position, &r.Duration, &r.UpdatedAt, &r.bookID)
-	}, `SELECT h.user_id, u.username, w.library_id, w.rel_path, COALESCE(b.title, ''), NULLIF(b.author, ''),
-	           w.end_pos, NULLIF(COALESCE(NULLIF(b.duration, 0), w.duration), 0), w.last_at, COALESCE(b.id, 0)
-	      FROM household_sharing me
-	     CROSS JOIN household_sharing h ON h.share_listening = 1 AND h.user_id <> me.user_id
-	     CROSS JOIN users u ON u.id = h.user_id AND u.disabled = 0 AND u.is_demo = 0
-	      JOIN listening_sessions w ON w.id = (
-	           SELECT s.id FROM listening_sessions s
-	            WHERE s.user_id = h.user_id AND s.last_at >= ?1 AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`
-	            ORDER BY s.last_at DESC, s.id DESC LIMIT 1)
-	      LEFT JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.rel_path
-	     WHERE me.user_id = ?2 AND me.share_listening = 1
-	     ORDER BY w.last_at DESC, h.user_id`,
-		formatSessionTime(c.now().Add(-houseWindow)), callerID)
+	}, houseListeningSQL, formatSessionTime(c.now().Add(-houseWindow)), callerID)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +168,23 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	}
 	return out, nil
 }
+
+// houseListeningSQL is HouseListening's query (?1 the window's start, ?2 the
+// caller); TestHouseListeningPlan checks the plan HouseListening records.
+const houseListeningSQL = `
+SELECT h.user_id, u.username, w.library_id, w.rel_path, COALESCE(b.title, ''), NULLIF(b.author, ''),
+       w.end_pos, NULLIF(COALESCE(NULLIF(b.duration, 0), w.duration), 0), w.last_at, COALESCE(b.id, 0)
+  FROM household_sharing me
+ CROSS JOIN household_sharing h ON h.share_listening = 1 AND h.user_id <> me.user_id
+ CROSS JOIN users u ON u.id = h.user_id AND u.disabled = 0 AND u.is_demo = 0
+  JOIN listening_sessions w ON w.id = (
+       SELECT s.id FROM listening_sessions s
+        WHERE s.user_id = h.user_id AND s.last_at >= MAX(?1, h.updated_at)
+          AND s.import_id = 0 AND s.backfilled = 0 AND ` + listenedSQL + `
+        ORDER BY s.last_at DESC, s.id DESC LIMIT 1)
+  LEFT JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.rel_path
+ WHERE me.user_id = ?2 AND me.share_listening = 1
+ ORDER BY w.last_at DESC, h.user_id`
 
 // houseState is a housemate's state from the age of their newest save.
 func houseState(age time.Duration) string {

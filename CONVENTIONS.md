@@ -1359,7 +1359,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **Privacy rules (all in catalog; each has an allowed and a denied test)**: reciprocal (`listening`
   is `[]` unless the CALLER shares); other people only (never the caller), enabled, not demo, sharing
   on; per person ONE row, their newest session with listening in it (`listening_sessions`,
-  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h); that book must pass
+  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h) and saved at or after
+  they last turned sharing on (`household_sharing.updated_at`, which moves only when the choice
+  changes, so a repeated PUT of the same choice keeps it; listening done while sharing was off never
+  shows, server#221); that book must pass
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
