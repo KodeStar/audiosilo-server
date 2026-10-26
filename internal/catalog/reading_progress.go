@@ -58,13 +58,10 @@ const (
 	maxDeviceIDBytes = 200
 )
 
-// ErrInvalidReadingProgress is a save CheckReadingSave refuses.
-var ErrInvalidReadingProgress = errors.New("invalid reading progress")
-
 // CheckReadingSave checks a save's fields before anything is read: a CFI that
 // starts "epubcfi(" and is at most 2048 bytes, a progression in [0, 1], an
 // updated_at in RFC3339, a device id of at most 200 bytes and a base version
-// that isn't negative. Its error wraps ErrInvalidReadingProgress with the reason.
+// that isn't negative. Its error is the reason (the handler's 400 message).
 func CheckReadingSave(in ReadingSave) error {
 	reason := ""
 	switch {
@@ -86,15 +83,8 @@ func CheckReadingSave(in ReadingSave) error {
 	if reason == "" {
 		return nil
 	}
-	return &readingError{reason}
+	return errors.New(reason)
 }
-
-// readingError is CheckReadingSave's refusal: its reason, wrapping
-// ErrInvalidReadingProgress.
-type readingError struct{ reason string }
-
-func (e *readingError) Error() string { return e.reason }
-func (e *readingError) Unwrap() error { return ErrInvalidReadingProgress }
 
 // readingColumns are the columns of a ReadingProgress, in scanReading's order.
 const readingColumns = `library_id, rel_path, cfi, progression, version, device_id, device_name, updated_at`

@@ -16,31 +16,21 @@ import (
 func ebookLibrary(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	put := func(rel string, body []byte) {
-		t.Helper()
-		p := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, body, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	epub := epubBytes(t, minimalEpub...)
 	for _, audio := range []string{"Author/Book/01.m4b", "Author/Linked/01.m4b", "Author/Hidden/01.m4b",
 		"Author/Two/01.m4b", "Author/Bad/01.m4b", "One.m4b", "Two.m4b",
 		"Four.m4b", "Five.m4b", "Author/None/01.m4b"} {
 		copyFixtureM4B(t, filepath.Join(root, filepath.FromSlash(audio)))
 	}
-	put("Author/Book/Book.EPUB", epub)
-	put("Author/Book/Extras/other.epub", epub) // deeper down: not the book's
-	put("Author/Hidden/.book.epub", epub)
-	put("Author/Two/Two.epub", epub)
-	put("Author/Two/Two (Annotated).epub", epub)
-	put("Author/Bad/Bad.epub", []byte("PK not a zip"))
-	put("One.epub", epub)
-	put("Three.epub", epub) // no book of that name
-	put("outside/Secret.epub", epub)
+	writeFile(t, root, "Author/Book/Book.EPUB", epub)
+	writeFile(t, root, "Author/Book/Extras/other.epub", epub) // deeper down: not the book's
+	writeFile(t, root, "Author/Hidden/.book.epub", epub)
+	writeFile(t, root, "Author/Two/Two.epub", epub)
+	writeFile(t, root, "Author/Two/Two (Annotated).epub", epub)
+	writeFile(t, root, "Author/Bad/Bad.epub", []byte("PK not a zip"))
+	writeFile(t, root, "One.epub", epub)
+	writeFile(t, root, "Three.epub", epub) // no book of that name
+	writeFile(t, root, "outside/Secret.epub", epub)
 	if err := os.Symlink(filepath.Join(root, "outside", "Secret.epub"), filepath.Join(root, "Author", "Linked", "Linked.epub")); err != nil {
 		t.Fatal(err)
 	}

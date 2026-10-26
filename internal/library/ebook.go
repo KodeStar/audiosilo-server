@@ -33,25 +33,21 @@ import (
 // the folder listings its walk already reads (ebookCandidate over the walk's
 // .epub entries, then checkEbook), so the reader and the Bridge always agree.
 func BookEbook(root, relPath string, folder bool) string {
-	rel, entry := ebookOnDisk(root, relPath, folder)
-	if rel == "" {
-		return ""
-	}
-	r, _ := checkEbook(root, catalog.EbookReading{Path: rel, Sig: ebookSig(root, rel, entry)})
+	r, _ := checkEbook(root, ebookOnDisk(root, relPath, folder))
 	return r.Path
 }
 
 // ebookOnDisk is ebookCandidate over the folder holding relPath's ebook, listed
-// now ("" when there is none or the folder can't be listed): for a book no walk
+// now (none when there is none or the folder can't be listed): for a book no walk
 // found (resolveBook) and for BookEbook.
-func ebookOnDisk(root, relPath string, folder bool) (string, fs.DirEntry) {
+func ebookOnDisk(root, relPath string, folder bool) catalog.EbookReading {
 	full, err := ContentJoin(root, ebookDir(relPath, folder))
 	if err != nil {
-		return "", nil
+		return catalog.EbookReading{}
 	}
 	entries, err := os.ReadDir(full)
 	if err != nil {
-		return "", nil
+		return catalog.EbookReading{}
 	}
 	var epubs []fs.DirEntry
 	for _, e := range entries {
@@ -59,7 +55,7 @@ func ebookOnDisk(root, relPath string, folder bool) (string, fs.DirEntry) {
 			epubs = append(epubs, e)
 		}
 	}
-	return ebookCandidate(relPath, folder, epubs)
+	return ebookCandidate(root, relPath, folder, epubs)
 }
 
 // ebookDir is the library-relative folder holding a book's ebook: a folder book's
@@ -83,36 +79,41 @@ func isEpubEntry(de fs.DirEntry) bool {
 
 // ebookCandidate is BookEbook's rule before the readability check, over epubs,
 // the .epub entries (isEpubEntry) of the folder holding the book's ebook
-// (ebookDir): its library-relative path and entry, "" for none.
+// (ebookDir): its library-relative path and signature (ebookSig), the zero
+// reading for none.
 //   - a folder book: the one regular file (a link is never one); several is none.
 //   - a single-file book: the entry named exactly "<stem>.epub", whatever it is
 //     (a link counts when it leads to a regular file inside the library:
 //     checkEbook).
-func ebookCandidate(relPath string, folder bool, epubs []fs.DirEntry) (string, fs.DirEntry) {
+func ebookCandidate(root, relPath string, folder bool, epubs []fs.DirEntry) catalog.EbookReading {
 	dir := ebookDir(relPath, folder)
+	found := func(e fs.DirEntry) catalog.EbookReading {
+		rel := path.Join(dir, e.Name())
+		return catalog.EbookReading{Path: rel, Sig: ebookSig(root, rel, e)}
+	}
 	if !folder {
 		want := stemOf(relPath) + ".epub"
 		for _, e := range epubs {
 			if e.Name() == want {
-				return path.Join(dir, want), e
+				return found(e)
 			}
 		}
-		return "", nil
+		return catalog.EbookReading{}
 	}
-	var found fs.DirEntry
+	var one fs.DirEntry
 	for _, e := range epubs {
 		if !e.Type().IsRegular() {
 			continue
 		}
-		if found != nil {
-			return "", nil // several: the Bridge reads the audio
+		if one != nil {
+			return catalog.EbookReading{} // several: the Bridge reads the audio
 		}
-		found = e
+		one = e
 	}
-	if found == nil {
-		return "", nil
+	if one == nil {
+		return catalog.EbookReading{}
 	}
-	return path.Join(dir, found.Name()), found
+	return found(one)
 }
 
 // ebookSig is the signature (catalog.EbookSig) of the candidate rel, entry its

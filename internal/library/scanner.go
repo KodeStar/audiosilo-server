@@ -942,9 +942,7 @@ func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, side sidecarFiles)
 		if len(epubs) == 0 {
 			continue
 		}
-		if rel, entry := ebookCandidate(b.RelPath, b.IsFolder, epubs); rel != "" {
-			b.EbookFile = catalog.EbookReading{Path: rel, Sig: ebookSig(lib.Root, rel, entry)}
-		}
+		b.EbookFile = ebookCandidate(lib.Root, b.RelPath, b.IsFolder, epubs)
 	}
 }
 
@@ -1528,9 +1526,7 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	} else {
 		book.Attachments.Sig = sig
 	}
-	if rel, entry := ebookOnDisk(lib.Root, book.RelPath, book.IsFolder); rel != "" {
-		book.EbookFile = catalog.EbookReading{Path: rel, Sig: ebookSig(lib.Root, rel, entry)}
-	}
+	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
 	return book, nil
 }
 

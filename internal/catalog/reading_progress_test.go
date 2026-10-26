@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -149,8 +148,8 @@ func TestCheckReadingSave(t *testing.T) {
 	} {
 		s := ok
 		mod(&s)
-		if err := CheckReadingSave(s); !errors.Is(err, ErrInvalidReadingProgress) {
-			t.Errorf("%s: err = %v, want ErrInvalidReadingProgress", name, err)
+		if err := CheckReadingSave(s); err == nil {
+			t.Errorf("%s: CheckReadingSave accepted it", name)
 		}
 	}
 	for _, edge := range []float64{0, 1} {
