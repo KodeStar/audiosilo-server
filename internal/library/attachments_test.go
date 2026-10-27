@@ -501,6 +501,92 @@ func TestRefreshAttachments(t *testing.T) {
 // TestIndexMoved: a book the Bridge moved keeps its listeners' state when the
 // old path is gone and the fingerprints match, and its old row goes; a `from`
 // still on disk, or another book's, is ignored.
+// TestIndexPathFollowsAMove: a book folder renamed on disk and opened by its new
+// path before a scan (a Folders tap) takes its listening state with it, as the
+// scan's move detection would (server#209); a copy whose source is still on disk
+// does not, and a book indexed already is left as it is.
+func TestIndexPathFollowsAMove(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Old", "Book", "audio.m4b"))
+	writeFile(t, root, "Other/Book/audio.m4b", []byte("not the same audio at all"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	uid := namedUser(t, db, "ann")
+	old := catalog.Ref{LibraryID: lib.ID, Path: "Old/Book"}
+	if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: old, Position: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.AddBookmark(ctx, uid, catalog.Bookmark{Ref: old, Position: 7, Note: "here"}); err != nil {
+		t.Fatal(err)
+	}
+	state := func(p string) (*catalog.Progress, []catalog.Bookmark) {
+		t.Helper()
+		ref := catalog.Ref{LibraryID: lib.ID, Path: p}
+		prog, err := cat.GetProgress(ctx, uid, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		marks, err := cat.ListBookmarks(ctx, uid, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prog, marks
+	}
+
+	// Renamed, then opened by the new path with no scan between.
+	if err := os.Rename(filepath.Join(root, "Old"), filepath.Join(root, "New")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := scanner.IndexPath(ctx, *lib, "New/Book")
+	if err != nil || b.RelPath != "New/Book" {
+		t.Fatalf("IndexPath = %+v, %v", b, err)
+	}
+	if p, marks := state("New/Book"); p == nil || p.Position != 42 || len(marks) != 1 || marks[0].Note != "here" {
+		t.Errorf("state at the new path = %+v, %+v", p, marks)
+	}
+	if p, marks := state("Old/Book"); p != nil || len(marks) != 0 {
+		t.Errorf("state left at the old path = %+v, %+v", p, marks)
+	}
+	if got := bookPaths(t, cat, lib.ID); slices.Contains(got, "Old/Book") {
+		t.Errorf("the old row stayed: %q", got)
+	}
+
+	// A copy opened while its source is still on disk: indexed as a new book, the
+	// source keeps its state.
+	copyFixtureM4B(t, filepath.Join(root, "Copy", "Book", "audio.m4b"))
+	if _, err := scanner.IndexPath(ctx, *lib, "Copy/Book"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := state("Copy/Book"); p != nil {
+		t.Errorf("progress copied to the copy: %+v", p)
+	}
+	if p, marks := state("New/Book"); p == nil || p.Position != 42 || len(marks) != 1 {
+		t.Errorf("the source lost its state: %+v, %+v", p, marks)
+	}
+
+	// A book indexed already is re-read in place, even with a gone twin: the
+	// Copy's twin New is removed from disk, and Copy keeps its own (empty) state.
+	if err := os.RemoveAll(filepath.Join(root, "New")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.IndexPath(ctx, *lib, "Copy/Book"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := state("Copy/Book"); p != nil {
+		t.Errorf("an indexed book took a gone twin's progress: %+v", p)
+	}
+	if p, _ := state("New/Book"); p == nil {
+		t.Error("a gone book's state moved to an indexed book")
+	}
+}
+
 func TestIndexMoved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

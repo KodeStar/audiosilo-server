@@ -678,7 +678,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
-  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). Re-tagging keeps state via
+  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
+  book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:
+  `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
+  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new

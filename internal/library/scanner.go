@@ -1521,12 +1521,35 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 		s.flightMu.Unlock()
 		close(f.done)
 	}()
-	indexed, err := s.indexBook(ctx, lib, book)
+	indexed, err := s.indexBookFrom(ctx, lib, book, s.movedFrom(ctx, lib, book))
 	if err == nil {
 		f.id = indexed.ID
 	}
 	f.err = err
 	return indexed, err
+}
+
+// movedFrom is where a book IndexPath indexes for the first time was indexed
+// before, when it is a book moved or renamed on disk since the last scan (a
+// renamed folder opened from Folders, server#209): an indexed book with its
+// fingerprint that is no longer on disk. "" when there is none, or when the book
+// is indexed already. carryFrom checks it as it checks IndexMoved's from.
+func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *catalog.Book) string {
+	if book.ContentHash == "" {
+		book.ContentHash = fingerprintFile(absOf(lib, primaryPath(book))) // reused by enrich
+	}
+	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath,
+		[]string{book.ContentHash, byteFirstFingerprint(lib, book)})
+	if err != nil {
+		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
+		return ""
+	}
+	for _, p := range candidates {
+		if !s.bookOnDisk(ctx, lib, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the
@@ -1666,6 +1689,13 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	if err != nil {
 		return nil, err
 	}
+	return s.indexBookFrom(ctx, lib, book, from)
+}
+
+// indexBookFrom indexes book (indexBook) after carrying the durable state of the
+// book indexed at from to it, when carryFrom finds it the same book moved (from
+// "": none), then drops the old book's row.
+func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) (*catalog.Book, error) {
 	moved := from != "" && from != book.RelPath && s.carryFrom(ctx, lib, from, book)
 	indexed, err := s.indexBook(ctx, lib, book)
 	if err != nil {
