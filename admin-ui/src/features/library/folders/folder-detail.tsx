@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookOpen, FileAudio, FolderOpen, FolderX } from 'lucide-react';
-import { setFolderMode, useBrowse } from '@/api/hooks';
+import { BookOpen, FileAudio, FolderOpen, FolderX, RefreshCw } from 'lucide-react';
+import { keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FsEntry } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
-import { buttonVariants } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { bookRoute } from '@/lib/book-route';
@@ -102,6 +102,21 @@ function Detail({
       : t('folders.mode.bookJoinHere');
   };
 
+  // A folder the scanner would read as a book that the index doesn't hold yet:
+  // Rescan reads it now (the book's own re-read), then the listing says it's a book.
+  const [adding, setAdding] = useState(false);
+  const addNow = async () => {
+    setAdding(true);
+    try {
+      await rescanBook(qc, { library_id: library.id, path: entry.path });
+      await qc.invalidateQueries({ queryKey: keys.browseLibrary(library.id) });
+    } catch (err) {
+      toastError(t('folders.detail.addFailed', { name: entry.name }), err);
+    } finally {
+      setAdding(false);
+    }
+  };
+
   const choose = async (choice: FolderChoice) => {
     if (choice === choiceOf(entry.override)) return;
     setSaving(choice);
@@ -148,6 +163,14 @@ function Detail({
             <p className="rounded-md bg-muted px-3 py-2 font-mono text-[12.5px] leading-relaxed [overflow-wrap:anywhere]">
               {joinLibraryPath(library.root, entry.path)}
             </p>
+            {entry.pending_book ? (
+              <p id="folder-pending" className="text-[12.5px] text-muted-foreground">
+                <span className="font-semibold text-foreground">
+                  {t('folders.detail.pending')}
+                </span>{' '}
+                {t('folders.detail.pendingBody')}
+              </p>
+            ) : null}
           </div>
           {entry.is_book ? (
             <Link
@@ -157,6 +180,17 @@ function Detail({
               <BookOpen aria-hidden="true" />
               {t('folders.detail.openBook')}
             </Link>
+          ) : entry.pending_book ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={adding}
+              aria-describedby="folder-pending"
+              onClick={() => void addNow()}
+            >
+              <RefreshCw aria-hidden="true" className={adding ? 'animate-spin' : undefined} />
+              {t('folders.detail.rescan')}
+            </Button>
           ) : null}
         </div>
         <div className="flex flex-col gap-2">

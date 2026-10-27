@@ -4,6 +4,7 @@ import { setToken } from '@/api/token';
 import type { FolderMode, FsEntry } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { libraries } from '@/test/fixtures';
+import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
 
@@ -170,6 +171,48 @@ describe('folders', () => {
       'href',
       '/admin/library/book?library=1&path=A%2FB',
     );
+  });
+
+  it('says a folder is not in the library yet and adds it on Rescan (ADMIN-02)', async () => {
+    let indexed = false;
+    const listing = (req: MockRequest) => {
+      const path = req.query.get('path') ?? '';
+      const fs: Record<string, FsEntry[]> = {
+        '': [dir('Zed')],
+        Zed: [
+          dir(
+            'Zed/New',
+            indexed ? { is_book: true, title: 'New', author: 'Ann' } : { pending_book: true },
+          ),
+        ],
+        'Zed/New': [audio('Zed/New/01.mp3')],
+      };
+      const entries = fs[path];
+      return entries
+        ? { body: { path, entries, total: entries.length, offset: 0 } }
+        : { status: 404, body: { error: 'not found' } };
+    };
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': listing,
+        'POST /admin/libraries/1/book/rescan': () => {
+          indexed = true;
+          return { body: bookDetail({ book: adminBook({ path: 'Zed/New', title: 'New' }) }) };
+        },
+      }),
+    );
+    renderApp('/library/folders?library=1&folder=Zed/New');
+    expect(await screen.findByText('Not in the library yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open book' })).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Rescan' }));
+    expect(await screen.findByRole('link', { name: 'Open book' })).toHaveAttribute(
+      'href',
+      '/admin/library/book?library=1&path=Zed%2FNew',
+    );
+    expect(screen.queryByText('Not in the library yet.')).not.toBeInTheDocument();
+    const post = calls.find((c) => c.method === 'POST');
+    expect(post?.path).toBe('/admin/libraries/1/book/rescan');
+    expect(post?.query.get('path')).toBe('Zed/New');
   });
 
   it('splits a folder into separate books, then puts it back to automatic', async () => {
