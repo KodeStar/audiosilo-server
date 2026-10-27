@@ -329,14 +329,29 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
-		// Every credential is a tokens row, so its id is its bucket.
-		if perToken && !a.tokenLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
-			a.ipLimiter.Charge(ip)
+		if perToken && !a.allowCredential(ctx, ip) {
 			rateLimited(w)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
+}
+
+// allowCredential spends an authenticated request (ctx) from its credential's
+// bucket: every credential is a tokens row, so its id is its bucket, and a
+// request the bucket refuses costs its address (the lookup was already done). A
+// demo account's session spends from its address's bucket instead, as every
+// request did before server#246: anyone can mint a demo session
+// (POST /demo/session), so a per-token budget would be no limit at all.
+func (a *API) allowCredential(ctx context.Context, ip string) bool {
+	if u := userFrom(ctx); u != nil && u.IsDemo {
+		return a.ipLimiter.Allow(ip)
+	}
+	if !a.tokenLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
+		a.ipLimiter.Charge(ip)
+		return false
+	}
+	return true
 }
 
 // requireMediaAuth is requireAuth that additionally accepts the credential as a

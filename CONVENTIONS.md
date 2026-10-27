@@ -1221,7 +1221,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
-  `api/ratelimit.go`, values from `config.rate_limit.*`, read at start), read off the
+  `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
+  `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
+  never saved, so a changed default reaches existing installs), read off the
   handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
   routes (`mediaAuth`, behind `requireBookMediaAuth` for cover/stream and
   `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) and the
@@ -1234,7 +1236,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   flood is looked up up to its concurrency before it pays), an authenticated one spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
-  refuses it (the lookup was already done); everything else (public routes, the
+  refuses it (the lookup was already done), except that a demo account's API requests
+  spend from the address's bucket (`allowCredential`: anyone can mint a demo session,
+  so a per-token budget would be none); everything else (public routes, the
   Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
   pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP).
   Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit

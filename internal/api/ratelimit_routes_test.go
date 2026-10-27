@@ -268,6 +268,47 @@ func TestRateLimitAuthenticatedPerToken(t *testing.T) {
 	}
 }
 
+// A demo account's session (anyone can mint one with POST /demo/session) spends
+// from its address's bucket, as every request did before server#246: the 201st
+// call from one address is refused, a fresh demo session there is no way round
+// it, and the same demo session from another address is served.
+func TestRateLimitDemoSessionByAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	ctx := context.Background()
+	demo := func() string {
+		t.Helper()
+		u, err := e.auth.CreateDemoUser(ctx, "demo_"+strconv.FormatInt(time.Now().UnixNano(), 36))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "demo", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	const ip = "192.0.2.60"
+	first := demo()
+	for i := range 200 {
+		if code := e.get(ip, "/api/v1/me", first); code != http.StatusOK {
+			t.Fatalf("demo call %d = %d, want 200", i, code)
+		}
+	}
+	if code := e.get(ip, "/api/v1/me", first); code != http.StatusTooManyRequests {
+		t.Fatalf("demo call past the address's burst = %d, want 429", code)
+	}
+	if code := e.get(ip, "/api/v1/me", demo()); code != http.StatusTooManyRequests {
+		t.Fatalf("a new demo session from the spent address = %d, want 429", code)
+	}
+	if code := e.get(ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("an unauthenticated call from the spent address = %d, want 429", code)
+	}
+	if code := e.get("192.0.2.61", "/api/v1/me", first); code != http.StatusOK {
+		t.Fatalf("the demo session from another address = %d, want 200", code)
+	}
+}
+
 // The routes that limit themselves (the authenticated API, media) refuse an
 // address whose general bucket is empty in rateLimit already, before the timeout
 // layer behind it runs; another address goes through.
