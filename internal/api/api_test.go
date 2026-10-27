@@ -1512,3 +1512,49 @@ func TestDemoCannotSelfRecover(t *testing.T) {
 		t.Fatalf("demo set-password = %d, want 403", resp.StatusCode)
 	}
 }
+
+// GET /libraries tells an admin where each library lives (root) and never a
+// listener (CONNECT-12); the admin routes keep it. Demo visitors are covered in
+// TestDemoSessionFlow.
+func TestListLibrariesRootAdminOnly(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberID, memberTok := newUserWithSession(t, e, "listener", false)
+	if err := e.cat.GrantWholeLibrary(ctx, memberID, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	adminTok := adminSession(t, e)
+	rootJSON, _ := json.Marshal(root)
+	type wire struct {
+		Libraries []map[string]json.RawMessage `json:"libraries"`
+	}
+	list := func(path, tok string) wire {
+		t.Helper()
+		resp, body := e.do(t, "GET", path, tok, "")
+		var w wire
+		if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &w) != nil || len(w.Libraries) != 1 {
+			t.Fatalf("GET %s = %d %s", path, resp.StatusCode, body)
+		}
+		return w
+	}
+	// Allowed: the admin, on the player route and the admin one.
+	for _, path := range []string{"/api/v1/libraries", "/api/v1/admin/libraries"} {
+		if got := list(path, adminTok).Libraries[0]["root"]; string(got) != string(rootJSON) {
+			t.Errorf("admin %s root = %s, want %s", path, got, rootJSON)
+		}
+	}
+	// Denied: a listener sees the library, never its root.
+	got := list("/api/v1/libraries", memberTok).Libraries[0]
+	if _, ok := got["root"]; ok {
+		t.Errorf("listener's library = %v, want no root", got)
+	}
+	if string(got["name"]) != `"Main"` || string(got["id"]) != strconv.FormatInt(lib.ID, 10) {
+		t.Errorf("listener's library = %v, want the rest as before", got)
+	}
+}

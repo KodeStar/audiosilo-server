@@ -54,7 +54,25 @@ func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+	if u := userFrom(r.Context()); u.Role == auth.RoleAdmin && !u.IsDemo {
+		writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+		return
+	}
+	// A listener (a demo visitor among them) is never told where the library
+	// lives on the server's disk; an admin is, here and on the admin routes.
+	out := make([]listenerLibrary, len(libs))
+	for i, l := range libs {
+		out[i] = listenerLibrary{Library: l}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": out})
+}
+
+// listenerLibrary is a library on GET /libraries for a caller who isn't an
+// admin: catalog.Library without its root (the shallower, always-empty Root
+// shadows the embedded one, and omitempty drops it).
+type listenerLibrary struct {
+	catalog.Library
+	Root string `json:"root,omitempty"`
 }
 
 // libraryScope loads a library and the caller's effective access scope for it.

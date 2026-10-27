@@ -100,6 +100,8 @@ func TestDemoSessionFlow(t *testing.T) {
 	}
 	if _, libs := e.do(t, "GET", "/api/v1/libraries", out.Token, ""); !strings.Contains(libs, "Demo") {
 		t.Fatalf("demo user cannot see demo library: %s", libs)
+	} else if strings.Contains(libs, `"root"`) {
+		t.Fatalf("a demo visitor is told the library's root: %s", libs)
 	}
 
 	// The pairing token exchanges for a second (phone) session as the same user.
