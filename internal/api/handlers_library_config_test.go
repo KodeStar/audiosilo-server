@@ -146,6 +146,16 @@ func TestDeleteConfigLibrary(t *testing.T) {
 	if _, err := e.cat.GetLibrary(ctx, own.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("console library after delete: %v, want not found", err)
 	}
+	// Denied: a library that is no longer there (or never was) is 404, with no
+	// audit row beside the one real delete (server#198).
+	for _, id := range []int64{own.ID, 9999} {
+		if code, out := del(adminTok, id); code != http.StatusNotFound || !strings.Contains(out, `"code":"not_found"`) {
+			t.Errorf("DELETE missing library %d = %d %s, want 404 not_found", id, code, out)
+		}
+	}
+	if events, _, _ := e.cat.ListAudit(ctx, catalog.AuditFilter{Area: "library"}); len(events) != 1 {
+		t.Errorf("library audit rows = %+v, want just the one delete", events)
+	}
 
 	// Allowed: a library by that name on a server whose config declares none.
 	plain := newTestEnv(t)
