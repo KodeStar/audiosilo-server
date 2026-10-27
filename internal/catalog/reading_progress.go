@@ -220,11 +220,12 @@ const (
 // the device: a device id outlives the places a client kept, so signed out and
 // back in its start would otherwise replace its own place further on) or not the
 // row's version while another device wrote the row (one device's saves in flight
-// together share a base). So a device's second save on a book before its first
-// is answered diverges too, keeping the further place: the safe side. A diverged
-// save never moves the place back silently: the further place by progression is
-// kept (the save when it is further, else the stored row; a tie keeps the stored
-// row) and the other is offered. Any other save (the same device's own saves on
+// together share a base). So a device's first saves on a book (all on base 0)
+// diverge from each other when one lands before the next is answered, keeping
+// the further place: the safe side. A diverged save never moves the place back
+// silently: the further place by progression is kept (the save when it is
+// further, else the stored row; a tie keeps the stored row) and the other is
+// offered. Any other save (the same device's own saves on
 // a version it saw, one that saw the stored row, one sent with no base) is
 // last-write-wins exactly like progress (IsNewer: the later updated_at, the
 // version breaking a tie), so moving back on purpose works. Pure: reading
@@ -233,7 +234,7 @@ func ResolvePlace(stored *Place, in Place, base *int64) PlaceOutcome {
 	switch {
 	case stored == nil:
 		return PlaceApply
-	case base != nil && *base != stored.Version && (*base == 0 || stored.DeviceID != in.DeviceID):
+	case base != nil && (*base == 0 || (*base != stored.Version && stored.DeviceID != in.DeviceID)):
 		if in.Progression > stored.Progression {
 			return PlaceApplyDiverged
 		}
