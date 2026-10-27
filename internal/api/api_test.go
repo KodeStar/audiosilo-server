@@ -579,8 +579,15 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	if got != http.StatusUnauthorized || !strings.Contains(b, "invite already used") {
 		t.Fatalf("exchange past the use limit = %d %s, want 401 + exhausted message", got, b)
 	}
-	if got, _, _ := e.redeemCode(t, bounded); got != http.StatusUnauthorized {
-		t.Fatalf("redeem of a spent invite = %d, want 401", got)
+	// The spent invite no longer redeems, and says it was used up (the connect
+	// page's "already used"); a code that never existed says nothing more.
+	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+bounded+`"}`); resp.StatusCode != http.StatusUnauthorized ||
+		!strings.Contains(b, `"code":"invite_used"`) {
+		t.Fatalf("redeem of a spent invite = %d %s, want 401 invite_used", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"NOPE-NOPE-NOPE-NOPE"}`); resp.StatusCode != http.StatusUnauthorized ||
+		strings.Contains(b, `"code"`) {
+		t.Fatalf("redeem of an unknown code = %d %s, want 401 with no code", resp.StatusCode, b)
 	}
 }
 

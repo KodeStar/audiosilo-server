@@ -163,7 +163,14 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	rc, err := a.auth.ResolveAuthCode(r.Context(), req.Code)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
-		writeError(w, http.StatusUnauthorized, "invalid or expired auth code")
+		switch {
+		case errors.Is(err, auth.ErrCodeExhausted):
+			writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
+		case errors.Is(err, auth.ErrCodeExpired):
+			writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
+		default:
+			writeError(w, http.StatusUnauthorized, "invalid or expired auth code")
+		}
 		return
 	}
 	a.redeemLimiter.Reset(ip)

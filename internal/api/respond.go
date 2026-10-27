@@ -81,6 +81,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // "error".
 const (
 	codeUsernameTaken      = "username_taken"
+	codeInviteUsed         = "invite_used"    // redeem: a real invite with no uses left
+	codeInviteExpired      = "invite_expired" // redeem: a real invite past its expiry
 	codeNameTaken          = "name_taken"
 	codeConfigLibrary      = "config_library" // a library the config declares: renamed, moved or deleted here
 	codeLastAdmin          = "last_admin"

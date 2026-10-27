@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -1023,8 +1024,10 @@ func (s *Service) ResolveAuthCode(ctx context.Context, code string) (*RedeemedCo
 	if err != nil {
 		return nil, err
 	}
-	if s.codeState(rc.MaxUses, rc.Uses, expires) != nil {
-		return nil, ErrInvalidCode
+	if err := s.codeState(rc.MaxUses, rc.Uses, expires); err != nil {
+		// Still ErrInvalidCode, and which way it is dead (ErrCodeExpired or
+		// ErrCodeExhausted), so the connect page can say "already used".
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCode, err)
 	}
 	rc.ExpiresAt = expires.String
 	u, err := s.GetUser(ctx, userID)

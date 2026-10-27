@@ -17,11 +17,11 @@
       </div>
       <div class="card">
         <h1 data-i18n="connect.heading">Connect a device</h1>
-        <p class="muted" data-i18n="connect.intro">Enter the auth code from your server administrator.</p>
+        <p id="intro" class="muted" data-i18n="connect.intro">Enter the invite code from your server's admin.</p>
 
         <form id="redeem-form">
           <div class="field">
-            <label for="code" data-i18n="connect.codeLabel">Auth code</label>
+            <label for="code" data-i18n="connect.codeLabel">Invite code</label>
             <input id="code" name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
           </div>
           <button type="submit" class="block" data-i18n="connect.continue">Continue</button>
@@ -34,6 +34,7 @@
           <div class="qr"><img id="qr" alt="Pairing QR code" data-i18n-alt="connect.qrAlt"></div>
           <p class="muted" data-i18n="connect.scanHint">Each device you're setting up can scan this code, or continue on this device.</p>
           <p id="uses-note" class="muted hidden"></p>
+          <p class="muted" data-i18n="connect.reopenHint">Keep this page open while you set up your devices. To see this code again later, open your invite link again.</p>
           <div class="links">
             <a id="link-app" class="button secondary block" href="#" aria-disabled="true" data-i18n="connect.openApp">Open in app</a>
             <a id="link-web" class="button block" href="#" aria-disabled="true" data-i18n="connect.openWeb">Open web player</a>
