@@ -1,10 +1,17 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // limiter is the brute-force lockout behind login + auth-code redemption. The
@@ -248,5 +255,35 @@ func TestRateLimiterWait(t *testing.T) {
 	rateLimited(rec, r.Wait("k"))
 	if rec.Code != 429 || rec.Header().Get("Retry-After") != "1" {
 		t.Fatalf("rateLimited = %d Retry-After %q, want 429 and 1", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+// A cover answers HEAD as it answers GET, headers and no body, so a player can
+// probe a cover that failed to load for its status and Retry-After without
+// fetching the art again; a cross-origin player may read Retry-After.
+func TestCoverAnswersHead(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	root := t.TempDir()
+	copyFixture(t, root, cradlePart, "A/Book/01.m4b")
+	jpeg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xFF, 0xD9}
+	if err := os.WriteFile(filepath.Join(root, "A", "Book", "cover.jpg"), jpeg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Covers", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e, lib)
+	tok := adminSession(t, e)
+	if resp, body := e.do(t, "GET", mediaURL(lib.ID, "cover", "A/Book", tok), "", ""); resp.StatusCode != http.StatusOK || len(body) != len(jpeg) {
+		t.Fatalf("GET cover = %d %d bytes", resp.StatusCode, len(body))
+	}
+	resp, body := e.do(t, "HEAD", mediaURL(lib.ID, "cover", "A/Book", tok), "", "")
+	if resp.StatusCode != http.StatusOK || body != "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
+		t.Fatalf("HEAD cover = %d %q %d bytes, want 200 image/* and no body", resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
+	}
+	if !strings.Contains(corsExposeHeaders, "Retry-After") {
+		t.Fatalf("Access-Control-Expose-Headers %q lacks Retry-After", corsExposeHeaders)
 	}
 }

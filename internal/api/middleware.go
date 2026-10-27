@@ -125,9 +125,9 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 const corsAllowHeaders = "Authorization, Content-Type, " + auth.ClientHeader + ", Range"
 
 // corsExposeHeaders are the response headers a cross-origin script may read:
-// Retry-After where a route sends one (the OPML and discovery budgets, a busy
-// transcode, an episode on its way; the general rate limit and the request
-// timeout send none) and the OPML export's counts.
+// Retry-After, which every 429 sends (the rate limits, the sign-in lockouts,
+// the OPML and discovery budgets) and some 503s (a busy transcode, an episode
+// on its way; the request timeout sends none), and the OPML export's counts.
 const corsExposeHeaders = "Retry-After, " + headerOPMLExported + ", " +
 	headerOPMLOmittedPrivate + ", " + headerOPMLOmittedUnavailable
 
