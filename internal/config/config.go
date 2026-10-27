@@ -127,17 +127,40 @@ func (a ActivityConfig) SessionRetention() time.Duration {
 // Media is per credential too: covers and audio (a grid is one request per
 // cover). The brute-force lockouts on sign-in and code redemption are separate
 // and not configurable.
+//
+// It holds only what the admin set: a rate or burst left at 0 is its current
+// default (Effective), so it is never written into config.yaml and a later
+// release's defaults reach an existing install.
 type RateLimitConfig struct {
-	Address RateBucket `yaml:"address"`
-	Token   RateBucket `yaml:"token"`
-	Media   RateBucket `yaml:"media"`
+	Address RateBucket `yaml:"address,omitempty"`
+	Token   RateBucket `yaml:"token,omitempty"`
+	Media   RateBucket `yaml:"media,omitempty"`
 }
 
-// RateBucket is one rate limit: Rate requests a second on average (more than 0)
-// and at most Burst at once (at least 1).
+// RateBucket is one rate limit: Rate requests a second on average and at most
+// Burst at once; 0 (unset) is the default's.
 type RateBucket struct {
-	Rate  float64 `yaml:"rate"`
-	Burst int     `yaml:"burst"`
+	Rate  float64 `yaml:"rate,omitempty"`
+	Burst int     `yaml:"burst,omitempty"`
+}
+
+// Effective is the limits in force: each rate or burst not set is its default.
+func (r RateLimitConfig) Effective() RateLimitConfig {
+	return RateLimitConfig{
+		Address: r.Address.or(DefaultAddressRateLimit),
+		Token:   r.Token.or(DefaultTokenRateLimit),
+		Media:   r.Media.or(DefaultMediaRateLimit),
+	}
+}
+
+func (b RateBucket) or(def RateBucket) RateBucket {
+	if b.Rate == 0 {
+		b.Rate = def.Rate
+	}
+	if b.Burst == 0 {
+		b.Burst = def.Burst
+	}
+	return b
 }
 
 // The default rate limits (RateLimitConfig).
@@ -396,7 +419,7 @@ type Config struct {
 	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
 
 	// RateLimit is the API's request rate limits (boot only).
-	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	RateLimit RateLimitConfig `yaml:"rate_limit,omitempty"`
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -447,7 +470,6 @@ func Default(dataDir string) *Config {
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
 		Household:      HouseholdConfig{MembersEnabled: true, MaxMembers: DefaultMaxMembers},
 		Podcasts:       PodcastsConfig{Discovery: PodcastDiscoveryConfig{Enabled: true}},
-		RateLimit:      RateLimitConfig{Address: DefaultAddressRateLimit, Token: DefaultTokenRateLimit, Media: DefaultMediaRateLimit},
 	}
 }
 
@@ -686,10 +708,11 @@ func (c *Config) Validate() error {
 		key string
 		b   RateBucket
 	}{{"rate_limit.address", c.RateLimit.Address}, {"rate_limit.token", c.RateLimit.Token}, {"rate_limit.media", c.RateLimit.Media}} {
-		if !(b.b.Rate > 0) || math.IsInf(b.b.Rate, 0) {
+		// 0 is unset (the default); anything else must let requests through.
+		if !(b.b.Rate >= 0) || math.IsInf(b.b.Rate, 0) {
 			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be more than 0 requests a second", b.key))
 		}
-		if b.b.Burst < 1 {
+		if b.b.Burst < 0 {
 			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1", b.key))
 		}
 	}
