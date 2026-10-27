@@ -9,9 +9,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The rate limits default to the values the API always had (the token's new),
-// are read from config.yaml or their variables, have no console setting, and
-// refuse a rate or burst that would never let a request through.
+// Default sets no rate limits: unset ones are the values the API always had
+// (the token's new) through Effective. They are read from config.yaml (one of a
+// pair alone included) or their variables, have no console setting, and refuse
+// a negative, NaN or infinite rate and a negative burst (0 is the default).
 func TestRateLimitConfig(t *testing.T) {
 	def := Default("/data").RateLimit
 	if def != (RateLimitConfig{}) {

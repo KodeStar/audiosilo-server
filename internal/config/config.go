@@ -7,6 +7,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -154,13 +155,7 @@ func (r RateLimitConfig) Effective() RateLimitConfig {
 }
 
 func (b RateBucket) or(def RateBucket) RateBucket {
-	if b.Rate == 0 {
-		b.Rate = def.Rate
-	}
-	if b.Burst == 0 {
-		b.Burst = def.Burst
-	}
-	return b
+	return RateBucket{Rate: cmp.Or(b.Rate, def.Rate), Burst: cmp.Or(b.Burst, def.Burst)}
 }
 
 // The default rate limits (RateLimitConfig).
@@ -709,11 +704,11 @@ func (c *Config) Validate() error {
 		b   RateBucket
 	}{{"rate_limit.address", c.RateLimit.Address}, {"rate_limit.token", c.RateLimit.Token}, {"rate_limit.media", c.RateLimit.Media}} {
 		// 0 is unset (the default); anything else must let requests through.
-		if !(b.b.Rate >= 0) || math.IsInf(b.b.Rate, 0) {
-			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be more than 0 requests a second", b.key))
+		if b.b.Rate < 0 || math.IsNaN(b.b.Rate) || math.IsInf(b.b.Rate, 0) {
+			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be more than 0 requests a second (0 or left out is the default)", b.key))
 		}
 		if b.b.Burst < 0 {
-			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1", b.key))
+			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1 (0 or left out is the default)", b.key))
 		}
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {

@@ -192,6 +192,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// service, which only runs while metadata.enabled is on.
 		metaSvc.SetStore(metaStore{cat: cat, log: log})
 	}
+	limits := cfg.RateLimit.Effective()
 	a := &API{
 		boot:           cfg,
 		auth:           authSvc,
@@ -209,9 +210,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		// Per IP, then per credential (config rate_limit.*).
-		ipLimiter:      newBucketLimiter(cfg.RateLimit.Effective().Address),
-		tokenLimiter:   newBucketLimiter(cfg.RateLimit.Effective().Token),
-		mediaLimiter:   newBucketLimiter(cfg.RateLimit.Effective().Media),
+		ipLimiter:      newBucketLimiter(limits.Address),
+		tokenLimiter:   newBucketLimiter(limits.Token),
+		mediaLimiter:   newBucketLimiter(limits.Media),
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
