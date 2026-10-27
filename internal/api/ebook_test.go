@@ -149,6 +149,44 @@ func TestBookEbookField(t *testing.T) {
 	}
 }
 
+// The console's book page and book list carry the same ebook {path, size} as
+// the player's Book (ADMIN-01), and no key for a book without one.
+func TestAdminBookEbookField(t *testing.T) {
+	t.Parallel()
+	e := newEbookEnv(t)
+	adminTok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{ebookBook: ebookFile, looseBook: "Loose.epub", plainBook: ""} {
+		resp, body := e.do(t, "GET", "/api/v1/admin"+strings.TrimPrefix(e.at("book", path), "/api/v1"), adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("admin book %s = %d %s", path, resp.StatusCode, body)
+		}
+		var d struct {
+			Book map[string]json.RawMessage `json:"book"`
+		}
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatal(err)
+		}
+		field, present := d.Book["ebook"]
+		if want == "" {
+			if present {
+				t.Errorf("%s: ebook = %s, want no key", path, field)
+			}
+			continue
+		}
+		var eb catalog.Ebook
+		if err := json.Unmarshal(field, &eb); err != nil || eb.Path != want || eb.Size != int64(len(e.epub)) {
+			t.Errorf("%s: ebook = %s, want {%s %d}", path, field, want, len(e.epub))
+		}
+	}
+	resp, body := e.do(t, "GET", fmt.Sprintf("/api/v1/admin/books?library_id=%d", e.lib.ID), adminTok, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"ebook":{"path":"`+ebookFile+`","size":`) {
+		t.Fatalf("admin books list = %d %s", resp.StatusCode, body)
+	}
+}
+
 // Allowed: the book's own path with a session or an API key in the header gets
 // the epub's bytes as application/epub+zip with a sandboxing policy, Range,
 // validators and no shared caching.
