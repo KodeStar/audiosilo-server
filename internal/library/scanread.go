@@ -17,13 +17,13 @@ type readSlots struct {
 	ch chan struct{}
 	// alone is held by a read retried on its own (extract), while it takes every slot.
 	alone sync.Mutex
-	// timeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
+	// timeout is each ffprobe run's (Scanner.probeTimeout).
 	timeout time.Duration
 }
 
-// newReadSlots returns n slots (at least one).
-func newReadSlots(n int) *readSlots {
-	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: metadata.ProbeTimeout}
+// newReadSlots returns n slots (at least one) whose ffprobe runs get timeout.
+func newReadSlots(n int, timeout time.Duration) *readSlots {
+	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: timeout}
 }
 
 // size is how many files may be read at once.
@@ -38,23 +38,27 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // recorded as a read problem because others were read beside it. Only a second
 // time-out, alone, is the file's problem.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
-	if !r.take(ctx, 1) {
-		return nil
-	}
-	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
-	r.give(1)
-	if r.size() == 1 || !errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) {
+	md := r.read(ctx, 1, absPath, ffprobePath)
+	if md == nil || r.size() == 1 || !errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) {
 		return md
 	}
 	// One retry at a time, each waiting for every read under way to finish.
 	r.alone.Lock()
 	defer r.alone.Unlock()
-	if !r.take(ctx, r.size()) {
-		return md // stopped: dropped by the scan
+	if again := r.read(ctx, r.size(), absPath, ffprobePath); again != nil {
+		return again
 	}
-	defer r.give(r.size())
-	again, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
-	return again
+	return md // stopped: dropped by the scan
+}
+
+// read is metadata.ExtractTimeout holding n slots; nil when ctx ends first.
+func (r *readSlots) read(ctx context.Context, n int, absPath, ffprobePath string) *metadata.Metadata {
+	if !r.take(ctx, n) {
+		return nil
+	}
+	defer r.give(n)
+	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
+	return md
 }
 
 // take takes n slots, one by one; false (none held) when ctx ends first.

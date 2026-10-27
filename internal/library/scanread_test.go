@@ -79,20 +79,27 @@ func fixedClock() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.U
 // the result, the catalog and the library.
 func scanWith(t *testing.T, root, ffprobe string, concurrency int) (*ScanResult, *catalog.Catalog, *catalog.Library, *store.DB) {
 	t.Helper()
-	ctx := context.Background()
+	s, cat, lib, db := newTestScanner(t, root, ffprobe, concurrency)
+	res, err := s.Scan(context.Background(), *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, cat, lib, db
+}
+
+// newTestScanner is a scanner with concurrency readers of root, a library in a
+// fresh index.
+func newTestScanner(t *testing.T, root, ffprobe string, concurrency int) (*Scanner, *catalog.Catalog, *catalog.Library, *store.DB) {
+	t.Helper()
 	db := storetest.Open(t)
 	cat := catalog.New(db, fixedClock)
-	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Mixed", Root: root})
+	lib, err := cat.CreateLibrary(context.Background(), catalog.Library{Name: "Mixed", Root: root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := NewScanner(cat, ffprobe, slog.New(slog.DiscardHandler))
 	s.SetConcurrency(concurrency)
-	res, err := s.Scan(ctx, *lib)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return res, cat, lib, db
+	return s, cat, lib, db
 }
 
 // dumpIndex is every row of the scan's tables, one line each, sorted: a file's
@@ -308,7 +315,7 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 	s := NewScanner(nil, "", slog.New(slog.DiscardHandler))
 	lib := catalog.Library{Root: root}
 	first := &metadata.Metadata{Title: "first"}
-	for _, slots := range []*readSlots{newReadSlots(1), newReadSlots(3), newReadSlots(64)} {
+	for _, slots := range []*readSlots{newReadSlots(1, time.Second), newReadSlots(3, time.Second), newReadSlots(64, time.Second)} {
 		mds := s.readFiles(context.Background(), lib, files, first, slots)
 		if len(mds) != len(files) || mds[0] != first {
 			t.Fatalf("slots %d: %d readings, first %v", slots.size(), len(mds), mds[0])
@@ -319,7 +326,7 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 			}
 		}
 	}
-	if got := s.readFiles(context.Background(), lib, nil, first, newReadSlots(2)); len(got) != 0 {
+	if got := s.readFiles(context.Background(), lib, nil, first, newReadSlots(2, time.Second)); len(got) != 0 {
 		t.Fatalf("no files read as %v", got)
 	}
 }
@@ -355,18 +362,11 @@ func smallLibrary(t *testing.T, books, files int) string {
 	return root
 }
 
-// timeoutScanner is a scanner of root whose ffprobe runs time out after 300 ms.
-func timeoutScanner(t *testing.T, root, probe string, concurrency int) (*Scanner, *catalog.Library, *store.DB) {
+// timeoutScanner is a scanner of root whose ffprobe runs time out after timeout.
+func timeoutScanner(t *testing.T, root, probe string, concurrency int, timeout time.Duration) (*Scanner, *catalog.Library, *store.DB) {
 	t.Helper()
-	db := storetest.Open(t)
-	cat := catalog.New(db, fixedClock)
-	lib, err := cat.CreateLibrary(context.Background(), catalog.Library{Name: "Small", Root: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewScanner(cat, probe, slog.New(slog.DiscardHandler))
-	s.SetConcurrency(concurrency)
-	s.probeTimeout = 300 * time.Millisecond
+	s, _, lib, db := newTestScanner(t, root, probe, concurrency)
+	s.probeTimeout = timeout
 	return s, lib, db
 }
 
@@ -376,7 +376,8 @@ const probeAnswer = `{"format":{"duration":"1.500000"},"streams":[{"codec_name":
 // A file whose ffprobe runs out of time while others are read beside it (a slow
 // disk shared by several reads) is read again on its own, and a healthy file
 // read in time then is no read problem. The stand-in hangs while another of its
-// runs is alive and answers when it runs alone.
+// runs is alive and answers when it runs alone; its first run lingers a moment,
+// so the runs beside it overlap it however busy the machine is.
 func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 	t.Parallel()
 	running, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
@@ -384,9 +385,10 @@ func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 n=0
 for f in %[1]q/*; do kill -0 "${f##*/}" 2>/dev/null && n=$((n+1)); done
 if [ "$n" -gt 1 ]; then echo hung >> %[2]q; exec sleep 10; fi
+if mkdir %[1]q/.first 2>/dev/null; then sleep 0.2; fi
 rm -f %[1]q/$$
 echo '%[3]s'`, running, log, probeAnswer))
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 3, 4), probe, 4)
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 3, 4), probe, 4, 500*time.Millisecond)
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +414,7 @@ echo '%[3]s'`, running, log, probeAnswer))
 // recorded, as a time-out.
 func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
 	t.Parallel()
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 3), stubProbe(t, "exec sleep 10"), 3)
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 3), stubProbe(t, "exec sleep 10"), 3, 300*time.Millisecond)
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
@@ -429,8 +431,7 @@ func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
 // A Stop ends a read retried on its own too, and the retry waiting its turn.
 func TestScanStopEndsProbeRetry(t *testing.T) {
 	t.Parallel()
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 4, 5), stubProbe(t, "exec sleep 10"), 4)
-	s.probeTimeout = 200 * time.Millisecond
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 4, 5), stubProbe(t, "exec sleep 10"), 4, 200*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(500*time.Millisecond, cancel) // the first runs have timed out: retries under way
 	start := time.Now()

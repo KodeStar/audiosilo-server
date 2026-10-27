@@ -51,7 +51,7 @@ type Scanner struct {
 
 	// concurrency is how many audio files a scan reads at once (SetConcurrency).
 	concurrency int
-	// probeTimeout, when set (tests), replaces metadata.ProbeTimeout in a scan.
+	// probeTimeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
 	probeTimeout time.Duration
 }
 
@@ -113,6 +113,8 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
+
+		probeTimeout: metadata.ProbeTimeout,
 	}
 }
 
@@ -364,10 +366,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// its own goroutine, up to a window of books ahead of the one written next; the
 	// index is written here alone, in discovery order (writeNext), so the rows,
 	// their ids and the log come out as a scan reading one file at a time writes them.
-	slots := newReadSlots(s.readers())
-	if s.probeTimeout > 0 {
-		slots.timeout = s.probeTimeout
-	}
+	slots := newReadSlots(s.readers(), s.probeTimeout)
 	window := 2 * slots.size()
 	var pending []*bookRead
 	// writeNext writes the oldest book read, once its read is done; ctx's error
@@ -1537,7 +1536,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
 	// never needs it.
 	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
-	s.enrich(context.WithoutCancel(ctx), lib, book, newReadSlots(1))
+	s.enrich(context.WithoutCancel(ctx), lib, book, newReadSlots(1, s.probeTimeout))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
 	id, err := s.cat.UpsertBook(ctx, book)
