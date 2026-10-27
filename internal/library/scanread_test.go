@@ -226,12 +226,16 @@ func stubProbe(t *testing.T, script string) string {
 
 // No more files are read at once than the concurrency allows, and more than
 // one are (each read is ffprobe's run here: the stand-in records how many are
-// under way as it starts).
+// under way as it starts; its first run waits up to 3 s for a second to start,
+// so a busy machine starting them slowly still shows them side by side).
 func TestScanReadsBoundedConcurrently(t *testing.T) {
 	t.Parallel()
 	running, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
-	probe := stubProbe(t, fmt.Sprintf(`touch %q/$$; ls %q | wc -l >> %q; sleep 0.2; rm %q/$$; echo '{}'`,
-		running, running, log, running))
+	probe := stubProbe(t, fmt.Sprintf(`touch %[1]q/$$; ls %[1]q | wc -l >> %[2]q
+if mkdir %[1]q/.first 2>/dev/null; then
+  i=0; while [ "$(ls %[1]q | wc -l)" -lt 2 ] && [ $i -lt 60 ]; do sleep 0.05; i=$((i+1)); done
+fi
+sleep 0.2; rm %[1]q/$$; echo '{}'`, running, log))
 	root := mixedLibrary(t)
 	const limit = 3
 	res, _, _, _ := scanWith(t, root, probe, limit)
@@ -376,19 +380,22 @@ const probeAnswer = `{"format":{"duration":"1.500000"},"streams":[{"codec_name":
 // A file whose ffprobe runs out of time while others are read beside it (a slow
 // disk shared by several reads) is read again on its own, and a healthy file
 // read in time then is no read problem. The stand-in hangs while another of its
-// runs is alive and answers when it runs alone; its first run lingers a moment,
-// so the runs beside it overlap it however busy the machine is.
+// runs is alive and answers when it runs alone; its first run waits for a
+// second to start (up to 3 s), so two always overlap however busy the machine
+// is. Nothing turns on how fast a run starts: the time-out (5 s) is only ever
+// reached by a run that hangs.
 func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 	t.Parallel()
 	running, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
 	probe := stubProbe(t, fmt.Sprintf(`touch %[1]q/$$
-n=0
-for f in %[1]q/*; do kill -0 "${f##*/}" 2>/dev/null && n=$((n+1)); done
-if [ "$n" -gt 1 ]; then echo hung >> %[2]q; exec sleep 10; fi
-if mkdir %[1]q/.first 2>/dev/null; then sleep 0.2; fi
+alive() { n=0; for f in %[1]q/*; do kill -0 "${f##*/}" 2>/dev/null && n=$((n+1)); done; echo $n; }
+if [ "$(alive)" -gt 1 ]; then echo hung >> %[2]q; exec sleep 30; fi
+if mkdir %[1]q/.first 2>/dev/null; then
+  i=0; while [ "$(ls %[1]q | wc -l)" -lt 2 ] && [ $i -lt 60 ]; do sleep 0.05; i=$((i+1)); done
+fi
 rm -f %[1]q/$$
 echo '%[3]s'`, running, log, probeAnswer))
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 3, 4), probe, 4, 500*time.Millisecond)
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 2, 2), probe, 4, 5*time.Second)
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +403,7 @@ echo '%[3]s'`, running, log, probeAnswer))
 	if hung, _ := os.ReadFile(log); len(hung) == 0 {
 		t.Fatal("no ffprobe run timed out: the scan never read files side by side")
 	}
-	if res.Errors != 0 || res.Added != 3 {
+	if res.Errors != 0 || res.Added != 2 {
 		t.Fatalf("added %d, %d read problems", res.Added, res.Errors)
 	}
 	var problems, short int
@@ -434,7 +441,8 @@ func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
 	t.Parallel()
 	runs := filepath.Join(t.TempDir(), "runs")
 	probe := stubProbe(t, fmt.Sprintf("echo run >> %q; exec sleep 10", runs))
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), probe, 4, time.Second) // time for the stand-in to start on a busy machine
+	// Time for the stand-in to start and say so on a busy machine: the run hangs anyway.
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), probe, 4, 3*time.Second)
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
@@ -453,16 +461,33 @@ func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
 }
 
 // A Stop ends a read retried on its own too, and the retry waiting its turn.
+// The stop comes once a run has started past the first round (the stand-in logs
+// each start): a retry, or a read held back for one. Unstopped, the 20 files'
+// retries alone would take 20 s.
 func TestScanStopEndsProbeRetry(t *testing.T) {
 	t.Parallel()
-	s, lib, db := timeoutScanner(t, smallLibrary(t, 4, 5), stubProbe(t, "exec sleep 10"), 4, 200*time.Millisecond)
+	starts := filepath.Join(t.TempDir(), "starts")
+	probe := stubProbe(t, fmt.Sprintf("echo start >> %q; exec sleep 30", starts))
+	const slots = 4
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 4, 5), probe, slots, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(500*time.Millisecond, cancel) // the first runs have timed out: retries under way
-	start := time.Now()
-	if _, err := s.Scan(ctx, *lib); !errors.Is(err, context.Canceled) {
+	defer cancel()
+	stopped := make(chan time.Time, 1)
+	go func() {
+		for ctx.Err() == nil {
+			if got, _ := os.ReadFile(starts); strings.Count(string(got), "start") > slots {
+				stopped <- time.Now()
+				cancel()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	_, err := s.Scan(ctx, *lib)
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("stopped scan: err = %v", err)
 	}
-	if took := time.Since(start); took > 2*time.Second { // unstopped, the 20 retries alone take 4 s
+	if took := time.Since(<-stopped); took > 5*time.Second {
 		t.Fatalf("the stop waited %v for the retries", took)
 	}
 	var n int

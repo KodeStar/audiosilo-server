@@ -107,7 +107,8 @@ var hashMemory = &memoryReleaser{delay: hashReleaseDelay, free: debug.FreeOSMemo
 // sign-in) and then idles keeps that memory: the heap grew to hold the block, so
 // the garbage it leaves stays under the next GC's goal and no GC runs to free it,
 // and the background scavenger returns freed pages only slowly. An idle server
-// with an empty library sat at about 140 MiB instead of about 20 (server#244).
+// with an empty library held 143 MiB of anonymous memory, 13 MiB with the
+// release (server#244).
 // The release (debug.FreeOSMemory: a GC, then every free page returned) runs on
 // its own goroutine after delay with no further hash, never on the request's.
 type memoryReleaser struct {
