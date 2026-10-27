@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,11 +35,9 @@ import (
 
 // perfEnv is a seeded API: its handler, an admin session and the library.
 type perfEnv struct {
-	api     *API
 	handler http.Handler
 	token   string
 	libID   int64
-	cat     *catalog.Catalog
 	db      *store.DB
 }
 
@@ -178,7 +177,7 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 	// The rate limits are not what this measures (ratelimit_routes_test.go is).
 	cfg.RateLimit.Token = config.RateBucket{Rate: 1e9, Burst: 1e9}
 	a := New(cfg, authSvc, cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
-	return &perfEnv{api: a, handler: a.Handler(), token: token, libID: lib.ID, cat: cat, db: db}
+	return &perfEnv{handler: a.Handler(), token: token, libID: lib.ID, db: db}
 }
 
 // perfRequests are the harness's requests (apps.py latency_spec, AudioSilo),
@@ -234,8 +233,7 @@ func (e *perfEnv) getJSON(tb testing.TB, path string, into any) {
 
 func perfBooks() int {
 	if s := strings.TrimSpace(os.Getenv("AUDIOSILO_PERF_BOOKS")); s != "" {
-		var n int
-		if _, err := fmt.Sscan(s, &n); err == nil && n > 0 {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			return n
 		}
 	}

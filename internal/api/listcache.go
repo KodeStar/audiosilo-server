@@ -82,6 +82,9 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 	if len(body) > listCacheMaxEntry {
 		return
 	}
+	// An exact-size copy: the encoder's buffer grew by doubling, and the bound
+	// counts length, so keeping it could hold up to twice listCacheBytes.
+	body = bytes.Clone(body)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.at(gen) {
@@ -102,51 +105,39 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 
 // listCacheKey is the key of an answer to r computed for scopes: the route
 // pattern, the raw query string and the scopes, hashed (the scopes of a member
-// with many paths would otherwise make a long key).
-func listCacheKey(r *http.Request, scopes []catalog.Scope) ([sha256.Size]byte, error) {
-	b, err := json.Marshal(struct {
+// with many paths would otherwise make a long key). Marshalled as JSON so a field
+// added to catalog.Scope joins the key by itself; strings and a Scope always
+// encode, so the error is never set.
+func listCacheKey(r *http.Request, scopes []catalog.Scope) [sha256.Size]byte {
+	b, _ := json.Marshal(struct {
 		Route  string
 		Lib    string
 		Query  string
 		Scopes []catalog.Scope
 	}{r.Pattern, r.PathValue("id"), r.URL.RawQuery, scopes})
-	if err != nil {
-		return [sha256.Size]byte{}, err
-	}
-	return sha256.Sum256(b), nil
+	return sha256.Sum256(b)
 }
 
 // cachedList is the list cache's lookup for one of the handlers it serves: gen
-// is the generation read before the request's first read (a.listGeneration).
-// It answers from the cache and returns true, or returns a store func that
-// encodes v exactly as writeJSON does, keeps it, and writes it.
-func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, ok bool, scopes []catalog.Scope) (served bool, store func(v any)) {
-	write := func(v any) { writeJSON(w, http.StatusOK, v) }
-	if !ok {
-		return false, write
+// is the generation read before the request's first read (a.cat.Generation).
+// It answers from the cache and returns nil, or returns a write func that
+// encodes v exactly as writeJSON does, keeps it when cacheable, and writes it.
+func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cacheable bool, scopes []catalog.Scope) (write func(v any)) {
+	if !cacheable {
+		return func(v any) { writeJSON(w, http.StatusOK, v) }
 	}
-	key, err := listCacheKey(r, scopes)
-	if err != nil {
-		return false, write
-	}
+	key := listCacheKey(r, scopes)
 	if body, hit := a.lists.get(gen, key); hit {
 		writeJSONBytes(w, body)
-		return true, nil
+		return nil
 	}
-	return false, func(v any) {
+	return func(v any) {
 		var buf bytes.Buffer
 		if err := json.NewEncoder(&buf).Encode(v); err != nil {
-			write(v) // writeJSON's own answer to a value that won't encode
+			writeJSON(w, http.StatusOK, v) // writeJSON's own answer to a value that won't encode
 			return
 		}
 		a.lists.put(gen, key, buf.Bytes())
 		writeJSONBytes(w, buf.Bytes())
 	}
-}
-
-// writeJSONBytes writes body, an encoded 200 answer, as writeJSON would have.
-func writeJSONBytes(w http.ResponseWriter, body []byte) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
 }

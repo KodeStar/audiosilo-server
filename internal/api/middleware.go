@@ -246,23 +246,17 @@ func addressCharged(r *http.Request) bool {
 // credential never moves them out of their address's budget.
 const authRoutes = "/api/v1/auth/"
 
-// addressKeyed reports whether a route pattern ("POST /api/v1/auth/pair") is one
-// of authRoutes, limited by address even when authenticated.
-func addressKeyed(pattern string) bool {
-	_, p, _ := strings.Cut(pattern, " ")
-	return strings.HasPrefix(p, authRoutes)
-}
-
 // authHandler marks a route wrapped in requireAuth (and so requireAdmin), so
 // rateLimit can leave an authenticated route's limit to it (tokenKeyed).
 type authHandler struct{ http.Handler }
 
 // tokenKeyed reports whether the route the mux picked (h, its pattern) is limited
 // per credential by requireAuth rather than per address by rateLimit: an
-// authenticated route outside authRoutes.
+// authenticated route outside authRoutes (pattern "POST /api/v1/auth/pair" is in).
 func tokenKeyed(h http.Handler, pattern string) bool {
 	_, ok := h.(authHandler)
-	return ok && !addressKeyed(pattern)
+	_, p, _ := strings.Cut(pattern, " ")
+	return ok && !strings.HasPrefix(p, authRoutes)
 }
 
 func rateLimited(w http.ResponseWriter) {

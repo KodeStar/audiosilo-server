@@ -401,8 +401,8 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	served, write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
-	if served {
+	write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+	if write == nil {
 		return
 	}
 	page, err := a.cat.ListBooks(r.Context(), catalog.ListOptions{
@@ -434,8 +434,8 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
-	served, write := a.cachedList(w, r, gen, cacheable, scopes)
-	if served {
+	write := a.cachedList(w, r, gen, cacheable, scopes)
+	if write == nil {
 		return
 	}
 	books, err := a.cat.Search(r.Context(), r.URL.Query().Get("q"), scopes, queryInt(r, "limit", 50))
@@ -457,8 +457,8 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load books")
 		return
 	}
-	served, write := a.cachedList(w, r, gen, cacheable, scopes)
-	if served {
+	write := a.cachedList(w, r, gen, cacheable, scopes)
+	if write == nil {
 		return
 	}
 	books, err := a.cat.RecentBooks(r.Context(), scopes, queryInt(r, "limit", 50))

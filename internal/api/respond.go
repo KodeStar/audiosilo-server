@@ -52,11 +52,21 @@ func withCredential(ctx context.Context, u *auth.User, cred auth.Credential) con
 
 // writeJSON writes v as JSON with the given status.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
+	jsonHeader(w, status)
 	if v != nil {
 		_ = json.NewEncoder(w).Encode(v)
 	}
+}
+
+// writeJSONBytes writes body, an encoded 200 answer, as writeJSON would have.
+func writeJSONBytes(w http.ResponseWriter, body []byte) {
+	jsonHeader(w, http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+func jsonHeader(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
 }
 
 // writeError writes a JSON error envelope.
