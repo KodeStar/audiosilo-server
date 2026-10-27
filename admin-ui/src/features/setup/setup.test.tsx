@@ -100,7 +100,7 @@ describe('the folder step', () => {
     await user.click(await screen.findByRole('button', { name: '/audiobooks' }));
     expect(await screen.findByText('Found 812 audio files')).toBeVisible();
     expect(screen.getByText(/Book folders: 64/)).toBeVisible();
-    expect(screen.getByLabelText('Library name')).toHaveValue('audiobooks');
+    expect(screen.getByLabelText('Library name')).toHaveValue('Audiobooks');
     const post = calls.find((c) => c.path === '/admin/setup/preview');
     expect(post?.body).toEqual({ root: '/audiobooks' });
   });
@@ -126,6 +126,8 @@ describe('the folder step', () => {
         /\/Users\/me\/Audiobooks isn't there, or the server can't read it\. In Docker/,
       ),
     ).toBeVisible();
+    // Nothing to name until a folder is found (ADMIN-06).
+    expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
   });
 
   it('refuses a relative path before asking the server', async () => {
@@ -192,7 +194,7 @@ describe('folder, naming and metadata', () => {
     const post = calls.find((c) => c.path === '/admin/libraries' && c.method === 'POST');
     expect(post?.body).toEqual({
       kind: 'books',
-      name: 'audiobooks',
+      name: 'Audiobooks',
       root: '/audiobooks',
       metadata_source: 'path',
     });
@@ -535,11 +537,16 @@ describe('the 2.4.0 fixes', () => {
       ),
     );
     renderApp('/setup?step=phone');
-    expect(await screen.findByText("A phone can't reach 127.0.0.1:8080")).toBeVisible();
-    expect(screen.getByRole('link', { name: "Set the server's address" })).toHaveAttribute(
-      'href',
-      '/admin/setup?step=reach',
-    );
+    const warning = await screen.findByText("A phone can't reach 127.0.0.1:8080");
+    expect(warning).toBeVisible();
+    const action = screen.getByRole('link', { name: "Set the server's address" });
+    expect(action).toHaveAttribute('href', '/admin/setup?step=reach');
+    // The address action leads and the QR is dimmed, saying why (ADMIN-07).
+    const qr = screen.getByRole('img', {
+      name: /won't work on a phone until the server has an address/,
+    });
+    expect(action.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(qr.parentElement).toHaveClass('opacity-45');
   });
 
   it('points the phone at the home address when the page is open at a loopback one', async () => {

@@ -6,6 +6,7 @@ import {
   compareField,
   disagreements,
   finishMarks,
+  defaultLibraryName,
   folderErrorKey,
   isHomeHost,
   isLoopbackUrl,
@@ -248,6 +249,15 @@ describe('the naming preview', () => {
   it('counts the disagreements across the samples', () => {
     expect(disagreements([sample, sample])).toBe(2);
     expect(disagreements([])).toBe(0);
+  });
+});
+
+describe('defaultLibraryName', () => {
+  it('is the folder name, capitalised', () => {
+    expect(defaultLibraryName('/srv/library')).toBe('Library');
+    expect(defaultLibraryName('/audiobooks/ ')).toBe('Audiobooks');
+    expect(defaultLibraryName('C:\\Media\\hörbücher')).toBe('Hörbücher');
+    expect(defaultLibraryName('/mnt/Fiction')).toBe('Fiction');
   });
 });
 

@@ -3449,6 +3449,7 @@
   "setup.backups.dirDefault": "backups, nella cartella dei dati",
   "setup.backups.keepRange": "Conserva tra 1 e 365 backup.",
   "setup.phone.qr": "Codice QR di abbinamento per il telefono",
+  "setup.phone.qrUnreachable": "Codice QR di abbinamento. Non funzionerà su un telefono finché il server non avrà un indirizzo.",
   "setup.phone.scan": "Scansiona con la fotocamera del telefono",
   "setup.phone.scanBody": "Apre l'app AudioSilo, o il lettore web, con il tuo account. Il codice vale una volta, per dieci minuti.",
   "setup.phone.viaHome": "Questa pagina è aperta sul server stesso, quindi il codice manda il telefono all'indirizzo di casa, {{address}}.",

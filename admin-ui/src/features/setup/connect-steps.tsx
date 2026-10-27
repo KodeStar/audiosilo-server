@@ -25,6 +25,7 @@ import { useBridge, usePairCode } from '@/features/bridge/use-bridge';
 import { playerConnectUrl } from '@/features/book/book-model';
 import { useCurrentUser } from '@/lib/session';
 import { usePlayerTab } from '@/lib/use-player-tab';
+import { cn } from '@/lib/utils';
 import { phoneLink } from './setup-model';
 import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
@@ -98,13 +99,44 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
   const link = pair.data
     ? phoneLink(connectUrl(pair.data), pair.data.addresses?.home || settings.general.lan_url)
     : null;
+  // A loopback link: a phone can't open it, so the address action leads and the
+  // QR is dimmed (ADMIN-07).
+  const loopback = link?.via === 'loopback';
 
   return (
     <>
       <div className="flex flex-col gap-5">
-        <div className="flex flex-wrap items-center gap-5 rounded-xl border px-4 py-4">
+        {loopback ? (
+          <Notice
+            tone="warn"
+            icon={TriangleAlert}
+            role="status"
+            title={t('setup.phone.loopback', { address: window.location.host })}
+            actions={
+              <Link
+                to="/setup"
+                search={{ step: 'reach' }}
+                className={buttonVariants({ size: 'sm' })}
+              >
+                {t('setup.phone.loopbackAction')}
+              </Link>
+            }
+          >
+            {t('setup.phone.loopbackBody')}
+          </Notice>
+        ) : null}
+
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-5 rounded-xl border px-4 py-4',
+            loopback && 'opacity-45',
+          )}
+        >
           {link ? (
-            <QrCode text={link.url} label={t('setup.phone.qr')} />
+            <QrCode
+              text={link.url}
+              label={t(loopback ? 'setup.phone.qrUnreachable' : 'setup.phone.qr')}
+            />
           ) : (
             <span
               className="skel size-[168px] shrink-0 rounded-[10px]"
@@ -138,26 +170,6 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
             </div>
           </div>
         </div>
-
-        {link?.via === 'loopback' ? (
-          <Notice
-            tone="warn"
-            icon={TriangleAlert}
-            role="status"
-            title={t('setup.phone.loopback', { address: window.location.host })}
-            actions={
-              <Link
-                to="/setup"
-                search={{ step: 'reach' }}
-                className={buttonVariants({ variant: 'outline', size: 'sm' })}
-              >
-                {t('setup.phone.loopbackAction')}
-              </Link>
-            }
-          >
-            {t('setup.phone.loopbackBody')}
-          </Notice>
-        ) : null}
 
         {webPlayer ? <WebPlayerButton /> : null}
 

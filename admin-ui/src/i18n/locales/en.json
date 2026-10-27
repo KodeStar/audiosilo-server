@@ -3268,6 +3268,7 @@
   "setup.backups.dirDefault": "backups, in the data folder",
   "setup.backups.keepRange": "Keep between 1 and 365 backups.",
   "setup.phone.qr": "Pairing QR code for your phone",
+  "setup.phone.qrUnreachable": "Pairing QR code. It won't work on a phone until the server has an address.",
   "setup.phone.scan": "Scan with your phone's camera",
   "setup.phone.scanBody": "It opens the AudioSilo app, or the web player, signed in as you. The code works once, for ten minutes.",
   "setup.phone.viaHome": "This page is open on the server itself, so the code sends your phone to the home address, {{address}}.",

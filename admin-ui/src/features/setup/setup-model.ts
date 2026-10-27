@@ -18,6 +18,7 @@ import {
 } from '@/api/types';
 import { lockOf, sectionPatch, type SettingId } from '@/features/settings/settings-model';
 import { isBookLibrary } from '@/lib/library-kind';
+import { absoluteBaseName } from '@/lib/paths';
 
 // The first-run flow (FIRST-RUN-PLAN.md Phase F1): which step comes next, where
 // a return visit picks up, what the Overview card lists, and the small rules
@@ -204,6 +205,14 @@ export function disagreements(samples: readonly PreviewSample[]): number {
     (n, s) => n + PREVIEW_FIELDS.filter((f) => compareField(s, f).differs).length,
     0,
   );
+}
+
+// --- The library's default name -------------------------------------------------
+
+/** The name a new library gets from its folder: the folder's name, capitalised ("/audiobooks": "Audiobooks"). */
+export function defaultLibraryName(root: string): string {
+  const base = absoluteBaseName(root.trim());
+  return base.charAt(0).toLocaleUpperCase() + base.slice(1);
 }
 
 // --- Folder check errors -------------------------------------------------------

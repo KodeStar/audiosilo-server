@@ -11,8 +11,8 @@ import { Input } from '@/components/ui/input';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
-import { absoluteBaseName, isAbsolutePath } from '@/lib/paths';
-import { folderErrorKey } from './setup-model';
+import { isAbsolutePath } from '@/lib/paths';
+import { defaultLibraryName, folderErrorKey } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, previewQuery, type StepProps } from './step-actions';
 
@@ -34,7 +34,9 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
   const typed = root.trim();
   const preview = useQuery({ ...previewQuery(checked), enabled: checked !== '' });
   const current = checked !== '' && checked === typed;
-  const shownName = name ?? absoluteBaseName(typed);
+  const shownName = name ?? defaultLibraryName(typed);
+  // The folder checked and found: only then is there a library to name.
+  const checkedOk = current && preview.data !== undefined;
 
   /**
    * Runs the preview for a folder; null when it was refused (the reason is
@@ -170,7 +172,7 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
 
         {current && preview.data ? <PreviewFound preview={preview.data} lang={lang} /> : null}
 
-        {typed ? (
+        {checkedOk ? (
           <Field
             htmlFor="setup-library-name"
             label={t('setup.folder.name')}
