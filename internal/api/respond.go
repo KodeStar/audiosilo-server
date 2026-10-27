@@ -25,6 +25,7 @@ const (
 	userKey ctxKey = iota
 	credentialKey
 	ipKey
+	addressChargedKey // rateLimit spent this request from its address's bucket
 )
 
 // userFrom returns the authenticated user from the request context.

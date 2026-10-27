@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -114,6 +115,36 @@ const (
 func (a ActivityConfig) SessionRetention() time.Duration {
 	return time.Duration(a.SessionDays) * 24 * time.Hour
 }
+
+// RateLimitConfig sets the API's request rate limits (api/ratelimit.go), each a
+// token bucket refilled at Rate requests a second up to Burst. Read once at
+// start. Address is per client address: requests no credential has been proved
+// for yet (a missing or refused token pays here, so a token can't be guessed
+// faster), the sign-in, pairing and account routes (/api/v1/auth/*, whatever
+// token they carry) and the public routes. Token is per credential: every other
+// authenticated API request, so several people behind one address (a household
+// behind NAT, a reverse proxy) each have their own. Media is per credential too:
+// covers and audio (a grid is one request per cover). The brute-force lockouts on
+// sign-in and code redemption are separate and not configurable.
+type RateLimitConfig struct {
+	Address RateBucket `yaml:"address"`
+	Token   RateBucket `yaml:"token"`
+	Media   RateBucket `yaml:"media"`
+}
+
+// RateBucket is one rate limit: Rate requests a second on average (more than 0)
+// and at most Burst at once (at least 1).
+type RateBucket struct {
+	Rate  float64 `yaml:"rate"`
+	Burst int     `yaml:"burst"`
+}
+
+// The default rate limits (RateLimitConfig).
+var (
+	DefaultAddressRateLimit = RateBucket{Rate: 50, Burst: 200}
+	DefaultTokenRateLimit   = RateBucket{Rate: 50000, Burst: 100000}
+	DefaultMediaRateLimit   = RateBucket{Rate: 200, Burst: 2000}
+)
 
 // HouseholdConfig configures household members (player redesign Phase 8b-1):
 // whether people may add members from the player, and how many each. Both apply
@@ -363,6 +394,9 @@ type Config struct {
 	Modules        ModulesConfig   `yaml:"modules"`   // managed modules (internal/modules), each off by default
 	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
 
+	// RateLimit is the API's request rate limits (boot only).
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
+
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
 	// environment. Save writes the file's values for those keys, so a value the
@@ -412,6 +446,7 @@ func Default(dataDir string) *Config {
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
 		Household:      HouseholdConfig{MembersEnabled: true, MaxMembers: DefaultMaxMembers},
 		Podcasts:       PodcastsConfig{Discovery: PodcastDiscoveryConfig{Enabled: true}},
+		RateLimit:      RateLimitConfig{Address: DefaultAddressRateLimit, Token: DefaultTokenRateLimit, Media: DefaultMediaRateLimit},
 	}
 }
 
@@ -536,6 +571,12 @@ func setFromEnv(ptr any, v string) bool {
 			return false
 		}
 		*p = n
+	case *float64:
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return false
+		}
+		*p = n
 	case *int64:
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -639,6 +680,17 @@ func (c *Config) Validate() error {
 	}
 	if n := c.Household.MaxMembers; n < MinMaxMembers || n > MaxMaxMembers {
 		return fieldErr("household.max_members", fmt.Errorf("household.max_members must be from %d to %d", MinMaxMembers, MaxMaxMembers))
+	}
+	for _, b := range []struct {
+		key string
+		b   RateBucket
+	}{{"rate_limit.address", c.RateLimit.Address}, {"rate_limit.token", c.RateLimit.Token}, {"rate_limit.media", c.RateLimit.Media}} {
+		if !(b.b.Rate > 0) || math.IsInf(b.b.Rate, 0) {
+			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be more than 0 requests a second", b.key))
+		}
+		if b.b.Burst < 1 {
+			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1", b.key))
+		}
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))

@@ -123,6 +123,7 @@ type API struct {
 	demoLimiter    *limiter     // per-IP cap on demo account creation
 	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
 	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
+	tokenLimiter   *rateLimiter // authenticated API rate, per credential (see requireAuth)
 	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
 
 	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
@@ -207,8 +208,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
-		ipLimiter:      newRateLimiter(50, 200),        // ~50 req/s, burst 200, per IP
-		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
+		// Per IP, then per credential (config rate_limit.*).
+		ipLimiter:      newBucketLimiter(cfg.RateLimit.Address),
+		tokenLimiter:   newBucketLimiter(cfg.RateLimit.Token),
+		mediaLimiter:   newBucketLimiter(cfg.RateLimit.Media),
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),

@@ -112,6 +112,21 @@ var fields = []field{
 	{key: "podcasts.discovery.enabled", env: "AUDIOSILO_PODCAST_DISCOVERY_ENABLED", restart: true,
 		ptr: func(c *Config) any { return &c.Podcasts.Discovery.Enabled }},
 
+	// The API's rate limits (api/ratelimit.go): read once at start, no console
+	// setting.
+	{key: "rate_limit.address.rate", env: "AUDIOSILO_RATE_LIMIT_ADDRESS_RATE", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Address.Rate }},
+	{key: "rate_limit.address.burst", env: "AUDIOSILO_RATE_LIMIT_ADDRESS_BURST", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Address.Burst }},
+	{key: "rate_limit.token.rate", env: "AUDIOSILO_RATE_LIMIT_TOKEN_RATE", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Token.Rate }},
+	{key: "rate_limit.token.burst", env: "AUDIOSILO_RATE_LIMIT_TOKEN_BURST", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Token.Burst }},
+	{key: "rate_limit.media.rate", env: "AUDIOSILO_RATE_LIMIT_MEDIA_RATE", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Media.Rate }},
+	{key: "rate_limit.media.burst", env: "AUDIOSILO_RATE_LIMIT_MEDIA_BURST", restart: true,
+		ptr: func(c *Config) any { return &c.RateLimit.Media.Burst }},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",

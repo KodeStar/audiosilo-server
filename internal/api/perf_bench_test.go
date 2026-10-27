@@ -175,9 +175,9 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 		tb.Fatal(err)
 	}
 	cfg := config.Default(tb.TempDir())
+	// The rate limits are not what this measures (ratelimit_routes_test.go is).
+	cfg.RateLimit.Token = config.RateBucket{Rate: 1e9, Burst: 1e9}
 	a := New(cfg, authSvc, cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
-	// The general limit is not what this measures (TestPerfSaturatingToken does).
-	a.ipLimiter = newRateLimiter(1e9, 1e9)
 	return &perfEnv{api: a, handler: a.Handler(), token: token, libID: lib.ID, cat: cat, db: db}
 }
 
@@ -213,7 +213,8 @@ func (e *perfEnv) serve(path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.RemoteAddr = "192.0.2.1:4000"
 	req.Header.Set("Authorization", "Bearer "+e.token)
-	req.Header.Set(auth.ClientHeader, "web/2.4.1 (macOS)")
+	req.Header.Set(auth.ClientHeader, "AudioSilo/2.4.1 (web)")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Encoding", "gzip, deflate")
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)

@@ -1219,16 +1219,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
-  `api/ratelimit.go`), read off the handler `mux.Handler` picks: static files
-  (`web.IsStatic`) are not counted; media routes (`mediaAuth`, behind `requireBookMediaAuth` for
-  cover/stream and `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) limit
-  themselves: refused while the address's
-  general bucket is empty (`Ready`), a failed authentication charges it (`Charge`:
-  even past empty, down to -burst, so requests that passed `Ready` together all pay), an
-  authenticated one spends from `mediaLimiter` (~200/s, burst 2000, per credential id)
-  and charges the address's bucket when that refuses it (the lookup was already done);
-  everything else spends from `ipLimiter` (~50/s, burst 200, per IP). The brute-force
-  lockouts (`limiter`) are separate. Tests: `ratelimit_routes_test.go`.
+  `api/ratelimit.go`, values from `config.rate_limit.*`, read at start), read off the
+  handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
+  routes (`mediaAuth`, behind `requireBookMediaAuth` for cover/stream and
+  `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) and the
+  authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
+  `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
+  while the address's general bucket is empty (`Ready`), a failed authentication
+  (missing or refused token) charges it (`Charge`: even past empty, down to -burst,
+  so requests that passed `Ready` together all pay), an authenticated one spends
+  from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
+  ~50000/s burst 100000, per credential id) and charges the address's bucket when that
+  refuses it (the lookup was already done); everything else (public routes, and
+  `/api/v1/auth/*` with or without a token: sign-in, pairing, password, API keys)
+  spends from `ipLimiter` (~50/s, burst 200, per IP). rateLimit marks a request it
+  charged (`addressCharged`), so requireAuth never charges it again and limits per
+  credential any request rateLimit didn't. The brute-force lockouts (`limiter`) are
+  separate. Tests: `ratelimit_routes_test.go`.
 - **Job queue, scan history, schedules, ignore rules (admin redesign Phase 3, `library/jobs.go`,
   `schedule.go`, `ignore.go`, `problems.go`)**: every scan (startup, schedule, admin rescan, a
   library or folder-setting change) goes through `Scanner.Enqueue`; `Scanner.Start` runs ONE

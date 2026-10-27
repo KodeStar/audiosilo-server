@@ -24,7 +24,7 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	now := time.Now()
-	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.mediaLimiter} {
+	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
 		l.now = func() time.Time { return now }
 	}
 	return &routeLimitEnv{testEnv: e, h: e.api.Handler()}
@@ -212,25 +212,182 @@ func TestRateLimitMediaPastBudgetBounded(t *testing.T) {
 	}
 }
 
-// The general API allows a burst of 200 per address, then refuses; another
-// address has its own bucket.
+// A request nobody has authenticated has the general burst of 200 per address,
+// then is refused; another address has its own bucket.
 func TestRateLimitGeneralBurst(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	tok := e.session(t)
 	const ip = "192.0.2.40"
 	for i := range 200 {
-		if code := e.get(ip, "/api/v1/me", tok); code != http.StatusOK {
+		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusOK {
 			t.Fatalf("API call %d = %d, want 200", i, code)
 		}
 	}
 	for range 10 {
-		if code := e.get(ip, "/api/v1/me", tok); code != http.StatusTooManyRequests {
+		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
 			t.Fatalf("API call past the burst = %d, want 429", code)
 		}
 	}
-	if code := e.get("192.0.2.41", "/api/v1/me", tok); code != http.StatusOK {
+	if code := e.get("192.0.2.41", "/api/v1/server", ""); code != http.StatusOK {
 		t.Fatalf("API call from another address = %d, want 200", code)
+	}
+}
+
+// An authenticated request spends from its credential's bucket, not its
+// address's (server#246): one address sending far more than the address burst
+// with valid tokens (a household behind NAT, a grid loading a whole library) is
+// never refused, two tokens from it have a bucket each, and the address's own
+// budget is untouched.
+func TestRateLimitAuthenticatedPerToken(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	first, second := e.session(t), e.session(t)
+	const ip = "192.0.2.42"
+	for i := range 1000 {
+		tok := first
+		if i%2 == 1 {
+			tok = second
+		}
+		if code := e.get(ip, "/api/v1/me", tok); code != http.StatusOK {
+			t.Fatalf("authenticated call %d = %d, want 200", i, code)
+		}
+	}
+	for i := range 200 {
+		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusOK {
+			t.Fatalf("unauthenticated call %d after the authenticated ones = %d, want 200", i, code)
+		}
+	}
+	// An API key is a credential like a session.
+	_, key := e.mintAPIKey(t, first, "script")
+	for i := range 300 {
+		if code := e.get("192.0.2.43", "/api/v1/me", key); code != http.StatusOK {
+			t.Fatalf("API key call %d = %d, want 200", i, code)
+		}
+	}
+}
+
+// A credential past its own budget is refused while another from the same
+// address carries on; each refusal has cost a lookup, so it pays into the
+// address's bucket, and a client hammering on soon has its address refused
+// before any lookup (another address unaffected).
+func TestRateLimitTokenBudget(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.tokenLimiter.burst = 5
+	first, second := e.session(t), e.session(t)
+	const ip = "192.0.2.44"
+	for i := range 5 {
+		if code := e.get(ip, "/api/v1/me", first); code != http.StatusOK {
+			t.Fatalf("call %d = %d, want 200", i, code)
+		}
+	}
+	if code := e.get(ip, "/api/v1/me", first); code != http.StatusTooManyRequests {
+		t.Fatalf("call past the credential's burst = %d, want 429", code)
+	}
+	if code := e.get(ip, "/api/v1/me", second); code != http.StatusOK {
+		t.Fatalf("another credential from the same address = %d, want 200", code)
+	}
+	for i := range 200 {
+		if code := e.get(ip, "/api/v1/me", first); code != http.StatusTooManyRequests {
+			t.Fatalf("call %d past the credential's burst = %d, want 429", i, code)
+		}
+	}
+	if code := e.get(ip, "/api/v1/me", second); code != http.StatusTooManyRequests {
+		t.Fatalf("another credential from an address that went past its budget = %d, want 429", code)
+	}
+	if code := e.get(ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("unauthenticated call from that address = %d, want 429", code)
+	}
+	if code := e.get("192.0.2.45", "/api/v1/me", second); code != http.StatusOK {
+		t.Fatalf("from another address = %d, want 200", code)
+	}
+}
+
+// A token is proved before it is a bucket of its own: a missing or refused one
+// pays into its address's bucket, so guessing tokens is bounded by the general
+// limit, and once the address is spent even a valid token from it is refused
+// before the lookup. Another address is unaffected.
+func TestRateLimitBadTokensChargeAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	tok := e.session(t)
+	for _, tc := range []struct{ name, ip, token string }{
+		{"bad token", "192.0.2.46", "not-a-token"},
+		{"no token", "192.0.2.47", ""},
+	} {
+		for i := range 200 {
+			if code := e.get(tc.ip, "/api/v1/me", tc.token); code != http.StatusUnauthorized {
+				t.Fatalf("%s: request %d = %d, want 401", tc.name, i, code)
+			}
+		}
+		if code := e.get(tc.ip, "/api/v1/me", tc.token); code != http.StatusTooManyRequests {
+			t.Fatalf("%s: request past the burst = %d, want 429", tc.name, code)
+		}
+		if code := e.get(tc.ip, "/api/v1/me", tok); code != http.StatusTooManyRequests {
+			t.Fatalf("%s: a valid token from the throttled address = %d, want 429", tc.name, code)
+		}
+		if code := e.get(tc.ip, "/api/v1/admin/libraries", tok); code != http.StatusTooManyRequests {
+			t.Fatalf("%s: an admin route from the throttled address = %d, want 429", tc.name, code)
+		}
+	}
+	if code := e.get("192.0.2.48", "/api/v1/me", tok); code != http.StatusOK {
+		t.Fatalf("a valid token from another address = %d, want 200", code)
+	}
+}
+
+// The sign-in, pairing and account routes stay limited by address with a valid
+// token on them, and spend none of the token's budget; a public route stays
+// limited by address whatever header it carries. A token can't buy more sign-in
+// attempts, pairing codes or API keys than its address has.
+func TestRateLimitAuthRoutesByAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	tok := e.session(t)
+	for _, tc := range []struct{ name, ip, method, path, body string }{
+		{"list keys", "192.0.2.60", "GET", "/api/v1/auth/tokens", ""},
+		{"pair", "192.0.2.61", "POST", "/api/v1/auth/pair", "{}"},
+		{"public with a token", "192.0.2.63", "GET", "/api/v1/server", ""},
+	} {
+		// Exactly the address's burst, each charged once (not again per token).
+		for i := range 201 {
+			code := e.serve(tc.ip, tc.method, tc.path, tok, tc.body)
+			if limited := code == http.StatusTooManyRequests; limited != (i == 200) {
+				t.Fatalf("%s: request %d with a valid token = %d; want 429 from the 201st only", tc.name, i+1, code)
+			}
+		}
+		if code := e.get(tc.ip, "/api/v1/server", ""); code != http.StatusTooManyRequests {
+			t.Fatalf("%s: the address's budget was not spent (%d)", tc.name, code)
+		}
+		// The token's own budget is whole: from another address it still works.
+		if code := e.get("198.51.100.60", "/api/v1/me", tok); code != http.StatusOK {
+			t.Fatalf("%s: the token from another address = %d, want 200", tc.name, code)
+		}
+	}
+	// Sign-in is refused, token or not, once its address has spent its budget.
+	const ip = "192.0.2.62"
+	for range 200 {
+		e.get(ip, "/api/v1/server", "")
+	}
+	if code := e.serve(ip, "POST", "/api/v1/auth/login", tok, `{"username":"admin","password":"admin-password"}`); code != http.StatusTooManyRequests {
+		t.Fatalf("sign-in with a token from a spent address = %d, want 429", code)
+	}
+}
+
+// Sign-in's brute-force lockout holds with a valid token on every attempt: ten
+// wrong passwords lock the address out, the right one included.
+func TestRateLimitLoginLockoutWithToken(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	tok := e.session(t)
+	const ip = "192.0.2.64"
+	for i := range 10 {
+		code := e.serve(ip, "POST", "/api/v1/auth/login", tok, `{"username":"admin","password":"wrong-password"}`)
+		if code == http.StatusOK || code == http.StatusTooManyRequests {
+			t.Fatalf("failure %d = %d, want a refusal short of the lockout", i+1, code)
+		}
+	}
+	if code := e.serve(ip, "POST", "/api/v1/auth/login", tok, `{"username":"admin","password":"admin-password"}`); code != http.StatusTooManyRequests {
+		t.Fatalf("right password from a locked-out address, with a token = %d, want 429", code)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 // limiter implements a simple per-key failure lockout: after maxFailures within
@@ -152,8 +154,8 @@ func (l *limiter) sweep(now time.Time) {
 }
 
 // rateLimiter is a token-bucket limiter on request rate, one bucket per key: the
-// client IP for the general API, the credential for authenticated media (see
-// rateLimit and requireMediaAuth).
+// client IP for the general API, the credential for the authenticated API and for
+// authenticated media (see rateLimit, requireAuth and requireMediaAuth).
 type rateLimiter struct {
 	mu        sync.Mutex
 	rate      float64 // tokens per second
@@ -167,6 +169,11 @@ type rateLimiter struct {
 type bucket struct {
 	tokens float64
 	last   time.Time
+}
+
+// newBucketLimiter is a rateLimiter with b's rate and burst (config rate_limit.*).
+func newBucketLimiter(b config.RateBucket) *rateLimiter {
+	return newRateLimiter(b.Rate, float64(b.Burst))
 }
 
 func newRateLimiter(ratePerSec, burst float64) *rateLimiter {
