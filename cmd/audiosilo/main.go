@@ -52,7 +52,7 @@ func command(args []string, stdout, stderr io.Writer) (code int, done bool) {
 	case len(args) == 0:
 		return 0, false
 	case len(args) == 1 && args[0] == "version":
-		fmt.Fprintln(stdout, "audiosilo", api.Version)
+		_, _ = fmt.Fprintln(stdout, "audiosilo", api.Version)
 		return 0, true
 	default:
 		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the only command is \"version\"; run with -h for the flags)\n", args[0])
