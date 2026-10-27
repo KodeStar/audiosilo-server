@@ -428,6 +428,30 @@ func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
 	}
 }
 
+// A file whose ffprobe times out with nothing read beside it is not read again,
+// however many slots the scan has: the time-out is already the file's own.
+func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {
+	t.Parallel()
+	runs := filepath.Join(t.TempDir(), "runs")
+	probe := stubProbe(t, fmt.Sprintf("echo run >> %q; exec sleep 10", runs))
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), probe, 4, time.Second) // time for the stand-in to start on a busy machine
+	res, err := s.Scan(context.Background(), *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(runs)
+	if n := strings.Count(string(got), "run"); n != 1 {
+		t.Fatalf("ffprobe ran %d times for a lone file, want 1", n)
+	}
+	var problem string
+	if err := db.QueryRowContext(context.Background(), `SELECT scan_error FROM books`).Scan(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if res.Errors != 1 || problem != problemProbe {
+		t.Fatalf("errors %d, problem %q", res.Errors, problem)
+	}
+}
+
 // A Stop ends a read retried on its own too, and the retry waiting its turn.
 func TestScanStopEndsProbeRetry(t *testing.T) {
 	t.Parallel()

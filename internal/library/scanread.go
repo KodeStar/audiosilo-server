@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -15,8 +16,14 @@ import (
 // ffprobe): one slot per read under way. An on-demand index reads with one.
 type readSlots struct {
 	ch chan struct{}
-	// alone is held by a read retried on its own (extract), while it takes every slot.
-	alone sync.Mutex
+	// alone is read-held by every read under way and held by a read retried on
+	// its own (extract): a retry waiting for it holds back the reads that would
+	// start after it, so it waits only for those already under way.
+	alone sync.RWMutex
+	// active is how many reads are under way, started how many have begun: a
+	// read overlapped another when either moved while it ran.
+	active  atomic.Int64
+	started atomic.Uint64
 	// timeout is each ffprobe run's (Scanner.probeTimeout).
 	timeout time.Duration
 }
@@ -33,52 +40,44 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // ctx ends while it waits for one (stopped: the scan drops the reading).
 //
 // A read whose ffprobe ran out of time while others were reading is read again
-// on its own, holding every slot: files sharing a slow disk or a busy share can
-// each take longer than ffprobe is given, and a healthy file must not be
-// recorded as a read problem because others were read beside it. Only a second
-// time-out, alone, is the file's problem.
+// on its own: files sharing a slow disk or a busy share can each take longer
+// than ffprobe is given, and a healthy file must not be recorded as a read
+// problem because others were read beside it. Only a time-out alone is the
+// file's problem.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
-	md := r.read(ctx, 1, absPath, ffprobePath)
-	if md == nil || r.size() == 1 || !errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) {
+	md, shared := r.read(ctx, absPath, ffprobePath)
+	if md == nil || !shared || !errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) {
 		return md
 	}
-	// One retry at a time, each waiting for every read under way to finish.
+	// One retry at a time, each waiting for the reads under way to finish.
 	r.alone.Lock()
 	defer r.alone.Unlock()
-	if again := r.read(ctx, r.size(), absPath, ffprobePath); again != nil {
-		return again
+	if ctx.Err() != nil {
+		return md // stopped: dropped by the scan
 	}
-	return md // stopped: dropped by the scan
+	again, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
+	return again
 }
 
-// read is metadata.ExtractTimeout holding n slots; nil when ctx ends first.
-func (r *readSlots) read(ctx context.Context, n int, absPath, ffprobePath string) *metadata.Metadata {
-	if !r.take(ctx, n) {
-		return nil
+// read is metadata.ExtractTimeout holding a slot, and whether another read ran
+// beside it; nil when ctx ends first.
+func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*metadata.Metadata, bool) {
+	select {
+	case r.ch <- struct{}{}:
+	case <-ctx.Done():
+		return nil, false
 	}
-	defer r.give(n)
+	defer func() { <-r.ch }()
+	r.alone.RLock()
+	defer r.alone.RUnlock()
+	if ctx.Err() != nil { // stopped while a retry ran alone
+		return nil, false
+	}
+	start := r.started.Add(1)
+	before := r.active.Add(1)
 	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
-	return md
-}
-
-// take takes n slots, one by one; false (none held) when ctx ends first.
-func (r *readSlots) take(ctx context.Context, n int) bool {
-	for i := range n {
-		select {
-		case r.ch <- struct{}{}:
-		case <-ctx.Done():
-			r.give(i)
-			return false
-		}
-	}
-	return true
-}
-
-// give hands back n slots.
-func (r *readSlots) give(n int) {
-	for range n {
-		<-r.ch
-	}
+	after := r.active.Add(-1)
+	return md, before > 1 || after > 0 || r.started.Load() != start
 }
 
 // readFiles reads a folder book's files, in their order: the first is first
