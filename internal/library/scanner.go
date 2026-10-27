@@ -1033,14 +1033,14 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 // rule names and its signature, not yet checked for readability: checkEbook)
 // from the .epub entries the discovery walk found (audioDirs), by the folder
 // holding them. A single-file book is handed only the entries named in some case
-// of its "<stem>.epub" (all ebookCandidate looks at), found through a name index
+// or Unicode form of its "<stem>.epub" (all ebookCandidate looks at), found through a name index
 // made once per folder, so a folder of many books and their epubs isn't searched
 // once per book.
 func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][]fs.DirEntry) {
 	if len(epubs) == 0 {
 		return
 	}
-	named := map[string]map[string][]fs.DirEntry{} // folder -> lower-cased name -> entries
+	named := map[string]map[string][]fs.DirEntry{} // folder -> ebookNameKey -> entries
 	for _, b := range books {
 		dir := sidecarDir(b.RelPath, b.IsFolder)
 		listed := epubs[dir]
@@ -1052,12 +1052,12 @@ func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][
 			if byName == nil {
 				byName = make(map[string][]fs.DirEntry, len(listed))
 				for _, e := range listed {
-					key := strings.ToLower(e.Name())
+					key := ebookNameKey(e.Name())
 					byName[key] = append(byName[key], e)
 				}
 				named[dir] = byName
 			}
-			if listed = byName[strings.ToLower(ebookName(b.RelPath))]; len(listed) == 0 {
+			if listed = byName[ebookNameKey(ebookName(b.RelPath))]; len(listed) == 0 {
 				continue
 			}
 		}

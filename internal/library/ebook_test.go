@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // epubBytes is a zip holding the named entries (empty bodies but container.xml's):
@@ -248,4 +250,80 @@ func TestOpenEbook(t *testing.T) {
 			_ = f.Close()
 		}
 	}
+}
+
+// A single-file book's "<stem>.epub" spelled in another Unicode form (an NFD
+// copy from macOS beside NFC audio) is its ebook, found by name, by the walk's
+// listing (ebookCandidate) and on demand (BookEbook); a name that only looks
+// alike without its accent is not (server#228).
+func TestBookEbookUnicodeForms(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	epub := epubBytes(t, minimalEpub...)
+	nfc, nfd := "Café", norm.NFD.String("Café")
+	writeFile(t, root, "C/"+nfc+".m4b", []byte("x"))
+	writeFile(t, root, "C/"+nfd+".epub", epub)
+	writeFile(t, root, "C/Creme.m4b", []byte("x"))
+	writeFile(t, root, "C/"+norm.NFD.String("Crème")+".epub", epub)
+	got := BookEbook(root, "C/"+nfc+".m4b", false)
+	if norm.NFC.String(got) != "C/Café.epub" {
+		t.Fatalf("BookEbook(NFC audio beside NFD epub) = %q, want C/Café.epub in some form", got)
+	}
+	if got := BookEbook(root, "C/Creme.m4b", false); got != "" {
+		t.Errorf("BookEbook(Creme) = %q, want none (Crème is another name)", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "C"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var epubs []fs.DirEntry
+	for _, e := range entries {
+		if isEpubEntry(e) {
+			epubs = append(epubs, e)
+		}
+	}
+	if r := ebookCandidate(root, "C/"+nfc+".m4b", false, epubs); norm.NFC.String(r.Path) != "C/Café.epub" || r.Sig == "" {
+		t.Errorf("ebookCandidate(NFC audio) = %+v, want the NFD epub", r)
+	}
+	if ebookNameKey(nfd+".EPUB") != ebookNameKey(nfc+".epub") {
+		t.Error("ebookNameKey differs across case and Unicode form")
+	}
+}
+
+// A file swapped for another as OpenEbook opens it is refused, never served
+// (server#228); the same file opened is served. Not parallel: it replaces the
+// package's open.
+func TestOpenEbookSwapped(t *testing.T) {
+	root := t.TempDir()
+	epub := epubBytes(t, minimalEpub...)
+	writeFile(t, root, "A/Book.epub", epub)
+	writeFile(t, root, "A/Other.epub", epub)
+	defer func(was func(string) (*os.File, error)) { openEbookFile = was }(openEbookFile)
+	swap := true
+	openEbookFile = func(full string) (*os.File, error) {
+		if swap {
+			// Opened as the old file, then replaced: the name now leads to another.
+			f, err := os.Open(full) //nolint:gosec // test
+			if err != nil {
+				return nil, err
+			}
+			if err := os.Rename(filepath.Join(root, "A", "Other.epub"), full); err != nil {
+				t.Fatal(err)
+			}
+			return f, nil
+		}
+		return os.Open(full) //nolint:gosec // test
+	}
+	if f, _, err := OpenEbook(root, "A/Book.epub", true); !errors.Is(err, ErrNoEbook) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("swapped open = %v, want ErrNoEbook", err)
+	}
+	swap = false
+	f, _, err := OpenEbook(root, "A/Book.epub", true)
+	if err != nil {
+		t.Fatalf("plain open: %v", err)
+	}
+	_ = f.Close()
 }

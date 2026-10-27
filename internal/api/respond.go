@@ -251,6 +251,12 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
 		errors.Is(err, catalog.ErrNothingToChange):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		// A bounded lookup that ran out of time (a stalled writer) is the
+		// timeout middleware's 503, for the routes it doesn't wrap (media,
+		// the ebook) too.
+		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)

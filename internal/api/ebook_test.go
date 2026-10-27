@@ -357,8 +357,8 @@ func TestEbookLookupBounded(t *testing.T) {
 		t.Fatalf("GET ebook with the writer held: %v (want an answer at the request timeout)", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("GET ebook with the writer held = %d, want 500", resp.StatusCode)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET ebook with the writer held = %d, want 503 like any timed-out lookup", resp.StatusCode)
 	}
 }
 
