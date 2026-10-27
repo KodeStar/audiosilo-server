@@ -428,7 +428,7 @@ func isAllDigits(s string) bool {
 }
 
 // splitSeriesIndex parses a leading volume number out of names like
-// "01 - Unsouled", "C02 Soulsmith", "Book 3 - Title".
+// "01 - Unsouled", "C02 Soulsmith", "Book 3 - Title", "02.5 - Gods of Risk".
 func splitSeriesIndex(name string) (float64, string) {
 	s := strings.TrimSpace(name)
 	lower := strings.ToLower(s)
@@ -454,6 +454,17 @@ func splitSeriesIndex(name string) (float64, string) {
 	// keeps ordinary volume numbers (up to 999) working while not mangling titles.
 	if !explicit && i >= 4 {
 		return 0, strings.TrimSpace(name)
+	}
+	// A decimal part ("02.5 - Gods of Risk", a novella between books 2 and 3) is
+	// part of the position: a dot with digits after it. "7. Title" keeps 7.
+	if i < len(s) && s[i] == '.' {
+		j := i + 1
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j > i+1 {
+			i = j
+		}
 	}
 	// A number running straight into a letter or a digit group ("3rd Rock",
 	// "20,000 Leagues", "1's and 0's") is part of the title, not a volume.

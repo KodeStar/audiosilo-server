@@ -96,6 +96,11 @@ func TestFromPathLayout(t *testing.T) {
 			want: Metadata{Author: "James S. A. Corey", Series: "The Expanse", SeriesIndex: 3, Title: "Abaddon's Gate"},
 		},
 		{
+			// A decimal position stays a decimal: no collision with book 2.
+			path: "James S. A. Corey/The Expanse/02.5 - Gods of Risk", isFolder: true,
+			want: Metadata{Author: "James S. A. Corey", Series: "The Expanse", SeriesIndex: 2.5, Title: "Gods of Risk"},
+		},
+		{
 			path: "Will Wight/Cradle/Book 1 - Unsouled.m4b",
 			want: Metadata{Author: "Will Wight", Series: "Cradle", SeriesIndex: 1, Title: "Unsouled"},
 		},

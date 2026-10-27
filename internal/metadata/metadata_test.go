@@ -29,6 +29,11 @@ func TestSplitSeriesIndex(t *testing.T) {
 		{"20,000 Leagues Under the Sea", 0, "20,000 Leagues Under the Sea"},
 		{"3rd Rock", 0, "3rd Rock"},
 		{"1's and 0's", 0, "1's and 0's"},
+		// A decimal position (a novella between two books) keeps its fraction.
+		{"02.5 - Gods of Risk", 2.5, "Gods of Risk"},
+		{"Book 7.5 Interlude", 7.5, "Interlude"},
+		{"3.Title", 3, "Title"},
+		{"2001.5 Odyssey", 0, "2001.5 Odyssey"},
 	}
 	for _, c := range cases {
 		idx, title := splitSeriesIndex(c.in)
