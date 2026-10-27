@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -26,35 +25,11 @@ import (
 // copyFixture copies a testdata file to dst (its folders made).
 func copyFixture(t *testing.T, src, dst string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	in, err := os.Open(src)
+	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// putFile writes data to path (its folders made).
-func putFile(t *testing.T, path string, data []byte) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, filepath.Dir(dst), filepath.Base(dst), data)
 }
 
 // mixedLibrary builds a library of every shape a scan reads, a few times over:
@@ -90,8 +65,8 @@ func mixedLibrary(t *testing.T) string {
 		}
 		broken := filepath.Join(author, "Broken")
 		copyFixture(t, mp3s[0], filepath.Join(broken, "01.mp3"))
-		putFile(t, filepath.Join(broken, "02.mp3"), []byte(strings.Repeat("not audio ", 400)))
-		putFile(t, filepath.Join(broken, "03.mp3"), nil)
+		writeFile(t, broken, "02.mp3", []byte(strings.Repeat("not audio ", 400)))
+		writeFile(t, broken, "03.mp3", nil)
 		copyFixture(t, mp3s[1], filepath.Join(broken, "04.mp3"))
 	}
 	return root
@@ -327,13 +302,13 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 	var files []catalog.BookFile
 	for i := range 20 {
 		rel := fmt.Sprintf("Book/%02d.mp3", i)
-		putFile(t, filepath.Join(root, rel), nil)
+		writeFile(t, root, rel, nil)
 		files = append(files, catalog.BookFile{RelPath: rel})
 	}
 	s := NewScanner(nil, "", slog.New(slog.DiscardHandler))
 	lib := catalog.Library{Root: root}
 	first := &metadata.Metadata{Title: "first"}
-	for _, slots := range []readSlots{nil, newReadSlots(1), newReadSlots(3), newReadSlots(64)} {
+	for _, slots := range []readSlots{newReadSlots(1), newReadSlots(3), newReadSlots(64)} {
 		mds := s.readFiles(context.Background(), lib, files, first, slots)
 		if len(mds) != len(files) || mds[0] != first {
 			t.Fatalf("slots %d: %d readings, first %v", cap(slots), len(mds), mds[0])

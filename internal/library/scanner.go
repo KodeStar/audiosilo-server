@@ -703,8 +703,8 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // metadata.json in a folder book's folder, when the walk found one: b.ABS.Sig,
 // and the book's .audiosilo/ attachments: b.Attachments.Sig).
 //
-// A scan reads with its slots (nil: one file at a time, as an on-demand index
-// reads) and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
+// A scan reads with its slots (an on-demand index with one, a file at a time)
+// and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
 // the reading rather than writing it.
 func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots readSlots) {
 	primary := primaryPath(b)
@@ -1525,7 +1525,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
 	// never needs it.
 	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
-	s.enrich(context.WithoutCancel(ctx), lib, book, nil)
+	s.enrich(context.WithoutCancel(ctx), lib, book, newReadSlots(1))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
 	id, err := s.cat.UpsertBook(ctx, book)

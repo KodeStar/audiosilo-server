@@ -27,19 +27,20 @@ type tagReader struct {
 	limit    int64  // the ID3v2 tag's end: reads before it go through buf
 	buf      []byte // the bytes at bufStart, read ahead
 	bufStart int64
-
-	size int64 // the file's size, read for the first seek from its end (-1 until then)
 }
 
 // newTagReader returns a tagReader over f, read from its start.
 func newTagReader(f *os.File) *tagReader {
-	r := &tagReader{f: f, size: -1}
+	r := &tagReader{f: f}
 	hdr := make([]byte, id3HeaderSize)
 	if n, _ := f.ReadAt(hdr, 0); n == id3HeaderSize && string(hdr[:3]) == "ID3" {
 		// The size is four 7-bit bytes (syncsafe), the tag's length after its header.
 		size := int64(hdr[6]&0x7f)<<21 | int64(hdr[7]&0x7f)<<14 | int64(hdr[8]&0x7f)<<7 | int64(hdr[9]&0x7f)
 		r.limit = id3HeaderSize + size
-		r.buf = hdr // the header is the buffer's first bytes: not read twice
+		// The tag's first block, read now from the start: dhowden reads the file's
+		// first bytes, seeks back to the start and reads the header again, all
+		// from this one read. A failed read is tried again by the first Read.
+		_ = r.fill()
 	}
 	return r
 }
@@ -51,16 +52,14 @@ func (r *tagReader) Read(p []byte) (int, error) {
 	}
 	if r.pos < r.limit {
 		if r.pos < r.bufStart || r.pos >= r.bufStart+int64(len(r.buf)) {
-			if err := r.fill(); err != nil && len(r.buf) == 0 {
+			if err := r.fill(); err != nil {
 				return 0, err
 			}
 		}
-		if off := r.pos - r.bufStart; off >= 0 && off < int64(len(r.buf)) {
-			// Never past the tag's end: the bytes after it are read directly.
-			n := copy(p[:min(int64(len(p)), r.limit-r.pos)], r.buf[off:])
-			r.pos += int64(n)
-			return n, nil
-		}
+		// Never past the tag's end: the bytes after it are read directly.
+		n := copy(p[:min(int64(len(p)), r.limit-r.pos)], r.buf[r.pos-r.bufStart:])
+		r.pos += int64(n)
+		return n, nil
 	}
 	n, err := r.f.ReadAt(p, r.pos)
 	r.pos += int64(n)
@@ -70,7 +69,8 @@ func (r *tagReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// fill reads the buffer at the reader's position, up to the tag's end.
+// fill reads the buffer at the reader's position, up to the tag's end: an error
+// only when it read nothing.
 func (r *tagReader) fill() error {
 	want := min(int64(tagBufferSize), r.limit-r.pos)
 	if int64(cap(r.buf)) < want {
@@ -78,14 +78,11 @@ func (r *tagReader) fill() error {
 	}
 	n, err := r.f.ReadAt(r.buf[:want], r.pos)
 	r.buf, r.bufStart = r.buf[:n], r.pos
-	if n > 0 {
-		return nil
+	if n == 0 {
+		return err
 	}
-	return err
+	return nil
 }
-
-// errNegativeSeek is a seek before the start of the file.
-var errNegativeSeek = errors.New("seek to a negative position")
 
 // Seek sets the reader's position, as (*os.File).Seek would.
 func (r *tagReader) Seek(offset int64, whence int) (int64, error) {
@@ -96,19 +93,16 @@ func (r *tagReader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		at = r.pos + offset
 	case io.SeekEnd:
-		if r.size < 0 {
-			info, err := r.f.Stat()
-			if err != nil {
-				return 0, err
-			}
-			r.size = info.Size()
+		info, err := r.f.Stat()
+		if err != nil {
+			return 0, err
 		}
-		at = r.size + offset
+		at = info.Size() + offset
 	default:
 		return 0, errors.New("invalid whence")
 	}
 	if at < 0 {
-		return 0, errNegativeSeek // the position stays, as a file's
+		return 0, errors.New("seek to a negative position") // the position stays, as a file's
 	}
 	r.pos = at
 	return at, nil
