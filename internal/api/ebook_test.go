@@ -369,7 +369,8 @@ func keysOf(m map[string]any) string {
 // The reading-progress routes: the wire shape, a part path kept on its book,
 // latest-wins for a save that saw the row (and a stale save echoed), Sync v2's
 // divergence (the further place kept, the other offered) both ways, the same
-// device never diverging, and the device's name always the token's.
+// device diverging only on base 0 (saw nothing), and the device's name always
+// the token's.
 func TestReadingProgressEndpoints(t *testing.T) {
 	t.Parallel()
 	e := newEbookEnv(t)
@@ -390,9 +391,9 @@ func TestReadingProgressEndpoints(t *testing.T) {
 		t.Fatalf("GET after save = %d %s", resp.StatusCode, body)
 	}
 
-	// Not diverged: the same device reads on (its base is behind, its own row).
+	// Not diverged: the same device reads on, on the version it saw.
 	rp, other = e.readingPut(t, e.annTok, ebookBook, `{"cfi":"epubcfi(/6/8!/4/2/1:0)","progression":0.4,`+
-		`"device_id":"phone","updated_at":"2026-10-25T10:05:00Z","base_version":0}`)
+		`"device_id":"phone","updated_at":"2026-10-25T10:05:00Z","base_version":1}`)
 	if other != nil || rp["version"] != 2.0 || rp["progression"] != 0.4 {
 		t.Fatalf("same device = %v, other %v", rp, other)
 	}
@@ -436,6 +437,22 @@ func TestReadingProgressEndpoints(t *testing.T) {
 		t.Fatalf("diverged further = %v, other %v", rp, other)
 	}
 
+	// The same device on base 0 saw nothing (signed out and back in, its places
+	// there cleared): diverged from its own row too, so its start never replaces
+	// a place further on. web's 0.7 stays, the start comes back as other_place.
+	rp, other = e.readingPut(t, key, ebookBook, `{"cfi":"epubcfi(/6/2!/4/2/1:0)","progression":0.01,`+
+		`"device_id":"web","updated_at":"2026-10-25T11:00:00Z","base_version":0}`)
+	if rp["version"] != 5.0 || rp["progression"] != 0.7 || rp["device_id"] != "web" ||
+		other == nil || other["progression"] != 0.01 || other["device_id"] != "web" {
+		t.Fatalf("same device saw nothing = %v, other %v", rp, other)
+	}
+	// ... while the same device with the version it saw moves back on purpose.
+	rp, other = e.readingPut(t, key, ebookBook, `{"cfi":"epubcfi(/6/2!/4/2/1:0)","progression":0.01,`+
+		`"device_id":"web","updated_at":"2026-10-25T11:01:00Z","base_version":5}`)
+	if other != nil || rp["version"] != 6.0 || rp["progression"] != 0.01 {
+		t.Fatalf("same device on its version = %v, other %v", rp, other)
+	}
+
 	// Another user's place is untouched and unseen: kid can't reach the book, and
 	// a place of kid's own is kid's alone.
 	if resp, _ := e.do(t, "GET", e.at("reading-progress", ebookBook), e.kidTok, ""); resp.StatusCode != http.StatusForbidden {
@@ -445,7 +462,7 @@ func TestReadingProgressEndpoints(t *testing.T) {
 		`{"cfi":"epubcfi(/6/2!)","progression":0,"device_id":"kid","updated_at":"2026-10-25T11:00:00Z"}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("kid PUT outside scope = %d, want 403", resp.StatusCode)
 	}
-	if p, _ := e.cat.GetReadingProgress(context.Background(), e.ann, catalog.Ref{LibraryID: e.lib.ID, Path: ebookBook}); p == nil || p.Version != 5 {
+	if p, _ := e.cat.GetReadingProgress(context.Background(), e.ann, catalog.Ref{LibraryID: e.lib.ID, Path: ebookBook}); p == nil || p.Version != 6 {
 		t.Fatalf("ann's place after kid's refused save = %+v", p)
 	}
 	if p, _ := e.cat.GetReadingProgress(context.Background(), e.kid, catalog.Ref{LibraryID: e.lib.ID, Path: ebookBook}); p != nil {
