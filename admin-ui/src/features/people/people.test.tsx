@@ -182,6 +182,50 @@ describe('a person', () => {
     );
   });
 
+  it('shows a narrowed library grant as its folders, and offers that library again (server#230)', async () => {
+    const narrowed = {
+      ...fictionGrant,
+      paths: [{ library_id: 1, path: 'Agatha Christie' }],
+    };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ shares: [narrowed] }) },
+        'GET /admin/shares': { body: { shares: [kidsShare, { ...narrowed, member_ids: [2] }] } },
+        'POST /admin/library-access': { status: 204 },
+      }),
+    );
+    renderApp('/people/user/2?tab=access');
+    const access = await screen.findByRole('region', { name: 'What sam can listen to' });
+    expect(await within(access).findByText('Library: Fiction')).toBeInTheDocument();
+    expect(within(access).getByText('Fiction › Agatha Christie')).toBeInTheDocument();
+    expect(within(access).queryByText('Whole library')).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(access).getByRole('button', { name: 'Give access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Give sam access' });
+    // Fiction isn't granted whole, so it is offered; the grant's share isn't a named share.
+    await user.click(await within(dialog).findByRole('radio', { name: /^Fiction/ }));
+    expect(within(dialog).queryByRole('radio', { name: /Library: Fiction/ })).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Give access' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/admin/library-access')?.body).toEqual({
+        user_id: 2,
+        library_id: 1,
+      }),
+    );
+  });
+
+  it('does not offer a library granted whole again', async () => {
+    mockFetch(routes({ 'GET /admin/users/2': { body: samDetail({ shares: [fictionGrant] }) } }));
+    renderApp('/people/user/2?tab=access');
+    const access = await screen.findByRole('region', { name: 'What sam can listen to' });
+    expect(await within(access).findByText('Whole library')).toBeInTheDocument();
+    await userEvent.setup().click(within(access).getByRole('button', { name: 'Give access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Give sam access' });
+    await within(dialog).findByRole('radio', { name: /Kids/ });
+    expect(within(dialog).queryByRole('radio', { name: /^Fiction/ })).toBeNull();
+  });
+
   it('makes a password-less member an admin by setting a password in the same step', async () => {
     const calls = mockFetch(
       routes({ 'PATCH /admin/users/2': { body: { ...sam, role: 'admin', has_password: true } } }),

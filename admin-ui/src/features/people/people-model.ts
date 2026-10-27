@@ -43,9 +43,25 @@ export function sortInvites<T extends AuthCode>(codes: readonly T[], now: number
   );
 }
 
-/** The library a whole-library grant gives (the server marks those shares). */
+/**
+ * Whether the server made this share for a whole-library grant (it marks those):
+ * listed with the grants, never offered as a named share, changed only by
+ * granting or revoking.
+ */
+export function isLibraryGrant(share: Pick<Share, 'whole_library_id'>): boolean {
+  return share.whole_library_id !== undefined;
+}
+
+/**
+ * The library a whole-library grant gives: the server's mark, while the share
+ * still holds that library's whole-library rule. A marked grant narrowed to
+ * folders, or left with no rule, gives no whole library (server#230): it reads
+ * as the folders it holds, under its own name.
+ */
 export function wholeLibraryOf(share: Share): number | undefined {
-  return share.whole_library_id;
+  const id = share.whole_library_id;
+  if (id === undefined) return undefined;
+  return (share.paths ?? []).some((r) => r.library_id === id && r.path === '') ? id : undefined;
 }
 
 /**
