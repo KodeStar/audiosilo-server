@@ -67,9 +67,9 @@ func (s *Service) startArtLocked(id, raw string) (*flight, *Error) {
 	s.arts[id] = f
 	gen := s.gen
 	go func() {
-		defer s.imageSlots.Release()
 		defer cancel()
 		jpg, err := s.fetchImage(ctx, raw)
+		s.imageSlots.Release() // before the waiters hear, as a search's
 		s.mu.Lock()
 		if s.arts[id] == f {
 			delete(s.arts, id)

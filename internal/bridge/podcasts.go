@@ -231,11 +231,32 @@ func (s *Service) Subscribe(ctx context.Context, r SubscribeRequest) (*Job, bool
 	defer s.secretFlowMu.Unlock()
 	j, created, err := s.Enqueue(ctx, NewJob{Kind: KindPodcastSubscribe, LibraryID: &lib, Params: raw, RequestedBy: user, Priority: 10, feedRedacted: feed.RedactURL(norm), adoptOnly: r.AdoptOnly})
 	if err == nil && private {
+		if s.beforeSecretHeld != nil {
+			s.beforeSecretHeld(j)
+		}
 		s.secretMu.Lock()
 		s.privateURLs[j.ID] = norm
 		s.secretMu.Unlock()
+		s.dropIfEnded(ctx, j.ID)
 	}
 	return j, created, err
+}
+
+// dropIfEnded lets go of the private URL just stored for job id when the job has
+// already ended. reportEnded drops a job's URL once its end has committed, but
+// an end that committed after Enqueue and before the URL was stored found
+// nothing to drop (server#200): this read, after the store, sees that end, and
+// any end it doesn't see is still to be reported, after the store. Without the
+// read the URL waits for PruneSecrets.
+func (s *Service) dropIfEnded(ctx context.Context, id int64) {
+	var open bool
+	err := s.db.QueryRowContext(context.WithoutCancel(ctx),
+		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND state IN `+OpenStatesSQL+`)`, id).Scan(&open)
+	if err == nil && !open {
+		s.secretMu.Lock()
+		delete(s.privateURLs, id)
+		s.secretMu.Unlock()
+	}
 }
 
 // notFeedFailures are the subscribe failure codes that say nothing about the

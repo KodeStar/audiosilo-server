@@ -27,6 +27,9 @@ type Service struct {
 	secretFlowMu sync.Mutex
 	secretMu     sync.Mutex
 	privateURLs  map[int64]string
+	// beforeSecretHeld, tests only, runs in Subscribe between the job's
+	// commit and storing its private URL.
+	beforeSecretHeld func(*Job)
 	// OnEnded hears every committed terminal transition. It must return at once;
 	// wake background work rather than re-entering the queue here.
 	OnEnded func(ctx context.Context, job Job)

@@ -21,7 +21,12 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/podcast"
 )
 
+// immediatePodcastWait makes the stream's wait end at once on a fake clock. The
+// budget's wall-clock deadline is a minute, so a loaded machine never spends it
+// before the wait is reached (server#189, server#200); the fake clock runs the
+// one wait to the end of that minute in a single step.
 func immediatePodcastWait(b *bridgeEnv) {
+	b.api.podcastDemand.Budget = time.Minute
 	var clock atomic.Int64
 	clock.Store(time.Now().UnixNano())
 	b.api.podcastDemand.Now = func() time.Time { return time.Unix(0, clock.Load()) }
@@ -230,7 +235,7 @@ func TestPodcastStreamWaitEnvelopeAndNearCompletion(t *testing.T) {
 	now := time.Now()
 	b.api.podcastDemand.Now = func() time.Time { return now }
 	b.api.podcastDemand.After = func(wait time.Duration) (<-chan time.Time, func()) {
-		if wait <= 0 || wait > podcast.StreamWait {
+		if wait <= 0 || wait > b.api.podcastDemand.Budget {
 			t.Fatalf("wait %v", wait)
 		}
 		raw, err := os.ReadFile("../podcast/testdata/phase2c2/chap-v24-reverse.mp3")

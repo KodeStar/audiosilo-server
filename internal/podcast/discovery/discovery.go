@@ -346,9 +346,11 @@ func (s *Service) startSearchLocked(key string, q Query) (*flight, *Error) {
 	s.flights[key] = f
 	gen := s.gen
 	go func() {
-		defer s.fetchSlots.Release()
 		defer cancel()
 		res, e := s.fetch(ctx, q)
+		// Free the slot before the waiters hear the answer, so a search that
+		// follows straight after one finds it free (not discovery_busy).
+		s.fetchSlots.Release()
 		s.mu.Lock()
 		if s.flights[key] == f {
 			delete(s.flights, key)
