@@ -582,3 +582,38 @@ func TestPodcastsModuleSetting(t *testing.T) {
 		t.Fatal("podcasts environment override missing")
 	}
 }
+
+// scan.concurrency: 0 (the default, one per CPU up to a cap) unless set, 0 to 64,
+// from config.yaml or AUDIOSILO_SCAN_CONCURRENCY, read at start and no console
+// setting.
+func TestScanConcurrency(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Scan.Concurrency != 0 {
+		t.Fatalf("default = %d", c.Scan.Concurrency)
+	}
+	if _, ok := c.Settings()["scan"]; ok {
+		t.Fatal("scan.concurrency is a console setting")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("scan:\n  concurrency: 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, err := Load(dir); err != nil || c.Scan.Concurrency != 3 {
+		t.Fatalf("from config.yaml = %+v, %v", c.Scan, err)
+	}
+	t.Setenv("AUDIOSILO_SCAN_CONCURRENCY", "12")
+	if c, _, err := Load(dir); err != nil || c.Scan.Concurrency != 12 {
+		t.Fatalf("from the environment = %+v, %v", c.Scan, err)
+	}
+	for _, bad := range []string{"-1", "65"} {
+		t.Setenv("AUDIOSILO_SCAN_CONCURRENCY", bad)
+		var fe *FieldError
+		if _, _, err := Load(dir); !errors.As(err, &fe) || fe.Key != "scan.concurrency" {
+			t.Fatalf("concurrency %s loaded: %v", bad, err)
+		}
+	}
+	t.Setenv("AUDIOSILO_SCAN_CONCURRENCY", "64")
+	if c, _, err := Load(dir); err != nil || c.Scan.Concurrency != MaxScanConcurrency {
+		t.Fatalf("the maximum = %+v, %v", c.Scan, err)
+	}
+}
