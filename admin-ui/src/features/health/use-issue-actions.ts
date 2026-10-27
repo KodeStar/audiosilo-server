@@ -103,8 +103,9 @@ export function useIssueActions(
 
   /**
    * Reads several books again, RESCAN_CONCURRENCY at a time: each is a synchronous
-   * re-read on the server (outside its scan queue), and firing them all at once
-   * would trip its per-client rate limit. The issues refresh once, at the end.
+   * re-read on the server (outside its scan queue) that reads the book's files
+   * from disk, so firing them all at once would load the server and its disk
+   * with many reads at the same time. The issues refresh once, at the end.
    */
   const rescanMany = async (books: AdminBook[]) => {
     let next = 0;

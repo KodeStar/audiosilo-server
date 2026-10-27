@@ -159,9 +159,6 @@ func (s snapshotDB) QueryRowContext(ctx context.Context, q string, args ...any) 
 func (s snapshotDB) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
 	return s.tx.ExecContext(ctx, q, args...)
 }
-func (s snapshotDB) WriteRowContext(ctx context.Context, q string, args ...any) *sql.Row {
-	return s.tx.QueryRowContext(ctx, q, args...)
-}
 func (s snapshotDB) WithTx(_ context.Context, _ string, fn func(*sql.Tx) error) error {
 	return fn(s.tx)
 }

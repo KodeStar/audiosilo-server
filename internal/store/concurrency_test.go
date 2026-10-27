@@ -31,7 +31,7 @@ func TestReaderServesReadsDuringWriteTx(t *testing.T) {
 	defer db.Close()
 
 	// Hold the single writer connection open in a transaction.
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.writer.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestSampleContentionTimesAWaitAfterItsTick(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, err := db.BeginTx(ctx, nil) // hold the one writer connection
+	tx, err := db.writer.BeginTx(ctx, nil) // hold the one writer connection
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}

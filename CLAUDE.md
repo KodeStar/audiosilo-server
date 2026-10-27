@@ -311,6 +311,7 @@ keep this index in step (one line per topic).
   - Native deep-link association
   - SQLite
   - Pagination
+  - List cache (`api/listcache.go`)
   - Path safety
   - Path-addressed API
   - Recognized audio

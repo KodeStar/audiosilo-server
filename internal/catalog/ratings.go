@@ -85,13 +85,15 @@ func (c *Catalog) SetRating(ctx context.Context, userID int64, ref Ref, stars in
 	}
 	now := c.stamp()
 	var r Rating
-	err = scanRating(c.db.WriteRowContext(ctx,
-		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?)
-		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
-		     rating = excluded.rating, note = excluded.note, updated_at = excluded.updated_at
-		 RETURNING `+ratingColumns,
-		userID, ref.LibraryID, ref.Path, stars, note, now, now), &r)
+	err = c.db.WithTx(ctx, "SetRating", func(tx *sql.Tx) error {
+		return scanRating(tx.QueryRowContext(ctx,
+			`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
+			 VALUES(?,?,?,?,?,?,?)
+			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+			     rating = excluded.rating, note = excluded.note, updated_at = excluded.updated_at
+			 RETURNING `+ratingColumns,
+			userID, ref.LibraryID, ref.Path, stars, note, now, now), &r)
+	})
 	if err != nil {
 		return nil, err
 	}

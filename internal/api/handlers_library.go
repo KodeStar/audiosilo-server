@@ -396,8 +396,13 @@ func (a *API) markPendingBooks(ctx context.Context, lib *catalog.Library, scope 
 // handleListBooks serves the computed/hybrid view from the index, scoped to the
 // caller's share path rules.
 func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	lib, scope, ok := a.browseScope(w, r)
 	if !ok {
+		return
+	}
+	write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+	if write == nil {
 		return
 	}
 	page, err := a.cat.ListBooks(r.Context(), catalog.ListOptions{
@@ -417,15 +422,20 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "list books failed", "could not load books", "library", lib.ID)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	write(page)
 }
 
 // handleSearch runs a full-text search across the caller's accessible content,
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+	write := a.cachedList(w, r, gen, cacheable, scopes)
+	if write == nil {
 		return
 	}
 	books, err := a.cat.Search(r.Context(), r.URL.Query().Get("q"), scopes, queryInt(r, "limit", 50))
@@ -433,7 +443,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"books": books})
+	write(map[string]any{"books": books})
 }
 
 // handleRecentBooks returns the most recently added books across every library
@@ -441,9 +451,14 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 // endpoint so clients render one merged "recently added" list (rather than
 // fanning out to each library's /books and concatenating).
 func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load books")
+		return
+	}
+	write := a.cachedList(w, r, gen, cacheable, scopes)
+	if write == nil {
 		return
 	}
 	books, err := a.cat.RecentBooks(r.Context(), scopes, queryInt(r, "limit", 50))
@@ -451,7 +466,7 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load books")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"books": books})
+	write(map[string]any{"books": books})
 }
 
 // handleItem returns full book detail (metadata + files + chapters + description)

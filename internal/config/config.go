@@ -7,8 +7,10 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -114,6 +116,54 @@ const (
 func (a ActivityConfig) SessionRetention() time.Duration {
 	return time.Duration(a.SessionDays) * 24 * time.Hour
 }
+
+// RateLimitConfig sets the API's request rate limits (api/ratelimit.go), each a
+// token bucket refilled at Rate requests a second up to Burst. Read once at
+// start. Address is per client address: requests no credential has been proved
+// for yet (a missing or refused token pays here, after its lookup), the sign-in,
+// pairing and account routes (/api/v1/auth/*, whatever token they carry), the
+// Bridge's routes (/api/v1/bridge/*) and the public routes. Token is per
+// credential: every other authenticated API request, so several people behind
+// one address (a household behind NAT, a reverse proxy) each have their own.
+// Media is per credential too: covers and audio (a grid is one request per
+// cover). The brute-force lockouts on sign-in and code redemption are separate
+// and not configurable.
+//
+// It holds only what the admin set: a rate or burst left at 0 is its current
+// default (Effective), so it is never written into config.yaml and a later
+// release's defaults reach an existing install.
+type RateLimitConfig struct {
+	Address RateBucket `yaml:"address,omitempty"`
+	Token   RateBucket `yaml:"token,omitempty"`
+	Media   RateBucket `yaml:"media,omitempty"`
+}
+
+// RateBucket is one rate limit: Rate requests a second on average and at most
+// Burst at once; 0 (unset) is the default's.
+type RateBucket struct {
+	Rate  float64 `yaml:"rate,omitempty"`
+	Burst int     `yaml:"burst,omitempty"`
+}
+
+// Effective is the limits in force: each rate or burst not set is its default.
+func (r RateLimitConfig) Effective() RateLimitConfig {
+	return RateLimitConfig{
+		Address: r.Address.or(DefaultAddressRateLimit),
+		Token:   r.Token.or(DefaultTokenRateLimit),
+		Media:   r.Media.or(DefaultMediaRateLimit),
+	}
+}
+
+func (b RateBucket) or(def RateBucket) RateBucket {
+	return RateBucket{Rate: cmp.Or(b.Rate, def.Rate), Burst: cmp.Or(b.Burst, def.Burst)}
+}
+
+// The default rate limits (RateLimitConfig).
+var (
+	DefaultAddressRateLimit = RateBucket{Rate: 50, Burst: 200}
+	DefaultTokenRateLimit   = RateBucket{Rate: 50000, Burst: 100000}
+	DefaultMediaRateLimit   = RateBucket{Rate: 200, Burst: 2000}
+)
 
 // HouseholdConfig configures household members (player redesign Phase 8b-1):
 // whether people may add members from the player, and how many each. Both apply
@@ -377,6 +427,9 @@ type Config struct {
 	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
 	Scan           ScanConfig      `yaml:"scan"`      // library scans (boot only)
 
+	// RateLimit is the API's request rate limits (boot only).
+	RateLimit RateLimitConfig `yaml:"rate_limit,omitempty"`
+
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
 	// environment. Save writes the file's values for those keys, so a value the
@@ -550,6 +603,12 @@ func setFromEnv(ptr any, v string) bool {
 			return false
 		}
 		*p = n
+	case *float64:
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return false
+		}
+		*p = n
 	case *int64:
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -653,6 +712,18 @@ func (c *Config) Validate() error {
 	}
 	if n := c.Household.MaxMembers; n < MinMaxMembers || n > MaxMaxMembers {
 		return fieldErr("household.max_members", fmt.Errorf("household.max_members must be from %d to %d", MinMaxMembers, MaxMaxMembers))
+	}
+	for _, b := range []struct {
+		key string
+		b   RateBucket
+	}{{"rate_limit.address", c.RateLimit.Address}, {"rate_limit.token", c.RateLimit.Token}, {"rate_limit.media", c.RateLimit.Media}} {
+		// 0 is unset (the default); anything else must let requests through.
+		if b.b.Rate < 0 || math.IsNaN(b.b.Rate) || math.IsInf(b.b.Rate, 0) {
+			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be a number of requests a second above 0, or 0 (or left out) for the default", b.key))
+		}
+		if b.b.Burst < 0 {
+			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1, or 0 (or left out) for the default", b.key))
+		}
 	}
 	if n := c.Scan.Concurrency; n < 0 || n > MaxScanConcurrency {
 		return fieldErr("scan.concurrency", fmt.Errorf("scan.concurrency must be from 0 (one per CPU) to %d", MaxScanConcurrency))

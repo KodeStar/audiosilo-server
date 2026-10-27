@@ -42,8 +42,8 @@ func isStreamingPath(p string) bool {
 // /ebook, and nothing deeper: a community cover (/libraries/{id}/meta/cover) is a
 // bounded thumbnail fetched upstream, so it stays under the timeout. The ebook is
 // tens of megabytes for an illustrated one, which a slow phone link fetches for
-// longer than the request timeout; it stays header-auth only and under the
-// general rate limit (no media route).
+// longer than the request timeout; it stays header-auth only and is no media
+// route: it is limited with the authenticated API, per credential (requireAuth).
 func isLibraryMedia(p string) bool {
 	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
 	if !ok {
@@ -211,18 +211,62 @@ func clientIP(r *http.Request) string {
 // console, the web player, the connect page; web.IsStatic) are not counted: they
 // are served from memory or, for a player in web_dir, through spa.Files'
 // per-version cache, and one cold console page is forty-odd chunk requests.
-// Media routes limit themselves (requireMediaAuth). Everything else spends from
+// Media routes limit themselves (requireMediaAuth), and so do the authenticated
+// API routes outside /api/v1/auth/ (requireAuth, tokenKeyed), but an address
+// whose general bucket is empty is refused here already, as they would refuse it,
+// before the timeout layer's goroutine and buffer. Everything else spends from
 // the general bucket, keyed by address because it runs before authentication: it
 // bounds the work done (token lookups included) for a caller nobody has
-// identified yet.
+// identified yet, and the sign-in, pairing and account routes, which a token must
+// not take out of their address's budget.
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h, _ := mux.Handler(r); !web.IsStatic(h, r) && !isMedia(h) && !a.ipLimiter.Allow(clientIP(r)) {
+		h, pattern := mux.Handler(r)
+		if web.IsStatic(h, r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isMedia(h) || tokenKeyed(h, pattern) {
+			if !a.ipLimiter.Ready(clientIP(r)) {
+				rateLimited(w)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !a.ipLimiter.Allow(clientIP(r)) {
 			rateLimited(w)
 			return
 		}
-		next.ServeHTTP(w, r)
+		// Said in the context, so requireAuth never limits this request a second
+		// time, and limits per credential any request this did not limit.
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), addressChargedKey, true)))
 	})
+}
+
+// addressCharged reports whether rateLimit spent r from its address's bucket.
+func addressCharged(r *http.Request) bool {
+	charged, _ := r.Context().Value(addressChargedKey).(bool)
+	return charged
+}
+
+// authRoutes is the prefix of the sign-in, pairing and account routes: limited by
+// address whether or not they are authenticated (POST /auth/pair mints a pairing
+// secret, /auth/password checks a password, /auth/tokens mints a key), so a
+// credential never moves them out of their address's budget.
+const authRoutes = "/api/v1/auth/"
+
+// authHandler marks a route wrapped in requireAuth (and so requireAdmin), so
+// rateLimit can leave an authenticated route's limit to it (tokenKeyed).
+type authHandler struct{ http.Handler }
+
+// tokenKeyed reports whether the route the mux picked (h, its pattern) is limited
+// per credential by requireAuth rather than per address by rateLimit: an
+// authenticated route outside authRoutes (pattern "POST /api/v1/auth/pair" is in).
+func tokenKeyed(h http.Handler, pattern string) bool {
+	_, ok := h.(authHandler)
+	_, p, _ := strings.Cut(pattern, " ")
+	return ok && !strings.HasPrefix(p, authRoutes)
 }
 
 func rateLimited(w http.ResponseWriter) {
@@ -253,15 +297,61 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // header only) and injects the user into context. An API key acts as its owner,
 // so it satisfies requireAuth (and requireAdmin, when the owner is an admin)
 // exactly like a session; a pairing token is never accepted here.
+//
+// It also owns the rate limit of its routes outside authRoutes (server#246),
+// which rateLimit leaves to it, as mediaAuth does for media: a request that
+// authenticates spends from its credential's bucket (tokenLimiter), not its
+// address's, so several people behind one address (a household behind NAT, every
+// visitor behind a reverse proxy) and a web player loading a whole library each
+// have their own budget. Until it is proved, a token costs its address: the
+// request is refused while the address's bucket is empty and a failed
+// authentication (a missing or refused token) pays into it. Ready reserves
+// nothing, so that bounds tokens tried one after another, not at once: requests
+// that pass Ready together are each looked up before any of them pays, and with
+// the debt floored at -burst, a flood sending more than burst+1 at a time gets
+// that many lookups every (burst+1)/rate seconds. A request its credential's
+// bucket refuses has cost a lookup too and pays into the address's bucket, so a
+// client hammering past its budget is soon refused before any lookup. A request
+// rateLimit already charged to its address (authRoutes) is only authenticated.
 func (a *API) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return authHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		perToken := !addressCharged(r)
+		ip := clientIP(r)
+		if perToken && !a.ipLimiter.Ready(ip) {
+			rateLimited(w)
+			return
+		}
 		ctx, failure, _ := a.authenticate(r, false, sessionOrAPI)
 		if failure != "" {
+			if perToken {
+				a.ipLimiter.Charge(ip)
+			}
 			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
+		if perToken && !a.allowCredential(ctx, ip) {
+			rateLimited(w)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	})}
+}
+
+// allowCredential spends an authenticated request (ctx) from its credential's
+// bucket: every credential is a tokens row, so its id is its bucket, and a
+// request the bucket refuses costs its address (the lookup was already done). A
+// demo account's session spends from its address's bucket instead, as every
+// request did before server#246: anyone can mint a demo session
+// (POST /demo/session), so a per-token budget would be no limit at all.
+func (a *API) allowCredential(ctx context.Context, ip string) bool {
+	if u := userFrom(ctx); u != nil && u.IsDemo {
+		return a.ipLimiter.Allow(ip)
+	}
+	if !a.tokenLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
+		a.ipLimiter.Charge(ip)
+		return false
+	}
+	return true
 }
 
 // requireMediaAuth is requireAuth that additionally accepts the credential as a

@@ -64,6 +64,32 @@ trusted_proxies: []                                 # [AUDIOSILO_TRUSTED_PROXIES
 # player on another site can show and play them.
 cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
 
+# Request rate limits (read at start), each a bucket refilled at `rate` requests a
+# second that holds at most `burst`; a request past it is answered 429.
+#   address - per client address: requests with no valid token (a wrong or
+#             missing token pays here), the public routes, the Bridge's own
+#             requests (/api/v1/bridge/*), and sign-in, pairing and account
+#             requests (/api/v1/auth/*) even with a valid token.
+#   token   - per signed-in device or API key: every other API request. A
+#             household behind one address, or everyone behind a reverse proxy,
+#             each have their own; a token past its budget also costs its address.
+#             A demo session (anyone can start one) spends from address instead.
+#   media   - per signed-in device or API key: covers and audio.
+# The lockouts on wrong passwords and invite codes (10 per address per 15
+# minutes) are separate and always on. Set only what you want to change: a value
+# left out (or 0) is the release's default, shown below, and is never written
+# into config.yaml, so a later release's defaults still apply.
+# rate_limit:
+#   address:
+#     rate: 50       # [AUDIOSILO_RATE_LIMIT_ADDRESS_RATE]
+#     burst: 200     # [AUDIOSILO_RATE_LIMIT_ADDRESS_BURST]
+#   token:
+#     rate: 50000    # [AUDIOSILO_RATE_LIMIT_TOKEN_RATE]
+#     burst: 100000  # [AUDIOSILO_RATE_LIMIT_TOKEN_BURST]
+#   media:
+#     rate: 200      # [AUDIOSILO_RATE_LIMIT_MEDIA_RATE]
+#     burst: 2000    # [AUDIOSILO_RATE_LIMIT_MEDIA_BURST]
+
 # Maximum request/upload body size in bytes (uploads land in Phase B).
 max_upload_bytes: 2147483648                        # [AUDIOSILO_MAX_UPLOAD_BYTES] (2 GiB)
 

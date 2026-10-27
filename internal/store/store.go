@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"modernc.org/sqlite"
@@ -60,6 +61,10 @@ type DB struct {
 	reader *sql.DB
 	log    *slog.Logger
 	dsn    string // as given to Open; VacuumInto opens its own connection on it
+
+	// gen is the write generation (Generation): moved after every write on the
+	// writer pool has finished.
+	gen atomic.Uint64
 
 	stopSampler context.CancelFunc // nil unless the pool-stats sampler is running
 }
@@ -178,23 +183,20 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 // ExecContext runs a write on the writer pool. (This also satisfies the auth
 // package's sqlExecer, so standalone auth-code writes route to the writer.)
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	defer db.gen.Add(1) // after the statement (autocommit) has committed
 	return db.writer.ExecContext(ctx, query, args...)
 }
 
-// WriteRowContext runs one statement that writes and reads a row back (an
-// INSERT/UPDATE ... RETURNING) on the writer pool. QueryRowContext would send it
-// to the reader pool, whose query_only refuses any write on a file-backed
-// database ("attempt to write a readonly database") while an in-memory test,
-// reader == writer, passes.
-func (db *DB) WriteRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return db.writer.QueryRowContext(ctx, query, args...)
-}
-
-// BeginTx starts a transaction on the writer pool. Prefer WithTx, which also
-// guarantees rollback and logs slow transactions.
-func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return db.writer.BeginTx(ctx, opts)
-}
+// Generation is the database's write generation: a number that moves after every
+// write through this handle has finished (ExecContext returned, a WithTx committed
+// or rolled back), and never otherwise. Every write goes through those two (the
+// reader pool is query_only), so an answer computed from reads that began after
+// Generation returned g is current for as long as Generation still returns g: a
+// write that committed after them moved it on, and one that committed before them
+// is in what they read. A cache keyed on it is exact (api's list cache). It moves
+// for every write, a no-op or failed one included, so it says only "nothing was
+// written since", never what changed.
+func (db *DB) Generation() uint64 { return db.gen.Load() }
 
 // Ping verifies the database is reachable for reads. It runs a trivial query on
 // the reader pool (a stronger check than a bare connection ping) and backs the
@@ -222,6 +224,8 @@ func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) (
 	if err != nil {
 		return err
 	}
+	// Deferred first, so it runs last: after the commit, or the rollback.
+	defer db.gen.Add(1)
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 	if err = fn(tx); err != nil {
 		return err
