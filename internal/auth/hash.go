@@ -9,7 +9,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -47,7 +50,7 @@ func hashWithCost(password string, c argonCost) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(password), salt, c.time, c.memory, c.threads, argonKeyLen)
+	key := argonKey([]byte(password), salt, c.time, c.memory, c.threads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, c.memory, c.time, c.threads,
 		base64.RawStdEncoding.EncodeToString(salt),
@@ -79,8 +82,51 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	got := argon2.IDKey([]byte(password), salt, time, mem, threads, uint32(len(want)))
+	got := argonKey([]byte(password), salt, time, mem, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
+}
+
+// argonKey is argon2.IDKey followed by handing its work memory back to the OS
+// (releaseHashMemory). Every argon2id hash and verify goes through it.
+func argonKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	key := argon2.IDKey(password, salt, time, memory, threads, keyLen)
+	hashMemory.release()
+	return key
+}
+
+// hashReleaseDelay is how long the hashes must have been quiet before their
+// memory is released, so a burst of sign-ins costs one release, not one each.
+const hashReleaseDelay = time.Second
+
+// hashMemory is the release after the last hash (see memoryReleaser).
+var hashMemory = &memoryReleaser{delay: hashReleaseDelay, free: debug.FreeOSMemory}
+
+// memoryReleaser hands an argon2id hash's work memory (argonMemory, 64 MiB, a
+// fresh allocation each time) back to the OS once the hashes go quiet. Without
+// it a server that hashes a password or two at start (the first-run admin, a
+// sign-in) and then idles keeps that memory: the heap grew to hold the block, so
+// the garbage it leaves stays under the next GC's goal and no GC runs to free it,
+// and the background scavenger returns freed pages only slowly. An idle server
+// with an empty library sat at about 140 MiB instead of about 20 (server#244).
+// The release (debug.FreeOSMemory: a GC, then every free page returned) runs on
+// its own goroutine after delay with no further hash, never on the request's.
+type memoryReleaser struct {
+	delay time.Duration
+	free  func()
+
+	mu    sync.Mutex
+	timer *time.Timer
+}
+
+// release schedules the release delay from now, pushing back one already due.
+func (r *memoryReleaser) release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.timer == nil {
+		r.timer = time.AfterFunc(r.delay, r.free)
+		return
+	}
+	r.timer.Reset(r.delay)
 }
 
 // generateToken returns a URL-safe random secret and its storage hash.
