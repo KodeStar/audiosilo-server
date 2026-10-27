@@ -75,6 +75,9 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 //   - favourites and daily roll-ups: re-keyed (a listener's favourite once).
 //   - ratings: re-keyed; where a listener rated more than one part (or the joined
 //     book), the newest updated_at wins.
+//   - reading places in the ebook (reading_progress): re-keyed, not offset (a
+//     place is a CFI); as for ratings, the newest updated_at wins, whole, under a
+//     version above both.
 //   - up-next entries and collection items: re-keyed; a list already holding the
 //     joined book (or an earlier part's entry) keeps that one, in its place.
 //

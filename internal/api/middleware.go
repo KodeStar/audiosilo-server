@@ -30,23 +30,27 @@ const requestTimeout = 30 * time.Second
 
 // isStreamingPath reports whether a request path serves a long-lived or large
 // body that must NOT be bounded by requestTimeout: a book's media (cover/stream,
-// incl. transcoding), a backup's download and the web player's static asset mount.
+// incl. transcoding) or ebook, a backup's download and the web player's static
+// asset mount.
 func isStreamingPath(p string) bool {
 	return isLibraryMedia(p) ||
 		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
 }
 
-// isLibraryMedia reports whether p is GET /libraries/{id}/cover or /stream, and
-// nothing deeper: a community cover (/libraries/{id}/meta/cover) is a bounded
-// thumbnail fetched upstream, so it stays under the timeout.
+// isLibraryMedia reports whether p is GET /libraries/{id}/cover, /stream or
+// /ebook, and nothing deeper: a community cover (/libraries/{id}/meta/cover) is a
+// bounded thumbnail fetched upstream, so it stays under the timeout. The ebook is
+// tens of megabytes for an illustrated one, which a slow phone link fetches for
+// longer than the request timeout; it stays header-auth only and under the
+// general rate limit (no media route).
 func isLibraryMedia(p string) bool {
 	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
 	if !ok {
 		return false
 	}
 	id, leaf, ok := strings.Cut(rest, "/")
-	return ok && id != "" && (leaf == "cover" || leaf == "stream")
+	return ok && id != "" && (leaf == "cover" || leaf == "stream" || leaf == "ebook")
 }
 
 // isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's

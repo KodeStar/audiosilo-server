@@ -146,7 +146,7 @@ func (s *Scanner) Preview(ctx context.Context, root string, ignore []string, lim
 	start := time.Now()
 	lib := catalog.Library{Name: "(setup preview)", Root: root, Kind: catalog.KindBooks}
 	walk := &walkCap{dirs: lim.MaxDirs, until: start.Add(min(lim.MaxWalk, lim.MaxTime))}
-	books, _, err := discoverAuto(ctx, lib, nil, ParseIgnore(lines), s.log, nil, walk)
+	books, _, _, err := discoverAuto(ctx, lib, nil, ParseIgnore(lines), s.log, nil, walk)
 	capped := errors.Is(err, errWalkCapped)
 	if err != nil && !capped {
 		return nil, err

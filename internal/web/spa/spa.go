@@ -22,7 +22,6 @@
 package spa
 
 import (
-	"bytes"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -144,6 +143,13 @@ func (c Config) isAsset(rel string) bool {
 }
 
 func (c Config) serve(w http.ResponseWriter, r *http.Request, files *Files, name, rel string) {
+	// A .html name in any case is a document: a case-insensitive disk (a web_dir
+	// on macOS or Windows) opens "INDEX.HTML" too, and mime types it text/html,
+	// so it must never go out under FileCSP (or none) instead of DocumentCSP.
+	if strings.EqualFold(path.Ext(name), ".html") {
+		files.ServeDocument(w, r, c.FS, name, c.DocumentCSP)
+		return
+	}
 	info, content, done, ok := openFile(c.FS, name)
 	if !ok {
 		http.NotFound(w, r)
@@ -154,23 +160,11 @@ func (c Config) serve(w http.ResponseWriter, r *http.Request, files *Files, name
 	h := w.Header()
 	h.Set("Content-Type", ContentType(name))
 	h.Set("Cache-Control", "no-cache")
-	if strings.HasSuffix(name, ".html") {
-		// The document's bytes feed its CSP (the player hashes inline scripts);
-		// both are kept per version of the file.
-		data, csp, err := files.Document(name, info, content, c.DocumentCSP)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		h.Set("Content-Security-Policy", csp)
-		content = bytes.NewReader(data)
-	} else {
-		if c.FileCSP != "" {
-			h.Set("Content-Security-Policy", c.FileCSP)
-		}
-		if c.inAssetDir(rel) {
-			h.Set("Cache-Control", immutable)
-		}
+	if c.FileCSP != "" {
+		h.Set("Content-Security-Policy", c.FileCSP)
+	}
+	if c.inAssetDir(rel) {
+		h.Set("Cache-Control", immutable)
 	}
 	files.Serve(w, r, name, info, content)
 }

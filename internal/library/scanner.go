@@ -230,10 +230,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
 	ignore := ParseIgnore(lib.IgnorePatterns)
-	books, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil)
+	books, epubs, partialDiscovery, err := discoverAuto(ctx, lib, overrides, ignore, s.log, rl, nil)
 	if err != nil {
 		return res, err
 	}
+	ebooksOfWalk(lib, books, epubs)
 	res.Books = len(books)
 	rl.add("info", "discovered", func(e *catalog.RunEvent) { e.Count = len(books) })
 	s.log.Info("discovery complete; indexing", "library", lib.Name, "books", len(books))
@@ -294,7 +295,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// files this once): recorded without a re-index (SetFileOrders), so the next
 	// scan reads none of their files.
 	orderBackfill := map[string]uint64{}
-	// The path, genre, ABS, attachments and file order backfills are written as
+	// Books found unchanged whose ebook is new, changed or gone (or never looked
+	// for: indexed before 0056): recorded without a re-index (SetEbooks).
+	ebookBackfill := map[string]catalog.EbookReading{}
+	// The path, genre, ABS, attachments, file order and ebook backfills are written as
 	// they go: a large one (most of a library laid out Author/Title, or every
 	// folder book of a library ABS has managed, read once after an upgrade) can
 	// take a while, and a scan stopped part way keeps what it read (written past
@@ -320,6 +324,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record file orders failed", "library", lib.Name, "err", err)
 		}
 		clear(orderBackfill)
+		if err := s.cat.SetEbooks(context.WithoutCancel(ctx), lib.ID, ebookBackfill); err != nil {
+			s.log.Warn("record ebooks failed", "library", lib.Name, "err", err)
+		}
+		clear(ebookBackfill)
 	}
 	lastLog := time.Now()
 	report := func(done int) {
@@ -417,7 +425,19 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 							Was: &catalog.AttachmentsState{Sig: old.AttachmentsSig, Unchecked: old.AttachmentsUnchecked}}
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill)+len(orderBackfill) >= pathFlushEvery {
+				// The ebook beside it (the reader's): a new, changed or gone one is
+				// checked and recorded; one that can't be read right now keeps what is
+				// stored, for the next scan.
+				if old.EbookSig != b.EbookFile.Sig {
+					if r, ok := checkEbook(lib.Root, b.EbookFile); ok {
+						// Recorded only over the row as this scan read it: an index of
+						// the book since (on demand) recorded a newer reading.
+						r.Was = &catalog.EbookState{Sig: old.EbookSig, IndexedAt: old.IndexedAt}
+						ebookBackfill[b.RelPath] = r
+					}
+				}
+				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill)+len(orderBackfill)+
+					len(ebookBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
 				continue
@@ -641,6 +661,16 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 		} else {
 			b.Attachments = catalog.AttachmentsReading{Unread: true}
 		}
+	}
+
+	// The ebook beside it: one that can't be read right now keeps what is stored
+	// (Unread; a new row gets none), as a scan that finds the book unchanged
+	// does, so a re-index on a flaky mount never takes a recorded ebook away; the
+	// next scan looks again at one that changed.
+	if r, ok := checkEbook(lib.Root, b.EbookFile); ok {
+		b.EbookFile = r
+	} else {
+		b.EbookFile = catalog.EbookReading{Unread: true}
 	}
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
@@ -888,15 +918,17 @@ func partTitle(relPath string) string {
 // which a Linux share can hold, and every scan would then read as partial.)
 //
 // limit bounds the walk (nil for none, as a scan walks): once it is reached the
-// books of the folders walked so far come back with errWalkCapped.
-func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap) (books []*catalog.Book, hadErrors bool, err error) {
+// books of the folders walked so far come back with errWalkCapped. epubs are
+// the walk's .epub entries by folder (sidecarFiles.epubs), which a scan turns
+// into its books' ebook candidates (ebooksOfWalk) and a setup preview ignores.
+func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap) (books []*catalog.Book, epubs map[string][]fs.DirEntry, hadErrors bool, err error) {
 	walkRoot := lib.Root
 	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
 		walkRoot = resolved
 	}
 	dirs, side, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl, limit)
 	if err != nil && !errors.Is(err, errWalkCapped) {
-		return nil, hadErrors, err
+		return nil, nil, hadErrors, err
 	}
 	books = booksOf(lib, dirs, overrides)
 	for _, b := range books {
@@ -905,7 +937,43 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		}
 	}
 	attachmentsOfWalk(books, side)
-	return books, hadErrors, err
+	return books, side.epubs, hadErrors, err
+}
+
+// ebooksOfWalk sets each book's ebook candidate (EbookFile: the path BookEbook's
+// rule names and its signature, not yet checked for readability: checkEbook)
+// from the .epub entries the discovery walk found (audioDirs), by the folder
+// holding them. A single-file book is handed only the entries named in some case
+// of its "<stem>.epub" (all ebookCandidate looks at), found through a name index
+// made once per folder, so a folder of many books and their epubs isn't searched
+// once per book.
+func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][]fs.DirEntry) {
+	if len(epubs) == 0 {
+		return
+	}
+	named := map[string]map[string][]fs.DirEntry{} // folder -> lower-cased name -> entries
+	for _, b := range books {
+		dir := sidecarDir(b.RelPath, b.IsFolder)
+		listed := epubs[dir]
+		if len(listed) == 0 {
+			continue
+		}
+		if !b.IsFolder {
+			byName := named[dir]
+			if byName == nil {
+				byName = make(map[string][]fs.DirEntry, len(listed))
+				for _, e := range listed {
+					key := strings.ToLower(e.Name())
+					byName[key] = append(byName[key], e)
+				}
+				named[dir] = byName
+			}
+			if listed = byName[strings.ToLower(ebookName(b.RelPath))]; len(listed) == 0 {
+				continue
+			}
+		}
+		b.EbookFile = ebookCandidate(lib.Root, b.RelPath, b.IsFolder, listed)
+	}
 }
 
 // booksOf turns the folders that directly hold audio (dirs: library-relative, with
@@ -947,7 +1015,8 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // reaching it stops the walk with errWalkCapped, dirs holding what it found.
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog, limit *walkCap) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
-	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{}}
+	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
+		epubs: map[string][]fs.DirEntry{}}
 	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1004,6 +1073,10 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			}
 			return nil
 		}
+		if isEpubEntry(d) {
+			side.epubs[dirOf(rel)] = append(side.epubs[dirOf(rel)], d)
+			return nil
+		}
 		if !isAudioEntry(d, rel, ignore) {
 			return nil
 		}
@@ -1022,11 +1095,14 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // (metadata.ABSSignature) of each folder's Audiobookshelf metadata.json (a
 // regular file, not ignored), attachments each .audiosilo folder's known files
 // (listAttachments), and unlisted the folders whose .audiosilo couldn't be
-// listed right now.
+// listed right now. epubs are each folder's .epub entries (isEpubEntry: links
+// and ignored files included, as BookEbook's rule reads a folder), which
+// ebooksOfWalk turns into each book's ebook candidate.
 type sidecarFiles struct {
 	abs         map[string]string
 	attachments map[string]attachmentFiles
 	unlisted    map[string]bool
+	epubs       map[string][]fs.DirEntry
 }
 
 // isABSEntry reports whether a directory entry (at library-relative rel) is an
@@ -1367,6 +1443,10 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the
 // book as stored.
 func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *catalog.Book) (*catalog.Book, error) {
+	// No walk found it, so look for its ebook here: only now it is indexed, as a
+	// book resolved for another reason (bookOnDisk, a shared read's waiters)
+	// never needs it.
+	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
 	s.enrich(lib, book)
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.

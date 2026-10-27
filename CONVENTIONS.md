@@ -163,9 +163,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   origin, which also serves AngularJS, a CSP-bypass gadget; `TestHTMLCSPCastSender` pins the
   whole string) and a sha256
   hash of that doc's inline scripts; `style-src` allows `'unsafe-inline'` for
-  react-native-web's runtime styles). Admin/connect pages keep the stricter
+  react-native-web's runtime styles). A `.html` name in any case is a document (`spa`'s `serve`:
+  a case-insensitive `web_dir` opens `INDEX.HTML` too, which must never go out under the file
+  policy; `TestCSPDocumentAnyCase`). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
   build); native apps negotiate via `GET /server` capability flags.
+  **The reader document** (Bridge Phase 3b, `web.readerDocument`): `GET /web/reader.html` is the
+  export's `reader.html` (the frontend's `public/reader.html`: foliate-js and the reader in ONE inline
+  script plus an inline style, no subresources), which the player's reader screen frames. The `/web/`
+  handler sends every path that would name it (`web.isReaderPath`: `reader.html` or `reader`, any
+  case, a trailing slash) to it, so it is never served under the player's policy, and a player route
+  must never be named `reader`. It gets its own policy (`web.readerCSP`, READ-ALONG-RESEARCH "Reader
+  recipe"; `TestReaderCSP` pins it): `default-src 'none'`, `script-src` only the sha256 of the
+  document's inline scripts as served (`web.inlineScriptHashes`, shared with `htmlCSP`; `'none'` with
+  none), `style-src 'unsafe-inline' blob:`, `img-src`/`font-src blob: data:`, `frame-src blob:` (the
+  EPUB's section frames, which inherit it), `media-src`/`connect-src`/`object-src`/`base-uri`/`form-action
+  'none'`, `frame-ancestors 'self'`; `X-Frame-Options: SAMEORIGIN` replaces the site-wide `DENY`;
+  `Cache-Control: no-cache` with the ETag (`spa.Files.ServeDocument`). No `reader.html` in the export
+  (an older web build) is a 404, never the app shell. `/web/`'s own policy is unchanged
+  (`TestHTMLCSPCastSender`, `TestReaderDocument`). foliate never runs in the `/web` document.
 - **Admin console (`admin-ui/` + `internal/web/adminui`)**: a React SPA in the Shelf design
   (workspace `ADMIN-CONSOLE-PLAN.md` holds the phases still to come; `admin-ui/STYLEGUIDE.md` the
   design). It replaced the classic vanilla-JS console at the Phase 1b cutover (no switch, no
@@ -543,6 +559,39 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   under a part path stay where they are (not merged), and bookmarks, notes, history,
   favourites and the queue are not canonicalized (follow-ups). `POST /cast/token` already grants
   the book's path (`bookAt`).
+  **The ebook** (Bridge Phase 3b, capability `ebooks`, `api/handlers_ebook.go`): `GET
+  /libraries/{id}/ebook?path=<the book's own path>` serves the file the scan recorded for the book
+  (`books.ebook_path`, see Auto book/folder detection), opened fresh by `library.OpenEbook`: joined
+  again through `ContentJoin`, checked a regular file BEFORE it is opened (a FIFO's open would wait
+  for a writer; a folder book's must not be a link now either, `Lstat`) and, once open, still the
+  very file the path leads to inside the library (`os.SameFile` against a second look), so a link
+  swapped in meanwhile is never followed out. Gone, or anything but such a file now
+  (`library.ErrNoEbook`): 404; one that is there but can't be read right now (a permission, a flaky
+  mount): 500, logged. Served with `http.ServeContent` (Range, a size+mtime
+  ETag, Last-Modified), `Content-Type: application/epub+zip`, `Content-Security-Policy: sandbox;
+  default-src 'none'`, `Cache-Control: private, no-cache`, the site-wide nosniff and `same-site`
+  CORP. **Header auth only** (`requireAuth`: a session or API key; `?token=` is never read and a cast
+  token is refused either way; there is no URL token for it, see Cast tokens). The path must be the
+  book's own (`bookAt`, then `book.RelPath == path`): a track, the epub's own path, a folder above,
+  a hidden or `.audiosilo/` path, a podcast library, a book with no ebook (none, several, unreadable,
+  a link leading out) are 404; a book outside scope 403. Its bytes outlive the request timeout
+  (`isLibraryMedia`, in `isStreamingPath`, matches `/ebook` as it does `/cover` and `/stream`), but
+  its lookup (`bookAt`, which may index the book on demand and so wait for the one writer) is
+  bounded by it: past it, a 500 (`TestEbookLookupBounded`). It stays under the general rate limit
+  (`requireAuth`, no media route). The player's
+  `Book` carries `ebook: {path, size}` (omitempty; `catalog.Ebook`, the size from `ebook_sig`) on
+  every endpoint returning a Book, so a client never asks for a book with none. **Reading
+  progress**: `GET`/`PUT /libraries/{id}/reading-progress?path=` (`bookAt`: a part path is its book's;
+  404 for no book or no ebook) keyed on the BOOK's path (never the epub's or a track's), table
+  `reading_progress` (`0057`, carried by `carryListeningState`), `{"reading_progress": row | null}`;
+  PUT `{cfi, progression, device_id, updated_at, base_version?}` answers the row stored after the
+  save plus `other_place` on a diverged save (see Progress reconciliation); 400 for a CFI not
+  starting `epubcfi(` or over 2048 bytes, a missing or null progression (never read as 0) or one
+  outside [0,1], an updated_at that isn't RFC3339 (or falls before year 1 in UTC, whose stored form
+  would be none), a missing or empty device id (two saves with none would read as one device's and
+  never diverge) or one over 200 bytes, a negative base or an unknown field (`device_name` is
+  accepted and ignored: the name is the token's, `Credential.DeviceName`, never the body's; an
+  echoed `other_place` is accepted, a whole stored row isn't). No listening heartbeat on a save.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML
@@ -583,7 +632,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `API.directPlayable`. An `.mka` beside a file of the same name in
   another audio format (`Book.m4b` + `Book.mka`) is that file's source or copy and stays out of the
   book, as an `.aax` does (`library.folderAudio`), and out of the `/fs` listing too
-  (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed.
+  (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed. An `.epub` is never
+  audio: `/stream` refuses it (404) and `/fs` doesn't list it; a book's ebook is served only by
+  `GET /libraries/{id}/ebook` (see Path-addressed API).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -699,6 +750,35 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **admin** caller only (`annotateWithBooks`; `omitempty`), so the player's listing is
   unchanged; the console offers "Always one book" on a folder without audio only there or
   on a joined book.
+  **A book's ebook** (Bridge Phase 3b, `0056`, `library/ebook.go`): `books.ebook_path` is the one
+  `.epub` the reader opens, by `library.BookEbook`'s rule (the Bridge's own, so the reader, the
+  estimate and the Bridge's "auto" source always agree): a folder book's one regular, non-hidden
+  `.epub` directly in its folder (a link never counts, several is none); a single-file book's
+  `<stem>.epub` beside it as the disk opens that name (the Bridge's `os.Stat` of it: exactly that name
+  on a case-sensitive disk, any case of it on a case-insensitive one, recorded under the computed name;
+  `ebookNamed`, one `Lstat`), a link counting while it leads to a regular file inside the library;
+  readable (`readableEpub`: a zip listing `META-INF/container.xml`; DRM is not judged, as the Bridge
+  doesn't judge it). Ignore rules don't apply (the Bridge's rule doesn't read them). One rule
+  function, `ebookCandidate`, serves both callers: the scan feeds it the `.epub` entries its discovery
+  walk already lists (`sidecarFiles.epubs`, `ebooksOfWalk`; a single-file book only the entries named
+  in some case of its `<stem>.epub`, through a name index made once per folder), an on-demand index
+  (`indexBook`: `IndexPath`, `IndexMoved`) and `BookEbook` what is on disk now (`ebookOnDisk`: a
+  folder book's folder listed, a single-file book's name looked up); `TestScanRecordsEbookByBookEbookRule`
+  and `TestEbookCaseVariantBesideSingleFile` hold them together. `books.ebook_sig` is the named file's
+  size, mtime and name (`catalog.EbookSig`; a link's target's), recorded whether or not it is readable
+  (a corrupt file, a link out of the library or to nothing, a FIFO: none, recorded by its signature,
+  `TestScanEbookLinkToNothing`), so a scan that finds the book unchanged opens it again only when the
+  signature changed (an index, a re-index and `BookEbook` always read it). A book found unchanged
+  whose signature differs (an epub added, replaced, renamed, removed, or a second one added; every
+  book after the upgrade, as 0056 starts them at '') is recorded by `SetEbooks` with the scan's other
+  backfills, with **no re-index** (`TestScanBackfillsEbookWithoutReindex`), and only over the row as
+  the scan read it (`EbookReading.Was`: its `ebook_sig` and `indexed_at`, so an on-demand index since,
+  newer than the walk, stays; `TestSetEbooksCompareAndSet`). A file that can't be read right now (a
+  folder that won't list, a permission, a flaky mount: `EbookReading.Unread`) keeps what is stored, in
+  a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
+  (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
+  regular file inside the library checked before it is opened (a FIFO's open would wait for a writer,
+  `TestOpenEbookFIFO`) and, once open, still the very file its name leads to (`os.SameFile`).
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
   found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
@@ -1093,7 +1173,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `communityRetryAfter`, 1 min, so a broken or hung host isn't fetched on every render; the
   console's batch ignores that and always retries), 404 `no cover` (not an image, over
   the pixel bound). It stays under the request timeout (`isStreamingPath` matches
-  only `/libraries/{id}/cover|stream` exactly, `isLibraryMedia`).
+  only `/libraries/{id}/cover|stream|ebook` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like
@@ -1503,7 +1583,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `transcodeSem` slots while the receiver reads it, and a full semaphore is the usual 503 +
   `Retry-After` (the receiver reports a load error; the sender should say "busy, try again"); it
   marks the SENDER's session transcoded (`StreamMarks.Note` keys on `Credential.DeviceID`, the
-  parent token, whose progress saves make the session).
+  parent token, whose progress saves make the session). **Not the ebook** (Bridge Phase 3b): `GET
+  /libraries/{id}/ebook` takes no URL token of any kind and there is no `reader` token kind. The web
+  host fetches the epub with its bearer header and posts the bytes to the reader; the native host
+  (3b-2) downloads it with the header into a local file. Nothing needs a URL carrying a credential,
+  so none exists. Only if 3b-2's proof shows a WebView can't read a local file does a `reader` kind
+  on `cast_grants` (own kind, `/ebook` only, 10 min) get planned and reviewed.
 - **The Bridge (BRIDGE-PLAN.md Phases 0, 1a, 1c, 1d and 2b, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
   `api/handlers_bridge.go`, `handlers_bridge_estimate.go`; security-critical)**: the optional companion (repo `audiosilo-bridge`,
   private) that writes to the libraries and runs the heavy jobs, so this server stays read-only. **The
@@ -2184,7 +2269,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with `?range=` it answers the Activity page's `activity` block instead (see Phase 4a above).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
   ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
-  REST and WebSocket writes converge.
+  REST and WebSocket writes converge. **Sync v2's rule** (`catalog.ResolvePlace`, pure, table-tested;
+  reading progress uses it since Bridge Phase 3b, listening progress will in Track W1): a save carries
+  `base_version`, the stored version its device last saw (0 none seen; absent, never diverges). It
+  is **diverged** when a row is stored, the base is sent and differs from its version, and another
+  device (`device_id`) wrote the row. A diverged save never moves the place back silently: the
+  further `progression` is kept (the save applied, or the stored row kept; a tie keeps the stored
+  row) and the place not kept comes back as `other_place` (response only, never stored), which the
+  reader offers ("On {device} you were at {percent}. Jump there?"). Any other save is last-write-wins
+  exactly as above (`newerStamp`, which `IsNewer` shares; the save compared at the version it would
+  be stored with, so a tie in time applies), a stale one echoing the stored row, so moving back on
+  purpose works. The server bumps `version` on every applied write; `updated_at` is stored as
+  fixed-width UTC milliseconds (a far-future one replaced by server time) so a move's merge compares
+  it as text; `device_name` is the saving token's.
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and

@@ -109,7 +109,7 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
-internal/library/     filesystem view (fsview.go: SafeJoin, and ContentPath/ContentJoin, the one hidden-segment rule) + background scanner (scanner.go: incl. IndexMoved and the .audiosilo/ walk); attachments.go (a book's Bridge attachments: signatures, RefreshAttachments); ebook.go (BookEbook, the Bridge's own .epub rule, for the estimate; a readable one only: a zip whose directory lists META-INF/container.xml, as the Bridge reads it)
+internal/library/     filesystem view (fsview.go: SafeJoin, and ContentPath/ContentJoin, the one hidden-segment rule) + background scanner (scanner.go: incl. IndexMoved and the .audiosilo/ walk); attachments.go (a book's Bridge attachments: signatures, RefreshAttachments); ebook.go (BookEbook, the Bridge's own .epub rule, for the estimate and, through the one rule function ebookCandidate fed by the walk, books.ebook_path, the reader's ebook; a readable one only: a zip whose directory lists META-INF/container.xml, as the Bridge reads it; OpenEbook, every open of one: a regular file inside the library, checked before it is opened and the same file once open)
 internal/metadata/    dhowden/tag + ffprobe extraction (a narrator tag beats composer in both passes; mp4narrator.go reads the iTunes \xa9nrt item, which neither reads, with a bounded box walk; a series tag ending in a marked position, "Discworld, book #40", is the series and that position: seriestag.go SplitSeriesTag; a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); absfile.go: ParseABSFile/ReadABSFile (an Audiobookshelf metadata.json, see Metadata overrides); attachments.go: AttachmentsDir `.audiosilo`, Read/ParseCharacters, Recaps, Description and Provenance (the Bridge's generated files, checked against audiosilo-meta's formats; see Bridge attachments); chapterlist.go: Read/ParseChapterList (the Bridge's `chapters.json`, chapters found in the narration; see Generated chapters); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction, transcoding (a descriptor input read seekably via fd:, pipe:0 for an older ffmpeg); remux.go: Remuxer, the MP3-in-MKA remux cache (<data>/cache/remux, 8 GiB LRU, single-flight, warmed by /item and /chapters, a cold stream transcoded after 2 s, own ETag; see Recognized audio)
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
@@ -272,7 +272,11 @@ library or a second account (not a demo or member), so an upgraded server never 
 `0055` adds `books.file_order` (a folder book's file order key, `catalog.FileOrderKey` bit-cast to a
 signed integer) and `file_order_indexed_at` (the index it was recorded with; NULL or another index's,
 an older server's re-index, = not recorded, filled by the next scan without a re-index; derived; see
-Auto book/folder detection in CONVENTIONS.md).
+Auto book/folder detection in CONVENTIONS.md). Bridge Phase 3b: `0056` adds `books.ebook_path` /
+`ebook_sig` (the book's ebook and the signature of the file the rule names; derived, backfilled by the
+scan without a re-index) and `0057` `reading_progress` (a reader's place in a book's ebook: durable,
+path-keyed on the book's path, no FK to the index, `device_name` from the saving token, carried by
+`carryListeningState`; see Path-addressed API and Progress reconciliation in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -366,7 +370,7 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
@@ -447,6 +451,11 @@ the next request; an API-key caller may revoke).
 Listening in the house is `GET`/`PUT /me/household` and `GET /household/listening`; casting is
 `POST /cast/token` (see the two Phase 8 bullets above). Household members are
 `/me/household/members[/{id}[/session|/pair|/devices[/{device_id}]]]` (see Household members above).
+The reader (Bridge Phase 3b, capability `ebooks`): a player `Book` carries `ebook: {path, size}`
+(omitted when none), `GET /libraries/{id}/ebook?path=<book>` serves it (header auth only, never
+`?token=`), `GET`/`PUT /libraries/{id}/reading-progress?path=` keep the reader's place (Sync v2's
+conflict rule, `other_place` on a diverged save), and `GET /web/reader.html` is the player's reader
+document under its own CSP (see Web player at `/web` and Path-addressed API in CONVENTIONS.md).
 What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
 `item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
 `{source: community|series|folder|none, next?, book?, work?}`, see Next book above).

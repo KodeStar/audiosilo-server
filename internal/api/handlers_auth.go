@@ -121,6 +121,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
 		"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
 		"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
+		"ebooks":             true,                 // the reader: Book.ebook, GET /libraries/{id}/ebook, GET/PUT /libraries/{id}/reading-progress
 	}
 }
 

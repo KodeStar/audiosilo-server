@@ -3,6 +3,8 @@ package library
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,6 +159,93 @@ func TestBookEbookReadable(t *testing.T) {
 	} {
 		if got := BookEbook(root, tc.rel, tc.folder); got != tc.want {
 			t.Errorf("BookEbook(%q) = %q, want %q", tc.rel, got, tc.want)
+		}
+	}
+}
+
+// diskFailing fails every read the way a disk does (os.File's *fs.PathError: a
+// flaky mount, an I/O error).
+type diskFailing struct{}
+
+func (diskFailing) ReadAt([]byte, int64) (int, error) {
+	return 0, &fs.PathError{Op: "read", Path: "Book.epub", Err: errors.New("input/output error")}
+}
+
+// A read the disk fails is one that can't be done right now (an error: the scan
+// looks again), never "not an epub", which would be recorded until the file
+// changes; the archive's own faults are (false, nil).
+func TestReadableEpubDiskError(t *testing.T) {
+	t.Parallel()
+	if ok, err := readableEpub(diskFailing{}, 4096); ok || err == nil {
+		t.Errorf("a failing disk: readableEpub = %v, %v; want an error", ok, err)
+	}
+	for name, body := range map[string][]byte{
+		"not a zip":    []byte(strings.Repeat("x", 64)),
+		"no container": epubBytes(t, "mimetype", "content.opf"),
+	} {
+		if ok, err := readableEpub(bytes.NewReader(body), int64(len(body))); ok || err != nil {
+			t.Errorf("%s: readableEpub = %v, %v; want false, nil", name, ok, err)
+		}
+	}
+	valid := epubBytes(t, minimalEpub...)
+	if ok, err := readableEpub(bytes.NewReader(valid), int64(len(valid))); !ok || err != nil {
+		t.Errorf("a valid epub: readableEpub = %v, %v; want true, nil", ok, err)
+	}
+}
+
+// OpenEbook opens only a regular file inside the library, the very one its name
+// leads to: a link where none may be (noLink), one leading out of the library or
+// to nothing, a hidden path and anything but a regular file are ErrNoEbook;
+// nothing there is fs.ErrNotExist.
+func TestOpenEbook(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	epub := epubBytes(t, minimalEpub...)
+	writeFile(t, root, "A/Book.epub", epub)
+	writeFile(t, root, "A/.hidden.epub", epub)
+	away := filepath.Join(t.TempDir(), "Away.epub")
+	if err := os.WriteFile(away, epub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{
+		"A/Inside.epub":   filepath.Join(root, "A", "Book.epub"),
+		"A/Out.epub":      away,
+		"A/Dangling.epub": filepath.Join(root, "A", "nothing.epub"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, filepath.FromSlash(link))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "A", "Dir.epub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		rel    string
+		noLink bool
+		want   error
+	}{
+		{"A/Book.epub", true, nil},
+		{"A/Book.epub", false, nil},
+		{"A/Inside.epub", false, nil}, // a link inside the library counts...
+		{"A/Inside.epub", true, ErrNoEbook},
+		{"A/Out.epub", false, ErrNoEbook}, // ...one leading out never does
+		{"A/Dangling.epub", false, ErrNoEbook},
+		{"A/Dir.epub", false, ErrNoEbook},
+		{"A/.hidden.epub", false, ErrNoEbook},
+		{"../outside.epub", false, ErrNoEbook},
+		{"A/Missing.epub", false, fs.ErrNotExist},
+	} {
+		f, info, err := OpenEbook(root, tc.rel, tc.noLink)
+		switch {
+		case tc.want == nil && err != nil:
+			t.Errorf("OpenEbook(%q, noLink %v): %v, want it open", tc.rel, tc.noLink, err)
+		case tc.want == nil && info.Size() != int64(len(epub)):
+			t.Errorf("OpenEbook(%q): size %d, want %d", tc.rel, info.Size(), len(epub))
+		case tc.want != nil && !errors.Is(err, tc.want):
+			t.Errorf("OpenEbook(%q, noLink %v): %v, want %v", tc.rel, tc.noLink, err, tc.want)
+		}
+		if f != nil {
+			_ = f.Close()
 		}
 	}
 }
