@@ -2,10 +2,10 @@ package library
 
 import (
 	"context"
-	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // readSlots bounds how many audio files a scan reads at once (tags, then
@@ -17,9 +17,14 @@ func newReadSlots(n int) readSlots {
 	return make(readSlots, max(n, 1))
 }
 
-// extract is metadata.ExtractContext holding a slot while it reads.
+// extract is metadata.ExtractContext holding a slot while it reads; nil when
+// ctx ends while it waits for one (stopped: the scan drops the reading).
 func (r readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
-	r <- struct{}{}
+	select {
+	case r <- struct{}{}:
+	case <-ctx.Done():
+		return nil
+	}
 	defer func() { <-r }()
 	md, _ := metadata.ExtractContext(ctx, absPath, ffprobePath)
 	return md
@@ -27,31 +32,33 @@ func (r readSlots) extract(ctx context.Context, absPath, ffprobePath string) *me
 
 // readFiles reads a folder book's files, in their order: the first is first
 // (already read, as the book's primary file), the rest are read with slots, as
-// many at once as they allow.
+// many at once as they allow. With room for one at a time they are read on the
+// caller's goroutine: an on-demand index reads on its request's, where net/http
+// recovers a reader's panic (leadIndex's errIndexAborted) rather than the server
+// going down with it.
 func (s *Scanner) readFiles(ctx context.Context, lib catalog.Library, files []catalog.BookFile, first *metadata.Metadata, slots readSlots) []*metadata.Metadata {
 	mds := make([]*metadata.Metadata, len(files))
 	if len(files) == 0 {
 		return mds
 	}
 	mds[0] = first
-	// A goroutine per slot at most, each taking the next file not yet read.
-	next := make(chan int)
-	var wg sync.WaitGroup
-	for range min(cap(slots), len(files)-1) {
-		wg.Go(func() {
-			for i := range next {
-				if ctx.Err() != nil {
-					continue // stopped: the scan drops this book's reading
-				}
-				mds[i] = slots.extract(ctx, absOf(lib, files[i].RelPath), s.ffprobePath)
-			}
-		})
+	read := func(i int) {
+		if ctx.Err() == nil { // stopped: the scan drops this book's reading
+			mds[i] = slots.extract(ctx, absOf(lib, files[i].RelPath), s.ffprobePath)
+		}
 	}
-	for i := 1; i < len(files); i++ {
-		next <- i
+	workers := min(cap(slots), len(files)-1)
+	if workers <= 1 {
+		for i := 1; i < len(files); i++ {
+			read(i)
+		}
+		return mds
 	}
-	close(next)
-	wg.Wait()
+	rest := make([]int, len(files)-1)
+	for i := range rest {
+		rest[i] = i + 1
+	}
+	pool.Each(ctx, workers, rest, func() bool { return true }, func(i *int) { read(*i) })
 	return mds
 }
 

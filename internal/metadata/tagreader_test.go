@@ -175,10 +175,12 @@ func TestTagReaderReadSeekMatchesFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { a.Close() })
 		b, err := os.Open(p)
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { b.Close() })
 		r := newTagReader(b)
 		rng := rand.New(rand.NewPCG(3, 4))
 		size := int64(len(data))
@@ -224,7 +226,5 @@ func TestTagReaderReadSeekMatchesFile(t *testing.T) {
 				t.Fatalf("%s step %d, %s: file error %v, tagReader error %v", name, step, op, wantErr, gotErr)
 			}
 		}
-		a.Close()
-		b.Close()
 	}
 }

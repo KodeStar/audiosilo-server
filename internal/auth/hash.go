@@ -69,9 +69,9 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
 		return false, err
 	}
-	var mem, time uint32
+	var mem, passes uint32
 	var threads uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &time, &threads); err != nil {
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &passes, &threads); err != nil {
 		return false, err
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
@@ -82,14 +82,14 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	got := argonKey([]byte(password), salt, time, mem, threads, uint32(len(want)))
+	got := argonKey([]byte(password), salt, passes, mem, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
 // argonKey is argon2.IDKey followed by handing its work memory back to the OS
-// (releaseHashMemory). Every argon2id hash and verify goes through it.
-func argonKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
-	key := argon2.IDKey(password, salt, time, memory, threads, keyLen)
+// (hashMemory). Every argon2id hash and verify goes through it.
+func argonKey(password, salt []byte, passes, memory uint32, threads uint8, keyLen uint32) []byte {
+	key := argon2.IDKey(password, salt, passes, memory, threads, keyLen)
 	hashMemory.release()
 	return key
 }

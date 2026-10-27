@@ -329,7 +329,7 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 func TestScanReaders(t *testing.T) {
 	t.Parallel()
 	s := NewScanner(nil, "", nil)
-	if got, want := s.readers(), min(runtime.NumCPU(), DefaultScanReaders); got != want {
+	if got, want := s.readers(), min(runtime.GOMAXPROCS(0), DefaultScanReaders); got != want {
 		t.Fatalf("default readers = %d, want %d", got, want)
 	}
 	s.SetConcurrency(20)

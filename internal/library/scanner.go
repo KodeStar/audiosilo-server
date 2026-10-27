@@ -68,12 +68,14 @@ func (s *Scanner) SetConcurrency(n int) { s.concurrency = n }
 // scan, and the server keeps cores free for listeners. scan.concurrency sets more.
 const DefaultScanReaders = 8
 
-// readers is how many audio files a scan reads at once.
+// readers is how many audio files a scan reads at once. One per CPU is
+// GOMAXPROCS, not NumCPU: in a container it is the CPU limit (cgroup quota), not
+// the host's cores, and the ffprobe runs count against that limit too.
 func (s *Scanner) readers() int {
 	if s.concurrency >= 1 {
 		return s.concurrency
 	}
-	return min(runtime.NumCPU(), DefaultScanReaders)
+	return min(runtime.GOMAXPROCS(0), DefaultScanReaders)
 }
 
 // ScanProgress reports how far a (possibly running) library scan has gotten, so
@@ -427,11 +429,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				return stopped(err)
 			}
 		}
-		report(i - len(pending))
+		done := i - len(pending)
+		report(done)
 		// Heartbeat so a long indexing pass (ffprobe per file over a network share)
 		// shows progress in the logs, not just in the admin UI counter.
 		if time.Since(lastLog) >= 15*time.Second {
-			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Added+res.Updated)
+			s.log.Info("scan progress", "library", lib.Name, "done", done, "total", len(books), "indexed", res.Added+res.Updated)
 			lastLog = time.Now()
 		}
 		old, existed := sigs[b.RelPath]
@@ -550,6 +553,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if err := writeNext(); err != nil {
 			return stopped(err)
 		}
+		report(len(books) - len(pending))
 	}
 	report(len(books))
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
@@ -710,6 +714,9 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
 	md := slots.extract(ctx, abs, s.ffprobePath)
+	if ctx.Err() != nil {
+		return // stopped: the scan drops this reading, so read no more of the book
+	}
 	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)

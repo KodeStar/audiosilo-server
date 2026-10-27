@@ -4,7 +4,15 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"github.com/dhowden/tag"
 )
+
+// ReadTags is dhowden's tag.ReadFrom over f, from its start, with an ID3v2 tag
+// read buffered (tagReader): every read of a file's tags goes through it.
+func ReadTags(f *os.File) (tag.Metadata, error) {
+	return tag.ReadFrom(newTagReader(f))
+}
 
 // tagBufferSize is how much of an ID3v2 tag tagReader reads in one go.
 const tagBufferSize = 64 << 10
@@ -51,16 +59,25 @@ func (r *tagReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	if r.pos < r.limit {
+		// Never past the tag's end: the bytes after it are read directly.
+		p = p[:min(int64(len(p)), r.limit-r.pos)]
 		if r.pos < r.bufStart || r.pos >= r.bufStart+int64(len(r.buf)) {
+			if len(p) >= tagBufferSize {
+				return r.readAt(p) // a read the buffer can't hold (a picture), as bufio does
+			}
 			if err := r.fill(); err != nil {
 				return 0, err
 			}
 		}
-		// Never past the tag's end: the bytes after it are read directly.
-		n := copy(p[:min(int64(len(p)), r.limit-r.pos)], r.buf[r.pos-r.bufStart:])
+		n := copy(p, r.buf[r.pos-r.bufStart:])
 		r.pos += int64(n)
 		return n, nil
 	}
+	return r.readAt(p)
+}
+
+// readAt reads p straight from the file at the reader's position.
+func (r *tagReader) readAt(p []byte) (int, error) {
 	n, err := r.f.ReadAt(p, r.pos)
 	r.pos += int64(n)
 	if n > 0 && errors.Is(err, io.EOF) {
