@@ -39,6 +39,9 @@ import { ruleLabel, shareLabel, wholeLibraryOf } from '@/features/people/people-
 import { AddFolderDialog } from './add-folder-dialog';
 import { ShareNameDialog } from './share-name-dialog';
 
+/** Avatars a share's card shows before a "+N" for the rest. */
+const MAX_AVATARS = 4;
+
 /**
  * People > Shares: named sets of folders given to people. A share follows its
  * folders, so books added under them appear for everyone with the share.
@@ -157,11 +160,19 @@ function ShareTile({
       </span>
       {members.length ? (
         <span className="flex shrink-0" aria-hidden="true">
-          {members.slice(0, 4).map((m, i) => (
+          {members.slice(0, MAX_AVATARS).map((m, i) => (
             <span key={m.id} className={cn('rounded-full ring-2 ring-card', i > 0 && '-ml-2')}>
               <Monogram name={m.username} size={26} />
             </span>
           ))}
+          {s.member_ids.length > MAX_AVATARS ? (
+            <span
+              data-testid="avatar-overflow"
+              className="-ml-2 grid size-[26px] place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground tabular-nums ring-2 ring-card"
+            >
+              +{s.member_ids.length - MAX_AVATARS}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </button>

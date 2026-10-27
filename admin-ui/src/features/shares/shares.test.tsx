@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { fictionGrant, kidsShare, users } from '@/test/fixtures';
+import { fictionGrant, kidsShare, sam, users } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -29,6 +29,35 @@ describe('shares', () => {
     await userEvent.setup().click(within(nav).getByRole('button', { name: /^Fiction/ }));
     const grant = await screen.findByRole('region', { name: 'Fiction' });
     expect(within(grant).queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument();
+  });
+
+  it('shows four avatars and a "+N" chip for the rest (ADMIN-10)', async () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({
+      ...sam,
+      id: 10 + i,
+      username: `listener${i}`,
+    }));
+    mockFetch(
+      routes({
+        'GET /admin/users': { body: { users: [...users, ...many] } },
+        'GET /admin/shares': {
+          body: { shares: [{ ...kidsShare, member_ids: many.map((u) => u.id) }] },
+        },
+      }),
+    );
+    renderApp('/people/shares');
+    const nav = await screen.findByRole('navigation', { name: 'Shares' });
+    const card = await within(nav).findByRole('button', { name: /Cosy mysteries/ });
+    expect(card).toHaveTextContent('6 people');
+    expect(await within(card).findByTestId('avatar-overflow')).toHaveTextContent('+2');
+  });
+
+  it('shows no "+N" chip for four people or fewer', async () => {
+    mockFetch(routes());
+    renderApp('/people/shares');
+    const nav = await screen.findByRole('navigation', { name: 'Shares' });
+    const card = await within(nav).findByRole('button', { name: /Cosy mysteries/ });
+    expect(within(card).queryByTestId('avatar-overflow')).not.toBeInTheDocument();
   });
 
   it('creates a share and selects it', async () => {
