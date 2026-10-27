@@ -1,4 +1,4 @@
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { copyWithToast } from '@/lib/clipboard';
@@ -30,10 +30,14 @@ export function BridgeCompose({ roots }: { roots: readonly string[] }) {
           <Copy aria-hidden="true" />
           {t('setup.bridge.copy')}
         </Button>
-        <span className="text-[12.5px] text-muted-foreground">{t('setup.bridge.agent')}</span>
-        <ExternalTextLink href={RUNNING_A_BRIDGE_DOCS_URL}>
-          {t('setup.bridge.docs')}
-        </ExternalTextLink>
+        <span className="text-[12.5px] text-muted-foreground">
+          <Trans
+            i18nKey="setup.bridge.agent"
+            components={{
+              docs: <ExternalTextLink href={RUNNING_A_BRIDGE_DOCS_URL}>{null}</ExternalTextLink>,
+            }}
+          />
+        </span>
       </div>
     </div>
   );

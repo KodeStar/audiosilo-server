@@ -351,9 +351,14 @@ describe('bridge page', () => {
     ).toBeInTheDocument();
     // One volume per library, at the server's own path.
     expect(screen.getByText(/\/path\/to\/fiction:\/books\/fiction:rw/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Running a Bridge/ })).toHaveAttribute(
+    const docs = screen.getByRole('link', { name: /Running a Bridge/ });
+    expect(docs).toHaveAttribute(
       'href',
       'https://docs.audiosilo.app/users/getting-started/running-a-bridge',
+    );
+    // The guide is named inside one sentence (ADMIN-15).
+    expect(docs.parentElement).toHaveTextContent(
+      'For characters and recaps you also need the agent container. The Running a Bridge guide has it, with the other options.',
     );
     expect(screen.getByText(/connect it with a pairing code/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
