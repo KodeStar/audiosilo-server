@@ -2925,6 +2925,8 @@
   "bridge.setup.credentialNotSet": "Não definida",
   "bridge.setup.contributing": "Contribuições",
   "bridge.setup.canContribute": "Pronto",
+  "bridge.setup.canContributeModuleOff": "Pronto, mas o módulo Contribuições está desligado",
+  "bridge.setup.openModules": "Abrir Módulos",
   "bridge.setup.cantContribute": "Não pronto",
   "bridge.setup.accountsBody": "Entrar e sair acontece na própria página do Bridge. Este servidor nunca vê as senhas nem as chaves.",
   "bridge.setup.openAccounts": "Abrir Accounts no Bridge",

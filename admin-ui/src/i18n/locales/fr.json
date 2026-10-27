@@ -2925,6 +2925,8 @@
   "bridge.setup.credentialNotSet": "Non défini",
   "bridge.setup.contributing": "Contributions",
   "bridge.setup.canContribute": "Prêt",
+  "bridge.setup.canContributeModuleOff": "Prêt, mais le module Contributions est désactivé",
+  "bridge.setup.openModules": "Ouvrir Modules",
   "bridge.setup.cantContribute": "Pas prêt",
   "bridge.setup.accountsBody": "La connexion et la déconnexion se font sur la page du Bridge. Ce serveur ne voit jamais les mots de passe ni les clés.",
   "bridge.setup.openAccounts": "Ouvrir Accounts sur le Bridge",

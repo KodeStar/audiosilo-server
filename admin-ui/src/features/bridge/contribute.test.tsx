@@ -340,6 +340,11 @@ describe('why Generate is missing', () => {
 
 describe('Settings > Bridge setup', () => {
   const SETTINGS = '/server?topic=bridge';
+  /** The Setup card, once complete ("Setup"). */
+  const setupCard = () =>
+    screen
+      .getByRole('heading', { name: 'Setup' })
+      .closest('section, [aria-labelledby]') as HTMLElement;
 
   it('lists the checklist, the GitHub account and the agent credential, read-only', async () => {
     const s = status();
@@ -382,10 +387,33 @@ describe('Settings > Bridge setup', () => {
   });
 
   it('says when everything required is done, with the signed-in account', async () => {
-    mockFetch(routes());
+    mockFetch(
+      routes({
+        'GET /admin/settings': { body: settingsWith({ modules: { contributions: true } }) },
+      }),
+    );
     renderApp(SETTINGS);
     expect(await screen.findByText('Everything required is done')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+    const card = setupCard();
+    expect(await within(card).findByText('Ready')).toBeInTheDocument();
+    expect(within(card).queryByText(/Contributions module is off/)).toBeNull();
+  });
+
+  it('says ready but the module is off, with a link to Modules (BRIDGE-07)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/settings': { body: settingsWith({ modules: { contributions: false } }) },
+      }),
+    );
+    const { router } = renderApp(SETTINGS);
+    expect(
+      await screen.findByText('Ready, but the Contributions module is off'),
+    ).toBeInTheDocument();
+    const card = setupCard();
+    expect(within(card).queryByText('Ready')).toBeNull();
+    await userEvent.setup().click(within(card).getByRole('link', { name: 'Open Modules' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'modules' }));
   });
 
   it('reads as the last report while the Bridge is offline, below the offline notice', async () => {

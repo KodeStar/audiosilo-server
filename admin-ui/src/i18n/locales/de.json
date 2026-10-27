@@ -2767,6 +2767,8 @@
   "bridge.setup.credentialNotSet": "Nicht gesetzt",
   "bridge.setup.contributing": "Beitragen",
   "bridge.setup.canContribute": "Bereit",
+  "bridge.setup.canContributeModuleOff": "Bereit, aber das Modul Beiträge ist aus",
+  "bridge.setup.openModules": "Module öffnen",
   "bridge.setup.cantContribute": "Nicht bereit",
   "bridge.setup.accountsBody": "An- und Abmelden geschieht auf der eigenen Seite der Bridge. Dieser Server sieht nie Passwörter oder Schlüssel.",
   "bridge.setup.openAccounts": "Accounts auf der Bridge öffnen",

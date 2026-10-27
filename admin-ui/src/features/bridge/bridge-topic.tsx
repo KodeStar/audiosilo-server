@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -14,7 +15,7 @@ import {
   Waypoints,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys } from '@/api/hooks';
+import { keys, useSettings } from '@/api/hooks';
 import type { BridgeLibrary, BridgeSetup, BridgeStatus, SidecarsEstimates } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
@@ -333,6 +334,8 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
   const offline = presence(status) === 'offline';
   const agent = agentCredentialSet(setup);
   const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
+  // Ready on the Bridge's side, but nothing is offered while the module is off (BRIDGE-07).
+  const moduleOff = useSettings().data?.modules.contributions === false;
   return (
     <Card aria-labelledby="bridge-setup-title">
       <CardHeader
@@ -377,11 +380,27 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
               : ([
                   [
                     t('bridge.setup.contributing'),
-                    <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>
-                      {setup.can_contribute
-                        ? t('bridge.setup.canContribute')
-                        : t('bridge.setup.cantContribute')}
-                    </StatusText>,
+                    setup.can_contribute && moduleOff ? (
+                      <span key="contribute" className="inline-flex flex-wrap items-center gap-x-2">
+                        <StatusText tone="warn">
+                          {t('bridge.setup.canContributeModuleOff')}
+                        </StatusText>
+                        <Link
+                          to="/server/{-$section}"
+                          params={{ section: undefined }}
+                          search={{ topic: 'modules' }}
+                          className="text-[12.5px] font-semibold text-brand-ink hover:underline"
+                        >
+                          {t('bridge.setup.openModules')}
+                        </Link>
+                      </span>
+                    ) : (
+                      <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>
+                        {setup.can_contribute
+                          ? t('bridge.setup.canContribute')
+                          : t('bridge.setup.cantContribute')}
+                      </StatusText>
+                    ),
                   ],
                 ] as [string, React.ReactNode][])),
           ]}
