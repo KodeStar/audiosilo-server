@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -48,7 +49,10 @@ func TestListCacheServesUntilAWrite(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	lib := listCacheLibrary(t, e)
-	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	tok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	paths := []string{
 		fmt.Sprintf("/api/v1/libraries/%d/books?sort=recent&limit=200", lib.ID),
 		"/api/v1/books/recent?limit=48",
@@ -69,6 +73,20 @@ func TestListCacheServesUntilAWrite(t *testing.T) {
 		resp, body := e.do(t, "GET", p, tok, "")
 		if body != first[p] || resp.Header.Get("Content-Type") != "application/json; charset=utf-8" {
 			t.Fatalf("GET %s again: %q (%s), want the first answer %q", p, body, resp.Header.Get("Content-Type"), first[p])
+		}
+	}
+	// The cache's: with every entry's body swapped for a marker, the marker is
+	// the answer.
+	const marker = "{\"cached\":true}\n"
+	e.api.lists.mu.Lock()
+	for _, el := range e.api.lists.entries {
+		el.Value.(*listEntry).body = []byte(marker)
+	}
+	e.api.lists.mu.Unlock()
+	for _, p := range paths {
+		resp, body := e.do(t, "GET", p, tok, "")
+		if body != marker || resp.Header.Get("Content-Type") != "application/json; charset=utf-8" {
+			t.Fatalf("GET %s with the cache's bodies swapped: %q (%s), want %q", p, body, resp.Header.Get("Content-Type"), marker)
 		}
 	}
 
@@ -94,16 +112,17 @@ func TestListCacheKeepsCallersApart(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	lib := listCacheLibrary(t, e)
-	admin, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
-	user, _ := e.auth.CreateUser(ctx, "listener", "listener-password", auth.RoleUser)
-	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "B only"})
+	admin, listener, userID := adminAndMember(t, e)
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "B only"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "B"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.cat.GrantShare(ctx, user.ID, share.ID); err != nil {
+	if err := e.cat.GrantShare(ctx, userID, share.ID); err != nil {
 		t.Fatal(err)
 	}
-	listener, _ := e.auth.IssueToken(ctx, user.ID, auth.KindSession, "t", 0)
 	paths := []string{
 		fmt.Sprintf("/api/v1/libraries/%d/books?limit=50", lib.ID),
 		"/api/v1/books/recent?limit=48",
@@ -130,7 +149,7 @@ func TestListCacheKeepsCallersApart(t *testing.T) {
 	}
 
 	// Revoking the share is a write: the listener's next answer is empty.
-	if err := e.cat.RevokeShare(ctx, user.ID, share.ID); err != nil {
+	if err := e.cat.RevokeShare(ctx, userID, share.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, body := e.do(t, "GET", "/api/v1/search?q=a&limit=50", listener, "")
@@ -145,7 +164,10 @@ func TestListCacheKeyedOnQuery(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	lib := listCacheLibrary(t, e)
-	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	tok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := fmt.Sprintf("/api/v1/libraries/%d/books", lib.ID)
 	var page struct {
 		Books []struct {
@@ -205,5 +227,42 @@ func TestListCacheGenerations(t *testing.T) {
 	c.put(6, k("huge"), make([]byte, listCacheMaxEntry+1))
 	if _, ok := c.get(6, k("huge")); ok {
 		t.Fatal("an answer over listCacheMaxEntry was kept")
+	}
+
+	// Tiny answers count their entry too, so a flood of them stays inside the
+	// bound in entries as well as in bytes.
+	for i := range listCacheBytes/listEntryCost + 1 {
+		c.put(7, k(fmt.Sprint(i)), []byte("{}\n"))
+	}
+	if n := len(c.entries); c.size > listCacheBytes || n > listCacheBytes/listEntryCost {
+		t.Fatalf("%d tiny entries, %d bytes: over the bound %d", n, c.size, listCacheBytes)
+	}
+}
+
+// TestListCacheKeyExact: scopes that differ only in bytes that aren't UTF-8 (a
+// path a scanner move wrote as the disk spells it) are other keys, as JSON would
+// not have made them, and so are other paths and queries.
+func TestListCacheKeyExact(t *testing.T) {
+	t.Parallel()
+	req := func(target string) *http.Request { return httptest.NewRequest("GET", target, nil) }
+	in := func(p string) []catalog.Scope { return []catalog.Scope{{LibraryID: 1, Paths: []string{p}}} }
+	recent := req("/api/v1/books/recent?limit=48")
+	keys := map[[sha256.Size]byte]string{}
+	for name, key := range map[string][sha256.Size]byte{
+		"latin-1 e acute":   listCacheKey(recent, in("Caf\xe9")),
+		"latin-1 e grave":   listCacheKey(recent, in("Caf\xe8")),
+		"U+FFFD":            listCacheKey(recent, in("Caf�")),
+		"whole library":     listCacheKey(recent, []catalog.Scope{{LibraryID: 1, AllowAll: true}}),
+		"another limit":     listCacheKey(req("/api/v1/books/recent?limit=50"), in("Caf\xe9")),
+		"another library's": listCacheKey(req("/api/v1/libraries/2/books?limit=48"), in("Caf\xe9")),
+		"one library's":     listCacheKey(req("/api/v1/libraries/1/books?limit=48"), in("Caf\xe9")),
+	} {
+		if other, dup := keys[key]; dup {
+			t.Fatalf("%s and %s share a key", name, other)
+		}
+		keys[key] = name
+	}
+	if listCacheKey(recent, in("Caf\xe9")) != listCacheKey(req("/api/v1/books/recent?limit=48"), in("Caf\xe9")) {
+		t.Fatal("the same request and scopes made two keys")
 	}
 }

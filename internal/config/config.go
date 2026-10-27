@@ -119,13 +119,14 @@ func (a ActivityConfig) SessionRetention() time.Duration {
 // RateLimitConfig sets the API's request rate limits (api/ratelimit.go), each a
 // token bucket refilled at Rate requests a second up to Burst. Read once at
 // start. Address is per client address: requests no credential has been proved
-// for yet (a missing or refused token pays here, so a token can't be guessed
-// faster), the sign-in, pairing and account routes (/api/v1/auth/*, whatever
-// token they carry) and the public routes. Token is per credential: every other
-// authenticated API request, so several people behind one address (a household
-// behind NAT, a reverse proxy) each have their own. Media is per credential too:
-// covers and audio (a grid is one request per cover). The brute-force lockouts on
-// sign-in and code redemption are separate and not configurable.
+// for yet (a missing or refused token pays here, after its lookup), the sign-in,
+// pairing and account routes (/api/v1/auth/*, whatever token they carry), the
+// Bridge's routes (/api/v1/bridge/*) and the public routes. Token is per
+// credential: every other authenticated API request, so several people behind
+// one address (a household behind NAT, a reverse proxy) each have their own.
+// Media is per credential too: covers and audio (a grid is one request per
+// cover). The brute-force lockouts on sign-in and code redemption are separate
+// and not configurable.
 type RateLimitConfig struct {
 	Address RateBucket `yaml:"address"`
 	Token   RateBucket `yaml:"token"`

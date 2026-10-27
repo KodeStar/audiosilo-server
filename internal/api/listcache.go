@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -19,7 +20,7 @@ import (
 //
 // It is exact because it is keyed on the database's write generation
 // (store.DB.Generation, which moves after every write has finished) as well as
-// on everything the answer is computed from: the route, the raw query string
+// on everything the answer is computed from: the path, the raw query string
 // and the caller's scopes (their access, as the catalog computed it for this
 // request). The answers are pure functions of those and the database: no
 // listener-specific field rides on a list book, and the scopes carry the
@@ -32,12 +33,16 @@ import (
 const (
 	listCacheBytes    = 8 << 20 // the whole cache
 	listCacheMaxEntry = 1 << 20 // one answer (a 200-book page is ~80 KB)
+	// listEntryCost is what an entry holds beside its body (its list element,
+	// listEntry and map slot, about 200 bytes), counted so a flood of tiny
+	// answers (a search per keystroke finding nothing) stays inside the bound.
+	listEntryCost = 256
 )
 
 type listCache struct {
 	mu      sync.Mutex
 	gen     uint64 // the generation the entries belong to
-	size    int    // bytes held (bodies)
+	size    int    // bytes held (entryCost of each entry)
 	order   *list.List
 	entries map[[sha256.Size]byte]*list.Element
 }
@@ -59,7 +64,7 @@ func (c *listCache) at(gen uint64) bool {
 	if gen > c.gen {
 		c.gen, c.size = gen, 0
 		c.order.Init()
-		clear(c.entries)
+		c.entries = map[[sha256.Size]byte]*list.Element{} // clear would keep the old tables
 	}
 	return gen == c.gen
 }
@@ -82,9 +87,6 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 	if len(body) > listCacheMaxEntry {
 		return
 	}
-	// An exact-size copy: the encoder's buffer grew by doubling, and the bound
-	// counts length, so keeping it could hold up to twice listCacheBytes.
-	body = bytes.Clone(body)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.at(gen) {
@@ -94,28 +96,28 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 		c.order.MoveToFront(el)
 		return
 	}
-	for c.size+len(body) > listCacheBytes && c.order.Len() > 0 {
+	cost := entryCost(body)
+	for c.size+cost > listCacheBytes && c.order.Len() > 0 {
 		old := c.order.Remove(c.order.Back()).(*listEntry)
 		delete(c.entries, old.key)
-		c.size -= len(old.body)
+		c.size -= entryCost(old.body)
 	}
 	c.entries[key] = c.order.PushFront(&listEntry{key: key, body: body})
-	c.size += len(body)
+	c.size += cost
 }
 
-// listCacheKey is the key of an answer to r computed for scopes: the route
-// pattern, the raw query string and the scopes, hashed (the scopes of a member
-// with many paths would otherwise make a long key). Marshalled as JSON so a field
-// added to catalog.Scope joins the key by itself; strings and a Scope always
-// encode, so the error is never set.
+// entryCost is what keeping body costs the cache: its capacity (the encoder's
+// buffer, kept as it grew, may be up to twice its length) and the entry around it.
+func entryCost(body []byte) int { return cap(body) + listEntryCost }
+
+// listCacheKey is the key of an answer to r computed for scopes: the path, the
+// raw query string and the scopes, hashed (the scopes of a member with many paths
+// would otherwise make a long key). Written with %q and %#v, which spell out
+// every byte (JSON would turn bytes that aren't UTF-8 into U+FFFD, so two scopes
+// naming such paths could share a key) and every field, so a field added to
+// catalog.Scope joins the key by itself.
 func listCacheKey(r *http.Request, scopes []catalog.Scope) [sha256.Size]byte {
-	b, _ := json.Marshal(struct {
-		Route  string
-		Lib    string
-		Query  string
-		Scopes []catalog.Scope
-	}{r.Pattern, r.PathValue("id"), r.URL.RawQuery, scopes})
-	return sha256.Sum256(b)
+	return sha256.Sum256(fmt.Appendf(nil, "%q %q %#v", r.URL.Path, r.URL.RawQuery, scopes))
 }
 
 // cachedList is the list cache's lookup for one of the handlers it serves: gen
@@ -133,11 +135,10 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 	}
 	return func(v any) {
 		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(v); err != nil {
-			writeJSON(w, http.StatusOK, v) // writeJSON's own answer to a value that won't encode
-			return
+		if err := json.NewEncoder(&buf).Encode(v); err == nil {
+			a.lists.put(gen, key, buf.Bytes())
 		}
-		a.lists.put(gen, key, buf.Bytes())
+		// A value that won't encode writes nothing: the empty 200 writeJSON answers.
 		writeJSONBytes(w, buf.Bytes())
 	}
 }

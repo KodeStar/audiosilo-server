@@ -147,9 +147,10 @@ TLS is configurable (see `tls.mode` in the config):
 - `off` - plain HTTP for use **behind a reverse proxy** (Caddy/nginx/Traefik).
   Set `trusted_proxies` so client IPs (used for rate limiting) are accurate.
 
-App-layer protections are always on: per-IP request rate limiting, brute-force
-lockout on login and auth-code redemption, argon2id password hashing, hashed
-(revocable) tokens, strict path-traversal containment, and body-size limits.
+App-layer protections are always on: request rate limiting (per address, and per
+device or API key once a token is proved), brute-force lockout on login and
+auth-code redemption, argon2id password hashing, hashed (revocable) tokens,
+strict path-traversal containment, and body-size limits.
 
 ## Deploying with Docker
 

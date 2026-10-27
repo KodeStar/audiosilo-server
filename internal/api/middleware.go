@@ -42,8 +42,8 @@ func isStreamingPath(p string) bool {
 // /ebook, and nothing deeper: a community cover (/libraries/{id}/meta/cover) is a
 // bounded thumbnail fetched upstream, so it stays under the timeout. The ebook is
 // tens of megabytes for an illustrated one, which a slow phone link fetches for
-// longer than the request timeout; it stays header-auth only and under the
-// general rate limit (no media route).
+// longer than the request timeout; it stays header-auth only and is no media
+// route: it is limited with the authenticated API, per credential (requireAuth).
 func isLibraryMedia(p string) bool {
 	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
 	if !ok {
@@ -212,15 +212,25 @@ func clientIP(r *http.Request) string {
 // are served from memory or, for a player in web_dir, through spa.Files'
 // per-version cache, and one cold console page is forty-odd chunk requests.
 // Media routes limit themselves (requireMediaAuth), and so do the authenticated
-// API routes outside /api/v1/auth/ (requireAuth, tokenKeyed). Everything else
-// spends from the general bucket, keyed by address because it runs before
-// authentication: it bounds the work done (token lookups included) for a caller
-// nobody has identified yet, and the sign-in, pairing and account routes, which a
-// token must not take out of their address's budget.
+// API routes outside /api/v1/auth/ (requireAuth, tokenKeyed), but an address
+// whose general bucket is empty is refused here already, as they would refuse it,
+// before the timeout layer's goroutine and buffer. Everything else spends from
+// the general bucket, keyed by address because it runs before authentication: it
+// bounds the work done (token lookups included) for a caller nobody has
+// identified yet, and the sign-in, pairing and account routes, which a token must
+// not take out of their address's budget.
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h, pattern := mux.Handler(r)
-		if web.IsStatic(h, r) || isMedia(h) || tokenKeyed(h, pattern) {
+		if web.IsStatic(h, r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isMedia(h) || tokenKeyed(h, pattern) {
+			if !a.ipLimiter.Ready(clientIP(r)) {
+				rateLimited(w)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -295,10 +305,13 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // visitor behind a reverse proxy) and a web player loading a whole library each
 // have their own budget. Until it is proved, a token costs its address: the
 // request is refused while the address's bucket is empty and a failed
-// authentication (a missing or refused token) pays into it, so tokens can't be
-// guessed faster than the general limit allows. A request its credential's bucket
-// refuses has cost a lookup too and pays into the address's bucket, so a client
-// hammering past its budget is soon refused before any lookup. A request
+// authentication (a missing or refused token) pays into it. Ready reserves
+// nothing, so that bounds tokens tried one after another, not at once: requests
+// that pass Ready together are each looked up before any of them pays, and with
+// the debt floored at -burst, a flood sending more than burst+1 at a time gets
+// that many lookups every (burst+1)/rate seconds. A request its credential's
+// bucket refuses has cost a lookup too and pays into the address's bucket, so a
+// client hammering past its budget is soon refused before any lookup. A request
 // rateLimit already charged to its address (authRoutes) is only authenticated.
 func (a *API) requireAuth(next http.Handler) http.Handler {
 	return authHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

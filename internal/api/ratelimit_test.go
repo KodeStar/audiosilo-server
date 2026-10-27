@@ -185,6 +185,27 @@ func TestRateLimiterEviction(t *testing.T) {
 	}
 }
 
+// The idle TTL is two refills, floored at a minute and capped at maxIdleTTL, on
+// every architecture: a configured rate and burst whose refill time is more
+// nanoseconds than a Duration holds still sweep a day later.
+func TestRateLimiterIdleTTL(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		rate, burst float64
+		want        time.Duration
+	}{
+		{50, 200, time.Minute},
+		{1, 3600, 2 * time.Hour},
+		{0.001, 1000, maxIdleTTL},
+		{1, 1e12, maxIdleTTL},
+		{1e-9, 1e12, maxIdleTTL},
+	} {
+		if got := newRateLimiter(c.rate, c.burst).idleTTL; got != c.want {
+			t.Errorf("rate %g, burst %g: idleTTL %v, want %v", c.rate, c.burst, got, c.want)
+		}
+	}
+}
+
 // The login/redeem failure limiter must likewise evict stale, unlocked entries.
 func TestLimiterEviction(t *testing.T) {
 	t.Parallel()

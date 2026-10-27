@@ -116,8 +116,10 @@ func TestRateLimitMediaBurstAllowed(t *testing.T) {
 			t.Fatalf("stream %d was rate limited", i)
 		}
 	}
+	// The address's whole general budget is left: a call that spends from it
+	// (no token, so it is limited by address) succeeds burst times.
 	for i := range 200 {
-		if code := e.get(ip, "/api/v1/me", tok); code != http.StatusOK {
+		if code := e.get(ip, "/api/v1/server", ""); code != http.StatusOK {
 			t.Fatalf("API call %d after the media burst = %d, want 200", i, code)
 		}
 	}
@@ -266,6 +268,45 @@ func TestRateLimitAuthenticatedPerToken(t *testing.T) {
 	}
 }
 
+// The routes that limit themselves (the authenticated API, media) refuse an
+// address whose general bucket is empty in rateLimit already, before the timeout
+// layer behind it runs; another address goes through.
+func TestRateLimitRefusesSpentAddressFirst(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	tok := e.session(t)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/me", e.api.requireAuth(ok))
+	mux.Handle("GET /api/v1/libraries/{id}/cover", e.api.requireBookMediaAuth(ok))
+	reached := 0
+	h := e.api.rateLimit(mux, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		mux.ServeHTTP(w, r)
+	}))
+	send := func(ip, path string) int {
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = ip + ":1234"
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	const spent = "192.0.2.70"
+	for range 200 {
+		e.api.ipLimiter.Allow(spent)
+	}
+	for _, path := range []string{"/api/v1/me", "/api/v1/libraries/1/cover?path=x"} {
+		if code := send(spent, path); code != http.StatusTooManyRequests || reached != 0 {
+			t.Fatalf("%s from a spent address = %d, %d passed on; want 429 before passing it on", path, code, reached)
+		}
+		if code := send("192.0.2.71", path); code != http.StatusNoContent || reached != 1 {
+			t.Fatalf("%s from another address = %d, %d passed on; want 204, passed on", path, code, reached)
+		}
+		reached = 0
+	}
+}
+
 // A credential past its own budget is refused while another from the same
 // address carries on; each refusal has cost a lookup, so it pays into the
 // address's bucket, and a client hammering on soon has its address refused
@@ -343,6 +384,9 @@ func TestRateLimitAuthRoutesByAddress(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
 	tok := e.session(t)
+	// Room for the three checks from another address only: one request on these
+	// routes spent from the token's budget would leave one of them refused.
+	e.api.tokenLimiter.burst = 3
 	for _, tc := range []struct{ name, ip, method, path, body string }{
 		{"list keys", "192.0.2.60", "GET", "/api/v1/auth/tokens", ""},
 		{"pair", "192.0.2.61", "POST", "/api/v1/auth/pair", "{}"},

@@ -6,12 +6,13 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"modernc.org/sqlite"
 )
 
 // TestGenerationMovesAfterEveryWrite: every write path moves the generation once
-// it has finished (a failed or rolled-back one too); reads never do, and the
-// generation a write leaves is already visible to a reader (api's list cache
-// relies on both).
+// it has finished (a failed or rolled-back one too), never before its commit;
+// reads never do (api's list cache relies on both).
 func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -55,22 +56,52 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 		})
 	})
 
-	// A commit is visible on the reader pool by the time its generation is.
-	var gotGen uint64
-	var n int
-	err = db.WithTx(ctx, "test", func(tx *sql.Tx) error {
-		gotGen = db.Generation()
-		_, err := tx.ExecContext(ctx, `INSERT INTO t VALUES (4)`)
-		return err
-	})
+	// It moves only once the write has committed: at the COMMIT itself (the
+	// driver's commit hook on the one writer connection) it is still the old one.
+	var atCommit []uint64
+	conn, err := db.writer.Conn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if db.Generation() == gotGen {
-		t.Fatal("generation did not move past the commit")
+	if err := conn.Raw(func(dc any) error {
+		dc.(sqlite.HookRegisterer).RegisterCommitHook(func() int32 {
+			atCommit = append(atCommit, db.Generation())
+			return 0
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t`).Scan(&n); err != nil || n != 3 {
-		t.Fatalf("rows after the moves = %d, %v; want 3", n, err)
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		name  string
+		write func() error
+	}{
+		{"exec", func() error {
+			_, err := db.ExecContext(ctx, `INSERT INTO t VALUES (4)`)
+			return err
+		}},
+		{"commit", func() error {
+			return db.WithTx(ctx, "test", func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO t VALUES (5)`)
+				return err
+			})
+		}},
+	} {
+		before := db.Generation()
+		atCommit = nil
+		if err := w.write(); err != nil {
+			t.Fatal(err)
+		}
+		if after := db.Generation(); len(atCommit) != 1 || atCommit[0] != before || after == before {
+			t.Errorf("%s: generation %d at the COMMIT (%v), %d after; want %d, then moved", w.name, before, atCommit, after, before)
+		}
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t`).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("rows after the moves = %d, %v; want 4", n, err)
 	}
 
 	// Reads leave it where it is.

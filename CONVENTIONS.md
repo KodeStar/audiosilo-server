@@ -508,11 +508,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   hide a misroute, which is why the test stores are temp files.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent` and `/search` keep their encoded answer (8 MiB
-  LRU, 1 MiB an answer) keyed on the route, raw query string and the caller's
-  scopes, under the write generation read before the request's first read; any
-  write moves the generation and empties it. Only answers that are a pure function
-  of the database, the query and the scopes may use it (no per-listener field on a
-  list book); a handler that adds one must leave the cache.
+  LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
+  raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
+  merge paths whose bytes aren't UTF-8), under the write generation read before
+  the request's first read; any write moves the generation and empties it. Only
+  answers that are a pure function of the database, the query and the scopes may
+  use it (no per-listener field on a list book); a handler that adds one must
+  leave the cache.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
@@ -585,8 +587,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a link leading out) are 404; a book outside scope 403. Its bytes outlive the request timeout
   (`isLibraryMedia`, in `isStreamingPath`, matches `/ebook` as it does `/cover` and `/stream`), but
   its lookup (`bookAt`, which may index the book on demand and so wait for the one writer) is
-  bounded by it: past it, a 500 (`TestEbookLookupBounded`). It stays under the general rate limit
-  (`requireAuth`, no media route). The player's
+  bounded by it: past it, a 500 (`TestEbookLookupBounded`). It is limited with the authenticated
+  API, per credential (`requireAuth`, no media route). The player's
   `Book` carries `ebook: {path, size}` (omitempty; `catalog.Ebook`, the size from `ebook_sig`) on
   every endpoint returning a Book, so a client never asks for a book with none. **Reading
   progress**: `GET`/`PUT /libraries/{id}/reading-progress?path=` (`bookAt`: a part path is its book's;
@@ -1225,17 +1227,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) and the
   authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
-  while the address's general bucket is empty (`Ready`), a failed authentication
-  (missing or refused token) charges it (`Charge`: even past empty, down to -burst,
-  so requests that passed `Ready` together all pay), an authenticated one spends
+  while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
+  the refusal comes before the timeout layer), a failed authentication (missing or
+  refused token) charges it (`Charge`: even past empty, down to -burst, so requests
+  that passed `Ready` together all pay; `Ready` reserves nothing, so a concurrent
+  flood is looked up up to its concurrency before it pays), an authenticated one spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
-  refuses it (the lookup was already done); everything else (public routes, and
-  `/api/v1/auth/*` with or without a token: sign-in, pairing, password, API keys)
-  spends from `ipLimiter` (~50/s, burst 200, per IP). rateLimit marks a request it
-  charged (`addressCharged`), so requireAuth never charges it again and limits per
-  credential any request rateLimit didn't. The brute-force lockouts (`limiter`) are
-  separate. Tests: `ratelimit_routes_test.go`.
+  refuses it (the lookup was already done); everything else (public routes, the
+  Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
+  pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP).
+  Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit
+  marks a request it charged (`addressCharged`), so requireAuth never charges it
+  again and limits per credential any request rateLimit didn't. The brute-force
+  lockouts (`limiter`) are separate. Tests: `ratelimit_routes_test.go`.
 - **Job queue, scan history, schedules, ignore rules (admin redesign Phase 3, `library/jobs.go`,
   `schedule.go`, `ignore.go`, `problems.go`)**: every scan (startup, schedule, admin rescan, a
   library or folder-setting change) goes through `Scanner.Enqueue`; `Scanner.Start` runs ONE
