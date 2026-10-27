@@ -108,13 +108,16 @@ export function OverviewPage() {
           <h1 className="display">
             {t(`home.greeting.${greetingFor(now.getHours())}`, { name: user.username })}
           </h1>
-          <p className="text-[15px] text-muted-foreground">
-            {split ? (
-              t('home.summary', { count: split.listeners })
-            ) : (
+          {/* Nobody listening is said once, in Listening now (ADMIN-12). */}
+          {!split ? (
+            <p className="text-[15px] text-muted-foreground">
               <span className="skel inline-block h-4 w-64 align-middle" />
-            )}
-          </p>
+            </p>
+          ) : split.listeners > 0 ? (
+            <p className="text-[15px] text-muted-foreground">
+              {t('home.summary', { count: split.listeners })}
+            </p>
+          ) : null}
         </div>
       </div>
 
