@@ -123,9 +123,16 @@ func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 			lastAt string
 			endPos float64
 		)
+		// A session started before the person turned listening in the house on
+		// (household_sharing.updated_at) never continues: the first save after the
+		// switch starts a new one, so no session holds listening from both sides of
+		// it and HouseListening can tell them apart by started_at (the same bound,
+		// so a session started in the switch's millisecond continues and shows).
 		err := tx.QueryRowContext(ctx,
 			`SELECT id, last_at, end_pos FROM listening_sessions
-			  WHERE user_id = ? AND token_id = ? AND library_id = ? AND rel_path = ? AND last_at >= ?
+			  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
+			    AND started_at >= COALESCE((SELECT updated_at FROM household_sharing
+			                                 WHERE user_id = ?1 AND share_listening = 1), '')
 			  ORDER BY id DESC LIMIT 1`,
 			hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path,
 			formatSessionTime(hb.At.Add(-resumeWindow))).Scan(&id, &lastAt, &endPos)

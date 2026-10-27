@@ -2,6 +2,9 @@ package catalog
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -128,12 +131,12 @@ func TestSharesAndUserScope(t *testing.T) {
 	}
 }
 
-// TestGrantWholeLibraryHealsRulelessShare guards the case observed in production:
-// a "Library: <name>" share exists but has lost its "" path rule (however it
-// arose - a server/schema update, a manual edit, an FK cascade). Such a share
-// grants nothing, so re-granting whole-library access must re-add the rule rather
-// than just hand out the rule-less share.
-func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
+// TestGrantWholeLibraryRegrantsPastAHeldRulelessShare guards the case observed in
+// production: a "Library: <name>" share has lost its "" path rule and grants
+// nothing, so re-granting must give the library again. Someone holds it, so it
+// isn't healed (that would widen every holder, server#223): the grant gets a
+// share of its own.
+func TestGrantWholeLibraryRegrantsPastAHeldRulelessShare(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "audiobooks", Root: "/tmp"})
@@ -154,9 +157,12 @@ func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
 		t.Fatalf("precondition: rule-less share should grant nothing, got %+v", sc)
 	}
 
-	// Re-granting whole-library access must heal the share.
+	// Re-granting whole-library access gives the library again.
 	if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
 		t.Fatal(err)
+	}
+	if got, _ := c.GetShare(ctx, share.ID); got == nil || len(got.Paths) != 0 {
+		t.Fatalf("the held rule-less share was healed: %+v", got)
 	}
 	if sc, _ := c.UserScope(ctx, uid, lib.ID, false); !sc.AllowAll {
 		t.Fatalf("re-grant should yield AllowAll, got %+v", sc)
@@ -360,5 +366,491 @@ func TestDeleteLibraryKeepsAGrantShareWithOtherRules(t *testing.T) {
 	}
 	if sc, _ := c.UserScope(ctx, uid, main.ID, false); len(sc.Paths) != 1 {
 		t.Fatalf("deleting Kids took away the Main folder too: %+v", sc)
+	}
+}
+
+// An admin's own share that happens to be named "Library: <name>" is never
+// adopted as that library's grant (server#223): it keeps its rules, its holders
+// and its unmarked state, and the grant gets its own "Library: <name> (<id>)".
+func TestGrantWholeLibraryNeverAdoptsAnAdminShare(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		description string
+		rules       func(kids, other int64) []PathRule
+	}{
+		{"a sub-path rule", "", func(kids, _ int64) []PathRule {
+			return []PathRule{{LibraryID: kids, Path: "Kids/Picture books"}}
+		}},
+		{"a sub-path rule, grant's description", wholeLibraryShareDescription, func(kids, _ int64) []PathRule {
+			return []PathRule{{LibraryID: kids, Path: "Kids/Picture books"}}
+		}},
+		{"whole plus a sub-path", wholeLibraryShareDescription, func(kids, _ int64) []PathRule {
+			return []PathRule{{LibraryID: kids, Path: ""}, {LibraryID: kids, Path: "Kids/Picture books"}}
+		}},
+		{"another library's rule", wholeLibraryShareDescription, func(_, other int64) []PathRule {
+			return []PathRule{{LibraryID: other, Path: ""}}
+		}},
+		{"its own description, whole rule", "Everything for the kids", func(kids, _ int64) []PathRule {
+			return []PathRule{{LibraryID: kids, Path: ""}}
+		}},
+		{"its own description, no rule", "", func(int64, int64) []PathRule { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
+			child := seedUserNamed(t, c, ctx, "child")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			rules := tc.rules(kids.ID, other.ID)
+			mine, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: tc.description, Paths: rules})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.GrantShare(ctx, child, mine.ID); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := c.UserScope(ctx, child, kids.ID, false)
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			// Denied: the admin's share is untouched, so the child's reach is too.
+			got, err := c.GetShare(ctx, mine.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.WholeLibraryID != nil || len(got.Paths) != len(rules) {
+				t.Fatalf("admin's share after the grant = %+v; want its own rules, unmarked", got)
+			}
+			for _, r := range rules {
+				if !slices.Contains(got.Paths, r) {
+					t.Fatalf("admin's share rules = %+v; want %+v", got.Paths, rules)
+				}
+			}
+			after, _ := c.UserScope(ctx, child, kids.ID, false)
+			if after.AllowAll != before.AllowAll || len(after.Paths) != len(before.Paths) {
+				t.Fatalf("the child's Kids scope changed: %+v -> %+v", before, after)
+			}
+			if members, _ := c.ShareMembers(ctx); len(members[mine.ID]) != 1 || members[mine.ID][0] != child {
+				t.Fatalf("admin's share holders = %v; want only the child", members[mine.ID])
+			}
+
+			// Allowed: the guest gets the whole library through a new, marked grant.
+			if sc, _ := c.UserScope(ctx, guest, kids.ID, false); !sc.AllowAll {
+				t.Fatalf("guest's Kids scope = %+v; want the whole library", sc)
+			}
+			grant, err := c.wholeLibraryShare(ctx, kids.ID, "Library: Kids")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if grant.ID == mine.ID || grant.Name != fmt.Sprintf("Library: Kids (%d)", kids.ID) ||
+				grant.WholeLibraryID == nil || *grant.WholeLibraryID != kids.ID {
+				t.Fatalf("the grant = %+v", grant)
+			}
+			// A second grant reuses it by its mark.
+			if err := c.GrantWholeLibrary(ctx, child, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+			if shares, _ := c.ListShares(ctx); len(shares) != 2 {
+				t.Fatalf("shares after a second grant = %+v; want the admin's and one grant", shares)
+			}
+		})
+	}
+}
+
+// An unmarked share that can only be an old grant (made before
+// whole_library_id): the grant's description and only the library's "" rule
+// (held or not), or no rule at all while nobody holds it (one an interrupted
+// grant left) - is still adopted, marked and healed, keeping its holders.
+func TestGrantWholeLibraryAdoptsAnOldGrant(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		whole bool
+	}{{"whole rule, held", true}, {"no rule, unheld", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			old := seedUserNamed(t, c, ctx, "old")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			s := Share{Name: "Library: Kids", Description: wholeLibraryShareDescription}
+			if tc.whole {
+				s.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
+			}
+			share, err := c.CreateShare(ctx, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			holders := []int64{guest}
+			if tc.whole {
+				if err := c.GrantShare(ctx, old, share.ID); err != nil {
+					t.Fatal(err)
+				}
+				holders = append(holders, old)
+			}
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+			shares, _ := c.ListShares(ctx)
+			if len(shares) != 1 || shares[0].ID != share.ID || shares[0].WholeLibraryID == nil || *shares[0].WholeLibraryID != kids.ID ||
+				len(shares[0].Paths) != 1 || shares[0].Paths[0] != (PathRule{LibraryID: kids.ID, Path: ""}) {
+				t.Fatalf("shares = %+v; want the old grant adopted and marked", shares)
+			}
+			for _, u := range holders {
+				if sc, _ := c.UserScope(ctx, u, kids.ID, false); !sc.AllowAll {
+					t.Fatalf("user %d's Kids scope = %+v; want the whole library", u, sc)
+				}
+			}
+		})
+	}
+}
+
+// A rule-less share someone holds is never adopted, marked or not: adding the
+// whole-library rule to it would hand the library to its holders (an admin's
+// empty "Library: X" share with the grant's description, or a grant whose rule
+// is gone). It stays as it is and the new holder gets a grant of its own.
+func TestGrantWholeLibraryNeverAdoptsAHeldRulelessShare(t *testing.T) {
+	t.Parallel()
+	for _, marked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marked=%v", marked), func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			held := seedUserNamed(t, c, ctx, "held")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			// Marked: a real grant whose rule is gone. Unmarked: an admin's empty
+			// share with the grant's name and description.
+			var empty *Share
+			if marked {
+				if err := c.GrantWholeLibrary(ctx, held, kids.ID); err != nil {
+					t.Fatal(err)
+				}
+				s, err := c.shareByName(ctx, "Library: Kids")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.RemoveSharePath(ctx, s.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+					t.Fatal(err)
+				}
+				empty = s
+			} else {
+				s, err := c.CreateShare(ctx, Share{Name: "Library: Kids", Description: wholeLibraryShareDescription})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.GrantShare(ctx, held, s.ID); err != nil {
+					t.Fatal(err)
+				}
+				empty = s
+			}
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			// Denied: the held share stays rule-less (and unmarked, if it was), so
+			// its holder still reaches nothing in Kids.
+			got, err := c.GetShare(ctx, empty.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Paths) != 0 || (got.WholeLibraryID != nil) != marked {
+				t.Fatalf("held rule-less share after the grant = %+v", got)
+			}
+			if sc, _ := c.UserScope(ctx, held, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+				t.Fatalf("the holder's Kids scope = %+v; want nothing", sc)
+			}
+			if members, _ := c.ShareMembers(ctx); len(members[empty.ID]) != 1 || members[empty.ID][0] != held {
+				t.Fatalf("held share's holders = %v; want only the holder", members[empty.ID])
+			}
+			// Allowed: the guest gets the whole library through a new, marked grant.
+			if sc, _ := c.UserScope(ctx, guest, kids.ID, false); !sc.AllowAll {
+				t.Fatalf("guest's Kids scope = %+v; want the whole library", sc)
+			}
+			grant, err := c.wholeLibraryShare(ctx, kids.ID, "Library: Kids")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if grant.ID == empty.ID || grant.Name != wholeLibraryIDName("Library: Kids", kids.ID) ||
+				grant.WholeLibraryID == nil || *grant.WholeLibraryID != kids.ID ||
+				len(grant.Paths) != 1 || grant.Paths[0] != (PathRule{LibraryID: kids.ID, Path: ""}) {
+				t.Fatalf("the grant = %+v", grant)
+			}
+		})
+	}
+}
+
+// A held rule-less grant marked for the library never shadows an adoptable one
+// under the "(<id>)" name (an interrupted grant, with or without its rule): the
+// marked share is skipped, not picked first and then refused, so the grant finishes
+// the adoptable one rather than failing on the taken names or making a third share.
+func TestGrantWholeLibraryHeldRulelessGrantNeverShadowsAnAdoptableOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		whole bool
+	}{{"no rule yet", false}, {"rule, not marked", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			held := seedUserNamed(t, c, ctx, "held")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			if err := c.GrantWholeLibrary(ctx, held, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+			dead, err := c.shareByName(ctx, "Library: Kids")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.RemoveSharePath(ctx, dead.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+				t.Fatal(err)
+			}
+			left := Share{Name: wholeLibraryIDName("Library: Kids", kids.ID), Description: wholeLibraryShareDescription}
+			if tc.whole {
+				left.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
+			}
+			orphan, err := c.CreateShare(ctx, left)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatalf("granting past a held rule-less grant: %v", err)
+			}
+			if mine, _ := c.UserShares(ctx, guest); len(mine) != 1 || mine[0].ID != orphan.ID ||
+				mine[0].WholeLibraryID == nil || *mine[0].WholeLibraryID != kids.ID ||
+				!slices.Equal(mine[0].Paths, []PathRule{{LibraryID: kids.ID, Path: ""}}) {
+				t.Fatalf("guest's shares = %+v; want the interrupted grant, finished", mine)
+			}
+			if got, _ := c.GetShare(ctx, dead.ID); got == nil || len(got.Paths) != 0 {
+				t.Fatalf("the held rule-less grant = %+v; want it as it was", got)
+			}
+			if shares, _ := c.ListShares(ctx); len(shares) != 2 {
+				t.Fatalf("shares = %+v; want the held rule-less grant and the finished one", shares)
+			}
+		})
+	}
+}
+
+// A library's grant share an admin has changed since - narrowed to a folder, or
+// given another library's folder too - is never reused for a new grant: adding
+// the whole-library rule back would widen its holders again, and handing it out
+// would give the new holder that other folder. The new holder gets a grant of
+// its own; the changed share keeps its rules, and its holder their reach.
+func TestGrantWholeLibraryNeverWidensAChangedGrant(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		change func(kids, other int64) (remove, add []PathRule)
+	}{
+		{"narrowed to a folder", func(kids, _ int64) ([]PathRule, []PathRule) {
+			return []PathRule{{LibraryID: kids, Path: ""}}, []PathRule{{LibraryID: kids, Path: "Kids/Picture books"}}
+		}},
+		{"another library's folder too", func(_, other int64) ([]PathRule, []PathRule) {
+			return nil, []PathRule{{LibraryID: other, Path: "Secret"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
+			old := seedUserNamed(t, c, ctx, "old")
+			guest := seedUserNamed(t, c, ctx, "guest")
+			if err := c.GrantWholeLibrary(ctx, old, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+			shares, _ := c.ListShares(ctx)
+			if len(shares) != 1 || shares[0].WholeLibraryID == nil {
+				t.Fatalf("precondition: shares = %+v; want one marked grant", shares)
+			}
+			changed := shares[0].ID
+			remove, add := tc.change(kids.ID, other.ID)
+			for _, r := range remove {
+				if err := c.RemoveSharePath(ctx, changed, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, r := range add {
+				if err := c.AddSharePath(ctx, changed, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := c.GetShare(ctx, changed)
+			reach := func(user int64) []Scope {
+				out := make([]Scope, 0, 2)
+				for _, lib := range []int64{kids.ID, other.ID} {
+					sc, err := c.UserScope(ctx, user, lib, false)
+					if err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, sc)
+				}
+				return out
+			}
+			oldReach := reach(old)
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			// Denied: the changed share keeps its rules, and the old holder their reach.
+			if after, _ := c.GetShare(ctx, changed); !slices.Equal(after.Paths, before.Paths) {
+				t.Fatalf("the changed share's rules = %+v; want %+v", after.Paths, before.Paths)
+			}
+			if got := reach(old); !slices.EqualFunc(got, oldReach, func(a, b Scope) bool {
+				return a.AllowAll == b.AllowAll && slices.Equal(a.Paths, b.Paths)
+			}) {
+				t.Fatalf("the old holder's reach = %+v; want %+v", got, oldReach)
+			}
+			// Denied: the guest gets nothing of the other library.
+			if sc := reach(guest)[1]; sc.AllowAll || len(sc.Paths) != 0 {
+				t.Fatalf("guest's Other scope = %+v; want none", sc)
+			}
+			// Allowed: the guest gets the whole of Kids, through a grant of its own.
+			if sc := reach(guest)[0]; !sc.AllowAll {
+				t.Fatalf("guest's Kids scope = %+v; want the whole library", sc)
+			}
+			held, _ := c.UserShares(ctx, guest)
+			if len(held) != 1 || held[0].ID == changed || held[0].WholeLibraryID == nil || *held[0].WholeLibraryID != kids.ID {
+				t.Fatalf("guest's shares = %+v; want one marked grant of its own", held)
+			}
+		})
+	}
+}
+
+// A grant an interrupted GrantWholeLibrary left under the "(<id>)" name (created,
+// not yet marked, with or without its rule) next to an admin's own "Library:
+// <name>" is found again and finished, rather than every later grant failing on
+// the taken name.
+func TestGrantWholeLibraryFinishesAnInterruptedGrant(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		whole bool
+	}{{"no rule yet", false}, {"rule, not marked", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+			guest := seedUserNamed(t, c, ctx, "guest")
+			mine, err := c.CreateShare(ctx, Share{Name: "Library: Kids",
+				Paths: []PathRule{{LibraryID: kids.ID, Path: "Kids/Picture books"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			left := Share{Name: fmt.Sprintf("Library: Kids (%d)", kids.ID), Description: wholeLibraryShareDescription}
+			if tc.whole {
+				left.Paths = []PathRule{{LibraryID: kids.ID, Path: ""}}
+			}
+			orphan, err := c.CreateShare(ctx, left)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+				t.Fatalf("granting next to an interrupted grant: %v", err)
+			}
+			got, err := c.GetShare(ctx, orphan.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.WholeLibraryID == nil || *got.WholeLibraryID != kids.ID ||
+				!slices.Equal(got.Paths, []PathRule{{LibraryID: kids.ID, Path: ""}}) {
+				t.Fatalf("the interrupted grant = %+v; want it marked with the whole-library rule", got)
+			}
+			if held, _ := c.UserShares(ctx, guest); len(held) != 1 || held[0].ID != orphan.ID {
+				t.Fatalf("guest's shares = %+v; want the finished grant", held)
+			}
+			if mineNow, _ := c.GetShare(ctx, mine.ID); mineNow.WholeLibraryID != nil || len(mineNow.Paths) != 1 {
+				t.Fatalf("the admin's share = %+v; want it untouched", mineNow)
+			}
+			if shares, _ := c.ListShares(ctx); len(shares) != 2 {
+				t.Fatalf("shares = %+v; want the admin's and the one grant", shares)
+			}
+		})
+	}
+}
+
+// An admin's own share under the "(<id>)" name is no more adopted than one under
+// "Library: <name>": with both names taken by shares of their own, the grant is
+// refused (ErrNameTaken, a 409) and both are left as they were.
+func TestGrantWholeLibraryNeverAdoptsAnAdminShareByTheIDName(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+	guest := seedUserNamed(t, c, ctx, "guest")
+	var mine []*Share
+	for _, s := range []Share{
+		{Name: "Library: Kids", Paths: []PathRule{{LibraryID: kids.ID, Path: "Kids/Picture books"}}},
+		{Name: fmt.Sprintf("Library: Kids (%d)", kids.ID), Description: wholeLibraryShareDescription,
+			Paths: []PathRule{{LibraryID: kids.ID, Path: "Kids/Chapter books"}}},
+	} {
+		share, err := c.CreateShare(ctx, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mine = append(mine, share)
+	}
+
+	if err := c.GrantWholeLibrary(ctx, guest, kids.ID); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("grant with both names taken = %v; want ErrNameTaken", err)
+	}
+	for _, m := range mine {
+		got, err := c.GetShare(ctx, m.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.WholeLibraryID != nil || !slices.Equal(got.Paths, m.Paths) {
+			t.Fatalf("admin's share %q = %+v; want %+v, unmarked", m.Name, got, m)
+		}
+	}
+	if sc, _ := c.UserScope(ctx, guest, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+		t.Fatalf("guest's Kids scope = %+v; want none", sc)
+	}
+}
+
+// Another library's grant share is never adopted, even once it has lost its rule
+// (so only its mark says whose it is) and its library's old name, which the
+// share still carries, has gone to a new library.
+func TestGrantWholeLibraryNeverTakesAnotherLibrarysRulelessGrant(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	fiction, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/a"})
+	maya := seedUserNamed(t, c, ctx, "maya")
+	sam := seedUserNamed(t, c, ctx, "sam")
+	if err := c.GrantWholeLibrary(ctx, maya, fiction.ID); err != nil {
+		t.Fatal(err)
+	}
+	old, err := c.shareByName(ctx, "Library: Fiction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveSharePath(ctx, old.ID, PathRule{LibraryID: fiction.ID, Path: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.UpdateLibrary(ctx, fiction.ID, LibraryPatch{Name: "Novels", Root: "/tmp/a"}); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/b"})
+
+	if err := c.GrantWholeLibrary(ctx, sam, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Denied: maya reaches nothing of the new library through Fiction's old grant.
+	if sc, _ := c.UserScope(ctx, maya, next.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+		t.Fatalf("maya's scope in the new library = %+v; want none", sc)
+	}
+	if got, _ := c.GetShare(ctx, old.ID); got.WholeLibraryID == nil || *got.WholeLibraryID != fiction.ID || len(got.Paths) != 0 {
+		t.Fatalf("Fiction's old grant = %+v; want it as it was", got)
+	}
+	// Allowed: sam gets the new library.
+	if sc, _ := c.UserScope(ctx, sam, next.ID, false); !sc.AllowAll {
+		t.Fatalf("sam's scope in the new library = %+v; want the whole library", sc)
 	}
 }

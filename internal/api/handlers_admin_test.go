@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -383,5 +384,51 @@ func TestAdminLibrariesCarryScanProgress(t *testing.T) {
 	_, body := e.do(t, "GET", "/api/v1/admin/libraries", adminTok, "")
 	if !strings.Contains(body, `"scan":{"running":false`) || !strings.Contains(body, `"unavailable":true`) {
 		t.Fatalf("libraries = %s, want each library's scan progress", body)
+	}
+}
+
+// TestLibraryAccessLeavesAnAdminShareAlone (server#223): granting a library
+// whole through POST /admin/library-access never widens an admin's own share
+// that happens to be named "Library: <name>"; its holder keeps exactly its
+// folder, and the grant goes to a share of its own.
+func TestLibraryAccessLeavesAnAdminShareAlone(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, guestTok, guest := adminAndMember(t, e)
+	lib := newFixtureLibrary(t, e)
+	child, childTok := newUserWithSession(t, e, "child", false)
+	mine, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Library: Main",
+		Paths: []catalog.PathRule{{LibraryID: lib.ID, Path: "Will Wight"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, child, mine.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"user_id":%d,"library_id":%d}`, guest, lib.ID)
+	if resp, b := e.do(t, "POST", "/api/v1/admin/library-access", adminTok, body); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /admin/library-access = %d %s", resp.StatusCode, b)
+	}
+
+	// Denied: the child still reaches only their folder (the share's own rules are
+	// catalog's TestGrantWholeLibraryNeverAdoptsAnAdminShare).
+	if code := e.item(t, childTok, lib.ID, mistbornBook); code != http.StatusForbidden {
+		t.Fatalf("the child reaches a book outside their share after the grant: %d", code)
+	}
+	if code := e.item(t, childTok, lib.ID, cradleBook); code != http.StatusOK {
+		t.Fatalf("the child's own book = %d", code)
+	}
+	// Allowed: the guest gets the whole library through a marked grant of its own.
+	if code := e.item(t, guestTok, lib.ID, mistbornBook); code != http.StatusOK {
+		t.Fatalf("the guest's whole library = %d", code)
+	}
+	held, err := e.cat.UserShares(ctx, guest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 1 || held[0].ID == mine.ID || held[0].WholeLibraryID == nil || *held[0].WholeLibraryID != lib.ID {
+		t.Fatalf("the guest's shares = %+v; want one marked grant, not the admin's", held)
 	}
 }

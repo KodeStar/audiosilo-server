@@ -796,13 +796,15 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	name := "Library: " + lib.Name
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	if errors.Is(err, ErrNotFound) {
-		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library"})
+		share, err = c.CreateShare(ctx, Share{Name: name, Description: wholeLibraryShareDescription})
 		if errors.Is(err, ErrNameTaken) {
 			// Another library's grant already has this name (that library was
-			// renamed and this one took its old name). The name is internal -
-			// clients show the library's own - so tell them apart by id.
+			// renamed and this one took its old name), or a share that can't be
+			// this library's grant does (wholeLibraryShare never adopts one). The
+			// name is internal - clients show the library's own - so tell them
+			// apart by id.
 			share, err = c.CreateShare(ctx, Share{
-				Name: fmt.Sprintf("%s (%d)", name, libraryID), Description: "Whole library",
+				Name: wholeLibraryIDName(name, libraryID), Description: wholeLibraryShareDescription,
 			})
 		}
 	}
@@ -810,10 +812,8 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		return err
 	}
 	// Always ensure the whole-library rule exists, not just on creation: a
-	// same-named library that was deleted and recreated cascade-deletes the old
-	// rule (share_paths FK) while the share row survives, leaving a rule-less
-	// share that grants nothing. AddSharePath is INSERT OR IGNORE, so re-running
-	// is cheap and self-heals such orphaned shares.
+	// reused share may lack it (an unheld one an interrupted grant left).
+	// AddSharePath is INSERT OR IGNORE, so re-running is cheap.
 	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
 		return err
 	}
@@ -826,19 +826,40 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	return c.GrantShare(ctx, userID, share.ID)
 }
 
+// wholeLibraryShareDescription is the description GrantWholeLibrary has always
+// given the share it creates.
+const wholeLibraryShareDescription = "Whole library"
+
+// wholeLibraryIDName is the name of libraryID's grant share when "Library:
+// <name>" (name) is another share's.
+func wholeLibraryIDName(name string, libraryID int64) string {
+	return fmt.Sprintf("%s (%d)", name, libraryID)
+}
+
 // wholeLibraryShare finds the share that grants libraryID whole: the one marked
-// with it (which survives a library rename), else an unmarked share named after
-// it (made before whole_library_id existed). A same-named share marked for
-// another library is never reused - adding this library's rule to it would hand
-// this library to everyone holding that one.
+// with it (which survives a library rename), else an unmarked one with the
+// description GrantWholeLibrary gives it, named "Library: <name>" (made before
+// whole_library_id existed) or "Library: <name> (<id>)" (one an interrupted
+// grant created and couldn't mark). Either way it qualifies only while its sole
+// rule is this library's "", or it has no rule and no holder (one an interrupted
+// grant left). GrantWholeLibrary adds the "" rule and hands the share out, so
+// reusing anything else - an admin's own share with the name (server#223), a
+// grant since narrowed or given another library's folders, a rule-less share
+// someone holds, or a same-named share marked for another library - would widen
+// its holders or hand their folders to the new one. The caller then creates a
+// share of its own.
 func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
 	var id int64
 	err := c.db.QueryRowContext(ctx,
-		`SELECT id FROM shares WHERE whole_library_id = ? ORDER BY id LIMIT 1`, libraryID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = c.db.QueryRowContext(ctx,
-			`SELECT id FROM shares WHERE name = ? AND whole_library_id IS NULL`, name).Scan(&id)
-	}
+		`SELECT s.id FROM shares s
+		  WHERE (s.whole_library_id = ?1
+		         OR (s.whole_library_id IS NULL AND s.name IN (?2, ?3) AND s.description = ?4))
+		    AND NOT EXISTS (SELECT 1 FROM share_paths sp
+		                     WHERE sp.share_id = s.id AND (sp.library_id <> ?1 OR sp.path <> ''))
+		    AND (EXISTS (SELECT 1 FROM share_paths sp WHERE sp.share_id = s.id)
+		         OR NOT EXISTS (SELECT 1 FROM user_share_access ua WHERE ua.share_id = s.id))
+		  ORDER BY s.whole_library_id IS NULL, s.id LIMIT 1`,
+		libraryID, name, wholeLibraryIDName(name, libraryID), wholeLibraryShareDescription).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

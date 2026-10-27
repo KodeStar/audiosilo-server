@@ -170,16 +170,16 @@ func (m *memberEnv) addItem(t *testing.T, tok string, col int64, path string) {
 }
 
 // status is the answer's status code for method path as tok.
-func (m *memberEnv) status(t *testing.T, method, path, tok, body string) int {
+func (e *testEnv) status(t *testing.T, method, path, tok, body string) int {
 	t.Helper()
-	resp, _ := m.do(t, method, path, tok, body)
+	resp, _ := e.do(t, method, path, tok, body)
 	return resp.StatusCode
 }
 
 // item is GET /libraries/{lib}/item?path= as tok.
-func (m *memberEnv) item(t *testing.T, tok string, lib int64, path string) int {
+func (e *testEnv) item(t *testing.T, tok string, lib int64, path string) int {
 	t.Helper()
-	return m.status(t, "GET", bookURL(lib, "item", path), tok, "")
+	return e.status(t, "GET", bookURL(lib, "item", path), tok, "")
 }
 
 func (m *memberEnv) me(t *testing.T, tok string) meUser {
