@@ -796,23 +796,14 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	name := "Library: " + lib.Name
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	if errors.Is(err, ErrNotFound) {
-		share, err = c.CreateShare(ctx, Share{Name: name, Description: wholeLibraryShareDescription})
-		if errors.Is(err, ErrNameTaken) {
-			// Another library's grant already has this name (that library was
-			// renamed and this one took its old name), or a share that can't be
-			// this library's grant does (wholeLibraryShare never adopts one). The
-			// name is internal - clients show the library's own - so tell them
-			// apart by id.
-			share, err = c.CreateShare(ctx, Share{
-				Name: wholeLibraryIDName(name, libraryID), Description: wholeLibraryShareDescription,
-			})
-		}
+		share, err = c.createWholeLibraryShare(ctx, libraryID, name)
 	}
 	if err != nil {
 		return err
 	}
 	// Always ensure the whole-library rule exists, not just on creation: a
-	// reused share may lack it (an unheld one an interrupted grant left).
+	// reused share may lack it (an unheld one an interrupted grant of an older
+	// version left; a new one is made whole in one transaction).
 	// AddSharePath is INSERT OR IGNORE, so re-running is cheap.
 	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
 		return err
@@ -834,6 +825,58 @@ const wholeLibraryShareDescription = "Whole library"
 // <name>" (name) is another share's.
 func wholeLibraryIDName(name string, libraryID int64) string {
 	return fmt.Sprintf("%s (%d)", name, libraryID)
+}
+
+// maxGrantNames bounds the names createWholeLibraryShare tries.
+const maxGrantNames = 20
+
+// grantName is the i-th name createWholeLibraryShare tries for libraryID's
+// grant share: "Library: <name>", then "Library: <name> (<id>)", then that
+// numbered from 2.
+func grantName(name string, libraryID int64, i int) string {
+	switch i {
+	case 0:
+		return name
+	case 1:
+		return wholeLibraryIDName(name, libraryID)
+	}
+	return fmt.Sprintf("%s %d", wholeLibraryIDName(name, libraryID), i)
+}
+
+// createWholeLibraryShare makes libraryID's grant share in one transaction:
+// named by the first of grantName's names no share has, with the library's ""
+// rule and marked as its grant, so no interrupted grant leaves a share without
+// its rule. The name is internal (clients show the library's own), so another
+// share holding one (another library's grant after a rename, an admin's own
+// share, a grant since narrowed, which is never adopted) only moves it along
+// (server#230). ErrNameTaken only when every name is taken.
+func (c *Catalog) createWholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
+	s := &Share{Description: wholeLibraryShareDescription, Paths: []PathRule{{LibraryID: libraryID, Path: ""}},
+		WholeLibraryID: &libraryID}
+	err := c.db.WithTx(ctx, "createWholeLibraryShare", func(tx *sql.Tx) error {
+		for i := range maxGrantNames {
+			// A refused INSERT ends only its statement in SQLite, not the
+			// transaction, so the next name is tried in the same one.
+			res, err := tx.ExecContext(ctx,
+				`INSERT INTO shares(name, description, read_only, created_at, whole_library_id) VALUES(?,?,0,?,?)`,
+				grantName(name, libraryID, i), s.Description, c.ts(), libraryID)
+			if store.IsUniqueViolation(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			s.ID, _ = res.LastInsertId()
+			s.Name = grantName(name, libraryID, i)
+			_, err = tx.ExecContext(ctx, `INSERT INTO share_paths(share_id, library_id, path) VALUES(?,?,'')`, s.ID, libraryID)
+			return err
+		}
+		return ErrNameTaken
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // wholeLibraryShare finds the share that grants libraryID whole: the one marked
