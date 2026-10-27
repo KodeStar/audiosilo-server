@@ -93,6 +93,14 @@ libraries: []
 # - name: "Main"
 #   root: "/srv/audiobooks"
 
+# Library scans. A scan reads several audio files at once (their tags, then
+# ffprobe) and writes the index in one place, so its result is the same however
+# many it reads. Read at start only: no console setting.
+scan:
+  # Files read at once, 0 to 64. 0 = one per CPU, up to 8. Lower it for a slow
+  # disk or a busy share; raise it for a fast disk on a machine with cores to spare.
+  concurrency: 0 # [AUDIOSILO_SCAN_CONCURRENCY]
+
 # Public demo mode. When enabled, an unauthenticated visitor can mint a throwaway
 # account via POST /api/v1/demo/session that is granted the named library; idle
 # demo accounts (and their data) are reaped automatically. Intended for a public

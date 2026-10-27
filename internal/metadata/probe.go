@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -30,6 +31,13 @@ type ffprobeOutput struct {
 	} `json:"chapters"`
 }
 
+// ProbeTimeout is how long one ffprobe run may take.
+const ProbeTimeout = 30 * time.Second
+
+// ErrProbeTimeout is a ProbeErr when ffprobe ran out of time (killed, not a
+// file it couldn't read): a slow disk or a busy one may read it given time.
+var ErrProbeTimeout = errors.New("ffprobe timed out")
+
 type probeResult struct {
 	Duration float64
 	Codec    string
@@ -40,8 +48,8 @@ type probeResult struct {
 // probe runs ffprobe to obtain duration, the audio codec, chapters and container
 // tags. -select_streams a:0 limits -show_streams to the first audio stream so we
 // read the codec that actually needs (or doesn't need) transcoding.
-func probe(parent context.Context, path, ffprobePath string) (*probeResult, error) {
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+func probe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
 		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
@@ -54,6 +62,9 @@ func probe(parent context.Context, path, ffprobePath string) (*probeResult, erro
 	)
 	out, err := cmd.Output()
 	if err != nil {
+		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w after %s", ErrProbeTimeout, timeout)
+		}
 		return nil, probeError(err)
 	}
 	var parsed ffprobeOutput

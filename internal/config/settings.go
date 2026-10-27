@@ -112,6 +112,10 @@ var fields = []field{
 	{key: "podcasts.discovery.enabled", env: "AUDIOSILO_PODCAST_DISCOVERY_ENABLED", restart: true,
 		ptr: func(c *Config) any { return &c.Podcasts.Discovery.Enabled }},
 
+	// How many files a scan reads at once: read once at start, no console setting.
+	{key: "scan.concurrency", env: "AUDIOSILO_SCAN_CONCURRENCY", restart: true,
+		ptr: func(c *Config) any { return &c.Scan.Concurrency }},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",

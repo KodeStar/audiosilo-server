@@ -130,6 +130,19 @@ const (
 	MaxMaxMembers     = 50
 )
 
+// ScanConfig tunes library scans.
+type ScanConfig struct {
+	// Concurrency is how many audio files a scan reads at once (tags and ffprobe):
+	// 0, the default, means one per CPU up to 8 (library.DefaultScanReaders).
+	// Lower it for a library on a slow disk or a busy share, raise it for a fast
+	// one on a machine with cores to spare. Read once at start (scan.concurrency,
+	// AUDIOSILO_SCAN_CONCURRENCY).
+	Concurrency int `yaml:"concurrency"`
+}
+
+// MaxScanConcurrency bounds scan.concurrency.
+const MaxScanConcurrency = 64
+
 // ModulesConfig holds each managed module's settings (internal/modules), all
 // off by default. A module's toggle is modules.<id>.enabled (the console's
 // setting modules.<id>, AUDIOSILO_MODULES_<ID>_ENABLED); a module's own
@@ -362,6 +375,7 @@ type Config struct {
 	Household      HouseholdConfig `yaml:"household"` // household members
 	Modules        ModulesConfig   `yaml:"modules"`   // managed modules (internal/modules), each off by default
 	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
+	Scan           ScanConfig      `yaml:"scan"`      // library scans (boot only)
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -639,6 +653,9 @@ func (c *Config) Validate() error {
 	}
 	if n := c.Household.MaxMembers; n < MinMaxMembers || n > MaxMaxMembers {
 		return fieldErr("household.max_members", fmt.Errorf("household.max_members must be from %d to %d", MinMaxMembers, MaxMaxMembers))
+	}
+	if n := c.Scan.Concurrency; n < 0 || n > MaxScanConcurrency {
+		return fieldErr("scan.concurrency", fmt.Errorf("scan.concurrency must be from 0 (one per CPU) to %d", MaxScanConcurrency))
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))

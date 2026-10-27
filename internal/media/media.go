@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dhowden/tag"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // browserCodecs are audio codecs mainstream browsers decode natively, so they
@@ -406,7 +406,7 @@ func EmbeddedCover(absPath string) (data []byte, mime string, ok bool) {
 		return nil, "", false
 	}
 	defer f.Close()
-	md, err := tag.ReadFrom(f)
+	md, err := metadata.ReadTags(f)
 	if err != nil {
 		return nil, "", false
 	}
