@@ -705,10 +705,10 @@ func (c *Config) Validate() error {
 	}{{"rate_limit.address", c.RateLimit.Address}, {"rate_limit.token", c.RateLimit.Token}, {"rate_limit.media", c.RateLimit.Media}} {
 		// 0 is unset (the default); anything else must let requests through.
 		if b.b.Rate < 0 || math.IsNaN(b.b.Rate) || math.IsInf(b.b.Rate, 0) {
-			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be more than 0 requests a second (0 or left out is the default)", b.key))
+			return fieldErr(b.key+".rate", fmt.Errorf("%s.rate must be a number of requests a second above 0, or 0 (or left out) for the default", b.key))
 		}
 		if b.b.Burst < 0 {
-			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1 (0 or left out is the default)", b.key))
+			return fieldErr(b.key+".burst", fmt.Errorf("%s.burst must be at least 1, or 0 (or left out) for the default", b.key))
 		}
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
