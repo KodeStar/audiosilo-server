@@ -64,6 +64,30 @@ describe('book page', () => {
     ).toHaveTextContent(/^by Brandon Sanderson · book 1 in The Stormlight Archive$/);
   });
 
+  it('shows the book\'s ebook in Files and as a hero chip', async () => {
+    const detail = bookDetail();
+    detail.book = {
+      ...detail.book,
+      ebook: { path: `${detail.book.path}/The Way of Kings.epub`, size: 2_400_000 },
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    const line = await screen.findByRole('group', { name: 'Ebook' });
+    expect(line).toHaveTextContent('The Way of Kings.epub');
+    expect(line).toHaveTextContent(/2\.4 MB/);
+    expect(screen.getByRole('heading', { level: 1 }).parentElement).toHaveTextContent('Ebook');
+  });
+
+  it('shows no ebook line or chip for a book without one', async () => {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('group', { name: 'Ebook' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 }).parentElement).not.toHaveTextContent(
+      'Ebook',
+    );
+  });
+
   it('lists every series the book is in, each a link', async () => {
     const detail = bookDetail();
     detail.book = {

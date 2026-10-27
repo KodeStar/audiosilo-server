@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Lock, Move } from 'lucide-react';
+import { BookOpen, FolderOpen, Lock, Move } from 'lucide-react';
 import { useLibraries } from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { PlaybackStatus } from '@/components/playback-status';
@@ -95,6 +95,24 @@ export function FilesCard({ detail }: { detail: AdminBookDetail }) {
           </tbody>
         </table>
       </div>
+      {b.ebook ? (
+        <div
+          role="group"
+          aria-label={t('book.files.ebook')}
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-5 py-3 text-[13.5px]"
+        >
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <BookOpen className="size-[15px]" aria-hidden="true" />
+            {t('book.files.ebook')}
+          </span>
+          <span className="min-w-0 flex-1 font-mono text-[12.5px] [overflow-wrap:anywhere]">
+            {fileName(b.ebook.path, b.path)}
+          </span>
+          <span className="text-muted-foreground tabular-nums">
+            {formatBytes(b.ebook.size, lang)}
+          </span>
+        </div>
+      ) : null}
     </Card>
   );
 }
