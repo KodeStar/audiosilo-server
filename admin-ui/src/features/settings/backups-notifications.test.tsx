@@ -67,6 +67,18 @@ describe('backups', () => {
     );
   });
 
+  it('holds a keep count outside 1-365 with a sentence, sending nothing (ADMIN-08)', async () => {
+    const calls = mockFetch(routes());
+    renderApp('/server?topic=backups');
+    const user = userEvent.setup();
+    const keep = await screen.findByRole('textbox', { name: 'Scheduled backups to keep' });
+    await user.clear(keep);
+    await user.type(keep, '400');
+    expect(await screen.findByText('Enter a whole number from 1 to 365.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
   it('backs up now and says when it is done', async () => {
     // Before the click nothing runs; the first poll after it sees the backup
     // running, the next one finished.

@@ -97,6 +97,14 @@ export function listToText(list: readonly string[]): string {
 }
 
 /**
+ * The ranges the server holds number settings to (internal/config: MinSessionDays
+ * and MaxSessionDays, MaxBackupKeep), checked before a save so the field says so in
+ * a sentence rather than sending a PATCH the server refuses.
+ */
+export const SESSION_DAYS_RANGE = { min: 30, max: 3650 } as const;
+export const BACKUP_KEEP_RANGE = { min: 1, max: 365 } as const;
+
+/**
  * Whether a number field's text is outside its whole-number range, checked
  * before saving (the server refuses the same). Blank is too: a ranged setting
  * always holds a number (the server refuses null for it, "enter a value").

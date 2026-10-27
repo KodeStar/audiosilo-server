@@ -47,6 +47,7 @@ import {
   certificateLook,
   lockOf,
   METADATA_MODES,
+  SESSION_DAYS_RANGE,
   SETTINGS_PAGES,
   visiblePages,
   type CertStatus,
@@ -195,7 +196,9 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
         section="general"
         title={t('settings.general.history')}
         description={t('settings.general.historyBody')}
-        fields={[{ name: 'session_days', kind: 'number', placeholder: '400' }]}
+        fields={[
+          { name: 'session_days', kind: 'number', placeholder: '400', range: SESSION_DAYS_RANGE },
+        ]}
       />
       <Card aria-labelledby="updates-title">
         <CardHeader

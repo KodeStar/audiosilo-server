@@ -29,6 +29,7 @@ import { backupFailureKey } from '@/lib/server-events';
 import { CardEmpty } from './card-empty';
 import { describeSchedule, restoreFailureKey, totalSize } from './backups-model';
 import { SettingBadges, SettingsForm } from './settings-form';
+import { BACKUP_KEEP_RANGE } from './settings-model';
 
 /** How long the outcome of the last restore stays on this page. */
 const RESTORE_NEWS_MS = 14 * 86_400_000;
@@ -52,7 +53,7 @@ export function BackupsTopic({ settings }: { settings: AdminSettings }) {
         title={t('backups.scheduleCard')}
         fields={[
           { name: 'schedule', kind: 'schedule' },
-          { name: 'keep', kind: 'number', placeholder: '7' },
+          { name: 'keep', kind: 'number', placeholder: '7', range: BACKUP_KEEP_RANGE },
         ]}
       >
         <SettingRow
