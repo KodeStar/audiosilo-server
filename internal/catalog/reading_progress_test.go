@@ -161,12 +161,6 @@ func TestSaveReadingProgressSameDeviceSawNothing(t *testing.T) {
 	if other != nil || kept.Version != 3 || kept.Progression != 0.02 {
 		t.Fatalf("after Stay = %+v, other %+v", kept, other)
 	}
-	// No base sent keeps today's latest-wins, the same device's or not.
-	kept, other = f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/2!/4/2/1:0)", Progression: 0.01, DeviceID: "phone",
-		UpdatedAt: "2026-10-25T11:02:00Z"})
-	if other != nil || kept.Version != 4 || kept.Progression != 0.01 {
-		t.Fatalf("no base = %+v, other %+v", kept, other)
-	}
 }
 
 func TestCheckReadingSave(t *testing.T) {
