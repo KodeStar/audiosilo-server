@@ -623,6 +623,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/share-access", a.requireAdmin(http.HandlerFunc(a.handleRevokeShare)))
 	mux.Handle("POST /api/v1/admin/library-access", a.requireAdmin(http.HandlerFunc(a.handleGrantWholeLibrary)))
 
+	// Any other /api/v1/ path answers in the API's JSON envelope (apiNoRoute),
+	// not the plain-text 404 of the web package's catch-all.
+	noRoute := apiNoRoute(mux)
+	for _, m := range apiMethods {
+		mux.Handle(m+" "+apiNoRoutePattern, noRoute)
+	}
+
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.

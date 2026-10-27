@@ -226,16 +226,17 @@ func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		ip := clientIP(r)
 		if isMedia(h) || tokenKeyed(h, pattern) {
-			if !a.ipLimiter.Ready(clientIP(r)) {
-				rateLimited(w)
+			if !a.ipLimiter.Ready(ip) {
+				rateLimited(w, a.ipLimiter.Wait(ip))
 				return
 			}
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.ipLimiter.Allow(clientIP(r)) {
-			rateLimited(w)
+		if !a.ipLimiter.Allow(ip) {
+			rateLimited(w, a.ipLimiter.Wait(ip))
 			return
 		}
 		// Said in the context, so requireAuth never limits this request a second
@@ -269,7 +270,10 @@ func tokenKeyed(h http.Handler, pattern string) bool {
 	return ok && !strings.HasPrefix(p, authRoutes)
 }
 
-func rateLimited(w http.ResponseWriter) {
+// rateLimited writes the request-rate 429 with Retry-After, the wait for the
+// bucket's next token.
+func rateLimited(w http.ResponseWriter, wait time.Duration) {
+	setRetryAfter(w, wait)
 	writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 }
 
@@ -318,7 +322,7 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 		perToken := !addressCharged(r)
 		ip := clientIP(r)
 		if perToken && !a.ipLimiter.Ready(ip) {
-			rateLimited(w)
+			rateLimited(w, a.ipLimiter.Wait(ip))
 			return
 		}
 		ctx, failure, _ := a.authenticate(r, false, sessionOrAPI)
@@ -329,9 +333,11 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
-		if perToken && !a.allowCredential(ctx, ip) {
-			rateLimited(w)
-			return
+		if perToken {
+			if wait, ok := a.allowCredential(ctx, ip); !ok {
+				rateLimited(w, wait)
+				return
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
@@ -342,16 +348,22 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // request the bucket refuses costs its address (the lookup was already done). A
 // demo account's session spends from its address's bucket instead, as every
 // request did before server#246: anyone can mint a demo session
-// (POST /demo/session), so a per-token budget would be no limit at all.
-func (a *API) allowCredential(ctx context.Context, ip string) bool {
+// (POST /demo/session), so a per-token budget would be no limit at all. When the
+// bucket refuses, wait is how long until the request could pass both its
+// credential's bucket and its address's (which the refusal charged), for
+// Retry-After.
+func (a *API) allowCredential(ctx context.Context, ip string) (wait time.Duration, ok bool) {
 	if u := userFrom(ctx); u != nil && u.IsDemo {
-		return a.ipLimiter.Allow(ip)
+		if !a.ipLimiter.Allow(ip) {
+			return a.ipLimiter.Wait(ip), false
+		}
+		return 0, true
 	}
-	if !a.tokenLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
+	if key := strconv.FormatInt(credentialFrom(ctx).ID, 10); !a.tokenLimiter.Allow(key) {
 		a.ipLimiter.Charge(ip)
-		return false
+		return max(a.tokenLimiter.Wait(key), a.ipLimiter.Wait(ip)), false
 	}
-	return true
+	return 0, true
 }
 
 // requireMediaAuth is requireAuth that additionally accepts the credential as a
@@ -393,7 +405,7 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !a.ipLimiter.Ready(ip) {
-			rateLimited(w)
+			rateLimited(w, a.ipLimiter.Wait(ip))
 			return
 		}
 		ctx, failure, _ := a.authenticate(r, true, kinds)
@@ -419,9 +431,9 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		}
 		// Every credential is a tokens row, so its id is its bucket.
-		if !a.mediaLimiter.Allow(strconv.FormatInt(cred.ID, 10)) {
+		if key := strconv.FormatInt(cred.ID, 10); !a.mediaLimiter.Allow(key) {
 			a.ipLimiter.Charge(ip)
-			rateLimited(w)
+			rateLimited(w, max(a.mediaLimiter.Wait(key), a.ipLimiter.Wait(ip)))
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))

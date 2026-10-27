@@ -150,7 +150,7 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 // backs the "enter your auth code" connect screen.
 func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
+	if !allowAttempt(w, a.redeemLimiter, ip) {
 		return
 	}
 	var req struct {
@@ -192,7 +192,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 // after a successful claim burns a use, same failure shape redeem had).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
+	if !allowAttempt(w, a.redeemLimiter, ip) {
 		return
 	}
 	var req struct {
@@ -253,7 +253,7 @@ func (a *API) handleAddresses(w http.ResponseWriter, r *http.Request) {
 // handleLogin authenticates username/password and issues a session token.
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !allowAttempt(w, a.loginLimiter.Allowed(ip)) {
+	if !allowAttempt(w, a.loginLimiter, ip) {
 		return
 	}
 	var req struct {
@@ -494,8 +494,8 @@ func (a *API) acquireAccountBudget(w http.ResponseWriter, r *http.Request) bool 
 	if a.accountLimiter.Acquire(ip) {
 		return true
 	}
-	setRetryAfter(w, a.accountLimiter.LockedFor(ip))
-	return allowAttempt(w, false)
+	tooManyAttempts(w, a.accountLimiter.LockedFor(ip))
+	return false
 }
 
 // nonDemoAccount loads the caller's full account, refusing a demo account (403

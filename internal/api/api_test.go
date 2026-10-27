@@ -705,6 +705,71 @@ func TestLoginLockout(t *testing.T) {
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("expected lockout (429) after repeated failures, got %d", last)
 	}
+	// The lockout says when to try again, and holds for the right password too.
+	resp, _ := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"admin-password"}`)
+	secs, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if resp.StatusCode != http.StatusTooManyRequests || err != nil || secs < 1 || secs > 15*60 {
+		t.Fatalf("locked login = %d, Retry-After %q; want 429 with 1..900 s", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	// The redeem limiter's 429 carries it too.
+	for range 12 {
+		resp, _ = e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"WRONG-CODE"}`)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("locked redeem = %d, Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+}
+
+// A username with space around it (pasted, autocompleted) signs in to the
+// account without it; the space never helps a wrong password, and a name that
+// differs by more than space (case) is still unknown. An account whose stored
+// name has the space keeps signing in by it.
+func TestLoginTrimsUsername(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	if _, err := e.auth.CreateUser(ctx, "alex", "alex-password", auth.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.auth.CreateUser(ctx, " pad ", "pad-password", auth.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		user, pass string
+		want       int
+	}{
+		{"alex ", "alex-password", http.StatusOK},
+		{"  alex", "alex-password", http.StatusOK},
+		{"alex ", "wrong-password", http.StatusUnauthorized},
+		{"Alex", "alex-password", http.StatusUnauthorized},
+		{" pad ", "pad-password", http.StatusOK},
+	} {
+		body, _ := json.Marshal(map[string]string{"username": tc.user, "password": tc.pass})
+		if resp, b := e.do(t, "POST", "/api/v1/auth/login", "", string(body)); resp.StatusCode != tc.want {
+			t.Errorf("login %q/%q = %d %s, want %d", tc.user, tc.pass, resp.StatusCode, b, tc.want)
+		}
+	}
+}
+
+// An /api/v1/ path no route claims answers in the JSON envelope: 404 for an
+// unknown path, 405 with Allow for a known one under another method.
+func TestUnknownAPIRouteIsJSON(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	resp, body := e.do(t, "GET", "/api/v1/nope", "", "")
+	if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+		!strings.Contains(body, `"code":"not_found"`) {
+		t.Fatalf("GET /api/v1/nope = %d %q %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	resp, body = e.do(t, "DELETE", "/api/v1/auth/login", "", "")
+	if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Allow") != "POST" ||
+		!strings.Contains(body, `"code":"method_not_allowed"`) {
+		t.Fatalf("DELETE /api/v1/auth/login = %d Allow %q %s", resp.StatusCode, resp.Header.Get("Allow"), body)
+	}
+	// A real route still answers.
+	if resp, body := e.do(t, "GET", "/api/v1/server", "", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/server = %d %s", resp.StatusCode, body)
+	}
 }
 
 // TestListProgressScopeFiltered covers review finding S4: GET /me/progress must

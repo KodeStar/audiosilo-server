@@ -106,7 +106,7 @@ func (a *API) bridgeOnline(ctx context.Context) *bridgeInfo {
 // like redeeming an auth code; a wrong or expired code is 401.
 func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
+	if !allowAttempt(w, a.redeemLimiter, ip) {
 		return
 	}
 	var req struct {

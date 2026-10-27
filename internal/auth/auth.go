@@ -236,15 +236,18 @@ func (s *Service) AdminExists(ctx context.Context) (bool, error) {
 	return n > 0, err
 }
 
-// Authenticate verifies a username/password and returns the user.
+// Authenticate verifies a username/password and returns the user. The username
+// as typed wins; with none by that name, the name without its surrounding space
+// (a pasted or autocompleted "alex ") is the account. Case still counts.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*User, error) {
 	var (
 		u    User
 		hash string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, role, disabled, password_hash FROM users WHERE username = ?`,
-		username).Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash)
+		`SELECT id, username, role, disabled, password_hash FROM users WHERE username IN (?, ?)
+		 ORDER BY username = ? DESC LIMIT 1`,
+		username, strings.TrimSpace(username), username).Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Run a dummy verify to keep timing roughly constant for unknown users.
 		_, _ = VerifyPassword(password, dummyHash)

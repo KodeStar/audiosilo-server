@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -222,5 +223,30 @@ func TestLimiterEviction(t *testing.T) {
 	l.Fail("k-new")
 	if len(l.entries) > 1 {
 		t.Fatalf("stale entries not evicted: %d remain", len(l.entries))
+	}
+}
+
+// Wait is the time to the bucket's next token: 0 while one is there, then the
+// refill time of what is missing, for the 429's Retry-After.
+func TestRateLimiterWait(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := newRateLimiter(2, 1) // 2 tokens/s, burst 1
+	r.now = func() time.Time { return now }
+	if d := r.Wait("k"); d != 0 {
+		t.Fatalf("fresh bucket Wait = %v, want 0", d)
+	}
+	r.Allow("k")
+	if d := r.Wait("k"); d != 500*time.Millisecond {
+		t.Fatalf("empty bucket Wait = %v, want 500ms", d)
+	}
+	now = now.Add(250 * time.Millisecond)
+	if d := r.Wait("k"); d != 250*time.Millisecond {
+		t.Fatalf("half-refilled Wait = %v, want 250ms", d)
+	}
+	rec := httptest.NewRecorder()
+	rateLimited(rec, r.Wait("k"))
+	if rec.Code != 429 || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("rateLimited = %d Retry-After %q, want 429 and 1", rec.Code, rec.Header().Get("Retry-After"))
 	}
 }

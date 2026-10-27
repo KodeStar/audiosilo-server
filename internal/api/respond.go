@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -306,4 +307,38 @@ func queryInt(r *http.Request, name string, def int) int {
 		return def
 	}
 	return n
+}
+
+// apiNoRoutePattern catches every /api/v1/ path no route claims, under each of
+// apiMethods (a pattern with no method would conflict with the web package's
+// "GET /").
+const apiNoRoutePattern = "/api/v1/"
+
+// apiMethods are the methods the API's routes use (GET covers HEAD).
+var apiMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+// apiNoRoute answers a request no API route claims with the JSON error envelope:
+// 405 method_not_allowed with Allow when the path is a route under another
+// method (what the mux itself would have said before this catch-all outranked
+// it), else 404 not_found.
+func apiNoRoute(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var allow []string
+		for _, m := range apiMethods {
+			if m == r.Method {
+				continue
+			}
+			other := r.Clone(r.Context())
+			other.Method = m
+			if _, pattern := mux.Handler(other); pattern != "" && pattern != m+" "+apiNoRoutePattern {
+				allow = append(allow, m)
+			}
+		}
+		if len(allow) > 0 {
+			w.Header().Set("Allow", strings.Join(allow, ", "))
+			writeErrorCode(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			return
+		}
+		writeErrorCode(w, http.StatusNotFound, "not_found", "not found")
+	})
 }
