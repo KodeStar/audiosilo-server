@@ -308,14 +308,14 @@ func TestReadFilesKeepsOrder(t *testing.T) {
 	s := NewScanner(nil, "", slog.New(slog.DiscardHandler))
 	lib := catalog.Library{Root: root}
 	first := &metadata.Metadata{Title: "first"}
-	for _, slots := range []readSlots{newReadSlots(1), newReadSlots(3), newReadSlots(64)} {
+	for _, slots := range []*readSlots{newReadSlots(1), newReadSlots(3), newReadSlots(64)} {
 		mds := s.readFiles(context.Background(), lib, files, first, slots)
 		if len(mds) != len(files) || mds[0] != first {
-			t.Fatalf("slots %d: %d readings, first %v", cap(slots), len(mds), mds[0])
+			t.Fatalf("slots %d: %d readings, first %v", slots.size(), len(mds), mds[0])
 		}
 		for i, md := range mds[1:] {
 			if md == nil || md.Format != "mp3" || md.OpenErr != nil {
-				t.Fatalf("slots %d: file %d read as %+v", cap(slots), i+1, md)
+				t.Fatalf("slots %d: file %d read as %+v", slots.size(), i+1, md)
 			}
 		}
 	}
@@ -339,5 +339,109 @@ func TestScanReaders(t *testing.T) {
 	s.SetConcurrency(-3)
 	if got := s.readers(); got < 1 || got > DefaultScanReaders {
 		t.Fatalf("readers for -3 = %d", got)
+	}
+}
+
+// smallLibrary is books folder books of files MP3 parts each.
+func smallLibrary(t *testing.T, books, files int) string {
+	t.Helper()
+	root := t.TempDir()
+	mp3 := filepath.Join("..", "..", "testdata", "multifile", "Jim Butcher", "The Dresden Files", "01 - Storm Front", "01 - Part One.mp3")
+	for b := range books {
+		for f := range files {
+			copyFixture(t, mp3, filepath.Join(root, "Author", fmt.Sprintf("Book %d", b), fmt.Sprintf("%02d.mp3", f+1)))
+		}
+	}
+	return root
+}
+
+// timeoutScanner is a scanner of root whose ffprobe runs time out after 300 ms.
+func timeoutScanner(t *testing.T, root, probe string, concurrency int) (*Scanner, *catalog.Library, *store.DB) {
+	t.Helper()
+	db := storetest.Open(t)
+	cat := catalog.New(db, fixedClock)
+	lib, err := cat.CreateLibrary(context.Background(), catalog.Library{Name: "Small", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, probe, slog.New(slog.DiscardHandler))
+	s.SetConcurrency(concurrency)
+	s.probeTimeout = 300 * time.Millisecond
+	return s, lib, db
+}
+
+// probeAnswer is the stand-in's ffprobe output for a readable file.
+const probeAnswer = `{"format":{"duration":"1.500000"},"streams":[{"codec_name":"mp3","codec_type":"audio"}]}`
+
+// A file whose ffprobe runs out of time while others are read beside it (a slow
+// disk shared by several reads) is read again on its own, and a healthy file
+// read in time then is no read problem. The stand-in hangs while another of its
+// runs is alive and answers when it runs alone.
+func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
+	t.Parallel()
+	running, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
+	probe := stubProbe(t, fmt.Sprintf(`touch %[1]q/$$
+n=0
+for f in %[1]q/*; do kill -0 "${f##*/}" 2>/dev/null && n=$((n+1)); done
+if [ "$n" -gt 1 ]; then echo hung >> %[2]q; exec sleep 10; fi
+rm -f %[1]q/$$
+echo '%[3]s'`, running, log, probeAnswer))
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 3, 4), probe, 4)
+	res, err := s.Scan(context.Background(), *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hung, _ := os.ReadFile(log); len(hung) == 0 {
+		t.Fatal("no ffprobe run timed out: the scan never read files side by side")
+	}
+	if res.Errors != 0 || res.Added != 3 {
+		t.Fatalf("added %d, %d read problems", res.Added, res.Errors)
+	}
+	var problems, short int
+	if err := db.QueryRowContext(context.Background(), `SELECT
+		(SELECT COUNT(*) FROM books WHERE scan_error <> ''),
+		(SELECT COUNT(*) FROM book_files WHERE duration <> 1.5)`).Scan(&problems, &short); err != nil {
+		t.Fatal(err)
+	}
+	if problems != 0 || short != 0 {
+		t.Fatalf("%d books with a read problem, %d files without their duration", problems, short)
+	}
+}
+
+// A file whose ffprobe times out again when read alone is the file's problem:
+// recorded, as a time-out.
+func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
+	t.Parallel()
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 3), stubProbe(t, "exec sleep 10"), 3)
+	res, err := s.Scan(context.Background(), *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem, detail string
+	if err := db.QueryRowContext(context.Background(), `SELECT scan_error, scan_error_detail FROM books`).Scan(&problem, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if res.Errors != 1 || problem != problemProbe || !strings.Contains(detail, "timed out") {
+		t.Fatalf("errors %d, problem %q (%q)", res.Errors, problem, detail)
+	}
+}
+
+// A Stop ends a read retried on its own too, and the retry waiting its turn.
+func TestScanStopEndsProbeRetry(t *testing.T) {
+	t.Parallel()
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 4, 5), stubProbe(t, "exec sleep 10"), 4)
+	s.probeTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(500*time.Millisecond, cancel) // the first runs have timed out: retries under way
+	start := time.Now()
+	if _, err := s.Scan(ctx, *lib); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stopped scan: err = %v", err)
+	}
+	if took := time.Since(start); took > 2*time.Second { // unstopped, the 20 retries alone take 4 s
+		t.Fatalf("the stop waited %v for the retries", took)
+	}
+	var n int
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM books`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("a stopped scan wrote %d books (%v)", n, err)
 	}
 }

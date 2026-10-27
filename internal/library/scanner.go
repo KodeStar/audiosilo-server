@@ -51,6 +51,8 @@ type Scanner struct {
 
 	// concurrency is how many audio files a scan reads at once (SetConcurrency).
 	concurrency int
+	// probeTimeout, when set (tests), replaces metadata.ProbeTimeout in a scan.
+	probeTimeout time.Duration
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -363,7 +365,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// index is written here alone, in discovery order (writeNext), so the rows,
 	// their ids and the log come out as a scan reading one file at a time writes them.
 	slots := newReadSlots(s.readers())
-	window := 2 * cap(slots)
+	if s.probeTimeout > 0 {
+		slots.timeout = s.probeTimeout
+	}
+	window := 2 * slots.size()
 	var pending []*bookRead
 	// writeNext writes the oldest book read, once its read is done; ctx's error
 	// when the scan was stopped by then (the read may have been cut short).
@@ -710,7 +715,7 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // A scan reads with its slots (an on-demand index with one, a file at a time)
 // and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
 // the reading rather than writing it.
-func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots readSlots) {
+func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
 	md := slots.extract(ctx, abs, s.ffprobePath)
@@ -912,7 +917,7 @@ func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapte
 // first is the reading of its first part (enrich's of the primary file), so that
 // file is read once; the others are read with slots (readFiles), then the
 // chapters are built from them in file order.
-func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots readSlots) {
+func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots) {
 	var cum float64
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
