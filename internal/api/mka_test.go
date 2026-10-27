@@ -437,10 +437,6 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 		t.Fatalf("cold stream = %d %q %q (%d bytes), want the live transcode", resp.StatusCode,
 			resp.Header.Get("Content-Type"), resp.Header.Get("Accept-Ranges"), len(body))
 	}
-	resp, _ = m.do(t, "GET", m.url("stream", mkaFile)+"&download=1", m.token, "")
-	if cd := resp.Header.Get("Content-Disposition"); resp.Header.Get("Accept-Ranges") != "none" || cd != `attachment; filename="book.mp3"` {
-		t.Fatalf("cold download = %q %q, want the transcode named book.mp3", resp.Header.Get("Accept-Ranges"), cd)
-	}
 	release()
 	m.api.remux.Wait()
 	resp, _ = m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
@@ -449,6 +445,60 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 	}
 	if n := m.cachedFiles(t); n != 1 {
 		t.Fatalf("%d cached files, want the one remux", n)
+	}
+}
+
+// TestMatroskaColdRemuxWaits (server#212): in the cold window a download, and a
+// stream with every transcode slot busy, wait for the remux rather than saving
+// the lossy transcode or answering 503: both get the remux, Range-seekable.
+func TestMatroskaColdRemuxWaits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, query string
+		fill        bool
+	}{{"download", "&download=1", false}, {"pool full", "", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMKAEnv(t)
+			m.api.ffmpeg = "ffmpeg"
+			m.api.remuxWait = 20 * time.Millisecond
+			release := m.holdRemuxes(t)
+			if tc.fill {
+				for range cap(m.api.transcodeSem) {
+					m.api.transcodeSem <- struct{}{}
+				}
+			}
+			type answer struct {
+				resp *http.Response
+				body string
+			}
+			got := make(chan answer, 1)
+			go func() {
+				resp, body := m.do(t, "GET", m.url("stream", mkaFile)+tc.query, m.token, "")
+				got <- answer{resp, body}
+			}()
+			// Well past the cold window: the request is still waiting.
+			select {
+			case a := <-got:
+				t.Fatalf("answered in the cold window: %d %q", a.resp.StatusCode, a.resp.Header.Get("Accept-Ranges"))
+			case <-time.After(10 * m.api.remuxWait):
+			}
+			release()
+			a := <-got
+			if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Accept-Ranges") != "bytes" ||
+				a.resp.Header.Get("Content-Type") != "audio/mpeg" || a.body == "" {
+				t.Fatalf("after the remux = %d %q %q, want the remux", a.resp.StatusCode,
+					a.resp.Header.Get("Content-Type"), a.resp.Header.Get("Accept-Ranges"))
+			}
+			if tc.query != "" && a.resp.Header.Get("Content-Disposition") != `attachment; filename="book.mp3"` {
+				t.Fatalf("download = %q, want the remux named book.mp3", a.resp.Header.Get("Content-Disposition"))
+			}
+			if tc.fill {
+				for range cap(m.api.transcodeSem) {
+					<-m.api.transcodeSem
+				}
+			}
+		})
 	}
 }
 

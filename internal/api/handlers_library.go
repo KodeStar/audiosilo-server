@@ -723,6 +723,11 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	if !ok {
 		return
 	}
+	a.transcodeHeld(w, r, abs, downloadName, done, start)
+}
+
+// transcodeHeld is serveTranscode once its slot is taken (done releases it).
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, done func(), start float64) {
 	defer done()
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
@@ -736,7 +741,10 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 // stored Matroska (a 2.4.x download) never earns a 304 or MP3 bytes spliced
 // onto Matroska. When the remux can't be had now (still running after
 // remuxColdWait, ErrRemuxUnavailable, an ffmpeg or cache failure) it answers
-// with the live transcode, the remux going on for the next request. It reports
+// with the live transcode, the remux going on for the next request. A remux still
+// running is waited for instead (server#212) when the request is a download
+// (whose saved copy would otherwise be the lossy transcode) or every transcode
+// slot is busy (which would otherwise be a 503). It reports
 // false, having written nothing, when the stored file should be served instead
 // (ErrNotRemuxable: not MP3 inside, or no regular file there); true also when
 // the request went away while waiting.
@@ -745,6 +753,23 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 	defer cancel()
 	f, etag, err := a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
 	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
+	var held func() // a transcode slot taken while the remux runs on
+	if err != nil && r.Context().Err() == nil && wait.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+		if !download {
+			held = a.takeTranscodeSlot()
+		}
+		if held == nil {
+			// A download, or no slot free: wait for the remux, as long as the
+			// request lasts.
+			f, etag, err = a.remux.Open(r.Context(), a.baseCtx, a.ffmpeg, abs)
+		} else {
+			defer func() {
+				if held != nil {
+					held() // taken, then not used (the server is stopping)
+				}
+			}()
+		}
+	}
 	if err != nil {
 		switch {
 		case r.Context().Err() != nil:
@@ -763,6 +788,12 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		downloadName := ""
 		if download {
 			downloadName = name
+		}
+		if held != nil {
+			done := held
+			held = nil
+			a.transcodeHeld(w, r, abs, downloadName, done, a.noteTranscode(r, lib, rel))
+			return true
 		}
 		a.serveTranscode(w, r, lib, rel, abs, downloadName)
 		return true
@@ -789,16 +820,32 @@ func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	}
 	// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
 	// rather than forking another core-pinning encoder.
-	select {
-	case a.transcodeSem <- struct{}{}:
-	default:
+	done = a.takeTranscodeSlot()
+	if done == nil {
 		w.Header().Set("Retry-After", "5")
 		writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 		return nil, 0, false
 	}
+	return done, a.noteTranscode(r, lib, rel), true
+}
+
+// takeTranscodeSlot takes one of the transcode slots and returns its release,
+// nil when every slot is busy.
+func (a *API) takeTranscodeSlot() (release func()) {
+	select {
+	case a.transcodeSem <- struct{}{}:
+		return func() { <-a.transcodeSem }
+	default:
+		return nil
+	}
+}
+
+// noteTranscode marks the device's session transcoded (a cast token's is its
+// sender's) and returns the ?t= start in seconds, for a transcode about to run.
+func (a *API) noteTranscode(r *http.Request, lib int64, rel string) (start float64) {
 	a.streams.Note(credentialFrom(r.Context()).DeviceID, lib, rel, time.Now())
 	start, _ = strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	return func() { <-a.transcodeSem }, start, true
+	return start
 }
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the
