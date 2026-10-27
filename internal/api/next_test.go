@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -431,27 +432,47 @@ func TestNextFolder(t *testing.T) {
 		&catalog.Book{RelPath: "Loose/Part A", IsFolder: true},
 		&catalog.Book{RelPath: "Alone/Only", IsFolder: true},
 	)
-	mkdirs(t, e.lib.Root, "Saga/1", "Saga/2", "Saga/10", "Saga/Extras", "Loose/Part A", "Loose/Part B", "Alone/Only")
+	mkdirs(t, e.lib.Root, "Saga/1", "Saga/10", "Loose/Part A", "Alone/Only")
+	// Saga/Extras holds no audio: a bare folder, never a book.
+	if err := os.MkdirAll(filepath.Join(e.lib.Root, "Saga", "Extras"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	// The next indexed book, in natural order, over the unindexed Saga/2 (the
-	// folder holds other indexed books, so a bare folder is not a book).
+	// The next indexed book, in natural order; the bare Extras folder is not one
+	// (the folder holds other indexed books, so a bare folder is not a book).
 	n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok)
 	if n.Source != nextFolder || n.nextPath() != "Saga/10" || n.Book == nil || n.Book.RelPath != "Saga/10" {
 		t.Fatalf("indexed = %s", n.raw)
 	}
-	// Nothing else in the folder indexed: the current book is, so a bare folder
-	// after it is not offered (it may be a series or author folder, which would
-	// strand the player), as the player's own folder walk decides.
+	// Nothing else in the folder indexed and no audio after it: the current book
+	// is indexed, so a bare folder after it is not offered (it may be a series or
+	// author folder, which would strand the player).
 	n = getNext(t, e.testEnv, e.url("next", "Loose/Part A"), e.adminTok)
 	if n.Source != nextNone || n.Next != nil || n.Book != nil {
 		t.Fatalf("unindexed = %s", n.raw)
 	}
-	// Denied: the member is granted Saga/1 and Saga/2 only; Saga/10 is not
-	// theirs, and Saga/2 is not indexed yet, so nothing follows for them.
-	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.Source != nextNone || strings.Contains(n.raw, "Saga/10") {
+	// Alone in its folder: none.
+	if n := getNext(t, e.testEnv, e.url("next", "Alone/Only"), e.adminTok); n.Source != nextNone || n.Next != nil || n.Book != nil {
+		t.Fatalf("alone = %s", n.raw)
+	}
+
+	// A folder with audio no scan has reached yet (pending) is the next book,
+	// before a later indexed one, with no book yet: the player opens it, which
+	// indexes it (server#211).
+	mkdirs(t, e.lib.Root, "Saga/2", "Loose/Part B")
+	n = getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok)
+	if n.Source != nextFolder || n.nextPath() != "Saga/2" || n.Book != nil {
+		t.Fatalf("pending = %s", n.raw)
+	}
+	if n := getNext(t, e.testEnv, e.url("next", "Loose/Part A"), e.adminTok); n.nextPath() != "Loose/Part B" || n.Book != nil {
+		t.Fatalf("pending after the only indexed book = %s", n.raw)
+	}
+	// Allowed: the member is granted Saga/1 and Saga/2, so the pending Saga/2 is
+	// theirs to play next...
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.nextPath() != "Saga/2" || strings.Contains(n.raw, "Saga/10") {
 		t.Fatalf("member = %s", n.raw)
 	}
-	// Allowed: once Saga/2 is indexed it is the member's next book.
+	// ...and once it is indexed, it comes with its book.
 	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: "Saga/2", IsFolder: true,
 		Title: "Saga/2", Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
@@ -459,9 +480,10 @@ func TestNextFolder(t *testing.T) {
 	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.nextPath() != "Saga/2" || n.Book == nil || strings.Contains(n.raw, "Saga/10") {
 		t.Fatalf("member after Saga/2 is indexed = %s", n.raw)
 	}
-	// Alone in its folder: none.
-	if n := getNext(t, e.testEnv, e.url("next", "Alone/Only"), e.adminTok); n.Source != nextNone || n.Next != nil || n.Book != nil {
-		t.Fatalf("alone = %s", n.raw)
+	// Denied: a pending folder outside the member's grant is never offered.
+	mkdirs(t, e.lib.Root, "Saga/3")
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/2"), e.memberTok); n.Source != nextNone || strings.Contains(n.raw, "Saga/3") {
+		t.Fatalf("member past their grant = %s", n.raw)
 	}
 }
 
@@ -707,5 +729,39 @@ func TestNextCommunityRails(t *testing.T) {
 				t.Fatalf("local/book do not match next: %s", n.raw)
 			}
 		})
+	}
+}
+
+// Favouriting a book no scan has reached yet (a pending folder) indexes it, as
+// opening it would, so it shows on Favourites at once; a folder that is no
+// book is still a favourite, and nothing is indexed for it (server#211).
+func TestFavouriteIndexesPendingBook(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	copyFixture(t, root, cradlePart, "Author/New/01.m4b")
+	if err := os.MkdirAll(filepath.Join(root, "Author", "Empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Fresh", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := adminSession(t, e)
+	for _, p := range []string{"Author/New", "Author/Empty"} {
+		if resp, body := e.do(t, "POST", bookURL(lib.ID, "favourites", p), tok, ""); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("favourite %s = %d %s", p, resp.StatusCode, body)
+		}
+	}
+	if b, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/New"); err != nil || b.RelPath != "Author/New" {
+		t.Fatalf("favourited pending book not indexed: %v %v", b, err)
+	}
+	if _, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/Empty"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("a folder that is no book: %v, want none indexed", err)
+	}
+	_, body := e.do(t, "GET", "/api/v1/me/favourites", tok, "")
+	if !strings.Contains(body, "Author/New") || !strings.Contains(body, "Author/Empty") {
+		t.Fatalf("favourites = %s", body)
 	}
 }

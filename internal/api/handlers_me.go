@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // Per-user listening state is addressed by (library, path) - the book path -
@@ -300,7 +301,7 @@ func (a *API) handleListFavourites(w http.ResponseWriter, r *http.Request) {
 
 // handleAddFavourite hearts a path for the caller (idempotent).
 func (a *API) handleAddFavourite(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -310,7 +311,25 @@ func (a *API) handleAddFavourite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save favourite")
 		return
 	}
+	a.indexFavourite(r.Context(), lib, scope, path)
 	w.WriteHeader(http.StatusCreated)
+}
+
+// indexFavourite indexes a book a scan hasn't reached yet when it is favourited
+// (a pending folder, server#211), as opening it would, so it shows on the
+// Favourites list (which reads the index) without the player opening it first.
+// Best-effort and bounded to half the request's time: the favourite is saved
+// either way, and a path that is no book (an author's folder) stays a bare
+// favourite.
+func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) {
+	if lib.Kind == catalog.KindPodcasts {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.timeoutDur/2)
+	defer cancel()
+	if _, err := a.bookForPath(ctx, lib, scope, path); err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
+		a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
+	}
 }
 
 // handleRemoveFavourite clears the caller's favourite for a path (idempotent).
