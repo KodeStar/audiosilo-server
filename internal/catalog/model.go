@@ -229,7 +229,6 @@ type catalogDB interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	WriteRowContext(context.Context, string, ...any) *sql.Row
 	WithTx(context.Context, string, func(*sql.Tx) error) error
 	Ping(context.Context) error
 }
@@ -289,6 +288,17 @@ func (c *Catalog) changed() {
 			f()
 		}
 	}
+}
+
+// Generation is the database's write generation (store.DB.Generation) and
+// whether there is one: a catalog over something else (a transaction's
+// snapshot, a test double) has none, and nothing may be cached on it.
+func (c *Catalog) Generation() (uint64, bool) {
+	g, ok := c.db.(interface{ Generation() uint64 })
+	if !ok {
+		return 0, false
+	}
+	return g.Generation(), true
 }
 
 // New returns a Catalog. now may be nil to use time.Now.

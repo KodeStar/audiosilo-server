@@ -123,7 +123,7 @@ func TestMigrationRunnerRollsBackOnBadBody(t *testing.T) {
 	badBody := `CREATE TABLE rollback_probe(id INTEGER PRIMARY KEY);
 		THIS IS NOT VALID SQL;`
 
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.writer.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}

@@ -166,6 +166,7 @@ type API struct {
 	// the OPML transfer budgets (handlers_podcast_discovery.go).
 	discovery *discovery.Service
 	opml      opmlTransfers
+	lists     *listCache // the player's book lists, by write generation (listcache.go)
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -216,6 +217,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
 		opml:           newOPMLTransfers(),
+		lists:          newListCache(),
 	}
 	if cfg.DataDir != "" {
 		if rm, err := media.NewRemuxer(filepath.Join(cfg.DataDir, "cache", "remux"), log); err != nil {

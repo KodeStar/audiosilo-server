@@ -502,9 +502,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **SQLite** runs with a single write connection (writers serialize) plus a
   read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
   the READER (`query_only`): any statement that writes, including `INSERT ...
-  RETURNING`, must use `ExecContext`, `WriteRowContext` or a `WithTx` transaction.
-  An in-memory DB has reader == writer and would hide a misroute, which is why the
-  test stores are temp files.
+  RETURNING`, must use `ExecContext` or a `WithTx` transaction (there is no other
+  way to the writer: `store.DB.Generation`, which the list cache keys on, moves
+  after each of those finishes). An in-memory DB has reader == writer and would
+  hide a misroute, which is why the test stores are temp files.
+- **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
+  books library), `/books/recent` and `/search` keep their encoded answer (8 MiB
+  LRU, 1 MiB an answer) keyed on the route, raw query string and the caller's
+  scopes, under the write generation read before the request's first read; any
+  write moves the generation and empties it. Only answers that are a pure function
+  of the database, the query and the scopes may use it (no per-listener field on a
+  list book); a handler that adds one must leave the cache.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
