@@ -2286,7 +2286,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reading progress uses it since Bridge Phase 3b, listening progress will in Track W1): a save carries
   `base_version`, the stored version its device last saw (0 none seen; absent, never diverges). It
   is **diverged** when a row is stored, the base is sent and differs from its version, and another
-  device (`device_id`) wrote the row. A diverged save never moves the place back silently: the
+  device (`device_id`) wrote the row, or the base is 0 whatever the device (a device id outlives
+  a client's kept places: signed out and back in, its start saved on 0 must not replace its own
+  place further on). A diverged save never moves the place back silently: the
   further `progression` is kept (the save applied, or the stored row kept; a tie keeps the stored
   row) and the place not kept comes back as `other_place` (response only, never stored), which the
   reader offers ("On {device} you were at {percent}. Jump there?"). Any other save is last-write-wins

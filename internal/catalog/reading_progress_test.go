@@ -10,8 +10,8 @@ func base(v int64) *int64 { return &v }
 
 // ResolvePlace is Sync v2's conflict rule: a save diverges only when a row is
 // stored, a base is sent that isn't the stored version, and another device wrote
-// the row; a diverged save keeps the further place, any other is
-// last-write-wins.
+// the row or the base is 0 (saw nothing, whatever the device); a diverged save
+// keeps the further place, any other is last-write-wins.
 func TestResolvePlace(t *testing.T) {
 	t.Parallel()
 	const earlier, later = "2026-10-25T10:00:00Z", "2026-10-25T11:00:00Z"
@@ -37,6 +37,12 @@ func TestResolvePlace(t *testing.T) {
 		{"diverged, level", stored, Place{Progression: 0.5, DeviceID: "web", UpdatedAt: later, Version: 4}, base(2), PlaceKeepStored},
 		{"never saw a row, behind", stored, Place{Progression: 0.3, DeviceID: "web", UpdatedAt: later, Version: 4}, base(0), PlaceKeepStored},
 		{"never saw a row, further", stored, Place{Progression: 0.6, DeviceID: "web", UpdatedAt: later, Version: 4}, base(0), PlaceApplyDiverged},
+		// The same device on base 0 saw nothing (its places here were cleared): diverged too.
+		{"same device saw nothing, behind", stored, Place{Progression: 0.01, DeviceID: "phone", UpdatedAt: later, Version: 4}, base(0), PlaceKeepStored},
+		{"same device saw nothing, further", stored, Place{Progression: 0.6, DeviceID: "phone", UpdatedAt: later, Version: 4}, base(0), PlaceApplyDiverged},
+		{"same device saw the row, back", stored, Place{Progression: 0.01, DeviceID: "phone", UpdatedAt: later, Version: 4}, base(3), PlaceApply},
+		{"same device, no base sent, back", stored, Place{Progression: 0.01, DeviceID: "phone", UpdatedAt: later, Version: 4}, nil, PlaceApply},
+		{"nothing stored, base 0", nil, Place{Progression: 0.01, DeviceID: "phone", UpdatedAt: earlier, Version: 1}, base(0), PlaceApply},
 	} {
 		if got := ResolvePlace(tc.stored, tc.in, tc.base); got != tc.want {
 			t.Errorf("%s: ResolvePlace = %d, want %d", tc.name, got, tc.want)
@@ -126,6 +132,40 @@ func TestSaveReadingProgress(t *testing.T) {
 	// Another user's place is theirs alone.
 	if p, _ := f.c.GetReadingProgress(ctx, f.bob, f.ref("A/Book")); p != nil {
 		t.Fatalf("bob sees ann's place: %+v", p)
+	}
+}
+
+// A device id outlives the places a client kept: signed out and back in, the
+// same device opens at the start and saves on base 0. That save saw nothing, so
+// its own place further on stays (offered back), and once it has seen that row
+// (the version the answer gave) it moves back on purpose.
+func TestSaveReadingProgressSameDeviceSawNothing(t *testing.T) {
+	t.Parallel()
+	f := newReadingFixture(t)
+	kept, _ := f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/4!/4/2/1:0)", Progression: 0.2, DeviceID: "phone",
+		UpdatedAt: "2026-10-25T10:00:00Z", BaseVersion: base(0)})
+	kept, other := f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/40!/4/2/1:0)", Progression: 0.8, DeviceID: "phone",
+		UpdatedAt: "2026-10-25T10:05:00Z", BaseVersion: base(kept.Version)})
+	if other != nil || kept.Version != 2 || kept.Progression != 0.8 {
+		t.Fatalf("same device on its version = %+v, other %+v", kept, other)
+	}
+	// Places cleared, the start saved on 0 later: the further place stays.
+	kept, other = f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/2!/4/2/1:0)", Progression: 0.01, DeviceID: "phone",
+		UpdatedAt: "2026-10-25T11:00:00Z", BaseVersion: base(0)})
+	if kept.Version != 2 || kept.Progression != 0.8 || other == nil || other.Progression != 0.01 || other.DeviceID != "phone" {
+		t.Fatalf("same device saw nothing = %+v, other %+v", kept, other)
+	}
+	// Stay: the next save is made on version 2 and applies.
+	kept, other = f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/2!/4/2/1:0)", Progression: 0.02, DeviceID: "phone",
+		UpdatedAt: "2026-10-25T11:01:00Z", BaseVersion: base(2)})
+	if other != nil || kept.Version != 3 || kept.Progression != 0.02 {
+		t.Fatalf("after Stay = %+v, other %+v", kept, other)
+	}
+	// No base sent keeps today's latest-wins, the same device's or not.
+	kept, other = f.save(t, f.ann, ReadingSave{CFI: "epubcfi(/6/2!/4/2/1:0)", Progression: 0.01, DeviceID: "phone",
+		UpdatedAt: "2026-10-25T11:02:00Z"})
+	if other != nil || kept.Version != 4 || kept.Progression != 0.01 {
+		t.Fatalf("no base = %+v, other %+v", kept, other)
 	}
 }
 

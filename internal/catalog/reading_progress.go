@@ -216,19 +216,23 @@ const (
 // ResolvePlace is Sync v2's conflict rule for one save (in) against the stored
 // row (nil for none), given the stored version the saving device last saw
 // (base: 0 = none seen; nil = not sent). The save diverged when a row is stored,
-// base is sent and isn't its version, and another device wrote it: the device
-// saved without seeing that row. A diverged save never moves the place back
-// silently: the further place by progression is kept (the save when it is
-// further, else the stored row; a tie keeps the stored row) and the other is
-// offered. Any other save (the same device's own queued saves, one that saw the
-// stored row, one sent with no base) is last-write-wins exactly like progress
-// (IsNewer: the later updated_at, the version breaking a tie), so moving back on
-// purpose works. Pure: reading progress uses it today, listening progress later.
+// base is sent and isn't its version, and another device wrote it, or base is 0
+// whatever the device: the device saved without seeing that row. A base of 0 is
+// diverged from this device's own row too, since a device id outlives the places
+// a client kept (signed out and back in, it saves from the start on 0 and would
+// otherwise replace its own place further on). A diverged save never moves the
+// place back silently: the further place by progression is kept (the save when
+// it is further, else the stored row; a tie keeps the stored row) and the other
+// is offered. Any other save (the same device's own queued saves made on a
+// version it saw, one that saw the stored row, one sent with no base) is
+// last-write-wins exactly like progress (IsNewer: the later updated_at, the
+// version breaking a tie), so moving back on purpose works. Pure: reading
+// progress uses it today, listening progress later.
 func ResolvePlace(stored *Place, in Place, base *int64) PlaceOutcome {
 	switch {
 	case stored == nil:
 		return PlaceApply
-	case base != nil && *base != stored.Version && stored.DeviceID != in.DeviceID:
+	case base != nil && *base != stored.Version && (*base == 0 || stored.DeviceID != in.DeviceID):
 		if in.Progression > stored.Progression {
 			return PlaceApplyDiverged
 		}
