@@ -122,7 +122,7 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
 	}
-	md, terr := tag.ReadFrom(f)
+	md, terr := tag.ReadFrom(newTagReader(f)) // the file's bytes, an ID3v2 tag read buffered
 	if terr == nil {
 		applyTags(m, md)
 	}
