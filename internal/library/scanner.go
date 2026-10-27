@@ -1692,11 +1692,25 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	return s.indexBookFrom(ctx, lib, book, from)
 }
 
+// movedIndexTimeout bounds indexBookFrom's index once the state has moved, which
+// no longer stops with its caller.
+const movedIndexTimeout = 10 * time.Minute
+
 // indexBookFrom indexes book (indexBook) after carrying the durable state of the
 // book indexed at from to it, when carryFrom finds it the same book moved (from
-// "": none), then drops the old book's row.
+// "": none), then drops the old book's row. Once the state has moved, the index
+// and the drop no longer stop with the caller (an on-demand index's request: a
+// cover the browser stopped loading, a request timeout, which would throw the
+// read away at its last write): the state would otherwise sit on a path with no
+// row while the gone book stays listed without it, until the book is opened
+// again or a scan comes.
 func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) (*catalog.Book, error) {
 	moved := from != "" && from != book.RelPath && s.carryFrom(ctx, lib, from, book)
+	if moved {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), movedIndexTimeout)
+		defer cancel()
+	}
 	indexed, err := s.indexBook(ctx, lib, book)
 	if err != nil {
 		return nil, err

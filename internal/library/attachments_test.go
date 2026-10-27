@@ -498,9 +498,6 @@ func TestRefreshAttachments(t *testing.T) {
 	}
 }
 
-// TestIndexMoved: a book the Bridge moved keeps its listeners' state when the
-// old path is gone and the fingerprints match, and its old row goes; a `from`
-// still on disk, or another book's, is ignored.
 // TestIndexPathFollowsAMove: a book folder renamed on disk and opened by its new
 // path before a scan (a Folders tap) takes its listening state with it, as the
 // scan's move detection would (server#209); a copy whose source is still on disk
@@ -587,6 +584,66 @@ func TestIndexPathFollowsAMove(t *testing.T) {
 	}
 }
 
+// TestIndexPathFollowsAMoveWhenCancelled: once a renamed book's state has moved
+// to its new path, the on-demand index finishes and the old row goes even when
+// its caller gives up meanwhile (the request ended mid-read), so the state never
+// sits on a path with no row while the gone book stays listed without it.
+func TestIndexPathFollowsAMoveWhenCancelled(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in ffprobe is a shell script")
+	}
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Old", "Book", "audio.m4b"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := NewScanner(cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	uid := namedUser(t, db, "ann")
+	if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: "Old/Book"}, Position: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "Old"), filepath.Join(root, "New")); err != nil {
+		t.Fatal(err)
+	}
+	// A stand-in ffprobe, run once the state has moved (the read after the
+	// carry), that notes its start and takes a while.
+	started := filepath.Join(t.TempDir(), "started")
+	probe := filepath.Join(t.TempDir(), "ffprobe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\ntouch '"+started+"'\nsleep 0.5\necho '{}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		for reqCtx.Err() == nil {
+			if _, err := os.Stat(started); err == nil {
+				cancel() // the request goes away mid-read
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	if _, err := NewScanner(cat, probe, slog.Default()).IndexPath(reqCtx, *lib, "New/Book"); err != nil {
+		t.Fatalf("IndexPath after its state moved: %v", err)
+	}
+	if reqCtx.Err() == nil {
+		t.Fatal("the request was never cancelled mid-read")
+	}
+	if got := bookPaths(t, cat, lib.ID); !slices.Equal(got, []string{"New/Book"}) {
+		t.Fatalf("books = %q, want the moved book only", got)
+	}
+	if p, err := cat.GetProgress(ctx, uid, catalog.Ref{LibraryID: lib.ID, Path: "New/Book"}); err != nil || p == nil || p.Position != 42 {
+		t.Fatalf("progress at the new path = %+v, %v", p, err)
+	}
+}
+
+// TestIndexMoved: a book the Bridge moved keeps its listeners' state when the
+// old path is gone and the fingerprints match, and its old row goes; a `from`
+// still on disk, or another book's, is ignored.
 func TestIndexMoved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

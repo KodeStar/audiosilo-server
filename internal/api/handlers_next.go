@@ -161,7 +161,7 @@ func (a *API) seriesNext(ctx context.Context, libraryID int64, scope catalog.Sco
 // folderNext reads the next book off the book's folder (library.NextInFolder).
 // nil (fall through) when nothing follows.
 func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
-	e, b, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath)
+	e, b, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.log)
 	if e == nil || err != nil {
 		return nil, err
 	}

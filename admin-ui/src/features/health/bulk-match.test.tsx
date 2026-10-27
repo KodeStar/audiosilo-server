@@ -520,6 +520,64 @@ describe('bulk matching', () => {
     }
   });
 
+  it('offers no next page while the read after a match by hand waits offline (server#198)', async () => {
+    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const one: MatchRunItem = {
+      ...confident,
+      id: 20,
+      path: 'Andy Weir/One',
+      book: { title: 'One', author: 'Andy Weir' },
+    };
+    const calls = mockFetch(
+      routes([run({ counts: { ...run().counts, auto: 2, pending: 2 } })], {
+        // Two pages: The Martian, then One.
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: req.query.get('after')
+            ? { items: [one], next_after: 0 }
+            : { items: [confident], next_after: 10 },
+        }),
+        'GET /admin/libraries/1/book': { body: unmatched },
+        // The connection drops as the match is saved: the list's read waits.
+        'PATCH /admin/libraries/1/book': () => {
+          onlineManager.setOnline(false);
+          return { body: unmatched };
+        },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    try {
+      const user = userEvent.setup();
+      renderApp('/health?issue=unmatched');
+      await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+      const review = await screen.findByRole('dialog', { name: 'Review matches' });
+      const more = () => within(review).getByRole('button', { name: 'Show more' });
+      const row = (
+        await within(review).findByRole('checkbox', { name: 'Apply to The Martian' })
+      ).closest('li')!;
+      expect(more()).toBeEnabled();
+      await matchByHand(user, row);
+      const asked = autoAsked();
+      // The read is paused, not fetching: a next page would cancel it and pass for it.
+      await waitFor(() => expect(more()).toBeDisabled());
+      expect(autoAsked()).toBe(asked);
+
+      // Back online the read lands, and the next page is a click away again.
+      act(() => onlineManager.setOnline(true));
+      await waitFor(() => expect(autoAsked()).toBeGreaterThan(asked));
+      await waitFor(() => expect(more()).toBeEnabled());
+      await user.click(more());
+      expect(
+        await within(review).findByRole('checkbox', { name: 'Apply to One' }),
+      ).toBeInTheDocument();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it('lets a range take a book matched by hand with an ASIN once a read of its list shows its checkbox', async () => {
     // A cut-short apply's book holds the run's ASIN: the hand match patches its row
     // in place, but the server doesn't call it matched since (cover_pending).

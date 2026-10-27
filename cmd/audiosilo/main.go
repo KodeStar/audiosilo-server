@@ -54,6 +54,9 @@ func command(args []string, stdout, stderr io.Writer) (code int, done bool) {
 	case len(args) == 1 && args[0] == "version":
 		_, _ = fmt.Fprintln(stdout, "audiosilo", api.Version)
 		return 0, true
+	case args[0] == "version":
+		_, _ = fmt.Fprintln(stderr, "audiosilo: \"version\" takes no arguments (flags go before it; run with -h for them)")
+		return 2, true
 	default:
 		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the only command is \"version\"; run with -h for the flags)\n", args[0])
 		return 2, true

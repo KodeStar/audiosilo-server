@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX, RefreshCw } from 'lucide-react';
-import { keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
+import { invalidateLibraryBooks, keys, rescanBook, setFolderMode, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FsEntry } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
@@ -109,7 +109,15 @@ function Detail({
     setAdding(true);
     try {
       await rescanBook(qc, { library_id: library.id, path: entry.path });
-      await qc.invalidateQueries({ queryKey: keys.browseLibrary(library.id) });
+      // A new book, so everywhere the library's books show reads again, not just
+      // these listings (the Libraries page's covers would miss it for minutes).
+      invalidateLibraryBooks(qc, library.id);
+      // Busy until the listings have read again and say it's a book: that read,
+      // joined rather than cancelled for another.
+      await qc.refetchQueries(
+        { queryKey: keys.browseLibrary(library.id), type: 'active' },
+        { cancelRefetch: false },
+      );
     } catch (err) {
       toastError(t('folders.detail.addFailed', { name: entry.name }), err);
     } finally {

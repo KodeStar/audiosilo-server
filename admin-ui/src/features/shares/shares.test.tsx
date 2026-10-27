@@ -31,17 +31,19 @@ describe('shares', () => {
     expect(within(grant).queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument();
   });
 
+  // Six listeners: more than a share's card has avatars for.
+  const listeners = Array.from({ length: 6 }, (_, i) => ({
+    ...sam,
+    id: 10 + i,
+    username: `listener${i}`,
+  }));
+
   it('shows four avatars and a "+N" chip for the rest (ADMIN-10)', async () => {
-    const many = Array.from({ length: 6 }, (_, i) => ({
-      ...sam,
-      id: 10 + i,
-      username: `listener${i}`,
-    }));
     mockFetch(
       routes({
-        'GET /admin/users': { body: { users: [...users, ...many] } },
+        'GET /admin/users': { body: { users: [...users, ...listeners] } },
         'GET /admin/shares': {
-          body: { shares: [{ ...kidsShare, member_ids: many.map((u) => u.id) }] },
+          body: { shares: [{ ...kidsShare, member_ids: listeners.map((u) => u.id) }] },
         },
       }),
     );
@@ -50,6 +52,26 @@ describe('shares', () => {
     const card = await within(nav).findByRole('button', { name: /Cosy mysteries/ });
     expect(card).toHaveTextContent('6 people');
     expect(await within(card).findByTestId('avatar-overflow')).toHaveTextContent('+2');
+  });
+
+  it('counts everyone without an avatar in the chip, when the people list knows fewer', async () => {
+    // The people list knows two of the share's six (a read of it failed since the
+    // others got the share): two avatars and +4, six as the count says.
+    mockFetch(
+      routes({
+        'GET /admin/users': { body: { users: [...users, ...listeners.slice(0, 2)] } },
+        'GET /admin/shares': {
+          body: { shares: [{ ...kidsShare, member_ids: listeners.map((u) => u.id) }] },
+        },
+      }),
+    );
+    renderApp('/people/shares');
+    const nav = await screen.findByRole('navigation', { name: 'Shares' });
+    const card = await within(nav).findByRole('button', { name: /Cosy mysteries/ });
+    expect(card).toHaveTextContent('6 people');
+    const chip = await within(card).findByTestId('avatar-overflow');
+    expect(chip).toHaveTextContent('+4');
+    expect(chip.parentElement?.children).toHaveLength(3);
   });
 
   it('shows no "+N" chip for four people or fewer', async () => {

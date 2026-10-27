@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { FolderMode, FsEntry } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -201,7 +202,9 @@ describe('folders', () => {
         },
       }),
     );
-    renderApp('/library/folders?library=1&folder=Zed/New');
+    const { queryClient } = renderApp('/library/folders?library=1&folder=Zed/New');
+    // The Libraries page's covers, read before: the new book is one of them now.
+    queryClient.setQueryData(keys.recentBooks(1), []);
     expect(await screen.findByText('Not in the library yet.')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open book' })).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Rescan' }));
@@ -213,6 +216,12 @@ describe('folders', () => {
     const post = calls.find((c) => c.method === 'POST');
     expect(post?.path).toBe('/admin/libraries/1/book/rescan');
     expect(post?.query.get('path')).toBe('Zed/New');
+    expect(queryClient.getQueryState(keys.recentBooks(1))?.isInvalidated).toBe(true);
+    // The folder's listing read once more, not twice: Rescan waits for that read.
+    const relisted = calls
+      .slice(calls.indexOf(post!))
+      .filter((c) => c.path === '/libraries/1/fs' && c.query.get('path') === 'Zed');
+    expect(relisted).toHaveLength(1);
   });
 
   it('splits a folder into separate books, then puts it back to automatic', async () => {

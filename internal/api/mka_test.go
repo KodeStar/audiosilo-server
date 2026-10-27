@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -448,6 +449,53 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 	}
 }
 
+// coldAnswer is a stream request's answer, read off the test's goroutine.
+type coldAnswer struct {
+	resp *http.Response
+	body string
+	err  error
+}
+
+// getAsync GETs the env's stream URL for mkaFile with query on its own
+// goroutine, never failing the test from there (t.Fatal must not run off the
+// test's goroutine, or a failed request would leave the test waiting).
+func (m *mkaEnv) getAsync(query string) <-chan coldAnswer {
+	got := make(chan coldAnswer, 1)
+	go func() {
+		req, err := http.NewRequest("GET", m.srv.URL+m.url("stream", mkaFile)+query, nil)
+		if err != nil {
+			got <- coldAnswer{err: err}
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+m.token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- coldAnswer{err: err}
+			return
+		}
+		b, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		got <- coldAnswer{resp: resp, body: string(b), err: err}
+	}()
+	return got
+}
+
+// await is the answer getAsync sends, failing the test on a request error or
+// when none comes within a generous bound.
+func await(t *testing.T, got <-chan coldAnswer) coldAnswer {
+	t.Helper()
+	select {
+	case a := <-got:
+		if a.err != nil {
+			t.Fatal(a.err)
+		}
+		return a
+	case <-time.After(30 * time.Second):
+		t.Fatal("no answer")
+	}
+	return coldAnswer{}
+}
+
 // TestMatroskaColdRemuxWaits (server#212): in the cold window a download, and a
 // stream with every transcode slot busy, wait for the remux rather than saving
 // the lossy transcode or answering 503: both get the remux, Range-seekable.
@@ -468,23 +516,18 @@ func TestMatroskaColdRemuxWaits(t *testing.T) {
 					m.api.transcodeSem <- struct{}{}
 				}
 			}
-			type answer struct {
-				resp *http.Response
-				body string
-			}
-			got := make(chan answer, 1)
-			go func() {
-				resp, body := m.do(t, "GET", m.url("stream", mkaFile)+tc.query, m.token, "")
-				got <- answer{resp, body}
-			}()
+			got := m.getAsync(tc.query)
 			// Well past the cold window: the request is still waiting.
 			select {
 			case a := <-got:
+				if a.err != nil {
+					t.Fatal(a.err)
+				}
 				t.Fatalf("answered in the cold window: %d %q", a.resp.StatusCode, a.resp.Header.Get("Accept-Ranges"))
 			case <-time.After(10 * m.api.remuxWait):
 			}
 			release()
-			a := <-got
+			a := await(t, got)
 			if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Accept-Ranges") != "bytes" ||
 				a.resp.Header.Get("Content-Type") != "audio/mpeg" || a.body == "" {
 				t.Fatalf("after the remux = %d %q %q, want the remux", a.resp.StatusCode,
@@ -497,6 +540,53 @@ func TestMatroskaColdRemuxWaits(t *testing.T) {
 				for range cap(m.api.transcodeSem) {
 					<-m.api.transcodeSem
 				}
+			}
+		})
+	}
+}
+
+// TestMatroskaColdRemuxWaitBounded (server#212): the longer wait has a bound,
+// under the 60 s an idle answer gets from Android's downloader and a reverse
+// proxy: past it a download is transcoded live after all (still book.mp3), and
+// a stream with every slot still busy gets the busy 503, never nothing at all.
+func TestMatroskaColdRemuxWaitBounded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, query string
+		fill        bool
+	}{{"download", "&download=1", false}, {"pool full", "", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMKAEnv(t)
+			m.api.ffmpeg = "ffmpeg"
+			m.api.remuxWait = 20 * time.Millisecond
+			m.api.remuxLongWait = 100 * time.Millisecond
+			m.holdRemuxes(t)
+			if tc.fill {
+				for range cap(m.api.transcodeSem) {
+					m.api.transcodeSem <- struct{}{}
+				}
+				t.Cleanup(func() {
+					for range cap(m.api.transcodeSem) {
+						<-m.api.transcodeSem
+					}
+				})
+			}
+			a := await(t, m.getAsync(tc.query))
+			if tc.fill {
+				if a.resp.StatusCode != http.StatusServiceUnavailable || a.resp.Header.Get("Retry-After") != "5" {
+					t.Fatalf("pool still full past the wait = %d (Retry-After %q), want the busy 503",
+						a.resp.StatusCode, a.resp.Header.Get("Retry-After"))
+				}
+				return
+			}
+			if a.resp.StatusCode != http.StatusOK || a.resp.Header.Get("Content-Type") != "audio/mpeg" ||
+				a.resp.Header.Get("Accept-Ranges") != "none" || a.body == "" {
+				t.Fatalf("download past the wait = %d %q %q (%d bytes), want the live transcode", a.resp.StatusCode,
+					a.resp.Header.Get("Content-Type"), a.resp.Header.Get("Accept-Ranges"), len(a.body))
+			}
+			if got := a.resp.Header.Get("Content-Disposition"); got != `attachment; filename="book.mp3"` {
+				t.Fatalf("download past the wait = %q, want book.mp3", got)
 			}
 		})
 	}

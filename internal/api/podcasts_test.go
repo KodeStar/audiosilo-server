@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +426,10 @@ func TestPodcastActionDeniedMatrix(t *testing.T) {
 		}
 	}
 	check(b.userTok, request, 429, "too_many_requests")
+	// Every 429 says when to try again.
+	if resp, _ := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, request, h); resp.Header.Get("Retry-After") != "30" {
+		t.Fatalf("follow cap Retry-After = %q, want 30", resp.Header.Get("Retry-After"))
+	}
 }
 func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 	b, _, f := podcastEnv(t, false)
@@ -519,6 +524,10 @@ func TestPodcastCheckRequiresFollowAndThrottles(t *testing.T) {
 	resp, out = b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, body, h)
 	if resp.StatusCode != 429 || !strings.Contains(out, "checked_recently") {
 		t.Fatalf("recent %d %s", resp.StatusCode, out)
+	}
+	// Retry-After: what is left of the minute, in whole seconds.
+	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err != nil || secs < 1 || secs > 60 {
+		t.Fatalf("checked_recently Retry-After = %q, want 1-60", resp.Header.Get("Retry-After"))
 	}
 }
 

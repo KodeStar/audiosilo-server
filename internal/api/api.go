@@ -138,6 +138,14 @@ type API struct {
 	// remuxWait is how long a stream waits for a cold remux before it is
 	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
 	remuxWait time.Duration
+	// favouriteWait bounds how long POST /favourites waits for the on-demand
+	// index of a book no scan has reached (favouriteIndexWait; a field so tests
+	// can shorten it).
+	favouriteWait time.Duration
+	// remuxLongWait bounds the longer wait of a download, or a stream with every
+	// transcode slot busy, for a remux still running (remuxDownloadWait; a field
+	// so tests can shorten it).
+	remuxLongWait time.Duration
 
 	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
 	// batch); coverReads bounds the art being read or waiting to be decoded and
@@ -215,6 +223,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
+		remuxLongWait:  remuxDownloadWait,
+		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),

@@ -292,7 +292,7 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, bridge.ErrTooManyRequests):
 		// The open follows settle as the Bridge works through them: a guess at
 		// when one has, so every 429 says when to try again.
-		w.Header().Set("Retry-After", "30")
+		setRetryAfter(w, 30*time.Second)
 		writeErrorCode(w, 429, "too_many_requests", "At most five follow requests may be open.")
 	case errors.Is(err, bridge.ErrFetchLimit):
 		writeErrorCode(w, 409, "fetch_limit", bridge.FetchErrorFor("fetch_limit").Message)

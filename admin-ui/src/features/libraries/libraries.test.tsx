@@ -317,6 +317,36 @@ describe('libraries', () => {
     expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/libraries/2')).toBe(true);
   });
 
+  it('takes a library deleted elsewhere as deleted, and drops its card (server#198)', async () => {
+    // Another admin deleted Kids after this list was read: the server has no
+    // such library, and the list read again leaves it out.
+    let gone = false;
+    mockFetch(
+      routes({
+        'GET /admin/libraries': () => ({
+          body: { libraries: gone ? libraries().slice(0, 1) : libraries() },
+        }),
+        'DELETE /admin/libraries/2': () => {
+          gone = true;
+          return { status: 404, body: { error: 'library not found', code: 'not_found' } };
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const kids = await screen.findByRole('listitem', { name: 'Kids' });
+    await user.click(within(kids).getByRole('button', { name: 'Actions for Kids' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete library...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Kids?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Kids');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete library' }));
+    expect(await screen.findByText('Deleted Kids')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete Kids?' })).toBeNull());
+    expect(screen.queryByText('library not found')).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Kids' })).toBeNull());
+    expect(screen.getByRole('listitem', { name: 'Fiction' })).toBeInTheDocument();
+  });
+
   it('overrides how a folder is detected', async () => {
     const calls = mockFetch(
       routes({

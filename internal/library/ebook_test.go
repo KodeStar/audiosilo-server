@@ -253,9 +253,13 @@ func TestOpenEbook(t *testing.T) {
 }
 
 // A single-file book's "<stem>.epub" spelled in another Unicode form (an NFD
-// copy from macOS beside NFC audio) is its ebook, found by name, by the walk's
-// listing (ebookCandidate) and on demand (BookEbook); a name that only looks
-// alike without its accent is not (server#228).
+// copy from macOS beside NFC audio) is its ebook for the reader, found by the
+// walk's listing (ebookCandidate) and on demand (ebookOnDisk), in another case
+// too where the disk opens the name so; a name that only looks alike without its
+// accent is not (server#228). The estimate (BookEbook) keeps the Bridge's lookup
+// of the name as spelled: it finds the epub only where the disk does, as the
+// Bridge's os.Stat would (a disk that doesn't tell the forms apart, APFS; never
+// ext4).
 func TestBookEbookUnicodeForms(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -265,13 +269,10 @@ func TestBookEbookUnicodeForms(t *testing.T) {
 	writeFile(t, root, "C/"+nfd+".epub", epub)
 	writeFile(t, root, "C/Creme.m4b", []byte("x"))
 	writeFile(t, root, "C/"+norm.NFD.String("Crème")+".epub", epub)
-	got := BookEbook(root, "C/"+nfc+".m4b", false)
-	if norm.NFC.String(got) != "C/Café.epub" {
-		t.Fatalf("BookEbook(NFC audio beside NFD epub) = %q, want C/Café.epub in some form", got)
-	}
-	if got := BookEbook(root, "C/Creme.m4b", false); got != "" {
-		t.Errorf("BookEbook(Creme) = %q, want none (Crème is another name)", got)
-	}
+	// Another case and another form at once: the disk decides, as it does for
+	// "Book.EPUB" (ebookNamed), on demand and in a scan alike.
+	writeFile(t, root, "C/Soirée.m4b", []byte("x"))
+	writeFile(t, root, "C/"+norm.NFD.String("SOIRÉE")+".epub", epub)
 	entries, err := os.ReadDir(filepath.Join(root, "C"))
 	if err != nil {
 		t.Fatal(err)
@@ -282,25 +283,58 @@ func TestBookEbookUnicodeForms(t *testing.T) {
 			epubs = append(epubs, e)
 		}
 	}
-	if r := ebookCandidate(root, "C/"+nfc+".m4b", false, epubs); norm.NFC.String(r.Path) != "C/Café.epub" || r.Sig == "" {
-		t.Errorf("ebookCandidate(NFC audio) = %+v, want the NFD epub", r)
+	onDemand := func(rel string) string {
+		r, _ := checkEbook(root, ebookOnDisk(root, rel, false))
+		return r.Path
+	}
+	scanned := func(rel string) string {
+		r, _ := checkEbook(root, ebookCandidate(root, rel, false, epubs))
+		return r.Path
+	}
+	opens := func(name string) bool {
+		_, err := os.Stat(filepath.Join(root, "C", name))
+		return err == nil
+	}
+
+	if got := onDemand("C/" + nfc + ".m4b"); norm.NFC.String(got) != "C/Café.epub" {
+		t.Errorf("on demand (NFC audio beside NFD epub) = %q, want C/Café.epub in some form", got)
+	}
+	if got := scanned("C/" + nfc + ".m4b"); norm.NFC.String(got) != "C/Café.epub" {
+		t.Errorf("scanned (NFC audio beside NFD epub) = %q, want C/Café.epub in some form", got)
+	}
+	if got := BookEbook(root, "C/"+nfc+".m4b", false); (got != "") != opens(nfc+".epub") {
+		t.Errorf("BookEbook(NFC audio beside NFD epub) = %q, want it only where the disk opens %q", got, nfc+".epub")
+	}
+	for _, find := range []func(string) string{onDemand, scanned, func(rel string) string { return BookEbook(root, rel, false) }} {
+		if got := find("C/Creme.m4b"); got != "" {
+			t.Errorf("Creme's ebook = %q, want none (Crème is another name)", got)
+		}
+	}
+	want := ""
+	if opens("Soirée.epub") {
+		want = "C/Soirée.epub"
+	}
+	if a, b := onDemand("C/Soirée.m4b"), scanned("C/Soirée.m4b"); a != want || b != want {
+		t.Errorf("another case and form: on demand %q, scanned %q, want %q both", a, b, want)
 	}
 	if ebookNameKey(nfd+".EPUB") != ebookNameKey(nfc+".epub") {
 		t.Error("ebookNameKey differs across case and Unicode form")
 	}
+	if hasOtherForm("Don’t Panic.epub") || hasOtherForm("三体.epub") || !hasOtherForm(nfc+".epub") || !hasOtherForm(nfd+".epub") {
+		t.Error("hasOtherForm: want true only for a name with another NFC/NFD spelling")
+	}
 }
 
 // A file swapped for another as OpenEbook opens it is refused, never served
-// (server#228); the same file opened is served. Not parallel: it replaces the
-// package's open.
+// (server#228); the same file opened is served.
 func TestOpenEbookSwapped(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	epub := epubBytes(t, minimalEpub...)
 	writeFile(t, root, "A/Book.epub", epub)
 	writeFile(t, root, "A/Other.epub", epub)
-	defer func(was func(string) (*os.File, error)) { openEbookFile = was }(openEbookFile)
 	swap := true
-	openEbookFile = func(full string) (*os.File, error) {
+	open := func(full string) (*os.File, error) {
 		if swap {
 			// Opened as the old file, then replaced: the name now leads to another.
 			f, err := os.Open(full) //nolint:gosec // test
@@ -314,14 +348,14 @@ func TestOpenEbookSwapped(t *testing.T) {
 		}
 		return os.Open(full) //nolint:gosec // test
 	}
-	if f, _, err := OpenEbook(root, "A/Book.epub", true); !errors.Is(err, ErrNoEbook) {
+	if f, _, err := openEbook(root, "A/Book.epub", true, open); !errors.Is(err, ErrNoEbook) {
 		if f != nil {
 			_ = f.Close()
 		}
 		t.Fatalf("swapped open = %v, want ErrNoEbook", err)
 	}
 	swap = false
-	f, _, err := OpenEbook(root, "A/Book.epub", true)
+	f, _, err := openEbook(root, "A/Book.epub", true, open)
 	if err != nil {
 		t.Fatalf("plain open: %v", err)
 	}

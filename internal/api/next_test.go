@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -487,6 +489,24 @@ func TestNextFolder(t *testing.T) {
 	}
 }
 
+// The pending folder after a book is found past a batch of folders that are no
+// books (markPendingNext reads them a batch at a time, in name order, and stops
+// at the batch holding one), and the first of two pending ones answers.
+func TestNextFolderPendingPastABatch(t *testing.T) {
+	t.Parallel()
+	e := newSagaEnv(t, false, &catalog.Book{RelPath: "Many/01 Current", IsFolder: true})
+	mkdirs(t, e.lib.Root, "Many/01 Current", "Many/24 Later", "Many/22 Next")
+	for i := 2; i <= 21; i++ {
+		if err := os.MkdirAll(filepath.Join(e.lib.Root, "Many", fmt.Sprintf("%02d Extras", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n := getNext(t, e.testEnv, e.url("next", "Many/01 Current"), e.adminTok)
+	if n.Source != nextFolder || n.nextPath() != "Many/22 Next" || n.Book != nil {
+		t.Fatalf("pending past a batch of bare folders = %s", n.raw)
+	}
+}
+
 func TestNextErrors(t *testing.T) {
 	t.Parallel()
 	e := newSagaEnv(t, false, sagaBooks()...)
@@ -763,5 +783,92 @@ func TestFavouriteIndexesPendingBook(t *testing.T) {
 	_, body := e.do(t, "GET", "/api/v1/me/favourites", tok, "")
 	if !strings.Contains(body, "Author/New") || !strings.Contains(body, "Author/Empty") {
 		t.Fatalf("favourites = %s", body)
+	}
+}
+
+// Favouriting a disc folder of a joined book no scan has reached indexes the
+// book only for a caller whose grant covers the book: an admin's does; a
+// listener granted only that disc (a share made before the join) still saves
+// the favourite, and nothing above their grant is read.
+func TestFavouriteIndexesOnlyWithinScope(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, memberTok, memberID := adminAndMember(t, e)
+	root := t.TempDir()
+	copyFixture(t, root, cradlePart, "A/Book/CD1/01.m4b")
+	copyFixture(t, root, cradlePart, "A/Book/CD2/01.m4b")
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.SetFolderOverride(ctx, lib.ID, "A/Book", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Disc one"})
+	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "A/Book/CD1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, memberID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Denied: the member's favourite is saved, the book above it never read.
+	if resp, body := e.do(t, "POST", bookURL(lib.ID, "favourites", "A/Book/CD1"), memberTok, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("member favourite = %d %s", resp.StatusCode, body)
+	}
+	if _, err := e.cat.GetBookByPath(ctx, lib.ID, "A/Book"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("a listener's favourite indexed the book above their grant: %v", err)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/me/favourites", memberTok, ""); !strings.Contains(body, "A/Book/CD1") {
+		t.Fatalf("member favourites = %s", body)
+	}
+
+	// Allowed: the admin's favourite of the same disc reads the joined book.
+	if resp, body := e.do(t, "POST", bookURL(lib.ID, "favourites", "A/Book/CD1"), adminTok, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("admin favourite = %d %s", resp.StatusCode, body)
+	}
+	if b, err := e.cat.GetBookByPath(ctx, lib.ID, "A/Book"); err != nil || b.RelPath != "A/Book" {
+		t.Fatalf("admin favourite of a disc didn't index its book: %v %v", b, err)
+	}
+}
+
+// A favourite's on-demand read runs detached from the request: the POST answers
+// once favouriteWait has passed, and the read still goes on and is saved, never
+// cut off with the request.
+func TestFavouriteIndexOutlastsTheRequest(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	copyFixture(t, root, cradlePart, "Author/New/01.m4b")
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Fresh", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.api.favouriteWait = 20 * time.Millisecond
+	release, finished := make(chan struct{}), make(chan error, 1)
+	index := e.api.indexPath
+	e.api.indexPath = func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error) {
+		<-release // a slow share
+		b, err := index(ctx, lib, rel, allow)
+		finished <- err
+		return b, err
+	}
+	tok := adminSession(t, e)
+	if resp, body := e.do(t, "POST", bookURL(lib.ID, "favourites", "Author/New"), tok, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("favourite = %d %s", resp.StatusCode, body)
+	}
+	close(release)
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("the read after the request ended: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the read never finished")
+	}
+	if b, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/New"); err != nil || b.RelPath != "Author/New" {
+		t.Fatalf("favourited pending book not saved after the request: %v %v", b, err)
 	}
 }

@@ -2,10 +2,13 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestCleanRelPath pins the canonicalization every user-supplied rel path goes
@@ -307,6 +310,58 @@ func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
 	shares, _ = c.ListShares(ctx)
 	if len(shares) != 1 || shares[0].ID != own.ID {
 		t.Fatalf("after deleting the library: %+v, want only Favourites", shares)
+	}
+}
+
+// First grants of one library sent together (two tabs, a burst of demo
+// sessions) all get the one grant share: each looks for it before any has
+// committed, and the transaction that makes it looks again (server#230's
+// numbered names would otherwise give each request a share of its own).
+func TestGrantWholeLibraryConcurrentFirstGrants(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/a"})
+	const n = 6
+	users := make([]int64, n)
+	for i := range users {
+		users[i] = seedUserNamed(t, c, ctx, fmt.Sprintf("u%d", i))
+	}
+	// Hold the one writer so every grant has looked (and found nothing) before
+	// the first share can commit.
+	held, release, holdDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(holdDone)
+		_ = c.db.WithTx(ctx, "hold", func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `UPDATE libraries SET name = name WHERE id = ?`, lib.ID); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return errors.New("roll back")
+		})
+	}()
+	<-held
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i, u := range users {
+		wg.Go(func() { errs[i] = c.GrantWholeLibrary(ctx, u, lib.ID) })
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	<-holdDone
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("grant %d: %v", i, err)
+		}
+	}
+	shares, _ := c.ListShares(ctx)
+	if len(shares) != 1 || shares[0].WholeLibraryID == nil || *shares[0].WholeLibraryID != lib.ID {
+		t.Fatalf("concurrent first grants made %+v, want the one marked grant share", shares)
+	}
+	members, _ := c.ShareMembers(ctx)
+	if got := members[shares[0].ID]; len(got) != n {
+		t.Fatalf("grant share holders = %v, want all %d users", got, n)
 	}
 }
 

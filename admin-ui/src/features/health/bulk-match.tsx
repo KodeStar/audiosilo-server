@@ -658,13 +658,15 @@ function ItemList({
         ))}
       </ul>
       {list.hasNextPage ? (
-        // Not while the list reads again either: a next page then would cancel that
-        // read, and the pages already loaded would keep what they said before.
+        // Not while the list reads again either, nor while that read waits for the
+        // network (paused, which isFetching doesn't count): a next page then would
+        // cancel that read and pass for it (whenReadAgain), and the pages already
+        // loaded would keep what they said before.
         <Button
           variant="outline"
           className="self-center"
           onClick={() => void list.fetchNextPage()}
-          disabled={list.isFetching}
+          disabled={list.fetchStatus !== 'idle'}
         >
           {list.isFetchingNextPage ? t('common.loading') : t('health.more')}
         </Button>

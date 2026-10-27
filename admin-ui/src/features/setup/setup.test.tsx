@@ -105,6 +105,34 @@ describe('the folder step', () => {
     expect(post?.body).toEqual({ root: '/audiobooks' });
   });
 
+  it('keeps a name typed for one folder to that folder', async () => {
+    mockFetch(flowRoutes());
+    renderApp('/setup');
+    const user = userEvent.setup();
+    const folder = await screen.findByLabelText('Books folder');
+    await user.type(folder, '/audiobooks');
+    await user.click(screen.getByRole('button', { name: 'Check folder' }));
+    const name = await screen.findByLabelText('Library name');
+    await user.clear(name);
+    await user.type(name, 'Bedtime stories');
+    // Another folder hides the name; back at the first, it is there again.
+    await user.clear(folder);
+    await user.type(folder, '/srv/kids');
+    expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
+    await user.clear(folder);
+    await user.type(folder, '/audiobooks');
+    expect(screen.getByLabelText('Library name')).toHaveValue('Bedtime stories');
+    // Continue on another folder, never checked: it gets its own name, not that one.
+    await user.clear(folder);
+    await user.type(folder, '/srv/kids');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
+    expect(JSON.parse(localStorage.getItem('audiosilo.setup.draft') ?? '{}')).toEqual({
+      root: '/srv/kids',
+      name: 'Kids',
+    });
+  });
+
   it('words an unreadable folder with the Docker hint', async () => {
     mockFetch(
       flowRoutes(
@@ -547,6 +575,10 @@ describe('the 2.4.0 fixes', () => {
     });
     expect(action.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(qr.parentElement).toHaveClass('opacity-45');
+    // Only the code: New code beside it works, so it isn't dimmed like a disabled button.
+    const newCode = screen.getByRole('button', { name: 'New code' });
+    expect(newCode).toBeEnabled();
+    expect(newCode.closest('.opacity-45')).toBeNull();
   });
 
   it('points the phone at the home address when the page is open at a loopback one', async () => {

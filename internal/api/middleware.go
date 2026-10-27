@@ -433,6 +433,8 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 		// Every credential is a tokens row, so its id is its bucket.
 		if key := strconv.FormatInt(cred.ID, 10); !a.mediaLimiter.Allow(key) {
 			a.ipLimiter.Charge(ip)
+			// The next request meets the IP's bucket first, which this charge
+			// may have put into debt: the longer of the two waits.
 			rateLimited(w, max(a.mediaLimiter.Wait(key), a.ipLimiter.Wait(ip)))
 			return
 		}

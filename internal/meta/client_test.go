@@ -86,6 +86,8 @@ func TestRetryAfter(t *testing.T) {
 		"0":    100 * time.Millisecond,
 		"4":    4 * time.Second,
 		"99":   maxRetryAfter,
+		// Large enough to wrap if multiplied as it came.
+		"9223372037": maxRetryAfter,
 		now.Add(3 * time.Second).Format(http.TimeFormat): 3 * time.Second,
 	} {
 		if got := retryAfter(h, now); got != want {

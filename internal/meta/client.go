@@ -101,7 +101,8 @@ func (c *client) getJSON(ctx context.Context, path string, out any) error {
 func retryAfter(h string, now time.Time) time.Duration {
 	d := defaultRetryAfter
 	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
-		d = time.Duration(secs) * time.Second
+		// Capped before it is multiplied, which a huge value would overflow.
+		d = time.Duration(min(secs, int(maxRetryAfter/time.Second))) * time.Second
 	} else if at, err := http.ParseTime(h); err == nil {
 		d = at.Sub(now)
 	}

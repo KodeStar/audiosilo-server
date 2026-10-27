@@ -659,3 +659,78 @@ func TestBeforeUpgrade(t *testing.T) {
 		t.Fatalf("latest = %+v", st.Latest)
 	}
 }
+
+// A start whose migrations fail part way is retried (a restart policy, an admin
+// trying again): each retry copies the half-migrated database, and those copies
+// replace one another, never the copy of the database as the older server left
+// it. A copy made while the clock reads earlier than the others' names is kept.
+func TestBeforeUpgradeRetries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	var newest []string
+	rows, err := e.db.QueryContext(ctx, `SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		newest = append(newest, n)
+	}
+	if err := rows.Close(); err != nil || len(newest) != 2 {
+		t.Fatalf("migrations = %v, %v", newest, err)
+	}
+	if _, err := e.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN (?, ?)`, newest[0], newest[1]); err != nil {
+		t.Fatal(err)
+	}
+	s := New(nil, e.dataDir, "", slogDiscard())
+	at := time.Date(2026, 10, 4, 3, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return at }
+	start := func() string {
+		t.Helper()
+		at = at.Add(time.Minute)
+		b := s.beforeUpgrade(ctx, e.dbPath)
+		if b == nil {
+			t.Fatal("no copy")
+		}
+		return b.Name
+	}
+
+	older := start() // the database as the older server left it
+	// The first of the two migrations applied, the second failing: three retries.
+	if _, err := e.db.ExecContext(ctx, `INSERT INTO schema_migrations(name, applied_at) VALUES(?, 'x')`, newest[1]); err != nil {
+		t.Fatal(err)
+	}
+	start()
+	start()
+	last := start()
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, b := range list {
+		got = append(got, b.Name)
+	}
+	if want := []string{last, older}; !slices.Equal(got, want) {
+		t.Fatalf("backups after the retries = %v, want %v", got, want)
+	}
+
+	// Copies named later than the clock now reads: the copy just made stays.
+	for _, n := range []string{
+		"audiosilo-20990101-000000Z-before-upgrade.db",
+		"audiosilo-20990102-000000Z-before-upgrade.db",
+		"audiosilo-20990103-000000Z-before-upgrade.db",
+	} {
+		if err := os.WriteFile(filepath.Join(s.dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	made := start()
+	if _, err := os.Stat(filepath.Join(s.dir, made)); err != nil {
+		t.Fatalf("the copy just made was pruned: %v", err)
+	}
+}

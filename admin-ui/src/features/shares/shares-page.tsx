@@ -135,6 +135,10 @@ function ShareTile({
   const users = useUsers();
   const libraries = useLibraries();
   const members = (users.data ?? []).filter((u) => s.member_ids.includes(u.id));
+  // The people past the avatars shown. Counted from the share's ids, not the
+  // people list, which may know fewer of them (a read of it failed since), so
+  // the avatars and the chip always add up to the share's count.
+  const more = s.member_ids.length - Math.min(members.length, MAX_AVATARS);
   const isLibrary = wholeLibraryOf(s) !== undefined;
   const name = shareLabel(s, libraries.data ?? []);
   return (
@@ -170,12 +174,12 @@ function ShareTile({
               <Monogram name={m.username} size={26} />
             </span>
           ))}
-          {s.member_ids.length > MAX_AVATARS ? (
+          {more > 0 ? (
             <span
               data-testid="avatar-overflow"
               className="-ml-2 grid size-[26px] place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground tabular-nums ring-2 ring-card"
             >
-              +{s.member_ids.length - MAX_AVATARS}
+              +{more}
             </span>
           ) : null}
         </span>

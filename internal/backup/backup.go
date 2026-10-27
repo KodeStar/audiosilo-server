@@ -651,29 +651,76 @@ func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *
 // it has not applied yet, and logs one line naming them and the copy. A fresh
 // install (no database yet, or one with no migration recorded) and a database
 // already up to date get no copy. Only the newest keepBeforeUpgrade such copies
-// are kept. A failed copy is logged and the start carries on: the server would
-// otherwise stay down until there is room for one. It returns the copy, nil when
-// none was made.
+// are kept (pruneBeforeUpgrade). A failed copy is logged and the start carries
+// on: the server would otherwise stay down until there is room for one. It
+// returns the copy, nil when none was made.
 func BeforeUpgrade(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) *Backup {
+	return New(nil, dataDir, dir, log).beforeUpgrade(ctx, dbPath)
+}
+
+func (s *Service) beforeUpgrade(ctx context.Context, dbPath string) *Backup {
 	pending, err := store.PendingMigrations(ctx, dbPath)
 	if err != nil {
-		log.Warn("reading which migrations the database needs failed; no before-upgrade backup was made", "err", err)
+		s.log.Warn("reading which migrations the database needs failed; no before-upgrade backup was made", "err", err)
 		return nil
 	}
 	if len(pending) == 0 {
 		return nil
 	}
-	s := New(nil, dataDir, dir, log)
 	b, err := s.write(ctx, KindBeforeUpgrade, func(ctx context.Context, to string) error {
 		return store.VacuumFile(ctx, dbPath, to)
 	})
 	if err != nil {
-		log.Warn("copying the database before the upgrade failed; migrating without a copy", "migrations", strings.Join(pending, ","), "err", err)
+		s.log.Warn("copying the database before the upgrade failed; migrating without a copy", "migrations", strings.Join(pending, ","), "err", err)
 		return nil
 	}
-	log.Info("copied the database before applying new migrations", "migrations", strings.Join(pending, ","), "backup", filepath.Join(s.dir, b.Name))
-	s.pruneKind(KindBeforeUpgrade, keepBeforeUpgrade)
+	s.log.Info("copied the database before applying new migrations", "migrations", strings.Join(pending, ","), "backup", filepath.Join(s.dir, b.Name))
+	s.pruneBeforeUpgrade(ctx, b.Name)
 	return &b
+}
+
+// pruneBeforeUpgrade removes before-upgrade copies past the newest
+// keepBeforeUpgrade, never the one a restore is waiting for. The copy just made
+// (made) is always kept, wherever the clock put its name among the others. A
+// copy holding the same migrations as a newer one counts only once and goes: a
+// start whose migrations failed part way copies the half-migrated database again
+// on every retry, and those copies would otherwise push out the one of the
+// database as the older server left it, the copy the upgrade is for. A copy that
+// can't be read as one (no migration it lacks: not a database this server knows)
+// counts on its own.
+func (s *Service) pruneBeforeUpgrade(ctx context.Context, made string) {
+	list, err := s.List()
+	if err != nil {
+		return
+	}
+	waiting, err := s.PendingRestore()
+	if err != nil {
+		s.log.Warn("reading the waiting restore failed; old backups are kept", "err", err)
+		return
+	}
+	holds := func(name string) string {
+		pending, err := store.PendingMigrations(ctx, filepath.Join(s.dir, name))
+		if err != nil || len(pending) == 0 {
+			return "\x00" + name
+		}
+		return strings.Join(pending, ",")
+	}
+	seen := map[string]bool{holds(made): true}
+	for _, b := range list { // newest first
+		if b.Kind != KindBeforeUpgrade || b.Name == made {
+			continue
+		}
+		if h := holds(b.Name); !seen[h] && len(seen) < keepBeforeUpgrade {
+			seen[h] = true
+			continue
+		}
+		if waiting != nil && waiting.Name == b.Name {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, b.Name)); err != nil {
+			s.log.Warn("removing an old backup failed", "name", b.Name, "err", err)
+		}
+	}
 }
 
 func (s *Service) applyRestore(ctx context.Context, name, dbPath string, res *RestoreResult) error {

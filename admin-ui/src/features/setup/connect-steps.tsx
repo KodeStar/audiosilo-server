@@ -126,17 +126,16 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
           </Notice>
         ) : null}
 
-        <div
-          className={cn(
-            'flex flex-wrap items-center gap-5 rounded-xl border px-4 py-4',
-            loopback && 'opacity-45',
-          )}
-        >
+        <div className="flex flex-wrap items-center gap-5 rounded-xl border px-4 py-4">
           {link ? (
-            <QrCode
-              text={link.url}
-              label={t(loopback ? 'setup.phone.qrUnreachable' : 'setup.phone.qr')}
-            />
+            // Only the code is dimmed: New code beside it still works, and dimmed it
+            // would read as disabled.
+            <div className={cn('shrink-0', loopback && 'opacity-45')}>
+              <QrCode
+                text={link.url}
+                label={t(loopback ? 'setup.phone.qrUnreachable' : 'setup.phone.qr')}
+              />
+            </div>
           ) : (
             <span
               className="skel size-[168px] shrink-0 rounded-[10px]"

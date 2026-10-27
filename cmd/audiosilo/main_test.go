@@ -7,6 +7,7 @@ import (
 )
 
 func TestCommand(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args        []string
 		code        int
@@ -16,7 +17,7 @@ func TestCommand(t *testing.T) {
 		{args: nil, code: 0, done: false},
 		{args: []string{"version"}, code: 0, done: true, out: "audiosilo dev\n"},
 		{args: []string{"foo"}, code: 2, done: true, errOut: `unknown command "foo"`},
-		{args: []string{"version", "extra"}, code: 2, done: true, errOut: `unknown command "version"`},
+		{args: []string{"version", "extra"}, code: 2, done: true, errOut: `"version" takes no arguments`},
 	} {
 		var out, errOut bytes.Buffer
 		code, done := command(tc.args, &out, &errOut)

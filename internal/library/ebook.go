@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -42,26 +41,37 @@ import (
 //
 // The scan records the same rule (books.ebook_path, what the reader opens) from
 // the folder listings its walk already reads (ebookCandidate over the walk's
-// .epub entries, then checkEbook), so the reader and the Bridge always agree.
+// .epub entries, then checkEbook), widened for the reader in one way: a
+// single-file book's "<stem>.epub" also counts spelled in another Unicode form
+// (server#228), which the Bridge's os.Stat of the name doesn't find on a disk
+// that tells the forms apart. So BookEbook looks the name up as spelled, never
+// through that listing (ebookOnDisk), and the estimate never quotes an ebook run
+// for a book the Bridge would read from its audio.
 func BookEbook(root, relPath string, folder bool) string {
-	r, _ := checkEbook(root, ebookOnDisk(root, relPath, folder))
+	var found catalog.EbookReading
+	if folder {
+		found = ebookListed(root, relPath, folder)
+	} else {
+		found = ebookNamed(root, sidecarDir(relPath, folder), ebookName(relPath))
+	}
+	r, _ := checkEbook(root, found)
 	return r.Path
 }
 
-// ebookOnDisk is BookEbook's rule over what is on disk now, before the
-// readability check, for a book no walk found (an on-demand index) and for
-// BookEbook: a folder book's folder listed for ebookCandidate, a single-file
-// book's "<stem>.epub" looked up by that name (ebookNamed: one Lstat, not a
-// listing of a folder other books share, unless a name with non-ASCII letters
-// isn't there by that spelling: ebookCandidate over the folder's epubs then
-// finds it in another Unicode form). Unread when it can't be looked at right
-// now (the folder won't list), so what is stored for it stays.
+// ebookOnDisk is the scan's rule (ebookCandidate) over what is on disk now,
+// before the readability check, for a book no walk found (an on-demand index): a
+// folder book's folder listed for ebookCandidate, a single-file book's
+// "<stem>.epub" looked up by that name (ebookNamed: one Lstat, not a listing of
+// a folder other books share, unless a name that has another Unicode form isn't
+// there by that spelling: ebookCandidate over the folder's epubs then finds it
+// in that form). Unread when it can't be looked at right now (the folder won't
+// list), so what is stored for it stays.
 func ebookOnDisk(root, relPath string, folder bool) catalog.EbookReading {
 	dir := sidecarDir(relPath, folder)
 	if !folder {
 		name := ebookName(relPath)
 		r := ebookNamed(root, dir, name)
-		if r.Sig != "" || r.Unread || isASCII(name) {
+		if r.Sig != "" || r.Unread || !hasOtherForm(name) {
 			return r
 		}
 		// Not there by that name, and a name with accents may be spelled in
@@ -105,13 +115,12 @@ func ebookName(relPath string) string { return stemOf(relPath) + ".epub" }
 // case or Unicode form of it (ebookCandidate decides which counts).
 func ebookNameKey(name string) string { return strings.ToLower(norm.NFC.String(name)) }
 
-func isASCII(s string) bool {
-	for i := range len(s) {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
+// hasOtherForm reports whether name can be spelled in another Unicode form
+// (NFC or NFD: an accented letter, Hangul, kana with a voicing mark), as macOS
+// writes NFD; plain ASCII, a curly apostrophe or a Han name has none, so no
+// listing could find it spelled otherwise.
+func hasOtherForm(name string) bool {
+	return !norm.NFC.IsNormalString(name) || !norm.NFD.IsNormalString(name)
 }
 
 // isEpubEntry reports whether a directory entry is one BookEbook's rule looks at:
@@ -129,11 +138,12 @@ func isEpubEntry(de fs.DirEntry) bool {
 //   - a single-file book: "<stem>.epub" (ebookName), whatever it is (a link
 //     counts when it leads to a regular file inside the library: checkEbook):
 //     the entry of exactly that name, else the one named in another Unicode
-//     form of it (NFC/NFD), else, when one is named in another case of
-//     it, what the disk opens by that name (ebookNamed: a case-insensitive
-//     disk's "Book.EPUB", as the Bridge's os.Stat finds it; nothing on a
-//     case-sensitive one), recorded under that name. Only entries named in some
-//     case of it matter, so the walk hands over just those.
+//     form of it (NFC/NFD), else, when one is named in another case of it (in
+//     either form), what the disk opens by that name (ebookNamed: a
+//     case-insensitive disk's "Book.EPUB", as the Bridge's os.Stat finds it;
+//     nothing on a case-sensitive one), recorded under that name, as an
+//     on-demand look (ebookOnDisk) records it. Only entries named in some case
+//     and form of it matter, so the walk hands over just those (ebookNameKey).
 func ebookCandidate(root, relPath string, folder bool, epubs []fs.DirEntry) catalog.EbookReading {
 	dir := sidecarDir(relPath, folder)
 	if !folder {
@@ -152,7 +162,7 @@ func ebookCandidate(root, relPath string, folder bool, epubs []fs.DirEntry) cata
 			}
 		}
 		for _, e := range epubs {
-			if strings.EqualFold(e.Name(), name) {
+			if strings.EqualFold(norm.NFC.String(e.Name()), nfc) {
 				return ebookNamed(root, dir, name)
 			}
 		}
@@ -271,11 +281,17 @@ var ErrNoEbook = errors.New("library: no regular file inside the library there")
 // fs.ErrNotExist when nothing is; any other error is one reading it right now (a
 // permission, a flaky mount).
 func OpenEbook(root, rel string, noLink bool) (*os.File, fs.FileInfo, error) {
+	return openEbook(root, rel, noLink, openEbookFile)
+}
+
+// openEbook is OpenEbook opening the file it found with open (a test's swaps the
+// file as it is opened).
+func openEbook(root, rel string, noLink bool, open func(full string) (*os.File, error)) (*os.File, fs.FileInfo, error) {
 	full, _, err := lookEbook(root, rel, noLink)
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := openEbookFile(full)
+	f, err := open(full)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -295,8 +311,8 @@ func OpenEbook(root, rel string, noLink bool) (*os.File, fs.FileInfo, error) {
 	return f, opened, nil
 }
 
-// openEbookFile opens OpenEbook's file; a test swaps the file as it is opened.
-var openEbookFile = func(full string) (*os.File, error) {
+// openEbookFile opens the file OpenEbook found.
+func openEbookFile(full string) (*os.File, error) {
 	return os.Open(full) //nolint:gosec // ContentJoin'd under the library root, a regular file when looked at
 }
 
