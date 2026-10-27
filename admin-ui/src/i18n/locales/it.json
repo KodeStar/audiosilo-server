@@ -2206,6 +2206,7 @@
   "backups.kind.scheduled": "Pianificato",
   "backups.kind.manual": "Manuale",
   "backups.kind.before-restore": "Prima di un ripristino",
+  "backups.kind.before-upgrade": "Prima di un aggiornamento",
   "backups.download": "Scarica",
   "backups.deleteAria": "Elimina {{name}}",
   "backups.nextAt": "Prossimo: {{when}}.",

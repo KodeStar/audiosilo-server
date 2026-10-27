@@ -67,6 +67,27 @@ describe('backups', () => {
     );
   });
 
+  it('labels a before-upgrade backup (UPGRADE-01)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/backups': {
+          body: backupsEnv({
+            backups: [
+              {
+                name: 'audiosilo-20261004-030000Z-before-upgrade.db',
+                size: 4_200_000,
+                created_at: '2026-10-04T03:00:00Z',
+                kind: 'before-upgrade',
+              },
+            ],
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=backups');
+    expect(await screen.findByText('Before an upgrade')).toBeInTheDocument();
+  });
+
   it('holds a keep count outside 1-365 with a sentence, sending nothing (ADMIN-08)', async () => {
     const calls = mockFetch(routes());
     renderApp('/server?topic=backups');

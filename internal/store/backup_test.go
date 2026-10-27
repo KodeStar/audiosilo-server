@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -87,5 +88,51 @@ func TestInspectRefuses(t *testing.T) {
 
 	if _, err := Inspect(ctx, filepath.Join(dir, "missing.db"), false); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing: err = %v", err)
+	}
+}
+
+func TestPendingMigrations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// No file, an empty file and a SQLite file with no schema record: a fresh install.
+	if got, err := PendingMigrations(ctx, filepath.Join(dir, "none.db")); got != nil || err != nil {
+		t.Fatalf("missing = %v, %v", got, err)
+	}
+	empty := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PendingMigrations(ctx, empty); got != nil || err != nil {
+		t.Fatalf("empty = %v, %v", got, err)
+	}
+
+	path := filepath.Join(dir, "audiosilo.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if got, err := PendingMigrations(ctx, path); got != nil || err != nil {
+		t.Fatalf("up to date = %v, %v", got, err)
+	}
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := names[len(names)-2:]
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN (?, ?)`, last[0], last[1]); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PendingMigrations(ctx, path); err != nil || !slices.Equal(got, last) {
+		t.Fatalf("pending = %v, %v; want %v", got, err, last)
+	}
+	// Nothing recorded at all reads as fresh, not as every migration pending.
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PendingMigrations(ctx, path); got != nil || err != nil {
+		t.Fatalf("nothing recorded = %v, %v", got, err)
 	}
 }

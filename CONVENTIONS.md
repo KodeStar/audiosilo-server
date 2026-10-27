@@ -2168,7 +2168,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   whole database written with `VACUUM INTO` (`store.DB.VacuumInto`, on a short-lived connection of its own:
   the reader pool's query_only refuses it and the one writer would stall writes) into the backups folder
   (`backups.dir`, config.yaml/env only, default `<data>/backups`) as `audiosilo-<UTC time>-<kind>.db`
-  (`scheduled|manual|before-restore`), written under a hidden temporary name, owner-only (0600: it holds
+  (`scheduled|manual|before-restore|before-upgrade`), written under a hidden temporary name, owner-only (0600: it holds
   password and token hashes), then renamed. Settings `backups.schedule` (`""`, `daily:HH:MM`,
   `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
   manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
@@ -2180,7 +2180,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
-  restored database's audit log as the server's own act. **Audit log** (`catalog/audit.go`,
+  restored database's audit log as the server's own act. **Before an upgrade** (UPGRADE-01): next, still
+  before `store.Open`, `backup.BeforeUpgrade` asks `store.PendingMigrations` (read-only; empty for no file or
+  no migration recorded, so a fresh install gets no copy) and, when migrations are pending, writes a
+  `before-upgrade` copy with `store.VacuumFile` plus one INFO line naming them and the copy, keeping the
+  newest 3 (`keepBeforeUpgrade`); a failed copy is a warning and the start carries on. **Audit log** (`catalog/audit.go`,
   `api/handlers_audit.go`): `audit_events` (0019; actor id + name copied, no FK; `via` session/api/system;
   no IP), written by `API.audit` after an admin change succeeds (best effort), kept 365 days / 100k rows
   (`PruneAudit`, daily in `launcher.retention`); scans and job cancels are not audited (Jobs history has

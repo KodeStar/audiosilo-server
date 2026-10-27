@@ -751,7 +751,7 @@ export interface Backup {
   name: string;
   size: number;
   created_at: string;
-  kind: 'scheduled' | 'manual' | 'before-restore';
+  kind: 'scheduled' | 'manual' | 'before-restore' | 'before-upgrade';
 }
 
 /** backup.Result: how the newest backup attempt went. */

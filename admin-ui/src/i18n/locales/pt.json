@@ -2206,6 +2206,7 @@
   "backups.kind.scheduled": "Agendada",
   "backups.kind.manual": "Manual",
   "backups.kind.before-restore": "Antes de uma restauração",
+  "backups.kind.before-upgrade": "Antes de uma atualização",
   "backups.download": "Transferir",
   "backups.deleteAria": "Eliminar {{name}}",
   "backups.nextAt": "Próxima: {{when}}.",

@@ -257,7 +257,13 @@ function BackupList({ env, schedule }: { env: BackupsEnvelope; schedule: string 
               <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
                 <span className="flex flex-wrap items-center gap-2">
                   <b className="font-semibold">{formatDateTime(b.created_at, lang)}</b>
-                  <Badge variant={b.kind === 'before-restore' ? 'warning' : 'secondary'}>
+                  <Badge
+                    variant={
+                      b.kind === 'before-restore' || b.kind === 'before-upgrade'
+                        ? 'warning'
+                        : 'secondary'
+                    }
+                  >
                     {t(`backups.kind.${b.kind}`)}
                   </Badge>
                 </span>

@@ -2058,6 +2058,7 @@
   "backups.kind.scheduled": "Scheduled",
   "backups.kind.manual": "Manual",
   "backups.kind.before-restore": "Before a restore",
+  "backups.kind.before-upgrade": "Before an upgrade",
   "backups.download": "Download",
   "backups.deleteAria": "Delete {{name}}",
   "backups.nextAt": "Next: {{when}}.",

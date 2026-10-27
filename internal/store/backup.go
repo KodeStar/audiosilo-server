@@ -109,6 +109,48 @@ func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 	return info, nil
 }
 
+// PendingMigrations lists the migrations this server would apply to the database
+// file at path, in order, reading it read-only. It is empty when there is nothing
+// to protect from them: no file, or a database with no migration recorded yet (a
+// fresh install), and when the database is up to date.
+func PendingMigrations(ctx context.Context, path string) ([]string, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	conn.SetMaxOpenConns(1)
+	var tables int
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
+		return nil, err
+	}
+	if tables == 0 {
+		return nil, nil
+	}
+	applied, err := appliedMigrations(ctx, conn)
+	if err != nil || len(applied) == 0 {
+		return nil, err
+	}
+	names, err := migrationNames()
+	if err != nil {
+		return nil, err
+	}
+	done := nameSet(applied)
+	var pending []string
+	for _, name := range names {
+		if !done[name] {
+			pending = append(pending, name)
+		}
+	}
+	return pending, nil
+}
+
 // knownMigrations is the set of migration names this server ships.
 func knownMigrations() (map[string]bool, error) {
 	names, err := migrationNames()
