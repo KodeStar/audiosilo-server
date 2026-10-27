@@ -126,6 +126,9 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.RateLimit.Media.Rate }},
 	{key: "rate_limit.media.burst", env: "AUDIOSILO_RATE_LIMIT_MEDIA_BURST", restart: true,
 		ptr: func(c *Config) any { return &c.RateLimit.Media.Burst }},
+	// How many files a scan reads at once: read once at start, no console setting.
+	{key: "scan.concurrency", env: "AUDIOSILO_SCAN_CONCURRENCY", restart: true,
+		ptr: func(c *Config) any { return &c.Scan.Concurrency }},
 
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},

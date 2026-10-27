@@ -158,6 +158,7 @@ func Run(ctx context.Context, opts Options) error {
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
 	scanner.OnRunFinished = ntf.ScanFinished
+	scanner.SetConcurrency(cfg.Scan.Concurrency)
 
 	// Persist a default config the first time (when none existed yet), or when we
 	// just minted a server_id for an install that predates it.

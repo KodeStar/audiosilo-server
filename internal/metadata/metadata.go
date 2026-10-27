@@ -114,6 +114,12 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 // ExtractContext is Extract with its ffprobe run ended when ctx is (a ProbeErr
 // then, the tags still read): the setup preview's time budget.
 func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, error) {
+	return ExtractTimeout(ctx, path, ffprobePath, ProbeTimeout)
+}
+
+// ExtractTimeout is ExtractContext with ffprobe given timeout instead of
+// ProbeTimeout (a ProbeErr matching ErrProbeTimeout when it runs out).
+func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")}
 
 	// Embedded tags via dhowden/tag (best-effort).
@@ -122,7 +128,7 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
 	}
-	md, terr := tag.ReadFrom(f)
+	md, terr := ReadTags(f)
 	if terr == nil {
 		applyTags(m, md)
 	}
@@ -140,7 +146,7 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 
 	// ffprobe for duration + chapters + richer container tags (best-effort).
 	if ffprobePath != "" {
-		if p, err := probe(ctx, path, ffprobePath); err == nil {
+		if p, err := probe(ctx, path, ffprobePath, timeout); err == nil {
 			applyProbe(m, p)
 		} else {
 			m.ProbeErr = err

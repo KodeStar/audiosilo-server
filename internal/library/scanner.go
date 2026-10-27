@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -47,6 +48,36 @@ type Scanner struct {
 	// OnRunFinished, when set before Start, hears how each scan job ended (the
 	// notifications). ctx outlives the server's, like the run's own record.
 	OnRunFinished func(ctx context.Context, r RunReport)
+
+	// concurrency is how many audio files a scan reads at once (SetConcurrency).
+	concurrency int
+	// probeTimeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
+	probeTimeout time.Duration
+}
+
+// SetConcurrency sets how many audio files a scan reads at once (tags and
+// ffprobe; config scan.concurrency): n < 1 means the default, one per CPU up to
+// DefaultScanReaders. Set it before Start; a scan reads it when it begins.
+// However many files are read at once, the index is written by the scan alone,
+// in discovery order, so a scan's result is the same as one that reads a file at
+// a time.
+func (s *Scanner) SetConcurrency(n int) { s.concurrency = n }
+
+// DefaultScanReaders caps the default number of files a scan reads at once. Past
+// about eight the scan gains little (a disk or share is the limit, and ffprobe's
+// start-up dominates), while each ffprobe run costs more CPU as they contend:
+// on a 20-core machine, 20 at once took a third more CPU than 8 for the same
+// scan, and the server keeps cores free for listeners. scan.concurrency sets more.
+const DefaultScanReaders = 8
+
+// readers is how many audio files a scan reads at once. One per CPU is
+// GOMAXPROCS, not NumCPU: in a container it is the CPU limit (cgroup quota), not
+// the host's cores, and the ffprobe runs count against that limit too.
+func (s *Scanner) readers() int {
+	if s.concurrency >= 1 {
+		return s.concurrency
+	}
+	return min(runtime.GOMAXPROCS(0), DefaultScanReaders)
 }
 
 // ScanProgress reports how far a (possibly running) library scan has gotten, so
@@ -82,6 +113,8 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		flights:     map[bookKey]*indexFlight{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
+
+		probeTimeout: metadata.ProbeTimeout,
 	}
 }
 
@@ -329,6 +362,60 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		clear(ebookBackfill)
 	}
+	// The books to read are read a few files at a time (readFiles), each book on
+	// its own goroutine, up to a window of books ahead of the one written next; the
+	// index is written here alone, in discovery order (writeNext), so the rows,
+	// their ids and the log come out as a scan reading one file at a time writes them.
+	slots := newReadSlots(s.readers(), s.probeTimeout)
+	window := 2 * slots.size()
+	var pending []*bookRead
+	// writeNext writes the oldest book read, once its read is done; ctx's error
+	// when the scan was stopped by then (the read may have been cut short).
+	writeNext := func() error {
+		r := pending[0]
+		<-r.done
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pending = pending[1:]
+		b := r.book
+		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
+			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
+			res.Errors++
+			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
+			return nil
+		}
+		if b.ScanError != "" {
+			res.Errors++
+			rl.add("warn", "problem", func(e *catalog.RunEvent) {
+				e.Path, e.Code, e.Detail = b.ScanErrorFile, b.ScanError, b.ScanErrorDetail
+			})
+		}
+		switch {
+		case r.existed:
+			res.Updated++
+		case !movedTo[b.RelPath] && !joinsIndexed(b, sigs) && split[b.RelPath] == "":
+			// New content. A moved book is counted as moved, a book joined from disc
+			// books already indexed is a reshape logged as joined (carryJoinedState),
+			// and a disc split back out of a joined book one logged as split (below):
+			// none is new, nor announced as added.
+			res.Added++
+			if len(res.AddedTitles) < maxAddedTitles {
+				res.AddedTitles = append(res.AddedTitles, b.Title)
+			}
+		}
+		return nil
+	}
+	// stopped ends the scan at a Stop (or its time limit): the reads under way are
+	// waited for and dropped (one cut short by the stop would record a false read
+	// problem), nothing more is written, and the backfills read so far are kept.
+	stopped := func(err error) (*ScanResult, error) {
+		for _, r := range pending {
+			<-r.done
+		}
+		flushBackfills()
+		return res, err
+	}
 	lastLog := time.Now()
 	report := func(done int) {
 		s.updateProgress(lib.ID, func(p *ScanProgress) {
@@ -338,14 +425,20 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
-			flushBackfills()
-			return res, err
+			return stopped(err)
 		}
-		report(i)
+		// Write the books read by now, and wait for the oldest once the window is full.
+		for len(pending) > 0 && (len(pending) >= window || pending[0].finished()) {
+			if err := writeNext(); err != nil {
+				return stopped(err)
+			}
+		}
+		done := i - len(pending)
+		report(done)
 		// Heartbeat so a long indexing pass (ffprobe per file over a network share)
 		// shows progress in the logs, not just in the admin UI counter.
 		if time.Since(lastLog) >= 15*time.Second {
-			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Added+res.Updated)
+			s.log.Info("scan progress", "library", lib.Name, "done", done, "total", len(books), "indexed", res.Added+res.Updated)
 			lastLog = time.Now()
 		}
 		old, existed := sigs[b.RelPath]
@@ -453,32 +546,18 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				continue
 			}
 		}
-		s.enrich(lib, b)
-		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
-			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
-			res.Errors++
-			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
-			continue
+		r := &bookRead{book: b, existed: existed, done: make(chan struct{})}
+		pending = append(pending, r)
+		go func() {
+			defer close(r.done)
+			s.enrich(ctx, lib, b, slots)
+		}()
+	}
+	for len(pending) > 0 {
+		if err := writeNext(); err != nil {
+			return stopped(err)
 		}
-		if b.ScanError != "" {
-			res.Errors++
-			rl.add("warn", "problem", func(e *catalog.RunEvent) {
-				e.Path, e.Code, e.Detail = b.ScanErrorFile, b.ScanError, b.ScanErrorDetail
-			})
-		}
-		switch {
-		case existed:
-			res.Updated++
-		case !movedTo[b.RelPath] && !joinsIndexed(b, sigs) && split[b.RelPath] == "":
-			// New content. A moved book is counted as moved, a book joined from disc
-			// books already indexed is a reshape logged as joined (carryJoinedState),
-			// and a disc split back out of a joined book one logged as split (below):
-			// none is new, nor announced as added.
-			res.Added++
-			if len(res.AddedTitles) < maxAddedTitles {
-				res.AddedTitles = append(res.AddedTitles, b.Title)
-			}
-		}
+		report(len(books) - len(pending))
 	}
 	report(len(books))
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
@@ -631,10 +710,17 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // folder context (path heuristics, sibling cover art, an Audiobookshelf
 // metadata.json in a folder book's folder, when the walk found one: b.ABS.Sig,
 // and the book's .audiosilo/ attachments: b.Attachments.Sig).
-func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
+//
+// A scan reads with its slots (an on-demand index with one, a file at a time)
+// and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
+// the reading rather than writing it.
+func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
-	md, _ := metadata.Extract(abs, s.ffprobePath)
+	md := slots.extract(ctx, abs, s.ffprobePath)
+	if ctx.Err() != nil {
+		return // stopped: the scan drops this reading, so read no more of the book
+	}
 	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)
@@ -682,7 +768,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	// Normalize chapters so single-file and multi-file books look the same to a
 	// client (see metadata.Chapter).
 	if b.IsFolder {
-		s.buildMultiFileChapters(lib, b)
+		s.buildMultiFileChapters(ctx, lib, b, md, slots)
 	} else {
 		none := 0
 		b.SuspectParts = &none
@@ -827,14 +913,17 @@ func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapte
 // expands them; otherwise the whole file becomes one chapter. Book offsets are
 // cumulative across parts, and the book's total duration is the sum. This makes
 // a single chaptered m4b and a folder of split mp3s render identically.
-func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
+// first is the reading of its first part (enrich's of the primary file), so that
+// file is read once; the others are read with slots (readFiles), then the
+// chapters are built from them in file order.
+func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Library, b *catalog.Book, first *metadata.Metadata, slots *readSlots) {
 	var cum float64
 	idx := 0
 	parts := make([]partFacts, 0, len(b.Files))
+	mds := s.readFiles(ctx, lib, b.Files, first, slots)
 	for i := range b.Files {
 		f := &b.Files[i]
-		abs := absOf(lib, f.RelPath)
-		md, _ := metadata.Extract(abs, s.ffprobePath)
+		md := mds[i]
 		noteProblem(b, f.RelPath, f.Size, md)
 		var dur float64
 		if md != nil {
@@ -1447,7 +1536,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 	// book resolved for another reason (bookOnDisk, a shared read's waiters)
 	// never needs it.
 	book.EbookFile = ebookOnDisk(lib.Root, book.RelPath, book.IsFolder)
-	s.enrich(lib, book)
+	s.enrich(context.WithoutCancel(ctx), lib, book, newReadSlots(1, s.probeTimeout))
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
 	id, err := s.cat.UpsertBook(ctx, book)
