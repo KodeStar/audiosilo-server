@@ -207,14 +207,36 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The listening is real: a session on the episode, recorded after sharing
+	// went on (SaveProgress alone records none, server#231), so the show is
+	// absent for the private-show rule, not for want of listening.
 	for _, pos := range []float64{10, 20} {
 		if _, err := b.cat.SaveProgress(ctx, uid, catalog.Progress{Ref: catalog.Ref{LibraryID: b.lib.ID, Path: episode}, Position: pos, Duration: 1512}); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.cat.RecordHeartbeat(ctx, catalog.Heartbeat{UserID: uid, Ref: catalog.Ref{LibraryID: b.lib.ID, Path: episode},
+			Position: pos, Duration: 1512, At: time.Now().UTC()}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	resp, out = b.doHeaders(t, "GET", "/api/v1/household/listening", b.adminTok, "", headers)
 	if resp.StatusCode != 200 || strings.Contains(out, "Example Show") {
 		t.Fatalf("private household %d %s", resp.StatusCode, out)
+	}
+	// Allowed: once the admin follows the show, the same listening shows.
+	var showID string
+	if err := b.db.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path='Example Show'`, b.lib.ID).Scan(&showID); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.FollowPodcast(ctx, b.adminID, b.lib.ID, "Example Show", showID); err != nil {
+		t.Fatal(err)
+	}
+	resp, out = b.doHeaders(t, "GET", "/api/v1/household/listening", b.adminTok, "", headers)
+	if resp.StatusCode != 200 || !strings.Contains(out, "Example Show") {
+		t.Fatalf("followed household %d %s", resp.StatusCode, out)
+	}
+	if err := b.cat.UnfollowPodcast(ctx, b.adminID, b.lib.ID, "Example Show"); err != nil {
+		t.Fatal(err)
 	}
 
 	// A grant inside a private show is discarded until this caller follows it.
