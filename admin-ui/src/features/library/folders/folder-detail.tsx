@@ -165,9 +165,7 @@ function Detail({
             </p>
             {entry.pending_book ? (
               <p id="folder-pending" className="text-[12.5px] text-muted-foreground">
-                <span className="font-semibold text-foreground">
-                  {t('folders.detail.pending')}
-                </span>{' '}
+                <span className="font-semibold text-foreground">{t('folders.detail.pending')}</span>{' '}
                 {t('folders.detail.pendingBody')}
               </p>
             ) : null}
