@@ -613,12 +613,9 @@ func (c *Catalog) MoveCandidates(ctx context.Context, libraryID int64, relPath s
 	if len(hashes) == 0 {
 		return nil, nil
 	}
-	args := []any{libraryID, relPath}
-	for _, h := range hashes {
-		args = append(args, h)
-	}
+	args := append([]any{libraryID, relPath}, anyOf(hashes)...)
 	rows, err := c.db.QueryContext(ctx, `SELECT rel_path FROM books
-		WHERE library_id = ? AND (rel_path = ? OR content_hash IN (?`+strings.Repeat(", ?", len(hashes)-1)+`))
+		WHERE library_id = ? AND (rel_path = ? OR content_hash IN (`+placeholders(len(hashes))+`))
 		ORDER BY rel_path`, args...)
 	if err != nil {
 		return nil, err

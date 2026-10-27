@@ -54,15 +54,24 @@ func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Librar
 // markPendingNext marks the folders after rel among entries that a scan would
 // make books of but the index doesn't hold yet (MarkPendingBooks, as the folder
 // listing marks them for the player), so the book that follows is offered
-// before a scan reaches it (server#211). Only the folders sorting after rel are
-// read. Without the library's overrides none are marked (a `collection` folder
-// would read as one).
+// before a scan reaches it (server#211). Only the folders sorting after rel and
+// before the first indexed book after it are read: one after that book could
+// never be the answer. Without the library's overrides none are marked (a
+// `collection` folder would read as one).
 func markPendingNext(ctx context.Context, cat *catalog.Catalog, lib *catalog.Library, scope catalog.Scope, ignore *Ignore, entries []Entry, rel string) error {
-	names := collate.New(language.Und, collate.Loose, collate.Numeric)
+	names := newNameCollator()
 	leaf := path.Base(rel)
+	var first *Entry // the first indexed book after rel
+	for i := range entries {
+		e := &entries[i]
+		if e.IsBook && e.Path != rel && names.CompareString(e.Name, leaf) > 0 && (first == nil || entryBefore(names, e, first)) {
+			first = e
+		}
+	}
 	var dirs []string
-	for _, e := range entries {
-		if e.IsDir && !e.IsBook && e.Path != rel && names.CompareString(e.Name, leaf) > 0 {
+	for i := range entries {
+		e := &entries[i]
+		if e.IsDir && !e.IsBook && e.Path != rel && names.CompareString(e.Name, leaf) > 0 && (first == nil || entryBefore(names, e, first)) {
 			dirs = append(dirs, e.Path)
 		}
 	}
@@ -100,13 +109,8 @@ func markPendingNext(ctx context.Context, cat *catalog.Catalog, lib *catalog.Lib
 // would strand the player. Loose files that are not books are never offered. nil
 // when nothing follows. Order is by name, not series_index.
 func NextSibling(entries []Entry, current string) *Entry {
-	names := collate.New(language.Und, collate.Loose, collate.Numeric)
-	before := func(a, b *Entry) bool {
-		if c := names.CompareString(a.Name, b.Name); c != 0 {
-			return c < 0
-		}
-		return strings.Compare(a.Path, b.Path) < 0
-	}
+	names := newNameCollator()
+	before := func(a, b *Entry) bool { return entryBefore(names, a, b) }
 	leaf := path.Base(current)
 	var book, dir *Entry
 	indexed := false
@@ -133,4 +137,17 @@ func NextSibling(entries []Entry, current string) *Entry {
 	default:
 		return dir
 	}
+}
+
+// newNameCollator sorts names as the player does (NextSibling's order).
+func newNameCollator() *collate.Collator {
+	return collate.New(language.Und, collate.Loose, collate.Numeric)
+}
+
+// entryBefore is NextSibling's order: by name (names), ties by path.
+func entryBefore(names *collate.Collator, a, b *Entry) bool {
+	if c := names.CompareString(a.Name, b.Name); c != 0 {
+		return c < 0
+	}
+	return strings.Compare(a.Path, b.Path) < 0
 }

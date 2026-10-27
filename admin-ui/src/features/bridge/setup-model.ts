@@ -42,13 +42,13 @@ export function knownSetupItem(id: string): boolean {
 }
 
 /** The Workers tab of the Bridge's page, where ASR workers are added. */
-export const WORKERS_TAB = 'workers';
+const WORKERS_TAB = 'workers';
 
 /**
  * The ASR step's detail while the Bridge waits for an ASR worker (the Bridge's
  * setup.DetailASRWaiting): that step is fixed on Workers, not Settings.
  */
-export const ASR_WAITING_DETAIL = 'waiting for an ASR worker';
+const ASR_WAITING_DETAIL = 'waiting for an ASR worker';
 
 /**
  * Where a step is fixed on the Bridge's page, when it has a tab and the page an

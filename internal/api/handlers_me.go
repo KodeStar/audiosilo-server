@@ -327,7 +327,12 @@ func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope ca
 	}
 	ctx, cancel := context.WithTimeout(ctx, a.timeoutDur/2)
 	defer cancel()
-	if _, err := a.bookForPath(ctx, lib, scope, path); err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
+	// The index alone answers for a book already there (no full book read).
+	_, err := a.cat.BookPathAt(ctx, lib.ID, path)
+	if errors.Is(err, catalog.ErrNotFound) {
+		_, err = a.indexPath(ctx, *lib, path, scope.Allows)
+	}
+	if err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
 		a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
 	}
 }

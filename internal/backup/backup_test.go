@@ -581,8 +581,8 @@ func TestBeforeUpgrade(t *testing.T) {
 
 	// A fresh install: no database yet, so nothing to copy.
 	fresh := t.TempDir()
-	if b, err := BeforeUpgrade(ctx, fresh, "", filepath.Join(fresh, "audiosilo.db"), slogDiscard()); b != nil || err != nil {
-		t.Fatalf("fresh = %+v, %v", b, err)
+	if b := BeforeUpgrade(ctx, fresh, "", filepath.Join(fresh, "audiosilo.db"), slogDiscard()); b != nil {
+		t.Fatalf("fresh = %+v", b)
 	}
 	if got := backups(fresh); len(got) != 0 {
 		t.Fatalf("fresh install made %v", got)
@@ -590,8 +590,8 @@ func TestBeforeUpgrade(t *testing.T) {
 
 	// A database already up to date: nothing to copy.
 	e := newEnv(t)
-	if b, err := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slogDiscard()); b != nil || err != nil {
-		t.Fatalf("up to date = %+v, %v", b, err)
+	if b := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slogDiscard()); b != nil {
+		t.Fatalf("up to date = %+v", b)
 	}
 	if got := backups(e.dataDir); len(got) != 0 {
 		t.Fatalf("up to date made %v", got)
@@ -625,9 +625,9 @@ func TestBeforeUpgrade(t *testing.T) {
 	}
 
 	var logs bytes.Buffer
-	b, err := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slog.New(slog.NewTextHandler(&logs, nil)))
-	if err != nil || b == nil || b.Kind != KindBeforeUpgrade {
-		t.Fatalf("pending = %+v, %v", b, err)
+	b := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slog.New(slog.NewTextHandler(&logs, nil)))
+	if b == nil || b.Kind != KindBeforeUpgrade {
+		t.Fatalf("pending = %+v", b)
 	}
 	// The copy is the database as the older server left it (store.Open would
 	// migrate it, so it is only inspected).

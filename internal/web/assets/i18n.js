@@ -50,8 +50,11 @@
       /* no Intl.PluralRules: "other" */
     }
     var active = table();
-    if (active[key + "." + cat] != null || BASE[key + "." + cat] != null) return key + "." + cat;
-    if (active[key + ".other"] != null || BASE[key + ".other"] != null) return key + ".other";
+    function has(k) {
+      return active[k] != null || BASE[k] != null;
+    }
+    if (has(key + "." + cat)) return key + "." + cat;
+    if (has(key + ".other")) return key + ".other";
     return key;
   }
 

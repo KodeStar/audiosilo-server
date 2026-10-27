@@ -857,9 +857,10 @@ func (c *Catalog) createWholeLibraryShare(ctx context.Context, libraryID int64, 
 		for i := range maxGrantNames {
 			// A refused INSERT ends only its statement in SQLite, not the
 			// transaction, so the next name is tried in the same one.
+			n := grantName(name, libraryID, i)
 			res, err := tx.ExecContext(ctx,
 				`INSERT INTO shares(name, description, read_only, created_at, whole_library_id) VALUES(?,?,0,?,?)`,
-				grantName(name, libraryID, i), s.Description, c.ts(), libraryID)
+				n, s.Description, c.ts(), libraryID)
 			if store.IsUniqueViolation(err) {
 				continue
 			}
@@ -867,7 +868,7 @@ func (c *Catalog) createWholeLibraryShare(ctx context.Context, libraryID int64, 
 				return err
 			}
 			s.ID, _ = res.LastInsertId()
-			s.Name = grantName(name, libraryID, i)
+			s.Name = n
 			_, err = tx.ExecContext(ctx, `INSERT INTO share_paths(share_id, library_id, path) VALUES(?,?,'')`, s.ID, libraryID)
 			return err
 		}

@@ -68,14 +68,11 @@ func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 	if _, err := os.Stat(path); err != nil {
 		return info, err
 	}
-	// mode=ro opens without creating; immutable is not set, so a -wal beside the file
-	// (there should be none for a VACUUM INTO copy) is still read correctly.
-	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	conn, err := openReadOnly(path)
 	if err != nil {
 		return info, fmt.Errorf("%w: %v", ErrNotADatabase, err)
 	}
 	defer func() { _ = conn.Close() }()
-	conn.SetMaxOpenConns(1)
 
 	if full {
 		var check string
@@ -119,12 +116,11 @@ func PendingMigrations(ctx context.Context, path string) ([]string, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	conn, err := openReadOnly(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	conn.SetMaxOpenConns(1)
 	var tables int
 	if err := conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
@@ -149,6 +145,18 @@ func PendingMigrations(ctx context.Context, path string) ([]string, error) {
 		}
 	}
 	return pending, nil
+}
+
+// openReadOnly opens the SQLite file at path read-only on one connection. mode=ro
+// opens without creating; immutable is not set, so a -wal beside the file (there
+// should be none for a VACUUM INTO copy) is still read correctly.
+func openReadOnly(path string) (*sql.DB, error) {
+	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	conn.SetMaxOpenConns(1)
+	return conn, nil
 }
 
 // knownMigrations is the set of migration names this server ships.

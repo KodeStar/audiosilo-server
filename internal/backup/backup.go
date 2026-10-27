@@ -652,15 +652,16 @@ func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *
 // install (no database yet, or one with no migration recorded) and a database
 // already up to date get no copy. Only the newest keepBeforeUpgrade such copies
 // are kept. A failed copy is logged and the start carries on: the server would
-// otherwise stay down until there is room for one.
-func BeforeUpgrade(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) (*Backup, error) {
+// otherwise stay down until there is room for one. It returns the copy, nil when
+// none was made.
+func BeforeUpgrade(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) *Backup {
 	pending, err := store.PendingMigrations(ctx, dbPath)
 	if err != nil {
 		log.Warn("reading which migrations the database needs failed; no before-upgrade backup was made", "err", err)
-		return nil, nil
+		return nil
 	}
 	if len(pending) == 0 {
-		return nil, nil
+		return nil
 	}
 	s := New(nil, dataDir, dir, log)
 	b, err := s.write(ctx, KindBeforeUpgrade, func(ctx context.Context, to string) error {
@@ -668,11 +669,11 @@ func BeforeUpgrade(ctx context.Context, dataDir, dir, dbPath string, log *slog.L
 	})
 	if err != nil {
 		log.Warn("copying the database before the upgrade failed; migrating without a copy", "migrations", strings.Join(pending, ","), "err", err)
-		return nil, err
+		return nil
 	}
 	log.Info("copied the database before applying new migrations", "migrations", strings.Join(pending, ","), "backup", filepath.Join(s.dir, b.Name))
 	s.pruneKind(KindBeforeUpgrade, keepBeforeUpgrade)
-	return &b, nil
+	return &b
 }
 
 func (s *Service) applyRestore(ctx context.Context, name, dbPath string, res *RestoreResult) error {

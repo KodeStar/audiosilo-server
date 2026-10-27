@@ -741,12 +741,12 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	if !ok {
 		return
 	}
-	a.transcodeHeld(w, r, abs, downloadName, done, start)
+	defer done()
+	a.transcodeHeld(w, r, abs, downloadName, start)
 }
 
-// transcodeHeld is serveTranscode once its slot is taken (done releases it).
-func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, done func(), start float64) {
-	defer done()
+// transcodeHeld is serveTranscode once its slot is taken (the caller releases it).
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, start float64) {
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
@@ -781,11 +781,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			// request lasts.
 			f, etag, err = a.remux.Open(r.Context(), a.baseCtx, a.ffmpeg, abs)
 		} else {
-			defer func() {
-				if held != nil {
-					held() // taken, then not used (the server is stopping)
-				}
-			}()
+			defer held()
 		}
 	}
 	if err != nil {
@@ -808,9 +804,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			downloadName = name
 		}
 		if held != nil {
-			done := held
-			held = nil
-			a.transcodeHeld(w, r, abs, downloadName, done, a.noteTranscode(r, lib, rel))
+			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel))
 			return true
 		}
 		a.serveTranscode(w, r, lib, rel, abs, downloadName)
