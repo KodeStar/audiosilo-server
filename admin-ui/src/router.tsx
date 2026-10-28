@@ -10,7 +10,7 @@ import { validateLibrarySearch, type LibrarySearch } from '@/features/library/li
 import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
-import { SectionPage } from '@/features/section-page';
+import { SectionPage, preloadSection } from '@/features/section-page';
 import { SETTINGS_PAGES, type SettingsPage } from '@/features/settings/settings-model';
 import {
   ACTIVITY_RANGES,
@@ -86,6 +86,9 @@ const destinationRoutes = DESTINATIONS.map((d) =>
     getParentRoute: () => rootRoute,
     path: d.route,
     validateSearch: validateSectionSearch,
+    // The section's chunk, fetched while the session is checked (not awaited:
+    // the route never waits on it; section-page.tsx).
+    loader: ({ params }) => preloadSection(d, params.section),
     component: () => <SectionPage destination={d} />,
   }),
 );

@@ -1,82 +1,111 @@
-import { Suspense, lazy } from 'react';
+import { Suspense } from 'react';
 import { useParams } from '@tanstack/react-router';
 import type { Destination, DestinationKey } from '@/components/shell/destinations';
 import { NotFound } from '@/features/not-found';
 import { PageSkeleton } from '@/components/page';
+import { lazyScreen, type Screen } from '@/lib/lazy-screen';
 
 // Each screen is its own chunk, loaded on first visit (with its form, drag and
 // drop and QR libraries), so the first paint only carries the shell and Overview.
-const BooksPage = lazy(() =>
-  import('@/features/library/books/books-page').then((m) => ({ default: m.BooksPage })),
+// The destination routes fetch it from their loader (preloadSection), beside the
+// session check (lib/lazy-screen.tsx).
+
+const BooksPage = lazyScreen(
+  () => import('@/features/library/books/books-page'),
+  (m) => m.BooksPage,
 );
-const PeopleScreen = lazy(() =>
-  import('@/features/library/people/people-screen').then((m) => ({ default: m.PeopleScreen })),
+const PeopleScreen = lazyScreen(
+  () => import('@/features/library/people/people-screen'),
+  (m) => m.PeopleScreen,
 );
 /** Library > Authors: everyone credited as an author, most books first. */
-const AuthorsPage = () => <PeopleScreen field="author" />;
+const AuthorsPage = Object.assign(() => <PeopleScreen field="author" />, {
+  preload: PeopleScreen.preload,
+});
 /** Library > Narrators: everyone credited as a narrator, most hours first. */
-const NarratorsPage = () => <PeopleScreen field="narrator" />;
-const SeriesPage = lazy(() =>
-  import('@/features/library/series/series-page').then((m) => ({ default: m.SeriesPage })),
+const NarratorsPage = Object.assign(() => <PeopleScreen field="narrator" />, {
+  preload: PeopleScreen.preload,
+});
+const SeriesPage = lazyScreen(
+  () => import('@/features/library/series/series-page'),
+  (m) => m.SeriesPage,
 );
-const FoldersPage = lazy(() =>
-  import('@/features/library/folders/folders-page').then((m) => ({ default: m.FoldersPage })),
+const FoldersPage = lazyScreen(
+  () => import('@/features/library/folders/folders-page'),
+  (m) => m.FoldersPage,
 );
-const LibrariesPage = lazy(() =>
-  import('@/features/libraries/libraries-page').then((m) => ({ default: m.LibrariesPage })),
+const LibrariesPage = lazyScreen(
+  () => import('@/features/libraries/libraries-page'),
+  (m) => m.LibrariesPage,
 );
-const PeoplePage = lazy(() =>
-  import('@/features/people/people-page').then((m) => ({ default: m.PeoplePage })),
+const PeoplePage = lazyScreen(
+  () => import('@/features/people/people-page'),
+  (m) => m.PeoplePage,
 );
-const InvitesPage = lazy(() =>
-  import('@/features/people/invites-page').then((m) => ({ default: m.InvitesPage })),
+const InvitesPage = lazyScreen(
+  () => import('@/features/people/invites-page'),
+  (m) => m.InvitesPage,
 );
-const SharesPage = lazy(() =>
-  import('@/features/shares/shares-page').then((m) => ({ default: m.SharesPage })),
+const SharesPage = lazyScreen(
+  () => import('@/features/shares/shares-page'),
+  (m) => m.SharesPage,
 );
-const IssuesPage = lazy(() =>
-  import('@/features/health/issues-page').then((m) => ({ default: m.IssuesPage })),
+const IssuesPage = lazyScreen(
+  () => import('@/features/health/issues-page'),
+  (m) => m.IssuesPage,
 );
-const JobsPage = lazy(() =>
-  import('@/features/health/jobs-page').then((m) => ({ default: m.JobsPage })),
+const JobsPage = lazyScreen(
+  () => import('@/features/health/jobs-page'),
+  (m) => m.JobsPage,
 );
-const DevicesPage = lazy(() =>
-  import('@/features/people/devices-page').then((m) => ({ default: m.DevicesPage })),
+const DevicesPage = lazyScreen(
+  () => import('@/features/people/devices-page'),
+  (m) => m.DevicesPage,
 );
-const ActivityPage = lazy(() =>
-  import('@/features/activity/activity-page').then((m) => ({ default: m.ActivityPage })),
+const ActivityPage = lazyScreen(
+  () => import('@/features/activity/activity-page'),
+  (m) => m.ActivityPage,
 );
-const LivePage = lazy(() =>
-  import('@/features/activity/live-page').then((m) => ({ default: m.LivePage })),
+const LivePage = lazyScreen(
+  () => import('@/features/activity/live-page'),
+  (m) => m.LivePage,
 );
-const SessionsPage = lazy(() =>
-  import('@/features/activity/sessions-page').then((m) => ({ default: m.SessionsPage })),
+const SessionsPage = lazyScreen(
+  () => import('@/features/activity/sessions-page'),
+  (m) => m.SessionsPage,
 );
-const YearPage = lazy(() =>
-  import('@/features/activity/year-page').then((m) => ({ default: m.YearPage })),
+const YearPage = lazyScreen(
+  () => import('@/features/activity/year-page'),
+  (m) => m.YearPage,
 );
-const SystemPage = lazy(() =>
-  import('@/features/health/system-page').then((m) => ({ default: m.SystemPage })),
+const SystemPage = lazyScreen(
+  () => import('@/features/health/system-page'),
+  (m) => m.SystemPage,
 );
-const LogsPage = lazy(() =>
-  import('@/features/logs/logs-page').then((m) => ({ default: m.LogsPage })),
+const LogsPage = lazyScreen(
+  () => import('@/features/logs/logs-page'),
+  (m) => m.LogsPage,
 );
-const EventsPage = lazy(() =>
-  import('@/features/events/events-page').then((m) => ({ default: m.EventsPage })),
+const EventsPage = lazyScreen(
+  () => import('@/features/events/events-page'),
+  (m) => m.EventsPage,
 );
-const AuditPage = lazy(() =>
-  import('@/features/audit/audit-page').then((m) => ({ default: m.AuditPage })),
+const AuditPage = lazyScreen(
+  () => import('@/features/audit/audit-page'),
+  (m) => m.AuditPage,
 );
-const AboutPage = lazy(() =>
-  import('@/features/about/about-page').then((m) => ({ default: m.AboutPage })),
+const AboutPage = lazyScreen(
+  () => import('@/features/about/about-page'),
+  (m) => m.AboutPage,
 );
-const SettingsPage = lazy(() =>
-  import('@/features/settings/settings-page').then((m) => ({ default: m.SettingsPage })),
+const SettingsPage = lazyScreen(
+  () => import('@/features/settings/settings-page'),
+  (m) => m.SettingsPage,
 );
 
 /** Every section's screen, by destination. */
 // eslint-disable-next-line react-refresh/only-export-components -- exported for the test that every section has a screen
-export const PAGES: Record<DestinationKey, Record<string, React.ComponentType>> = {
+export const PAGES: Record<DestinationKey, Record<string, Screen>> = {
   library: {
     books: BooksPage,
     authors: AuthorsPage,
@@ -97,11 +126,27 @@ export const PAGES: Record<DestinationKey, Record<string, React.ComponentType>> 
   },
 };
 
+/** A section's screen (the destination's first without one), if it has one. */
+function sectionScreen(destination: Destination, section: string | undefined): Screen | undefined {
+  return PAGES[destination.key][section ?? destination.sections[0]];
+}
+
+/**
+ * Starts fetching a section's chunk (a destination route's loader, so also on a
+ * link's hover); a failed fetch is left to SectionPage, which fetches again.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- the routes' loader
+export function preloadSection(destination: Destination, section: string | undefined) {
+  void sectionScreen(destination, section)
+    ?.preload()
+    .catch(() => {});
+}
+
 /** A destination's routed section: its screen, or a 404. */
 export function SectionPage({ destination }: { destination: Destination }) {
   const { section } = useParams({ strict: false }) as { section?: string };
   // Every listed section has a screen (section-page.test.ts), so a missing one is a 404.
-  const Page = PAGES[destination.key][section ?? destination.sections[0]];
+  const Page = sectionScreen(destination, section);
   if (!Page) return <NotFound />;
   return (
     <Suspense fallback={<PageSkeleton />}>
