@@ -332,6 +332,67 @@ func TestRateLimitDemoSessionByAddress(t *testing.T) {
 	}
 }
 
+// A demo account's media spends from its address's bucket too, like its API
+// requests: a second demo session from the same address is no new media budget
+// (denied, with the address's Retry-After), while another address is served and a
+// normal user's media still spends from a bucket per credential, never from its
+// address's (allowed).
+func TestRateLimitDemoMediaByAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 4, 0.25 // 4 s to the next token
+	libID, _ := seedCovers(t, e.testEnv)
+	ctx := context.Background()
+	demo := func(name string) string {
+		t.Helper()
+		u, err := e.auth.CreateDemoUser(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "demo", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	cover := func(ip, tok string) (int, string) {
+		req := httptest.NewRequest("GET", mediaURL(libID, "cover", "Sidecar", tok), nil)
+		req.RemoteAddr = ip + ":1234"
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code, rec.Header().Get("Retry-After")
+	}
+
+	const ip = "192.0.2.62"
+	first, second := demo("demo_media_a"), demo("demo_media_b")
+	for i := range 4 {
+		if code, _ := cover(ip, first); code == http.StatusTooManyRequests {
+			t.Fatalf("demo cover %d within the address's burst = 429", i)
+		}
+	}
+	if code, ra := cover(ip, first); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("demo cover past the address's burst = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+	if code, ra := cover(ip, second); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("a second demo session's cover from the spent address = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+	if code, _ := cover("192.0.2.63", second); code == http.StatusTooManyRequests {
+		t.Fatal("the demo session's cover from another address = 429")
+	}
+
+	// A normal user's sessions spend from their media buckets, not the address's
+	// four: well past that burst, neither is refused.
+	const userIP = "192.0.2.64"
+	a, b := e.session(t), e.session(t)
+	for i := range 10 {
+		for _, tok := range []string{a, b} {
+			if code, _ := cover(userIP, tok); code != http.StatusOK {
+				t.Fatalf("user cover %d = %d, want 200", i, code)
+			}
+		}
+	}
+}
+
 // The routes that limit themselves (the authenticated API, media) refuse an
 // address whose general bucket is empty in rateLimit already, before the timeout
 // layer behind it runs; another address goes through.

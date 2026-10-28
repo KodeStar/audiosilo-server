@@ -334,7 +334,7 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		if perToken {
-			if wait, ok := a.allowCredential(ctx, ip); !ok {
+			if wait, ok := a.allowCredential(ctx, a.tokenLimiter, ip); !ok {
 				rateLimited(w, wait)
 				return
 			}
@@ -344,18 +344,20 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 }
 
 // allowCredential spends an authenticated request (ctx) from its credential's
-// bucket (spendCredential). A demo account's session spends from its address's
-// bucket instead, as every request did before server#246: anyone can mint a demo
-// session (POST /demo/session), so a per-token budget would be no limit at all.
-// When refused, wait is the request's Retry-After.
-func (a *API) allowCredential(ctx context.Context, ip string) (wait time.Duration, ok bool) {
+// bucket in l (spendCredential): tokenLimiter for the API, mediaLimiter for
+// media. A demo account's session spends from its address's bucket instead, its
+// media too, as every API request did before server#246: anyone can mint a demo
+// session (POST /demo/session), so a per-token budget would let one address
+// multiply its budget by its sessions. When refused, wait is the request's
+// Retry-After.
+func (a *API) allowCredential(ctx context.Context, l *rateLimiter, ip string) (wait time.Duration, ok bool) {
 	if u := userFrom(ctx); u != nil && u.IsDemo {
 		if !a.ipLimiter.Allow(ip) {
 			return a.ipLimiter.Wait(ip), false
 		}
 		return 0, true
 	}
-	return a.spendCredential(a.tokenLimiter, credentialFrom(ctx).ID, ip)
+	return a.spendCredential(l, credentialFrom(ctx).ID, ip)
 }
 
 // spendCredential spends one request from credential id's bucket in l (every
@@ -386,7 +388,8 @@ func (a *API) spendCredential(l *rateLimiter, id int64, ip string) (wait time.Du
 // credential's media bucket instead: the credential is what the request just
 // proved, and several people behind one address (a household behind NAT, or every
 // visitor behind a reverse proxy missing from trusted_proxies) would otherwise
-// share one budget, so one person's cover grid could blank another's. A runaway
+// share one budget, so one person's cover grid could blank another's (a demo
+// session spends from its address's general bucket, allowCredential). A runaway
 // client or a leaked token is still capped: a request its credential's bucket
 // refuses has already cost a token lookup, so it pays into the address's bucket
 // too, and a client hammering past its budget is soon refused before the lookup.
@@ -436,7 +439,7 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			// the credential that fetches it anywhere.
 			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		}
-		if wait, ok := a.spendCredential(a.mediaLimiter, cred.ID, ip); !ok {
+		if wait, ok := a.allowCredential(ctx, a.mediaLimiter, ip); !ok {
 			rateLimited(w, wait)
 			return
 		}
