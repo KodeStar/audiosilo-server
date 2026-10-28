@@ -32,6 +32,12 @@ func TestIssuesSummaryCachedUntilAWrite(t *testing.T) {
 	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: "AC3/Book", Title: "AC3", Codec: "ac3"}); err != nil {
 		t.Fatal(err)
 	}
+	// The member's first request writes its token's last_seen (a write, which
+	// would empty the cache): made now, so their refusals below write nothing
+	// and would be answered from the cache if it were consulted before the role.
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/issues", memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member issues = %d, want 403", resp.StatusCode)
+	}
 	count := func(kind string) (open, ignored int) {
 		t.Helper()
 		resp, body := e.do(t, "GET", "/api/v1/admin/issues", adminTok, "")
@@ -59,7 +65,8 @@ func TestIssuesSummaryCachedUntilAWrite(t *testing.T) {
 	}
 
 	// Repeated: the cache answers both, and still refuses a member (whose
-	// first request writes its token's last_seen, so it goes last).
+	// token was touched above, so the refusals write nothing: checked by the
+	// admin's answers still coming from the cache after them).
 	const marker = "{\"cached\":true}\n"
 	e.cachedBodies(marker)
 	paths := []string{"/api/v1/admin/issues", list}
@@ -72,6 +79,11 @@ func TestIssuesSummaryCachedUntilAWrite(t *testing.T) {
 	for _, p := range paths {
 		if resp, body := e.do(t, "GET", p, memberTok, ""); resp.StatusCode != http.StatusForbidden || body == marker {
 			t.Fatalf("member GET %s = %d %q, want 403", p, resp.StatusCode, body)
+		}
+	}
+	for _, p := range paths {
+		if _, body := e.do(t, "GET", p, adminTok, ""); body != marker {
+			t.Fatalf("GET %s after the member's = %q, want the cached answer (a member's refusal wrote)", p, body)
 		}
 	}
 

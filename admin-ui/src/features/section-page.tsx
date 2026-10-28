@@ -91,7 +91,10 @@ export const PAGES: Record<DestinationKey, Record<string, Screen>> = {
 
 /** A section's screen (the destination's first without one), if it has one. */
 function sectionScreen(destination: Destination, section: string | undefined): Screen | undefined {
-  return PAGES[destination.key][section ?? destination.sections[0]];
+  const pages = PAGES[destination.key];
+  const key = section ?? destination.sections[0];
+  // Own keys only: a URL naming an inherited property (/library/constructor) is a 404.
+  return Object.hasOwn(pages, key) ? pages[key] : undefined;
 }
 
 /**

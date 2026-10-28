@@ -13,8 +13,8 @@ export type Screen<P extends object = object> = ComponentType<P> & {
  * is in, the screen shows the page skeleton by itself rather than suspending
  * (React.lazy): React holds a Suspense boundary's content back for up to 300 ms
  * after its fallback shows (the fallback throttle), and the page's own requests
- * wait for that commit (server#245). A chunk that fails to load throws in render, to the route's
- * error boundary, as a lazy screen's does.
+ * wait for that commit (server#245). A chunk that fails to load throws in render, to the
+ * router's error boundary (no destination route sets its own), as a lazy screen's did.
  */
 export function lazyScreen<P extends object = object>(
   load: () => Promise<ComponentType<P>>,

@@ -19,6 +19,7 @@ describe('section pages', () => {
     preloadSection(health, 'system');
     expect(system).toHaveBeenCalledTimes(1);
     preloadSection(health, 'nope'); // a 404 has nothing to fetch
+    preloadSection(health, 'constructor'); // nor does an inherited property's name
     expect(issues).toHaveBeenCalledTimes(1);
   });
 });
