@@ -272,3 +272,88 @@ func TestListCacheKeyExact(t *testing.T) {
 		t.Fatal("the same request and scopes made two keys")
 	}
 }
+
+// TestListCacheBrowseLists: a library's authors, narrators and series (with and
+// without memberships) are answered from the cache until a write, the write (a
+// re-index crediting a new author, narrator and series) is in the next answer,
+// and a scoped listener's answer is never the admin's.
+func TestListCacheBrowseLists(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	lib := listCacheLibrary(t, e)
+	admin, listener, userID := adminAndMember(t, e)
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "B only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, userID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	reindex := func(p, title, author, narrator, series string) {
+		t.Helper()
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: p, Title: title,
+			Author: author, Narrator: narrator, Series: series, SeriesIndex: 1, Format: "m4b", Duration: 60, Size: 1000,
+			Files: []catalog.BookFile{{RelPath: p, Duration: 60, Format: "m4b", Size: 1000}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reindex("A/Alpha One.m4b", "Alpha One", "A Author", "Ann Reader", "Alpha Saga")
+	reindex("B/Beta.m4b", "Beta", "B Author", "Bob Reader", "Beta Saga")
+
+	base := fmt.Sprintf("/api/v1/libraries/%d/", lib.ID)
+	paths := map[string][2]string{ // path -> what the admin sees, what only the admin sees
+		base + "authors":              {"B Author", "A Author"},
+		base + "narrators":            {"Bob Reader", "Ann Reader"},
+		base + "series":               {"Beta Saga", "Alpha Saga"},
+		base + "series?memberships=1": {"Beta Saga", "Alpha Saga"},
+	}
+	first := map[string]string{}
+	for p, want := range paths {
+		resp, body := e.do(t, "GET", p, admin, "")
+		if resp.StatusCode != http.StatusOK || !strings.Contains(body, want[0]) || !strings.Contains(body, want[1]) {
+			t.Fatalf("admin GET %s: %d %s", p, resp.StatusCode, body)
+		}
+		first[p] = body
+	}
+	if n := e.cacheEntries(); n != len(paths) {
+		t.Fatalf("cache entries = %d, want %d (one per route and query)", n, len(paths))
+	}
+	for p := range paths {
+		if _, body := e.do(t, "GET", p, admin, ""); body != first[p] {
+			t.Fatalf("admin GET %s again: %q, want the first answer %q", p, body, first[p])
+		}
+	}
+	const marker = "{\"cached\":true}\n"
+	e.cachedBodies(marker)
+	for p := range paths {
+		if _, body := e.do(t, "GET", p, admin, ""); body != marker {
+			t.Fatalf("admin GET %s with the cache's bodies swapped: %q, want %q", p, body, marker)
+		}
+	}
+	for range 2 { // the second time from the cache (the first one's token touch is a write)
+		for p, want := range paths {
+			_, body := e.do(t, "GET", p, listener, "")
+			if !strings.Contains(body, want[0]) || strings.Contains(body, want[1]) {
+				t.Fatalf("listener GET %s: %s, want only B's", p, body)
+			}
+		}
+	}
+
+	// A content write: the next answers have it.
+	reindex("A/Alpha One.m4b", "Alpha One", "Carla Author", "Cy Reader", "Gamma Saga")
+	for p := range paths {
+		_, body := e.do(t, "GET", p, admin, "")
+		if strings.Contains(body, "Ann Reader") || strings.Contains(body, "Alpha Saga") {
+			t.Fatalf("admin GET %s after the re-index: %s", p, body)
+		}
+	}
+	for p, want := range map[string]string{base + "authors": "Carla Author", base + "narrators": "Cy Reader", base + "series": "Gamma Saga"} {
+		if _, body := e.do(t, "GET", p, admin, ""); !strings.Contains(body, want) {
+			t.Fatalf("admin GET %s after the re-index: %s, want %s", p, body, want)
+		}
+	}
+}

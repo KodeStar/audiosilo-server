@@ -515,7 +515,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reader == writer and would hide a misroute, which is why the test stores are
   temp files.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
-  books library), `/books/recent` and `/search` keep their encoded answer (8 MiB
+  books library), `/books/recent`, `/search` and a books library's browse lists
+  (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer (8 MiB
   LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
   merge paths whose bytes aren't UTF-8), under the write generation read before

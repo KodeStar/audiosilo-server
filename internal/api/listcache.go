@@ -13,7 +13,8 @@ import (
 )
 
 // The list cache (server#243) keeps the encoded answers of the player's book
-// lists: a library's /books pages, the recent shelf and search. A grid that
+// lists: a library's /books pages, the recent shelf, search and the browse
+// lists (authors, narrators, series). A grid that
 // loads every page, a home screen opened again, a search typed twice: each is
 // the same answer while nothing was written, and building it is most of the
 // request (the books' rows, their file counts, FTS ranking, JSON). The admin
