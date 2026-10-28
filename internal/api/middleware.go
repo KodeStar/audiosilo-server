@@ -270,8 +270,8 @@ func tokenKeyed(h http.Handler, pattern string) bool {
 	return ok && !strings.HasPrefix(p, authRoutes)
 }
 
-// rateLimited writes the request-rate 429 with Retry-After, the wait for the
-// bucket's next token.
+// rateLimited writes the request-rate 429 with Retry-After: wait, the time until
+// the refused request's buckets have a token again (Wait, spendCredential).
 func rateLimited(w http.ResponseWriter, wait time.Duration) {
 	setRetryAfter(w, wait)
 	writeError(w, http.StatusTooManyRequests, "rate limit exceeded")

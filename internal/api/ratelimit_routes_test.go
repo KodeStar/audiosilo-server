@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,10 +15,14 @@ import (
 
 // routeLimitEnv is a test env whose token buckets are frozen in time, so a test
 // counts exactly the burst with no refill, plus a way to send a request from a
-// chosen address.
+// chosen address. Every 429 it sees must carry Retry-After (checked at cleanup),
+// so each refusal path the tests below reach is covered.
 type routeLimitEnv struct {
 	*testEnv
 	h http.Handler
+
+	mu        sync.Mutex
+	noRetryAt []string // "METHOD path" of each 429 sent without Retry-After
 }
 
 func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
@@ -27,7 +32,15 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
 		l.now = func() time.Time { return now }
 	}
-	return &routeLimitEnv{testEnv: e, h: e.api.Handler()}
+	re := &routeLimitEnv{testEnv: e, h: e.api.Handler()}
+	t.Cleanup(func() {
+		re.mu.Lock()
+		defer re.mu.Unlock()
+		if len(re.noRetryAt) > 0 {
+			t.Errorf("429 without Retry-After: %v", re.noRetryAt)
+		}
+	})
+	return re
 }
 
 // serve sends a request from ip (with a bearer token when tok is set) and
@@ -45,6 +58,11 @@ func (e *routeLimitEnv) record(ip, method, path, tok, body string) *httptest.Res
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusTooManyRequests && rec.Header().Get("Retry-After") == "" {
+		e.mu.Lock()
+		e.noRetryAt = append(e.noRetryAt, method+" "+path)
+		e.mu.Unlock()
+	}
 	return rec
 }
 

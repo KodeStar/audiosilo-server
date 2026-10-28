@@ -255,7 +255,9 @@ func (r *rateLimiter) Ready(key string) bool {
 }
 
 // Wait is how long key waits for its next token (0 when it has one now), for a
-// 429's Retry-After.
+// 429's Retry-After. It is worked out in seconds and capped at maxIdleTTL, as
+// newRateLimiter's idle TTL is: a slow rate_limit.* rate can make it more
+// nanoseconds than a Duration holds, and a key idle that long is swept anyway.
 func (r *rateLimiter) Wait(key string) time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -263,7 +265,8 @@ func (r *rateLimiter) Wait(key string) time.Duration {
 	if b.tokens >= 1 || r.rate <= 0 {
 		return 0
 	}
-	return time.Duration((1 - b.tokens) / r.rate * float64(time.Second))
+	secs := min((1-b.tokens)/r.rate, maxIdleTTL.Seconds())
+	return time.Duration(secs * float64(time.Second))
 }
 
 // Charge spends one token for key whether or not one is left, for work already

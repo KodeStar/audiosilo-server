@@ -256,6 +256,15 @@ func TestRateLimiterWait(t *testing.T) {
 	if rec.Code != 429 || rec.Header().Get("Retry-After") != "1" {
 		t.Fatalf("rateLimited = %d Retry-After %q, want 429 and 1", rec.Code, rec.Header().Get("Retry-After"))
 	}
+
+	// A rate so slow its wait is more nanoseconds than a Duration holds is capped
+	// at maxIdleTTL, never wrapped round to a negative (a Retry-After of 1).
+	slow := newRateLimiter(1e-12, 1)
+	slow.now = func() time.Time { return now }
+	slow.Allow("k")
+	if d := slow.Wait("k"); d != maxIdleTTL {
+		t.Fatalf("very slow bucket Wait = %v, want %v", d, maxIdleTTL)
+	}
 }
 
 // A cover answers HEAD as it answers GET, headers and no body, so a player can
