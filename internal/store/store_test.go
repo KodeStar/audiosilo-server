@@ -194,7 +194,7 @@ func TestWithDurableTx(t *testing.T) {
 	_ = db.WithDurableTx(cctx, "probe", func(*sql.Tx) error { cancel(); return cctx.Err() })
 	writerNormal("after a cancelled context")
 
-	if _, err := db.ExecDurable(ctx, `INSERT INTO durable_probe VALUES(2)`); err != nil {
+	if _, err := db.ExecDurable(ctx, "probe", `INSERT INTO durable_probe VALUES(2)`); err != nil {
 		t.Fatal(err)
 	}
 	if db.DurableCommits() != 2 {

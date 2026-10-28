@@ -1090,11 +1090,11 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 // (another library's, a podcasts library's episodes, a listener's unshared
 // ones). So each scope is an arm limited on its own, the arms are merged and
 // limited, and only the rows kept are read whole. An arm walks as one scope
-// does, but an arm of one path rule seeks the path and sorts what it holds, as
-// the OR plan did: a walk reads the whole library when the path holds few or
-// only old books (more paths SQLite plans as a read of the whole library,
-// which the walk never exceeds). The kind check is once per arm, so a podcasts
-// library's arm reads nothing.
+// does, except a scope of exactly one path rule: it seeks the path and sorts
+// what it holds (the "+" hint), since a walk reads the whole library when the
+// path holds few or only old books. Two or more paths SQLite already plans as
+// a read of the library, which the walk never exceeds. The kind check is once
+// per arm, so a podcasts library's arm reads nothing.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 	fetch := dedupFetch(limit)
 	if len(scopes) == 1 {
@@ -1107,18 +1107,15 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 	arms := make([]string, len(scopes))
 	var args []any
 	for i, s := range scopes {
-		frag, fargs := pathFilterSQL("b.rel_path", s)
+		filter, fargs := scopesFilterSQL("b.library_id", "b.rel_path", []Scope{s})
 		order := "b.added_at DESC, b.id DESC"
 		if !s.AllowAll && len(s.Paths) == 1 {
 			order = "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
 		}
 		arms[i] = `SELECT * FROM (SELECT b.id, b.added_at FROM books b
-			WHERE b.library_id = ? AND EXISTS (SELECT 1 FROM libraries WHERE id = ? AND kind = 'books')
-				AND ` + frag + `
+			WHERE EXISTS (SELECT 1 FROM libraries WHERE id = ? AND kind = 'books') AND ` + filter + `
 			ORDER BY ` + order + ` LIMIT ?)`
-		args = append(args, s.LibraryID, s.LibraryID)
-		args = append(args, fargs...)
-		args = append(args, fetch)
+		args = append(append(append(args, s.LibraryID), fargs...), fetch)
 	}
 	// Ordered by r's columns, the merged arms' order needs no sort of its own.
 	return `SELECT ` + prefixCols("b.") + dedupCols + `

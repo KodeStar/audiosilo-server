@@ -583,7 +583,7 @@ func inPlaceholders(n int) string {
 
 // RevokeToken revokes a token by its secret.
 func (s *Service) RevokeToken(ctx context.Context, secret string) error {
-	_, err := s.db.ExecDurable(ctx,
+	_, err := s.db.ExecDurable(ctx, "RevokeToken",
 		`UPDATE tokens SET revoked = 1 WHERE token_hash = ?`, hashSecret(secret))
 	return err
 }
@@ -674,7 +674,7 @@ func (s *Service) ListAPITokens(ctx context.Context, userID int64) ([]APIToken, 
 // pairing token: an id matching no live api key of this user returns ErrNotFound
 // (the transport maps it to 404). Backs DELETE /auth/tokens/{id}.
 func (s *Service) RevokeTokenByID(ctx context.Context, userID, id int64) error {
-	res, err := s.db.ExecDurable(ctx,
+	res, err := s.db.ExecDurable(ctx, "RevokeTokenByID",
 		`UPDATE tokens SET revoked = 1
 		  WHERE id = ? AND user_id = ? AND kind = ? AND revoked = 0`, id, userID, KindAPI)
 	if err != nil {
@@ -891,7 +891,7 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 // ClearRecoveryCode removes a user's recovery code, if any. Wired to both the
 // user's own DELETE /auth/recovery and the admin's per-user revoke.
 func (s *Service) ClearRecoveryCode(ctx context.Context, userID int64) error {
-	_, err := s.db.ExecDurable(ctx,
+	_, err := s.db.ExecDurable(ctx, "ClearRecoveryCode",
 		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery)
 	return err
 }
@@ -979,7 +979,7 @@ func scanAuthCode(rows *sql.Rows, c *AuthCode, extra ...any) error {
 
 // RevokeAuthCode deletes an issued auth code by id, immediately invalidating it.
 func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
-	_, err := s.db.ExecDurable(ctx, `DELETE FROM auth_codes WHERE id = ?`, id)
+	_, err := s.db.ExecDurable(ctx, "RevokeAuthCode", `DELETE FROM auth_codes WHERE id = ?`, id)
 	return err
 }
 

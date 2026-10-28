@@ -102,11 +102,9 @@ const slowTxThreshold = 2 * time.Second
 // fsyncs the WAL (only a checkpoint does), so a power cut or OS crash can roll
 // back the last few commits, but never corrupts the database or tears a
 // transaction (an application crash loses nothing). Any commit can be in that
-// window, not only listening progress (which clients re-send): a revocation,
-// sign-out or password change (the old credential works again), a pairing, a
-// Bridge claim (handed out again under the same attempt) or its report. FULL
-// cost an fsync per commit (two per progress save), 1 to 5 ms on an SSD and far
-// more on an HDD array or a FUSE share, all of it serialized on the one writer.
+// window, not only listening progress (which clients re-send). FULL cost an
+// fsync per commit (two per progress save), 1 to 5 ms on an SSD and far more on
+// an HDD array or a FUSE share, all of it serialized on the one writer.
 //
 // So the few writes whose loss would bring back what a person ended go through
 // WithDurableTx / ExecDurable, which commit under FULL: ending a credential
@@ -204,10 +202,10 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 }
 
 // ExecDurable is ExecContext committed durably (WithDurableTx): for a lone
-// statement that ends a credential.
-func (db *DB) ExecDurable(ctx context.Context, query string, args ...any) (sql.Result, error) {
+// statement that ends a credential. name labels it in the slow-transaction log.
+func (db *DB) ExecDurable(ctx context.Context, name, query string, args ...any) (sql.Result, error) {
 	var res sql.Result
-	err := db.WithDurableTx(ctx, "ExecDurable", func(tx *sql.Tx) error {
+	err := db.WithDurableTx(ctx, name, func(tx *sql.Tx) error {
 		var err error
 		res, err = tx.ExecContext(ctx, query, args...)
 		return err
