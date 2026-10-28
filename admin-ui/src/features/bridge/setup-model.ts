@@ -41,9 +41,27 @@ export function knownSetupItem(id: string): boolean {
   return SETUP_TAB.has(id);
 }
 
-/** Where a step is fixed on the Bridge's page, when it has a tab and the page an address. */
-export function setupItemLink(uiUrl: string | undefined, id: string): string | undefined {
-  const tab = SETUP_TAB.get(id);
+/** The Workers tab of the Bridge's page, where ASR workers are added. */
+const WORKERS_TAB = 'workers';
+
+/**
+ * The ASR step's detail while the Bridge waits for an ASR worker (the Bridge's
+ * setup.DetailASRWaiting): that step is fixed on Workers, not Settings.
+ */
+const ASR_WAITING_DETAIL = 'waiting for an ASR worker';
+
+/**
+ * Where a step is fixed on the Bridge's page, when it has a tab and the page an
+ * address. The ASR step waiting for a worker goes to Workers (keyed on the
+ * Bridge's detail text, as its own page does); every other ASR state to Settings.
+ */
+export function setupItemLink(
+  uiUrl: string | undefined,
+  id: string,
+  detail?: string,
+): string | undefined {
+  const tab =
+    id === 'asr' && detail?.includes(ASR_WAITING_DETAIL) ? WORKERS_TAB : SETUP_TAB.get(id);
   return tab ? bridgeTabLink(uiUrl, tab) : undefined;
 }
 

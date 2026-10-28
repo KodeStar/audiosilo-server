@@ -100,9 +100,37 @@ describe('the folder step', () => {
     await user.click(await screen.findByRole('button', { name: '/audiobooks' }));
     expect(await screen.findByText('Found 812 audio files')).toBeVisible();
     expect(screen.getByText(/Book folders: 64/)).toBeVisible();
-    expect(screen.getByLabelText('Library name')).toHaveValue('audiobooks');
+    expect(screen.getByLabelText('Library name')).toHaveValue('Audiobooks');
     const post = calls.find((c) => c.path === '/admin/setup/preview');
     expect(post?.body).toEqual({ root: '/audiobooks' });
+  });
+
+  it('keeps a name typed for one folder to that folder', async () => {
+    mockFetch(flowRoutes());
+    renderApp('/setup');
+    const user = userEvent.setup();
+    const folder = await screen.findByLabelText('Books folder');
+    await user.type(folder, '/audiobooks');
+    await user.click(screen.getByRole('button', { name: 'Check folder' }));
+    const name = await screen.findByLabelText('Library name');
+    await user.clear(name);
+    await user.type(name, 'Bedtime stories');
+    // Another folder hides the name; back at the first, it is there again.
+    await user.clear(folder);
+    await user.type(folder, '/srv/kids');
+    expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
+    await user.clear(folder);
+    await user.type(folder, '/audiobooks');
+    expect(screen.getByLabelText('Library name')).toHaveValue('Bedtime stories');
+    // Continue on another folder, never checked: it gets its own name, not that one.
+    await user.clear(folder);
+    await user.type(folder, '/srv/kids');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
+    expect(JSON.parse(localStorage.getItem('audiosilo.setup.draft') ?? '{}')).toEqual({
+      root: '/srv/kids',
+      name: 'Kids',
+    });
   });
 
   it('words an unreadable folder with the Docker hint', async () => {
@@ -126,6 +154,8 @@ describe('the folder step', () => {
         /\/Users\/me\/Audiobooks isn't there, or the server can't read it\. In Docker/,
       ),
     ).toBeVisible();
+    // Nothing to name until a folder is found (ADMIN-06).
+    expect(screen.queryByLabelText('Library name')).not.toBeInTheDocument();
   });
 
   it('refuses a relative path before asking the server', async () => {
@@ -192,7 +222,7 @@ describe('folder, naming and metadata', () => {
     const post = calls.find((c) => c.path === '/admin/libraries' && c.method === 'POST');
     expect(post?.body).toEqual({
       kind: 'books',
-      name: 'audiobooks',
+      name: 'Audiobooks',
       root: '/audiobooks',
       metadata_source: 'path',
     });
@@ -535,11 +565,20 @@ describe('the 2.4.0 fixes', () => {
       ),
     );
     renderApp('/setup?step=phone');
-    expect(await screen.findByText("A phone can't reach 127.0.0.1:8080")).toBeVisible();
-    expect(screen.getByRole('link', { name: "Set the server's address" })).toHaveAttribute(
-      'href',
-      '/admin/setup?step=reach',
-    );
+    const warning = await screen.findByText("A phone can't reach 127.0.0.1:8080");
+    expect(warning).toBeVisible();
+    const action = screen.getByRole('link', { name: "Set the server's address" });
+    expect(action).toHaveAttribute('href', '/admin/setup?step=reach');
+    // The address action leads and the QR is dimmed, saying why (ADMIN-07).
+    const qr = screen.getByRole('img', {
+      name: /won't work on a phone until the server has an address/,
+    });
+    expect(action.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(qr.parentElement).toHaveClass('opacity-45');
+    // Only the code: New code beside it works, so it isn't dimmed like a disabled button.
+    const newCode = screen.getByRole('button', { name: 'New code' });
+    expect(newCode).toBeEnabled();
+    expect(newCode.closest('.opacity-45')).toBeNull();
   });
 
   it('points the phone at the home address when the page is open at a loopback one', async () => {

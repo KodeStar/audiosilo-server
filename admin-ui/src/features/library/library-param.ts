@@ -26,6 +26,15 @@ export function useUpdateSearch(): Update {
 }
 
 /**
+ * Whether the Library screens offer a library choice: only from two book
+ * libraries, since one choice filters nothing (LibraryFilter and the books
+ * filter sheet's Library group share this rule).
+ */
+export function offersLibraryChoice(bookLibraries: readonly unknown[]): boolean {
+  return bookLibraries.length >= 2;
+}
+
+/**
  * `?library=` as the Library screens take it: a podcast library's id (an old
  * link, or one typed) reads as all libraries, so the page doesn't sit on an
  * empty list. Until the libraries load, the id stands.

@@ -76,6 +76,20 @@ describe('settings', () => {
     });
   });
 
+  it('says a day count outside the range in a sentence and sends nothing (ADMIN-08)', async () => {
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(settingsWith()) }));
+    renderApp('/server');
+    const user = userEvent.setup();
+    const days = await screen.findByRole('textbox', { name: 'Days to keep sessions' });
+    await user.clear(days);
+    await user.type(days, '5');
+    expect(await screen.findByText('Enter a whole number from 30 to 3,650.')).toBeInTheDocument();
+    await user.click(
+      within(days.closest('section') as HTMLElement).getByRole('button', { name: 'Save changes' }),
+    );
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
   it('saves the home address under the public one, and locks it to its variable', async () => {
     const base = settingsWith();
     const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));

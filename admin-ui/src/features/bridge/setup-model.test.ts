@@ -93,6 +93,16 @@ describe('the setup checklist', () => {
     expect(setupItemLink(ui, 'github')).toBe('http://192.168.1.20:8090/#/accounts');
     expect(setupItemLink(ui, 'libraries')).toBe('http://192.168.1.20:8090/#/libraries');
     expect(setupItemLink(ui, 'budget')).toBe('http://192.168.1.20:8090/#/settings');
+    // The ASR step goes to Settings, or to Workers while it waits for a worker.
+    expect(setupItemLink(ui, 'asr')).toBe('http://192.168.1.20:8090/#/settings');
+    expect(setupItemLink(ui, 'asr', 'local')).toBe('http://192.168.1.20:8090/#/settings');
+    expect(setupItemLink(ui, 'asr', 'waiting for an ASR worker')).toBe(
+      'http://192.168.1.20:8090/#/workers',
+    );
+    // Only the ASR step reads the detail.
+    expect(setupItemLink(ui, 'budget', 'waiting for an ASR worker')).toBe(
+      'http://192.168.1.20:8090/#/settings',
+    );
     expect(setupItemLink(ui, 'paired')).toBeUndefined();
     expect(setupItemLink(ui, 'audible_login')).toBeUndefined();
     // An id the Bridge may send that names an Object.prototype member links nowhere.

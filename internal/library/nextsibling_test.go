@@ -82,6 +82,14 @@ func TestNextSibling(t *testing.T) {
 			[]Entry{dirEntry("Eve", true), dirEntry("Émile", true), dirEntry("Anna", true)},
 			"S/Anna", "S/Émile",
 		},
+		"a pending folder is the next book": {
+			[]Entry{dirEntry("Book 1", true), pendingEntry("Book 2"), dirEntry("Book 3", true)},
+			"S/Book 1", "S/Book 2",
+		},
+		"a pending folder after the last indexed book": {
+			[]Entry{dirEntry("Book 1", true), dirEntry("Extras", false), pendingEntry("Book 2")},
+			"S/Book 1", "S/Book 2",
+		},
 		"names read alike keep a stable order": {
 			[]Entry{dirEntry("Book 02", true), dirEntry("Book 2", true), dirEntry("Book 1", true)},
 			"S/Book 1", "S/Book 02",
@@ -97,4 +105,11 @@ func TestNextSibling(t *testing.T) {
 			}
 		})
 	}
+}
+
+// pendingEntry is a folder the index doesn't hold that a scan would make a book of.
+func pendingEntry(name string) Entry {
+	e := dirEntry(name, false)
+	e.PendingBook = true
+	return e
 }

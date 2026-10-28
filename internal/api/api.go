@@ -138,6 +138,14 @@ type API struct {
 	// remuxWait is how long a stream waits for a cold remux before it is
 	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
 	remuxWait time.Duration
+	// favouriteWait bounds how long POST /favourites waits for the on-demand
+	// index of a book no scan has reached (favouriteIndexWait; a field so tests
+	// can shorten it).
+	favouriteWait time.Duration
+	// remuxLongWait bounds the longer wait of a download, or a stream with every
+	// transcode slot busy, for a remux still running (remuxDownloadWait; a field
+	// so tests can shorten it).
+	remuxLongWait time.Duration
 
 	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
 	// batch); coverReads bounds the art being read or waiting to be decoded and
@@ -215,6 +223,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newBucketLimiter(limits.Media),
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
+		remuxLongWait:  remuxDownloadWait,
+		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
@@ -622,6 +632,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/share-access", a.requireAdmin(http.HandlerFunc(a.handleGrantShare)))
 	mux.Handle("DELETE /api/v1/admin/share-access", a.requireAdmin(http.HandlerFunc(a.handleRevokeShare)))
 	mux.Handle("POST /api/v1/admin/library-access", a.requireAdmin(http.HandlerFunc(a.handleGrantWholeLibrary)))
+
+	// Any other /api/v1/ path answers in the API's JSON envelope (apiNoRoute),
+	// not the plain-text 404 of the web package's catch-all.
+	noRoute := apiNoRoute(mux)
+	for _, m := range apiMethods {
+		mux.Handle(m+" "+apiNoRoutePattern, noRoute)
+	}
 
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"

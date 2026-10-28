@@ -1033,14 +1033,14 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 // rule names and its signature, not yet checked for readability: checkEbook)
 // from the .epub entries the discovery walk found (audioDirs), by the folder
 // holding them. A single-file book is handed only the entries named in some case
-// of its "<stem>.epub" (all ebookCandidate looks at), found through a name index
+// or Unicode form of its "<stem>.epub" (all ebookCandidate looks at), found through a name index
 // made once per folder, so a folder of many books and their epubs isn't searched
 // once per book.
 func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][]fs.DirEntry) {
 	if len(epubs) == 0 {
 		return
 	}
-	named := map[string]map[string][]fs.DirEntry{} // folder -> lower-cased name -> entries
+	named := map[string]map[string][]fs.DirEntry{} // folder -> ebookNameKey -> entries
 	for _, b := range books {
 		dir := sidecarDir(b.RelPath, b.IsFolder)
 		listed := epubs[dir]
@@ -1052,12 +1052,12 @@ func ebooksOfWalk(lib catalog.Library, books []*catalog.Book, epubs map[string][
 			if byName == nil {
 				byName = make(map[string][]fs.DirEntry, len(listed))
 				for _, e := range listed {
-					key := strings.ToLower(e.Name())
+					key := ebookNameKey(e.Name())
 					byName[key] = append(byName[key], e)
 				}
 				named[dir] = byName
 			}
-			if listed = byName[strings.ToLower(ebookName(b.RelPath))]; len(listed) == 0 {
+			if listed = byName[ebookNameKey(ebookName(b.RelPath))]; len(listed) == 0 {
 				continue
 			}
 		}
@@ -1521,12 +1521,35 @@ func (s *Scanner) leadIndex(ctx context.Context, lib catalog.Library, book *cata
 		s.flightMu.Unlock()
 		close(f.done)
 	}()
-	indexed, err := s.indexBook(ctx, lib, book)
+	indexed, err := s.indexBookFrom(ctx, lib, book, s.movedFrom(ctx, lib, book))
 	if err == nil {
 		f.id = indexed.ID
 	}
 	f.err = err
 	return indexed, err
+}
+
+// movedFrom is where a book IndexPath indexes for the first time was indexed
+// before, when it is a book moved or renamed on disk since the last scan (a
+// renamed folder opened from Folders, server#209): an indexed book with its
+// fingerprint that is no longer on disk. "" when there is none, or when the book
+// is indexed already. carryFrom checks it as it checks IndexMoved's from.
+func (s *Scanner) movedFrom(ctx context.Context, lib catalog.Library, book *catalog.Book) string {
+	if book.ContentHash == "" {
+		book.ContentHash = fingerprintFile(absOf(lib, primaryPath(book))) // reused by enrich
+	}
+	candidates, err := s.cat.MoveCandidates(ctx, lib.ID, book.RelPath,
+		[]string{book.ContentHash, byteFirstFingerprint(lib, book)})
+	if err != nil {
+		s.log.Warn("looking for a moved book failed", "library", lib.Name, "path", book.RelPath, "err", err)
+		return ""
+	}
+	for _, p := range candidates {
+		if !s.bookOnDisk(ctx, lib, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // indexBook reads a resolved book (resolveBook) and indexes it, returning the
@@ -1666,7 +1689,28 @@ func (s *Scanner) IndexMoved(ctx context.Context, lib catalog.Library, relPath, 
 	if err != nil {
 		return nil, err
 	}
+	return s.indexBookFrom(ctx, lib, book, from)
+}
+
+// movedIndexTimeout bounds indexBookFrom's index once the state has moved, which
+// no longer stops with its caller.
+const movedIndexTimeout = 10 * time.Minute
+
+// indexBookFrom indexes book (indexBook) after carrying the durable state of the
+// book indexed at from to it, when carryFrom finds it the same book moved (from
+// "": none), then drops the old book's row. Once the state has moved, the index
+// and the drop no longer stop with the caller (an on-demand index's request: a
+// cover the browser stopped loading, a request timeout, which would throw the
+// read away at its last write): the state would otherwise sit on a path with no
+// row while the gone book stays listed without it, until the book is opened
+// again or a scan comes.
+func (s *Scanner) indexBookFrom(ctx context.Context, lib catalog.Library, book *catalog.Book, from string) (*catalog.Book, error) {
 	moved := from != "" && from != book.RelPath && s.carryFrom(ctx, lib, from, book)
+	if moved {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), movedIndexTimeout)
+		defer cancel()
+	}
 	indexed, err := s.indexBook(ctx, lib, book)
 	if err != nil {
 		return nil, err

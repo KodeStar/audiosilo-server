@@ -38,12 +38,6 @@ export function DeleteLibraryDialog({
       onConfirm={async () => {
         try {
           await api.deleteLibrary(l.id);
-          invalidateLibraries(qc);
-          toast.add({
-            title: t('libraries.toast.deleted', { name: l.name }),
-            description: t('libraries.toast.deletedBody'),
-            type: 'success',
-          });
         } catch (err) {
           // The config declares it, which the console's copy of the setup (read
           // once) didn't know yet. Retrying can't help, so close the dialog, say
@@ -54,8 +48,16 @@ export function DeleteLibraryDialog({
             toast.add({ title: t('libraries.menu.deleteConfigLocked'), type: 'error' });
             return;
           }
-          throw err;
+          // Gone already (deleted in another tab, or by another admin): what was
+          // asked for is done, so it reads as deleted and the list reads again.
+          if (!(err instanceof ApiError && err.status === 404)) throw err;
         }
+        invalidateLibraries(qc);
+        toast.add({
+          title: t('libraries.toast.deleted', { name: l.name }),
+          description: t('libraries.toast.deletedBody'),
+          type: 'success',
+        });
       }}
     />
   );

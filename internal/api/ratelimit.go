@@ -27,14 +27,22 @@ type lockEntry struct {
 	last     time.Time
 }
 
-// allowAttempt writes the shared 429 and reports false when a limiter refused
-// the caller (the result of Allowed or Acquire), so every credential handler
-// gates with one line.
-func allowAttempt(w http.ResponseWriter, allowed bool) bool {
-	if !allowed {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+// allowAttempt reports whether l admits key's attempt (Allowed); when it doesn't
+// it writes the shared 429 (tooManyAttempts) and reports false, so every
+// credential handler gates with one line.
+func allowAttempt(w http.ResponseWriter, l *limiter, key string) bool {
+	if l.Allowed(key) {
+		return true
 	}
-	return allowed
+	tooManyAttempts(w, l.LockedFor(key))
+	return false
+}
+
+// tooManyAttempts writes the shared credential 429 with Retry-After, the time
+// until the lockout ends, so a client can say when to try again.
+func tooManyAttempts(w http.ResponseWriter, lockedFor time.Duration) {
+	setRetryAfter(w, lockedFor)
+	writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
 }
 
 func newLimiter(maxFailures int, window time.Duration) *limiter {
@@ -244,6 +252,21 @@ func (r *rateLimiter) Ready(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.refill(key, r.now()).tokens >= 1
+}
+
+// Wait is how long key waits for its next token (0 when it has one now), for a
+// 429's Retry-After. It is worked out in seconds and capped at maxIdleTTL, as
+// newRateLimiter's idle TTL is: a slow rate_limit.* rate can make it more
+// nanoseconds than a Duration holds, and a key idle that long is swept anyway.
+func (r *rateLimiter) Wait(key string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	b := r.refill(key, r.now())
+	if b.tokens >= 1 || r.rate <= 0 {
+		return 0
+	}
+	secs := min((1-b.tokens)/r.rate, maxIdleTTL.Seconds())
+	return time.Duration(secs * float64(time.Second))
 }
 
 // Charge spends one token for key whether or not one is left, for work already

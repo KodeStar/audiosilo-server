@@ -221,8 +221,11 @@ function WhoCanSee({
   const { t } = useTranslation();
   const libraries = useLibraries().data ?? [];
   const shares = detail.shares ?? [];
+  // A grant gives the whole library only by its whole-library rule: a marked
+  // grant narrowed to folders reads as those (server#230).
+  const whole = (s: BookShare) => s.whole_library_id === detail.book.library_id && s.path === '';
   const label = (s: BookShare) => {
-    if (s.whole_library_id !== undefined) {
+    if (whole(s)) {
       const name = libraries.find((l) => l.id === s.whole_library_id)?.name ?? s.name;
       return {
         title: t('book.access.library', { library: name }),
@@ -243,7 +246,7 @@ function WhoCanSee({
         <ul className="divide-y">
           {shares.map((s) => {
             const { title, sub } = label(s);
-            const Icon = s.whole_library_id !== undefined ? LibraryBig : Share2;
+            const Icon = whole(s) ? LibraryBig : Share2;
             return (
               <li key={`${s.share_id}:${s.path}`}>
                 <Link

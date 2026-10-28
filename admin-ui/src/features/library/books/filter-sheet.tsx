@@ -7,6 +7,7 @@ import { Sheet } from '@/components/ui/sheet';
 import { counted, formatNumber } from '@/lib/format';
 import { labelKey } from '@/lib/labels';
 import { cn } from '@/lib/utils';
+import { offersLibraryChoice } from '../library-param';
 import {
   ADDED,
   LENGTHS,
@@ -87,10 +88,12 @@ export function FilterSheet({
     {
       key: 'library',
       title: t('books.facet.library'),
-      // Hidden below two book libraries, as LibraryFilter is: one choice filters
-      // nothing. Unless a link set it (a book page's library crumb): the badge
-      // counts it, so the sheet shows it on.
-      options: (libraries.length < 2 && search.library === undefined ? [] : libraries).map((l) => ({
+      // Offered as LibraryFilter is (offersLibraryChoice). Unless a link set it
+      // (a book page's library crumb): the badge counts it, so the sheet shows it on.
+      options: (!offersLibraryChoice(libraries) && search.library === undefined
+        ? []
+        : libraries
+      ).map((l) => ({
         value: String(l.id),
         label: l.name,
         count: facets?.libraries.find((c) => c.library_id === l.id)?.count ?? 0,

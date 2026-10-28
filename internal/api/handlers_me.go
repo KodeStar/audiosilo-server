@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // Per-user listening state is addressed by (library, path) - the book path -
@@ -300,7 +302,7 @@ func (a *API) handleListFavourites(w http.ResponseWriter, r *http.Request) {
 
 // handleAddFavourite hearts a path for the caller (idempotent).
 func (a *API) handleAddFavourite(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -310,7 +312,53 @@ func (a *API) handleAddFavourite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save favourite")
 		return
 	}
+	a.indexFavourite(r.Context(), lib, scope, path)
 	w.WriteHeader(http.StatusCreated)
+}
+
+// favouriteIndexWait bounds how long POST /favourites waits for the on-demand
+// index of a book no scan has reached: well under the player's 15 s request
+// timeout, as a large book on a slow share reads for longer.
+const favouriteIndexWait = 5 * time.Second
+
+// indexFavourite indexes a book a scan hasn't reached yet when it is favourited
+// (a pending folder, server#211), as opening it would, so it shows on the
+// Favourites list (which reads the index) without the player opening it first.
+// Best-effort: the favourite is saved either way, and a path that is no book (an
+// author's folder) stays a bare favourite. The read runs detached from the
+// request, as a rescan does (rescanAt): the request waits for it only up to
+// favouriteWait (the probes don't stop for a context, so a request's deadline
+// would only throw the read away at its last write), and it is saved when it
+// ends, also for an open of the book that joined it meanwhile (indexShared).
+func (a *API) indexFavourite(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) {
+	if lib.Kind == catalog.KindPodcasts {
+		return
+	}
+	// The index alone answers for a book already there (no full book read).
+	_, err := a.cat.BookPathAt(ctx, lib.ID, path)
+	if !errors.Is(err, catalog.ErrNotFound) {
+		if err != nil {
+			a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
+		}
+		return
+	}
+	l, done := *lib, make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+		defer cancel()
+		_, err := a.indexPath(ctx, l, path, scope.Allows)
+		if err != nil && !errors.Is(err, library.ErrNotIndexable) && !errors.Is(err, library.ErrNotAllowed) {
+			a.log.Info("index favourite on demand failed", "library", lib.ID, "path", path, "err", err)
+		}
+	}()
+	wait := time.NewTimer(a.favouriteWait)
+	defer wait.Stop()
+	select {
+	case <-done:
+	case <-wait.C:
+	case <-ctx.Done():
+	}
 }
 
 // handleRemoveFavourite clears the caller's favourite for a path (idempotent).

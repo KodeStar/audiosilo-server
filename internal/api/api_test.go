@@ -579,8 +579,15 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	if got != http.StatusUnauthorized || !strings.Contains(b, "invite already used") {
 		t.Fatalf("exchange past the use limit = %d %s, want 401 + exhausted message", got, b)
 	}
-	if got, _, _ := e.redeemCode(t, bounded); got != http.StatusUnauthorized {
-		t.Fatalf("redeem of a spent invite = %d, want 401", got)
+	// The spent invite no longer redeems, and says it was used up (the connect
+	// page's "already used"); a code that never existed says nothing more.
+	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+bounded+`"}`); resp.StatusCode != http.StatusUnauthorized ||
+		!strings.Contains(b, `"code":"invite_used"`) {
+		t.Fatalf("redeem of a spent invite = %d %s, want 401 invite_used", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"NOPE-NOPE-NOPE-NOPE"}`); resp.StatusCode != http.StatusUnauthorized ||
+		strings.Contains(b, `"code"`) {
+		t.Fatalf("redeem of an unknown code = %d %s, want 401 with no code", resp.StatusCode, b)
 	}
 }
 
@@ -704,6 +711,71 @@ func TestLoginLockout(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("expected lockout (429) after repeated failures, got %d", last)
+	}
+	// The lockout says when to try again, and holds for the right password too.
+	resp, _ := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"admin-password"}`)
+	secs, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if resp.StatusCode != http.StatusTooManyRequests || err != nil || secs < 1 || secs > 15*60 {
+		t.Fatalf("locked login = %d, Retry-After %q; want 429 with 1..900 s", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	// The redeem limiter's 429 carries it too.
+	for range 12 {
+		resp, _ = e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"WRONG-CODE"}`)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("locked redeem = %d, Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+}
+
+// A username with space around it (pasted, autocompleted) signs in to the
+// account without it; the space never helps a wrong password, and a name that
+// differs by more than space (case) is still unknown. An account whose stored
+// name has the space keeps signing in by it.
+func TestLoginTrimsUsername(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	if _, err := e.auth.CreateUser(ctx, "alex", "alex-password", auth.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.auth.CreateUser(ctx, " pad ", "pad-password", auth.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		user, pass string
+		want       int
+	}{
+		{"alex ", "alex-password", http.StatusOK},
+		{"  alex", "alex-password", http.StatusOK},
+		{"alex ", "wrong-password", http.StatusUnauthorized},
+		{"Alex", "alex-password", http.StatusUnauthorized},
+		{" pad ", "pad-password", http.StatusOK},
+	} {
+		body, _ := json.Marshal(map[string]string{"username": tc.user, "password": tc.pass})
+		if resp, b := e.do(t, "POST", "/api/v1/auth/login", "", string(body)); resp.StatusCode != tc.want {
+			t.Errorf("login %q/%q = %d %s, want %d", tc.user, tc.pass, resp.StatusCode, b, tc.want)
+		}
+	}
+}
+
+// An /api/v1/ path no route claims answers in the JSON envelope: 404 for an
+// unknown path, 405 with Allow for a known one under another method.
+func TestUnknownAPIRouteIsJSON(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	resp, body := e.do(t, "GET", "/api/v1/nope", "", "")
+	if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+		!strings.Contains(body, `"code":"not_found"`) {
+		t.Fatalf("GET /api/v1/nope = %d %q %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	resp, body = e.do(t, "DELETE", "/api/v1/auth/login", "", "")
+	if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Allow") != "POST" ||
+		!strings.Contains(body, `"code":"method_not_allowed"`) {
+		t.Fatalf("DELETE /api/v1/auth/login = %d Allow %q %s", resp.StatusCode, resp.Header.Get("Allow"), body)
+	}
+	// A real route still answers.
+	if resp, body := e.do(t, "GET", "/api/v1/server", "", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/server = %d %s", resp.StatusCode, body)
 	}
 }
 
@@ -1438,5 +1510,51 @@ func TestDemoCannotSelfRecover(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"longenough"}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("demo set-password = %d, want 403", resp.StatusCode)
+	}
+}
+
+// GET /libraries tells an admin where each library lives (root) and never a
+// listener (CONNECT-12); the admin routes keep it. Demo visitors are covered in
+// TestDemoSessionFlow.
+func TestListLibrariesRootAdminOnly(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberID, memberTok := newUserWithSession(t, e, "listener", false)
+	if err := e.cat.GrantWholeLibrary(ctx, memberID, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	adminTok := adminSession(t, e)
+	rootJSON, _ := json.Marshal(root)
+	type wire struct {
+		Libraries []map[string]json.RawMessage `json:"libraries"`
+	}
+	list := func(path, tok string) wire {
+		t.Helper()
+		resp, body := e.do(t, "GET", path, tok, "")
+		var w wire
+		if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &w) != nil || len(w.Libraries) != 1 {
+			t.Fatalf("GET %s = %d %s", path, resp.StatusCode, body)
+		}
+		return w
+	}
+	// Allowed: the admin, on the player route and the admin one.
+	for _, path := range []string{"/api/v1/libraries", "/api/v1/admin/libraries"} {
+		if got := list(path, adminTok).Libraries[0]["root"]; string(got) != string(rootJSON) {
+			t.Errorf("admin %s root = %s, want %s", path, got, rootJSON)
+		}
+	}
+	// Denied: a listener sees the library, never its root.
+	got := list("/api/v1/libraries", memberTok).Libraries[0]
+	if _, ok := got["root"]; ok {
+		t.Errorf("listener's library = %v, want no root", got)
+	}
+	if string(got["name"]) != `"Main"` || string(got["id"]) != strconv.FormatInt(lib.ID, 10) {
+		t.Errorf("listener's library = %v, want the rest as before", got)
 	}
 }

@@ -137,6 +137,15 @@ describe('overview', () => {
     expect(await within(server).findByText('v0.9.2')).toBeInTheDocument();
   });
 
+  it('says nobody is listening once, with no "0 people" (ADMIN-12)', async () => {
+    mockFetch(signedInRoutes());
+    renderApp();
+    const live = await screen.findByRole('region', { name: 'Listening now' });
+    expect(await within(live).findByText('Nobody is listening right now.')).toBeInTheDocument();
+    expect(screen.queryByText(/listening right now/, { selector: 'p' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/listening right now/)).toHaveLength(1);
+  });
+
   it('renders covers from data: URLs fetched with the header, never a token in a URL', async () => {
     const calls = mockFetch(
       signedInRoutes({

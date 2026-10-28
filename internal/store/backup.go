@@ -68,14 +68,11 @@ func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 	if _, err := os.Stat(path); err != nil {
 		return info, err
 	}
-	// mode=ro opens without creating; immutable is not set, so a -wal beside the file
-	// (there should be none for a VACUUM INTO copy) is still read correctly.
-	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	conn, err := openReadOnly(path)
 	if err != nil {
 		return info, fmt.Errorf("%w: %v", ErrNotADatabase, err)
 	}
 	defer func() { _ = conn.Close() }()
-	conn.SetMaxOpenConns(1)
 
 	if full {
 		var check string
@@ -107,6 +104,59 @@ func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 		return info, fmt.Errorf("%w: no accounts table", ErrNotADatabase)
 	}
 	return info, nil
+}
+
+// PendingMigrations lists the migrations this server would apply to the database
+// file at path, in order, reading it read-only. It is empty when there is nothing
+// to protect from them: no file, or a database with no migration recorded yet (a
+// fresh install), and when the database is up to date.
+func PendingMigrations(ctx context.Context, path string) ([]string, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	conn, err := openReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	var tables int
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
+		return nil, err
+	}
+	if tables == 0 {
+		return nil, nil
+	}
+	applied, err := appliedMigrations(ctx, conn)
+	if err != nil || len(applied) == 0 {
+		return nil, err
+	}
+	names, err := migrationNames()
+	if err != nil {
+		return nil, err
+	}
+	done := nameSet(applied)
+	var pending []string
+	for _, name := range names {
+		if !done[name] {
+			pending = append(pending, name)
+		}
+	}
+	return pending, nil
+}
+
+// openReadOnly opens the SQLite file at path read-only on one connection. mode=ro
+// opens without creating; immutable is not set, so a -wal beside the file (there
+// should be none for a VACUUM INTO copy) is still read correctly.
+func openReadOnly(path string) (*sql.DB, error) {
+	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	conn.SetMaxOpenConns(1)
+	return conn, nil
 }
 
 // knownMigrations is the set of migration names this server ships.

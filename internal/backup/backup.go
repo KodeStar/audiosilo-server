@@ -11,6 +11,10 @@
 // schedule keeps the newest `keep` scheduled backups; manual backups and the copies
 // made before a restore stay until an admin deletes them.
 //
+// A start that is about to apply new migrations to an existing database first
+// copies it into the backups folder as a before-upgrade backup (BeforeUpgrade),
+// keeping the newest keepBeforeUpgrade of those.
+//
 // A restore never swaps the database under a running server: RequestRestore checks
 // the file and leaves a marker (restore.json in the data folder), and the next start
 // applies it (ApplyPendingRestore) before the database opens, keeping a copy of the
@@ -41,7 +45,12 @@ const (
 	KindScheduled     = "scheduled"
 	KindManual        = "manual"
 	KindBeforeRestore = "before-restore"
+	KindBeforeUpgrade = "before-upgrade"
 )
+
+// keepBeforeUpgrade is how many before-upgrade backups are kept: one per upgrade
+// that changed the database, so a few releases back.
+const keepBeforeUpgrade = 3
 
 // Errors.
 var (
@@ -70,7 +79,7 @@ const timeLayout = "20060102-150405Z"
 var nameRE = regexp.MustCompile(`^audiosilo-[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.db$`)
 
 // madeRE splits a name this server made into its time and kind.
-var madeRE = regexp.MustCompile(`^audiosilo-(\d{8}-\d{6}Z)-(scheduled|manual|before-restore)\.db$`)
+var madeRE = regexp.MustCompile(`^audiosilo-(\d{8}-\d{6}Z)-(scheduled|manual|before-restore|before-upgrade)\.db$`)
 
 // validName reports whether name can be a backup's file name.
 func validName(name string) bool { return nameRE.MatchString(name) && !strings.Contains(name, "..") }
@@ -80,7 +89,7 @@ type Backup struct {
 	Name      string    `json:"name"`
 	Size      int64     `json:"size"`
 	CreatedAt time.Time `json:"created_at"`
-	// Kind is KindScheduled, KindManual or KindBeforeRestore; a file copied in from
+	// Kind is KindScheduled, KindManual, KindBeforeRestore or KindBeforeUpgrade; a file copied in from
 	// elsewhere under another name reads as manual (its time is the file's).
 	Kind string `json:"kind"`
 }
@@ -215,7 +224,7 @@ func (s *Service) StatusOf(list []Backup) Status {
 	defer s.mu.Unlock()
 	st := Status{Dir: s.dir, Running: s.running}
 	for _, b := range list { // newest first
-		if b.Kind != KindBeforeRestore {
+		if b.Kind != KindBeforeRestore && b.Kind != KindBeforeUpgrade {
 			st.Latest = &b
 			break
 		}
@@ -405,6 +414,12 @@ func (s *Service) prune() {
 	s.mu.Lock()
 	keep := s.keep
 	s.mu.Unlock()
+	s.pruneKind(KindScheduled, keep)
+}
+
+// pruneKind removes backups of kind past the newest keep, never the one a restore
+// is waiting for.
+func (s *Service) pruneKind(kind string, keep int) {
 	list, err := s.List()
 	if err != nil {
 		return
@@ -416,7 +431,7 @@ func (s *Service) prune() {
 	}
 	n := 0
 	for _, b := range list { // newest first
-		if b.Kind != KindScheduled {
+		if b.Kind != kind {
 			continue
 		}
 		if n++; n > keep && (pending == nil || pending.Name != b.Name) {
@@ -629,6 +644,83 @@ func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *
 		return res, fmt.Errorf("remove restore marker: %w", err)
 	}
 	return res, nil
+}
+
+// BeforeUpgrade copies the database at dbPath into the backups folder (dir, as for
+// New) as a before-upgrade backup when this server is about to apply migrations
+// it has not applied yet, and logs one line naming them and the copy. A fresh
+// install (no database yet, or one with no migration recorded) and a database
+// already up to date get no copy. Only the newest keepBeforeUpgrade such copies
+// are kept (pruneBeforeUpgrade). A failed copy is logged and the start carries
+// on: the server would otherwise stay down until there is room for one. It
+// returns the copy, nil when none was made.
+func BeforeUpgrade(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) *Backup {
+	return New(nil, dataDir, dir, log).beforeUpgrade(ctx, dbPath)
+}
+
+func (s *Service) beforeUpgrade(ctx context.Context, dbPath string) *Backup {
+	pending, err := store.PendingMigrations(ctx, dbPath)
+	if err != nil {
+		s.log.Warn("reading which migrations the database needs failed; no before-upgrade backup was made", "err", err)
+		return nil
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	b, err := s.write(ctx, KindBeforeUpgrade, func(ctx context.Context, to string) error {
+		return store.VacuumFile(ctx, dbPath, to)
+	})
+	if err != nil {
+		s.log.Warn("copying the database before the upgrade failed; migrating without a copy", "migrations", strings.Join(pending, ","), "err", err)
+		return nil
+	}
+	s.log.Info("copied the database before applying new migrations", "migrations", strings.Join(pending, ","), "backup", filepath.Join(s.dir, b.Name))
+	s.pruneBeforeUpgrade(ctx, b.Name)
+	return &b
+}
+
+// pruneBeforeUpgrade removes before-upgrade copies past the newest
+// keepBeforeUpgrade, never the one a restore is waiting for. The copy just made
+// (made) is always kept, wherever the clock put its name among the others. A
+// copy holding the same migrations as a newer one counts only once and goes: a
+// start whose migrations failed part way copies the half-migrated database again
+// on every retry, and those copies would otherwise push out the one of the
+// database as the older server left it, the copy the upgrade is for. A copy that
+// can't be read as one (no migration it lacks: not a database this server knows)
+// counts on its own.
+func (s *Service) pruneBeforeUpgrade(ctx context.Context, made string) {
+	list, err := s.List()
+	if err != nil {
+		return
+	}
+	waiting, err := s.PendingRestore()
+	if err != nil {
+		s.log.Warn("reading the waiting restore failed; old backups are kept", "err", err)
+		return
+	}
+	holds := func(name string) string {
+		pending, err := store.PendingMigrations(ctx, filepath.Join(s.dir, name))
+		if err != nil || len(pending) == 0 {
+			return "\x00" + name
+		}
+		return strings.Join(pending, ",")
+	}
+	seen := map[string]bool{holds(made): true}
+	for _, b := range list { // newest first
+		if b.Kind != KindBeforeUpgrade || b.Name == made {
+			continue
+		}
+		if h := holds(b.Name); !seen[h] && len(seen) < keepBeforeUpgrade {
+			seen[h] = true
+			continue
+		}
+		if waiting != nil && waiting.Name == b.Name {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, b.Name)); err != nil {
+			s.log.Warn("removing an old backup failed", "name", b.Name, "err", err)
+		}
+	}
 }
 
 func (s *Service) applyRestore(ctx context.Context, name, dbPath string, res *RestoreResult) error {

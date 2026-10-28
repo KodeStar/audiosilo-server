@@ -7,6 +7,7 @@
 //
 // Static markup is tagged with data-i18n / data-i18n-placeholder / data-i18n-alt /
 // data-i18n-aria and translated by apply(); dynamic strings call asI18n.t(key, vars).
+// A numeric vars.count picks the key's plural form (key.one, key.other, ...).
 // Loaded as an external script so the strict CSP (script-src 'self') is unaffected.
 (function () {
   "use strict";
@@ -37,7 +38,28 @@
     return DICT[current] || BASE;
   }
 
+  // plural picks key's plural form for vars.count (key.one, key.other, ...) by
+  // the language's plural rules, falling back to key.other; a key with no plural
+  // forms is itself.
+  function plural(key, vars) {
+    if (!vars || typeof vars.count !== "number") return key;
+    var cat = "other";
+    try {
+      cat = new Intl.PluralRules(current).select(vars.count);
+    } catch (e) {
+      /* no Intl.PluralRules: "other" */
+    }
+    var active = table();
+    function has(k) {
+      return active[k] != null || BASE[k] != null;
+    }
+    if (has(key + "." + cat)) return key + "." + cat;
+    if (has(key + ".other")) return key + ".other";
+    return key;
+  }
+
   function t(key, vars) {
+    key = plural(key, vars);
     var active = table();
     var s = active[key] != null ? active[key] : BASE[key] != null ? BASE[key] : key;
     if (vars) {

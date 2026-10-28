@@ -5,7 +5,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { useLibraryParam } from './library-param';
+import { offersLibraryChoice, useLibraryParam } from './library-param';
 
 /** Up to this many libraries pick from a segmented control; more from a select. */
 const SEGMENTED_MAX = 4;
@@ -38,7 +38,7 @@ export function LibraryFilter({
   const lang = i18n.resolvedLanguage ?? 'en';
   const libraries = useBookLibraries() ?? [];
   const [param, setParam] = useLibraryParam();
-  if (libraries.length < 2) return null;
+  if (!offersLibraryChoice(libraries)) return null;
 
   const change = (id: number) => (onChange ?? setParam)(id || undefined);
   const countOf = (id: number) => counts?.find((c) => c.library_id === id)?.count ?? 0;

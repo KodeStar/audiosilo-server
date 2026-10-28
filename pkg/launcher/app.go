@@ -128,6 +128,9 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An upgrade that brings new migrations copies the database first (logged), so
+	// the database as the older server left it can be restored.
+	_ = backup.BeforeUpgrade(ctx, abs, cfg.Backups.Dir, dbPath, log)
 
 	db, err := store.Open(ctx, dbPath, store.WithLogger(log))
 	if err != nil {

@@ -394,4 +394,26 @@ func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
 	if err := q.PruneSecrets(ctx); err != nil || len(q.privateURLs) != 0 {
 		t.Fatalf("an ended request's URL: %d %v", len(q.privateURLs), err)
 	}
+
+	// A request that ends between its commit and the URL being stored (its
+	// reportEnded found nothing to drop) is let go by Subscribe itself, with no
+	// PruneSecrets (server#200).
+	q.beforeSecretHeld = func(j *Job) {
+		if _, err := q.Cancel(ctx, j.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	raced, _, err := q.EnqueueSubscribe(ctx, other, q.admin, "https://example.com/c?auth=SECRET_RACED", true, "")
+	q.beforeSecretHeld = nil
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.privateURLs[raced.ID]; ok {
+		t.Fatal("the URL of a request that ended while it was being queued is still held")
+	}
+	// Allowed: one that stays open keeps its URL for the claim.
+	open, _, err := q.EnqueueSubscribe(ctx, other, q.admin, "https://example.com/d?auth=SECRET_OPEN", true, "")
+	if err != nil || q.privateURLs[open.ID] == "" {
+		t.Fatalf("an open request's URL: %q %v", q.privateURLs[open.ID], err)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -601,6 +602,37 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 		return nil, err
 	}
 	return paths, nil
+}
+
+// MoveCandidates lists the indexed books in the library whose fingerprint is one of
+// hashes, for a book about to be indexed at relPath that may be one of them moved
+// on disk since the last scan (the scanner's on-demand move detection). It is
+// empty when a book is indexed at relPath already: that book is no new one.
+func (c *Catalog) MoveCandidates(ctx context.Context, libraryID int64, relPath string, hashes []string) ([]string, error) {
+	hashes = slices.DeleteFunc(slices.Clone(hashes), func(h string) bool { return h == "" })
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	args := append([]any{libraryID, relPath}, anyOf(hashes)...)
+	rows, err := c.db.QueryContext(ctx, `SELECT rel_path FROM books
+		WHERE library_id = ? AND (rel_path = ? OR content_hash IN (`+placeholders(len(hashes))+`))
+		ORDER BY rel_path`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		if p == relPath {
+			return nil, nil
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
 
 // DeleteBookAt removes the indexed book at relPath, if any: a book the scanner

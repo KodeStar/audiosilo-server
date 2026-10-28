@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import {
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+  type QueryKey,
+} from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, Check, ExternalLink, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
@@ -388,9 +393,14 @@ function ReviewDialog({
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
     if (run.mode !== 'match' || item.applied || !(book?.asin || book?.isbn)) {
       setMatchedByHand((ids) => withId(ids, item.id));
-      void qc
-        .invalidateQueries({ queryKey: itemsKey })
-        .then(() => setMatchedByHand((ids) => withoutId(ids, item.id)));
+      // The id stays until a read of the whole list lands (server#198): not when
+      // the invalidation's promise settles, which it does at once while the read
+      // waits offline.
+      const since = Date.now();
+      void qc.invalidateQueries({ queryKey: itemsKey });
+      void whenReadAgain(qc, itemsKey, since).then(() =>
+        setMatchedByHand((ids) => withoutId(ids, item.id)),
+      );
       return;
     }
     const now = { title: book.title, author: book.author };
@@ -539,6 +549,29 @@ function ReviewDialog({
 }
 
 /**
+ * Settles once the query at `key` holds data read after `since` from a read of
+ * the whole list (not invalidated since, nothing still fetching), or once the
+ * query is gone (the review closed). A read paused offline waits for the network.
+ */
+function whenReadAgain(qc: QueryClient, key: QueryKey, since: number): Promise<void> {
+  const cache = qc.getQueryCache();
+  const readAgain = () => {
+    const q = cache.find({ queryKey: key, exact: true });
+    if (!q) return true;
+    const st = q.state;
+    return st.dataUpdatedAt >= since && !st.isInvalidated && st.fetchStatus === 'idle';
+  };
+  return new Promise((resolve) => {
+    if (readAgain()) return resolve();
+    const unsubscribe = cache.subscribe(() => {
+      if (!readAgain()) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+/**
  * One outcome's books, a page at a time. A click on a checkbox flips that
  * book's pick; a Shift-click gives every book from the last one clicked to
  * this one the pick this one takes (togglePickRange).
@@ -625,13 +658,15 @@ function ItemList({
         ))}
       </ul>
       {list.hasNextPage ? (
-        // Not while the list reads again either: a next page then would cancel that
-        // read, and the pages already loaded would keep what they said before.
+        // Not while the list reads again either, nor while that read waits for the
+        // network (paused, which isFetching doesn't count): a next page then would
+        // cancel that read and pass for it (whenReadAgain), and the pages already
+        // loaded would keep what they said before.
         <Button
           variant="outline"
           className="self-center"
           onClick={() => void list.fetchNextPage()}
-          disabled={list.isFetching}
+          disabled={list.fetchStatus !== 'idle'}
         >
           {list.isFetchingNextPage ? t('common.loading') : t('health.more')}
         </Button>

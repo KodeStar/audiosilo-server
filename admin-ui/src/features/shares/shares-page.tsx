@@ -35,9 +35,17 @@ import {
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { ruleLabel, shareLabel, wholeLibraryOf } from '@/features/people/people-model';
+import {
+  isLibraryGrant,
+  ruleLabel,
+  shareLabel,
+  wholeLibraryOf,
+} from '@/features/people/people-model';
 import { AddFolderDialog } from './add-folder-dialog';
 import { ShareNameDialog } from './share-name-dialog';
+
+/** Avatars a share's card shows before a "+N" for the rest. */
+const MAX_AVATARS = 4;
 
 /**
  * People > Shares: named sets of folders given to people. A share follows its
@@ -52,8 +60,8 @@ export function SharesPage() {
   const [creating, setCreating] = useState(false);
 
   const all = shares.data ?? [];
-  const named = all.filter((s) => wholeLibraryOf(s) === undefined);
-  const libraryGrants = all.filter((s) => wholeLibraryOf(s) !== undefined);
+  const named = all.filter((s) => !isLibraryGrant(s));
+  const libraryGrants = all.filter(isLibraryGrant);
   const selected = all.find((s) => s.id === search.share) ?? named[0] ?? libraryGrants[0];
   const select = (id: number) => void navigate({ to: '.', search: { share: id }, replace: true });
 
@@ -127,6 +135,10 @@ function ShareTile({
   const users = useUsers();
   const libraries = useLibraries();
   const members = (users.data ?? []).filter((u) => s.member_ids.includes(u.id));
+  // The people past the avatars shown. Counted from the share's ids, not the
+  // people list, which may know fewer of them (a read of it failed since), so
+  // the avatars and the chip always add up to the share's count.
+  const more = s.member_ids.length - Math.min(members.length, MAX_AVATARS);
   const isLibrary = wholeLibraryOf(s) !== undefined;
   const name = shareLabel(s, libraries.data ?? []);
   return (
@@ -157,11 +169,19 @@ function ShareTile({
       </span>
       {members.length ? (
         <span className="flex shrink-0" aria-hidden="true">
-          {members.slice(0, 4).map((m, i) => (
+          {members.slice(0, MAX_AVATARS).map((m, i) => (
             <span key={m.id} className={cn('rounded-full ring-2 ring-card', i > 0 && '-ml-2')}>
               <Monogram name={m.username} size={26} />
             </span>
           ))}
+          {more > 0 ? (
+            <span
+              data-testid="avatar-overflow"
+              className="-ml-2 grid size-[26px] place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground tabular-nums ring-2 ring-card"
+            >
+              +{more}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </button>
@@ -175,6 +195,9 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
   const users = useUsers();
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<'rename' | 'delete' | 'folder' | null>(null);
+  // A grant's share changes only by granting or revoking; it reads as a whole
+  // library only while it holds that library's rule (server#230).
+  const isGrant = isLibraryGrant(s);
   const isLibrary = wholeLibraryOf(s) !== undefined;
   const libs = libraries.data ?? [];
   const people = users.data ?? [];
@@ -202,13 +225,13 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
             </h2>
             {isLibrary ? <Badge variant="outline">{t('shares.wholeLibrary')}</Badge> : null}
           </div>
-          {isLibrary ? (
+          {isGrant ? (
             <span className="text-[12.5px] text-muted-foreground">
               {t('shares.libraryGrantHint')}
             </span>
           ) : null}
         </div>
-        {!isLibrary ? (
+        {!isGrant ? (
           <DropdownMenu>
             <DropdownMenuTrigger
               className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
@@ -251,7 +274,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
                       </span>
                     ) : null}
                   </span>
-                  {!isLibrary ? (
+                  {!isGrant ? (
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -271,7 +294,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
             })}
           </ul>
         )}
-        {!isLibrary ? (
+        {!isGrant ? (
           <div>
             <Button
               variant="outline"
@@ -302,7 +325,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
               <Monogram name={m.username} size={28} />
               <span className="text-[13px] font-[550]">{m.username}</span>
               {/* A whole-library grant is changed from each person's page. */}
-              {!isLibrary ? (
+              {!isGrant ? (
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -322,7 +345,7 @@ function ShareDetail({ share: s }: { share: AdminShare }) {
               )}
             </li>
           ))}
-          {others.length && !isLibrary ? (
+          {others.length && !isGrant ? (
             <li>
               <AddPersonMenu
                 people={others}

@@ -1,11 +1,14 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -563,3 +566,171 @@ func TestDeleteCancelsItsRestore(t *testing.T) {
 }
 
 func slogDiscard() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+func TestBeforeUpgrade(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backups := func(dataDir string) []string {
+		entries, _ := os.ReadDir(filepath.Join(dataDir, dirName))
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	// A fresh install: no database yet, so nothing to copy.
+	fresh := t.TempDir()
+	if b := BeforeUpgrade(ctx, fresh, "", filepath.Join(fresh, "audiosilo.db"), slogDiscard()); b != nil {
+		t.Fatalf("fresh = %+v", b)
+	}
+	if got := backups(fresh); len(got) != 0 {
+		t.Fatalf("fresh install made %v", got)
+	}
+
+	// A database already up to date: nothing to copy.
+	e := newEnv(t)
+	if b := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slogDiscard()); b != nil {
+		t.Fatalf("up to date = %+v", b)
+	}
+	if got := backups(e.dataDir); len(got) != 0 {
+		t.Fatalf("up to date made %v", got)
+	}
+
+	// A database an older server left: its newest migration is not recorded yet.
+	var newest string
+	if err := e.db.QueryRowContext(ctx, `SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1`).Scan(&newest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name = ?`, newest); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.db.Close()
+	// Older before-upgrade copies, past the number kept, and a scheduled backup
+	// pruning must leave alone.
+	dir := filepath.Join(e.dataDir, dirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := []string{
+		"audiosilo-20240101-000000Z-before-upgrade.db",
+		"audiosilo-20250101-000000Z-before-upgrade.db",
+		"audiosilo-20260101-000000Z-before-upgrade.db",
+		"audiosilo-20200101-000000Z-scheduled.db",
+	}
+	for _, n := range old {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var logs bytes.Buffer
+	b := BeforeUpgrade(ctx, e.dataDir, "", e.dbPath, slog.New(slog.NewTextHandler(&logs, nil)))
+	if b == nil || b.Kind != KindBeforeUpgrade {
+		t.Fatalf("pending = %+v", b)
+	}
+	// The copy is the database as the older server left it (store.Open would
+	// migrate it, so it is only inspected).
+	if info, err := store.Inspect(ctx, filepath.Join(dir, b.Name), true); err != nil || info.Users != 1 || info.Schema >= newest {
+		t.Fatalf("copy = %+v, %v", info, err)
+	}
+	line := logs.String()
+	if strings.Count(line, "\n") != 1 || !strings.Contains(line, "level=INFO") ||
+		!strings.Contains(line, newest) || !strings.Contains(line, filepath.Join(dir, b.Name)) {
+		t.Fatalf("log = %q", line)
+	}
+	got := backups(e.dataDir)
+	want := []string{
+		"audiosilo-20200101-000000Z-scheduled.db",
+		"audiosilo-20250101-000000Z-before-upgrade.db",
+		"audiosilo-20260101-000000Z-before-upgrade.db",
+		b.Name,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backups = %v, want %v", got, want)
+	}
+	// It lists as a before-upgrade backup, and the status's latest backup is not it.
+	s := New(nil, e.dataDir, "", nil)
+	list, err := s.List()
+	if err != nil || len(list) != 4 || list[0].Name != b.Name || list[0].Kind != KindBeforeUpgrade {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	if st := s.StatusOf(list); st.Latest == nil || st.Latest.Kind != KindScheduled {
+		t.Fatalf("latest = %+v", st.Latest)
+	}
+}
+
+// A start whose migrations fail part way is retried (a restart policy, an admin
+// trying again): each retry copies the half-migrated database, and those copies
+// replace one another, never the copy of the database as the older server left
+// it. A copy made while the clock reads earlier than the others' names is kept.
+func TestBeforeUpgradeRetries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	var newest []string
+	rows, err := e.db.QueryContext(ctx, `SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		newest = append(newest, n)
+	}
+	if err := rows.Close(); err != nil || len(newest) != 2 {
+		t.Fatalf("migrations = %v, %v", newest, err)
+	}
+	if _, err := e.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN (?, ?)`, newest[0], newest[1]); err != nil {
+		t.Fatal(err)
+	}
+	s := New(nil, e.dataDir, "", slogDiscard())
+	at := time.Date(2026, 10, 4, 3, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return at }
+	start := func() string {
+		t.Helper()
+		at = at.Add(time.Minute)
+		b := s.beforeUpgrade(ctx, e.dbPath)
+		if b == nil {
+			t.Fatal("no copy")
+		}
+		return b.Name
+	}
+
+	older := start() // the database as the older server left it
+	// The first of the two migrations applied, the second failing: three retries.
+	if _, err := e.db.ExecContext(ctx, `INSERT INTO schema_migrations(name, applied_at) VALUES(?, 'x')`, newest[1]); err != nil {
+		t.Fatal(err)
+	}
+	start()
+	start()
+	last := start()
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, b := range list {
+		got = append(got, b.Name)
+	}
+	if want := []string{last, older}; !slices.Equal(got, want) {
+		t.Fatalf("backups after the retries = %v, want %v", got, want)
+	}
+
+	// Copies named later than the clock now reads: the copy just made stays.
+	for _, n := range []string{
+		"audiosilo-20990101-000000Z-before-upgrade.db",
+		"audiosilo-20990102-000000Z-before-upgrade.db",
+		"audiosilo-20990103-000000Z-before-upgrade.db",
+	} {
+		if err := os.WriteFile(filepath.Join(s.dir, n), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	made := start()
+	if _, err := os.Stat(filepath.Join(s.dir, made)); err != nil {
+		t.Fatalf("the copy just made was pruned: %v", err)
+	}
+}

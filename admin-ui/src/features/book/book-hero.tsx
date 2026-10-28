@@ -2,6 +2,7 @@ import { Fragment, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
+  BookOpen,
   CalendarPlus,
   Clock,
   Copy,
@@ -120,6 +121,12 @@ export function BookHero({
         <div className="flex min-w-0 flex-col">
           <div className="flex flex-wrap items-center gap-2">
             <span className="eyebrow">{b.library_name}</span>
+            {b.ebook ? (
+              <Badge variant="outline">
+                <BookOpen aria-hidden="true" />
+                {t('book.hero.ebook')}
+              </Badge>
+            ) : null}
             {library && !library.available ? (
               <Badge variant="destructive">
                 <Unplug aria-hidden="true" />

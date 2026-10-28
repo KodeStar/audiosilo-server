@@ -11,8 +11,8 @@ import { Input } from '@/components/ui/input';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
-import { absoluteBaseName, isAbsolutePath } from '@/lib/paths';
-import { folderErrorKey } from './setup-model';
+import { isAbsolutePath } from '@/lib/paths';
+import { defaultLibraryName, folderErrorKey } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, previewQuery, type StepProps } from './step-actions';
 
@@ -27,14 +27,21 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const [root, setRoot] = useState(draft?.root ?? '');
-  const [name, setName] = useState<string | null>(draft?.name ?? null);
+  // A name given for one folder (typed, or the draft's back from a later step)
+  // is that folder's only: another folder has its own default, and going back
+  // to the first brings the name back.
+  const [name, setName] = useState<{ root: string; value: string } | null>(
+    draft ? { root: draft.root, value: draft.name } : null,
+  );
   // The folder last checked: its preview shows while the field still says it.
   const [checked, setChecked] = useState(draft?.root ?? '');
   const [inputError, setInputError] = useState<string | null>(null);
   const typed = root.trim();
   const preview = useQuery({ ...previewQuery(checked), enabled: checked !== '' });
   const current = checked !== '' && checked === typed;
-  const shownName = name ?? absoluteBaseName(typed);
+  const shownName = name && name.root === typed ? name.value : defaultLibraryName(typed);
+  // The folder checked and found: only then is there a library to name.
+  const checkedOk = current && preview.data !== undefined;
 
   /**
    * Runs the preview for a folder; null when it was refused (the reason is
@@ -170,7 +177,7 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
 
         {current && preview.data ? <PreviewFound preview={preview.data} lang={lang} /> : null}
 
-        {typed ? (
+        {checkedOk ? (
           <Field
             htmlFor="setup-library-name"
             label={t('setup.folder.name')}
@@ -180,7 +187,7 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
               id="setup-library-name"
               autoComplete="off"
               value={shownName}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => setName({ root: typed, value: e.target.value })}
               aria-describedby="setup-library-name-desc"
             />
           </Field>

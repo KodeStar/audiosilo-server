@@ -95,6 +95,37 @@ func (a *API) ebookBook(w http.ResponseWriter, r *http.Request, lib *catalog.Lib
 	return book, true
 }
 
+// readingBook is the path of the book whose reading place rel addresses (a part
+// path reads its book), for the reading-progress routes: from the index alone
+// (catalog.BookEbookAt), never loading the whole book, and through ebookBook
+// (which may index it on demand) only when no indexed book is there. A podcast
+// library's, a book with no ebook (404) and one outside scope (403) are refused;
+// on a failure it writes the answer and returns false.
+func (a *API) readingBook(w http.ResponseWriter, r *http.Request, lib *catalog.Library, scope catalog.Scope, rel, generic string) (string, bool) {
+	if lib.Kind == catalog.KindPodcasts {
+		writeError(w, http.StatusNotFound, msgNoEbook)
+		return "", false
+	}
+	bookPath, has, err := a.cat.BookEbookAt(r.Context(), lib.ID, rel)
+	switch {
+	case errors.Is(err, catalog.ErrNotFound):
+		book, ok := a.ebookBook(w, r, lib, scope, rel, generic)
+		if !ok {
+			return "", false
+		}
+		return book.RelPath, true
+	case err != nil:
+		a.writeCatalogError(w, err, "load book for path failed", generic, "library", lib.ID, "path", rel)
+	case !scope.Allows(bookPath):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+	case !has:
+		writeError(w, http.StatusNotFound, msgNoEbook)
+	default:
+		return bookPath, true
+	}
+	return "", false
+}
+
 // handleGetReadingProgress answers the caller's place in the ebook of the book
 // at ?path= (a part path reads its book's): {"reading_progress": ReadingProgress
 // | null}. 404 when there is no book there, or it has no ebook.
@@ -104,13 +135,13 @@ func (a *API) handleGetReadingProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	book, ok := a.ebookBook(w, r, lib, scope, rel, "could not load reading progress")
+	bookPath, ok := a.readingBook(w, r, lib, scope, rel, "could not load reading progress")
 	if !ok {
 		return
 	}
-	p, err := a.cat.GetReadingProgress(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: book.RelPath})
+	p, err := a.cat.GetReadingProgress(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: lib.ID, Path: bookPath})
 	if err != nil {
-		a.writeCatalogError(w, err, "get reading progress failed", "could not load reading progress", "library", lib.ID, "path", book.RelPath)
+		a.writeCatalogError(w, err, "get reading progress failed", "could not load reading progress", "library", lib.ID, "path", bookPath)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"reading_progress": p})
@@ -157,19 +188,19 @@ func (a *API) handlePutReadingProgress(w http.ResponseWriter, r *http.Request) {
 	save := catalog.ReadingSave{CFI: body.CFI, Progression: *body.Progression, DeviceID: body.DeviceID,
 		UpdatedAt: body.UpdatedAt, BaseVersion: body.BaseVersion,
 		DeviceName: credentialFrom(r.Context()).DeviceName}
-	// Checked before bookAt, which may read an unindexed book from disk.
+	// Checked before readingBook, which may read an unindexed book from disk.
 	if err := catalog.CheckReadingSave(save); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	book, ok := a.ebookBook(w, r, lib, scope, rel, "could not save reading progress")
+	bookPath, ok := a.readingBook(w, r, lib, scope, rel, "could not save reading progress")
 	if !ok {
 		return
 	}
-	save.Ref = catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}
+	save.Ref = catalog.Ref{LibraryID: lib.ID, Path: bookPath}
 	kept, other, err := a.cat.SaveReadingProgress(r.Context(), userFrom(r.Context()).ID, save)
 	if err != nil {
-		a.writeCatalogError(w, err, "save reading progress failed", "could not save reading progress", "library", lib.ID, "path", book.RelPath)
+		a.writeCatalogError(w, err, "save reading progress failed", "could not save reading progress", "library", lib.ID, "path", bookPath)
 		return
 	}
 	out := map[string]any{"reading_progress": kept}

@@ -751,7 +751,7 @@ export interface Backup {
   name: string;
   size: number;
   created_at: string;
-  kind: 'scheduled' | 'manual' | 'before-restore';
+  kind: 'scheduled' | 'manual' | 'before-restore' | 'before-upgrade';
 }
 
 /** backup.Result: how the newest backup attempt went. */
@@ -1467,6 +1467,18 @@ export interface AdminBook {
    * narration stand in only with none, so Detect chapters isn't offered then.
    */
   chapter_choice?: ChapterChoice;
+  /**
+   * The book's ebook (catalog.Ebook): the .epub beside its audio the player's
+   * reader opens, library-relative, with its size in bytes when last scanned.
+   * Absent when it has none.
+   */
+  ebook?: AdminBookEbook;
+}
+
+/** A book's ebook (catalog.Ebook). */
+export interface AdminBookEbook {
+  path: string;
+  size: number;
 }
 
 /** GET /admin/books (catalog.AdminPage). */

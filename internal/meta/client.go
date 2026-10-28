@@ -39,6 +39,9 @@ const clientTimeout = 5 * time.Second
 type client struct {
 	baseURL string // no trailing slash; API is served under <baseURL>/api/v1
 	http    *http.Client
+	// sleep waits d or until ctx is done (its error then); a test records the
+	// waits instead.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // newClient builds a client for the given metaserve base URL. baseURL is
@@ -47,24 +50,87 @@ func newClient(baseURL string) *client {
 	return &client{
 		baseURL: baseURL,
 		http:    &http.Client{Timeout: clientTimeout},
+		sleep:   sleepCtx,
+	}
+}
+
+// A 429 (metaserve's per-client rate limit, audiosilo-meta#2749) is waited out
+// and asked again, rateLimitRetries times at most, each wait its Retry-After
+// capped at maxRetryAfter (defaultRetryAfter when it gives none), so a burst a
+// bulk match makes slows down instead of failing books (server#247). A wait the
+// caller's deadline would cut short isn't started.
+const (
+	rateLimitRetries  = 3
+	maxRetryAfter     = 10 * time.Second
+	defaultRetryAfter = time.Second
+)
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
 // getJSON fetches path (relative to the API root) and decodes the JSON body into
 // out. A 404 becomes ErrNotFound (errLocalNotFound when the local copy answered
-// it); any other non-2xx (or transport failure) is a plain error the caller
-// treats as an upstream outage.
+// it); a 429 is waited out and retried (rateLimitRetries); any other non-2xx (or
+// transport failure, or a 429 still there after the retries) is a plain error
+// the caller treats as an upstream outage.
 func (c *client) getJSON(ctx context.Context, path string, out any) error {
+	for attempt := 0; ; attempt++ {
+		wait, err := c.getJSONOnce(ctx, path, out)
+		if wait == 0 || attempt == rateLimitRetries {
+			return err
+		}
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait {
+			return err
+		}
+		if c.sleep(ctx, wait) != nil {
+			return err
+		}
+	}
+}
+
+// retryAfter is how long a 429 asks to wait (Retry-After in seconds or as a
+// date), within (0, maxRetryAfter].
+func retryAfter(h string, now time.Time) time.Duration {
+	d := defaultRetryAfter
+	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
+		// Capped before it is multiplied, which a huge value would overflow.
+		d = time.Duration(min(secs, int(maxRetryAfter/time.Second))) * time.Second
+	} else if at, err := http.ParseTime(h); err == nil {
+		d = at.Sub(now)
+	}
+	return min(max(d, 100*time.Millisecond), maxRetryAfter)
+}
+
+// getJSONOnce is one request of getJSON; wait is how long a 429 asks to wait
+// before asking again (0 for any other answer).
+func (c *client) getJSONOnce(ctx context.Context, path string, out any) (wait time.Duration, _ error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+		return retryAfter(resp.Header.Get("Retry-After"), time.Now()), &statusError{code: resp.StatusCode, path: path}
+	}
+	return 0, decodeAnswer(resp, path, out)
+}
+
+// decodeAnswer is getJSON's reading of an answer other than a 429.
+func decodeAnswer(resp *http.Response, path string, out any) error {
 	if resp.StatusCode == http.StatusNotFound {
 		// Drain a little so the connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
@@ -89,6 +155,9 @@ type statusError struct {
 }
 
 func (e *statusError) Error() string {
+	if e.code == http.StatusTooManyRequests {
+		return fmt.Sprintf("meta: rate limited (status 429) for %s", e.path)
+	}
 	return fmt.Sprintf("meta: upstream status %d for %s", e.code, e.path)
 }
 

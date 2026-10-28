@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,10 +15,14 @@ import (
 
 // routeLimitEnv is a test env whose token buckets are frozen in time, so a test
 // counts exactly the burst with no refill, plus a way to send a request from a
-// chosen address.
+// chosen address. Every 429 it sees must carry Retry-After (checked at cleanup),
+// so each refusal path the tests below reach is covered.
 type routeLimitEnv struct {
 	*testEnv
 	h http.Handler
+
+	mu        sync.Mutex
+	noRetryAt []string // "METHOD path" of each 429 sent without Retry-After
 }
 
 func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
@@ -27,12 +32,25 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 	for _, l := range []*rateLimiter{e.api.ipLimiter, e.api.tokenLimiter, e.api.mediaLimiter} {
 		l.now = func() time.Time { return now }
 	}
-	return &routeLimitEnv{testEnv: e, h: e.api.Handler()}
+	re := &routeLimitEnv{testEnv: e, h: e.api.Handler()}
+	t.Cleanup(func() {
+		re.mu.Lock()
+		defer re.mu.Unlock()
+		if len(re.noRetryAt) > 0 {
+			t.Errorf("429 without Retry-After: %v", re.noRetryAt)
+		}
+	})
+	return re
 }
 
 // serve sends a request from ip (with a bearer token when tok is set) and
 // returns the status.
 func (e *routeLimitEnv) serve(ip, method, path, tok, body string) int {
+	return e.record(ip, method, path, tok, body).Code
+}
+
+// record is serve returning the whole response.
+func (e *routeLimitEnv) record(ip, method, path, tok, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.RemoteAddr = ip + ":1234"
 	if tok != "" {
@@ -40,7 +58,12 @@ func (e *routeLimitEnv) serve(ip, method, path, tok, body string) int {
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
-	return rec.Code
+	if rec.Code == http.StatusTooManyRequests && rec.Header().Get("Retry-After") == "" {
+		e.mu.Lock()
+		e.noRetryAt = append(e.noRetryAt, method+" "+path)
+		e.mu.Unlock()
+	}
+	return rec
 }
 
 func (e *routeLimitEnv) get(ip, path, tok string) int { return e.serve(ip, "GET", path, tok, "") }
@@ -275,17 +298,8 @@ func TestRateLimitAuthenticatedPerToken(t *testing.T) {
 func TestRateLimitDemoSessionByAddress(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	ctx := context.Background()
 	demo := func() string {
-		t.Helper()
-		u, err := e.auth.CreateDemoUser(ctx, "demo_"+strconv.FormatInt(time.Now().UnixNano(), 36))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "demo", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
+		_, tok := newUserWithSession(t, e.testEnv, "demo_"+strconv.FormatInt(time.Now().UnixNano(), 36), true)
 		return tok
 	}
 	const ip = "192.0.2.60"
@@ -306,6 +320,67 @@ func TestRateLimitDemoSessionByAddress(t *testing.T) {
 	}
 	if code := e.get("192.0.2.61", "/api/v1/me", first); code != http.StatusOK {
 		t.Fatalf("the demo session from another address = %d, want 200", code)
+	}
+}
+
+// A demo account's media spends from its address's bucket too, like its API
+// requests: a second demo session from the same address is no new media budget
+// (denied, with the address's Retry-After), while another address is served and a
+// normal user's media still spends from a bucket per credential, never from its
+// address's (allowed).
+func TestRateLimitDemoMediaByAddress(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 4, 0.25 // 4 s to the next token
+	libID, _ := seedCovers(t, e.testEnv)
+	cover := func(ip, tok string) (int, string) {
+		rec := e.record(ip, "GET", mediaURL(libID, "cover", "Sidecar", tok), "", "")
+		return rec.Code, rec.Header().Get("Retry-After")
+	}
+
+	const ip = "192.0.2.62"
+	_, first := newUserWithSession(t, e.testEnv, "demo_media_a", true)
+	_, second := newUserWithSession(t, e.testEnv, "demo_media_b", true)
+	for i := range 4 {
+		if code, _ := cover(ip, first); code == http.StatusTooManyRequests {
+			t.Fatalf("demo cover %d within the address's burst = 429", i)
+		}
+	}
+	if code, ra := cover(ip, first); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("demo cover past the address's burst = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+	if code, ra := cover(ip, second); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("a second demo session's cover from the spent address = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+	if code, _ := cover("192.0.2.63", second); code == http.StatusTooManyRequests {
+		t.Fatal("the demo session's cover from another address = 429")
+	}
+
+	// A normal user's sessions spend from their media buckets, not the address's
+	// four: well past that burst, neither is refused.
+	const userIP = "192.0.2.64"
+	a, b := e.session(t), e.session(t)
+	for i := range 10 {
+		for _, tok := range []string{a, b} {
+			if code, _ := cover(userIP, tok); code != http.StatusOK {
+				t.Fatalf("user cover %d = %d, want 200", i, code)
+			}
+		}
+	}
+}
+
+// A demo request its address's bucket refuses after it passed Ready (a burst of
+// requests looked up together) still pays into that bucket, as a credential
+// bucket's refusal does: its token lookup was already done.
+func TestAllowCredentialDemoRefusalPays(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 1
+	ctx := withCredential(context.Background(), &auth.User{IsDemo: true}, auth.Credential{ID: 1})
+	const ip = "192.0.2.65"
+	e.api.ipLimiter.Charge(ip) // the bucket is spent: the next token is 1 s away
+	if wait, ok := e.api.allowCredential(ctx, e.api.mediaLimiter, ip); ok || wait != 2*time.Second {
+		t.Fatalf("refused demo request = %v, %v; want refused with a 2 s wait (the refusal paid)", wait, ok)
 	}
 }
 
@@ -382,6 +457,45 @@ func TestRateLimitTokenBudget(t *testing.T) {
 	}
 	if code := e.get("192.0.2.45", "/api/v1/me", second); code != http.StatusOK {
 		t.Fatalf("from another address = %d, want 200", code)
+	}
+}
+
+// A credential's 429 carries Retry-After: the longer of its own bucket's wait and
+// its address's, which the refusal charged and which the next request meets
+// first. Both refusal paths say it: the credential's bucket (the wait for its
+// next token, or the address's when the charge left that one longer) and the
+// address's bucket checked before the lookup.
+func TestRateLimitPerCredentialRetryAfter(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.tokenLimiter.burst, e.api.tokenLimiter.rate = 2, 0.25 // 4 s to the next token
+	tok := e.session(t)
+	retryAfter := func(ip string) (int, string) {
+		rec := e.record(ip, "GET", "/api/v1/me", tok, "")
+		return rec.Code, rec.Header().Get("Retry-After")
+	}
+
+	// The address has plenty left: the credential's wait is the answer.
+	const roomy = "192.0.2.46"
+	for i := range 2 {
+		if code := e.get(roomy, "/api/v1/me", tok); code != http.StatusOK {
+			t.Fatalf("call %d = %d, want 200", i, code)
+		}
+	}
+	if code, ra := retryAfter(roomy); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("past the credential's burst = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+
+	// The address's bucket is the last token: the refusal's charge empties it,
+	// and its 10 s refill outlasts the credential's 4 s.
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 0.1
+	const tight = "192.0.2.47"
+	if code, ra := retryAfter(tight); code != http.StatusTooManyRequests || ra != "10" {
+		t.Fatalf("credential refused, address spent by the charge = %d, Retry-After %q; want 429, 10", code, ra)
+	}
+	// The next request meets the spent address before any lookup.
+	if code, ra := retryAfter(tight); code != http.StatusTooManyRequests || ra != "10" {
+		t.Fatalf("from the spent address = %d, Retry-After %q; want 429, 10", code, ra)
 	}
 }
 

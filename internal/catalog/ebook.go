@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
@@ -88,4 +89,21 @@ func (c *Catalog) SetEbooks(ctx context.Context, libraryID int64, readings map[s
 		}
 		return nil
 	})
+}
+
+// BookEbookAt is the path of the indexed book relPath addresses (BookPathAt's
+// rule: the book at it, else the innermost folder book holding it) and whether
+// that book has an ebook, from the index alone: the reader's progress routes
+// need no more than that, not the whole book. ErrNotFound when no indexed book
+// is there (the caller may index it on demand).
+func (c *Catalog) BookEbookAt(ctx context.Context, libraryID int64, relPath string) (bookPath string, hasEbook bool, err error) {
+	if bookPath, err = c.BookPathAt(ctx, libraryID, CleanRelPath(relPath)); err != nil {
+		return "", false, err
+	}
+	err = c.db.QueryRowContext(ctx, `SELECT ebook_path != '' FROM books WHERE library_id = ? AND rel_path = ?`,
+		libraryID, bookPath).Scan(&hasEbook)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, ErrNotFound
+	}
+	return bookPath, hasEbook, err
 }

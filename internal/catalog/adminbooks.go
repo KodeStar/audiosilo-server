@@ -98,6 +98,9 @@ type AdminBook struct {
 	// community; omitted when automatic), so a list can say why a book's
 	// chapters can't be detected: a found list stands in only with no choice.
 	ChapterChoice string `json:"chapter_choice,omitempty"`
+	// Ebook is the book's ebook (Book.Ebook: books.ebook_path and the size its
+	// signature holds), for the book page's Files; omitted when it has none.
+	Ebook *Ebook `json:"ebook,omitempty"`
 }
 
 // fieldList scans a comma-separated SQL list (group_concat) into field names,
@@ -214,7 +217,7 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
 	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, ` + chapterChoiceExpr + `, b.cover_art, b.cover_color,
-	b.publisher, b.language, b.abridged, b.genres, b.tags`
+	b.publisher, b.language, b.abridged, b.genres, b.tags, b.ebook_path, b.ebook_sig`
 
 // scanAdminBook reads one row of adminBookCols into b.
 func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
@@ -249,15 +252,16 @@ func creditFilter(prefix, field, value string) (string, []any) {
 // finish, called after the scan, derives what the row carries beyond its
 // columns: Authors and Narrators from Author and Narrator, SeriesList from the
 // series columns and Genres and Tags from theirs (never nil, so the wire carries
-// [] for none), and CoverColor, when the stored colour is for the current art.
+// [] for none), CoverColor, when the stored colour is for the current art, and
+// Ebook from the stored ebook columns.
 func adminBookDest(b *AdminBook) (dest []any, finish func()) {
-	var art, color, genres, tags string
+	var art, color, genres, tags, ebookPath, ebookSig string
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Subtitle, &b.Author,
 			&b.Narrator, &b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &b.moreSeries, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
-			&b.ChapterChoice, &art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags},
+			&b.ChapterChoice, &art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSig},
 		func() {
 			b.Genres = append([]string{}, ParseLabels(genres)...)
 			b.Tags = append([]string{}, ParseLabels(tags)...)
@@ -265,6 +269,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
 			b.SeriesList = SeriesList(SeriesRef{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}, b.moreSeries)
 			b.CoverColor, _ = storedCoverColor(art, color)
+			b.Ebook = ebookOf(ebookPath, ebookSig)
 		}
 }
 

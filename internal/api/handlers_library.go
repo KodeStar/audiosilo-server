@@ -54,7 +54,25 @@ func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+	if u := userFrom(r.Context()); u.Role == auth.RoleAdmin && !u.IsDemo {
+		writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+		return
+	}
+	// A listener (a demo visitor among them) is never told where the library
+	// lives on the server's disk; an admin is, here and on the admin routes.
+	out := make([]listenerLibrary, len(libs))
+	for i, l := range libs {
+		out[i] = listenerLibrary{Library: l}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": out})
+}
+
+// listenerLibrary is a library on GET /libraries for a caller who isn't an
+// admin: catalog.Library without its root (the shallower, always-empty Root
+// shadows the embedded one, and omitempty drops it).
+type listenerLibrary struct {
+	catalog.Library
+	Root string `json:"root,omitempty"`
 }
 
 // libraryScope loads a library and the caller's effective access scope for it.
@@ -664,6 +682,15 @@ func (a *API) warmRemux(lib *catalog.Library, book *catalog.Book) {
 // and Android's 8 s read timeout.
 const remuxColdWait = 2 * time.Second
 
+// remuxDownloadWait bounds how long a download, or a stream with every
+// transcode slot busy, waits for a remux still running past remuxColdWait
+// (server#212) before it is transcoded live after all: nothing is sent while it
+// waits, so it stays under the 60 s an idle response gets from Android's
+// downloader (OkHttp's read timeout) and a reverse proxy's default (nginx's
+// proxy_read_timeout), which would otherwise fail a long book's remux with
+// nothing saved.
+const remuxDownloadWait = 45 * time.Second
+
 // handleStream serves an audio file by path. By default it streams the file with
 // Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
 // to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
@@ -672,8 +699,9 @@ const remuxColdWait = 2 * time.Second
 // lossless remux to plain MP3 (server#174: no browser and no iOS player opens
 // Matroska) while ffmpeg is configured, unless ?original=1 asks for the stored
 // bytes; one ffmpeg can't remux (another codec inside) is served as stored, and
-// one whose remux can't be had now (still running after remuxColdWait, low
-// disk, an ffmpeg failure) is transcoded live, as ?transcode=1 would, since
+// one whose remux can't be had now (still running after remuxColdWait, or
+// remuxDownloadWait for a download or with every transcode slot busy; low disk,
+// an ffmpeg failure) is transcoded live, as ?transcode=1 would, since
 // direct_playable told the web player it needn't ask for that. The path is the actual audio file (a chapter's
 // file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -724,6 +752,11 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 		return
 	}
 	defer done()
+	a.transcodeHeld(w, r, abs, downloadName, start)
+}
+
+// transcodeHeld is serveTranscode once its slot is taken (the caller releases it).
+func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloadName string, start float64) {
 	if downloadName != "" {
 		media.SetAttachment(w.Header(), downloadName)
 	}
@@ -736,7 +769,10 @@ func (a *API) serveTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 // stored Matroska (a 2.4.x download) never earns a 304 or MP3 bytes spliced
 // onto Matroska. When the remux can't be had now (still running after
 // remuxColdWait, ErrRemuxUnavailable, an ffmpeg or cache failure) it answers
-// with the live transcode, the remux going on for the next request. It reports
+// with the live transcode, the remux going on for the next request. A remux still
+// running is waited for instead (server#212), up to remuxDownloadWait, when the
+// request is a download (whose saved copy would otherwise be the lossy
+// transcode) or every transcode slot is busy (which would otherwise be a 503). It reports
 // false, having written nothing, when the stored file should be served instead
 // (ErrNotRemuxable: not MP3 inside, or no regular file there); true also when
 // the request went away while waiting.
@@ -745,6 +781,25 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 	defer cancel()
 	f, etag, err := a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
 	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
+	var held func() // a transcode slot taken while the remux runs on
+	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
+	running := err != nil && r.Context().Err() == nil && wait.Err() != nil && errors.Is(err, context.DeadlineExceeded)
+	if running {
+		if !download {
+			held = a.takeTranscodeSlot()
+		}
+		if held == nil {
+			// A download, or no slot free: wait for the remux, up to
+			// remuxDownloadWait, then transcode after all.
+			long, cancelLong := context.WithTimeout(r.Context(), a.remuxLongWait)
+			defer cancelLong()
+			f, etag, err = a.remux.Open(long, a.baseCtx, a.ffmpeg, abs)
+			// A remux that failed by its own timeout is a failure, not this wait.
+			running = err != nil && r.Context().Err() == nil && long.Err() != nil && errors.Is(err, context.DeadlineExceeded)
+		} else {
+			defer held()
+		}
+	}
 	if err != nil {
 		switch {
 		case r.Context().Err() != nil:
@@ -755,7 +810,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			// The server is stopping, and its remux with it: no new transcode now.
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
 			return true
-		case wait.Err() != nil && errors.Is(err, context.DeadlineExceeded):
+		case running:
 			// Still remuxing (it goes on): this request is transcoded.
 		case !errors.Is(err, media.ErrRemuxUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
@@ -763,6 +818,10 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		downloadName := ""
 		if download {
 			downloadName = name
+		}
+		if held != nil {
+			a.transcodeHeld(w, r, abs, downloadName, a.noteTranscode(r, lib, rel))
+			return true
 		}
 		a.serveTranscode(w, r, lib, rel, abs, downloadName)
 		return true
@@ -789,16 +848,32 @@ func (a *API) beginTranscode(w http.ResponseWriter, r *http.Request, lib int64, 
 	}
 	// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
 	// rather than forking another core-pinning encoder.
-	select {
-	case a.transcodeSem <- struct{}{}:
-	default:
+	done = a.takeTranscodeSlot()
+	if done == nil {
 		w.Header().Set("Retry-After", "5")
 		writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 		return nil, 0, false
 	}
+	return done, a.noteTranscode(r, lib, rel), true
+}
+
+// takeTranscodeSlot takes one of the transcode slots and returns its release,
+// nil when every slot is busy.
+func (a *API) takeTranscodeSlot() (release func()) {
+	select {
+	case a.transcodeSem <- struct{}{}:
+		return func() { <-a.transcodeSem }
+	default:
+		return nil
+	}
+}
+
+// noteTranscode marks the device's session transcoded (a cast token's is its
+// sender's) and returns the ?t= start in seconds, for a transcode about to run.
+func (a *API) noteTranscode(r *http.Request, lib int64, rel string) (start float64) {
 	a.streams.Note(credentialFrom(r.Context()).DeviceID, lib, rel, time.Now())
 	start, _ = strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	return func() { <-a.transcodeSem }, start, true
+	return start
 }
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the

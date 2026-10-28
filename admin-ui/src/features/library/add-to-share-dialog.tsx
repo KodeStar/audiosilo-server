@@ -15,6 +15,7 @@ import { errorMessage } from '@/lib/errors';
 import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { chunk } from '@/lib/utils';
+import { isLibraryGrant } from '@/features/people/people-model';
 
 /**
  * Adds books to a named share (the Books selection, or the book page's one
@@ -81,7 +82,7 @@ function AddToShareForm({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const shares = useShares();
-  const named = (shares.data ?? []).filter((s) => s.whole_library_id === undefined);
+  const named = (shares.data ?? []).filter((s) => !isLibraryGrant(s));
   const open = named.filter((s) => !alreadyIn?.has(s.id));
   const [picked, setPicked] = useState<string>();
   const [busy, setBusy] = useState(false);

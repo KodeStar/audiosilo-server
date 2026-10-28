@@ -11,6 +11,7 @@ import {
   shareLabel,
   accessValue,
   sortInvites,
+  isLibraryGrant,
   wholeLibraryOf,
 } from './people-model';
 
@@ -77,7 +78,21 @@ describe('access', () => {
     expect(wholeLibraryOf(whole)).toBe(2);
     expect(wholeLibraryOf(ownWhole)).toBeUndefined();
     expect(wholeLibraryOf(named)).toBeUndefined();
-    expect(wholeLibraryOf(named)).toBeUndefined();
+    expect(isLibraryGrant(whole)).toBe(true);
+    expect(isLibraryGrant(ownWhole)).toBe(false);
+  });
+
+  it("gives no whole library from a marked grant that lost the library's rule (server#230)", () => {
+    const narrowed: Share = { ...whole, paths: [{ library_id: 2, path: 'Gruffalo' }] };
+    const empty: Share = { ...whole, paths: [] };
+    const otherRoot: Share = { ...whole, paths: [{ library_id: 1, path: '' }] };
+    for (const s of [narrowed, empty, otherRoot, { ...whole, paths: undefined }]) {
+      expect(wholeLibraryOf(s)).toBeUndefined();
+      // Still the server's grant share: listed with the grants, changed from a person's page.
+      expect(isLibraryGrant(s)).toBe(true);
+    }
+    // It goes by its own name, not its library's.
+    expect(shareLabel(narrowed, libs)).toBe('Library: Kids');
   });
 
   it('names whole-library grants after their library', () => {

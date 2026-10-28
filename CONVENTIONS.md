@@ -486,9 +486,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
   ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
-  chunks; the player's `findNextSibling`: names compared as its `localeCompare`
-  (numeric, base) does, by `x/text/collate`, and a bare folder only when nothing in
-  the folder, the current book included, is indexed), else `{source:"none"}`. A
+  chunks, and by `markPendingNext`: the folders after the book and before the next
+  indexed one that a scan would make books of, `pending_book` as the listing marks
+  them (server#211), read in name order 16 at a time up to the batch holding one,
+  within 2 s, best-effort (a failed index read is logged, the step answers from the
+  index alone); the player's `findNextSibling`: names compared as its `localeCompare`
+  (numeric, base) does, by `x/text/collate`, a pending folder as a book (offered with no
+  `book`), and a bare folder only when nothing in the folder, the current book
+  included, is indexed), else `{source:"none"}`. A numbered series' end still answers
+  `{source:"series"}` with a pending folder after the book (the folder step isn't asked). A
   failure to place the caller's books leaves the next entry unplaced (as `/meta`
   degrades). `book` is the list shape; everything `next` names is in the caller's
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
@@ -557,15 +563,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   flagged until a scan indexes it (opening one of its files indexes it on demand). The pass has
   `pendingTime` (2 s, walks included) and the request's context: a folder it doesn't reach in
   time stays unmarked. The player opens such a folder as a book (indexed on demand by
-  `bookForPath`).
+  `bookForPath`). Favouriting one indexes it too (server#211, `indexFavourite`, the caller's scope
+  deciding as `bookForPath`'s does), detached from the request like a rescan (the probes don't stop
+  for a context, so a request's deadline would only throw the read away at its last write): the
+  POST waits for it up to `favouriteIndexWait`, 5 s, under the player's 15 s request timeout, and it
+  is saved when it ends.
   **Progress is the book's** (#199): `GET`/`PUT`/`PATCH .../progress?path=` key the row (and
   PUT's listening session) on the path of the indexed book the path is or names a file of
   (`api.progressPath` over `catalog.BookPathOfFile`: the book at it, else the innermost folder
   book one of whose files it is), when the caller's scope allows that book; otherwise on the
   path as given, as before (a navigation folder, a book not indexed yet, a grant reaching only a
   part, a disc folder of a joined book: a download of that disc saves there, on the disc's own
-  timeline). No on-demand index on a save, and a failed lookup is a 500, never a save under
-  another key. Rows old clients already wrote
+  timeline). No on-demand index on a save, and a failed lookup is a 500 (a timed-out one a 503,
+  `writeCatalogError`), never a save under another key. Rows old clients already wrote
   under a part path stay where they are (not merged), and bookmarks, notes, history,
   favourites and the queue are not canonicalized (follow-ups). `POST /cast/token` already grants
   the book's path (`bookAt`).
@@ -587,11 +597,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a link leading out) are 404; a book outside scope 403. Its bytes outlive the request timeout
   (`isLibraryMedia`, in `isStreamingPath`, matches `/ebook` as it does `/cover` and `/stream`), but
   its lookup (`bookAt`, which may index the book on demand and so wait for the one writer) is
-  bounded by it: past it, a 500 (`TestEbookLookupBounded`). It is limited with the authenticated
+  bounded by it: past it, a 503 like any timed-out lookup (`writeCatalogError`'s
+  `context.DeadlineExceeded`; `TestEbookLookupBounded`). It is limited with the authenticated
   API, per credential (`requireAuth`, no media route). The player's
   `Book` carries `ebook: {path, size}` (omitempty; `catalog.Ebook`, the size from `ebook_sig`) on
   every endpoint returning a Book, so a client never asks for a book with none. **Reading
-  progress**: `GET`/`PUT /libraries/{id}/reading-progress?path=` (`bookAt`: a part path is its book's;
+  progress**: `GET`/`PUT /libraries/{id}/reading-progress?path=` (`readingBook`: from the index
+  alone, `catalog.BookEbookAt`, a part path its book's, on demand only when no indexed book is there;
   404 for no book or no ebook) keyed on the BOOK's path (never the epub's or a track's), table
   `reading_progress` (`0057`, carried by `carryListeningState`), `{"reading_progress": row | null}`;
   PUT `{cfi, progression, device_id, updated_at, base_version?}` answers the row stored after the
@@ -631,7 +643,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   timeout; the disk guard; a failure other than that refusal) answers the plain URL with the live
   transcode instead (`serveRemuxed`; `download=1` still named `<stem>.mp3`), the remux going on for
   the next request, since `direct_playable` told the web player not to ask for one (a 503 while the
-  server stops). `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
+  server stops). Two requests wait longer for a remux still running (server#212): a `download=1`
+  (its saved copy would otherwise be the lossy transcode) and a stream that finds every transcode
+  slot busy (else a 503), up to `remuxDownloadWait`, 45 s, sending nothing meanwhile, so under the
+  60 s an idle answer gets from Android's downloader and a reverse proxy; past it they are
+  transcoded after all (the busy 503 when no slot freed). The remux's own timeout (30 min) is a
+  failure, logged, not this wait. `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
   `Remuxer.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
   server so warms hold at most one of the 2 slots, a book warmed once while queued, at most 16 queued
   (more dropped), the cached (not marked used) and known refusals skipped, never a podcast library;
@@ -673,12 +690,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule is that library's `""`, or it has no rule and no holder, since the grant adds that rule and hands
   the share out: anything else (an admin's own share with the name, server#223, a narrowed grant, a
   rule-less share someone holds, a share marked for another library) keeps its rules and holders, and
-  the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken.
+  the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
+  from 2, server#230), made whole and marked in one transaction that looks for the library's grant
+  share again first: write transactions run one at a time, so first grants sent together share one.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
   first file's; one indexed in byte order before #160 still matches by the file that order
-  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). Re-tagging keeps state via
+  put first (`byteFirstFingerprint`, in `detectMoves` and `IndexMoved`). The on-demand index of a
+  book not indexed yet (a renamed folder opened from Folders before a scan, server#209) looks too:
+  `Scanner.movedFrom` takes an indexed book with its fingerprint that is gone from disk
+  (`catalog.MoveCandidates`, `bookOnDisk`) as `IndexMoved`'s from (`indexBookFrom`, which, once the
+  state has moved, finishes the index and drops the old row past its caller's cancel or deadline, so
+  the state never sits on a path with no row). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
   ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
   a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
@@ -768,19 +792,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unchanged; the console offers "Always one book" on a folder without audio only there or
   on a joined book.
   **A book's ebook** (Bridge Phase 3b, `0056`, `library/ebook.go`): `books.ebook_path` is the one
-  `.epub` the reader opens, by `library.BookEbook`'s rule (the Bridge's own, so the reader, the
-  estimate and the Bridge's "auto" source always agree): a folder book's one regular, non-hidden
+  `.epub` the reader opens, by the Bridge's own rule (`generate.epubBeside`), so the reader and the
+  Bridge's "auto" source agree: a folder book's one regular, non-hidden
   `.epub` directly in its folder (a link never counts, several is none); a single-file book's
   `<stem>.epub` beside it as the disk opens that name (the Bridge's `os.Stat` of it: exactly that name
   on a case-sensitive disk, any case of it on a case-insensitive one, recorded under the computed name;
-  `ebookNamed`, one `Lstat`), a link counting while it leads to a regular file inside the library;
+  `ebookNamed`, one `Lstat`), widened for the reader to that name spelled in another Unicode form
+  (server#228: an NFD copy from macOS beside NFC audio on a disk that tells the forms apart; recorded
+  under its own name; in another case too only where the disk opens the name), which the Bridge
+  doesn't find, so the estimate (`library.BookEbook`) keeps the Bridge's lookup as spelled and never
+  quotes an ebook run the Bridge won't make; a link counting while it leads to a regular file inside the library;
   readable (`readableEpub`: a zip listing `META-INF/container.xml`; DRM is not judged, as the Bridge
   doesn't judge it). Ignore rules don't apply (the Bridge's rule doesn't read them). One rule
   function, `ebookCandidate`, serves both callers: the scan feeds it the `.epub` entries its discovery
   walk already lists (`sidecarFiles.epubs`, `ebooksOfWalk`; a single-file book only the entries named
-  in some case of its `<stem>.epub`, through a name index made once per folder), an on-demand index
-  (`indexBook`: `IndexPath`, `IndexMoved`) and `BookEbook` what is on disk now (`ebookOnDisk`: a
-  folder book's folder listed, a single-file book's name looked up); `TestScanRecordsEbookByBookEbookRule`
+  in some case and Unicode form of its `<stem>.epub`, `ebookNameKey`, through a name index made once
+  per folder), an on-demand index (`indexBook`: `IndexPath`, `IndexMoved`) what is on disk now
+  (`ebookOnDisk`: a folder book's folder listed, a single-file book's name looked up, then its
+  folder's epubs listed only when the name has another Unicode form, `hasOtherForm`, and isn't
+  there as spelled); `TestScanRecordsEbookByBookEbookRule`
   and `TestEbookCaseVariantBesideSingleFile` hold them together. `books.ebook_sig` is the named file's
   size, mtime and name (`catalog.EbookSig`; a link's target's), recorded whether or not it is readable
   (a corrupt file, a link out of the library or to nothing, a FIFO: none, recorded by its signature,
@@ -1236,9 +1266,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   flood is looked up up to its concurrency before it pays), an authenticated one spends
   from its credential's bucket (`mediaLimiter` ~200/s burst 2000, `tokenLimiter`
   ~50000/s burst 100000, per credential id) and charges the address's bucket when that
-  refuses it (the lookup was already done), except that a demo account's API requests
-  spend from the address's bucket (`allowCredential`: anyone can mint a demo session,
-  so a per-token budget would be none); everything else (public routes, the
+  refuses it (the lookup was already done), except that a demo account's API and media
+  requests spend from the address's bucket (`allowCredential`: anyone can mint a demo
+  session, so a per-token budget would be none); everything else (public routes, the
   Bridge's `/api/v1/bridge/*`, and `/api/v1/auth/*` with or without a token: sign-in,
   pairing, password, API keys) spends from `ipLimiter` (~50/s, burst 200, per IP).
   Each limiter's idle TTL is two refills, from a minute up to a day. rateLimit
@@ -2168,7 +2198,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   whole database written with `VACUUM INTO` (`store.DB.VacuumInto`, on a short-lived connection of its own:
   the reader pool's query_only refuses it and the one writer would stall writes) into the backups folder
   (`backups.dir`, config.yaml/env only, default `<data>/backups`) as `audiosilo-<UTC time>-<kind>.db`
-  (`scheduled|manual|before-restore`), written under a hidden temporary name, owner-only (0600: it holds
+  (`scheduled|manual|before-restore|before-upgrade`), written under a hidden temporary name, owner-only (0600: it holds
   password and token hashes), then renamed. Settings `backups.schedule` (`""`, `daily:HH:MM`,
   `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
   manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
@@ -2180,7 +2210,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
-  restored database's audit log as the server's own act. **Audit log** (`catalog/audit.go`,
+  restored database's audit log as the server's own act. **Before an upgrade** (UPGRADE-01): next, still
+  before `store.Open`, `backup.BeforeUpgrade` asks `store.PendingMigrations` (read-only; empty for no file or
+  no migration recorded, so a fresh install gets no copy) and, when migrations are pending, writes a
+  `before-upgrade` copy with `store.VacuumFile` plus one INFO line naming them and the copy, keeping the
+  newest 3 (`keepBeforeUpgrade`, `pruneBeforeUpgrade`: the copy just made always, whatever the clock
+  said when the others were named; a copy holding the same pending migrations as a newer one goes,
+  so the retries of a start whose migrations failed part way never push out the copy of the database
+  as the older server left it); a failed copy is a warning and the start carries on. **Audit log** (`catalog/audit.go`,
   `api/handlers_audit.go`): `audit_events` (0019; actor id + name copied, no FK; `via` session/api/system;
   no IP), written by `API.audit` after an admin change succeeds (best effort), kept 365 days / 100k rows
   (`PruneAudit`, daily in `launcher.retention`); scans and job cancels are not audited (Jobs history has

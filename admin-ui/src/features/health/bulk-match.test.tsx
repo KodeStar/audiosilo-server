@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { focusManager } from '@tanstack/react-query';
+import { focusManager, onlineManager } from '@tanstack/react-query';
 import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -457,6 +457,125 @@ describe('bulk matching', () => {
     await shiftClick(user, box('One'));
     for (const title of ['One', 'The Martian', 'Five']) expect(box(title)).toBeChecked();
     expect(within(review).getByRole('button', { name: 'Apply to 3 books' })).toBeEnabled();
+  });
+
+  it('keeps a book matched by hand out of a range while its list reads again offline (server#198)', async () => {
+    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const book = (id: number, title: string): MatchRunItem => ({
+      ...confident,
+      id,
+      path: `Andy Weir/${title}`,
+      book: { title, author: 'Andy Weir' },
+    });
+    const calls = mockFetch(
+      routes([run({ counts: { ...run().counts, auto: 3, pending: 3 } })], {
+        'GET /admin/match-runs/5/items': {
+          body: { items: [book(20, 'One'), confident, book(24, 'Five')], next_after: 0 },
+        },
+        'GET /admin/libraries/1/book': { body: unmatched },
+        // The connection drops as the match is saved: the list's read waits.
+        'PATCH /admin/libraries/1/book': () => {
+          onlineManager.setOnline(false);
+          return { body: unmatched };
+        },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    try {
+      const user = userEvent.setup();
+      renderApp('/health?issue=unmatched');
+      await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+      const review = await screen.findByRole('dialog', { name: 'Review matches' });
+      const box = (title: string) =>
+        within(review).getByRole('checkbox', { name: `Apply to ${title}` });
+      const row = (
+        await within(review).findByRole('checkbox', { name: 'Apply to The Martian' })
+      ).closest('li')!;
+      await matchByHand(user, row);
+      const asked = autoAsked();
+      // Offline: the range passes over the book matched by hand.
+      await user.click(box('One'));
+      await user.click(box('Five'));
+      await shiftClick(user, box('One'));
+      expect(box('One')).toBeChecked();
+      expect(box('Five')).toBeChecked();
+      expect(box('The Martian')).not.toBeChecked();
+      expect(autoAsked()).toBe(asked);
+
+      // Back online the list reads again; then a range takes it.
+      act(() => onlineManager.setOnline(true));
+      await waitFor(() => expect(autoAsked()).toBeGreaterThan(asked));
+      await user.click(box('One'));
+      await user.click(box('Five'));
+      await waitFor(async () => {
+        await shiftClick(user, box('One'));
+        expect(box('The Martian')).toBeChecked();
+      });
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it('offers no next page while the read after a match by hand waits offline (server#198)', async () => {
+    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const one: MatchRunItem = {
+      ...confident,
+      id: 20,
+      path: 'Andy Weir/One',
+      book: { title: 'One', author: 'Andy Weir' },
+    };
+    const calls = mockFetch(
+      routes([run({ counts: { ...run().counts, auto: 2, pending: 2 } })], {
+        // Two pages: The Martian, then One.
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: req.query.get('after')
+            ? { items: [one], next_after: 0 }
+            : { items: [confident], next_after: 10 },
+        }),
+        'GET /admin/libraries/1/book': { body: unmatched },
+        // The connection drops as the match is saved: the list's read waits.
+        'PATCH /admin/libraries/1/book': () => {
+          onlineManager.setOnline(false);
+          return { body: unmatched };
+        },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    try {
+      const user = userEvent.setup();
+      renderApp('/health?issue=unmatched');
+      await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+      const review = await screen.findByRole('dialog', { name: 'Review matches' });
+      const more = () => within(review).getByRole('button', { name: 'Show more' });
+      const row = (
+        await within(review).findByRole('checkbox', { name: 'Apply to The Martian' })
+      ).closest('li')!;
+      expect(more()).toBeEnabled();
+      await matchByHand(user, row);
+      const asked = autoAsked();
+      // The read is paused, not fetching: a next page would cancel it and pass for it.
+      await waitFor(() => expect(more()).toBeDisabled());
+      expect(autoAsked()).toBe(asked);
+
+      // Back online the read lands, and the next page is a click away again.
+      act(() => onlineManager.setOnline(true));
+      await waitFor(() => expect(autoAsked()).toBeGreaterThan(asked));
+      await waitFor(() => expect(more()).toBeEnabled());
+      await user.click(more());
+      expect(
+        await within(review).findByRole('checkbox', { name: 'Apply to One' }),
+      ).toBeInTheDocument();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('lets a range take a book matched by hand with an ASIN once a read of its list shows its checkbox', async () => {

@@ -29,6 +29,7 @@ import { backupFailureKey } from '@/lib/server-events';
 import { CardEmpty } from './card-empty';
 import { describeSchedule, restoreFailureKey, totalSize } from './backups-model';
 import { SettingBadges, SettingsForm } from './settings-form';
+import { BACKUP_KEEP_RANGE } from './settings-model';
 
 /** How long the outcome of the last restore stays on this page. */
 const RESTORE_NEWS_MS = 14 * 86_400_000;
@@ -52,7 +53,7 @@ export function BackupsTopic({ settings }: { settings: AdminSettings }) {
         title={t('backups.scheduleCard')}
         fields={[
           { name: 'schedule', kind: 'schedule' },
-          { name: 'keep', kind: 'number', placeholder: '7' },
+          { name: 'keep', kind: 'number', placeholder: '7', range: BACKUP_KEEP_RANGE },
         ]}
       >
         <SettingRow
@@ -256,7 +257,13 @@ function BackupList({ env, schedule }: { env: BackupsEnvelope; schedule: string 
               <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
                 <span className="flex flex-wrap items-center gap-2">
                   <b className="font-semibold">{formatDateTime(b.created_at, lang)}</b>
-                  <Badge variant={b.kind === 'before-restore' ? 'warning' : 'secondary'}>
+                  <Badge
+                    variant={
+                      b.kind === 'before-restore' || b.kind === 'before-upgrade'
+                        ? 'warning'
+                        : 'secondary'
+                    }
+                  >
                     {t(`backups.kind.${b.kind}`)}
                   </Badge>
                 </span>

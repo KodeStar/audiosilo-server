@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -100,6 +101,8 @@ func TestDemoSessionFlow(t *testing.T) {
 	}
 	if _, libs := e.do(t, "GET", "/api/v1/libraries", out.Token, ""); !strings.Contains(libs, "Demo") {
 		t.Fatalf("demo user cannot see demo library: %s", libs)
+	} else if strings.Contains(libs, `"root"`) {
+		t.Fatalf("a demo visitor is told the library's root: %s", libs)
 	}
 
 	// The pairing token exchanges for a second (phone) session as the same user.
@@ -111,5 +114,29 @@ func TestDemoSessionFlow(t *testing.T) {
 	json.Unmarshal([]byte(ex), &exr)
 	if exr.Token == "" {
 		t.Fatalf("pairing exchange failed: %s", ex)
+	}
+}
+
+// Past the per-IP cap a demo session is a 429 that says when to try again
+// (Retry-After, whole seconds, within the limiter's 15 minutes).
+func TestDemoSessionRateLimited(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	if _, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Demo", Root: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Demo.Enabled = true
+	e.cfg.Demo.Library = "Demo"
+	for i := range 5 {
+		if resp, body := e.do(t, "POST", "/api/v1/demo/session", "", ""); resp.StatusCode != 200 {
+			t.Fatalf("demo session %d: %d %s", i, resp.StatusCode, body)
+		}
+	}
+	resp, body := e.do(t, "POST", "/api/v1/demo/session", "", "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("past the cap: %d %s", resp.StatusCode, body)
+	}
+	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err != nil || secs < 1 || secs > 15*60 {
+		t.Fatalf("Retry-After = %q, want 1-900 seconds", resp.Header.Get("Retry-After"))
 	}
 }

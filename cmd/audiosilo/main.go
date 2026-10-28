@@ -10,10 +10,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/kodestar/audiosilo-server/internal/api"
 	"github.com/kodestar/audiosilo-server/pkg/launcher"
 )
 
@@ -23,6 +25,9 @@ func main() {
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "path to ffmpeg binary for on-the-fly transcoding (\"\" to disable)")
 	setup := flag.Bool("setup", false, "first-run web setup wizard: instead of auto-creating the admin, enable a browser wizard to set the admin password (the admin console then walks through the rest)")
 	flag.Parse()
+	if code, done := command(flag.Args(), os.Stdout, os.Stderr); done {
+		os.Exit(code)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -35,5 +40,25 @@ func main() {
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
+	}
+}
+
+// command handles the positional arguments after the flags: none runs the server
+// (done is false); "version" prints the version and exits 0, before anything
+// touches the data directory; anything else is a usage error (exit 2, as the
+// flag package exits on a bad flag).
+func command(args []string, stdout, stderr io.Writer) (code int, done bool) {
+	switch {
+	case len(args) == 0:
+		return 0, false
+	case len(args) == 1 && args[0] == "version":
+		_, _ = fmt.Fprintln(stdout, "audiosilo", api.Version)
+		return 0, true
+	case args[0] == "version":
+		_, _ = fmt.Fprintln(stderr, "audiosilo: \"version\" takes no arguments (flags go before it; run with -h for them)")
+		return 2, true
+	default:
+		fmt.Fprintf(stderr, "audiosilo: unknown command %q (the only command is \"version\"; run with -h for the flags)\n", args[0])
+		return 2, true
 	}
 }

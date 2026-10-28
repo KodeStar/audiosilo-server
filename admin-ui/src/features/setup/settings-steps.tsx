@@ -15,7 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { Switch } from '@/components/ui/switch';
 import { SettingBadges } from '@/features/settings/settings-form';
-import { METADATA_MODES, outOfRange } from '@/features/settings/settings-model';
+import { BACKUP_KEEP_RANGE, METADATA_MODES, outOfRange } from '@/features/settings/settings-model';
 import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
 import { regionOptions } from '@/lib/regions';
@@ -440,7 +440,7 @@ export function BackupsStep({ settings, leave, back, last }: StepProps) {
   const [updates, setUpdates] = useState(settings.general.update_check);
   const [error, setError] = useState<string | null>(null);
   const dir = b.dir || system.data?.backups?.dir || '';
-  const keepBad = outOfRange(keep, 1, 365);
+  const keepBad = outOfRange(keep, BACKUP_KEEP_RANGE.min, BACKUP_KEEP_RANGE.max);
 
   const onContinue = async () => {
     setError(null);

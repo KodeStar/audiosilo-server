@@ -290,6 +290,9 @@ func (a *API) podcastQueueError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, bridge.ErrNotFound):
 		writeErrorCode(w, 404, "episode_not_found", "Episode not found.")
 	case errors.Is(err, bridge.ErrTooManyRequests):
+		// The open follows settle as the Bridge works through them: a guess at
+		// when one has, so every 429 says when to try again.
+		setRetryAfter(w, 30*time.Second)
 		writeErrorCode(w, 429, "too_many_requests", "At most five follow requests may be open.")
 	case errors.Is(err, bridge.ErrFetchLimit):
 		writeErrorCode(w, 409, "fetch_limit", bridge.FetchErrorFor("fetch_limit").Message)
@@ -403,7 +406,8 @@ func (a *API) handlePodcastCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		if st.LastChecked != nil {
 			t, _ := time.Parse(time.RFC3339, *st.LastChecked)
-			if time.Since(t) < time.Minute {
+			if since := time.Since(t); since < time.Minute {
+				setRetryAfter(w, time.Minute-since)
 				writeErrorCode(w, 429, "checked_recently", "This feed was checked recently.")
 				return
 			}

@@ -2,10 +2,13 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestCleanRelPath pins the canonicalization every user-supplied rel path goes
@@ -307,6 +310,58 @@ func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
 	shares, _ = c.ListShares(ctx)
 	if len(shares) != 1 || shares[0].ID != own.ID {
 		t.Fatalf("after deleting the library: %+v, want only Favourites", shares)
+	}
+}
+
+// First grants of one library sent together (two tabs, a burst of demo
+// sessions) all get the one grant share: each looks for it before any has
+// committed, and the transaction that makes it looks again (server#230's
+// numbered names would otherwise give each request a share of its own).
+func TestGrantWholeLibraryConcurrentFirstGrants(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/a"})
+	const n = 6
+	users := make([]int64, n)
+	for i := range users {
+		users[i] = seedUserNamed(t, c, ctx, fmt.Sprintf("u%d", i))
+	}
+	// Hold the one writer so every grant has looked (and found nothing) before
+	// the first share can commit.
+	held, release, holdDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(holdDone)
+		_ = c.db.WithTx(ctx, "hold", func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `UPDATE libraries SET name = name WHERE id = ?`, lib.ID); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return errors.New("roll back")
+		})
+	}()
+	<-held
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i, u := range users {
+		wg.Go(func() { errs[i] = c.GrantWholeLibrary(ctx, u, lib.ID) })
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	<-holdDone
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("grant %d: %v", i, err)
+		}
+	}
+	shares, _ := c.ListShares(ctx)
+	if len(shares) != 1 || shares[0].WholeLibraryID == nil || *shares[0].WholeLibraryID != lib.ID {
+		t.Fatalf("concurrent first grants made %+v, want the one marked grant share", shares)
+	}
+	members, _ := c.ShareMembers(ctx)
+	if got := members[shares[0].ID]; len(got) != n {
+		t.Fatalf("grant share holders = %v, want all %d users", got, n)
 	}
 }
 
@@ -778,8 +833,9 @@ func TestGrantWholeLibraryFinishesAnInterruptedGrant(t *testing.T) {
 }
 
 // An admin's own share under the "(<id>)" name is no more adopted than one under
-// "Library: <name>": with both names taken by shares of their own, the grant is
-// refused (ErrNameTaken, a 409) and both are left as they were.
+// "Library: <name>": with both names taken by shares of their own, the grant
+// goes to a new share under the next numbered name, made whole and marked at
+// once, and both are left as they were (server#230).
 func TestGrantWholeLibraryNeverAdoptsAnAdminShareByTheIDName(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -798,8 +854,8 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShareByTheIDName(t *testing.T) {
 		mine = append(mine, share)
 	}
 
-	if err := c.GrantWholeLibrary(ctx, guest, kids.ID); !errors.Is(err, ErrNameTaken) {
-		t.Fatalf("grant with both names taken = %v; want ErrNameTaken", err)
+	if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+		t.Fatalf("grant with both names taken = %v; want it granted under a third", err)
 	}
 	for _, m := range mine {
 		got, err := c.GetShare(ctx, m.ID)
@@ -810,8 +866,30 @@ func TestGrantWholeLibraryNeverAdoptsAnAdminShareByTheIDName(t *testing.T) {
 			t.Fatalf("admin's share %q = %+v; want %+v, unmarked", m.Name, got, m)
 		}
 	}
-	if sc, _ := c.UserScope(ctx, guest, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
-		t.Fatalf("guest's Kids scope = %+v; want none", sc)
+	held, _ := c.UserShares(ctx, guest)
+	if len(held) != 1 || held[0].Name != fmt.Sprintf("Library: Kids (%d) 2", kids.ID) ||
+		held[0].WholeLibraryID == nil || *held[0].WholeLibraryID != kids.ID {
+		t.Fatalf("guest's shares = %+v; want the marked grant under the numbered name", held)
+	}
+	if sc, _ := c.UserScope(ctx, guest, kids.ID, false); !sc.AllowAll {
+		t.Fatalf("guest's Kids scope = %+v; want the whole library", sc)
+	}
+	// Granting again reuses that grant; with every name taken it is refused.
+	if err := c.GrantWholeLibrary(ctx, seedUserNamed(t, c, ctx, "guest2"), kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	if shares, _ := c.ListShares(ctx); len(shares) != 3 {
+		t.Fatalf("shares = %d; want the admin's two and one grant", len(shares))
+	}
+	books, _ := c.CreateLibrary(ctx, Library{Name: "Books", Root: "/tmp/books"})
+	for i := range maxGrantNames {
+		if _, err := c.CreateShare(ctx, Share{Name: grantName("Library: Books", books.ID, i),
+			Paths: []PathRule{{LibraryID: books.ID, Path: "Some"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.GrantWholeLibrary(ctx, guest, books.ID); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("grant with every name taken = %v; want ErrNameTaken", err)
 	}
 }
 

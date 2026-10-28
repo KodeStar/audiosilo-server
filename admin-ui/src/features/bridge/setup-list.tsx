@@ -53,7 +53,7 @@ export function BridgeSetupList({
         const Icon = STATE_ICON[state];
         const label = setupItemLabel(item.id);
         const name = t(label.key, { defaultValue: label.fallback });
-        const link = state === 'done' ? undefined : setupItemLink(uiUrl, item.id);
+        const link = state === 'done' ? undefined : setupItemLink(uiUrl, item.id, item.detail);
         return (
           <li key={item.id} className="flex items-start gap-3 py-2.5">
             <Icon className={cn('mt-0.5 size-4 shrink-0', STATE_TONE[state])} aria-hidden="true" />

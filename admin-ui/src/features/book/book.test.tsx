@@ -64,6 +64,44 @@ describe('book page', () => {
     ).toHaveTextContent(/^by Brandon Sanderson · book 1 in The Stormlight Archive$/);
   });
 
+  it("shows the book's ebook in Files and as a hero chip", async () => {
+    const detail = bookDetail();
+    detail.book = {
+      ...detail.book,
+      ebook: { path: `${detail.book.path}/The Way of Kings.epub`, size: 2_400_000 },
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    const line = await screen.findByRole('group', { name: 'Ebook' });
+    expect(line).toHaveTextContent('The Way of Kings.epub');
+    expect(line).toHaveTextContent(/2\.4 MB/);
+    expect(screen.getByRole('heading', { level: 1 }).parentElement).toHaveTextContent('Ebook');
+  });
+
+  it('shows no ebook line or chip for a book without one', async () => {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('group', { name: 'Ebook' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 }).parentElement).not.toHaveTextContent('Ebook');
+  });
+
+  it('names whole-library access only for a grant that still holds the library (server#230)', async () => {
+    const detail = bookDetail();
+    detail.shares = [
+      { share_id: 8, name: 'Library: Fiction', path: '', whole_library_id: 1 },
+      // A marked grant narrowed to a folder reads as that folder.
+      { share_id: 9, name: 'Library: Fiction (9)', path: 'Brandon Sanderson', whole_library_id: 1 },
+    ];
+    mockFetch(routes(detail));
+    renderApp(URL);
+    const access = await screen.findByRole('region', { name: 'Who can see this' });
+    expect(within(access).getByText('Fiction library')).toBeInTheDocument();
+    expect(within(access).getAllByText('Whole-library access')).toHaveLength(1);
+    expect(within(access).getByText('Library: Fiction (9)')).toBeInTheDocument();
+    expect(within(access).getByText('via Brandon Sanderson')).toBeInTheDocument();
+  });
+
   it('lists every series the book is in, each a link', async () => {
     const detail = bookDetail();
     detail.book = {

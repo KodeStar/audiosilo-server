@@ -614,6 +614,9 @@ func TestCancellationAndReset(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the last waiter's leaving did not cancel the fetch")
 	}
+	// Its waiter left before it ended: wait for its slot (only two) to free, as
+	// every later step needs one (server#200).
+	waitFor(t, func() bool { return len(s.fetchSlots) == 0 })
 	s.mu.Lock()
 	if s.failures.len() != 0 || s.results.len() != 0 {
 		t.Fatal("a cancelled fetch was recorded")

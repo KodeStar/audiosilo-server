@@ -25,7 +25,7 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { InviteCard } from './invite-card';
 import { grantAccess } from './grant-access';
-import { accessValue, inviteStatus, parseAccessChoice, wholeLibraryOf } from './people-model';
+import { accessValue, inviteStatus, isLibraryGrant, parseAccessChoice } from './people-model';
 
 const USES = [1, 3, 5, 10, 0] as const; // 0 = unlimited
 const DAYS = [1, 7, 30, 0] as const; // 0 = never
@@ -121,7 +121,7 @@ function InviteForm({
   const qc = useQueryClient();
   const libraries = useLibraries();
   const shares = useShares();
-  const named = (shares.data ?? []).filter((s) => wholeLibraryOf(s) === undefined);
+  const named = (shares.data ?? []).filter((s) => !isLibraryGrant(s));
   const libs = libraries.data ?? [];
 
   const accessOptions: RadioCardOption<string>[] = [

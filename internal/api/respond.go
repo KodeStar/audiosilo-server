@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -80,6 +81,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // "error".
 const (
 	codeUsernameTaken      = "username_taken"
+	codeInviteUsed         = "invite_used"    // redeem: a real invite with no uses left
+	codeInviteExpired      = "invite_expired" // redeem: a real invite past its expiry
 	codeNameTaken          = "name_taken"
 	codeConfigLibrary      = "config_library" // a library the config declares: renamed, moved or deleted here
 	codeLastAdmin          = "last_admin"
@@ -248,6 +251,12 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
 		errors.Is(err, catalog.ErrNothingToChange):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		// A bounded lookup that ran out of time (a stalled writer) is the
+		// timeout middleware's 503, also on the one route it doesn't wrap that
+		// bounds its lookup (the ebook's: handleEbook).
+		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
+		writeError(w, http.StatusServiceUnavailable, "request timed out")
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)
@@ -306,4 +315,38 @@ func queryInt(r *http.Request, name string, def int) int {
 		return def
 	}
 	return n
+}
+
+// apiNoRoutePattern catches every /api/v1/ path no route claims, under each of
+// apiMethods (a pattern with no method would conflict with the web package's
+// "GET /").
+const apiNoRoutePattern = "/api/v1/"
+
+// apiMethods are the methods the API's routes use (GET covers HEAD).
+var apiMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+// apiNoRoute answers a request no API route claims with the JSON error envelope:
+// 405 method_not_allowed with Allow when the path is a route under another
+// method (what the mux itself would have said before this catch-all outranked
+// it), else 404 not_found.
+func apiNoRoute(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var allow []string
+		for _, m := range apiMethods {
+			if m == r.Method {
+				continue
+			}
+			other := r.Clone(r.Context())
+			other.Method = m
+			if _, pattern := mux.Handler(other); pattern != "" && pattern != m+" "+apiNoRoutePattern {
+				allow = append(allow, m)
+			}
+		}
+		if len(allow) > 0 {
+			w.Header().Set("Allow", strings.Join(allow, ", "))
+			writeErrorCode(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			return
+		}
+		writeErrorCode(w, http.StatusNotFound, "not_found", "not found")
+	})
 }

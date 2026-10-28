@@ -416,8 +416,8 @@ func TestResolveAuthCode(t *testing.T) {
 	if _, err := consumePairing(s, ctx, pairThrough(t, s, ctx, code)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ResolveAuthCode(ctx, code); err != ErrInvalidCode {
-		t.Fatalf("exhausted code resolve = %v, want ErrInvalidCode", err)
+	if _, err := s.ResolveAuthCode(ctx, code); !errors.Is(err, ErrInvalidCode) || !errors.Is(err, ErrCodeExhausted) {
+		t.Fatalf("exhausted code resolve = %v, want ErrInvalidCode and ErrCodeExhausted", err)
 	}
 }
 

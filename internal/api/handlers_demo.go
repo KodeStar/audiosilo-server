@@ -33,6 +33,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 	// let concurrent requests slip past the cap.
 	ip := clientIP(r)
 	if !a.demoLimiter.Acquire(ip) {
+		setRetryAfter(w, a.demoLimiter.LockedFor(ip))
 		writeError(w, http.StatusTooManyRequests, "too many demo sessions, try again later")
 		return
 	}

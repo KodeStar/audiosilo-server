@@ -795,33 +795,25 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	}
 	name := "Library: " + lib.Name
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
+	created := false
 	if errors.Is(err, ErrNotFound) {
-		share, err = c.CreateShare(ctx, Share{Name: name, Description: wholeLibraryShareDescription})
-		if errors.Is(err, ErrNameTaken) {
-			// Another library's grant already has this name (that library was
-			// renamed and this one took its old name), or a share that can't be
-			// this library's grant does (wholeLibraryShare never adopts one). The
-			// name is internal - clients show the library's own - so tell them
-			// apart by id.
-			share, err = c.CreateShare(ctx, Share{
-				Name: wholeLibraryIDName(name, libraryID), Description: wholeLibraryShareDescription,
-			})
-		}
+		share, created, err = c.createWholeLibraryShare(ctx, libraryID, name)
 	}
 	if err != nil {
 		return err
 	}
-	// Always ensure the whole-library rule exists, not just on creation: a
-	// reused share may lack it (an unheld one an interrupted grant left).
-	// AddSharePath is INSERT OR IGNORE, so re-running is cheap.
-	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
-		return err
-	}
-	// Mark it as this library's grant (idempotent; also heals a share made
-	// before the column existed that the migration couldn't match).
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE shares SET whole_library_id = ? WHERE id = ?`, libraryID, share.ID); err != nil {
-		return err
+	// A share made here is whole and marked already (one transaction). A reused
+	// one may lack its rule (an unheld one an interrupted grant of an older
+	// version left) or its mark (one made before the column existed that the
+	// migration couldn't match): both are idempotent, so re-running is cheap.
+	if !created {
+		if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
+			return err
+		}
+		if _, err := c.db.ExecContext(ctx,
+			`UPDATE shares SET whole_library_id = ? WHERE id = ?`, libraryID, share.ID); err != nil {
+			return err
+		}
 	}
 	return c.GrantShare(ctx, userID, share.ID)
 }
@@ -834,6 +826,76 @@ const wholeLibraryShareDescription = "Whole library"
 // <name>" (name) is another share's.
 func wholeLibraryIDName(name string, libraryID int64) string {
 	return fmt.Sprintf("%s (%d)", name, libraryID)
+}
+
+// maxGrantNames bounds the names createWholeLibraryShare tries.
+const maxGrantNames = 20
+
+// grantName is the i-th name createWholeLibraryShare tries for libraryID's
+// grant share: "Library: <name>", then "Library: <name> (<id>)", then that
+// numbered from 2.
+func grantName(name string, libraryID int64, i int) string {
+	switch i {
+	case 0:
+		return name
+	case 1:
+		return wholeLibraryIDName(name, libraryID)
+	}
+	return fmt.Sprintf("%s %d", wholeLibraryIDName(name, libraryID), i)
+}
+
+// createWholeLibraryShare makes libraryID's grant share in one transaction:
+// named by the first of grantName's names no share has, with the library's ""
+// rule and marked as its grant, so no interrupted grant leaves a share without
+// its rule. The name is internal (clients show the library's own), so another
+// share holding one (another library's grant after a rename, an admin's own
+// share, a grant since narrowed, which is never adopted) only moves it along
+// (server#230). It looks again inside the transaction, and returns with created
+// false the grant share another grant made since the caller looked: write
+// transactions run one at a time, so first grants sent together (two tabs, a
+// burst of demo sessions) share one, where the numbered names would otherwise
+// give each its own. ErrNameTaken only when every name is taken.
+func (c *Catalog) createWholeLibraryShare(ctx context.Context, libraryID int64, name string) (share *Share, created bool, err error) {
+	s := &Share{Description: wholeLibraryShareDescription, Paths: []PathRule{{LibraryID: libraryID, Path: ""}},
+		WholeLibraryID: &libraryID}
+	var found int64
+	err = c.db.WithTx(ctx, "createWholeLibraryShare", func(tx *sql.Tx) error {
+		id, err := wholeLibraryShareID(ctx, tx, libraryID, name)
+		if err == nil {
+			found = id
+			return nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		for i := range maxGrantNames {
+			// A refused INSERT ends only its statement in SQLite, not the
+			// transaction, so the next name is tried in the same one.
+			n := grantName(name, libraryID, i)
+			res, err := tx.ExecContext(ctx,
+				`INSERT INTO shares(name, description, read_only, created_at, whole_library_id) VALUES(?,?,0,?,?)`,
+				n, s.Description, c.ts(), libraryID)
+			if store.IsUniqueViolation(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			s.ID, _ = res.LastInsertId()
+			s.Name = n
+			_, err = tx.ExecContext(ctx, `INSERT INTO share_paths(share_id, library_id, path) VALUES(?,?,'')`, s.ID, libraryID)
+			return err
+		}
+		return ErrNameTaken
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if found != 0 {
+		share, err = c.GetShare(ctx, found)
+		return share, false, err
+	}
+	return s, true, nil
 }
 
 // wholeLibraryShare finds the share that grants libraryID whole: the one marked
@@ -849,8 +911,18 @@ func wholeLibraryIDName(name string, libraryID int64) string {
 // its holders or hand their folders to the new one. The caller then creates a
 // share of its own.
 func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
+	id, err := wholeLibraryShareID(ctx, c.db, libraryID, name)
+	if err != nil {
+		return nil, err
+	}
+	return c.GetShare(ctx, id)
+}
+
+// wholeLibraryShareID is wholeLibraryShare's lookup, read through q (the
+// catalog, or a transaction that must see its own writes).
+func wholeLibraryShareID(ctx context.Context, q querier, libraryID int64, name string) (int64, error) {
 	var id int64
-	err := c.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT s.id FROM shares s
 		  WHERE (s.whole_library_id = ?1
 		         OR (s.whole_library_id IS NULL AND s.name IN (?2, ?3) AND s.description = ?4))
@@ -861,12 +933,9 @@ func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name s
 		  ORDER BY s.whole_library_id IS NULL, s.id LIMIT 1`,
 		libraryID, name, wholeLibraryIDName(name, libraryID), wholeLibraryShareDescription).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		return 0, ErrNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
-	return c.GetShare(ctx, id)
+	return id, err
 }
 
 func (c *Catalog) shareByName(ctx context.Context, name string) (*Share, error) {
