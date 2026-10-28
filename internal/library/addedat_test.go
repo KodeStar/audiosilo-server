@@ -15,13 +15,18 @@ func TestStampAddedAt(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	lib := catalog.Library{Root: root}
-	writeFile(t, root, "A/Book/01.mp3", []byte("x"))
+	// 02.mp3, listed after 01.mp3, is the earliest file: its mtime is older (a
+	// Mac moves its birth time back with it), and 01.mp3 is made a second later
+	// for a filesystem whose birth times can't be set (Linux).
 	writeFile(t, root, "A/Book/02.mp3", []byte("x"))
-	writeFile(t, root, "loose.mp3", []byte("x"))
 	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 	if err := os.Chtimes(filepath.Join(root, "A/Book/02.mp3"), old, old); err != nil {
 		t.Fatal(err)
 	}
+	// Past the next second by more than a file timestamp's coarse clock lags.
+	time.Sleep(time.Until(time.Unix(time.Now().Unix()+1, int64(100*time.Millisecond))))
+	writeFile(t, root, "A/Book/01.mp3", []byte("x"))
+	writeFile(t, root, "loose.mp3", []byte("x"))
 	of := func(rel string) string {
 		t.Helper()
 		abs := filepath.Join(root, filepath.FromSlash(rel))
@@ -31,7 +36,10 @@ func TestStampAddedAt(t *testing.T) {
 		}
 		return addedAt(abs, info)
 	}
-	want := min(of("A/Book/01.mp3"), of("A/Book/02.mp3"))
+	want := of("A/Book/02.mp3")
+	if first := of("A/Book/01.mp3"); want >= first {
+		t.Fatalf("02.mp3 (%s) isn't earlier than 01.mp3 (%s): nothing tells the earliest file", want, first)
+	}
 
 	folder := catalog.Book{RelPath: "A/Book", IsFolder: true, Files: []catalog.BookFile{
 		{RelPath: "A/Book/gone.mp3"}, {RelPath: "A/Book/01.mp3"}, {RelPath: "A/Book/02.mp3"},

@@ -20,6 +20,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
 func coverURL(libID int64, path string, size string) string {
@@ -309,7 +310,7 @@ func TestCoverColorAndVersion(t *testing.T) {
 	cc, artVersion := itemCover(t, e, adminTok, libID, "Sidecar")
 	thumb, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, "")
 	etag := thumb.Header.Get("ETag")
-	if artVersion == first["Sidecar"].Version || etag != `"thumb-160-`+artVersion+`"` || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
+	if artVersion == first["Sidecar"].Version || etag != `"thumb-160-`+media.ThumbnailRev+"-"+artVersion+`"` || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
 		t.Fatalf("sidecar after batch: color %+v version %q (ETag %s), want black bg, no accent, the art's version", cc, artVersion, etag)
 	}
 
@@ -375,7 +376,7 @@ func TestCoverSidecarReplacedInPlace(t *testing.T) {
 	if next.StatusCode != http.StatusOK || next.Header.Get("ETag") == first.Header.Get("ETag") {
 		t.Fatalf("replaced art = %d (ETag %s), want 200 with a new ETag", next.StatusCode, next.Header.Get("ETag"))
 	}
-	if cc == nil || cc.Bg != "#141e50" || version == oldVersion || next.Header.Get("ETag") != `"thumb-320-`+version+`"` {
+	if cc == nil || cc.Bg != "#141e50" || version == oldVersion || next.Header.Get("ETag") != `"thumb-320-`+media.ThumbnailRev+"-"+version+`"` {
 		t.Fatalf("after the replaced art's thumbnail: colour %+v version %q (was %q, ETag %s), want navy at the new art's version",
 			cc, version, oldVersion, next.Header.Get("ETag"))
 	}

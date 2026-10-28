@@ -1,8 +1,10 @@
 package library
 
 import (
+	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"strings"
 	"unicode"
 
@@ -46,63 +48,82 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 // A fixed permission or a share that came back changes neither the file's mtime
 // nor its size, and a problem on a part other than the first leaves the book's
 // duration and codec looking complete, so without this a scan would skip the book
-// and the problem would stay listed. It reads only that one file, and not even
-// that when this server has seen ffprobe reject the file's data with the book as
-// it is now (rejectedFile): the same ffprobe rejects the same bytes again, and
-// each run is a process start (most of a no-change scan of a library holding a
-// damaged file).
-func (s *Scanner) problemCleared(lib catalog.Library, sig catalog.Signature) bool {
-	if sig.ScanErrorFile == "" || (sig.ScanError != problemUnreadable && sig.ScanError != problemProbe) {
+// and the problem would stay listed. It reads only that one file, with the scan's
+// slots under its ctx as enrich reads (a read the scan stopped answers false: the
+// scan ends at its next check), and not even that when this server has seen
+// ffprobe reject the file's data with the file as it is now (noteRejected): the
+// same ffprobe rejects the same bytes again, and each run is a process start
+// (most of a no-change scan of a library holding a damaged file).
+func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig catalog.Signature, slots *readSlots) bool {
+	if !recheckable(sig) {
 		return false
 	}
-	file := rejectedFile{library: lib.ID, file: sig.ScanErrorFile}
-	book := bookState{mtime: sig.MTime, size: sig.Size}
+	abs := absOf(lib, sig.ScanErrorFile)
 	probe := sig.ScanError == problemProbe
-	if probe && s.wasRejected(file, book) {
+	var at *fileState
+	if probe {
+		// The file's own state, before the read: a book's is a folder's newest
+		// part and total size, which a part put back as it was leaves unchanged.
+		if info, err := os.Stat(abs); err == nil {
+			at = &fileState{mtime: info.ModTime().Unix(), size: info.Size()}
+			if s.wasRejected(abs, *at) {
+				return false
+			}
+		}
+	}
+	md := slots.extract(ctx, abs, s.ffprobePath)
+	if md == nil {
 		return false
 	}
-	md, _ := metadata.Extract(absOf(lib, sig.ScanErrorFile), s.ffprobePath)
-	if probe {
-		s.noteRejected(file, book, md)
-	}
+	s.noteRejected(abs, at, md)
 	return md.OpenErr == nil && (!probe || md.ProbeErr == nil)
 }
 
-// rejectedFile is a file ffprobe rejected (metadata.ErrProbeRejected), kept
-// with its book's bookState then: a scan that finds the book in the same state
-// takes it to hold the same bytes, as it does for every book it finds unchanged.
-type rejectedFile struct {
-	library int64
-	file    string // library-relative
-}
+// fileState is a file's mtime (Unix seconds) and size: with its absolute path,
+// what a rejection of its data is remembered by (noteRejected). A scan that
+// finds the file in the same state takes it to hold the same bytes, as it does
+// for every book it finds unchanged.
+type fileState struct{ mtime, size int64 }
 
-// bookState is a book's mtime and size.
-type bookState struct{ mtime, size int64 }
-
-// noteRejected remembers file with its book in state book when md says ffprobe
-// rejected the file's data (not a time-out, an exec failure or a read error:
-// those may pass), replacing what was remembered of it before. Remembered for
-// the server's life only, so a restart (perhaps with another ffprobe) looks
-// again.
-func (s *Scanner) noteRejected(file rejectedFile, book bookState, md *metadata.Metadata) {
-	if md == nil || md.OpenErr != nil || !errors.Is(md.ProbeErr, metadata.ErrProbeRejected) {
+// noteRejected keeps what md, a reading of the file at abs, says for
+// problemCleared. A rejection of its data (metadata.ErrProbeRejected; not a
+// time-out, an exec failure or a read error, which may pass) is remembered with
+// the file's state from before the read (at; nil when the reader doesn't know
+// it, and nothing is remembered then), replacing what was. Any other reading
+// forgets what was remembered of the file: it has read otherwise since. A read
+// stopped by its scan (nil) says nothing. Remembered for the server's life only,
+// so a restart (perhaps with another ffprobe) looks again.
+func (s *Scanner) noteRejected(abs string, at *fileState, md *metadata.Metadata) {
+	if md == nil {
 		return
 	}
+	rejected := md.OpenErr == nil && errors.Is(md.ProbeErr, metadata.ErrProbeRejected)
 	s.rejectedMu.Lock()
 	defer s.rejectedMu.Unlock()
-	if s.rejected == nil {
-		s.rejected = map[rejectedFile]bookState{}
+	switch {
+	case !rejected:
+		delete(s.rejected, abs)
+	case at != nil:
+		if s.rejected == nil {
+			s.rejected = map[string]fileState{}
+		}
+		s.rejected[abs] = *at
 	}
-	s.rejected[file] = book
 }
 
-// wasRejected reports whether noteRejected remembered file with its book in
-// state book.
-func (s *Scanner) wasRejected(file rejectedFile, book bookState) bool {
+// wasRejected reports whether noteRejected remembered the file at abs in state
+// at.
+func (s *Scanner) wasRejected(abs string, at fileState) bool {
 	s.rejectedMu.Lock()
 	defer s.rejectedMu.Unlock()
-	was, ok := s.rejected[file]
-	return ok && was == book
+	was, ok := s.rejected[abs]
+	return ok && was == at
+}
+
+// recheckable reports whether sig records a read problem with one file that
+// problemCleared can look at again.
+func recheckable(sig catalog.Signature) bool {
+	return sig.ScanErrorFile != "" && (sig.ScanError == problemUnreadable || sig.ScanError == problemProbe)
 }
 
 // soleFileProblem reports whether a book's one audio file is the file its
@@ -111,8 +132,7 @@ func (s *Scanner) wasRejected(file rejectedFile, book bookState) bool {
 // problemCleared decide whether to read it again, rather than reading all of it
 // on every scan only to record the same problem.
 func soleFileProblem(b *catalog.Book, sig catalog.Signature) bool {
-	return soleFile(b) && sig.ScanErrorFile == primaryPath(b) &&
-		(sig.ScanError == problemUnreadable || sig.ScanError == problemProbe)
+	return soleFile(b) && sig.ScanErrorFile == primaryPath(b) && recheckable(sig)
 }
 
 // soleFile reports whether a book has one audio file (a file book, or a folder

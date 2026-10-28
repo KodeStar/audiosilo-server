@@ -241,10 +241,10 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	return &l, nil
 }
 
-// GetLibrary returns a library by ID, from libraryCache while nothing has been
-// written since it was read.
+// GetLibrary returns a library by ID, from the library cache (c.libs,
+// librarycache.go) while nothing has been written since it was read.
 func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
-	gen, cacheable := c.Generation() // before the read (libraryCache)
+	gen, cacheable := c.Generation() // before the read (store.GenMap)
 	if cacheable {
 		if l, ok := c.libs.Get(gen, id); ok {
 			return copyLibrary(l), nil

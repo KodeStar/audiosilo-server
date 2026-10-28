@@ -113,17 +113,21 @@ const maxProbeMessage = 300
 // every distinct line it wrote to stderr, joined, since the specific cause ("[mov,
 // mp4 @ 0x..] moov atom not found") usually comes before the generic last line
 // ("x.m4b: Invalid data found when processing input"). Falls back to the exit
-// status. A message ending in invalidData matches ErrProbeRejected.
+// status. A run whose last line (ffprobe's own error, which it writes last) ends
+// in invalidData matches ErrProbeRejected; an earlier line ending so, followed by
+// another error (a read failure, which may pass), does not.
 func probeError(err error) error {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		return err
 	}
 	var parts []string
-	rejected := false
+	last := ""
 	for _, l := range strings.Split(string(exit.Stderr), "\n") {
 		l = strings.TrimSpace(l)
-		rejected = rejected || strings.HasSuffix(l, invalidData)
+		if l != "" {
+			last = l
+		}
 		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
 		// Health page shows the file separately.
 		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
@@ -140,7 +144,7 @@ func probeError(err error) error {
 	if len(msg) > maxProbeMessage {
 		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
 	}
-	return &probeMessage{msg: msg, rejected: rejected}
+	return &probeMessage{msg: msg, rejected: strings.HasSuffix(last, invalidData)}
 }
 
 func normalizeTags(in map[string]string) map[string]string {

@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // walkTree builds a tree with folders several deep, hidden and lone folders, a
@@ -55,7 +58,8 @@ func record(root string, calls *[]string, skip func(rel string, d fs.DirEntry) e
 
 // walkDir makes the same calls as filepath.WalkDir, in the same order, whatever
 // fn answers (go on, SkipDir on a folder, SkipDir on a file, SkipAll), with or
-// without listing ahead, and an unreadable folder reported the same way.
+// without listing ahead (every folder, the ones descend allows, or none at width
+// 1), and an unreadable folder reported the same way.
 func TestWalkDirIsWalkDir(t *testing.T) {
 	t.Parallel()
 	root, unreadable := walkTree(t)
@@ -86,21 +90,27 @@ func TestWalkDirIsWalkDir(t *testing.T) {
 		if err := filepath.WalkDir(root, record(root, &want, skip)); err != nil {
 			t.Fatal(err)
 		}
-		for _, descend := range []func(string, fs.DirEntry) bool{nil, hidden} {
+		for _, w := range []struct {
+			width   int
+			descend func(string, fs.DirEntry) bool
+		}{{walkIO, nil}, {walkIO, hidden}, {2, hidden}, {1, nil}} {
 			var got []string
-			if err := walkDir(t.Context(), root, descend, record(root, &got, skip)); err != nil {
+			if err := walkDir(t.Context(), root, w.width, w.descend, record(root, &got, skip)); err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Equal(got, want) {
-				t.Errorf("%s (descend %v): calls\n%s\nwant\n%s", name, descend != nil, strings.Join(got, "\n"), strings.Join(want, "\n"))
+				t.Errorf("%s (width %d, descend %v): calls\n%s\nwant\n%s", name, w.width, w.descend != nil,
+					strings.Join(got, "\n"), strings.Join(want, "\n"))
 			}
 		}
 	}
 	if unreadable {
-		var calls []string
-		_ = walkDir(t.Context(), root, nil, record(root, &calls, skips["none"]))
-		if !slices.Contains(calls, "F/locked true d--------- err=true") {
-			t.Errorf("the unreadable folder's error call is missing: %q", calls)
+		for _, width := range []int{walkIO, 1} {
+			var calls []string
+			_ = walkDir(t.Context(), root, width, nil, record(root, &calls, skips["none"]))
+			if !slices.Contains(calls, "F/locked true d--------- err=true") {
+				t.Errorf("width %d: the unreadable folder's error call is missing: %q", width, calls)
+			}
 		}
 	}
 }
@@ -112,7 +122,7 @@ func TestWalkDirErrors(t *testing.T) {
 	root, _ := walkTree(t)
 	stop := errors.New("stop")
 	var calls []string
-	err := walkDir(t.Context(), root, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
+	err := walkDir(t.Context(), root, walkIO, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
 		if rel == "A/Book 2" {
 			return stop
 		}
@@ -124,13 +134,14 @@ func TestWalkDirErrors(t *testing.T) {
 	missing := filepath.Join(root, "nope")
 	var want, got []string
 	wantErr := filepath.WalkDir(missing, record(root, &want, nil))
-	gotErr := walkDir(t.Context(), missing, nil, record(root, &got, nil))
+	gotErr := walkDir(t.Context(), missing, walkIO, nil, record(root, &got, nil))
 	if !slices.Equal(got, want) || (gotErr == nil) != (wantErr == nil) {
 		t.Fatalf("missing root: %q %v, want %q %v", got, gotErr, want, wantErr)
 	}
 }
 
-// Only the folders descend allows are listed ahead.
+// Only the folders descend allows are listed ahead; not a lone folder, and
+// none at width 1 (a capped walk's, which may stop at any folder).
 func TestListAheadOnlyDescended(t *testing.T) {
 	t.Parallel()
 	root, _ := walkTree(t)
@@ -138,7 +149,7 @@ func TestListAheadOnlyDescended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ahead := listAhead(t.Context(), root, entries, func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" })
+	ahead := listAhead(t.Context(), root, entries, walkIO, func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" })
 	for i, e := range entries {
 		listed := ahead[i] != nil
 		want := e.IsDir() && e.Name() != "C"
@@ -146,8 +157,11 @@ func TestListAheadOnlyDescended(t *testing.T) {
 			t.Errorf("%s listed ahead = %v, want %v", e.Name(), listed, want)
 		}
 	}
-	if one := listAhead(t.Context(), filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B")), nil); one[0] != nil {
+	if one := listAhead(t.Context(), filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B")), walkIO, nil); one != nil {
 		t.Error("a lone folder was listed ahead")
+	}
+	if none := listAhead(t.Context(), root, entries, 1, nil); none != nil {
+		t.Error("folders were listed ahead at width 1")
 	}
 }
 
@@ -158,4 +172,36 @@ func mustReadDir(t *testing.T, dir string) []fs.DirEntry {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// statAudio reads the size and mtime of each audio file the walk listed and
+// counts those gone by the time it looks (a book folder renamed once listed),
+// which makes the discovery partial (discoverAuto): a prune then would delete a
+// book the next scan finds moved.
+func TestStatAudioCountsFilesGone(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, p := range []string{"A Book/01.mp3", "A Book/02.mp3", "Z Book/01.mp3"} {
+		writeFile(t, root, p, []byte("xyz"))
+	}
+	lib := catalog.Library{Name: "L", Root: root}
+	for _, width := range []int{walkIO, 1} {
+		dirs, _, partial, err := audioDirs(t.Context(), lib, root, "", ParseIgnore(nil), slog.New(slog.DiscardHandler), nil, nil, width)
+		if err != nil || partial || len(dirs) != 2 {
+			t.Fatalf("width %d: walk found %d folders, partial %v, err %v", width, len(dirs), partial, err)
+		}
+		from, to := filepath.Join(root, "A Book"), filepath.Join(root, "A Book (2019)")
+		if err := os.Rename(from, to); err != nil {
+			t.Fatal(err)
+		}
+		if gone := statAudio(t.Context(), dirs, width); gone != 2 {
+			t.Errorf("width %d: %d files gone, want 2", width, gone)
+		}
+		if info, err := dirs["Z Book"][0].de.Info(); err != nil || info.Size() != 3 {
+			t.Errorf("width %d: the file still there = %v, %v", width, info, err)
+		}
+		if err := os.Rename(to, from); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

@@ -20,8 +20,10 @@ func TestProbeErrorKeepsTheCause(t *testing.T) {
 }
 
 // A message ending in ffmpeg's invalid-data words is a rejection of the file's
-// data (the same ffprobe rejects the same bytes again); any other failure is not.
+// data (the same ffprobe rejects the same bytes again); any other failure is not,
+// even after a line that ends in them.
 func TestProbeErrorRejected(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		stderr string
 		want   bool
@@ -30,6 +32,7 @@ func TestProbeErrorRejected(t *testing.T) {
 		{"/srv/x.mp3: Invalid data found when processing input", true},
 		{"/srv/x.mp3: Input/output error\n", false},
 		{"/srv/x.mp3: Permission denied\n", false},
+		{"[ogg @ 0x1] Header processing failed: Invalid data found when processing input\n/srv/x.ogg: Input/output error\n", false},
 	} {
 		err := probeError(&exec.ExitError{Stderr: []byte(tc.stderr)})
 		if got := errors.Is(err, ErrProbeRejected); got != tc.want {

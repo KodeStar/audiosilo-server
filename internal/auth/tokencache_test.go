@@ -59,6 +59,44 @@ func TestTokenCacheAnswersValidTokens(t *testing.T) {
 	}
 }
 
+// A caller changing what its user's pointers point at (a member's owner, kind,
+// access and rule) changes nothing kept either: the resolve that fills the cache
+// and each one answered from it hand out their own copies.
+func TestTokenCacheKeepsAMembersOwnFields(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "adam", "pw-pw-pw-pw", RoleUser)
+	kid := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberCollections})
+	secret, err := s.IssueToken(ctx, kid.ID, KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := func() *User {
+		t.Helper()
+		u, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.ManagedBy == nil || u.ManagedBy.ID != owner.ID || u.MemberKind == nil || *u.MemberKind != MemberKid ||
+			u.MemberAccess == nil || *u.MemberAccess != MemberCollections ||
+			u.MemberRule == nil || u.MemberRule.Owner != owner.ID || u.MemberRule.Access != MemberCollections {
+			t.Fatalf("member resolved as %+v", u)
+		}
+		// The caller's changes, which the next resolve must not see.
+		u.ManagedBy.ID, *u.MemberKind, *u.MemberAccess = 0, MemberGrownup, MemberAll
+		u.MemberRule.Owner, u.MemberRule.Access = 0, MemberAll
+		return u
+	}
+	for i := 0; !cached(s, secret); i++ {
+		if i == 3 {
+			t.Fatal("a valid token's lookup was never cached")
+		}
+		resolve() // the last of these filled the cache
+	}
+	resolve() // answered from the cache
+	resolve()
+}
+
 // Denied: a sign-out, a revoked device and a disabled account refuse the token
 // on the very next request, cached or not.
 func TestTokenCacheRefusesAtOnce(t *testing.T) {

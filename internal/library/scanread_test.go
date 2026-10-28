@@ -435,6 +435,31 @@ func TestScanRecordsProbeTimingOutAlone(t *testing.T) {
 	}
 }
 
+// A recorded problem checked again by the next scan (problemCleared) is read
+// with the scan's probe time-out, so a file whose ffprobe hangs holds that scan
+// up for as long as any read, not for the default time-out.
+func TestProblemCheckTakesTheScansTimeout(t *testing.T) {
+	t.Parallel()
+	s, lib, db := timeoutScanner(t, smallLibrary(t, 1, 1), stubProbe(t, "exec sleep 10"), 2, 300*time.Millisecond)
+	if res, err := s.Scan(context.Background(), *lib); err != nil || res.Errors != 1 {
+		t.Fatalf("first scan = %+v, %v; want the time-out recorded", res, err)
+	}
+	start := time.Now()
+	if _, err := s.Scan(context.Background(), *lib); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the scan checking the problem took %v, with a 300ms probe time-out", took)
+	}
+	var problem string
+	if err := db.QueryRowContext(context.Background(), `SELECT scan_error FROM books`).Scan(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem != problemProbe {
+		t.Fatalf("problem %q after the check, want %q", problem, problemProbe)
+	}
+}
+
 // A file whose ffprobe times out with nothing read beside it is not read again,
 // however many slots the scan has: the time-out is already the file's own.
 func TestScanSkipsRetryOfLoneTimeout(t *testing.T) {

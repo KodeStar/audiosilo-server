@@ -174,8 +174,7 @@ func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *
 		writeError(w, http.StatusNotFound, "no cover")
 		return
 	}
-	cond := conditional{etag: `"thumb-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(art.version) + `"`,
-		cacheControl: coverCache}
+	cond := conditional{etag: thumbETag("thumb", size, catalog.CoverVersion(art.version)), cacheControl: coverCache}
 	if src.CustomAt != "" {
 		cond.cacheControl = customCoverCache
 	}
@@ -234,6 +233,14 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 		return jpg, nil, nil
 	}
 	return jpg, a.colorRecord(lib.ID, path, src, art, jpg), nil
+}
+
+// thumbETag is the validator of a thumbnail at size of art whose
+// catalog.CoverVersion is version, kind naming the route ("thumb", "podcast",
+// "community"). It carries media.ThumbnailRev, so it changes when what
+// media.Thumbnail makes of the same art does: a strong validator names one body.
+func thumbETag(kind string, size int, version string) string {
+	return `"` + kind + "-" + strconv.Itoa(size) + "-" + media.ThumbnailRev + "-" + version + `"`
 }
 
 // thumbKey is the thumbnail cache's key for a book's art at size.

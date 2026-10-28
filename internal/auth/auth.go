@@ -548,7 +548,8 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	member.apply(&u)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
-	// lookup (each authenticated request) stays this one two-table query.
+	// lookup is this one two-table query, and a valid session, API key or bridge
+	// token's is then answered from s.tokens until the next write.
 	switch row.kind {
 	case KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {

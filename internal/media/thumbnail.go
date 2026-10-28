@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"image"
 	"image/color"
@@ -34,13 +35,22 @@ var ErrImageTooLarge = errors.New("image dimensions too large")
 // flat art shown small, where 80 is indistinguishable from the source.
 const thumbnailQuality = 80
 
+// ThumbnailRev names what Thumbnail makes of the same art, for a thumbnail's
+// ETag: change it whenever Thumbnail would return other bytes for the same
+// source (its quality, its scaler, which JPEGs it re-encodes), so that a client
+// holding the old bytes fetches the new rather than being told its copy is
+// current, or, resuming a copy cut short, being sent the rest of other bytes.
+const ThumbnailRev = "t2"
+
 // Thumbnail scales cover art down to fit within size x size pixels and encodes it
 // as a JPEG. It never scales up: art already within size keeps its own size. A
 // JPEG that small is re-encoded at thumbnailQuality and the smaller of that and
 // the source's own bytes returned (cover.jpg files are often saved at a quality
 // near 95, twice the bytes for a 180 px tile; a re-encode of art saved at a lower
-// quality comes out larger and the source is kept). Transparent areas are
-// flattened onto white, as a cover is shown on a card.
+// quality comes out larger and the source is kept), unless it is drawn from more
+// than its pixels (ownRendering), which a re-encode would lose: then its own
+// bytes. Transparent areas are flattened onto white, as a cover is shown on a
+// card.
 func Thumbnail(src []byte, size int) ([]byte, error) { return thumbnail(src, size, false) }
 
 // ThumbnailJPEG is Thumbnail that always re-encodes, a small JPEG too: what it
@@ -57,6 +67,12 @@ func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 		return nil, ErrImageTooLarge
 	}
 	small := !reencode && format == "jpeg" && cfg.Width <= size && cfg.Height <= size
+	if small && (cfg.ColorModel == color.CMYKModel || ownRendering(src)) {
+		// Go's decoder converts CMYK naively, and its encoder writes no
+		// orientation or colour profile: a re-encode would show in other colours
+		// or turned. The bytes as they are, which a viewer draws right.
+		return src, nil
+	}
 	img, _, err := image.Decode(bytes.NewReader(src))
 	if small {
 		// Served as it is unless a re-encode is smaller: a JPEG Go can't decode
@@ -85,6 +101,78 @@ func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 	// factor, so a large downscale averages its source pixels instead of aliasing.
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
 	return encodeQuality(dst)
+}
+
+// ownRendering reports whether a JPEG carries what a viewer applies when it draws
+// it and Go's encoder doesn't write: an EXIF orientation other than 1, or an ICC
+// colour profile. It reads the segments before the image data; one it can't
+// read counts as carrying them (the bytes are kept).
+func ownRendering(src []byte) bool {
+	if len(src) < 2 || src[0] != 0xFF || src[1] != 0xD8 {
+		return true
+	}
+	for i := 2; i+4 <= len(src); {
+		if src[i] != 0xFF {
+			return true
+		}
+		marker := src[i+1]
+		switch {
+		case marker == 0xFF: // fill
+			i++
+			continue
+		case marker == 0xDA || marker == 0xD9: // the image data, or its end
+			return false
+		case marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7): // no length
+			i += 2
+			continue
+		}
+		n := int(binary.BigEndian.Uint16(src[i+2:]))
+		if n < 2 || i+2+n > len(src) {
+			return true
+		}
+		seg := src[i+4 : i+2+n]
+		switch {
+		case marker == 0xE2 && bytes.HasPrefix(seg, []byte("ICC_PROFILE\x00")):
+			return true
+		case marker == 0xE1 && len(seg) >= 6 && bytes.HasPrefix(seg, []byte("Exif\x00")):
+			if o, ok := exifOrientation(seg[6:]); !ok || o > 1 {
+				return true
+			}
+		}
+		i += 2 + n
+	}
+	return true // no image data found
+}
+
+// exifOrientation is the Orientation (tag 0x0112) in an EXIF block's first IFD,
+// 0 when it has none; false when the block can't be read.
+func exifOrientation(tiff []byte) (int, bool) {
+	if len(tiff) < 8 {
+		return 0, false
+	}
+	var order binary.ByteOrder
+	switch string(tiff[:2]) {
+	case "II":
+		order = binary.LittleEndian
+	case "MM":
+		order = binary.BigEndian
+	default:
+		return 0, false
+	}
+	ifd := int64(order.Uint32(tiff[4:]))
+	if ifd < 8 || ifd+2 > int64(len(tiff)) {
+		return 0, false
+	}
+	n := int(order.Uint16(tiff[ifd:]))
+	for e := int(ifd) + 2; n > 0; e, n = e+12, n-1 {
+		if e+12 > len(tiff) {
+			return 0, false
+		}
+		if order.Uint16(tiff[e:]) == 0x0112 {
+			return int(order.Uint16(tiff[e+8:])), true
+		}
+	}
+	return 0, true
 }
 
 // encodeQuality is img as a JPEG at thumbnailQuality.

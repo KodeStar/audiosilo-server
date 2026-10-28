@@ -184,9 +184,10 @@ const (
 type ScanConfig struct {
 	// Concurrency is how many audio files a scan reads at once (tags and ffprobe):
 	// 0, the default, means one per CPU up to 8 (library.DefaultScanReaders).
-	// Lower it for a library on a slow disk or a busy share, raise it for a fast
-	// one on a machine with cores to spare. Read once at start (scan.concurrency,
-	// AUDIOSILO_SCAN_CONCURRENCY).
+	// Set below 8, it also caps how many folder listings and file lookups
+	// discovery makes at once (8 otherwise). Lower it for a library on a slow disk
+	// or a busy share, raise it for a fast one on a machine with cores to spare.
+	// Read once at start (scan.concurrency, AUDIOSILO_SCAN_CONCURRENCY).
 	Concurrency int `yaml:"concurrency"`
 }
 

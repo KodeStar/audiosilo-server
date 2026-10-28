@@ -24,10 +24,20 @@ func TestGetLibraryCachedUntilAWrite(t *testing.T) {
 		}
 		return l
 	}
-	first := get()
-	first.Name, first.IgnorePatterns[0] = "Changed", "changed"
-	if again := get(); again.Name != "Books" || !slices.Equal(again.IgnorePatterns, []string{"*.tmp"}) {
-		t.Fatalf("a caller's change reached the cache: %+v", again)
+	// The first read fills the cache and the next two are answered from it; each
+	// caller changes the library it was given, and none sees another's change.
+	for i := range 3 {
+		if i > 0 {
+			gen, _ := c.Generation()
+			if _, ok := c.libs.Get(gen, lib.ID); !ok {
+				t.Fatalf("read %d: the library isn't cached", i)
+			}
+		}
+		l := get()
+		if l.Name != "Books" || !slices.Equal(l.IgnorePatterns, []string{"*.tmp"}) {
+			t.Fatalf("read %d: a caller's change reached the cache: %+v", i, l)
+		}
+		l.Name, l.IgnorePatterns[0] = "Changed", "changed"
 	}
 
 	if _, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Name: "Renamed", Root: "/books", DefaultView: lib.DefaultView}); err != nil {
