@@ -1062,20 +1062,7 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	var conds []string
-	var args []any
-	for _, s := range scopes {
-		frag, fargs := pathFilterSQL("b.rel_path", s)
-		conds = append(conds, "(b.library_id = ? AND "+frag+")")
-		args = append(args, s.LibraryID)
-		args = append(args, fargs...)
-	}
-	// Over-fetch so de-dup can still return up to `limit` distinct books.
-	args = append(args, dedupFetch(limit))
-	q := `SELECT ` + prefixCols("b.") + dedupCols + `
-		FROM books b` + dedupJoins + `
-		WHERE l.kind = 'books' AND (` + strings.Join(conds, " OR ") + `)
-		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
+	q, args := recentBooksQuery(scopes, limit)
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -1093,6 +1080,38 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 		return nil, err
 	}
 	return dedupBooks(cands, limit), nil
+}
+
+// recentBooksQuery is RecentBooks' query: one (library, path rules) arm per scope,
+// newest added first, over-fetched for de-dup. With one scope SQLite picks
+// idx_books_lib_added on its own and stops at the limit. With two or more it
+// plans the OR as a MULTI-INDEX OR over idx_books_series_key, reading every book
+// in scope (each with its book_files count) into a sort; INDEXED BY idx_books_added
+// makes it walk the added-at index backwards and stop once it has the limit
+// (12 ms -> under 1 ms at 5k books in two libraries). A scope that matches few of
+// the walked books walks further, no worse than the full read it replaces. The
+// kind filter (a podcasts scope's episodes are books rows too) is per row either
+// way.
+func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
+	conds := make([]string, 0, len(scopes))
+	var args []any
+	for _, s := range scopes {
+		frag, fargs := pathFilterSQL("b.rel_path", s)
+		conds = append(conds, "(b.library_id = ? AND "+frag+")")
+		args = append(args, s.LibraryID)
+		args = append(args, fargs...)
+	}
+	from := "books b"
+	if len(scopes) > 1 {
+		from = "books b INDEXED BY idx_books_added"
+	}
+	// Over-fetch so de-dup can still return up to `limit` distinct books.
+	args = append(args, dedupFetch(limit))
+	q := `SELECT ` + prefixCols("b.") + dedupCols + `
+		FROM ` + from + dedupJoins + `
+		WHERE l.kind = 'books' AND (` + strings.Join(conds, " OR ") + `)
+		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
+	return q, args
 }
 
 func sortValue(b *Book, col string) string {
