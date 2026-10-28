@@ -385,6 +385,49 @@ func TestRateLimitTokenBudget(t *testing.T) {
 	}
 }
 
+// A credential's 429 carries Retry-After: the longer of its own bucket's wait and
+// its address's, which the refusal charged and which the next request meets
+// first. Both refusal paths say it: the credential's bucket (the wait for its
+// next token, or the address's when the charge left that one longer) and the
+// address's bucket checked before the lookup.
+func TestRateLimitPerCredentialRetryAfter(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.tokenLimiter.burst, e.api.tokenLimiter.rate = 2, 0.25 // 4 s to the next token
+	tok := e.session(t)
+	retryAfter := func(ip string) (int, string) {
+		req := httptest.NewRequest("GET", "/api/v1/me", nil)
+		req.RemoteAddr = ip + ":1234"
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code, rec.Header().Get("Retry-After")
+	}
+
+	// The address has plenty left: the credential's wait is the answer.
+	const roomy = "192.0.2.46"
+	for i := range 2 {
+		if code, _ := retryAfter(roomy); code != http.StatusOK {
+			t.Fatalf("call %d = %d, want 200", i, code)
+		}
+	}
+	if code, ra := retryAfter(roomy); code != http.StatusTooManyRequests || ra != "4" {
+		t.Fatalf("past the credential's burst = %d, Retry-After %q; want 429, 4", code, ra)
+	}
+
+	// The address's bucket is the last token: the refusal's charge empties it,
+	// and its 10 s refill outlasts the credential's 4 s.
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 0.1
+	const tight = "192.0.2.47"
+	if code, ra := retryAfter(tight); code != http.StatusTooManyRequests || ra != "10" {
+		t.Fatalf("credential refused, address spent by the charge = %d, Retry-After %q; want 429, 10", code, ra)
+	}
+	// The next request meets the spent address before any lookup.
+	if code, ra := retryAfter(tight); code != http.StatusTooManyRequests || ra != "10" {
+		t.Fatalf("from the spent address = %d, Retry-After %q; want 429, 10", code, ra)
+	}
+}
+
 // A token is proved before it is a bucket of its own: a missing or refused one
 // pays into its address's bucket, so guessing tokens is bounded by the general
 // limit, and once the address is spent even a valid token from it is refused
