@@ -138,8 +138,8 @@ func TestSynchronousNormal(t *testing.T) {
 
 // TestWithDurableTx: a durable transaction runs, and commits, under
 // synchronous=FULL on the writer's one connection, and the writer is NORMAL again
-// after it, whether it committed, failed or its context was cancelled before
-// the end; it moves the generation like any write, and DurableCommits counts
+// after it, whether it committed, failed, panicked or its context was cancelled
+// before the end; it moves the generation like any write, and DurableCommits counts
 // only the commits. ExecDurable is one of them. Plain WithTx stays NORMAL.
 func TestWithDurableTx(t *testing.T) {
 	t.Parallel()
@@ -193,6 +193,16 @@ func TestWithDurableTx(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	_ = db.WithDurableTx(cctx, "probe", func(*sql.Tx) error { cancel(); return cctx.Err() })
 	writerNormal("after a cancelled context")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("a panicking durable tx did not panic")
+			}
+		}()
+		_ = db.WithDurableTx(ctx, "probe", func(*sql.Tx) error { panic("boom") })
+	}()
+	writerNormal("after a panic")
 
 	if _, err := db.ExecDurable(ctx, "probe", `INSERT INTO durable_probe VALUES(2)`); err != nil {
 		t.Fatal(err)

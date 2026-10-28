@@ -109,8 +109,9 @@ const slowTxThreshold = 2 * time.Second
 // So the few writes whose loss would bring back what a person ended go through
 // WithDurableTx / ExecDurable, which commit under FULL: ending a credential
 // (sign-out, a device or API key revoked, a password set or cleared, an account
-// disabled, demoted or deleted, an auth code revoked or rotated, a Bridge
-// paired or unpaired) and a Bridge claim (its attempt number must never be
+// disabled, demoted or deleted, an auth code revoked, rotated, replaced or
+// used, a pairing token used, a Bridge pairing code replaced, a Bridge paired
+// or unpaired) and a Bridge claim (its attempt number must never be
 // handed out twice). Their fsync also flushes the NORMAL commits before them.
 // Everything else stays NORMAL; listening progress and heartbeats never take it.
 //
@@ -260,18 +261,22 @@ func (db *DB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) e
 	start := time.Now()
 	conn, err := db.writer.Conn(ctx)
 	if err != nil {
+		db.logSlow(name, start, err) // a wait for the writer that timed out, as WithTx logs it
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous = FULL`); err != nil {
-		return err
-	}
+	// Deferred before FULL is set, so a FULL that took effect but answered an
+	// error (a cancel landing on it) is put back too.
 	defer func() {
 		// Whatever happened, on a context the caller's leaving doesn't end.
 		if _, err := conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA synchronous = NORMAL`); err != nil {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}()
+	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous = FULL`); err != nil {
+		db.logSlow(name, start, err)
+		return err
+	}
 	if err := db.withTx(ctx, name, start, conn, fn); err != nil {
 		return err
 	}
@@ -282,6 +287,14 @@ func (db *DB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) e
 // DurableCommits is how many WithDurableTx commits succeeded (tests check that a
 // path takes it).
 func (db *DB) DurableCommits() uint64 { return db.durable.Load() }
+
+// logSlow warns of a transaction that took slowTxThreshold or more since start,
+// whatever its outcome (err).
+func (db *DB) logSlow(name string, start time.Time, err error) {
+	if el := time.Since(start); el >= slowTxThreshold {
+		db.log.Warn("slow db transaction", "op", name, "elapsed", el.String(), "err", err)
+	}
+}
 
 // txBeginner is the writer pool or its one connection held (WithDurableTx).
 type txBeginner interface {
@@ -295,11 +308,7 @@ func (db *DB) withTx(ctx context.Context, name string, start time.Time, on txBeg
 	// fails (e.g. the request timeout cancels its context after ~25s) is the
 	// backend-lockup precursor this warning exists to surface, so the check must
 	// not sit only on the success path. Deferred so it fires on every return.
-	defer func() {
-		if el := time.Since(start); el >= slowTxThreshold {
-			db.log.Warn("slow db transaction", "op", name, "elapsed", el.String(), "err", err)
-		}
-	}()
+	defer func() { db.logSlow(name, start, err) }()
 	tx, err := on.BeginTx(ctx, nil)
 	if err != nil {
 		return err

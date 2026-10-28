@@ -75,7 +75,7 @@ func (s *Service) IssueBridgePairCode(ctx context.Context, adminID int64) (code,
 		return "", "", err
 	}
 	expiresAt = s.now().Add(bridgePairTTL).UTC().Format(time.RFC3339)
-	_, err = s.db.ExecContext(ctx,
+	_, err = s.db.ExecDurable(ctx, "IssueBridgePairCode",
 		`INSERT INTO bridge_status(id, pair_code_hash, pair_expires_at, pair_created_by) VALUES(1, ?1, ?2, ?3)
 		 ON CONFLICT(id) DO UPDATE SET pair_code_hash = ?1, pair_expires_at = ?2, pair_created_by = ?3`,
 		hash, expiresAt, adminID)

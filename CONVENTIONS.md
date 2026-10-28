@@ -515,8 +515,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reader == writer and would hide a misroute, which is why the test stores are
   temp files. Commits are `synchronous=NORMAL` (a power cut can roll back the last
   few); a write that ends a credential (sign-out, device or API key revoke, password
-  set or cleared, account disabled/demoted/deleted, auth code revoked or rotated,
-  Bridge pair/unpair) or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
+  set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
+  replaced or used, a pairing token used, Bridge pair code issued, pair/unpair)
+  or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; progress,
   heartbeats and other listening writes never do.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a

@@ -748,7 +748,7 @@ func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, 
 		return Minted{}, err
 	}
 	expires := s.expiresAt(ttl)
-	if err := s.db.WithTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
+	if err := s.db.WithDurableTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
@@ -873,7 +873,7 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 	if err != nil {
 		return "", err
 	}
-	if err := s.db.WithTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
+	if err := s.db.WithDurableTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err // a kid holds no recovery code
 		}
@@ -1135,7 +1135,7 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
-		res, err := s.db.ExecContext(ctx,
+		res, err := s.db.ExecDurable(ctx, "ConsumePairing",
 			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
 		if err != nil {
 			return nil, "", err
@@ -1147,7 +1147,7 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	}
 	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
 	// chronological (same convention as supersedeActiveInvites).
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecDurable(ctx, "ConsumePairing",
 		`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
 		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
 		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)

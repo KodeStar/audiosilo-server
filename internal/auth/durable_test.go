@@ -123,6 +123,48 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 			}
 			return func() error { return s.ClearRecoveryCode(ctx, u.ID) }
 		},
+		"recovery code replaced": func() func() error {
+			u := user()
+			if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+				t.Fatal(err)
+			}
+			return func() error { _, err := s.GenerateRecoveryCode(ctx, u.ID); return err }
+		},
+		"invite superseded by a new one": func() func() error {
+			u := user()
+			if _, err := s.CreateInvite(ctx, u.ID, "invite", 1, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			return func() error { _, err := s.CreateInvite(ctx, u.ID, "invite", 1, time.Hour); return err }
+		},
+		"single-use pairing token used": func() func() error {
+			u := user()
+			tok, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+		},
+		"invite use claimed by a pairing": func() func() error {
+			u := user()
+			m, err := s.CreateInvite(ctx, u.ID, "invite", 1, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc, err := s.ResolveAuthCode(ctx, m.Code)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok, err := s.IssuePairingToken(ctx, rc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func() error { _, _, err := s.ConsumePairing(ctx, tok); return err }
+		},
+		"Bridge pairing code replaced": func() func() error {
+			admin := mustUser(t, s, ctx, "coder", "admin-password", RoleAdmin)
+			return func() error { _, _, err := s.IssueBridgePairCode(ctx, admin.ID); return err }
+		},
 		"Bridge paired (earlier tokens revoked)": func() func() error {
 			admin := mustUser(t, s, ctx, "pairer", "admin-password", RoleAdmin)
 			code, _, err := s.IssueBridgePairCode(ctx, admin.ID)
