@@ -396,8 +396,7 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such cover")
 		return
 	}
-	cond := conditional{etag: `"community-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(rawURL) + `"`,
-		cacheControl: coverCache}
+	cond := conditional{etag: thumbETag("community", size, catalog.CoverVersion(rawURL)), cacheControl: coverCache}
 	if cond.notModified(w, r) {
 		return
 	}

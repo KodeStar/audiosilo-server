@@ -116,7 +116,8 @@ func SafeJoin(root, relPath string) (string, error) {
 	}
 	// Resolve symlinks in the root itself so containment is checked against the
 	// real directory (the root is operator-configured and expected to exist).
-	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+	resolved, rerr := filepath.EvalSymlinks(rootAbs)
+	if rerr == nil {
 		rootAbs = resolved
 	}
 	full := filepath.Join(rootAbs, filepath.FromSlash(relPath))
@@ -129,11 +130,46 @@ func SafeJoin(root, relPath string) (string, error) {
 	}
 	// Symlink-aware containment: resolve symlinks in the longest existing prefix
 	// of the target and re-check, so a symlink inside the root that points
-	// outside it is rejected rather than followed.
-	if !withinRoot(rootAbs, resolveExisting(full)) {
+	// outside it is rejected rather than followed. Below a resolved root (no
+	// links in it) only the names under it need looking at (resolveBelow).
+	var target string
+	if rerr == nil {
+		target = resolveBelow(rootAbs, full)
+	} else {
+		target = resolveExisting(full)
+	}
+	if !withinRoot(rootAbs, target) {
 		return "", ErrOutsideRoot
 	}
 	return full, nil
+}
+
+// resolveBelow is resolveExisting(p) for a path p under rootAbs, a root with no
+// symlinks in it: the names below the root are looked at one Lstat each, down
+// to the first that is a link (from which resolveExisting resolves the rest) or
+// that isn't there (it and the names after it kept as they are). EvalSymlinks
+// would Lstat every name from the filesystem's root down, the root's own
+// included, which on a network share or a FUSE pool (Unraid's /mnt/user) is a
+// round trip each, on every cover and stream request.
+func resolveBelow(rootAbs, p string) string {
+	rel, err := filepath.Rel(rootAbs, p)
+	if err != nil || rel == "." {
+		return p
+	}
+	names := strings.Split(rel, string(filepath.Separator))
+	cur := rootAbs
+	for i, name := range names {
+		next := filepath.Join(cur, name)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{cur}, names[i:]...)...)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return resolveExisting(filepath.Join(append([]string{next}, names[i+1:]...)...))
+		}
+		cur = next
+	}
+	return cur
 }
 
 // withinRoot reports whether p is the root itself or nested under it.

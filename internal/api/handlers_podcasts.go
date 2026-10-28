@@ -481,7 +481,7 @@ func (a *API) servePodcastCover(w http.ResponseWriter, r *http.Request, lib *cat
 			writeError(w, 404, "no cover")
 			return
 		}
-		conditional{etag: `"podcast-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(art.version) + `"`, cacheControl: coverCache}.serve(w, r, "image/jpeg", jpg)
+		conditional{etag: thumbETag("podcast", size, catalog.CoverVersion(art.version)), cacheControl: coverCache}.serve(w, r, "image/jpeg", jpg)
 		return
 	}
 	abs, err := library.SafeJoin(lib.Root, show.CoverPath)

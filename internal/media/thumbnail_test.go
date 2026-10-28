@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -63,15 +64,137 @@ func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
 	}
 }
 
-func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
+// noisyJPEG is a w x h JPEG of busy art (a gradient with fine detail) saved at
+// quality q, as a cover.jpg from the web often is.
+func noisyJPEG(t *testing.T, w, h, q int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			img.Set(x, y, color.RGBA{uint8(x * 255 / w), uint8((x*y + y*7) % 256), uint8((x ^ y) * 3), 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: q}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A JPEG already within the size is never scaled up: it keeps its own size, and
+// comes back as the smaller of its own bytes and a re-encode at
+// thumbnailQuality. A small JPEG Go can't decode fully is served as it is.
+func TestThumbnailSmallJPEGNeverUpscaledSmallestBytes(t *testing.T) {
 	t.Parallel()
-	src := encodeJPEG(t, 200, 200)
-	out, err := Thumbnail(src, 320)
+	high := noisyJPEG(t, 180, 180, 95)
+	out, err := Thumbnail(high, 320)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(out, src) {
-		t.Fatal("a JPEG already within the size should be returned unchanged")
+	if w, h := decodedSize(t, out); w != 180 || h != 180 {
+		t.Fatalf("size = %dx%d, want the source's 180x180", w, h)
+	}
+	if len(out) >= len(high) {
+		t.Fatalf("a quality-95 JPEG came back %d bytes, want fewer than its %d", len(out), len(high))
+	}
+
+	low := noisyJPEG(t, 200, 200, 40)
+	if out, err := Thumbnail(low, 320); err != nil || !bytes.Equal(out, low) {
+		t.Fatalf("a JPEG smaller than its re-encode should be returned unchanged (err %v)", err)
+	}
+
+	truncated := high[:len(high)/2]
+	if out, err := Thumbnail(truncated, 320); err != nil || !bytes.Equal(out, truncated) {
+		t.Fatalf("a small JPEG that doesn't decode fully should be returned unchanged (err %v)", err)
+	}
+}
+
+// jpegWith is jpg with segs (whole marker segments) put right after its start
+// of image, where an editor writes its EXIF and colour profile.
+func jpegWith(jpg []byte, segs ...[]byte) []byte {
+	out := append([]byte{}, jpg[:2]...)
+	for _, s := range segs {
+		out = append(out, s...)
+	}
+	return append(out, jpg[2:]...)
+}
+
+// segment is a JPEG marker segment holding payload.
+func segment(marker byte, payload []byte) []byte {
+	s := []byte{0xFF, marker, 0, 0}
+	binary.BigEndian.PutUint16(s[2:], uint16(len(payload)+2))
+	return append(s, payload...)
+}
+
+// exifSegment is an APP1 EXIF segment whose first IFD holds an Orientation, in
+// byte order "II" or "MM".
+func exifSegment(order string, orientation uint16) []byte {
+	var bo binary.ByteOrder = binary.BigEndian
+	if order == "II" {
+		bo = binary.LittleEndian
+	}
+	tiff := make([]byte, 26)
+	copy(tiff, order)
+	bo.PutUint16(tiff[2:], 42)
+	bo.PutUint32(tiff[4:], 8) // the first IFD
+	bo.PutUint16(tiff[8:], 1) // one entry
+	bo.PutUint16(tiff[10:], 0x0112)
+	bo.PutUint16(tiff[12:], 3) // SHORT
+	bo.PutUint32(tiff[14:], 1)
+	bo.PutUint16(tiff[18:], orientation)
+	return segment(0xE1, append([]byte("Exif\x00\x00"), tiff...))
+}
+
+// cmykJPEG is an 8 x 8 CMYK JPEG (Adobe APP14, no colour profile).
+const cmykJPEG = "/9j/4AAQSkZJRgABAQAASABIAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs" +
+	"+EJ+/+4ADkFkb2JlAGQAAAAAAP/AABQIAAgACAQBEQACEQEDEQEEEQH/xAAfAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgv/" +
+	"xAC1EAACAQMDAgQDBQUEBAAAAX0BAgMABBEFEiExQQYTUWEHInEUMoGRoQgjQrHBFVLR8CQzYnKCCQoWFxgZGiUmJygpKjQ1Njc4" +
+	"OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbH" +
+	"yMnK0tPU1dbX2Nna4eLj5OXm5+jp6vHy8/T19vf4+fr/xAAfAQADAQEBAQEBAQEBAAAAAAAAAQIDBAUGBwgJCgv/xAC1EQACAQIE" +
+	"BAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdI" +
+	"SUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV" +
+	"1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2wBDAAICAgICAgMCAgMFAwMDBQYFBQUFBggGBgYGBggKCAgICAgICgoKCgoKCgoMDAwM" +
+	"DAwODg4ODg8PDw8PDw8PDw//2wBDAQIDAwQEBAcEBAcQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ" +
+	"EBAQEBAQEBAQEBD/3QAEAAH/2gAOBAEAAhEDEQQRAD8A6D/gmC8Rm1CziyJ5CJJASNjAdDL2BTGR/e6Dua/f/FeWD9lSp0oJTVm3" +
+	"ZLm0918v2XbZPpdI/UeHcmzPKcxjisTzLAJunRpQbaoJvlrUaNaOtWlUl+7qVKelLSrVUeVKP+wnCuDlhsQowXLRjpGKtaHRxi1o" +
+	"10dtt30P/9k="
+
+// A small JPEG drawn from more than its pixels (an EXIF orientation, a colour
+// profile, CMYK) comes back as its own bytes, which a re-encode would lose or
+// convert; one carrying only what changes nothing drawn is re-encoded.
+func TestThumbnailSmallJPEGKeepsWhatAViewerApplies(t *testing.T) {
+	t.Parallel()
+	plain := noisyJPEG(t, 180, 180, 95)
+	cmyk, err := base64.StdEncoding.DecodeString(cmykJPEG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(cmyk)); err != nil || cfg.ColorModel != color.CMYKModel {
+		t.Fatalf("the CMYK fixture decodes as %v (err %v)", cfg.ColorModel, err)
+	}
+	broken := exifSegment("II", 6)
+	broken = broken[:len(broken)-14] // an IFD entry cut short
+	binary.BigEndian.PutUint16(broken[2:], uint16(len(broken)-2))
+	for _, c := range []struct {
+		name string
+		src  []byte
+		keep bool
+	}{
+		{"orientation 6, little-endian", jpegWith(plain, exifSegment("II", 6)), true},
+		{"orientation 8, big-endian", jpegWith(plain, exifSegment("MM", 8)), true},
+		{"an ICC profile", jpegWith(plain, segment(0xE2, append([]byte("ICC_PROFILE\x00\x01\x01"), make([]byte, 600)...))), true},
+		{"EXIF that can't be read", jpegWith(plain, broken), true},
+		{"CMYK", cmyk, true},
+		{"orientation 1", jpegWith(plain, exifSegment("II", 1)), false},
+		{"XMP only", jpegWith(plain, segment(0xE1, []byte("http://ns.adobe.com/xap/1.0/\x00<x:xmpmeta/>"))), false},
+	} {
+		out, err := Thumbnail(c.src, 320)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if kept := bytes.Equal(out, c.src); kept != c.keep {
+			t.Errorf("%s: source kept = %v (%d bytes from %d), want %v", c.name, kept, len(out), len(c.src), c.keep)
+		}
 	}
 }
 

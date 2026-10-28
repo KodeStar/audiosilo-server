@@ -323,3 +323,59 @@ func TestListDirIsBrowseFSUnpaged(t *testing.T) {
 		}
 	}
 }
+
+// resolveBelow resolves a path under a resolved root as resolveExisting does
+// (links inside and out, deep ones, dangling ones, missing names, a file taken
+// for a folder), and SafeJoin built on it allows and refuses the same paths.
+func TestResolveBelowIsResolveExisting(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	writeFile(t, outside, "secret/s.txt", []byte("x"))
+	writeFile(t, root, "A/B/C/f.mp3", []byte("x"))
+	for link, to := range map[string]string{
+		"A/B/out":      filepath.Join(outside, "secret"),
+		"A/B/in":       filepath.Join(root, "A"),
+		"A/B/C/rel":    "../../B",
+		"A/dangling":   filepath.Join(root, "nope"),
+		"A/B/up":       "../../..",
+		"A/B/C/chain":  "../out",
+		"A/B/C/selfin": ".",
+	} {
+		if err := os.Symlink(to, filepath.Join(root, filepath.FromSlash(link))); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+	}
+	cases := map[string]bool{ // rel path -> SafeJoin allows it
+		"":                              true,
+		"A":                             true,
+		"A/B/C/f.mp3":                   true,
+		"A/B/C/missing/x.mp3":           true,
+		"A/missing/C":                   true,
+		"A/B/C/f.mp3/x":                 true,
+		"A/B/in/B/C/f.mp3":              true,
+		"A/B/C/rel/C/f.mp3":             true,
+		"A/B/C/selfin/f.mp3":            true,
+		"A/dangling/x":                  true,
+		"A/B/out/s.txt":                 false,
+		"A/B/out":                       false,
+		"A/B/up":                        false,
+		"A/B/up/x":                      false,
+		"A/B/C/chain/s.txt":             false,
+		"A/B/in/B/out/s.txt":            false,
+		"A/B/C/rel/out/s.txt":           false,
+		"A/B/C/missing/../../out/s.txt": false,
+	}
+	for rel, allowed := range cases {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if got, want := resolveBelow(root, full), resolveExisting(full); got != want {
+			t.Errorf("resolveBelow(%q) = %q, resolveExisting = %q", rel, got, want)
+		}
+		if _, err := SafeJoin(root, rel); (err == nil) != allowed {
+			t.Errorf("SafeJoin(%q) err = %v, want allowed %v", rel, err, allowed)
+		}
+	}
+}

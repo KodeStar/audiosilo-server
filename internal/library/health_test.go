@@ -578,6 +578,54 @@ func TestFixedReadProblemClears(t *testing.T) {
 	}
 }
 
+// A book whose one file can't be opened is otherwise kept as any unchanged book
+// is: an Audiobookshelf metadata.json and an ebook put beside it are recorded by
+// the next scan, its problem staying listed, and it is read once the file opens.
+func TestUnreadableBookKeepsWhatIsBesideIt(t *testing.T) {
+	t.Parallel()
+	cat, ctx := newHealthCatalog(t)
+	root := t.TempDir()
+	writeFile(t, root, "A/Book/01.m4b", testAudio(t))
+	file := filepath.Join(root, "A", "Book", "01.m4b")
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+	if f, err := os.Open(file); err == nil {
+		_ = f.Close()
+		t.Skip("can't make a file unreadable here (running as root?)")
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, stubProbe(t, `echo '`+probeAnswer+`'`), slog.New(slog.DiscardHandler))
+	scan := func() *catalog.Book {
+		t.Helper()
+		if _, err := s.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+		b, err := cat.GetBookByPath(ctx, lib.ID, "A/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	scan()
+	scan()
+	writeFile(t, root, "A/Book/metadata.json", []byte(`{"title":"From ABS","asin":"B0ABSASIN1"}`))
+	writeFile(t, root, "A/Book/Book.epub", epubBytes(t, minimalEpub...))
+	if b := scan(); b.ASIN != "B0ABSASIN1" || b.Ebook == nil {
+		t.Fatalf("beside the unreadable file: asin %q, ebook %v; want both recorded", b.ASIN, b.Ebook)
+	}
+	if got := readProblems(t, cat)["A/Book"]; got != problemUnreadable {
+		t.Fatalf("problem %q, want %q", got, problemUnreadable)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b := scan(); b.Duration == 0 || len(readProblems(t, cat)) != 0 {
+		t.Fatalf("once the file opens: duration %v, problems %v", b.Duration, readProblems(t, cat))
+	}
+}
+
 // A scheduled scan dropped without a run of its own (cancelled while it waited, or
 // folded into a scan of the library already running) skips its slot rather than
 // coming back on the next tick.

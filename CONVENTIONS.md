@@ -509,9 +509,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
   the READER (`query_only`): any statement that writes, including `INSERT ...
   RETURNING`, must use `ExecContext` or a `WithTx` transaction (there is no other
-  way to the writer: `store.DB.Generation`, which the list cache keys on, moves
-  after each of those finishes). An in-memory DB has reader == writer and would
-  hide a misroute, which is why the test stores are temp files.
+  way to the writer: `store.DB.Generation`, which the list cache, the token cache
+  and the library cache key on, moves after each of those finishes, so a write
+  that bypassed them would leave a revoked token honoured). An in-memory DB has
+  reader == writer and would hide a misroute, which is why the test stores are
+  temp files.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent` and `/search` keep their encoded answer (8 MiB
   LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
@@ -1307,7 +1309,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (ffprobe runs with `-v error` so its message survives, path prefix stripped); `noteProblem`
   records the first read problem per book (`unreadable|empty_file|probe_failed`), and a scan
   re-reads an otherwise unchanged book once the file its problem names opens or probes again
-  (`problemCleared`: a fixed permission changes neither mtime nor size). A folder book
+  (`problemCleared`: a fixed permission changes neither mtime nor size). A one-file book with a
+  problem counts as unchanged while `problemCleared` finds the problem there (`soleFileProblem`;
+  its metadata files are still read), and a file ffprobe rejected (`ErrProbeRejected`: its last
+  stderr line is ffmpeg's invalid-data words) is not probed again while its own mtime and size are
+  as they were then (`noteRejected`, by absolute path, for the server's life; any other reading of
+  the file forgets it). A folder book
   whose parts are all >= 1 h with >= 2 distinct titles (tag, else file name) gets
   `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
   /admin/libraries/{id}` rescans only when the root or ignore rules change.
@@ -1616,7 +1623,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
   was cast) never outlive it by more than a day. **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
   disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
-  only for a cast token, so every other token's per-request lookup stays one two-table query): **signing out the device that
+  only for a cast token, so every other token's lookup is one two-table query, and a valid session,
+  API key or bridge token's is answered from `Service.tokens`, a `store.GenMap`, until the next
+  write: every change that could end a token is a write, and expiry is checked on each hit): **signing out the device that
   minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
   disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
   `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its

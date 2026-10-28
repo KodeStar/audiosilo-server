@@ -167,6 +167,9 @@ func (u *User) IsKid() bool { return u.MemberKind != nil && *u.MemberKind == Mem
 type Service struct {
 	db  *store.DB
 	now func() time.Time
+	// tokens is lookupToken's cache of valid tokens, exact by the store's write
+	// generation (tokencache.go).
+	tokens store.GenMap[string, cachedToken]
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -174,7 +177,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now}
+	return &Service{db: db, now: now, tokens: store.GenMap[string, cachedToken]{Max: maxCachedTokens}}
 }
 
 func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
@@ -498,7 +501,9 @@ type tokenRow struct {
 // by ResolveRequest and
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
-// real token presented where its kind is not accepted.
+// real token presented where its kind is not accepted. A valid session, API key
+// or bridge token is answered from s.tokens until the next write (tokencache.go),
+// its expiry still checked against the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
@@ -506,6 +511,16 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		expires sql.NullString
 		revoked bool
 	)
+	// The generation is taken before the read, so a write that lands after it
+	// leaves what is cached here unused.
+	gen := s.db.Generation()
+	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
+		if s.pastExpiry(c.expires) {
+			return nil, tokenRow{}, ErrInvalidToken
+		}
+		u := cloneUser(c.user)
+		return &u, c.row, nil
+	}
 	args := make([]any, 0, len(kinds)+1)
 	args = append(args, hash)
 	for _, k := range kinds {
@@ -533,11 +548,16 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	member.apply(&u)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
-	// lookup (each authenticated request) stays this one two-table query.
-	if row.kind == KindCast {
+	// lookup is this one two-table query, and a valid session, API key or bridge
+	// token's is then answered from s.tokens until the next write.
+	switch row.kind {
+	case KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {
 			return nil, tokenRow{}, err
 		}
+	case KindPairing: // used once, by an exchange: not worth holding
+	default:
+		s.tokens.Put(gen, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
 	}
 	return &u, row, nil
 }

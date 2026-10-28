@@ -39,6 +39,8 @@ type perfEnv struct {
 	token   string
 	libID   int64
 	db      *store.DB
+	root    string
+	books   []string // the seeded books' paths, in seeding order
 }
 
 var perfWords = []string{
@@ -99,6 +101,7 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 		}
 	}
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	paths := make([]string, 0, n)
 	for i := range n {
 		author, title := authors[rng.IntN(len(authors))], ""
 		switch r := rng.IntN(100); {
@@ -168,6 +171,7 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 		if _, err := cat.UpsertBook(ctx, b); err != nil {
 			tb.Fatalf("seed book %d: %v", i, err)
 		}
+		paths = append(paths, b.RelPath)
 	}
 	token, _, err := authSvc.IssueSession(ctx, admin.ID, "Web browser", "")
 	if err != nil {
@@ -176,8 +180,9 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 	cfg := config.Default(tb.TempDir())
 	// The rate limits are not what this measures (ratelimit_routes_test.go is).
 	cfg.RateLimit.Token = config.RateBucket{Rate: 1e9, Burst: 1e9}
+	cfg.RateLimit.Media = config.RateBucket{Rate: 1e9, Burst: 1e9}
 	a := New(cfg, authSvc, cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
-	return &perfEnv{handler: a.Handler(), token: token, libID: lib.ID, db: db}
+	return &perfEnv{handler: a.Handler(), token: token, libID: lib.ID, db: db, root: root, books: paths}
 }
 
 // perfRequests are the harness's requests (apps.py latency_spec, AudioSilo),
