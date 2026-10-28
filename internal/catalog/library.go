@@ -241,13 +241,23 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	return &l, nil
 }
 
-// GetLibrary returns a library by ID.
+// GetLibrary returns a library by ID, from libraryCache while nothing has been
+// written since it was read.
 func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
+	gen, cacheable := c.Generation() // before the read (libraryCache)
+	if cacheable {
+		if l, ok := c.libs.get(gen, id); ok {
+			return l, nil
+		}
+	}
 	row := c.db.QueryRowContext(ctx,
 		`SELECT `+libraryCols+` FROM libraries WHERE id = ?`, id)
 	l, err := scanLibrary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	if err == nil && cacheable {
+		c.libs.put(gen, l)
 	}
 	return l, err
 }
