@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,16 +14,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
-
-// cachedBodies swaps the body of every list cache entry for marker, so a
-// request the cache answers says so.
-func (e *testEnv) cachedBodies(marker string) {
-	e.api.lists.mu.Lock()
-	defer e.api.lists.mu.Unlock()
-	for _, el := range e.api.lists.entries {
-		el.Value.(*listEntry).body = []byte(marker)
-	}
-}
 
 // TestIssuesSummaryCachedUntilAWrite (server#245): the Health summary and the
 // admin book lists are answered from the list cache while nothing is written,
@@ -123,10 +114,10 @@ func TestIssuesCacheKey(t *testing.T) {
 	nas := []offlineLibrary{{LibraryID: 2, Name: "NAS", Root: "/mnt/nas", Books: 4}}
 	keys := map[[32]byte]string{}
 	for name, k := range map[string][32]byte{
-		"online":      issuesCacheKey(req, all, []offlineLibrary{}),
-		"offline":     issuesCacheKey(req, all, nas),
-		"more books":  issuesCacheKey(req, all, []offlineLibrary{{LibraryID: 2, Name: "NAS", Root: "/mnt/nas", Books: 5}}),
-		"fewer kinds": issuesCacheKey(req, without, []offlineLibrary{}),
+		"online":      listCacheKey(req, nil, all, []offlineLibrary{}),
+		"offline":     listCacheKey(req, nil, all, nas),
+		"more books":  listCacheKey(req, nil, all, []offlineLibrary{{LibraryID: 2, Name: "NAS", Root: "/mnt/nas", Books: 5}}),
+		"fewer kinds": listCacheKey(req, nil, without, []offlineLibrary{}),
 		"a list":      listCacheKey(req, nil),
 	} {
 		if other, dup := keys[k]; dup {
@@ -134,15 +125,14 @@ func TestIssuesCacheKey(t *testing.T) {
 		}
 		keys[k] = name
 	}
-	if issuesCacheKey(req, all, nas) != issuesCacheKey(req, slicesClone(all), slicesClone(nas)) {
+	if listCacheKey(req, nil, all, nas) != listCacheKey(req, nil, slices.Clone(all), slices.Clone(nas)) {
 		t.Fatal("the same inputs give different keys")
 	}
 }
 
-func slicesClone[T any](s []T) []T { return append([]T(nil), s...) }
-
 // TestAdminFacetsCachedUntilAWrite: Library > Books' facet counts are kept in
-// the list cache too, and a book indexed after them is counted at once.
+// the list cache too, and a book indexed after them is counted at once; of its
+// pages only the first is kept.
 func TestAdminFacetsCachedUntilAWrite(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
@@ -168,5 +158,20 @@ func TestAdminFacetsCachedUntilAWrite(t *testing.T) {
 	}
 	if n := total(); n != 3 {
 		t.Fatalf("total after a new book = %d, want 3", n)
+	}
+
+	// A first page is kept; a later (cursor) page isn't, so one admin
+	// scrolling every page can't push the player's lists out.
+	_, body := e.do(t, "GET", "/api/v1/admin/books?limit=1", adminTok, "")
+	var page catalog.AdminPage
+	if err := json.Unmarshal([]byte(body), &page); err != nil || page.NextCursor == "" {
+		t.Fatalf("first page = %s", body)
+	}
+	before := e.cacheEntries()
+	if resp, body := e.do(t, "GET", "/api/v1/admin/books?limit=1&cursor="+page.NextCursor, adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second page = %d %s", resp.StatusCode, body)
+	}
+	if n := e.cacheEntries(); n != before {
+		t.Fatalf("cache entries after a cursor page = %d, want %d", n, before)
 	}
 }

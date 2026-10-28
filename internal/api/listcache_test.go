@@ -36,6 +36,16 @@ func listCacheLibrary(t *testing.T, e *testEnv) *catalog.Library {
 	return lib
 }
 
+// cachedBodies swaps the body of every list cache entry for marker, so a
+// request the cache answers says so.
+func (e *testEnv) cachedBodies(marker string) {
+	e.api.lists.mu.Lock()
+	defer e.api.lists.mu.Unlock()
+	for _, el := range e.api.lists.entries {
+		el.Value.(*listEntry).body = []byte(marker)
+	}
+}
+
 func (e *testEnv) cacheEntries() int {
 	e.api.lists.mu.Lock()
 	defer e.api.lists.mu.Unlock()
@@ -78,11 +88,7 @@ func TestListCacheServesUntilAWrite(t *testing.T) {
 	// The cache's: with every entry's body swapped for a marker, the marker is
 	// the answer.
 	const marker = "{\"cached\":true}\n"
-	e.api.lists.mu.Lock()
-	for _, el := range e.api.lists.entries {
-		el.Value.(*listEntry).body = []byte(marker)
-	}
-	e.api.lists.mu.Unlock()
+	e.cachedBodies(marker)
 	for _, p := range paths {
 		resp, body := e.do(t, "GET", p, tok, "")
 		if body != marker || resp.Header.Get("Content-Type") != "application/json; charset=utf-8" {

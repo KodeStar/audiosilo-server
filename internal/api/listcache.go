@@ -111,33 +111,29 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 // buffer, kept as it grew, may be up to twice its length) and the entry around it.
 func entryCost(body []byte) int { return cap(body) + listEntryCost }
 
-// listCacheKey is the key of an answer to r computed for scopes: the path, the
-// raw query string and the scopes, hashed (the scopes of a member with many paths
-// would otherwise make a long key). Written with %q and %#v, which spell out
-// every byte (JSON would turn bytes that aren't UTF-8 into U+FFFD, so two scopes
+// listCacheKey is the key of an answer to r computed for scopes and extra (what
+// else the answer is computed from besides the database, such as the Health
+// summary's kinds and offline libraries): the path, the raw query string, the
+// scopes and extra, hashed (the scopes of a member with many paths would
+// otherwise make a long key). Written with %q and %#v, which spell out every
+// byte (JSON would turn bytes that aren't UTF-8 into U+FFFD, so two scopes
 // naming such paths could share a key) and every field, so a field added to
 // catalog.Scope joins the key by itself.
-func listCacheKey(r *http.Request, scopes []catalog.Scope) [sha256.Size]byte {
-	return sha256.Sum256(fmt.Appendf(nil, "%q %q %#v", r.URL.Path, r.URL.RawQuery, scopes))
+func listCacheKey(r *http.Request, scopes []catalog.Scope, extra ...any) [sha256.Size]byte {
+	return sha256.Sum256(fmt.Appendf(nil, "%q %q %#v %#v", r.URL.Path, r.URL.RawQuery, scopes, extra))
 }
 
-// cachedList is the list cache's lookup for one of the player's list handlers:
-// gen is the generation read before the request's first read (a.cat.Generation).
-// It answers from the cache and returns nil, or returns a write func that
-// encodes v exactly as writeJSON does, keeps it when cacheable, and writes it.
-func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cacheable bool, scopes []catalog.Scope) (write func(v any)) {
+// cachedList is the list cache's lookup for one of the handlers it serves: gen
+// is the generation read before the request's first read (a.cat.Generation),
+// and extra is what the answer is computed from besides the database and r
+// (listCacheKey). It answers from the cache and returns nil, or returns a
+// write func that encodes v exactly as writeJSON does, keeps it when
+// cacheable, and writes it.
+func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cacheable bool, scopes []catalog.Scope, extra ...any) (write func(v any)) {
 	if !cacheable {
 		return func(v any) { writeJSON(w, http.StatusOK, v) }
 	}
-	return a.cachedAnswer(w, gen, listCacheKey(r, scopes))
-}
-
-// cachedAnswer is cachedList for an answer under any key: one that names
-// everything the answer is computed from besides the database (the admin
-// console's Health summary keys on its kinds and the offline libraries,
-// handleIssues). Every answer the cache holds is either a list's or one of
-// these, keyed on its route's path, so the two never share a key.
-func (a *API) cachedAnswer(w http.ResponseWriter, gen uint64, key [sha256.Size]byte) (write func(v any)) {
+	key := listCacheKey(r, scopes, extra...)
 	if body, hit := a.lists.get(gen, key); hit {
 		writeJSONBytes(w, body)
 		return nil

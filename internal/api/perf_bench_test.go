@@ -244,32 +244,7 @@ func perfBooks() int {
 // query, JSON) against a seeded library of AUDIOSILO_PERF_BOOKS books (5,000).
 func BenchmarkPerfAPI(b *testing.B) {
 	e := seedPerfLibrary(b, perfBooks())
-	ctx := context.Background()
-	for _, r := range e.perfRequests(b) {
-		// Repeated, as the harness asks: answered from the list cache.
-		b.Run(r[0], func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				if rec := e.serve(r[1]); rec.Code != http.StatusOK {
-					b.Fatalf("%s: %d", r[1], rec.Code)
-				}
-			}
-		})
-		// After a write each time (the generation moves): the answer is built.
-		b.Run(r[0]+"/uncached", func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				b.StopTimer()
-				if _, err := e.db.ExecContext(ctx, `SELECT 1`); err != nil {
-					b.Fatal(err)
-				}
-				b.StartTimer()
-				if rec := e.serve(r[1]); rec.Code != http.StatusOK {
-					b.Fatalf("%s: %d", r[1], rec.Code)
-				}
-			}
-		})
-	}
+	e.benchRequests(b, e.perfRequests(b))
 }
 
 // BenchmarkPerfAdmin times the admin console's heaviest requests at
@@ -279,12 +254,19 @@ func BenchmarkPerfAPI(b *testing.B) {
 //	go test ./internal/api -run '^$' -bench BenchmarkPerfAdmin -benchtime 2s
 func BenchmarkPerfAdmin(b *testing.B) {
 	e := seedPerfLibrary(b, perfBooks())
-	ctx := context.Background()
-	for _, r := range [][2]string{
+	e.benchRequests(b, [][2]string{
 		{"admin_issues", "/api/v1/admin/issues"},
 		{"admin_issue_books", "/api/v1/admin/books?issue=scan_error&sort=added&order=desc&limit=50"},
 		{"admin_facets", "/api/v1/admin/books/facets"},
-	} {
+	})
+}
+
+// benchRequests runs a sub-benchmark per {name, path}, twice: repeated (as the
+// harness asks: answered from the list cache) and after a write each time (the
+// generation moves, so the answer is built).
+func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
+	ctx := context.Background()
+	for _, r := range reqs {
 		b.Run(r[0], func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {

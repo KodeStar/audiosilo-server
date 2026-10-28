@@ -520,11 +520,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the request's first read; any write moves the generation and empties it. Only
   answers that are a pure function of the database, the query and the scopes may
   use it (no per-listener field on a list book); a handler that adds one must
-  leave the cache. The admin console's `GET /admin/books` pages use it too (keyed
-  like a list, no scopes: an admin sees every book), and so does the Health summary
-  `GET /admin/issues` (server#245) through `cachedAnswer`, keyed on its path, the
-  kinds it counts and the offline libraries (`issuesCacheKey`: a filesystem probe
-  made on every request, so a root going away needs no write to show).
+  leave the cache. The admin console's `GET /admin/books` first pages and
+  `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
+  every book), and so does the Health summary `GET /admin/issues` (server#245),
+  whose key also takes `cachedList`'s extra inputs: the kinds it counts and the
+  offline libraries (a filesystem probe made before the lookup, so a root going
+  away needs no write to show).
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through

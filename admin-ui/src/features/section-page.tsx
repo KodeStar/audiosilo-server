@@ -1,8 +1,6 @@
-import { Suspense } from 'react';
 import { useParams } from '@tanstack/react-router';
 import type { Destination, DestinationKey } from '@/components/shell/destinations';
 import { NotFound } from '@/features/not-found';
-import { PageSkeleton } from '@/components/page';
 import { lazyScreen, type Screen } from '@/lib/lazy-screen';
 
 // Each screen is its own chunk, loaded on first visit (with its form, drag and
@@ -10,97 +8,62 @@ import { lazyScreen, type Screen } from '@/lib/lazy-screen';
 // The destination routes fetch it from their loader (preloadSection), beside the
 // session check (lib/lazy-screen.tsx).
 
-const BooksPage = lazyScreen(
-  () => import('@/features/library/books/books-page'),
-  (m) => m.BooksPage,
+const BooksPage = lazyScreen(() =>
+  import('@/features/library/books/books-page').then((m) => m.BooksPage),
 );
-const PeopleScreen = lazyScreen(
-  () => import('@/features/library/people/people-screen'),
-  (m) => m.PeopleScreen,
-);
+const loadPeople = () => import('@/features/library/people/people-screen');
 /** Library > Authors: everyone credited as an author, most books first. */
-const AuthorsPage = Object.assign(() => <PeopleScreen field="author" />, {
-  preload: PeopleScreen.preload,
-});
+const AuthorsPage = lazyScreen(() =>
+  loadPeople().then(({ PeopleScreen }) => () => <PeopleScreen field="author" />),
+);
 /** Library > Narrators: everyone credited as a narrator, most hours first. */
-const NarratorsPage = Object.assign(() => <PeopleScreen field="narrator" />, {
-  preload: PeopleScreen.preload,
-});
-const SeriesPage = lazyScreen(
-  () => import('@/features/library/series/series-page'),
-  (m) => m.SeriesPage,
+const NarratorsPage = lazyScreen(() =>
+  loadPeople().then(({ PeopleScreen }) => () => <PeopleScreen field="narrator" />),
 );
-const FoldersPage = lazyScreen(
-  () => import('@/features/library/folders/folders-page'),
-  (m) => m.FoldersPage,
+const SeriesPage = lazyScreen(() =>
+  import('@/features/library/series/series-page').then((m) => m.SeriesPage),
 );
-const LibrariesPage = lazyScreen(
-  () => import('@/features/libraries/libraries-page'),
-  (m) => m.LibrariesPage,
+const FoldersPage = lazyScreen(() =>
+  import('@/features/library/folders/folders-page').then((m) => m.FoldersPage),
 );
-const PeoplePage = lazyScreen(
-  () => import('@/features/people/people-page'),
-  (m) => m.PeoplePage,
+const LibrariesPage = lazyScreen(() =>
+  import('@/features/libraries/libraries-page').then((m) => m.LibrariesPage),
 );
-const InvitesPage = lazyScreen(
-  () => import('@/features/people/invites-page'),
-  (m) => m.InvitesPage,
+const PeoplePage = lazyScreen(() =>
+  import('@/features/people/people-page').then((m) => m.PeoplePage),
 );
-const SharesPage = lazyScreen(
-  () => import('@/features/shares/shares-page'),
-  (m) => m.SharesPage,
+const InvitesPage = lazyScreen(() =>
+  import('@/features/people/invites-page').then((m) => m.InvitesPage),
 );
-const IssuesPage = lazyScreen(
-  () => import('@/features/health/issues-page'),
-  (m) => m.IssuesPage,
+const SharesPage = lazyScreen(() =>
+  import('@/features/shares/shares-page').then((m) => m.SharesPage),
 );
-const JobsPage = lazyScreen(
-  () => import('@/features/health/jobs-page'),
-  (m) => m.JobsPage,
+const IssuesPage = lazyScreen(() =>
+  import('@/features/health/issues-page').then((m) => m.IssuesPage),
 );
-const DevicesPage = lazyScreen(
-  () => import('@/features/people/devices-page'),
-  (m) => m.DevicesPage,
+const JobsPage = lazyScreen(() => import('@/features/health/jobs-page').then((m) => m.JobsPage));
+const DevicesPage = lazyScreen(() =>
+  import('@/features/people/devices-page').then((m) => m.DevicesPage),
 );
-const ActivityPage = lazyScreen(
-  () => import('@/features/activity/activity-page'),
-  (m) => m.ActivityPage,
+const ActivityPage = lazyScreen(() =>
+  import('@/features/activity/activity-page').then((m) => m.ActivityPage),
 );
-const LivePage = lazyScreen(
-  () => import('@/features/activity/live-page'),
-  (m) => m.LivePage,
+const LivePage = lazyScreen(() => import('@/features/activity/live-page').then((m) => m.LivePage));
+const SessionsPage = lazyScreen(() =>
+  import('@/features/activity/sessions-page').then((m) => m.SessionsPage),
 );
-const SessionsPage = lazyScreen(
-  () => import('@/features/activity/sessions-page'),
-  (m) => m.SessionsPage,
+const YearPage = lazyScreen(() => import('@/features/activity/year-page').then((m) => m.YearPage));
+const SystemPage = lazyScreen(() =>
+  import('@/features/health/system-page').then((m) => m.SystemPage),
 );
-const YearPage = lazyScreen(
-  () => import('@/features/activity/year-page'),
-  (m) => m.YearPage,
+const LogsPage = lazyScreen(() => import('@/features/logs/logs-page').then((m) => m.LogsPage));
+const EventsPage = lazyScreen(() =>
+  import('@/features/events/events-page').then((m) => m.EventsPage),
 );
-const SystemPage = lazyScreen(
-  () => import('@/features/health/system-page'),
-  (m) => m.SystemPage,
-);
-const LogsPage = lazyScreen(
-  () => import('@/features/logs/logs-page'),
-  (m) => m.LogsPage,
-);
-const EventsPage = lazyScreen(
-  () => import('@/features/events/events-page'),
-  (m) => m.EventsPage,
-);
-const AuditPage = lazyScreen(
-  () => import('@/features/audit/audit-page'),
-  (m) => m.AuditPage,
-);
-const AboutPage = lazyScreen(
-  () => import('@/features/about/about-page'),
-  (m) => m.AboutPage,
-);
-const SettingsPage = lazyScreen(
-  () => import('@/features/settings/settings-page'),
-  (m) => m.SettingsPage,
+const AuditPage = lazyScreen(() => import('@/features/audit/audit-page').then((m) => m.AuditPage));
+const AboutPage = lazyScreen(() => import('@/features/about/about-page').then((m) => m.AboutPage));
+const SettingsPage = lazyScreen(() =>
+  import('@/features/settings/settings-page').then((m) => m.SettingsPage),
 );
 
 /** Every section's screen, by destination. */
@@ -148,9 +111,5 @@ export function SectionPage({ destination }: { destination: Destination }) {
   // Every listed section has a screen (section-page.test.ts), so a missing one is a 404.
   const Page = sectionScreen(destination, section);
   if (!Page) return <NotFound />;
-  return (
-    <Suspense fallback={<PageSkeleton />}>
-      <Page />
-    </Suspense>
-  );
+  return <Page />;
 }

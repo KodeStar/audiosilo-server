@@ -54,8 +54,10 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A page is the database's answer to the query string alone (an admin sees
-	// every book), so it is kept like the player's lists (server#245).
-	write := a.cachedList(w, r, gen, cacheable, nil)
+	// every book), so it is kept like the player's lists (server#245). Only a
+	// first page: one admin scrolling a large library through every cursor page
+	// would otherwise push the player's lists out of the shared cache.
+	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "", nil)
 	if write == nil {
 		return
 	}

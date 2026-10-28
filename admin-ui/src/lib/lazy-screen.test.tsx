@@ -31,7 +31,7 @@ class Boundary extends Component<{ children: ReactNode }, { error?: Error }> {
 describe('lazyScreen', () => {
   it('renders a preloaded screen on its first render, with no skeleton', async () => {
     const c = chunk();
-    const Screen = lazyScreen(c.load, (m) => m.Hello);
+    const Screen = lazyScreen(() => c.load().then((m) => m.Hello));
     const preloaded = Screen.preload();
     c.settle().resolve({ Hello });
     await preloaded;
@@ -44,7 +44,7 @@ describe('lazyScreen', () => {
 
   it('shows the skeleton until the chunk is in, fetching it once', async () => {
     const c = chunk();
-    const Screen = lazyScreen(c.load, (m) => m.Hello);
+    const Screen = lazyScreen(() => c.load().then((m) => m.Hello));
     void Screen.preload(); // a hover, then the visit
     render(<Screen name="Ada" />);
     expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
@@ -56,7 +56,7 @@ describe('lazyScreen', () => {
 
   it('throws a chunk that fails to the error boundary, and fetches again next time', async () => {
     const c = chunk();
-    const Screen = lazyScreen(c.load, (m) => m.Hello);
+    const Screen = lazyScreen(() => c.load().then((m) => m.Hello));
     vi.spyOn(console, 'error').mockImplementation(() => {});
     render(
       <Boundary>
