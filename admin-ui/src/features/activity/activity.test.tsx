@@ -43,7 +43,13 @@ describe('activity overview', () => {
   it('shows the period: tiles with changes, charts, top books and people, playback and apps', async () => {
     const calls = mockFetch(routes());
     renderApp('/activity');
-    expect(await screen.findByRole('heading', { level: 1, name: 'Activity' })).toBeInTheDocument();
+    // The page's own heading (the sub bar names the destination too).
+    expect(
+      await within(await screen.findByRole('main')).findByRole('heading', {
+        level: 1,
+        name: 'Activity',
+      }),
+    ).toBeInTheDocument();
     expect(await screen.findByText('9h')).toBeInTheDocument();
     expect(screen.getByText('2 people listened')).toBeInTheDocument();
     // 9h against 6h before: up 50%.

@@ -249,9 +249,29 @@ func perfBooks() int {
 // query, JSON) against a seeded library of AUDIOSILO_PERF_BOOKS books (5,000).
 func BenchmarkPerfAPI(b *testing.B) {
 	e := seedPerfLibrary(b, perfBooks())
+	e.benchRequests(b, e.perfRequests(b))
+}
+
+// BenchmarkPerfAdmin times the admin console's heaviest requests at
+// AUDIOSILO_PERF_BOOKS books (server#245): the Health summary and its first
+// list, Library > Books' facets, cached and after a write.
+//
+//	go test ./internal/api -run '^$' -bench BenchmarkPerfAdmin -benchtime 2s
+func BenchmarkPerfAdmin(b *testing.B) {
+	e := seedPerfLibrary(b, perfBooks())
+	e.benchRequests(b, [][2]string{
+		{"admin_issues", "/api/v1/admin/issues"},
+		{"admin_issue_books", "/api/v1/admin/books?issue=scan_error&sort=added&order=desc&limit=50"},
+		{"admin_facets", "/api/v1/admin/books/facets"},
+	})
+}
+
+// benchRequests runs a sub-benchmark per {name, path}, twice: repeated (as the
+// harness asks: answered from the list cache) and after a write each time (the
+// generation moves, so the answer is built).
+func (e *perfEnv) benchRequests(b *testing.B, reqs [][2]string) {
 	ctx := context.Background()
-	for _, r := range e.perfRequests(b) {
-		// Repeated, as the harness asks: answered from the list cache.
+	for _, r := range reqs {
 		b.Run(r[0], func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
@@ -260,7 +280,6 @@ func BenchmarkPerfAPI(b *testing.B) {
 				}
 			}
 		})
-		// After a write each time (the generation moves): the answer is built.
 		b.Run(r[0]+"/uncached", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {

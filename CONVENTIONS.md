@@ -522,7 +522,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the request's first read; any write moves the generation and empties it. Only
   answers that are a pure function of the database, the query and the scopes may
   use it (no per-listener field on a list book); a handler that adds one must
-  leave the cache.
+  leave the cache. The admin console's `GET /admin/books` first pages and
+  `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
+  every book), and so does the Health summary `GET /admin/issues` (server#245),
+  whose key also takes `cachedList`'s extra inputs: the kinds it counts and the
+  offline libraries (a filesystem probe made before the lookup, so a root going
+  away needs no write to show).
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
@@ -1319,7 +1324,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
   /admin/libraries/{id}` rescans only when the root or ignore rules change.
 - **Health issues (`catalog/issues.go`, `api/handlers_health.go`)**: computed from the index on
-  request; each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
+  request (the summary is kept in the list cache until the next write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (left out of the summary

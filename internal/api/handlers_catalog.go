@@ -37,6 +37,7 @@ const (
 // handleAdminListBooks serves GET /admin/books: a keyset page of books across
 // every library, filtered, searched and sorted (see bookFilterFromQuery).
 func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	q := r.URL.Query()
 	f, msg := bookFilterFromQuery(q)
 	if msg != "" {
@@ -52,20 +53,35 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `order must be "asc" or "desc"`)
 		return
 	}
+	// A page is the database's answer to the query string alone (an admin sees
+	// every book), so it is kept like the player's lists (server#245). Only a
+	// first page: one admin scrolling a large library through every cursor page
+	// would otherwise push the player's lists out of the shared cache.
+	write := a.cachedList(w, r, gen, cacheable && opt.Cursor == "", nil)
+	if write == nil {
+		return
+	}
 	page, err := a.cat.ListAdminBooks(r.Context(), opt)
 	if err != nil {
 		a.writeCatalogError(w, err, "admin list books failed", "could not list books")
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	write(page)
 }
 
 // handleAdminBookFacets serves GET /admin/books/facets: the facet counts for the
 // same filter parameters as the list.
 func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	f, msg := bookFilterFromQuery(r.URL.Query())
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	// Counted over every matching book (about 100 ms at 5,000), and like a page
+	// the database's answer to the query string alone: kept until the next write.
+	write := a.cachedList(w, r, gen, cacheable, nil)
+	if write == nil {
 		return
 	}
 	facets, err := a.cat.BookFacets(r.Context(), f)
@@ -73,7 +89,7 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "admin book facets failed", "could not count books")
 		return
 	}
-	writeJSON(w, http.StatusOK, facets)
+	write(facets)
 }
 
 // bookFilterFromQuery parses the list/facet filter parameters. A non-empty msg is

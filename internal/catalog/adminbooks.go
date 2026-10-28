@@ -156,8 +156,9 @@ const (
 	editedFieldsExpr = `(SELECT group_concat(field, ',') FROM (SELECT o.field FROM book_overrides o
 		WHERE o.library_id = b.library_id AND o.path = b.rel_path ORDER BY o.field))`
 	// "Has chapters" means real navigation: more than the one chapter every
-	// single-part book gets.
-	hasChaptersExpr = `(` + chapterCountExpr + ` > 1)`
+	// single-part book gets. A second row is looked for, not every row counted
+	// (a third of the cost over a library; server#245).
+	hasChaptersExpr = `EXISTS(SELECT 1 FROM chapters ch WHERE ch.book_id = b.id LIMIT 1 OFFSET 1)`
 )
 
 // directPlayableExpr is media.DirectPlayable in SQL for a whole book (its Go twin
