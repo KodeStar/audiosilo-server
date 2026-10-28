@@ -22,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // Scanner walks library roots and keeps the catalog index up to date. The
@@ -53,6 +54,10 @@ type Scanner struct {
 	concurrency int
 	// probeTimeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
 	probeTimeout time.Duration
+
+	// The files this server has seen ffprobe reject (problemCleared).
+	rejectedMu sync.Mutex
+	rejected   map[rejectedKey]bool
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -444,13 +449,15 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
-			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) &&
-			!problemCleared(lib, old, s.ffprobePath) {
+			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
+			!s.problemCleared(lib, old) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order);
 			// only skip the probe when ffprobe is
 			// disabled, or a prior probe already stored both duration and codec
-			// (so books indexed before the codec column get it backfilled).
+			// (so books indexed before the codec column get it backfilled), or the
+			// book's one file has a read problem that problemCleared just found
+			// still there: reading the book again would find the same.
 			// Whether it is a disc of a split book turns on its siblings, so it can
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
@@ -709,12 +716,16 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
 // folder context (path heuristics, sibling cover art, an Audiobookshelf
 // metadata.json in a folder book's folder, when the walk found one: b.ABS.Sig,
-// and the book's .audiosilo/ attachments: b.Attachments.Sig).
+// and the book's .audiosilo/ attachments: b.Attachments.Sig), and when it first
+// appeared on disk (stampAddedAt), which discovery leaves unread.
 //
 // A scan reads with its slots (an on-demand index with one, a file at a time)
 // and its ctx, which ends the ffprobe runs at a Stop: the scan then drops
 // the reading rather than writing it.
 func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Book, slots *readSlots) {
+	if b.AddedAt == "" {
+		stampAddedAt(lib, b)
+	}
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
 	md := slots.extract(ctx, abs, s.ffprobePath)
@@ -724,6 +735,10 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)
+	}
+	if !b.IsFolder || len(b.Files) == 1 {
+		// Its only file: what the next scan's problemCleared asks of it.
+		s.noteRejected(rejectedKey{library: lib.ID, file: primary, mtime: b.MTime, size: b.Size}, md)
 	}
 	setNames(b, md)
 	if md != nil {
@@ -1106,7 +1121,20 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	dirs = map[string][]audioFile{}
 	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{},
 		epubs: map[string][]fs.DirEntry{}}
-	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
+	// Hidden folders (.Trash-1000, Syncthing .stversions, .git, and .audiosilo,
+	// listed on its own below) and ignored ones are never gone into, so their
+	// audio isn't indexed into books unreachable via the fs browse view (which
+	// also hides them).
+	skipped := func(d fs.DirEntry, rel string) bool {
+		return isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))
+	}
+	// The folders the walk goes into are listed ahead (walkDir), except by a
+	// capped walk (a setup preview), which may stop at any folder.
+	var descend func(string, fs.DirEntry) bool
+	if limit == nil {
+		descend = func(p string, d fs.DirEntry) bool { return !skipped(d, path.Join(fromRel, relPathOf(walkFrom, p))) }
+	}
+	err = walkDir(walkFrom, descend, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1145,10 +1173,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				}
 				return fs.SkipDir
 			}
-			// Skip hidden directories (.Trash-1000, Syncthing .stversions, .git) so
-			// their audio isn't indexed into books unreachable via the fs browse view
-			// (which also hides them).
-			if rel != fromRel && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
+			if rel != fromRel && skipped(d, rel) {
 				return fs.SkipDir
 			}
 			if !limit.another() {
@@ -1176,7 +1201,34 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	for dir, audio := range dirs {
 		dirs[dir] = folderAudio(audio)
 	}
+	statAudio(ctx, dirs)
 	return dirs, side, hadErrors, err
+}
+
+// walkStatters is how many audio files statAudio looks at at once.
+const walkStatters = 8
+
+// statAudio reads every audio file's lstat (fs.DirEntry.Info: its size and
+// mtime, all a scan needs to find a book unchanged) walkStatters at a time,
+// ahead of the books being built from them (audioFile.info). One at a time, a
+// no-change scan of a library on a network share or a FUSE pool (Unraid's
+// /mnt/user) spends most of its time waiting on these, one round trip each, the
+// walk's own folder reads being far fewer. A file not looked at by the time ctx
+// ends is looked at when asked, as before.
+func statAudio(ctx context.Context, dirs map[string][]audioFile) {
+	var files []*audioFile
+	for _, audio := range dirs {
+		for i := range audio {
+			files = append(files, &audio[i])
+		}
+	}
+	if len(files) < 2 {
+		return
+	}
+	pool.Each(ctx, walkStatters, files, func() bool { return true }, func(f **audioFile) {
+		(*f).stat, (*f).statErr = (*f).de.Info()
+		(*f).statted = true
+	})
 }
 
 // sidecarFiles are the metadata files the discovery walk found beside the audio,
@@ -1280,10 +1332,21 @@ func booksInDir(lib catalog.Library, rel string, audio []audioFile, overrides ma
 }
 
 // audioFile is one audio file found for a book: its path under lib.Root and its
-// directory entry.
+// directory entry, and its lstat when statAudio has read it.
 type audioFile struct {
-	abs string
-	de  fs.DirEntry
+	abs     string
+	de      fs.DirEntry
+	statted bool
+	stat    fs.FileInfo
+	statErr error
+}
+
+// info is the file's lstat (fs.DirEntry.Info), as statAudio read it.
+func (f audioFile) info() (fs.FileInfo, error) {
+	if f.statted {
+		return f.stat, f.statErr
+	}
+	return f.de.Info()
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
@@ -1348,7 +1411,7 @@ func shadowedMKA(names []string) map[string]bool {
 func fileBooksIn(lib catalog.Library, audio []audioFile) []*catalog.Book {
 	var books []*catalog.Book
 	for _, f := range audio {
-		info, err := f.de.Info()
+		info, err := f.info()
 		if err != nil {
 			continue
 		}
@@ -1367,9 +1430,9 @@ func relPathOf(root, absDir string) string {
 	return filepath.ToSlash(rel)
 }
 
-// addedAt is when a book first appeared on disk: the file's birth (creation)
-// time where the OS/filesystem records it, otherwise its mtime. Formatted as
-// RFC3339 UTC to match the other timestamp columns and sort lexicographically.
+// addedAt is when a file first appeared on disk: its birth (creation) time
+// where the OS/filesystem records it, otherwise its mtime. Formatted as RFC3339
+// UTC to match the other timestamp columns and sort lexicographically.
 func addedAt(absPath string, info os.FileInfo) string {
 	t := info.ModTime()
 	if bt, ok := birthTime(absPath, info); ok && !bt.IsZero() {
@@ -1378,7 +1441,41 @@ func addedAt(absPath string, info os.FileInfo) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// fileBook builds a single-file book for the audio file at absPath.
+// stampAddedAt sets b.AddedAt to when the book first appeared on disk: the
+// earliest addedAt of its audio files. It is read only for a book about to be
+// written (enrich), never by discovery: added_at is recorded when a book is
+// first indexed and never updated, so a scan that finds a book unchanged has no
+// use for it, and on Linux the birth time is a statx per file on top of the
+// walk's lstat, which on a network share or a FUSE pool (Unraid's /mnt/user)
+// is most of a no-change scan's cost. A book none of whose files can be looked
+// at now (gone since discovery) is stamped now, as first seen.
+func stampAddedAt(lib catalog.Library, b *catalog.Book) {
+	paths := []string{b.RelPath}
+	if b.IsFolder {
+		paths = paths[:0]
+		for _, f := range b.Files {
+			paths = append(paths, f.RelPath)
+		}
+	}
+	var added string // RFC3339 UTC sorts lexicographically, so min string = earliest
+	for _, rel := range paths {
+		abs := absOf(lib, rel)
+		info, err := os.Lstat(abs)
+		if err != nil {
+			continue
+		}
+		if a := addedAt(abs, info); added == "" || a < added {
+			added = a
+		}
+	}
+	if added == "" {
+		added = time.Now().UTC().Format(time.RFC3339)
+	}
+	b.AddedAt = added
+}
+
+// fileBook builds a single-file book for the audio file at absPath (its AddedAt
+// is enrich's: stampAddedAt).
 func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Book {
 	rel, _ := filepath.Rel(lib.Root, absPath)
 	return &catalog.Book{
@@ -1387,19 +1484,17 @@ func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Bo
 		Format:    ext(filepath.Base(absPath)),
 		Size:      info.Size(),
 		MTime:     info.ModTime().Unix(),
-		AddedAt:   addedAt(absPath, info),
 	}
 }
 
 // folderBook builds a (possibly multi-file) book at absDir from audio, its
 // files in play order (audioEntries' name order, or joinedBook's), or returns nil
-// if there are none.
+// if there are none. Its AddedAt is enrich's (stampAddedAt).
 func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.Book {
 	var files []catalog.BookFile
 	var totalSize, maxMTime int64
-	var added string // earliest file added time = when the book first appeared
 	for _, f := range audio {
-		info, ierr := f.de.Info()
+		info, ierr := f.info()
 		if ierr != nil {
 			continue
 		}
@@ -1410,9 +1505,6 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 		totalSize += info.Size()
 		if m := info.ModTime().Unix(); m > maxMTime {
 			maxMTime = m
-		}
-		if a := addedAt(f.abs, info); added == "" || a < added {
-			added = a // RFC3339 UTC sorts lexicographically, so min string = earliest
 		}
 	}
 	if len(files) == 0 {
@@ -1426,7 +1518,6 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 		Format:    files[0].Format,
 		Size:      totalSize,
 		MTime:     maxMTime,
-		AddedAt:   added,
 		Files:     files,
 	}
 }

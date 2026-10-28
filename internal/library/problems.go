@@ -46,13 +46,68 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 // A fixed permission or a share that came back changes neither the file's mtime
 // nor its size, and a problem on a part other than the first leaves the book's
 // duration and codec looking complete, so without this a scan would skip the book
-// and the problem would stay listed. It reads only that one file.
-func problemCleared(lib catalog.Library, sig catalog.Signature, ffprobePath string) bool {
+// and the problem would stay listed. It reads only that one file, and not even
+// that when this server has seen ffprobe reject the file's data with the book as
+// it is now (rejectedKey): the same ffprobe rejects the same bytes again, and
+// each run is a process start (most of a no-change scan of a library holding a
+// damaged file).
+func (s *Scanner) problemCleared(lib catalog.Library, sig catalog.Signature) bool {
 	if sig.ScanErrorFile == "" || (sig.ScanError != problemUnreadable && sig.ScanError != problemProbe) {
 		return false
 	}
-	md, _ := metadata.Extract(absOf(lib, sig.ScanErrorFile), ffprobePath)
+	key := rejectedKey{library: lib.ID, file: sig.ScanErrorFile, mtime: sig.MTime, size: sig.Size}
+	if sig.ScanError == problemProbe && s.wasRejected(key) {
+		return false
+	}
+	md, _ := metadata.Extract(absOf(lib, sig.ScanErrorFile), s.ffprobePath)
+	if sig.ScanError == problemProbe {
+		s.noteRejected(key, md)
+	}
 	return md.OpenErr == nil && (sig.ScanError == problemUnreadable || md.ProbeErr == nil)
+}
+
+// rejectedKey is a file ffprobe rejected (metadata.ErrProbeRejected) and its
+// book's mtime and size then: a scan that finds the book with the same two
+// takes it to hold the same bytes, as it does for every book it finds unchanged.
+type rejectedKey struct {
+	library     int64
+	file        string // library-relative
+	mtime, size int64  // the book's
+}
+
+// noteRejected remembers k when md says ffprobe rejected the file's data (not a
+// time-out, an exec failure or a read error: those may pass). Remembered for the
+// server's life only, so a restart (perhaps with another ffprobe) looks again.
+func (s *Scanner) noteRejected(k rejectedKey, md *metadata.Metadata) {
+	if md == nil || md.OpenErr != nil || !errors.Is(md.ProbeErr, metadata.ErrProbeRejected) {
+		return
+	}
+	s.rejectedMu.Lock()
+	defer s.rejectedMu.Unlock()
+	if s.rejected == nil {
+		s.rejected = map[rejectedKey]bool{}
+	}
+	s.rejected[k] = true
+}
+
+// wasRejected reports whether noteRejected remembered k.
+func (s *Scanner) wasRejected(k rejectedKey) bool {
+	s.rejectedMu.Lock()
+	defer s.rejectedMu.Unlock()
+	return s.rejected[k]
+}
+
+// soleFileProblem reports whether a book's one audio file is the file its
+// recorded read problem names. Such a book has no duration or codec stored (its
+// only file was never probed), so a scan finding it unchanged lets
+// problemCleared decide whether to read it again, rather than reading all of it
+// on every scan only to record the same problem.
+func soleFileProblem(b *catalog.Book, sig catalog.Signature) bool {
+	if b.IsFolder && len(b.Files) != 1 {
+		return false
+	}
+	return sig.ScanErrorFile == primaryPath(b) &&
+		(sig.ScanError == problemUnreadable || sig.ScanError == problemProbe)
 }
 
 // pathErrText is an OS error's own words without the absolute path it names
