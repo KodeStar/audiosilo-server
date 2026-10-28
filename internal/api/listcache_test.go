@@ -283,11 +283,9 @@ func TestListCacheBrowseLists(t *testing.T) {
 	ctx := context.Background()
 	lib := listCacheLibrary(t, e)
 	admin, listener, userID := adminAndMember(t, e)
-	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "B only"})
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "B only",
+		Paths: []catalog.PathRule{{LibraryID: lib.ID, Path: "B"}}})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "B"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.cat.GrantShare(ctx, userID, share.ID); err != nil {
@@ -305,27 +303,21 @@ func TestListCacheBrowseLists(t *testing.T) {
 	reindex("B/Beta.m4b", "Beta", "B Author", "Bob Reader", "Beta Saga")
 
 	base := fmt.Sprintf("/api/v1/libraries/%d/", lib.ID)
-	paths := map[string][2]string{ // path -> what the admin sees, what only the admin sees
-		base + "authors":              {"B Author", "A Author"},
-		base + "narrators":            {"Bob Reader", "Ann Reader"},
-		base + "series":               {"Beta Saga", "Alpha Saga"},
-		base + "series?memberships=1": {"Beta Saga", "Alpha Saga"},
+	// path -> what the listener sees too, what only the admin sees, the re-index's name
+	paths := map[string][3]string{
+		base + "authors":              {"B Author", "A Author", "Carla Author"},
+		base + "narrators":            {"Bob Reader", "Ann Reader", "Cy Reader"},
+		base + "series":               {"Beta Saga", "Alpha Saga", "Gamma Saga"},
+		base + "series?memberships=1": {"Beta Saga", "Alpha Saga", "Gamma Saga"},
 	}
-	first := map[string]string{}
 	for p, want := range paths {
 		resp, body := e.do(t, "GET", p, admin, "")
 		if resp.StatusCode != http.StatusOK || !strings.Contains(body, want[0]) || !strings.Contains(body, want[1]) {
 			t.Fatalf("admin GET %s: %d %s", p, resp.StatusCode, body)
 		}
-		first[p] = body
 	}
 	if n := e.cacheEntries(); n != len(paths) {
 		t.Fatalf("cache entries = %d, want %d (one per route and query)", n, len(paths))
-	}
-	for p := range paths {
-		if _, body := e.do(t, "GET", p, admin, ""); body != first[p] {
-			t.Fatalf("admin GET %s again: %q, want the first answer %q", p, body, first[p])
-		}
 	}
 	const marker = "{\"cached\":true}\n"
 	e.cachedBodies(marker)
@@ -345,15 +337,9 @@ func TestListCacheBrowseLists(t *testing.T) {
 
 	// A content write: the next answers have it.
 	reindex("A/Alpha One.m4b", "Alpha One", "Carla Author", "Cy Reader", "Gamma Saga")
-	for p := range paths {
-		_, body := e.do(t, "GET", p, admin, "")
-		if strings.Contains(body, "Ann Reader") || strings.Contains(body, "Alpha Saga") {
-			t.Fatalf("admin GET %s after the re-index: %s", p, body)
-		}
-	}
-	for p, want := range map[string]string{base + "authors": "Carla Author", base + "narrators": "Cy Reader", base + "series": "Gamma Saga"} {
-		if _, body := e.do(t, "GET", p, admin, ""); !strings.Contains(body, want) {
-			t.Fatalf("admin GET %s after the re-index: %s, want %s", p, body, want)
+	for p, want := range paths {
+		if _, body := e.do(t, "GET", p, admin, ""); !strings.Contains(body, want[2]) {
+			t.Fatalf("admin GET %s after the re-index: %s, want %s", p, body, want[2])
 		}
 	}
 }

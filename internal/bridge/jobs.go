@@ -34,7 +34,7 @@ const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
 const (
 	// Lease is how long a claim holds a job without a progress update. The
-	// Bridge reports at least every 10 s while it works.
+	// Bridge reports at least every 30 s while it works.
 	Lease = 2 * time.Minute
 	// MaxAttempts is how many times a job may be claimed; a lease that runs out
 	// on the last attempt fails the job instead of queueing it again.
@@ -974,9 +974,7 @@ func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
 // first), so the console's polls don't queue behind scans for the writer.
 func (s *Service) expireDue(ctx context.Context) error {
 	now := s.ts()
-	var due bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, now).Scan(&due); err != nil || !due {
+	if due, err := s.leaseLapsed(ctx, now); err != nil || !due {
 		return err
 	}
 	var exp expiry
@@ -1042,12 +1040,8 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		exp expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
-		var live bool
-		if err := tx.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+		if err := bridgeTokenLive(ctx, tx, token); err != nil {
 			return err
-		}
-		if !live {
-			return ErrNotPaired
 		}
 		now := s.ts()
 		var err error
@@ -1091,14 +1085,10 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 // enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
 // before it claims), and a lease that lapses later is due at the next claim.
 func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (bool, error) {
-	var live, lapsed bool
-	if err := s.db.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+	if err := bridgeTokenLive(ctx, s.db, token); err != nil {
 		return false, err
 	}
-	if !live {
-		return false, ErrNotPaired
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, s.ts()).Scan(&lapsed); err != nil || lapsed {
+	if lapsed, err := s.leaseLapsed(ctx, s.ts()); err != nil || lapsed {
 		return lapsed, err
 	}
 	lost, err := s.lostPrivateRequests(ctx, s.db)
@@ -1107,6 +1097,27 @@ func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, min
 	}
 	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
 	return id != 0, err
+}
+
+// bridgeTokenLive answers ErrNotPaired once token is no longer the paired
+// Bridge's, read through q (the reader pool or the claim's transaction).
+func bridgeTokenLive(ctx context.Context, q rowQuerier, token int64) error {
+	var live bool
+	if err := q.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+		return err
+	}
+	if !live {
+		return ErrNotPaired
+	}
+	return nil
+}
+
+// leaseLapsed reports, on the reader pool (idx_bridge_jobs_lease), whether any
+// lease ran out by now: whether expireTx has anything to do.
+func (s *Service) leaseLapsed(ctx context.Context, now string) (bool, error) {
+	var lapsed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, now).Scan(&lapsed)
+	return lapsed, err
 }
 
 // maxOpenRequests caps one requester's open jobs of a capped kind.

@@ -516,8 +516,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   temp files.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
-  (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer (8 MiB
-  LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
+  (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
+  (8 MiB LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
   merge paths whose bytes aren't UTF-8), under the write generation read before
   the request's first read; any write moves the generation and empties it. Only
@@ -1777,8 +1777,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
   and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
   private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
-  answers without the writer, so an idle paired Bridge's polls leave the write generation alone; `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
-  error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
+  answers without the writer, so an idle paired Bridge's polls leave the write generation alone;
+  `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?, error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.
   Claim responses retain the request deadline but bypass response buffering and flush before return;

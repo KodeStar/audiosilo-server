@@ -3,8 +3,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // The player's browse lists (the `browse_people` capability): a library's
@@ -13,7 +11,7 @@ import (
 // caller's scope, so a share-scoped user never sees a count for a book outside
 // their grant, and without the admin-only merge suggestions. Transport only.
 //
-// Both answer through the list cache (listcache.go): an answer is a pure function
+// Both answer through the list cache (browseList): an answer is a pure function
 // of the database, the path and query (the field, ?memberships=) and the caller's
 // scope, with no listener-specific field. A podcasts library's answers are empty
 // (the aggregates count book libraries only) and skip it, as its /books does.
@@ -21,12 +19,7 @@ import (
 // handleBrowsePeople serves GET /libraries/{id}/authors and /narrators.
 func (a *API) handleBrowsePeople(field, key string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		gen, cacheable := a.cat.Generation() // before any read (listcache.go)
-		lib, scope, ok := a.browseScope(w, r)
-		if !ok {
-			return
-		}
-		write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+		lib, scope, write := a.browseList(w, r)
 		if write == nil {
 			return
 		}
@@ -41,12 +34,7 @@ func (a *API) handleBrowsePeople(field, key string) http.HandlerFunc {
 
 // handleBrowseSeries serves GET /libraries/{id}/series.
 func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
-	lib, scope, ok := a.browseScope(w, r)
-	if !ok {
-		return
-	}
-	write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+	lib, scope, write := a.browseList(w, r)
 	if write == nil {
 		return
 	}

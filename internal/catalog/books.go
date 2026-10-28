@@ -1101,14 +1101,14 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 		args = append(args, s.LibraryID)
 		args = append(args, fargs...)
 	}
-	from := "books b"
+	hint := ""
 	if len(scopes) > 1 {
-		from = "books b INDEXED BY idx_books_added"
+		hint = " INDEXED BY idx_books_added"
 	}
 	// Over-fetch so de-dup can still return up to `limit` distinct books.
 	args = append(args, dedupFetch(limit))
 	q := `SELECT ` + prefixCols("b.") + dedupCols + `
-		FROM ` + from + dedupJoins + `
+		FROM books b` + hint + dedupJoins + `
 		WHERE l.kind = 'books' AND (` + strings.Join(conds, " OR ") + `)
 		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
 	return q, args
