@@ -298,17 +298,8 @@ func TestRateLimitAuthenticatedPerToken(t *testing.T) {
 func TestRateLimitDemoSessionByAddress(t *testing.T) {
 	t.Parallel()
 	e := newRouteLimitEnv(t)
-	ctx := context.Background()
 	demo := func() string {
-		t.Helper()
-		u, err := e.auth.CreateDemoUser(ctx, "demo_"+strconv.FormatInt(time.Now().UnixNano(), 36))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "demo", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
+		_, tok := newUserWithSession(t, e.testEnv, "demo_"+strconv.FormatInt(time.Now().UnixNano(), 36), true)
 		return tok
 	}
 	const ip = "192.0.2.60"
@@ -342,29 +333,14 @@ func TestRateLimitDemoMediaByAddress(t *testing.T) {
 	e := newRouteLimitEnv(t)
 	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 4, 0.25 // 4 s to the next token
 	libID, _ := seedCovers(t, e.testEnv)
-	ctx := context.Background()
-	demo := func(name string) string {
-		t.Helper()
-		u, err := e.auth.CreateDemoUser(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "demo", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return tok
-	}
 	cover := func(ip, tok string) (int, string) {
-		req := httptest.NewRequest("GET", mediaURL(libID, "cover", "Sidecar", tok), nil)
-		req.RemoteAddr = ip + ":1234"
-		rec := httptest.NewRecorder()
-		e.h.ServeHTTP(rec, req)
+		rec := e.record(ip, "GET", mediaURL(libID, "cover", "Sidecar", tok), "", "")
 		return rec.Code, rec.Header().Get("Retry-After")
 	}
 
 	const ip = "192.0.2.62"
-	first, second := demo("demo_media_a"), demo("demo_media_b")
+	_, first := newUserWithSession(t, e.testEnv, "demo_media_a", true)
+	_, second := newUserWithSession(t, e.testEnv, "demo_media_b", true)
 	for i := range 4 {
 		if code, _ := cover(ip, first); code == http.StatusTooManyRequests {
 			t.Fatalf("demo cover %d within the address's burst = 429", i)
