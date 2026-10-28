@@ -167,6 +167,9 @@ func (u *User) IsKid() bool { return u.MemberKind != nil && *u.MemberKind == Mem
 type Service struct {
 	db  *store.DB
 	now func() time.Time
+	// tokens is lookupToken's cache of valid tokens, exact by the store's write
+	// generation (tokencache.go).
+	tokens tokenCache
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -498,7 +501,9 @@ type tokenRow struct {
 // by ResolveRequest and
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
-// real token presented where its kind is not accepted.
+// real token presented where its kind is not accepted. A valid session, API key
+// or bridge token is answered from s.tokens until the next write (tokencache.go),
+// its expiry still checked against the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
@@ -510,6 +515,16 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	args = append(args, hash)
 	for _, k := range kinds {
 		args = append(args, k)
+	}
+	// The generation is taken before the read, so a write that lands after it
+	// leaves what is cached here unused.
+	gen := s.db.Generation()
+	if c, ok := s.tokens.get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
+		if s.pastExpiry(c.expires) {
+			return nil, tokenRow{}, ErrInvalidToken
+		}
+		u := cloneUser(c.user)
+		return &u, c.row, nil
 	}
 	var member memberScan
 	err := s.db.QueryRowContext(ctx,
@@ -534,10 +549,14 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
 	// lookup (each authenticated request) stays this one two-table query.
-	if row.kind == KindCast {
+	switch row.kind {
+	case KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {
 			return nil, tokenRow{}, err
 		}
+	case KindPairing: // used once, by an exchange: not worth holding
+	default:
+		s.tokens.put(gen, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
 	}
 	return &u, row, nil
 }
