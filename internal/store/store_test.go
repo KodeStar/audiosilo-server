@@ -100,6 +100,41 @@ func TestForeignKeysEnabled(t *testing.T) {
 	}
 }
 
+// TestSynchronousNormal asserts both pools of an opened file-backed DB run with
+// synchronous=NORMAL (1), the WAL setting dsnPragmas documents, not SQLite's
+// default FULL (2), and that the journal is still WAL (NORMAL is only safe there).
+func TestSynchronousNormal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db")
+
+	db, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	for name, pool := range map[string]*sql.DB{"writer": db.writer, "reader": db.reader} {
+		var sync int
+		if err := pool.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil {
+			t.Fatalf("%s: PRAGMA synchronous: %v", name, err)
+		}
+		if sync != 1 {
+			t.Errorf("%s: PRAGMA synchronous = %d, want 1 (NORMAL)", name, sync)
+		}
+		var mode string
+		if err := pool.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+			t.Fatalf("%s: PRAGMA journal_mode: %v", name, err)
+		}
+		if mode != "wal" {
+			t.Errorf("%s: PRAGMA journal_mode = %q, want wal", name, mode)
+		}
+	}
+	if db.reader == db.writer {
+		t.Fatal("file-backed DB has no separate reader pool; the reader check above was the writer twice")
+	}
+}
+
 // TestMigrationRunnerRollsBackOnBadBody exercises the lower-level transactional
 // guarantee the migration runner relies on: a migration body that fails partway
 // must leave no partial schema behind. The embedded migrations can't be
