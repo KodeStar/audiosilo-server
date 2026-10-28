@@ -35,8 +35,11 @@ var ErrImageTooLarge = errors.New("image dimensions too large")
 const thumbnailQuality = 80
 
 // Thumbnail scales cover art down to fit within size x size pixels and encodes it
-// as a JPEG. It never scales up: art already within size is re-encoded only when
-// it isn't a JPEG (a JPEG that small is returned as is). Transparent areas are
+// as a JPEG. It never scales up: art already within size keeps its own size. A
+// JPEG that small is re-encoded at thumbnailQuality and the smaller of that and
+// the source's own bytes returned (cover.jpg files are often saved at a quality
+// near 95, twice the bytes for a 180 px tile; a re-encode of art saved at a lower
+// quality comes out larger and the source is kept). Transparent areas are
 // flattened onto white, as a cover is shown on a card.
 func Thumbnail(src []byte, size int) ([]byte, error) { return thumbnail(src, size, false) }
 
@@ -53,10 +56,18 @@ func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxThumbnailSourcePixels {
 		return nil, ErrImageTooLarge
 	}
-	if !reencode && format == "jpeg" && cfg.Width <= size && cfg.Height <= size {
+	small := !reencode && format == "jpeg" && cfg.Width <= size && cfg.Height <= size
+	img, _, err := image.Decode(bytes.NewReader(src))
+	if small {
+		// Served as it is unless a re-encode is smaller: a JPEG Go can't decode
+		// fully (truncated, say) is still the browser's to show, as before.
+		if err == nil {
+			if out, err := encodeQuality(img); err == nil && len(out) < len(src) {
+				return out, nil
+			}
+		}
 		return src, nil
 	}
-	img, _, err := image.Decode(bytes.NewReader(src))
 	if err != nil {
 		return nil, err
 	}
@@ -71,8 +82,13 @@ func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 	// BiLinear (the kernel, not ApproxBiLinear) widens its support with the scale
 	// factor, so a large downscale averages its source pixels instead of aliasing.
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
+	return encodeQuality(dst)
+}
+
+// encodeQuality is img as a JPEG at thumbnailQuality.
+func encodeQuality(img image.Image) ([]byte, error) {
 	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
+	if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil

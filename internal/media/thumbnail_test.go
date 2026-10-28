@@ -63,15 +63,48 @@ func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
 	}
 }
 
-func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
+// noisyJPEG is a w x h JPEG of busy art (a gradient with fine detail) saved at
+// quality q, as a cover.jpg from the web often is.
+func noisyJPEG(t *testing.T, w, h, q int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			img.Set(x, y, color.RGBA{uint8(x * 255 / w), uint8((x*y + y*7) % 256), uint8((x ^ y) * 3), 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: q}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A JPEG already within the size is never scaled up: it keeps its own size, and
+// comes back as the smaller of its own bytes and a re-encode at
+// thumbnailQuality. A small JPEG Go can't decode fully is served as it is.
+func TestThumbnailSmallJPEGNeverUpscaledSmallestBytes(t *testing.T) {
 	t.Parallel()
-	src := encodeJPEG(t, 200, 200)
-	out, err := Thumbnail(src, 320)
+	high := noisyJPEG(t, 180, 180, 95)
+	out, err := Thumbnail(high, 320)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(out, src) {
-		t.Fatal("a JPEG already within the size should be returned unchanged")
+	if w, h := decodedSize(t, out); w != 180 || h != 180 {
+		t.Fatalf("size = %dx%d, want the source's 180x180", w, h)
+	}
+	if len(out) >= len(high) {
+		t.Fatalf("a quality-95 JPEG came back %d bytes, want fewer than its %d", len(out), len(high))
+	}
+
+	low := noisyJPEG(t, 200, 200, 40)
+	if out, err := Thumbnail(low, 320); err != nil || !bytes.Equal(out, low) {
+		t.Fatalf("a JPEG smaller than its re-encode should be returned unchanged (err %v)", err)
+	}
+
+	truncated := high[:len(high)/2]
+	if out, err := Thumbnail(truncated, 320); err != nil || !bytes.Equal(out, truncated) {
+		t.Fatalf("a small JPEG that doesn't decode fully should be returned unchanged (err %v)", err)
 	}
 }
 
