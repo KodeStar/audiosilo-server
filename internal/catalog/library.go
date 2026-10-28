@@ -246,8 +246,8 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 	gen, cacheable := c.Generation() // before the read (libraryCache)
 	if cacheable {
-		if l, ok := c.libs.get(gen, id); ok {
-			return l, nil
+		if l, ok := c.libs.Get(gen, id); ok {
+			return copyLibrary(l), nil
 		}
 	}
 	row := c.db.QueryRowContext(ctx,
@@ -257,7 +257,7 @@ func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 		return nil, ErrNotFound
 	}
 	if err == nil && cacheable {
-		c.libs.put(gen, l)
+		c.libs.Put(gen, id, *copyLibrary(*l))
 	}
 	return l, err
 }

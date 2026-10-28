@@ -132,11 +132,13 @@ func SafeJoin(root, relPath string) (string, error) {
 	// of the target and re-check, so a symlink inside the root that points
 	// outside it is rejected rather than followed. Below a resolved root (no
 	// links in it) only the names under it need looking at (resolveBelow).
-	target := resolveExisting
+	var target string
 	if rerr == nil {
-		target = func(p string) string { return resolveBelow(rootAbs, p) }
+		target = resolveBelow(rootAbs, full)
+	} else {
+		target = resolveExisting(full)
 	}
-	if !withinRoot(rootAbs, target(full)) {
+	if !withinRoot(rootAbs, target) {
 		return "", ErrOutsideRoot
 	}
 	return full, nil

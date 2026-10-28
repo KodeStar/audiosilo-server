@@ -9,7 +9,7 @@ import (
 // cached reports whether the token cache holds secret's lookup for the current
 // generation (the next request is answered from it).
 func cached(s *Service, secret string) bool {
-	_, ok := s.tokens.get(s.db.Generation(), hashSecret(secret))
+	_, ok := s.tokens.Get(s.db.Generation(), hashSecret(secret))
 	return ok
 }
 
@@ -150,26 +150,14 @@ func TestTokenCacheSkipsCastAndPairing(t *testing.T) {
 	}
 }
 
-// The cache keeps only the newest generation's lookups, and starts again when full.
-func TestTokenCacheGenerations(t *testing.T) {
+// The cache is bounded (store.GenMap's generations are its own test).
+func TestTokenCacheBounded(t *testing.T) {
 	t.Parallel()
-	var c tokenCache
-	c.put(2, "a", cachedToken{row: tokenRow{id: 1}})
-	if _, ok := c.get(1, "a"); ok {
-		t.Fatal("a lookup answered at another generation")
-	}
-	c.put(1, "b", cachedToken{})
-	if _, ok := c.get(2, "b"); ok {
-		t.Fatal("an older generation's lookup was kept")
-	}
-	c.put(3, "c", cachedToken{})
-	if _, ok := c.get(3, "a"); ok {
-		t.Fatal("a newer generation kept the older lookups")
-	}
+	s := New(nil, nil)
 	for i := range maxCachedTokens + 1 {
-		c.put(3, string(rune(i+1000)), cachedToken{})
+		s.tokens.Put(3, string(rune(i+1000)), cachedToken{})
 	}
-	if len(c.rows) > maxCachedTokens {
-		t.Fatalf("cache holds %d lookups, bound %d", len(c.rows), maxCachedTokens)
+	if n := s.tokens.Len(); n > maxCachedTokens {
+		t.Fatalf("cache holds %d lookups, bound %d", n, maxCachedTokens)
 	}
 }

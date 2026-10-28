@@ -61,12 +61,14 @@ func thumbnail(src []byte, size int, reencode bool) ([]byte, error) {
 	if small {
 		// Served as it is unless a re-encode is smaller: a JPEG Go can't decode
 		// fully (truncated, say) is still the browser's to show, as before.
-		if err == nil {
-			if out, err := encodeQuality(img); err == nil && len(out) < len(src) {
-				return out, nil
-			}
+		if err != nil {
+			return src, nil
 		}
-		return src, nil
+		out, eerr := encodeQuality(img)
+		if eerr != nil || len(out) >= len(src) {
+			return src, nil
+		}
+		return out, nil
 	}
 	if err != nil {
 		return nil, err

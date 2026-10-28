@@ -57,7 +57,7 @@ type Scanner struct {
 
 	// The files this server has seen ffprobe reject (problemCleared).
 	rejectedMu sync.Mutex
-	rejected   map[rejectedKey]bool
+	rejected   map[rejectedFile]bookState
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -736,9 +736,9 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)
 	}
-	if !b.IsFolder || len(b.Files) == 1 {
+	if soleFile(b) {
 		// Its only file: what the next scan's problemCleared asks of it.
-		s.noteRejected(rejectedKey{library: lib.ID, file: primary, mtime: b.MTime, size: b.Size}, md)
+		s.noteRejected(rejectedFile{library: lib.ID, file: primary}, bookState{mtime: b.MTime, size: b.Size}, md)
 	}
 	setNames(b, md)
 	if md != nil {
@@ -1134,7 +1134,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	if limit == nil {
 		descend = func(p string, d fs.DirEntry) bool { return !skipped(d, path.Join(fromRel, relPathOf(walkFrom, p))) }
 	}
-	err = walkDir(walkFrom, descend, func(p string, d fs.DirEntry, walkErr error) error {
+	err = walkDir(ctx, walkFrom, descend, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1205,12 +1205,9 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 	return dirs, side, hadErrors, err
 }
 
-// walkStatters is how many audio files statAudio looks at at once.
-const walkStatters = 8
-
 // statAudio reads every audio file's lstat (fs.DirEntry.Info: its size and
-// mtime, all a scan needs to find a book unchanged) walkStatters at a time,
-// ahead of the books being built from them (audioFile.info). One at a time, a
+// mtime, all a scan needs to find a book unchanged) walkIO at a time,
+// ahead of the books being built from them (statEntry). One at a time, a
 // no-change scan of a library on a network share or a FUSE pool (Unraid's
 // /mnt/user) spends most of its time waiting on these, one round trip each, the
 // walk's own folder reads being far fewer. A file not looked at by the time ctx
@@ -1225,11 +1222,20 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile) {
 	if len(files) < 2 {
 		return
 	}
-	pool.Each(ctx, walkStatters, files, func() bool { return true }, func(f **audioFile) {
-		(*f).stat, (*f).statErr = (*f).de.Info()
-		(*f).statted = true
+	pool.Each(ctx, walkIO, files, func() bool { return true }, func(f **audioFile) {
+		info, err := (*f).de.Info()
+		(*f).de = statEntry{DirEntry: (*f).de, info: info, err: err}
 	})
 }
+
+// statEntry is a directory entry whose Info statAudio has read.
+type statEntry struct {
+	fs.DirEntry
+	info fs.FileInfo
+	err  error
+}
+
+func (e statEntry) Info() (fs.FileInfo, error) { return e.info, e.err }
 
 // sidecarFiles are the metadata files the discovery walk found beside the audio,
 // each by the library-relative folder holding it: abs is the signature
@@ -1332,21 +1338,10 @@ func booksInDir(lib catalog.Library, rel string, audio []audioFile, overrides ma
 }
 
 // audioFile is one audio file found for a book: its path under lib.Root and its
-// directory entry, and its lstat when statAudio has read it.
+// directory entry (a statEntry once statAudio has read its lstat).
 type audioFile struct {
-	abs     string
-	de      fs.DirEntry
-	statted bool
-	stat    fs.FileInfo
-	statErr error
-}
-
-// info is the file's lstat (fs.DirEntry.Info), as statAudio read it.
-func (f audioFile) info() (fs.FileInfo, error) {
-	if f.statted {
-		return f.stat, f.statErr
-	}
-	return f.de.Info()
+	abs string
+	de  fs.DirEntry
 }
 
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
@@ -1411,7 +1406,7 @@ func shadowedMKA(names []string) map[string]bool {
 func fileBooksIn(lib catalog.Library, audio []audioFile) []*catalog.Book {
 	var books []*catalog.Book
 	for _, f := range audio {
-		info, err := f.info()
+		info, err := f.de.Info()
 		if err != nil {
 			continue
 		}
@@ -1450,12 +1445,13 @@ func addedAt(absPath string, info os.FileInfo) string {
 // is most of a no-change scan's cost. A book none of whose files can be looked
 // at now (gone since discovery) is stamped now, as first seen.
 func stampAddedAt(lib catalog.Library, b *catalog.Book) {
-	paths := []string{b.RelPath}
+	var paths []string
 	if b.IsFolder {
-		paths = paths[:0]
 		for _, f := range b.Files {
 			paths = append(paths, f.RelPath)
 		}
+	} else {
+		paths = []string{b.RelPath}
 	}
 	var added string // RFC3339 UTC sorts lexicographically, so min string = earliest
 	for _, rel := range paths {
@@ -1494,7 +1490,7 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 	var files []catalog.BookFile
 	var totalSize, maxMTime int64
 	for _, f := range audio {
-		info, ierr := f.info()
+		info, ierr := f.de.Info()
 		if ierr != nil {
 			continue
 		}

@@ -88,7 +88,7 @@ func TestWalkDirIsWalkDir(t *testing.T) {
 		}
 		for _, descend := range []func(string, fs.DirEntry) bool{nil, hidden} {
 			var got []string
-			if err := walkDir(root, descend, record(root, &got, skip)); err != nil {
+			if err := walkDir(t.Context(), root, descend, record(root, &got, skip)); err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Equal(got, want) {
@@ -98,7 +98,7 @@ func TestWalkDirIsWalkDir(t *testing.T) {
 	}
 	if unreadable {
 		var calls []string
-		_ = walkDir(root, nil, record(root, &calls, skips["none"]))
+		_ = walkDir(t.Context(), root, nil, record(root, &calls, skips["none"]))
 		if !slices.Contains(calls, "F/locked true d--------- err=true") {
 			t.Errorf("the unreadable folder's error call is missing: %q", calls)
 		}
@@ -112,7 +112,7 @@ func TestWalkDirErrors(t *testing.T) {
 	root, _ := walkTree(t)
 	stop := errors.New("stop")
 	var calls []string
-	err := walkDir(root, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
+	err := walkDir(t.Context(), root, nil, record(root, &calls, func(rel string, _ fs.DirEntry) error {
 		if rel == "A/Book 2" {
 			return stop
 		}
@@ -124,7 +124,7 @@ func TestWalkDirErrors(t *testing.T) {
 	missing := filepath.Join(root, "nope")
 	var want, got []string
 	wantErr := filepath.WalkDir(missing, record(root, &want, nil))
-	gotErr := walkDir(missing, nil, record(root, &got, nil))
+	gotErr := walkDir(t.Context(), missing, nil, record(root, &got, nil))
 	if !slices.Equal(got, want) || (gotErr == nil) != (wantErr == nil) {
 		t.Fatalf("missing root: %q %v, want %q %v", got, gotErr, want, wantErr)
 	}
@@ -138,7 +138,7 @@ func TestListAheadOnlyDescended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ahead := listAhead(root, entries, func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" })
+	ahead := listAhead(t.Context(), root, entries, func(p string, _ fs.DirEntry) bool { return filepath.Base(p) != "C" })
 	for i, e := range entries {
 		listed := ahead[i] != nil
 		want := e.IsDir() && e.Name() != "C"
@@ -146,7 +146,7 @@ func TestListAheadOnlyDescended(t *testing.T) {
 			t.Errorf("%s listed ahead = %v, want %v", e.Name(), listed, want)
 		}
 	}
-	if one := listAhead(filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B")), nil); one[0] != nil {
+	if one := listAhead(t.Context(), filepath.Join(root, "B"), mustReadDir(t, filepath.Join(root, "B")), nil); one[0] != nil {
 		t.Error("a lone folder was listed ahead")
 	}
 }

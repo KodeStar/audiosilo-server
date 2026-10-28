@@ -169,7 +169,7 @@ type Service struct {
 	now func() time.Time
 	// tokens is lookupToken's cache of valid tokens, exact by the store's write
 	// generation (tokencache.go).
-	tokens tokenCache
+	tokens store.GenMap[string, cachedToken]
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -177,7 +177,7 @@ func New(db *store.DB, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, now: now}
+	return &Service{db: db, now: now, tokens: store.GenMap[string, cachedToken]{Max: maxCachedTokens}}
 }
 
 func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
@@ -511,20 +511,20 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		expires sql.NullString
 		revoked bool
 	)
-	args := make([]any, 0, len(kinds)+1)
-	args = append(args, hash)
-	for _, k := range kinds {
-		args = append(args, k)
-	}
 	// The generation is taken before the read, so a write that lands after it
 	// leaves what is cached here unused.
 	gen := s.db.Generation()
-	if c, ok := s.tokens.get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
+	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
 		if s.pastExpiry(c.expires) {
 			return nil, tokenRow{}, ErrInvalidToken
 		}
 		u := cloneUser(c.user)
 		return &u, c.row, nil
+	}
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, hash)
+	for _, k := range kinds {
+		args = append(args, k)
 	}
 	var member memberScan
 	err := s.db.QueryRowContext(ctx,
@@ -556,7 +556,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		}
 	case KindPairing: // used once, by an exchange: not worth holding
 	default:
-		s.tokens.put(gen, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
+		s.tokens.Put(gen, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
 	}
 	return &u, row, nil
 }

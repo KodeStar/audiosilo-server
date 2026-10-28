@@ -50,22 +50,3 @@ func TestGetLibraryCachedUntilAWrite(t *testing.T) {
 		t.Fatalf("after a delete: %v", err)
 	}
 }
-
-// A row read before a write is never kept past it, and a newer generation
-// empties what was kept.
-func TestLibraryCacheGenerations(t *testing.T) {
-	t.Parallel()
-	var lc libraryCache
-	lc.put(5, &Library{ID: 1, Name: "at 5"})
-	if _, ok := lc.get(6, 1); ok {
-		t.Fatal("a row from generation 5 answered at 6")
-	}
-	lc.put(6, &Library{ID: 2, Name: "at 6"})
-	lc.put(5, &Library{ID: 1, Name: "late read at 5"})
-	if _, ok := lc.get(6, 1); ok {
-		t.Fatal("a read from before the write was kept")
-	}
-	if l, ok := lc.get(6, 2); !ok || l.Name != "at 6" {
-		t.Fatalf("get(6, 2) = %+v %v", l, ok)
-	}
-}

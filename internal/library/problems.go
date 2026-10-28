@@ -48,53 +48,61 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 // duration and codec looking complete, so without this a scan would skip the book
 // and the problem would stay listed. It reads only that one file, and not even
 // that when this server has seen ffprobe reject the file's data with the book as
-// it is now (rejectedKey): the same ffprobe rejects the same bytes again, and
+// it is now (rejectedFile): the same ffprobe rejects the same bytes again, and
 // each run is a process start (most of a no-change scan of a library holding a
 // damaged file).
 func (s *Scanner) problemCleared(lib catalog.Library, sig catalog.Signature) bool {
 	if sig.ScanErrorFile == "" || (sig.ScanError != problemUnreadable && sig.ScanError != problemProbe) {
 		return false
 	}
-	key := rejectedKey{library: lib.ID, file: sig.ScanErrorFile, mtime: sig.MTime, size: sig.Size}
-	if sig.ScanError == problemProbe && s.wasRejected(key) {
+	file := rejectedFile{library: lib.ID, file: sig.ScanErrorFile}
+	book := bookState{mtime: sig.MTime, size: sig.Size}
+	probe := sig.ScanError == problemProbe
+	if probe && s.wasRejected(file, book) {
 		return false
 	}
 	md, _ := metadata.Extract(absOf(lib, sig.ScanErrorFile), s.ffprobePath)
-	if sig.ScanError == problemProbe {
-		s.noteRejected(key, md)
+	if probe {
+		s.noteRejected(file, book, md)
 	}
-	return md.OpenErr == nil && (sig.ScanError == problemUnreadable || md.ProbeErr == nil)
+	return md.OpenErr == nil && (!probe || md.ProbeErr == nil)
 }
 
-// rejectedKey is a file ffprobe rejected (metadata.ErrProbeRejected) and its
-// book's mtime and size then: a scan that finds the book with the same two
+// rejectedFile is a file ffprobe rejected (metadata.ErrProbeRejected), kept
+// with its book's bookState then: a scan that finds the book in the same state
 // takes it to hold the same bytes, as it does for every book it finds unchanged.
-type rejectedKey struct {
-	library     int64
-	file        string // library-relative
-	mtime, size int64  // the book's
+type rejectedFile struct {
+	library int64
+	file    string // library-relative
 }
 
-// noteRejected remembers k when md says ffprobe rejected the file's data (not a
-// time-out, an exec failure or a read error: those may pass). Remembered for the
-// server's life only, so a restart (perhaps with another ffprobe) looks again.
-func (s *Scanner) noteRejected(k rejectedKey, md *metadata.Metadata) {
+// bookState is a book's mtime and size.
+type bookState struct{ mtime, size int64 }
+
+// noteRejected remembers file with its book in state book when md says ffprobe
+// rejected the file's data (not a time-out, an exec failure or a read error:
+// those may pass), replacing what was remembered of it before. Remembered for
+// the server's life only, so a restart (perhaps with another ffprobe) looks
+// again.
+func (s *Scanner) noteRejected(file rejectedFile, book bookState, md *metadata.Metadata) {
 	if md == nil || md.OpenErr != nil || !errors.Is(md.ProbeErr, metadata.ErrProbeRejected) {
 		return
 	}
 	s.rejectedMu.Lock()
 	defer s.rejectedMu.Unlock()
 	if s.rejected == nil {
-		s.rejected = map[rejectedKey]bool{}
+		s.rejected = map[rejectedFile]bookState{}
 	}
-	s.rejected[k] = true
+	s.rejected[file] = book
 }
 
-// wasRejected reports whether noteRejected remembered k.
-func (s *Scanner) wasRejected(k rejectedKey) bool {
+// wasRejected reports whether noteRejected remembered file with its book in
+// state book.
+func (s *Scanner) wasRejected(file rejectedFile, book bookState) bool {
 	s.rejectedMu.Lock()
 	defer s.rejectedMu.Unlock()
-	return s.rejected[k]
+	was, ok := s.rejected[file]
+	return ok && was == book
 }
 
 // soleFileProblem reports whether a book's one audio file is the file its
@@ -103,12 +111,13 @@ func (s *Scanner) wasRejected(k rejectedKey) bool {
 // problemCleared decide whether to read it again, rather than reading all of it
 // on every scan only to record the same problem.
 func soleFileProblem(b *catalog.Book, sig catalog.Signature) bool {
-	if b.IsFolder && len(b.Files) != 1 {
-		return false
-	}
-	return sig.ScanErrorFile == primaryPath(b) &&
+	return soleFile(b) && sig.ScanErrorFile == primaryPath(b) &&
 		(sig.ScanError == problemUnreadable || sig.ScanError == problemProbe)
 }
+
+// soleFile reports whether a book has one audio file (a file book, or a folder
+// holding one).
+func soleFile(b *catalog.Book) bool { return !b.IsFolder || len(b.Files) == 1 }
 
 // pathErrText is an OS error's own words without the absolute path it names
 // ("permission denied", not "open /srv/books/x.mp3: permission denied"): the

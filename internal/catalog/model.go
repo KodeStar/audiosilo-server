@@ -249,7 +249,7 @@ type Catalog struct {
 	podcastScheduleMu sync.Mutex
 	podcastVisit      Ref
 	// libs is GetLibrary's rows while nothing is written.
-	libs libraryCache
+	libs store.GenMap[int64, Library]
 }
 
 // OnBookChange adds f to the listeners that hear, after the fact and without
