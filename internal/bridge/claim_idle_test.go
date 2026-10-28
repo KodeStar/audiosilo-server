@@ -62,7 +62,7 @@ func TestClaimDueLetsWorkThrough(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
-	gen := q.db.Generation()
+	gen, durable := q.db.Generation(), q.db.DurableCommits()
 	j, err := q.claim(ctx, q.token, []string{KindVerify})
 	if err != nil || j == nil || j.ID != job.ID || j.State != StateClaimed || j.Attempts != 1 {
 		t.Fatalf("claim of a queued job = %+v, %v", j, err)
@@ -70,8 +70,12 @@ func TestClaimDueLetsWorkThrough(t *testing.T) {
 	if q.db.Generation() == gen {
 		t.Fatal("a claim that leased a job did not move the generation")
 	}
-	idleGen := q.db.Generation()
-	if j, err := q.claim(ctx, q.token, []string{KindVerify}); j != nil || err != nil || q.db.Generation() != idleGen {
+	// Its attempt number must survive a power cut (never handed out twice).
+	if got := q.db.DurableCommits() - durable; got != 1 {
+		t.Fatalf("a claim that leased a job made %d durable commits, want 1", got)
+	}
+	idleGen, durable := q.db.Generation(), q.db.DurableCommits()
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); j != nil || err != nil || q.db.Generation() != idleGen || q.db.DurableCommits() != durable {
 		t.Fatalf("claim with the only job held = %+v, %v (generation %d -> %d)", j, err, idleGen, q.db.Generation())
 	}
 

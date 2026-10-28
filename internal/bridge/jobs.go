@@ -1040,7 +1040,7 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		exp expiry
 	)
 	// Each write below has its check in claimDue, or an idle claim skips it.
-	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
 		if err := bridgeTokenLive(ctx, tx, token); err != nil {
 			return err
 		}

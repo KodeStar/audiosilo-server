@@ -96,7 +96,7 @@ func (s *Service) ExchangeBridgeCode(ctx context.Context, code string) (secret s
 	if err != nil {
 		return "", err
 	}
-	err = s.db.WithTx(ctx, "ExchangeBridgeCode", func(tx *sql.Tx) error {
+	err = s.db.WithDurableTx(ctx, "ExchangeBridgeCode", func(tx *sql.Tx) error {
 		var (
 			stored  sql.NullString
 			expires sql.NullString
@@ -146,7 +146,7 @@ func (s *Service) ExchangeBridgeCode(ctx context.Context, code string) (secret s
 // UnpairBridge revokes every bridge token and forgets the paired Bridge, its
 // status and any pairing code waiting. A Bridge's next call is then refused.
 func (s *Service) UnpairBridge(ctx context.Context) error {
-	return s.db.WithTx(ctx, "UnpairBridge", func(tx *sql.Tx) error {
+	return s.db.WithDurableTx(ctx, "UnpairBridge", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, revokeBridgeTokensSQL); err != nil {
 			return err
 		}

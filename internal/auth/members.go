@@ -518,7 +518,7 @@ func (s *Service) MemberDevices(ctx context.Context, owner, id int64) ([]Device,
 // ErrNotFound for a device that isn't the member's live session or API key.
 func (s *Service) RevokeMemberDevice(ctx context.Context, owner, id, deviceID int64) (Member, error) {
 	var m Member
-	err := s.db.WithTx(ctx, "RevokeMemberDevice", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "RevokeMemberDevice", func(tx *sql.Tx) error {
 		var err error
 		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
 			return err
@@ -550,7 +550,7 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 		m       Member
 		changes = map[string]any{}
 	)
-	err := s.db.WithTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
 		cur, err := s.memberOf(ctx, tx, owner, id)
 		if err != nil {
 			return err
@@ -671,7 +671,7 @@ func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
 // cascade, as DeleteUser), returning the member as it was.
 func (s *Service) DeleteMember(ctx context.Context, owner, id int64) (Member, error) {
 	var m Member
-	err := s.db.WithTx(ctx, "DeleteMember", func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, "DeleteMember", func(tx *sql.Tx) error {
 		var err error
 		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
 			return err

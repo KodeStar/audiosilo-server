@@ -160,7 +160,7 @@ func (s *Service) RevokeOwnDeviceAndMembers(ctx context.Context, userID, id int6
 // of their own (revokeDeviceTx).
 func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64, alsoMembers bool) ([]string, error) {
 	var members []string
-	err := s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+	err := s.db.WithDurableTx(ctx, op, func(tx *sql.Tx) error {
 		var err error
 		members, err = revokeDeviceTx(ctx, tx, id, owner, alsoMembers)
 		return err
