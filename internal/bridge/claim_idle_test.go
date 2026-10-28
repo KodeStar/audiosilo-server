@@ -54,10 +54,10 @@ func TestIdleClaimLeavesGenerationAlone(t *testing.T) {
 	idle("a revoked token", []string{KindVerify}, ErrNotPaired)
 }
 
-// The precheck lets every claim with work through the writer: a queued job of
+// claimDue lets every claim with work through to the writer: a queued job of
 // an asked kind is claimed, and a lease that ran out is ended by any claim (one
 // asking other kinds too), its job queued again for the next.
-func TestClaimPrecheckLetsWorkThrough(t *testing.T) {
+func TestClaimDueLetsWorkThrough(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
 	ctx := context.Background()
@@ -93,8 +93,8 @@ func TestClaimPrecheckLetsWorkThrough(t *testing.T) {
 }
 
 // A private follow request whose feed URL a restart lost is failed by the next
-// claim, even one asking other kinds, as before the precheck.
-func TestClaimPrecheckFailsLostPrivateRequest(t *testing.T) {
+// claim, even one asking other kinds: claimDue finds it due.
+func TestClaimDueFailsLostPrivateRequest(t *testing.T) {
 	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()

@@ -302,6 +302,12 @@ func TestListCacheBrowseLists(t *testing.T) {
 	reindex("A/Alpha One.m4b", "Alpha One", "A Author", "Ann Reader", "Alpha Saga")
 	reindex("B/Beta.m4b", "Beta", "B Author", "Bob Reader", "Beta Saga")
 
+	// The listener's first request touches its token, a write that empties the
+	// cache, so it comes first: the listener's lists below are asked at the
+	// generation the admin's answers are kept under.
+	if resp, body := e.do(t, "GET", "/api/v1/me", listener, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("listener GET /me: %d %s", resp.StatusCode, body)
+	}
 	base := fmt.Sprintf("/api/v1/libraries/%d/", lib.ID)
 	// path -> what the listener sees too, what only the admin sees, the re-index's name
 	paths := map[string][3]string{
@@ -326,12 +332,17 @@ func TestListCacheBrowseLists(t *testing.T) {
 			t.Fatalf("admin GET %s with the cache's bodies swapped: %q, want %q", p, body, marker)
 		}
 	}
-	for range 2 { // the second time from the cache (the first one's token touch is a write)
+	for range 2 { // the second time from the cache
 		for p, want := range paths {
 			_, body := e.do(t, "GET", p, listener, "")
 			if !strings.Contains(body, want[0]) || strings.Contains(body, want[1]) {
 				t.Fatalf("listener GET %s: %s, want only B's", p, body)
 			}
+		}
+	}
+	for p := range paths { // nothing was written: the admin's answers are still kept
+		if _, body := e.do(t, "GET", p, admin, ""); body != marker {
+			t.Fatalf("admin GET %s after the listener's: %q, want %q", p, body, marker)
 		}
 	}
 

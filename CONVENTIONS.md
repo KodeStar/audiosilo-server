@@ -1692,8 +1692,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which
   both `GetBridgePairing` and the heartbeat reads use; `auth.BridgeTokenLiveSQL` is the same for one token,
-  which the heartbeat's write and every claim ask inside their transaction (a call authenticated before a
-  pairing or an unpair revoked its token, a long poll above all, saves nothing and claims nothing: 401).
+  which the heartbeat's write asks inside its transaction and a claim asks first on the reader pool
+  (`claimDue`), then again inside its transaction when it has something to write (a call authenticated
+  before a pairing or an unpair revoked its token, a long poll above all, saves nothing and claims
+  nothing: 401).
   A route-table
   test sends it (header and `?token=`) to every other authenticated route: all 401. **Heartbeat** `PUT
   /bridge/status {version, kinds, libraries[{library_id, mount_path, mapped, writable, checked_path,
@@ -1777,8 +1779,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
   and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
   private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
-  answers without the writer, so an idle paired Bridge's polls leave the write generation alone;
-  `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?, error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
+  answers without the writer, so an idle paired Bridge's polls leave the write generation alone (its
+  heartbeat still moves it, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.
   Claim responses retain the request deadline but bypass response buffering and flush before return;

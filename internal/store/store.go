@@ -91,23 +91,25 @@ func WithLogger(l *slog.Logger) Option {
 // contention - the signal that precedes a backend-wide stall.
 const slowTxThreshold = 2 * time.Second
 
-// dsnPragmas appends AudioSilo's required pragmas to a DSN. WAL for concurrent
-// readers, busy_timeout to ride out brief locks, and foreign_keys for referential
-// integrity.
+// dsnPragmas appends AudioSilo's required pragmas to a DSN: WAL for concurrent
+// readers, synchronous=NORMAL for commits without an fsync, busy_timeout to ride
+// out brief locks, and foreign_keys for referential integrity.
 //
 // synchronous=NORMAL is the WAL trade-off SQLite documents: a commit no longer
-// fsyncs the WAL (only a checkpoint does), so a power cut or OS crash can lose
-// the last few commits, but never corrupts the database or tears a transaction
-// (an application crash loses nothing). The window is the last moments of
-// listening progress, which clients re-send; FULL cost an fsync per commit (two
-// per progress save), 1 to 5 ms on an SSD and far more on an HDD array or a FUSE
-// share, all of it serialized on the one writer.
+// fsyncs the WAL (only a checkpoint does), so a power cut or OS crash can roll
+// back the last few commits, but never corrupts the database or tears a
+// transaction (an application crash loses nothing). Any commit can be in that
+// window, not only listening progress (which clients re-send): a revocation,
+// sign-out or password change (the old credential works again), a pairing, a
+// Bridge claim (handed out again under the same attempt) or its report. FULL
+// cost an fsync per commit (two per progress save), 1 to 5 ms on an SSD and far
+// more on an HDD array or a FUSE share, all of it serialized on the one writer.
 //
-// foreign_keys defaults OFF per SQLite connection, and the schema
-// relies on ~28 ON DELETE CASCADE rules, so these must always be applied - append
-// with the right separator rather than skipping them when the DSN already carries
-// query params (which would silently disable every cascade delete). extra carries
-// per-pool pragmas (e.g. query_only for the reader).
+// foreign_keys defaults OFF per SQLite connection, and the schema relies on ~28
+// ON DELETE CASCADE rules, so the pragmas must always be applied - append with
+// the right separator rather than skipping them when the DSN already carries
+// query params (which would silently disable every cascade delete). extra
+// carries per-pool pragmas (e.g. query_only for the reader).
 func dsnPragmas(dsn string, extra ...string) string {
 	sep := "?"
 	if strings.Contains(dsn, "?") {

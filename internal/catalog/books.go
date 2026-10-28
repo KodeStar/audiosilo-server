@@ -1082,36 +1082,49 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 	return dedupBooks(cands, limit), nil
 }
 
-// recentBooksQuery is RecentBooks' query: one (library, path rules) arm per scope,
-// newest added first, over-fetched for de-dup. With one scope SQLite picks
-// idx_books_lib_added on its own and stops at the limit. With two or more it
-// plans the OR as a MULTI-INDEX OR over idx_books_series_key, reading every book
-// in scope (each with its book_files count) into a sort; INDEXED BY idx_books_added
-// makes it walk the added-at index backwards and stop once it has the limit
-// (12 ms -> under 1 ms at 5k books in two libraries). A scope that matches few of
-// the walked books walks further, no worse than the full read it replaces. The
-// kind filter (a podcasts scope's episodes are books rows too) is per row either
-// way.
+// recentBooksQuery is RecentBooks' query: newest added first, over-fetched for
+// de-dup. One scope walks idx_books_lib_added backwards and stops at the limit.
+// Several, ORed in one WHERE, are planned (without statistics) as a MULTI-INDEX
+// OR that reads every book in scope, each with its book_files count, into a
+// sort, and INDEXED BY idx_books_added walks every newer book outside them too
+// (another library's, a podcasts library's episodes, a listener's unshared
+// ones). So each scope is an arm limited on its own, the arms are merged and
+// limited, and only the rows kept are read whole. An arm walks as one scope
+// does, but an arm of one path rule seeks the path and sorts what it holds, as
+// the OR plan did: a walk reads the whole library when the path holds few or
+// only old books (more paths SQLite plans as a read of the whole library,
+// which the walk never exceeds). The kind check is once per arm, so a podcasts
+// library's arm reads nothing.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
-	conds := make([]string, 0, len(scopes))
+	fetch := dedupFetch(limit)
+	if len(scopes) == 1 {
+		filter, args := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
+		return `SELECT ` + prefixCols("b.") + dedupCols + `
+		FROM books b` + dedupJoins + `
+		WHERE l.kind = 'books' AND ` + filter + `
+		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, append(args, fetch)
+	}
+	arms := make([]string, len(scopes))
 	var args []any
-	for _, s := range scopes {
+	for i, s := range scopes {
 		frag, fargs := pathFilterSQL("b.rel_path", s)
-		conds = append(conds, "(b.library_id = ? AND "+frag+")")
-		args = append(args, s.LibraryID)
+		order := "b.added_at DESC, b.id DESC"
+		if !s.AllowAll && len(s.Paths) == 1 {
+			order = "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
+		}
+		arms[i] = `SELECT * FROM (SELECT b.id, b.added_at FROM books b
+			WHERE b.library_id = ? AND EXISTS (SELECT 1 FROM libraries WHERE id = ? AND kind = 'books')
+				AND ` + frag + `
+			ORDER BY ` + order + ` LIMIT ?)`
+		args = append(args, s.LibraryID, s.LibraryID)
 		args = append(args, fargs...)
+		args = append(args, fetch)
 	}
-	hint := ""
-	if len(scopes) > 1 {
-		hint = " INDEXED BY idx_books_added"
-	}
-	// Over-fetch so de-dup can still return up to `limit` distinct books.
-	args = append(args, dedupFetch(limit))
-	q := `SELECT ` + prefixCols("b.") + dedupCols + `
-		FROM books b` + hint + dedupJoins + `
-		WHERE l.kind = 'books' AND (` + strings.Join(conds, " OR ") + `)
-		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
-	return q, args
+	// Ordered by r's columns, the merged arms' order needs no sort of its own.
+	return `SELECT ` + prefixCols("b.") + dedupCols + `
+		FROM (` + strings.Join(arms, " UNION ") + ` ORDER BY added_at DESC, id DESC LIMIT ?) r
+		JOIN books b ON b.id = r.id` + dedupJoins + `
+		ORDER BY r.added_at DESC, r.id DESC`, append(args, fetch)
 }
 
 func sortValue(b *Book, col string) string {
