@@ -33,6 +33,11 @@ func newRouteLimitEnv(t *testing.T) *routeLimitEnv {
 // serve sends a request from ip (with a bearer token when tok is set) and
 // returns the status.
 func (e *routeLimitEnv) serve(ip, method, path, tok, body string) int {
+	return e.record(ip, method, path, tok, body).Code
+}
+
+// record is serve returning the whole response.
+func (e *routeLimitEnv) record(ip, method, path, tok, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.RemoteAddr = ip + ":1234"
 	if tok != "" {
@@ -40,7 +45,7 @@ func (e *routeLimitEnv) serve(ip, method, path, tok, body string) int {
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
-	return rec.Code
+	return rec
 }
 
 func (e *routeLimitEnv) get(ip, path, tok string) int { return e.serve(ip, "GET", path, tok, "") }
@@ -396,18 +401,14 @@ func TestRateLimitPerCredentialRetryAfter(t *testing.T) {
 	e.api.tokenLimiter.burst, e.api.tokenLimiter.rate = 2, 0.25 // 4 s to the next token
 	tok := e.session(t)
 	retryAfter := func(ip string) (int, string) {
-		req := httptest.NewRequest("GET", "/api/v1/me", nil)
-		req.RemoteAddr = ip + ":1234"
-		req.Header.Set("Authorization", "Bearer "+tok)
-		rec := httptest.NewRecorder()
-		e.h.ServeHTTP(rec, req)
+		rec := e.record(ip, "GET", "/api/v1/me", tok, "")
 		return rec.Code, rec.Header().Get("Retry-After")
 	}
 
 	// The address has plenty left: the credential's wait is the answer.
 	const roomy = "192.0.2.46"
 	for i := range 2 {
-		if code, _ := retryAfter(roomy); code != http.StatusOK {
+		if code := e.get(roomy, "/api/v1/me", tok); code != http.StatusOK {
 			t.Fatalf("call %d = %d, want 200", i, code)
 		}
 	}

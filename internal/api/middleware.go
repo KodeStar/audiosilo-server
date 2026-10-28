@@ -344,14 +344,10 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 }
 
 // allowCredential spends an authenticated request (ctx) from its credential's
-// bucket: every credential is a tokens row, so its id is its bucket, and a
-// request the bucket refuses costs its address (the lookup was already done). A
-// demo account's session spends from its address's bucket instead, as every
-// request did before server#246: anyone can mint a demo session
-// (POST /demo/session), so a per-token budget would be no limit at all. When the
-// bucket refuses, wait is how long until the request could pass both its
-// credential's bucket and its address's (which the refusal charged), for
-// Retry-After.
+// bucket (spendCredential). A demo account's session spends from its address's
+// bucket instead, as every request did before server#246: anyone can mint a demo
+// session (POST /demo/session), so a per-token budget would be no limit at all.
+// When refused, wait is the request's Retry-After.
 func (a *API) allowCredential(ctx context.Context, ip string) (wait time.Duration, ok bool) {
 	if u := userFrom(ctx); u != nil && u.IsDemo {
 		if !a.ipLimiter.Allow(ip) {
@@ -359,11 +355,21 @@ func (a *API) allowCredential(ctx context.Context, ip string) (wait time.Duratio
 		}
 		return 0, true
 	}
-	if key := strconv.FormatInt(credentialFrom(ctx).ID, 10); !a.tokenLimiter.Allow(key) {
-		a.ipLimiter.Charge(ip)
-		return max(a.tokenLimiter.Wait(key), a.ipLimiter.Wait(ip)), false
+	return a.spendCredential(a.tokenLimiter, credentialFrom(ctx).ID, ip)
+}
+
+// spendCredential spends one request from credential id's bucket in l (every
+// credential is a tokens row, so its id is its bucket). A refusal charges the
+// address (the lookup was already done) and waits the longer of the two
+// buckets' waits: the next request meets the address's bucket first, which the
+// charge may have put into debt.
+func (a *API) spendCredential(l *rateLimiter, id int64, ip string) (wait time.Duration, ok bool) {
+	key := strconv.FormatInt(id, 10)
+	if l.Allow(key) {
+		return 0, true
 	}
-	return 0, true
+	a.ipLimiter.Charge(ip)
+	return max(l.Wait(key), a.ipLimiter.Wait(ip)), false
 }
 
 // requireMediaAuth is requireAuth that additionally accepts the credential as a
@@ -430,12 +436,8 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			// the credential that fetches it anywhere.
 			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		}
-		// Every credential is a tokens row, so its id is its bucket.
-		if key := strconv.FormatInt(cred.ID, 10); !a.mediaLimiter.Allow(key) {
-			a.ipLimiter.Charge(ip)
-			// The next request meets the IP's bucket first, which this charge
-			// may have put into debt: the longer of the two waits.
-			rateLimited(w, max(a.mediaLimiter.Wait(key), a.ipLimiter.Wait(ip)))
+		if wait, ok := a.spendCredential(a.mediaLimiter, cred.ID, ip); !ok {
+			rateLimited(w, wait)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
