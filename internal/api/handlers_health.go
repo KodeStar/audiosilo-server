@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -33,18 +35,33 @@ type offlineLibrary struct {
 // count and a few books to show, the offline libraries, and when a scan last
 // finished. "Not matched" is left out while community metadata is off (there is
 // nothing to match against).
+//
+// Counting is a pass over the whole library (about 100 ms at 5,000 books), so
+// the answer is kept in the list cache (listcache.go) under the write
+// generation, keyed on what it is computed from besides the database: the
+// kinds and the offline libraries (a filesystem probe, made on every request).
+// It is exact: any write (a fix, an ignore, a scan) moves the generation, and
+// the next request counts again (server#245).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
+	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
 		return k == catalog.IssueUnmatched && !a.metadataOn()
 	})
-	counts, err := a.cat.IssueCounts(r.Context(), kinds)
-	if err != nil {
-		a.writeCatalogError(w, err, "issue counts failed", "could not count issues")
-		return
-	}
 	offline, err := a.offlineLibraries(r)
 	if err != nil {
 		a.writeCatalogError(w, err, "issue counts failed", "could not check the libraries")
+		return
+	}
+	write := func(v any) { writeJSON(w, http.StatusOK, v) }
+	if cacheable {
+		write = a.cachedAnswer(w, gen, issuesCacheKey(r, kinds, offline))
+		if write == nil {
+			return
+		}
+	}
+	counts, err := a.cat.IssueCounts(r.Context(), kinds)
+	if err != nil {
+		a.writeCatalogError(w, err, "issue counts failed", "could not count issues")
 		return
 	}
 	checked, err := a.cat.LastScanFinished(r.Context())
@@ -52,9 +69,13 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "issue counts failed", "could not read scan history")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"categories": counts, "offline": offline, "checked_at": checked,
-	})
+	write(map[string]any{"categories": counts, "offline": offline, "checked_at": checked})
+}
+
+// issuesCacheKey is the list cache's key of a Health summary: the route's path
+// (no list shares it), the kinds counted and the offline libraries.
+func issuesCacheKey(r *http.Request, kinds []string, offline []offlineLibrary) [sha256.Size]byte {
+	return sha256.Sum256(fmt.Appendf(nil, "%q %q %#v", r.URL.Path, kinds, offline))
 }
 
 // offlineLibraries lists the libraries whose root can't be read right now, with

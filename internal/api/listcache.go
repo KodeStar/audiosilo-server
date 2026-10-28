@@ -16,7 +16,8 @@ import (
 // lists: a library's /books pages, the recent shelf and search. A grid that
 // loads every page, a home screen opened again, a search typed twice: each is
 // the same answer while nothing was written, and building it is most of the
-// request (the books' rows, their file counts, FTS ranking, JSON).
+// request (the books' rows, their file counts, FTS ranking, JSON). The admin
+// console's book pages and Health summary are kept the same way (server#245).
 //
 // It is exact because it is keyed on the database's write generation
 // (store.DB.Generation, which moves after every write has finished) as well as
@@ -120,15 +121,23 @@ func listCacheKey(r *http.Request, scopes []catalog.Scope) [sha256.Size]byte {
 	return sha256.Sum256(fmt.Appendf(nil, "%q %q %#v", r.URL.Path, r.URL.RawQuery, scopes))
 }
 
-// cachedList is the list cache's lookup for one of the handlers it serves: gen
-// is the generation read before the request's first read (a.cat.Generation).
+// cachedList is the list cache's lookup for one of the player's list handlers:
+// gen is the generation read before the request's first read (a.cat.Generation).
 // It answers from the cache and returns nil, or returns a write func that
 // encodes v exactly as writeJSON does, keeps it when cacheable, and writes it.
 func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cacheable bool, scopes []catalog.Scope) (write func(v any)) {
 	if !cacheable {
 		return func(v any) { writeJSON(w, http.StatusOK, v) }
 	}
-	key := listCacheKey(r, scopes)
+	return a.cachedAnswer(w, gen, listCacheKey(r, scopes))
+}
+
+// cachedAnswer is cachedList for an answer under any key: one that names
+// everything the answer is computed from besides the database (the admin
+// console's Health summary keys on its kinds and the offline libraries,
+// handleIssues). Every answer the cache holds is either a list's or one of
+// these, keyed on its route's path, so the two never share a key.
+func (a *API) cachedAnswer(w http.ResponseWriter, gen uint64, key [sha256.Size]byte) (write func(v any)) {
 	if body, hit := a.lists.get(gen, key); hit {
 		writeJSONBytes(w, body)
 		return nil
