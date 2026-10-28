@@ -444,6 +444,11 @@ type rowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// rowsQuerier is the reader pool or a write transaction, for many rows.
+type rowsQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // getJob reads one job through q (inside a write transaction: the writer's
 // view, not the reader pool's).
 func getJob(ctx context.Context, q rowQuerier, id int64) (*Job, error) {
@@ -1026,8 +1031,12 @@ func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []str
 // claim hands the Bridge holding token the next queued job of one of kinds
 // (highest priority, then oldest) that isn't held (nextQueued), leased for
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
-// paired Bridge's.
+// paired Bridge's. An idle claim (claimDue false) answers from the reader pool
+// and writes nothing.
 func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+	if due, err := s.claimDue(ctx, token, kinds, minPriority); err != nil || !due {
+		return nil, err
+	}
 	var (
 		job *Job
 		exp expiry
@@ -1069,6 +1078,35 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
 	}
 	return job, err
+}
+
+// claimDue reports whether a claim has anything to write, read on the reader
+// pool: a lease that ran out (expireTx's, of any kind), a private follow request
+// whose feed URL this server no longer holds (expirePrivateTx's), or a job
+// nextQueued would hand out for kinds. A paired Bridge long-polls on two loops,
+// 4 to 6 claims a minute when idle; without this each took the one writer and
+// moved the write generation (store.DB.Generation), emptying every cache keyed
+// on it, to change nothing. ErrNotPaired as the claim's own check, which the
+// claim's transaction repeats. A write landing after these reads is no loss: an
+// enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
+// before it claims), and a lease that lapses later is due at the next claim.
+func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (bool, error) {
+	var live, lapsed bool
+	if err := s.db.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+		return false, err
+	}
+	if !live {
+		return false, ErrNotPaired
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, s.ts()).Scan(&lapsed); err != nil || lapsed {
+		return lapsed, err
+	}
+	lost, err := s.lostPrivateRequests(ctx, s.db)
+	if err != nil || len(lost) > 0 {
+		return len(lost) > 0, err
+	}
+	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
+	return id != 0, err
 }
 
 // maxOpenRequests caps one requester's open jobs of a capped kind.
@@ -1122,8 +1160,8 @@ func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 // a managed module that is off (held) waits, queued, until the module is on
 // again. The queue is short, so the kinds are matched as read (the statement
 // stays a constant).
-func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string, minPriority *int32) (int64, error) {
-	rows, err := tx.QueryContext(ctx,
+func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string, minPriority *int32) (int64, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, minPriority, minPriority)
 	if err != nil {
 		return 0, err

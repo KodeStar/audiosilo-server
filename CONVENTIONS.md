@@ -1775,7 +1775,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
   highest-priority oldest queued job of the
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
-  and leases it for 2 min (`attempts` + 1); `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
+  private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
+  answers without the writer, so an idle paired Bridge's polls leave the write generation alone; `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.
