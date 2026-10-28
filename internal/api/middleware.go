@@ -348,11 +348,14 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // media. A demo account's session spends from its address's bucket instead, its
 // media too, as every API request did before server#246: anyone can mint a demo
 // session (POST /demo/session), so a per-token budget would let one address
-// multiply its budget by its sessions. When refused, wait is the request's
-// Retry-After.
+// multiply its budget by its sessions. A refused demo request pays into that
+// bucket anyway, as spendCredential's refusals do: its lookup was already done,
+// so requests that passed Ready together can't buy lookups for free. When
+// refused, wait is the request's Retry-After.
 func (a *API) allowCredential(ctx context.Context, l *rateLimiter, ip string) (wait time.Duration, ok bool) {
 	if u := userFrom(ctx); u != nil && u.IsDemo {
 		if !a.ipLimiter.Allow(ip) {
+			a.ipLimiter.Charge(ip)
 			return a.ipLimiter.Wait(ip), false
 		}
 		return 0, true

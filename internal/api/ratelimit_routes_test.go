@@ -369,6 +369,21 @@ func TestRateLimitDemoMediaByAddress(t *testing.T) {
 	}
 }
 
+// A demo request its address's bucket refuses after it passed Ready (a burst of
+// requests looked up together) still pays into that bucket, as a credential
+// bucket's refusal does: its token lookup was already done.
+func TestAllowCredentialDemoRefusalPays(t *testing.T) {
+	t.Parallel()
+	e := newRouteLimitEnv(t)
+	e.api.ipLimiter.burst, e.api.ipLimiter.rate = 1, 1
+	ctx := withCredential(context.Background(), &auth.User{IsDemo: true}, auth.Credential{ID: 1})
+	const ip = "192.0.2.65"
+	e.api.ipLimiter.Charge(ip) // the bucket is spent: the next token is 1 s away
+	if wait, ok := e.api.allowCredential(ctx, e.api.mediaLimiter, ip); ok || wait != 2*time.Second {
+		t.Fatalf("refused demo request = %v, %v; want refused with a 2 s wait (the refusal paid)", wait, ok)
+	}
+}
+
 // The routes that limit themselves (the authenticated API, media) refuse an
 // address whose general bucket is empty in rateLimit already, before the timeout
 // layer behind it runs; another address goes through.
