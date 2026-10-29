@@ -55,11 +55,11 @@ func dedupFetch(limit int) int {
 // (prefixed b.) plus the library order/name and the book's audio-file count. The
 // count is a correlated subquery on idx_book_files_book, run for each row the
 // query selects: only the rows it returns when nothing has to be sorted (a
-// search, in FTS5's rank order; one library's recent shelf, by its index), but
-// every book in scope when the ORDER BY sorts (the recent shelf across several
-// libraries: a temp B-tree of whole rows). A join on a grouped count of
-// book_files materialised that count for every book in the index on every
-// request (server#243: most of a search or recent shelf's time at 5,000 books).
+// search, in FTS5's rank order; the recent shelf, by its index or in its merged
+// arms' order), but every row in scope under an ORDER BY that sorts (a temp
+// B-tree of whole rows). A join on a grouped count of book_files materialised
+// that count for every book in the index on every request (server#243: most of
+// a search or recent shelf's time at 5,000 books).
 const dedupCols = `, l.sort_order, l.name,
 	(SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id)`
 

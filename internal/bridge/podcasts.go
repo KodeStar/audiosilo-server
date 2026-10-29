@@ -346,13 +346,10 @@ func (s *Service) ExpirePrivateRequests(ctx context.Context) error {
 // expirePrivateTx follows lease expiry in the claim transaction too: a lease
 // requeued after a restart must fail before nextQueued can hand it out.
 func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) ([]Job, error) {
-	queued, err := queryIDs(ctx, tx, `SELECT id FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
+	queued, err := s.lostPrivateRequests(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	s.secretMu.Lock()
-	queued = slices.DeleteFunc(queued, func(id int64) bool { return s.privateURLs[id] != "" })
-	s.secretMu.Unlock()
 	ended := []Job{}
 	for _, id := range queued {
 		if _, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET state='failed',error='The follow request expired. Follow the feed again.',result='{"code":"request_expired","message":"The follow request expired. Follow the feed again."}',finished_at=?1,updated_at=?1 WHERE id=?2`, now, id); err != nil {
@@ -366,9 +363,20 @@ func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) (
 	}
 	return ended, nil
 }
-func queryIDs(ctx context.Context, db interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, q string, args ...any) ([]int64, error) {
+
+// lostPrivateRequests is the queued private subscriptions whose feed URL this
+// server doesn't hold (it restarted since they were asked for), read through q.
+func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int64, error) {
+	queued, err := queryIDs(ctx, q, `SELECT id FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
+	if err != nil {
+		return nil, err
+	}
+	s.secretMu.Lock()
+	defer s.secretMu.Unlock()
+	return slices.DeleteFunc(queued, func(id int64) bool { return s.privateURLs[id] != "" }), nil
+}
+
+func queryIDs(ctx context.Context, db rowsQuerier, q string, args ...any) ([]int64, error) {
 	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

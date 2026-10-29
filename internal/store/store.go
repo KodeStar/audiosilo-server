@@ -8,6 +8,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"errors"
 	"fmt"
@@ -65,6 +66,8 @@ type DB struct {
 	// gen is the write generation (Generation): moved after every write on the
 	// writer pool has finished.
 	gen atomic.Uint64
+	// durable counts WithDurableTx's commits (DurableCommits).
+	durable atomic.Uint64
 
 	stopSampler context.CancelFunc // nil unless the pool-stats sampler is running
 }
@@ -91,19 +94,38 @@ func WithLogger(l *slog.Logger) Option {
 // contention - the signal that precedes a backend-wide stall.
 const slowTxThreshold = 2 * time.Second
 
-// dsnPragmas appends AudioSilo's required pragmas to a DSN. WAL for concurrent
-// readers, busy_timeout to ride out brief locks, and foreign_keys for referential
-// integrity. foreign_keys defaults OFF per SQLite connection, and the schema
-// relies on ~28 ON DELETE CASCADE rules, so these must always be applied - append
-// with the right separator rather than skipping them when the DSN already carries
-// query params (which would silently disable every cascade delete). extra carries
-// per-pool pragmas (e.g. query_only for the reader).
+// dsnPragmas appends AudioSilo's required pragmas to a DSN: WAL for concurrent
+// readers, synchronous=NORMAL for commits without an fsync, busy_timeout to ride
+// out brief locks, and foreign_keys for referential integrity.
+//
+// synchronous=NORMAL is the WAL trade-off SQLite documents: a commit no longer
+// fsyncs the WAL (only a checkpoint does), so a power cut or OS crash can roll
+// back the last few commits, but never corrupts the database or tears a
+// transaction (an application crash loses nothing). Any commit can be in that
+// window, not only listening progress (which clients re-send). FULL cost an
+// fsync per commit (two per progress save), 1 to 5 ms on an SSD and far more on
+// an HDD array or a FUSE share, all of it serialized on the one writer.
+//
+// So the few writes whose loss would bring back what a person ended go through
+// WithDurableTx / ExecDurable, which commit under FULL: ending a credential
+// (sign-out, a device or API key revoked, a password set or cleared, an account
+// disabled, demoted or deleted, an auth code revoked, rotated, replaced or
+// used, a pairing token used, a Bridge pairing code replaced, a Bridge paired
+// or unpaired) and a Bridge claim (its attempt number must never be
+// handed out twice). Their fsync also flushes the NORMAL commits before them.
+// Everything else stays NORMAL; listening progress and heartbeats never take it.
+//
+// foreign_keys defaults OFF per SQLite connection, and the schema relies on ~28
+// ON DELETE CASCADE rules, so the pragmas must always be applied - append with
+// the right separator rather than skipping them when the DSN already carries
+// query params (which would silently disable every cascade delete). extra
+// carries per-pool pragmas (e.g. query_only for the reader).
 func dsnPragmas(dsn string, extra ...string) string {
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"
 	}
-	p := "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+	p := "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 	for _, e := range extra {
 		p += "&_pragma=" + e
 	}
@@ -180,6 +202,18 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	return db.reader.QueryRowContext(ctx, query, args...)
 }
 
+// ExecDurable is ExecContext committed durably (WithDurableTx): for a lone
+// statement that ends a credential. name labels it in the slow-transaction log.
+func (db *DB) ExecDurable(ctx context.Context, name, query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := db.WithDurableTx(ctx, name, func(tx *sql.Tx) error {
+		var err error
+		res, err = tx.ExecContext(ctx, query, args...)
+		return err
+	})
+	return res, err
+}
+
 // ExecContext runs a write on the writer pool. (This also satisfies the auth
 // package's sqlExecer, so standalone auth-code writes route to the writer.)
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -209,18 +243,73 @@ func (db *DB) Ping(ctx context.Context) error {
 
 // WithTx runs fn inside a writer transaction, committing on success and rolling
 // back on error (or panic). name labels the operation in the slow-transaction log.
-func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) (err error) {
+func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
+	return db.withTx(ctx, name, time.Now(), db.writer, fn)
+}
+
+// WithDurableTx is WithTx for a write that must survive a power cut or OS crash
+// (see dsnPragmas for which): it commits with synchronous=FULL, so the commit
+// returns only once the WAL is on disk. It holds the writer's one connection
+// (sql.DB.Conn) from setting FULL until NORMAL is back, so no other write runs
+// in between and none is left at FULL; a connection that can't be put back is
+// dropped (the pool opens a fresh one, NORMAL from the DSN). Setting the pragma
+// on the connection is what works under modernc and the single-writer pool: a
+// PASSIVE wal_checkpoint after the commit would skip its WAL sync whenever a
+// reader's snapshot leaves it nothing to copy, and SQLite has no per-commit
+// sync of its own.
+func (db *DB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
 	start := time.Now()
+	conn, err := db.writer.Conn(ctx)
+	if err != nil {
+		db.logSlow(name, start, err) // a wait for the writer that timed out, as WithTx logs it
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	// Deferred before FULL is set, so a FULL that took effect but answered an
+	// error (a cancel landing on it) is put back too.
+	defer func() {
+		// Whatever happened, on a context the caller's leaving doesn't end.
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA synchronous = NORMAL`); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous = FULL`); err != nil {
+		db.logSlow(name, start, err)
+		return err
+	}
+	if err := db.withTx(ctx, name, start, conn, fn); err != nil {
+		return err
+	}
+	db.durable.Add(1)
+	return nil
+}
+
+// DurableCommits is how many WithDurableTx commits succeeded (tests check that a
+// path takes it).
+func (db *DB) DurableCommits() uint64 { return db.durable.Load() }
+
+// logSlow warns of a transaction that took slowTxThreshold or more since start,
+// whatever its outcome (err).
+func (db *DB) logSlow(name string, start time.Time, err error) {
+	if el := time.Since(start); el >= slowTxThreshold {
+		db.log.Warn("slow db transaction", "op", name, "elapsed", el.String(), "err", err)
+	}
+}
+
+// txBeginner is the writer pool or its one connection held (WithDurableTx).
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// withTx is WithTx on a writer pool or connection, start being when the caller
+// began waiting for it.
+func (db *DB) withTx(ctx context.Context, name string, start time.Time, on txBeginner, fn func(*sql.Tx) error) (err error) {
 	// Log a slow transaction regardless of outcome: a tx that stalls and then
 	// fails (e.g. the request timeout cancels its context after ~25s) is the
 	// backend-lockup precursor this warning exists to surface, so the check must
 	// not sit only on the success path. Deferred so it fires on every return.
-	defer func() {
-		if el := time.Since(start); el >= slowTxThreshold {
-			db.log.Warn("slow db transaction", "op", name, "elapsed", el.String(), "err", err)
-		}
-	}()
-	tx, err := db.writer.BeginTx(ctx, nil)
+	defer func() { db.logSlow(name, start, err) }()
+	tx, err := on.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

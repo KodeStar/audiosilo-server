@@ -34,7 +34,7 @@ const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
 const (
 	// Lease is how long a claim holds a job without a progress update. The
-	// Bridge reports at least every 10 s while it works.
+	// Bridge reports at least every 30 s while it works.
 	Lease = 2 * time.Minute
 	// MaxAttempts is how many times a job may be claimed; a lease that runs out
 	// on the last attempt fails the job instead of queueing it again.
@@ -442,6 +442,11 @@ func nullable(s sql.NullString) *string {
 // rowQuerier is the reader pool or a write transaction.
 type rowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// rowsQuerier is the reader pool or a write transaction, for many rows.
+type rowsQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // getJob reads one job through q (inside a write transaction: the writer's
@@ -969,9 +974,7 @@ func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
 // first), so the console's polls don't queue behind scans for the writer.
 func (s *Service) expireDue(ctx context.Context) error {
 	now := s.ts()
-	var due bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, now).Scan(&due); err != nil || !due {
+	if due, err := s.leaseLapsed(ctx, now); err != nil || !due {
 		return err
 	}
 	var exp expiry
@@ -1026,19 +1029,20 @@ func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []str
 // claim hands the Bridge holding token the next queued job of one of kinds
 // (highest priority, then oldest) that isn't held (nextQueued), leased for
 // Lease, or nil when there is none; ErrNotPaired once token is no longer the
-// paired Bridge's.
+// paired Bridge's. An idle claim (claimDue false) answers from the reader pool
+// and writes nothing.
 func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
+	if due, err := s.claimDue(ctx, token, kinds, minPriority); err != nil || !due {
+		return nil, err
+	}
 	var (
 		job *Job
 		exp expiry
 	)
-	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
-		var live bool
-		if err := tx.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+	// Each write below has its check in claimDue, or an idle claim skips it.
+	err := s.db.WithDurableTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
+		if err := bridgeTokenLive(ctx, tx, token); err != nil {
 			return err
-		}
-		if !live {
-			return ErrNotPaired
 		}
 		now := s.ts()
 		var err error
@@ -1069,6 +1073,52 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
 	}
 	return job, err
+}
+
+// claimDue reports whether a claim has anything to write, read on the reader
+// pool: a lease that ran out (expireTx's, of any kind), a private follow request
+// whose feed URL this server no longer holds (expirePrivateTx's), or a job
+// nextQueued would hand out for kinds. A paired Bridge long-polls on two loops,
+// 4 to 6 claims a minute when idle; without this each took the one writer and
+// moved the write generation (store.DB.Generation), emptying every cache keyed
+// on it, to change nothing. ErrNotPaired as the claim's own check, which the
+// claim's transaction repeats. A write landing after these reads is no loss: an
+// enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
+// before it claims), and a lease that lapses later is due at the next claim.
+func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (bool, error) {
+	if err := bridgeTokenLive(ctx, s.db, token); err != nil {
+		return false, err
+	}
+	if lapsed, err := s.leaseLapsed(ctx, s.ts()); err != nil || lapsed {
+		return lapsed, err
+	}
+	lost, err := s.lostPrivateRequests(ctx, s.db)
+	if err != nil || len(lost) > 0 {
+		return len(lost) > 0, err
+	}
+	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
+	return id != 0, err
+}
+
+// bridgeTokenLive answers ErrNotPaired once token is no longer the paired
+// Bridge's, read through q (the reader pool or the claim's transaction).
+func bridgeTokenLive(ctx context.Context, q rowQuerier, token int64) error {
+	var live bool
+	if err := q.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
+		return err
+	}
+	if !live {
+		return ErrNotPaired
+	}
+	return nil
+}
+
+// leaseLapsed reports, on the reader pool (idx_bridge_jobs_lease), whether any
+// lease ran out by now: whether expireTx has anything to do.
+func (s *Service) leaseLapsed(ctx context.Context, now string) (bool, error) {
+	var lapsed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, now).Scan(&lapsed)
+	return lapsed, err
 }
 
 // maxOpenRequests caps one requester's open jobs of a capped kind.
@@ -1122,8 +1172,8 @@ func (s *Service) ReleaseUnsentClaim(ctx context.Context, claim *Job) error {
 // a managed module that is off (held) waits, queued, until the module is on
 // again. The queue is short, so the kinds are matched as read (the statement
 // stays a constant).
-func (s *Service) nextQueued(ctx context.Context, tx *sql.Tx, kinds []string, minPriority *int32) (int64, error) {
-	rows, err := tx.QueryContext(ctx,
+func (s *Service) nextQueued(ctx context.Context, q rowsQuerier, kinds []string, minPriority *int32) (int64, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, kind, params FROM bridge_jobs WHERE state = 'queued' AND (? IS NULL OR priority >= ?) ORDER BY priority DESC, id`, minPriority, minPriority)
 	if err != nil {
 		return 0, err

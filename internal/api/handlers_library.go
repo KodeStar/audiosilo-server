@@ -181,6 +181,19 @@ func (a *API) browseScope(w http.ResponseWriter, r *http.Request) (*catalog.Libr
 	return lib, scope, true
 }
 
+// browseList is browseScope for a list answered through the list cache
+// (listcache.go): it reads the write generation before any read, then answers a
+// cache hit itself (write nil, as it does an error). Only a books library's
+// answers are cached.
+func (a *API) browseList(w http.ResponseWriter, r *http.Request) (*catalog.Library, catalog.Scope, func(any)) {
+	gen, cacheable := a.cat.Generation()
+	lib, scope, ok := a.browseScope(w, r)
+	if !ok {
+		return nil, scope, nil
+	}
+	return lib, scope, a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+}
+
 // authorizedPath resolves {id} + ?path=, checks the path is within the caller's
 // scope, and returns the library + path. Used by every path-addressed endpoint.
 func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, string) {
@@ -414,12 +427,7 @@ func (a *API) markPendingBooks(ctx context.Context, lib *catalog.Library, scope 
 // handleListBooks serves the computed/hybrid view from the index, scoped to the
 // caller's share path rules.
 func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
-	lib, scope, ok := a.browseScope(w, r)
-	if !ok {
-		return
-	}
-	write := a.cachedList(w, r, gen, cacheable && lib.Kind == catalog.KindBooks, []catalog.Scope{scope})
+	lib, scope, write := a.browseList(w, r)
 	if write == nil {
 		return
 	}

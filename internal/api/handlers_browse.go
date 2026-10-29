@@ -10,12 +10,17 @@ import (
 // admin's /admin/authors|narrators|series (catalog.People/Series) but within the
 // caller's scope, so a share-scoped user never sees a count for a book outside
 // their grant, and without the admin-only merge suggestions. Transport only.
+//
+// Both answer through the list cache (browseList): an answer is a pure function
+// of the database, the path and query (the field, ?memberships=) and the caller's
+// scope, with no listener-specific field. A podcasts library's answers are empty
+// (the aggregates count book libraries only) and skip it, as its /books does.
 
 // handleBrowsePeople serves GET /libraries/{id}/authors and /narrators.
 func (a *API) handleBrowsePeople(field, key string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		lib, scope, ok := a.browseScope(w, r)
-		if !ok {
+		lib, scope, write := a.browseList(w, r)
+		if write == nil {
 			return
 		}
 		agg, err := a.cat.People(r.Context(), field, lib.ID, &scope)
@@ -23,14 +28,14 @@ func (a *API) handleBrowsePeople(field, key string) http.HandlerFunc {
 			a.writeCatalogError(w, err, "browse people failed", "could not list "+key, "library", lib.ID, "field", field)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{key: agg.People, "unknown": agg.Unknown})
+		write(map[string]any{key: agg.People, "unknown": agg.Unknown})
 	}
 }
 
 // handleBrowseSeries serves GET /libraries/{id}/series.
 func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
-	lib, scope, ok := a.browseScope(w, r)
-	if !ok {
+	lib, scope, write := a.browseList(w, r)
+	if write == nil {
 		return
 	}
 	series, err := a.cat.Series(r.Context(), lib.ID, &scope, r.URL.Query().Get("memberships") == "1")
@@ -38,7 +43,7 @@ func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "browse series failed", "could not list series", "library", lib.ID)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"series": series})
+	write(map[string]any{"series": series})
 }
 
 // maxSeriesBatch bounds the distinct series one GET /libraries/{id}/series/books

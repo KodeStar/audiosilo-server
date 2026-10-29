@@ -513,10 +513,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the library cache key on, moves after each of those finishes, so a write
   that bypassed them would leave a revoked token honoured). An in-memory DB has
   reader == writer and would hide a misroute, which is why the test stores are
-  temp files.
+  temp files. Commits are `synchronous=NORMAL` (a power cut can roll back the last
+  few); a write that ends a credential (sign-out, device or API key revoke, password
+  set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
+  replaced or used, a pairing token used, Bridge pair code issued, pair/unpair)
+  or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
+  that commit, about one fsync), and a new one of those kinds must too; progress,
+  heartbeats and other listening writes never do.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
-  books library), `/books/recent` and `/search` keep their encoded answer (8 MiB
-  LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
+  books library), `/books/recent`, `/search` and a books library's browse lists
+  (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
+  (8 MiB LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
   merge paths whose bytes aren't UTF-8), under the write generation read before
   the request's first read; any write moves the generation and empties it. Only
@@ -1691,8 +1698,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which
   both `GetBridgePairing` and the heartbeat reads use; `auth.BridgeTokenLiveSQL` is the same for one token,
-  which the heartbeat's write and every claim ask inside their transaction (a call authenticated before a
-  pairing or an unpair revoked its token, a long poll above all, saves nothing and claims nothing: 401).
+  which the heartbeat's write asks inside its transaction and a claim asks first on the reader pool
+  (`claimDue`), then again inside its transaction when it has something to write (a call authenticated
+  before a pairing or an unpair revoked its token, a long poll above all, saves nothing and claims
+  nothing: 401).
   A route-table
   test sends it (header and `?token=`) to every other authenticated route: all 401. **Heartbeat** `PUT
   /bridge/status {version, kinds, libraries[{library_id, mount_path, mapped, writable, checked_path,
@@ -1774,7 +1783,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
   highest-priority oldest queued job of the
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
-  and leases it for 2 min (`attempts` + 1); `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
+  private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
+  answers without the writer, so an idle paired Bridge's polls leave the write generation alone (its
+  heartbeat still moves it, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.

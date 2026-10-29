@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,129 @@ func TestForeignKeysEnabled(t *testing.T) {
 	}
 	if on != 1 {
 		t.Fatalf("PRAGMA foreign_keys = %d, want 1 (cascade deletes depend on it)", on)
+	}
+}
+
+// TestSynchronousNormal asserts both pools of an opened file-backed DB run with
+// synchronous=NORMAL (1), the WAL setting dsnPragmas documents, not SQLite's
+// default FULL (2), and that the journal is still WAL (NORMAL is only safe there).
+func TestSynchronousNormal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "test.db")
+
+	db, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	for name, pool := range map[string]*sql.DB{"writer": db.writer, "reader": db.reader} {
+		var sync int
+		if err := pool.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil {
+			t.Fatalf("%s: PRAGMA synchronous: %v", name, err)
+		}
+		if sync != 1 {
+			t.Errorf("%s: PRAGMA synchronous = %d, want 1 (NORMAL)", name, sync)
+		}
+		var mode string
+		if err := pool.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+			t.Fatalf("%s: PRAGMA journal_mode: %v", name, err)
+		}
+		if mode != "wal" {
+			t.Errorf("%s: PRAGMA journal_mode = %q, want wal", name, mode)
+		}
+	}
+	if db.reader == db.writer {
+		t.Fatal("file-backed DB has no separate reader pool; the reader check above was the writer twice")
+	}
+}
+
+// TestWithDurableTx: a durable transaction runs, and commits, under
+// synchronous=FULL on the writer's one connection, and the writer is NORMAL again
+// after it, whether it committed, failed, panicked or its context was cancelled
+// before the end; it moves the generation like any write, and DurableCommits counts
+// only the commits. ExecDurable is one of them. Plain WithTx stays NORMAL.
+func TestWithDurableTx(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE durable_probe(n INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	syncIn := func(q interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	}) int {
+		t.Helper()
+		var n int
+		if err := q.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	writerNormal := func(what string) {
+		t.Helper()
+		if n := syncIn(db.writer); n != 1 {
+			t.Fatalf("%s: writer synchronous = %d, want 1 (NORMAL) again", what, n)
+		}
+	}
+
+	gen := db.Generation()
+	if err := db.WithDurableTx(ctx, "probe", func(tx *sql.Tx) error {
+		if n := syncIn(tx); n != 2 {
+			t.Errorf("inside WithDurableTx: synchronous = %d, want 2 (FULL)", n)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO durable_probe VALUES(1)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writerNormal("after a commit")
+	if db.Generation() == gen || db.DurableCommits() != 1 {
+		t.Fatalf("after a commit: generation %d -> %d, durable commits %d", gen, db.Generation(), db.DurableCommits())
+	}
+
+	boom := errors.New("boom")
+	if err := db.WithDurableTx(ctx, "probe", func(*sql.Tx) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("failed durable tx = %v", err)
+	}
+	writerNormal("after a rollback")
+
+	cctx, cancel := context.WithCancel(ctx)
+	_ = db.WithDurableTx(cctx, "probe", func(*sql.Tx) error { cancel(); return cctx.Err() })
+	writerNormal("after a cancelled context")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("a panicking durable tx did not panic")
+			}
+		}()
+		_ = db.WithDurableTx(ctx, "probe", func(*sql.Tx) error { panic("boom") })
+	}()
+	writerNormal("after a panic")
+
+	if _, err := db.ExecDurable(ctx, "probe", `INSERT INTO durable_probe VALUES(2)`); err != nil {
+		t.Fatal(err)
+	}
+	if db.DurableCommits() != 2 {
+		t.Fatalf("durable commits = %d, want 2 (the rollbacks don't count)", db.DurableCommits())
+	}
+	if err := db.WithTx(ctx, "plain", func(tx *sql.Tx) error {
+		if n := syncIn(tx); n != 1 {
+			t.Errorf("inside WithTx: synchronous = %d, want 1", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM durable_probe`).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("committed rows = %d, %v; want 2", rows, err)
 	}
 }
 

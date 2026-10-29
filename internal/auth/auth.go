@@ -583,7 +583,7 @@ func inPlaceholders(n int) string {
 
 // RevokeToken revokes a token by its secret.
 func (s *Service) RevokeToken(ctx context.Context, secret string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.db.ExecDurable(ctx, "RevokeToken",
 		`UPDATE tokens SET revoked = 1 WHERE token_hash = ?`, hashSecret(secret))
 	return err
 }
@@ -674,7 +674,7 @@ func (s *Service) ListAPITokens(ctx context.Context, userID int64) ([]APIToken, 
 // pairing token: an id matching no live api key of this user returns ErrNotFound
 // (the transport maps it to 404). Backs DELETE /auth/tokens/{id}.
 func (s *Service) RevokeTokenByID(ctx context.Context, userID, id int64) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecDurable(ctx, "RevokeTokenByID",
 		`UPDATE tokens SET revoked = 1
 		  WHERE id = ? AND user_id = ? AND kind = ? AND revoked = 0`, id, userID, KindAPI)
 	if err != nil {
@@ -748,7 +748,7 @@ func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, 
 		return Minted{}, err
 	}
 	expires := s.expiresAt(ttl)
-	if err := s.db.WithTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
+	if err := s.db.WithDurableTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
@@ -807,7 +807,7 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) 
 		return Minted{}, err
 	}
 	m := Minted{Code: code}
-	if err := s.db.WithTx(ctx, "RotateAuthCode", func(tx *sql.Tx) error {
+	if err := s.db.WithDurableTx(ctx, "RotateAuthCode", func(tx *sql.Tx) error {
 		var (
 			createdAt string
 			expires   sql.NullString
@@ -873,7 +873,7 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 	if err != nil {
 		return "", err
 	}
-	if err := s.db.WithTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
+	if err := s.db.WithDurableTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err // a kid holds no recovery code
 		}
@@ -891,7 +891,7 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 // ClearRecoveryCode removes a user's recovery code, if any. Wired to both the
 // user's own DELETE /auth/recovery and the admin's per-user revoke.
 func (s *Service) ClearRecoveryCode(ctx context.Context, userID int64) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.db.ExecDurable(ctx, "ClearRecoveryCode",
 		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery)
 	return err
 }
@@ -979,7 +979,7 @@ func scanAuthCode(rows *sql.Rows, c *AuthCode, extra ...any) error {
 
 // RevokeAuthCode deletes an issued auth code by id, immediately invalidating it.
 func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_codes WHERE id = ?`, id)
+	_, err := s.db.ExecDurable(ctx, "RevokeAuthCode", `DELETE FROM auth_codes WHERE id = ?`, id)
 	return err
 }
 
@@ -1135,7 +1135,7 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
-		res, err := s.db.ExecContext(ctx,
+		res, err := s.db.ExecDurable(ctx, "ConsumePairing",
 			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
 		if err != nil {
 			return nil, "", err
@@ -1147,7 +1147,7 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	}
 	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
 	// chronological (same convention as supersedeActiveInvites).
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecDurable(ctx, "ConsumePairing",
 		`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
 		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
 		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
@@ -1343,7 +1343,7 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 		return DeletedUser{}, err
 	}
 	var out DeletedUser
-	err = s.db.WithTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
+	err = s.db.WithDurableTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
 		// The account and the last-admin guard are read inside the write, as
 		// UpdateUser's are: two admins removing each other at once can't both
 		// pass the guard.
@@ -1503,7 +1503,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 			role = RoleAdmin
 		}
 	}
-	return s.db.WithTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
+	return s.db.WithDurableTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
 		u, err := getUser(ctx, tx, id)
 		if err != nil {
 			return err
