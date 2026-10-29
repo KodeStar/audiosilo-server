@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// database.mmap: empty (auto) unless set, one of auto/on/off, from config.yaml
+// database.mmap: empty (auto) unless set, one of auto/on/off in any case, from config.yaml
 // or AUDIOSILO_DB_MMAP, read at start and no console setting; an unset value is
 // not written to config.yaml.
 func TestDatabaseMmap(t *testing.T) {
@@ -35,14 +35,14 @@ func TestDatabaseMmap(t *testing.T) {
 	if c, _, err := Load(dir); err != nil || c.Database.Mmap != "off" {
 		t.Fatalf("from config.yaml = %+v, %v", c.Database, err)
 	}
-	for _, m := range []string{"on", "auto", "off"} {
+	for _, m := range []string{"on", "auto", "off", "Auto", "OFF", "On"} {
 		t.Setenv("AUDIOSILO_DB_MMAP", m)
 		c, _, err := Load(dir)
 		if err != nil || c.Database.Mmap != m {
 			t.Fatalf("from the environment %q = %+v, %v", m, c.Database, err)
 		}
 	}
-	for _, bad := range []string{"yes", "ON", "1"} {
+	for _, bad := range []string{"yes", "1", "fuse"} {
 		t.Setenv("AUDIOSILO_DB_MMAP", bad)
 		var fe *FieldError
 		if _, _, err := Load(dir); !errors.As(err, &fe) || fe.Key != "database.mmap" {

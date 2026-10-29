@@ -52,8 +52,9 @@ func writerMmap(t *testing.T, db *DB) (n int64) {
 }
 
 // TestReaderMmap: the readers map 256 MiB when the detector says the database is
-// on FUSE in auto mode (the default, "" too), or when forced on; never when
-// forced off, nor on a disk the detector says isn't FUSE. The writer never maps.
+// on shfs or mergerfs in auto mode (the default, "" too), or when forced on;
+// never when forced off, nor on a disk the detector says no for. A mode is read
+// in any case. The writer never maps.
 // Every reader connection has it (the pool's DSN), and the detector is asked
 // about the database file itself.
 func TestReaderMmap(t *testing.T) {
@@ -71,13 +72,18 @@ func TestReaderMmap(t *testing.T) {
 		{"on, local disk", MmapOn, false, readerMmapSize},
 		{"off on FUSE", MmapOff, true, 0},
 		{"unknown is auto", "sometimes", true, readerMmapSize},
+		{"Auto on FUSE", "Auto", true, readerMmapSize},
+		{"AUTO on a local disk", "AUTO", false, 0},
+		{"ON, local disk", "ON", false, readerMmapSize},
+		{"OFF on FUSE", "OFF", true, 0},
+		{"Off on FUSE", "Off", true, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			path := migratedPath(t)
 			var asked []string
 			detect := func(p string) bool { asked = append(asked, p); return c.fuse }
-			db, err := Open(context.Background(), path+"?_txlock=immediate", WithReaderMmap(c.mode), withFUSEDetector(detect))
+			db, err := Open(context.Background(), path+"?_txlock=immediate", WithReaderMmap(c.mode), withMmapDetector(detect))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +112,7 @@ func TestReaderMmap(t *testing.T) {
 				t.Fatalf("writer mmap_size = %d", w)
 			}
 			wantAsked := 0
-			if c.mode != MmapOn && c.mode != MmapOff {
+			if m := mmapMode(c.mode); m != MmapOn && m != MmapOff {
 				wantAsked = 1
 			}
 			if len(asked) != wantAsked || wantAsked == 1 && asked[0] != path {
@@ -120,7 +126,7 @@ func TestReaderMmap(t *testing.T) {
 func TestReaderMmapMemory(t *testing.T) {
 	t.Parallel()
 	db, err := Open(context.Background(), ":memory:", WithReaderMmap(MmapOn),
-		withFUSEDetector(func(string) bool { t.Error("detector asked for :memory:"); return true }))
+		withMmapDetector(func(string) bool { t.Error("detector asked for :memory:"); return true }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,14 +159,77 @@ func TestFUSEMagic(t *testing.T) {
 	}
 }
 
-// TestOnFUSEHere: the real detector says no for this test's temp folder (no CI
-// runner keeps it on FUSE) and for a path that doesn't exist.
-func TestOnFUSEHere(t *testing.T) {
+// TestOnMappableFUSEHere: the real detector says no for this test's temp folder
+// (no CI runner keeps it on shfs or mergerfs) and for a path that doesn't exist.
+func TestOnMappableFUSEHere(t *testing.T) {
 	t.Parallel()
-	if onFUSE(t.TempDir()) {
-		t.Skip("the temp folder is on FUSE here")
+	if onMappableFUSE(t.TempDir()) {
+		t.Skip("the temp folder is on shfs or mergerfs here")
 	}
-	if onFUSE(filepath.Join(t.TempDir(), "missing", "audiosilo.db")) {
+	if onMappableFUSE(filepath.Join(t.TempDir(), "missing", "audiosilo.db")) {
 		t.Fatal("a missing path read as FUSE")
+	}
+}
+
+// unraidMountinfo is an Unraid container's /proc/self/mountinfo, cut down: the
+// overlay root, the data folder bound from /mnt/user (shfs), a library from
+// /mnt/cache (btrfs), a mergerfs pool, an sshfs mount, a tmpfs and a mount point
+// with a space in it (escaped \040).
+const unraidMountinfo = `581 470 0:52 / / rw,relatime master:278 - overlay overlay rw,lowerdir=/var/lib/docker/l
+582 581 0:55 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+590 581 0:44 /appdata/audiosilo /config rw,noatime - fuse.shfs shfs rw,user_id=0,group_id=0,allow_other
+591 581 0:31 /appdata/audiosilo-cache /cache rw,noatime - btrfs /dev/nvme0n1p1 rw,ssd,space_cache=v2
+592 581 0:60 / /pool rw,relatime shared:12 - fuse.mergerfs pool rw,user_id=0,group_id=0
+593 592 0:61 / /pool/remote rw,relatime - fuse.sshfs me@host:/srv rw,user_id=0,group_id=0
+594 581 0:62 / /scratch rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k
+595 581 0:44 /appdata/my\040data /my\040data rw,noatime - fuse.shfs shfs rw
+`
+
+// TestMountFSType: the mount holding a path is the longest mount point that is a
+// segment-boundary prefix of it, the later of two at one point (the one on top),
+// and the auto mode maps on shfs and mergerfs only; a line it can't read makes
+// the whole table untrusted (no).
+func TestMountFSType(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		path, want string
+		mappable   bool
+	}{
+		{"/config/audiosilo.db", "fuse.shfs", true},
+		{"/config", "fuse.shfs", true},
+		{"/configs/audiosilo.db", "overlay", false}, // not under /config
+		{"/cache/audiosilo.db", "btrfs", false},
+		{"/pool/data/audiosilo.db", "fuse.mergerfs", true},
+		{"/pool/remote/audiosilo.db", "fuse.sshfs", false}, // nested in the mergerfs pool
+		{"/scratch/audiosilo.db", "tmpfs", false},
+		{"/data/audiosilo.db", "overlay", false},
+		{"/my data/audiosilo.db", "fuse.shfs", true},
+	} {
+		got, ok := mountFSType(unraidMountinfo, c.path)
+		if !ok || got != c.want || mappableFSTypes[got] != c.mappable {
+			t.Errorf("%s: %q %v, want %q (mappable %v)", c.path, got, ok, c.want, c.mappable)
+		}
+	}
+	// Two mounts at one point: the later is on top.
+	stacked := unraidMountinfo + "596 590 0:70 / /config rw - fuse.sshfs me@host:/x rw\n"
+	if got, ok := mountFSType(stacked, "/config/audiosilo.db"); !ok || got != "fuse.sshfs" {
+		t.Fatalf("stacked mount: %q %v", got, ok)
+	}
+
+	for name, bad := range map[string]string{
+		"no separator":       "590 581 0:44 / /config rw,noatime fuse.shfs shfs rw\n",
+		"too few fields":     "590 581 / /config - fuse.shfs shfs rw\n",
+		"no type":            "590 581 0:44 / /config rw - \n",
+		"bad escape":         "590 581 0:44 / /my\\04 rw - fuse.shfs shfs rw\n",
+		"relative point":     "590 581 0:44 / config rw - fuse.shfs shfs rw\n",
+		"garbage":            "not a mountinfo at all\n",
+		"one bad line among": unraidMountinfo + "garbage line\n",
+	} {
+		if got, ok := mountFSType(bad, "/config/audiosilo.db"); ok || mappableFSTypes[got] {
+			t.Errorf("%s: %q %v, want no", name, got, ok)
+		}
+	}
+	if _, ok := mountFSType("", "/config/audiosilo.db"); ok {
+		t.Fatal("an empty mountinfo held the path")
 	}
 }

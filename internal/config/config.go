@@ -197,13 +197,14 @@ const MaxScanConcurrency = 64
 
 // DatabaseConfig tunes the SQLite database.
 type DatabaseConfig struct {
-	// Mmap is whether the database's readers map the file (store.WithReaderMmap):
-	// "auto" (or empty, the default) only when the database file (in the data
-	// folder; a symlink is followed) is on a FUSE filesystem on Linux (an Unraid
-	// /mnt/user share, mergerfs), where it is measured several times faster;
-	// "on" always; "off" never (a FUSE layer that misbehaves: an I/O error under
-	// a mapping crashes the server, where a read would fail one request). Read
-	// once at start (database.mmap, AUDIOSILO_DB_MMAP).
+	// Mmap is whether the database's readers map the file (store.WithReaderMmap),
+	// in any case: "auto" (or empty, the default) only when the database file (in
+	// the data folder; a symlink is followed) is on Linux on shfs (an Unraid
+	// /mnt/user share) or mergerfs, by its mount's type, where it is measured
+	// several times faster; never on another FUSE filesystem (sshfs, rclone,
+	// s3fs, ntfs-3g) or a network one, where an I/O error under a mapping
+	// crashes the server and a read would fail one request; "on" always; "off"
+	// never. Read once at start (database.mmap, AUDIOSILO_DB_MMAP).
 	Mmap string `yaml:"mmap,omitempty"`
 }
 
@@ -744,7 +745,7 @@ func (c *Config) Validate() error {
 	if n := c.Scan.Concurrency; n < 0 || n > MaxScanConcurrency {
 		return fieldErr("scan.concurrency", fmt.Errorf("scan.concurrency must be from 0 (one per CPU) to %d", MaxScanConcurrency))
 	}
-	if m := c.Database.Mmap; m != "" && !slices.Contains(store.MmapModes, m) {
+	if m := c.Database.Mmap; m != "" && !slices.Contains(store.MmapModes, strings.ToLower(m)) {
 		return fieldErr("database.mmap", fmt.Errorf("database.mmap must be one of %s, got %q",
 			strings.Join(store.MmapModes, ", "), m))
 	}

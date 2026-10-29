@@ -83,9 +83,9 @@ type DB struct {
 type Option func(*openConfig)
 
 type openConfig struct {
-	log    *slog.Logger
-	mmap   string                 // the reader pool's mmap mode (WithReaderMmap)
-	onFUSE func(path string) bool // the auto mode's filesystem check (mmap_linux.go)
+	log      *slog.Logger
+	mmap     string                 // the reader pool's mmap mode (WithReaderMmap)
+	mappable func(path string) bool // the auto mode's filesystem check (mmap_linux.go)
 }
 
 // WithLogger sets the logger used for slow-transaction warnings and pool-stats
@@ -152,7 +152,7 @@ func isMemoryDSN(dsn string) bool {
 // Open opens (creating if needed) the SQLite database at dsn and applies any
 // pending migrations. Pass ":memory:" for tests.
 func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
-	cfg := openConfig{log: slog.Default(), onFUSE: onFUSE}
+	cfg := openConfig{log: slog.Default(), mappable: onMappableFUSE}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -184,7 +184,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 	// pool would be a different, empty database).
 	if !isMemoryDSN(dsn) {
 		// Asked once the writer has created the file, so statfs sees it.
-		mmap := readerMmap(cfg.mmap, func() bool { return cfg.onFUSE(dsnFile(dsn)) })
+		mmap := readerMmap(cfg.mmap, func() bool { return cfg.mappable(dsnFile(dsn)) })
 		reader, err := sql.Open("sqlite", dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
 		if err != nil {
 			writer.Close()
@@ -214,9 +214,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 // map). It is the limit, not a mapping made: a reader whose mmap() fails later
 // (a FUSE mount that refuses shared mappings) falls back to reads unlogged.
 func (db *DB) logReaderMmap(ctx context.Context, mode string, asked int64) {
-	if mode == "" {
-		mode = MmapAuto
-	}
+	mode = mmapMode(mode)
 	var got int64
 	if err := db.reader.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&got); err != nil {
 		db.log.Warn("database readers: mmap_size unreadable", "mode", mode, "err", err)

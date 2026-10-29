@@ -132,13 +132,14 @@ scan:
 # The database (read at start only: no console setting).
 # database:
   # Whether the database's readers map the file into memory (SQLite mmap_size,
-  # 256 MiB, readers only):
-  #   auto - only when the data folder is on a FUSE filesystem on Linux, such as an
-  #          Unraid /mnt/user share or mergerfs, where reads are several times
-  #          faster with it (the default)
-  #   on   - always
-  #   off  - never: a FUSE or network layer that misbehaves (an I/O error under a
-  #          mapping stops the server, where a plain read fails one request)
+  # 256 MiB, readers only), in any case:
+  #   auto - only when the data folder is on Linux on an Unraid /mnt/user share
+  #          (shfs) or mergerfs, where reads are several times faster with it (the
+  #          default); never on another FUSE filesystem (sshfs, rclone, s3fs,
+  #          ntfs-3g) or a network share, where an I/O error under a mapping stops
+  #          the server and a plain read fails one request
+  #   on   - always (at that risk)
+  #   off  - never
   # mmap: auto # [AUDIOSILO_DB_MMAP]
 
 # Public demo mode. When enabled, an unauthenticated visitor can mint a throwaway

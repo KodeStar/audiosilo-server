@@ -523,10 +523,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; progress,
   heartbeats and other listening writes never do. The readers (never the writer) map the file
-  (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`) is `on`, or
-  `auto` (the default) and the database file is on FUSE (Linux statfs `0x65735546`: Unraid
-  `/mnt/user`, mergerfs; measured 2-9x faster there, little on a local disk, never on NFS/SMB where
-  an I/O error under a mapping is a SIGBUS crash); the start logs which (`database readers: mmap`).
+  (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`, any case) is
+  `on`, or `auto` (the default) and the database file is on Linux on shfs or mergerfs: statfs says
+  FUSE (`0x65735546`), then the mount holding the resolved path in `/proc/self/mountinfo` (longest
+  mount point) is `fuse.shfs` or `fuse.mergerfs` (`mappableFSTypes`); any failure says off. Measured
+  2-9x faster on Unraid `/mnt/user`, little on a local disk; never on other FUSE filesystems (sshfs,
+  rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
+  start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET under `/api/v1/` without Range, outside
