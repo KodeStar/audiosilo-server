@@ -706,9 +706,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 // of those transactions holds the writer, at most (catalog.UpsertBooks'
 // budget). A transaction's begin and commit cost a scan about as much as a
 // book's own writes (0.6 of 1.5 ms a book on a synthetic library, 1.3 of 3.9
-// ms on a real one: SCAN-SPIKE.md); at 64 a book they cost a few percent of
-// that, and more books gain little while holding back every other write (a
-// listener's progress) for longer. A scan whose reads are slower than its
+// ms on a real one: SCAN-SPIKE.md); shared by 64 books they cost a few percent
+// of that, and more books a transaction gain little while holding back every
+// other write (a listener's progress) for longer. A scan whose reads are slower than its
 // writes (ffprobe on every file) writes each book as its read is done, as
 // before: the writer never waits on a read holding books.
 const (
