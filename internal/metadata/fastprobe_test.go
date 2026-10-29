@@ -457,13 +457,19 @@ type freeBoxes struct {
 	delay       time.Duration
 }
 
+// freeHeader is a free box's header, size long.
+func freeHeader(size int64) []byte {
+	h := make([]byte, 8)
+	binary.BigEndian.PutUint32(h[:4], uint32(size))
+	copy(h[4:], "free")
+	return h
+}
+
 func (r freeBoxes) ReadAt(p []byte, off int64) (int, error) {
 	time.Sleep(r.delay)
 	clear(p)
+	h := freeHeader(r.every)
 	for box := off / r.every * r.every; box < off+int64(len(p)); box += r.every {
-		var h [8]byte
-		binary.BigEndian.PutUint32(h[:4], uint32(r.every))
-		copy(h[4:], "free")
 		for i := range h {
 			if at := box + int64(i) - off; at >= 0 && at < int64(len(p)) {
 				p[at] = h[i]
@@ -500,12 +506,6 @@ func TestFastProbeLimits(t *testing.T) {
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("a slow reader took %v to give up", took)
 	}
-	// The timeout is capped at maxProbeTime, whatever ffprobe is given.
-	b := newBlockFile(freeBoxes{every: 1 << 20, size: gib}, gib)
-	b.arm(context.Background(), min(time.Hour, maxProbeTime), maxProbeBytes)
-	if left := time.Until(b.deadline); left > maxProbeTime {
-		t.Errorf("deadline %v away, want at most %v", left, maxProbeTime)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if p, reason := probeWith(ctx, freeBoxes{every: 1 << 20, size: gib}, time.Minute); p != nil || reason != "limit: context canceled" {
@@ -521,7 +521,9 @@ func TestBlockFileTick(t *testing.T) {
 	for range 1000 {
 		b.tick()
 	}
-	b.arm(context.Background(), -time.Second, maxProbeBytes)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), -time.Second, errProbeDeadline)
+	defer cancel()
+	b.arm(ctx, maxProbeBytes)
 	defer func() {
 		if r := recover(); r != probeLimit("limit: probe deadline") {
 			t.Errorf("recovered %v, want the deadline", r)
@@ -548,9 +550,7 @@ func TestExtractFallsBackPastTheProbeBudget(t *testing.T) {
 	if err := f.Truncate(size); err != nil {
 		t.Fatal(err)
 	}
-	h := make([]byte, 8)
-	binary.BigEndian.PutUint32(h[:4], every)
-	copy(h[4:], "free")
+	h := freeHeader(every)
 	for at := int64(0); at < size; at += every {
 		if _, err := f.WriteAt(h, at); err != nil {
 			t.Fatal(err)

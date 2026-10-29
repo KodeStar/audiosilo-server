@@ -70,6 +70,19 @@ func probeMP4(b *blockFile) (*probeResult, error) {
 	end, endText := int64(i64min), int64(i64min)
 	dur, durText := int64(i64min), int64(i64min)
 	audio := -1
+	// The chapter tracks' ids, and each id's first track: looked up per track
+	// and per id, so a file of many tracks and ids stays linear.
+	chapIDs := s.chapterIDs()
+	isChapID := make(map[uint32]bool, len(chapIDs))
+	for _, id := range chapIDs {
+		isChapID[id] = true
+	}
+	trackByID := make(map[uint32]*mp4Track, len(s.tracks))
+	for _, t := range s.tracks {
+		if _, ok := trackByID[t.id]; !ok {
+			trackByID[t.id] = t
+		}
+	}
 	for i, t := range s.tracks {
 		if t.timescale <= 0 {
 			return nil, unsure("mp4: track without a timescale")
@@ -86,7 +99,7 @@ func probeMP4(b *blockFile) (*probeResult, error) {
 		default:
 			return nil, unsure("mp4: track handler " + strconv.Quote(t.handler))
 		}
-		if s.isChapterTrack(t) {
+		if isChapID[t.id] && t.handler != "vide" {
 			isText = true // mov_read_chapters makes it a data stream
 		}
 		sd := t.mdhdDur
@@ -154,18 +167,9 @@ func probeMP4(b *blockFile) (*probeResult, error) {
 		return nil, err
 	}
 	// Chapter tracks (mov_read_chapters), after chpl.
-	for _, id := range s.chapterIDs() {
-		var t *mp4Track
-		for _, tt := range s.tracks {
-			if tt.id == id {
-				t = tt
-				break
-			}
-		}
-		if t == nil {
-			continue
-		}
-		if t.handler == "vide" {
+	for _, id := range chapIDs {
+		t := trackByID[id]
+		if t == nil || t.handler == "vide" {
 			continue
 		}
 		if err := s.readChapterTrack(t); err != nil {
@@ -189,15 +193,6 @@ func (s *mp4State) chapterIDs() []uint32 {
 		}
 	}
 	return ids
-}
-
-func (s *mp4State) isChapterTrack(t *mp4Track) bool {
-	for _, id := range s.chapterIDs() {
-		if id == t.id && t.handler != "vide" {
-			return true
-		}
-	}
-	return false
 }
 
 func mp4Codec(t *mp4Track) (string, error) {

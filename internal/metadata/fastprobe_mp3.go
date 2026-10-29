@@ -345,6 +345,7 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 				if dlen > maxID3Uncompressed {
 					return unsure("mp3: compressed ID3 frame too large")
 				}
+				b.check() // up to maxID3Uncompressed to inflate
 				u, ok := uncompress(data, int(dlen))
 				if !ok {
 					break

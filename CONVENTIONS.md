@@ -763,8 +763,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
   caller's context, and `min(timeout, maxProbeTime)` = 5 s, the timeout ExtractTimeout gives
   ffprobe) or after `maxProbeBytes` (64 MiB; the real-library p95 is ~0.9 MiB) read, checked on
-  every block read and, every 256 ticks, in the walks that loop without reading (`blockFile.tick`;
-  a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
+  every block read, before inflating an ID3 frame or growing a repeated Vorbis key
+  (`blockFile.check`) and, every 256 ticks, in the walks that loop without reading
+  (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
   ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
   nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
   `probeTagKeys`. Tests: `testdata/probe` (~90 fixtures, < 3 MB, made by

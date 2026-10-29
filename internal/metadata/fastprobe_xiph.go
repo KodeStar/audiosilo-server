@@ -81,7 +81,7 @@ func ogmChapter(cl *chapterList, key, val string) bool {
 		return true
 	}
 	if asciiFold(key[kl-4:], "NAME") {
-		if c := cl.find(int64(cnum)); c != nil {
+		if c := cl.byID[int64(cnum)]; c != nil {
 			c.title = val
 			return true
 		}
@@ -104,7 +104,7 @@ func vorbisComment(b *blockFile, buf []byte, d *avDict, cl *chapterList) {
 	n := binary.LittleEndian.Uint32(buf[p:])
 	p += 4
 	for len(buf)-p >= 4 && n > 0 {
-		b.tick() // in memory, but a repeated key's appends grow with the comments
+		b.tick() // in memory: a comment costs a map lookup or two
 		s := int(int32(binary.LittleEndian.Uint32(buf[p:])))
 		p += 4
 		if len(buf)-p < s || s < 0 {
@@ -116,6 +116,7 @@ func vorbisComment(b *blockFile, buf []byte, d *avDict, cl *chapterList) {
 			if t := cutNUL(string(c[:eq])); !asciiFold(t, "METADATA_BLOCK_PICTURE") {
 				if v := cutNUL(string(c[eq+1:])); !ogmChapter(cl, t, v) {
 					if _, ok := d.get(t); ok {
+						b.check() // a repeat copies the value so far, which grows
 						d.set(t, ";", dictAppend)
 					}
 					d.set(t, v, dictAppend)
