@@ -347,6 +347,7 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 		return err
 	}
 	now := s.now()
+	gen := s.heartbeatGen() // before the write: a Forget after it wins (remember)
 	// A heartbeat is user state (server#258): a paired Bridge beats twice a
 	// minute, and while an ASR worker is attached every beat's status differs
 	// (workers[].last_seen). No content cache reads it (store's rule for
@@ -362,7 +363,7 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 		return ErrNotPaired
 	}
 	stored, _ := time.Parse(time.RFC3339, at(now)) // the stored precision
-	s.remember(&Heartbeat{Status: st, At: stored})
+	s.remember(gen, &Heartbeat{Status: st, At: stored})
 	return nil
 }
 
@@ -371,12 +372,27 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 // at most (Forget clears it at once for a pairing or an unpair made here).
 const heartbeatTTL = 5 * time.Second
 
-// remember caches h as the heartbeat now (a heartbeat just saved).
-func (s *Service) remember(h *Heartbeat) {
+// heartbeatGen is the cache's generation now, taken by a save before its write.
+func (s *Service) heartbeatGen() uint64 {
 	s.hbMu.Lock()
 	defer s.hbMu.Unlock()
+	return s.hbGen
+}
+
+// remember caches h as the heartbeat now (a heartbeat just saved, its write
+// begun while the cache was at generation gen). When the cache moved in
+// between (an unpair's Forget, another save) it is dropped instead: a beat
+// that landed before an unpair must not show the Bridge online after it, and
+// the next read asks the database.
+func (s *Service) remember(gen uint64, h *Heartbeat) {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	if s.hbGen == gen {
+		s.hb, s.hbRead = h, s.now()
+	} else {
+		s.hb, s.hbRead = nil, time.Time{}
+	}
 	s.hbGen++
-	s.hb, s.hbRead = h, s.now()
 }
 
 // keep caches h, read from the database while the cache was at generation gen,
