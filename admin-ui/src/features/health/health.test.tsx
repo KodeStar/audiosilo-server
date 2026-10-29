@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { onTestFinished } from 'vitest';
 import { setToken } from '@/api/token';
 import type { AdminBook, BridgeJob, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
@@ -829,6 +830,119 @@ describe('library health', () => {
     ).toBeInTheDocument();
     expect(within(ignored).queryByText(/may be different recordings/)).not.toBeInTheDocument();
     expect(within(ignored).queryByText('Worth keeping')).not.toBeInTheDocument();
+  });
+
+  it('loads duplicate groups a page at a time, numbering them out of the total', async () => {
+    const pair = (n: number): DuplicateGroup => ({
+      reason: 'same_files',
+      ignored: false,
+      books: [
+        { ...adminBook({ path: `Book ${n}`, title: `Book ${n}` }), listeners: 0 },
+        { ...adminBook({ path: `Copies/Book ${n}`, title: `Book ${n}` }), listeners: 0 },
+      ],
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': (req) =>
+          req.query.get('cursor') === 'c1'
+            ? { body: { groups: [pair(3)], total: 3 } }
+            : { body: { groups: [pair(1), pair(2)], total: 3, next_cursor: 'c1' } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    const first = (await screen.findByRole('heading', { name: 'Book 1' })).closest('section')!;
+    expect(within(first).getByText('1 of 3')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Book 3' })).toBeNull();
+    const asked = calls.filter((c) => c.path === '/admin/issues/duplicates');
+    expect(asked[0].query.get('limit')).toBe('50');
+    expect(asked[0].query.get('cursor')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    const third = (await screen.findByRole('heading', { name: 'Book 3' })).closest('section')!;
+    expect(within(third).getByText('3 of 3')).toBeInTheDocument();
+    expect(
+      calls
+        .filter((c) => c.path === '/admin/issues/duplicates')
+        .at(-1)
+        ?.query.get('cursor'),
+    ).toBe('c1');
+    // The last page: nothing more to load.
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+  });
+
+  it('shows a few copies of a large group until asked, and ignores them all', async () => {
+    const books = Array.from({ length: 14 }, (_, i) => ({
+      ...adminBook({ path: `Copy ${i + 1}`, title: 'Dune' }),
+      listeners: 0,
+    }));
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': {
+          body: { groups: [{ reason: 'same_files', ignored: false, books }], total: 1 },
+        },
+        'POST /admin/issues/ignore': { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    const card = (await screen.findByRole('heading', { name: 'Dune' })).closest('section')!;
+    expect(within(card).getAllByText('Open book')).toHaveLength(10);
+    await user.click(within(card).getByRole('button', { name: 'Show all 14 copies' }));
+    expect(within(card).getAllByText('Open book')).toHaveLength(14);
+    expect(within(card).queryByRole('button', { name: /^Show all/ })).toBeNull();
+    await user.click(within(card).getByRole('button', { name: "They're different books" }));
+    await waitFor(() =>
+      expect(
+        (calls.find((c) => c.path === '/admin/issues/ignore')?.body as { books: unknown[] })?.books,
+      ).toHaveLength(14),
+    );
+  });
+
+  it("asks for a copy's cover only once its column nears the viewport", async () => {
+    // An observer that only says "in view" when the test says so.
+    const observed: { el: Element; cb: IntersectionObserverCallback }[] = [];
+    class FakeObserver {
+      private cb: IntersectionObserverCallback;
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+      }
+      observe(el: Element) {
+        observed.push({ el, cb: this.cb });
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal('IntersectionObserver', FakeObserver);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const group: DuplicateGroup = {
+      reason: 'same_files',
+      ignored: false,
+      books: [
+        { ...adminBook({ path: 'Dune', title: 'Dune' }), listeners: 0 },
+        { ...adminBook({ path: 'Dune (copy)', title: 'Dune' }), listeners: 0 },
+      ],
+    };
+    const calls = mockFetch(
+      routes({ 'GET /admin/issues/duplicates': { body: { groups: [group], total: 1 } } }),
+    );
+    renderApp('/health?issue=duplicate');
+    await screen.findByRole('heading', { name: 'Dune' });
+    await waitFor(() => expect(observed.length).toBeGreaterThanOrEqual(2));
+    await new Promise((r) => setTimeout(r, 50));
+    const covers = () =>
+      calls
+        .filter((c) => c.path === '/admin/covers')
+        .flatMap((c) => (c.body as { books: { path: string }[] }).books.map((b) => b.path));
+    expect(covers()).not.toContain('Dune (copy)');
+    const column = screen.getAllByText('Open book')[1].closest('div.p-5')!;
+    const entry = observed.find((o) => o.el === column)!;
+    entry.cb([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    await waitFor(() => expect(covers()).toContain('Dune (copy)'));
   });
 
   it('sets one spelling on every book of a series spelled several ways', async () => {

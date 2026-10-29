@@ -9,7 +9,8 @@ import { GeneratedCover } from './generated-cover';
  * batched thumbnail fetched with the session header, never a token in the URL
  * (`size`: 160 for rows, 320 for tiles, the default, 640 for the book hero).
  * A skeleton holds the slot while it loads; a book without art (or whose art
- * failed to load) gets its procedural cover.
+ * failed to load) gets its procedural cover. `load` false holds the skeleton
+ * without asking (a long list loading covers as they near the viewport).
  */
 export function BookCover({
   libraryId,
@@ -17,6 +18,7 @@ export function BookCover({
   title,
   author = '',
   size = 320,
+  load = true,
   className,
 }: {
   libraryId: number;
@@ -24,9 +26,10 @@ export function BookCover({
   title: string;
   author?: string;
   size?: ThumbSize;
+  load?: boolean;
   className?: string;
 }) {
-  const cover = useCover(libraryId, path, size);
+  const cover = useCover(libraryId, path, size, load);
   return (
     <CoverArt
       src={cover.data}

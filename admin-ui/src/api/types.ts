@@ -1168,6 +1168,17 @@ export interface DuplicateGroup {
   books: DuplicateMember[];
 }
 
+/**
+ * catalog.DuplicatePage, GET /admin/issues/duplicates: a page of groups in a
+ * stable order (by library, then the kept copy's path); `total` counts every
+ * page's groups, `next_cursor` is absent on the last page.
+ */
+export interface DuplicatePage {
+  groups: DuplicateGroup[];
+  total?: number;
+  next_cursor?: string;
+}
+
 /** library.DirListing (internal/library/dirs.go), GET /admin/fs/dirs. */
 export interface DirListing {
   path: string;

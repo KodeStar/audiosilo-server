@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -115,6 +118,77 @@ func TestDuplicatesAcrossLibraries(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/issues/duplicates?across=1&library_id=x", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("bad library_id = %d, want 400", resp.StatusCode)
+	}
+}
+
+// GET /admin/issues/duplicates pages its groups: ?limit= groups a page, the
+// next one after its next_cursor, total over every page; a cursor that isn't
+// one is a 400; a member is refused (403) like every Health endpoint.
+func TestDuplicatesPaged(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, memberTok, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Fiction", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		for _, p := range []string{"Book %d", "Copies/Book %d"} {
+			if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: fmt.Sprintf(p, i),
+				Title: fmt.Sprintf("Book %d", i), Format: "m4b", ContentHash: fmt.Sprintf("h%d", i), Size: 100}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	type page struct {
+		Groups []struct {
+			Books []struct {
+				Path string `json:"path"`
+			} `json:"books"`
+		} `json:"groups"`
+		Total      int    `json:"total"`
+		NextCursor string `json:"next_cursor"`
+	}
+	get := func(q string) page {
+		t.Helper()
+		resp, body := e.do(t, "GET", "/api/v1/admin/issues/duplicates"+q, adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", q, resp.StatusCode, body)
+		}
+		var p page
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var kept []string
+	q := "?limit=2"
+	for range 5 {
+		p := get(q)
+		if p.Total != 5 {
+			t.Fatalf("total = %d, want 5", p.Total)
+		}
+		for _, g := range p.Groups {
+			kept = append(kept, g.Books[0].Path)
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		q = "?limit=2&cursor=" + url.QueryEscape(p.NextCursor)
+	}
+	if want := []string{"Book 0", "Book 1", "Book 2", "Book 3", "Book 4"}; !slices.Equal(kept, want) {
+		t.Fatalf("paged = %v, want %v", kept, want)
+	}
+	// Without a limit: every group (up to 500) on one page, as before.
+	if p := get(""); len(p.Groups) != 5 || p.NextCursor != "" {
+		t.Fatalf("unpaged = %d groups, cursor %q", len(p.Groups), p.NextCursor)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/issues/duplicates?cursor=%21%21", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad cursor = %d, want 400", resp.StatusCode)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/issues/duplicates?limit=2", memberTok, ""); resp.StatusCode != http.StatusForbidden || strings.Contains(body, "Book") {
+		t.Fatalf("member = %d %s, want 403", resp.StatusCode, body)
 	}
 }
 

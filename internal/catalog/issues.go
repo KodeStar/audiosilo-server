@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -212,8 +213,35 @@ type DuplicateMember struct {
 	Listeners int `json:"listeners"`
 }
 
-// maxDuplicateGroups bounds one duplicates answer (the count is not bounded).
+// maxDuplicateGroups bounds one duplicates page, and is the size of a page asked
+// for without a limit (the count is not bounded).
 const maxDuplicateGroups = 500
+
+// maxDuplicatePageBooks bounds the copies on one duplicates page: a page ends
+// early, before the group that would take it past this, once it holds one group,
+// so a few very large groups can't make a page megabytes (each copy is an admin
+// row). A single group larger than this is still one page.
+const maxDuplicatePageBooks = 300
+
+// DuplicateQuery is what GET /admin/issues/duplicates asks: the groups of one
+// library (0 = all), the open or only the ignored ones, across libraries or not,
+// a page of at most Limit groups (0 or more than maxDuplicateGroups =
+// maxDuplicateGroups) after Cursor (a NextCursor; "" = the first page).
+type DuplicateQuery struct {
+	LibraryID       int64
+	Ignored, Across bool
+	Limit           int
+	Cursor          string
+}
+
+// DuplicatePage is one page of duplicate groups, in the groups' stable order (by
+// library, then the kept copy's path). Total is how many groups there are in all
+// (every page's); NextCursor is "" on the last page.
+type DuplicatePage struct {
+	Groups     []DuplicateGroup `json:"groups"`
+	Total      int              `json:"total"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+}
 
 // dupRow is what duplicate detection reads per book. Only the fields the grouping
 // and the ranking need, since it is read for every book of the library.
@@ -420,43 +448,91 @@ func betterCopy(a, b dupRow) bool {
 	return a.listeners > b.listeners
 }
 
-// DuplicateGroups returns the groups of copies (duplicateSets) with each copy's
-// admin row, at most maxDuplicateGroups: the open ones, or with ignored only the
-// ones every member of which an admin ignored (a new copy brings a group back).
-// across also groups copies in different libraries (duplicateSets).
+// DuplicateGroups returns the first maxDuplicateGroups groups of copies
+// (DuplicatePage without a cursor).
 func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored, across bool) ([]DuplicateGroup, error) {
-	rows, sets, err := c.duplicateSets(ctx, libraryID, across)
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: libraryID, Ignored: ignored, Across: across})
+	return page.Groups, err
+}
+
+// DuplicatePage returns a page of the groups of copies (duplicateSets) with each
+// copy's admin row: the open ones, or with q.Ignored only the ones every member
+// of which an admin ignored (a new copy brings a group back). q.Across also groups
+// copies in different libraries (duplicateSets). The groups are found afresh for
+// every page (it reads the library's rows, not the admin rows, which only the
+// page's copies need) and paged by keyset on their order, the kept copy's library
+// and path: a cursor names the last group's, so a group that comes or goes
+// between pages moves nothing else. ErrInvalidCursor for a cursor that isn't one.
+func (c *Catalog) DuplicatePage(ctx context.Context, q DuplicateQuery) (DuplicatePage, error) {
+	limit := q.Limit
+	if limit <= 0 || limit > maxDuplicateGroups {
+		limit = maxDuplicateGroups
+	}
+	var afterLib int64
+	var afterPath string
+	if q.Cursor != "" {
+		var err error
+		if afterPath, afterLib, err = decodeCursor(q.Cursor); err != nil {
+			return DuplicatePage{}, ErrInvalidCursor
+		}
+	}
+	rows, sets, err := c.duplicateSets(ctx, q.LibraryID, q.Across)
 	if err != nil {
-		return nil, err
+		return DuplicatePage{}, err
 	}
-	// Filtered before the cap, so every ignored group can be reached to show again.
-	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored != ignored })
-	if len(sets) > maxDuplicateGroups {
-		sets = sets[:maxDuplicateGroups]
+	// Filtered before paging, so every ignored group can be reached to show again.
+	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored != q.Ignored })
+	page := DuplicatePage{Total: len(sets), Groups: []DuplicateGroup{}}
+	if q.Cursor != "" {
+		// The first group past the cursor, in duplicateSets' order.
+		start, _ := slices.BinarySearchFunc(sets, 0, func(s dupSet, _ int) int {
+			keep := rows[s.members[0]]
+			if d := cmp.Compare(keep.libraryID, afterLib); d != 0 {
+				return d
+			}
+			if compareFold(keep.path, afterPath) <= 0 {
+				return -1
+			}
+			return 1
+		})
+		sets = sets[start:]
 	}
-	var ids []int64
+	end, books := 0, 0
+	for end < len(sets) && end < limit {
+		n := len(sets[end].members)
+		if end > 0 && books+n > maxDuplicatePageBooks {
+			break
+		}
+		books += n
+		end++
+	}
+	if end < len(sets) {
+		last := rows[sets[end-1].members[0]]
+		page.NextCursor = encodeCursor(last.path, last.libraryID)
+	}
+	sets = sets[:end]
+	ids := make([]int64, 0, books)
 	for _, s := range sets {
 		for _, i := range s.members {
 			ids = append(ids, rows[i].id)
 		}
 	}
-	books, err := c.adminBooksByID(ctx, ids)
+	byID, err := c.adminBooksByID(ctx, ids)
 	if err != nil {
-		return nil, err
+		return DuplicatePage{}, err
 	}
-	out := make([]DuplicateGroup, 0, len(sets))
 	for _, s := range sets {
 		g := DuplicateGroup{Reason: s.reason(), Ignored: s.ignored}
 		for _, i := range s.members {
-			if b, ok := books[rows[i].id]; ok {
+			if b, ok := byID[rows[i].id]; ok {
 				g.Books = append(g.Books, DuplicateMember{AdminBook: b, Listeners: rows[i].listeners})
 			}
 		}
 		if len(g.Books) >= 2 {
-			out = append(out, g)
+			page.Groups = append(page.Groups, g)
 		}
 	}
-	return out, nil
+	return page, nil
 }
 
 // adminBooksByID returns admin rows for the given book ids, by id.

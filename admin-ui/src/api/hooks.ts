@@ -388,10 +388,11 @@ export function useUpdateStatus() {
  * minutes after the last cover using it unmounts, so scrolling a long grid
  * doesn't hold every data: URL in memory.
  */
-export function useCover(libraryId: number, path: string, size: ThumbSize = 320) {
+export function useCover(libraryId: number, path: string, size: ThumbSize = 320, enabled = true) {
   return useQuery({
     queryKey: keys.thumb(libraryId, path, size),
     queryFn: ({ signal }) => loadThumb({ library_id: libraryId, path }, size, signal),
+    enabled,
     staleTime: 60 * 60_000,
     gcTime: 5 * 60_000,
     retry: false,
@@ -742,12 +743,25 @@ export function useIssues() {
   return useQuery({ queryKey: keys.issueSummary, queryFn: api.issues, staleTime: 30_000 });
 }
 
-/** Groups of copies of one book: the open ones, or with `ignored` the ignored ones. */
+/** How many duplicate groups a page of the Health list loads. */
+export const DUPLICATES_PAGE = 50;
+
+/**
+ * Groups of copies of one book, a page at a time (`fetchNextPage` for more): the
+ * open ones, or with `ignored` the ignored ones.
+ */
 export function useDuplicates(ignored: boolean, across = false) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: keys.duplicates(ignored, across),
-    queryFn: () =>
-      api.duplicates({ ignored: ignored || undefined, across }).then((r) => r.groups ?? []),
+    queryFn: ({ pageParam }) =>
+      api.duplicates({
+        ignored: ignored || undefined,
+        across,
+        limit: DUPLICATES_PAGE,
+        cursor: pageParam,
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor || undefined,
   });
 }
 

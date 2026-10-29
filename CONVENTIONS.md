@@ -1452,7 +1452,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
   `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
-  groups, or with `?ignored=true` only the ignored ones), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
+  (<= 500, the default) after `?cursor=`, keyset on the kept copy's library + path, a page ending
+  early past 300 copies; `{groups, total, next_cursor?}`), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
   /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
   request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`

@@ -107,6 +107,8 @@ func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 // lists instead the groups an admin said are different books). ?across=1 also
 // groups copies in different libraries (each copy names its library_id and
 // library_name), the groups holding one of ?library_id='s books with it (#165).
+// A page at a time: ?limit= groups (at most 500, the default) after ?cursor=,
+// the last page's next_cursor; total counts every page's groups.
 func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	libID, ok := parseOptionalID(q.Get("library_id"))
@@ -114,13 +116,18 @@ func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
 	}
-	across := q.Get("across") == "1" || q.Get("across") == "true"
-	groups, err := a.cat.DuplicateGroups(r.Context(), libID, q.Get("ignored") == "true", across)
+	page, err := a.cat.DuplicatePage(r.Context(), catalog.DuplicateQuery{
+		LibraryID: libID,
+		Ignored:   q.Get("ignored") == "true",
+		Across:    q.Get("across") == "1" || q.Get("across") == "true",
+		Limit:     queryInt(r, "limit", 0),
+		Cursor:    q.Get("cursor"),
+	})
 	if err != nil {
 		a.writeCatalogError(w, err, "duplicates failed", "could not find duplicates")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+	writeJSON(w, http.StatusOK, page)
 }
 
 // handleSeriesSpellings serves GET /admin/issues/series-spellings: the series a

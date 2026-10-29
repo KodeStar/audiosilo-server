@@ -30,7 +30,7 @@ import type {
   ClearedMatches,
   CoverThumb,
   Device,
-  DuplicateGroup,
+  DuplicatePage,
   IssueKind,
   SeriesSpellingGroup,
   IssuesSummary,
@@ -661,9 +661,20 @@ export const api = {
 
   // Health and Jobs.
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
-  /** across: also copies in different libraries (?across=1, #165; an older server ignores it). */
-  duplicates: (opts: { library_id?: number; ignored?: boolean; across?: boolean } = {}) =>
-    request<{ groups: DuplicateGroup[] }>(
+  /**
+   * A page of duplicate groups: at most `limit` after `cursor` (the last page's
+   * next_cursor). across: also copies in different libraries (?across=1, #165).
+   */
+  duplicates: (
+    opts: {
+      library_id?: number;
+      ignored?: boolean;
+      across?: boolean;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ) =>
+    request<DuplicatePage>(
       'GET',
       `/admin/issues/duplicates${bookQuery({ ...opts, across: opts.across ? 1 : undefined })}`,
     ),
