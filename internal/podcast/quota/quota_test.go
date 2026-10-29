@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -67,5 +68,25 @@ func TestSlots(t *testing.T) {
 	s.Release()
 	if !s.TryAcquire() {
 		t.Fatal("released")
+	}
+}
+
+// Acquire waits for a released slot, and gives up when its context ends.
+func TestSlotsAcquire(t *testing.T) {
+	s := NewSlots(1)
+	if !s.Acquire(context.Background()) {
+		t.Fatal("a free slot")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if s.Acquire(ctx) {
+		t.Fatal("a busy slot past the deadline")
+	}
+	got := make(chan bool)
+	go func() { got <- s.Acquire(context.Background()) }()
+	time.Sleep(10 * time.Millisecond)
+	s.Release()
+	if !<-got {
+		t.Fatal("the released slot")
 	}
 }
