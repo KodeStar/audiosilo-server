@@ -23,7 +23,8 @@ var ErrInvalidCursor = errors.New("invalid cursor")
 // recoverable client mistake isn't reported as an internal server error.
 var ErrNameTaken = errors.New("name already taken")
 
-// CreateLibrary inserts a library and returns it with its assigned ID.
+// CreateLibrary inserts a library, last in the display order, and returns it
+// with its assigned ID and sort order.
 func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, error) {
 	if lib.DefaultView == "" {
 		lib.DefaultView = ViewHybrid
@@ -42,12 +43,11 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 		if _, err := checkLibraryRoot(ctx, tx, lib); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO libraries(name,root,default_view,scan_schedule,ignore_patterns,metadata_source,created_at,kind) VALUES(?,?,?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule, joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts(), lib.Kind)
-		if err != nil {
-			return err
-		}
-		id, err = res.LastInsertId()
-		return err
+		// A new library lands after every other in the display order (ADMIN-12),
+		// where an order of 0 would put it among them by name.
+		return tx.QueryRowContext(ctx, `INSERT INTO libraries(name,root,default_view,scan_schedule,ignore_patterns,metadata_source,created_at,kind,sort_order)
+			VALUES(?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order) + 1, 0) FROM libraries)) RETURNING id, sort_order`,
+			lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule, joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts(), lib.Kind).Scan(&id, &lib.SortOrder)
 	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {

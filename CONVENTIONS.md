@@ -2520,7 +2520,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
   when every part still has two words, so "Alexandre Dumas, pere" stays whole).
   Advertised by the additive `export` capability.
-- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
+- **Library admin**: a new library (`catalog.CreateLibrary`, every route that adds one) takes the
+  next `sort_order` (max + 1), so it lands last in the display order, never in its name's place
+  among libraries left at 0 (ADMIN-12). `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
   change. A library the config declares (config.yaml, or an embedding app's
   `launcher.Options.Libraries`; upserted by name at every start) keeps its name and folder: changing
