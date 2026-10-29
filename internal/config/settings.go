@@ -138,6 +138,10 @@ var fields = []field{
 	// password hash, and the schedule's retention deletes files in it.
 	{key: "backups.dir", env: "AUDIOSILO_BACKUP_DIR", setting: "backups.dir", restart: true, readOnly: true,
 		ptr: func(c *Config) any { return &c.Backups.Dir }},
+	// The database readers' mmap (store.WithReaderMmap): read once at start, no
+	// console setting.
+	{key: "database.mmap", env: "AUDIOSILO_DB_MMAP", restart: true,
+		ptr: func(c *Config) any { return &c.Database.Mmap }},
 }
 
 func fieldByKey(key string) *field {
