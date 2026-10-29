@@ -2,6 +2,7 @@ package library
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -371,4 +372,38 @@ func readableEpub(r io.ReaderAt, size int64) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// RefreshEbook records the ebook of book (its index row, book.Ebook non-nil)
+// again when the file at its path has changed since the index read it (another
+// signature: an EPUB replaced in place), so ebook.size follows the file without
+// waiting for a scan (BRIDGE-16): one stat while it hasn't. The new file goes
+// through the scan's rule (checkEbook: one that isn't a readable epub is recorded
+// as none), compare-and-set on the row as read here (SetEbooks with Was), and
+// book.Ebook is set to what was recorded. A file gone, or one that can't be read
+// right now, is left for the next scan; a failure to record is logged.
+func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *catalog.Book) {
+	if book.Ebook == nil {
+		return
+	}
+	rel := book.Ebook.Path
+	_, info, err := lookEbook(lib.Root, rel, book.IsFolder)
+	if err != nil {
+		return
+	}
+	sig := catalog.EbookSig(path.Base(rel), info)
+	was, err := s.cat.EbookStateAt(ctx, lib.ID, book.RelPath)
+	if err != nil || was.Sig == sig {
+		return
+	}
+	r, ok := checkEbook(lib.Root, catalog.EbookReading{Path: rel, Sig: sig, Size: info.Size()})
+	if !ok {
+		return
+	}
+	r.Was = &was
+	if err := s.cat.SetEbooks(ctx, lib.ID, map[string]catalog.EbookReading{book.RelPath: r}); err != nil {
+		s.log.Warn("record changed ebook failed", "library", lib.Name, "path", book.RelPath, "err", err)
+		return
+	}
+	book.Ebook = r.Ebook()
 }

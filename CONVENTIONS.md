@@ -957,7 +957,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book after the upgrade, as 0056 starts them at '') is recorded by `SetEbooks` with the scan's other
   backfills, with **no re-index** (`TestScanBackfillsEbookWithoutReindex`), and only over the row as
   the scan read it (`EbookReading.Was`: its `ebook_sig` and `indexed_at`, so an on-demand index since,
-  newer than the walk, stays; `TestSetEbooksCompareAndSet`). A file that can't be read right now (a
+  newer than the walk, stays; `TestSetEbooksCompareAndSet`). A book's page (`GET /item`) stats the
+  recorded ebook too (`library.Scanner.RefreshEbook`, one stat and one row read): a file replaced in
+  place (another signature) is checked by the same rule (`checkEbook`) and recorded the same way
+  (compare-and-set), so `ebook.size` follows it before the next scan (BRIDGE-16,
+  `TestItemEbookReplacedInPlace`); a new, renamed or removed file still waits for the scan. A file that can't be read right now (a
   folder that won't list, a permission, a flaky mount: `EbookReading.Unread`) keeps what is stored, in
   a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a

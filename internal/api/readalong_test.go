@@ -368,8 +368,10 @@ func TestReadalongEbookReplacedBeforeScan(t *testing.T) {
 		t.Errorf("item, ebook replaced, no scan = %s", got)
 	}
 	after, err := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook)
-	if err != nil || after.EbookSHA256 != sha256Hex(edited) || after.HashedSig == before.HashedSig || after.DigestCurrent {
-		t.Errorf("after = %+v, %v; want the new file's digest kept under its own signature", after, err)
+	// The book's page (/item) records the new file in the index too
+	// (BRIDGE-16), so the digest is current for it already.
+	if err != nil || after.EbookSHA256 != sha256Hex(edited) || after.HashedSig == before.HashedSig || !after.DigestCurrent {
+		t.Errorf("after = %+v, %v; want the new file's digest kept under its own signature, the index on it", after, err)
 	}
 	writeMap(t, e.root, mapPaths[ebookBook], readalongMapJSON(t, sha256Hex(edited), bookAudio(t, e.cat, e.lib.ID, ebookBook)))
 	if resp, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK {
