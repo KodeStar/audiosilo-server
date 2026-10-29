@@ -169,7 +169,7 @@ func TestWithDurableTx(t *testing.T) {
 		}
 	}
 
-	gen := db.Generation()
+	gen := db.ContentGeneration()
 	if err := db.WithDurableTx(ctx, "probe", func(tx *sql.Tx) error {
 		if n := syncIn(tx); n != 2 {
 			t.Errorf("inside WithDurableTx: synchronous = %d, want 2 (FULL)", n)
@@ -180,8 +180,8 @@ func TestWithDurableTx(t *testing.T) {
 		t.Fatal(err)
 	}
 	writerNormal("after a commit")
-	if db.Generation() == gen || db.DurableCommits() != 1 {
-		t.Fatalf("after a commit: generation %d -> %d, durable commits %d", gen, db.Generation(), db.DurableCommits())
+	if db.ContentGeneration() == gen || db.DurableCommits() != 1 {
+		t.Fatalf("after a commit: generation %d -> %d, durable commits %d", gen, db.ContentGeneration(), db.DurableCommits())
 	}
 
 	boom := errors.New("boom")

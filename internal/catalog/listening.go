@@ -134,7 +134,7 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 		stamp = t.UTC().Format(time.RFC3339)
 	}
 	var out *Progress
-	err := c.db.WithTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
+	err := c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
 		if err != nil {
 			return err
@@ -604,7 +604,7 @@ func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*B
 		return nil, err
 	}
 	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
-	res, err := c.db.ExecContext(ctx,
+	res, err := c.db.ExecUserState(ctx,
 		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt)
 	if err != nil {
@@ -625,7 +625,7 @@ func (c *Catalog) ListBookmarks(ctx context.Context, userID int64, ref Ref) ([]B
 
 // DeleteBookmark removes a user's bookmark by ID.
 func (c *Catalog) DeleteBookmark(ctx context.Context, userID, id int64) error {
-	_, err := c.db.ExecContext(ctx,
+	_, err := c.db.ExecUserState(ctx,
 		`DELETE FROM bookmarks WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
@@ -638,7 +638,7 @@ func (c *Catalog) AddNote(ctx context.Context, userID int64, n Note) (*Note, err
 	}
 	n.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
 	n.UpdatedAt = n.CreatedAt
-	res, err := c.db.ExecContext(ctx,
+	res, err := c.db.ExecUserState(ctx,
 		`INSERT INTO notes(user_id, library_id, rel_path, position, body, created_at, updated_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, n.LibraryID, n.Path, n.Position, n.Body, n.CreatedAt, n.UpdatedAt)
 	if err != nil {
@@ -659,7 +659,7 @@ func (c *Catalog) ListNotes(ctx context.Context, userID int64, ref Ref) ([]Note,
 
 // DeleteNote removes a user's note by ID.
 func (c *Catalog) DeleteNote(ctx context.Context, userID, id int64) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM notes WHERE id = ? AND user_id = ?`, id, userID)
+	_, err := c.db.ExecUserState(ctx, `DELETE FROM notes WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
 
@@ -669,7 +669,7 @@ func (c *Catalog) DeleteNote(ctx context.Context, userID, id int64) error {
 // send what they send).
 func (c *Catalog) AddHistory(ctx context.Context, userID int64, ref Ref, from, to float64, startedAt, endedAt string) error {
 	startedAt, endedAt = c.historySpan(startedAt, endedAt)
-	_, err := c.db.ExecContext(ctx,
+	_, err := c.db.ExecUserState(ctx,
 		`INSERT INTO listening_history(user_id, library_id, rel_path, from_pos, to_pos, started_at, ended_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, ref.LibraryID, ref.Path, from, to, startedAt, endedAt)
 	return err

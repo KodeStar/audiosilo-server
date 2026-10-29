@@ -8,7 +8,7 @@ import (
 )
 
 // An idle claim (nothing queued for the asked kinds, no lease run out) answers
-// from the reader pool: it neither takes the writer nor moves the write
+// from the reader pool: it neither takes the writer nor moves the content
 // generation, the long poll's wait included. A queued job of another kind, a
 // held one (its module off) and a revoked token are idle too.
 func TestIdleClaimLeavesGenerationAlone(t *testing.T) {
@@ -17,22 +17,22 @@ func TestIdleClaimLeavesGenerationAlone(t *testing.T) {
 	ctx := context.Background()
 	idle := func(what string, kinds []string, wantErr error) {
 		t.Helper()
-		gen := q.db.Generation()
+		gen := q.db.ContentGeneration()
 		j, err := q.claim(ctx, q.token, kinds)
 		if j != nil || !errors.Is(err, wantErr) {
 			t.Fatalf("%s: claim = %+v, %v; want nil, %v", what, j, err, wantErr)
 		}
-		if got := q.db.Generation(); got != gen {
+		if got := q.db.ContentGeneration(); got != gen {
 			t.Fatalf("%s: generation %d -> %d; an idle claim wrote", what, gen, got)
 		}
 	}
 	idle("empty queue", []string{KindVerify, KindPodcastPoll}, nil)
 
-	gen := q.db.Generation()
+	gen := q.db.ContentGeneration()
 	if j, err := q.waitClaim(ctx, q.token, []string{KindVerify}, 50*time.Millisecond); j != nil || err != nil {
 		t.Fatalf("waiting claim = %+v, %v", j, err)
 	}
-	if got := q.db.Generation(); got != gen {
+	if got := q.db.ContentGeneration(); got != gen {
 		t.Fatalf("a waiting claim moved the generation %d -> %d", gen, got)
 	}
 
@@ -62,29 +62,29 @@ func TestClaimDueLetsWorkThrough(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
-	gen, durable := q.db.Generation(), q.db.DurableCommits()
+	gen, durable := q.db.ContentGeneration(), q.db.DurableCommits()
 	j, err := q.claim(ctx, q.token, []string{KindVerify})
 	if err != nil || j == nil || j.ID != job.ID || j.State != StateClaimed || j.Attempts != 1 {
 		t.Fatalf("claim of a queued job = %+v, %v", j, err)
 	}
-	if q.db.Generation() == gen {
+	if q.db.ContentGeneration() == gen {
 		t.Fatal("a claim that leased a job did not move the generation")
 	}
 	// Its attempt number must survive a power cut (never handed out twice).
 	if got := q.db.DurableCommits() - durable; got != 1 {
 		t.Fatalf("a claim that leased a job made %d durable commits, want 1", got)
 	}
-	idleGen, durable := q.db.Generation(), q.db.DurableCommits()
-	if j, err := q.claim(ctx, q.token, []string{KindVerify}); j != nil || err != nil || q.db.Generation() != idleGen || q.db.DurableCommits() != durable {
-		t.Fatalf("claim with the only job held = %+v, %v (generation %d -> %d)", j, err, idleGen, q.db.Generation())
+	idleGen, durable := q.db.ContentGeneration(), q.db.DurableCommits()
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); j != nil || err != nil || q.db.ContentGeneration() != idleGen || q.db.DurableCommits() != durable {
+		t.Fatalf("claim with the only job held = %+v, %v (generation %d -> %d)", j, err, idleGen, q.db.ContentGeneration())
 	}
 
 	q.advance(Lease + time.Second)
-	gen = q.db.Generation()
+	gen = q.db.ContentGeneration()
 	if j, err := q.claim(ctx, q.token, []string{KindDescribe}); j != nil || err != nil {
 		t.Fatalf("claim of another kind = %+v, %v", j, err)
 	}
-	if q.db.Generation() == gen {
+	if q.db.ContentGeneration() == gen {
 		t.Fatal("a claim with a lapsed lease due did not write")
 	}
 	if got, err := q.Job(ctx, job.ID); err != nil || got.State != StateQueued || got.LeaseUntil != nil {

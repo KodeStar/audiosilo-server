@@ -117,7 +117,7 @@ func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 		hb.Speed = 1
 	}
 	at := formatSessionTime(hb.At)
-	return c.db.WithTx(ctx, "RecordHeartbeat", func(tx *sql.Tx) error {
+	return c.db.WithUserStateTx(ctx, "RecordHeartbeat", func(tx *sql.Tx) error {
 		var (
 			id     int64
 			lastAt string

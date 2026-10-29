@@ -162,6 +162,12 @@ func (s snapshotDB) ExecContext(ctx context.Context, q string, args ...any) (sql
 func (s snapshotDB) WithTx(_ context.Context, _ string, fn func(*sql.Tx) error) error {
 	return fn(s.tx)
 }
+func (s snapshotDB) ExecUserState(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return s.ExecContext(ctx, q, args...)
+}
+func (s snapshotDB) WithUserStateTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
+	return s.WithTx(ctx, name, fn)
+}
 func (s snapshotDB) Ping(ctx context.Context) error {
 	var x int
 	return s.tx.QueryRowContext(ctx, `SELECT 1`).Scan(&x)

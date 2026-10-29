@@ -63,9 +63,16 @@ type DB struct {
 	log    *slog.Logger
 	dsn    string // as given to Open; VacuumInto opens its own connection on it
 
-	// gen is the write generation (Generation): moved after every write on the
-	// writer pool has finished.
-	gen atomic.Uint64
+	// content is the content generation (ContentGeneration): moved after every
+	// write on the writer pool has finished, except a user-state one that
+	// changed only user state (userstate.go).
+	content atomic.Uint64
+	// userState is each user-state table's rule as this database's schema
+	// spells it (userStateRules), read once migrations have run.
+	userState map[string]tableRule
+	// onMisfiled, when set (tests), hears of a user-state write that changed a
+	// table outside userStateTables instead of a test binary's panic.
+	onMisfiled func(table string)
 	// durable counts WithDurableTx's commits (DurableCommits).
 	durable atomic.Uint64
 
@@ -165,6 +172,10 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 		writer.Close()
 		return nil, err
 	}
+	if db.userState, err = userStateRules(ctx, writer); err != nil {
+		writer.Close()
+		return nil, err
+	}
 
 	// A file-backed DB gets a concurrent read-only pool over the same file so a
 	// stuck writer can't block reads. An in-memory DB stays single-pool (a second
@@ -217,20 +228,27 @@ func (db *DB) ExecDurable(ctx context.Context, name, query string, args ...any) 
 // ExecContext runs a write on the writer pool. (This also satisfies the auth
 // package's sqlExecer, so standalone auth-code writes route to the writer.)
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	defer db.gen.Add(1) // after the statement (autocommit) has committed
+	defer db.content.Add(1) // after the statement (autocommit) has committed
 	return db.writer.ExecContext(ctx, query, args...)
 }
 
-// Generation is the database's write generation: a number that moves after every
-// write through this handle has finished (ExecContext returned, a WithTx committed
-// or rolled back), and never otherwise. Every write goes through those two (the
-// reader pool is query_only), so an answer computed from reads that began after
-// Generation returned g is current for as long as Generation still returns g: a
-// write that committed after them moved it on, and one that committed before them
-// is in what they read. A cache keyed on it is exact (api's list cache). It moves
-// for every write, a no-op or failed one included, so it says only "nothing was
-// written since", never what changed.
-func (db *DB) Generation() uint64 { return db.gen.Load() }
+// ContentGeneration is the database's content generation: a number that moves
+// after every write through this handle has finished (ExecContext returned, a
+// WithTx committed or rolled back), except a user-state write (ExecUserState,
+// WithUserStateTx) that changed only what userStateTables lists as user state
+// (a listener's progress, sessions, history and annotations, a token's
+// last-seen touch, the Bridge's heartbeats and job progress), and
+// never otherwise. Every write goes through those (the reader pool is
+// query_only), so an answer computed from reads that began after
+// ContentGeneration returned g, and that reads no user state, is current for as
+// long as ContentGeneration still returns g: a write that committed after them
+// moved it on (or changed nothing the answer reads), and one that committed
+// before them is in what they read. A cache keyed on it is exact (api's list
+// cache, the library cache, and the token cache, which drops a touched token's
+// row itself; CONVENTIONS.md, Content generation, has each one's audit). It
+// moves for every other write, a no-op or failed one included, so it says only
+// "no content was written since", never what changed.
+func (db *DB) ContentGeneration() uint64 { return db.content.Load() }
 
 // Ping verifies the database is reachable for reads. It runs a trivial query on
 // the reader pool (a stronger check than a bare connection ping) and backs the
@@ -244,7 +262,7 @@ func (db *DB) Ping(ctx context.Context) error {
 // WithTx runs fn inside a writer transaction, committing on success and rolling
 // back on error (or panic). name labels the operation in the slow-transaction log.
 func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
-	return db.withTx(ctx, name, time.Now(), db.writer, fn)
+	return db.withTx(ctx, name, time.Now(), db.writer, true, fn)
 }
 
 // WithDurableTx is WithTx for a write that must survive a power cut or OS crash
@@ -277,7 +295,7 @@ func (db *DB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) e
 		db.logSlow(name, start, err)
 		return err
 	}
-	if err := db.withTx(ctx, name, start, conn, fn); err != nil {
+	if err := db.withTx(ctx, name, start, conn, true, fn); err != nil {
 		return err
 	}
 	db.durable.Add(1)
@@ -302,8 +320,10 @@ type txBeginner interface {
 }
 
 // withTx is WithTx on a writer pool or connection, start being when the caller
-// began waiting for it.
-func (db *DB) withTx(ctx context.Context, name string, start time.Time, on txBeginner, fn func(*sql.Tx) error) (err error) {
+// began waiting for it. With content it moves the content generation once the
+// transaction has begun, after its commit or rollback; a user-state
+// transaction's caller decides instead (userStateWrite).
+func (db *DB) withTx(ctx context.Context, name string, start time.Time, on txBeginner, content bool, fn func(*sql.Tx) error) (err error) {
 	// Log a slow transaction regardless of outcome: a tx that stalls and then
 	// fails (e.g. the request timeout cancels its context after ~25s) is the
 	// backend-lockup precursor this warning exists to surface, so the check must
@@ -313,8 +333,9 @@ func (db *DB) withTx(ctx context.Context, name string, start time.Time, on txBeg
 	if err != nil {
 		return err
 	}
-	// Deferred first, so it runs last: after the commit, or the rollback.
-	defer db.gen.Add(1)
+	if content {
+		defer db.content.Add(1) // deferred first, so it runs last: after the commit, or the rollback
+	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 	if err = fn(tx); err != nil {
 		return err

@@ -230,6 +230,11 @@ type catalogDB interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	WithTx(context.Context, string, func(*sql.Tx) error) error
+	// ExecUserState and WithUserStateTx write only user state (the tables
+	// store's userStateTables lists): on a store.DB they leave the content
+	// caches warm.
+	ExecUserState(context.Context, string, ...any) (sql.Result, error)
+	WithUserStateTx(context.Context, string, func(*sql.Tx) error) error
 	Ping(context.Context) error
 }
 
@@ -248,7 +253,7 @@ type Catalog struct {
 	podcastStreams    map[Ref]int
 	podcastScheduleMu sync.Mutex
 	podcastVisit      Ref
-	// libs is GetLibrary's rows while nothing is written.
+	// libs is GetLibrary's rows while no content is written.
 	libs store.GenMap[int64, Library]
 }
 
@@ -292,15 +297,16 @@ func (c *Catalog) changed() {
 	}
 }
 
-// Generation is the database's write generation (store.DB.Generation) and
-// whether there is one: a catalog over something else (a transaction's
-// snapshot, a test double) has none, and nothing may be cached on it.
-func (c *Catalog) Generation() (uint64, bool) {
-	g, ok := c.db.(interface{ Generation() uint64 })
+// ContentGeneration is the database's content generation
+// (store.DB.ContentGeneration) and whether there is one: a catalog over
+// something else (a transaction's snapshot, a test double) has none, and
+// nothing may be cached on it.
+func (c *Catalog) ContentGeneration() (uint64, bool) {
+	g, ok := c.db.(interface{ ContentGeneration() uint64 })
 	if !ok {
 		return 0, false
 	}
-	return g.Generation(), true
+	return g.ContentGeneration(), true
 }
 
 // New returns a Catalog. now may be nil to use time.Now.

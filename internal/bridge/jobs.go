@@ -1080,7 +1080,7 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 // whose feed URL this server no longer holds (expirePrivateTx's), or a job
 // nextQueued would hand out for kinds. A paired Bridge long-polls on two loops,
 // 4 to 6 claims a minute when idle; without this each took the one writer and
-// moved the write generation (store.DB.Generation), emptying every cache keyed
+// moved the content generation (store.DB.ContentGeneration), emptying every cache keyed
 // on it, to change nothing. ErrNotPaired as the claim's own check, which the
 // claim's transaction repeats. A write landing after these reads is no loss: an
 // enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
@@ -1294,7 +1294,14 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		fromCode string
 		exp      expiry
 	)
-	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
+	// A user-state transaction (server#258): a report that renews the lease or
+	// reports progress (a running job's keepalive, its step and message)
+	// changes no more than bridge_jobs' lease_until, updated_at and progress,
+	// which no content cache reads, and leaves the content generation alone;
+	// one that changes the job's state, result or error, or expires another
+	// job's lease, moves it like any write (store's rule for bridge_jobs,
+	// checked by value).
+	err := s.db.WithUserStateTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
 		var err error
 		if exp, err = expireTx(ctx, tx, now); err != nil {

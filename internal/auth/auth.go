@@ -167,8 +167,8 @@ func (u *User) IsKid() bool { return u.MemberKind != nil && *u.MemberKind == Mem
 type Service struct {
 	db  *store.DB
 	now func() time.Time
-	// tokens is lookupToken's cache of valid tokens, exact by the store's write
-	// generation (tokencache.go).
+	// tokens is lookupToken's cache of valid tokens, exact by the store's content
+	// generation and its own touches' deletes (tokencache.go).
 	tokens store.GenMap[string, cachedToken]
 }
 
@@ -404,14 +404,15 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 // signed-in caller (GET /server), so it never waits on the writer. Like
 // ResolveRequest, it never accepts a cast token.
 func (s *Service) Peek(ctx context.Context, secret string, kinds ...string) (*User, error) {
-	u, _, err := s.checkToken(ctx, secret, nil, kinds)
+	u, _, err := s.checkToken(ctx, hashSecret(secret), nil, kinds)
 	return u, err
 }
 
 // resolve is ResolveRequest and ResolveCastRequest: the token's checks
 // (checkToken), then the touch.
 func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
-	u, row, err := s.checkToken(ctx, secret, media, kinds)
+	hash := hashSecret(secret)
+	u, row, err := s.checkToken(ctx, hash, media, kinds)
 	if err != nil {
 		return nil, Credential{}, err
 	}
@@ -430,7 +431,13 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	// The app is written only when this request named one, decided in SQL rather
 	// than from the value read above: a request without the header racing one with
 	// it (covers loading beside an API call) must not write back the stale app.
-	_, _ = s.db.ExecContext(ctx,
+	// The touch is user state: it leaves the content generation, and so every
+	// cache keyed on it, where it was (store.DB.ExecUserState), and drops the
+	// token's own cached row, whose last_seen, address and app it changed, so
+	// the next request reads them again (needsTouch); a lookup that read the row
+	// before the touch committed puts nothing after the drop (lookupToken's mark).
+	defer s.tokens.Delete(hash)
+	_, _ = s.db.ExecUserState(ctx,
 		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
 		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
 		        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
@@ -440,13 +447,13 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	return u, cred, nil
 }
 
-// checkToken is whether secret is a valid token of one of kinds, writing
+// checkToken is whether hash (hashSecret's) is a valid token of one of kinds, writing
 // nothing: lookupToken's checks, then a cast token only when media names the
 // book media the request reads and its grant covers it, and a bridge token
 // (only ever listed by the Bridge's own routes) only while its admin is still
 // an admin (lookupToken already refuses a disabled one).
-func (s *Service) checkToken(ctx context.Context, secret string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
-	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+func (s *Service) checkToken(ctx context.Context, hash string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
+	u, row, err := s.lookupToken(ctx, hash, kinds...)
 	if err != nil {
 		return nil, tokenRow{}, err
 	}
@@ -502,8 +509,8 @@ type tokenRow struct {
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
 // real token presented where its kind is not accepted. A valid session, API key
-// or bridge token is answered from s.tokens until the next write (tokencache.go),
-// its expiry still checked against the clock each time.
+// or bridge token is answered from s.tokens until the next content write or its
+// own touch (tokencache.go), its expiry still checked against the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
@@ -511,9 +518,11 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		expires sql.NullString
 		revoked bool
 	)
-	// The generation is taken before the read, so a write that lands after it
-	// leaves what is cached here unused.
-	gen := s.db.Generation()
+	// The generation and the cache's mark are taken before the read, so a content
+	// write that lands after it leaves what is cached here unused, and a touch
+	// that lands after it (which drops the row it changed, leaving the
+	// generation) has this read's row dropped too.
+	gen, mark := s.db.ContentGeneration(), s.tokens.Mark()
 	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
 		if s.pastExpiry(c.expires) {
 			return nil, tokenRow{}, ErrInvalidToken
@@ -549,7 +558,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
 	// lookup is this one two-table query, and a valid session, API key or bridge
-	// token's is then answered from s.tokens until the next write.
+	// token's is then answered from s.tokens until the next content write or touch.
 	switch row.kind {
 	case KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {
@@ -557,7 +566,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		}
 	case KindPairing: // used once, by an exchange: not worth holding
 	default:
-		s.tokens.Put(gen, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
+		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
 	}
 	return &u, row, nil
 }

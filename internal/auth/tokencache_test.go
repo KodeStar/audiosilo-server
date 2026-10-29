@@ -2,6 +2,8 @@ package auth
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -9,12 +11,12 @@ import (
 // cached reports whether the token cache holds secret's lookup for the current
 // generation (the next request is answered from it).
 func cached(s *Service, secret string) bool {
-	_, ok := s.tokens.Get(s.db.Generation(), hashSecret(secret))
+	_, ok := s.tokens.Get(s.db.ContentGeneration(), hashSecret(secret))
 	return ok
 }
 
 // warm resolves secret until its lookup is answered from the cache (the first
-// resolve may touch the token, a write, which leaves its lookup unused).
+// resolve may touch the token, which drops its lookup).
 func warm(t *testing.T, s *Service, secret string, kinds ...string) {
 	t.Helper()
 	for range 3 {
@@ -28,8 +30,8 @@ func warm(t *testing.T, s *Service, secret string, kinds ...string) {
 	t.Fatal("a valid token's lookup was never cached")
 }
 
-// Allowed: a session and an API key are answered from the cache while nothing is
-// written, with the same user and credential the database gives.
+// Allowed: a session and an API key are answered from the cache while no content
+// is written, with the same user and credential the database gives.
 func TestTokenCacheAnswersValidTokens(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -197,5 +199,145 @@ func TestTokenCacheBounded(t *testing.T) {
 	}
 	if n := s.tokens.Len(); n > maxCachedTokens {
 		t.Fatalf("cache holds %d lookups, bound %d", n, maxCachedTokens)
+	}
+}
+
+// Allowed (server#258): a token's last-seen touch is user state. It leaves the
+// content generation, so every other token's lookup stays cached, and drops
+// only the touched token's, whose next lookup reads the new address and is
+// cached again without another touch.
+func TestTokenCacheSurvivesTouches(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	phone, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	tablet, _ := s.IssueToken(ctx, u.ID, KindSession, "tablet", 0)
+	warm(t, s, phone, KindSession)
+	warm(t, s, tablet, KindSession)
+	gen := s.db.ContentGeneration()
+
+	away := Presence{IP: "203.0.113.9"}
+	if _, _, err := s.ResolveRequest(ctx, phone, away, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	if s.db.ContentGeneration() != gen {
+		t.Fatalf("a touch moved the content generation %d -> %d", gen, s.db.ContentGeneration())
+	}
+	if !cached(s, tablet) || cached(s, phone) {
+		t.Fatalf("after the phone's touch: tablet cached %v (want true), phone cached %v (want false)",
+			cached(s, tablet), cached(s, phone))
+	}
+	var ip string
+	if err := s.db.QueryRowContext(ctx, `SELECT last_ip FROM tokens WHERE token_hash = ?`, hashSecret(phone)).Scan(&ip); err != nil || ip != away.IP {
+		t.Fatalf("stored address = %q, %v; want %q", ip, err, away.IP)
+	}
+	// The next request reads the touched row (nothing new to write) and is
+	// cached; the one after is answered from the cache, still with no touch.
+	for range 2 {
+		if _, _, err := s.ResolveRequest(ctx, phone, away, KindSession); err != nil {
+			t.Fatal(err)
+		}
+		if !cached(s, phone) {
+			t.Fatal("the touched token's lookup was not cached again")
+		}
+	}
+	if s.db.ContentGeneration() != gen {
+		t.Fatal("resolves after the touch moved the content generation")
+	}
+}
+
+// Denied (server#258): a lookup that read a token's row before a touch landed
+// never caches that row after the touch dropped it. Each round empties the
+// cache (a content write), then races a request naming a new app version (a
+// touch) with header-less ones (covers, which read the row); once all are done,
+// a cached row is the stored one, or covers would carry the old app.
+func TestTokenCacheDropsARowReadBeforeATouch(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	tok, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	hash := hashSecret(tok)
+	stored := func() ClientInfo {
+		var c ClientInfo
+		if err := s.db.QueryRowContext(ctx, `SELECT client_app, client_version, client_platform FROM tokens WHERE token_hash = ?`,
+			hash).Scan(&c.App, &c.Version, &c.Platform); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for i := range 100 {
+		if _, err := s.db.ExecContext(ctx, `UPDATE users SET disabled = disabled WHERE 0`); err != nil {
+			t.Fatal(err)
+		}
+		app := ClientInfo{App: "AudioSilo", Version: fmt.Sprintf("2.%d.0", i%2), Platform: "ios"}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for j := range 9 {
+			p := Presence{IP: "10.0.0.1"}
+			if j == 0 {
+				p.Client = app
+			}
+			wg.Go(func() {
+				<-start
+				_, _, _ = s.ResolveRequest(ctx, tok, p, KindSession)
+			})
+		}
+		close(start)
+		wg.Wait()
+		if c, ok := s.tokens.Get(s.db.ContentGeneration(), hash); ok && c.row.client != stored() {
+			t.Fatalf("round %d: cached app %+v, stored %+v", i, c.row.client, stored())
+		}
+	}
+}
+
+// Denied (server#258): with the cache warm through touches, a sign-out, a
+// demotion and a password change still reach the very next request.
+func TestTokenCacheRefusesAfterTouches(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin, _ := s.CreateUser(ctx, "boss", "pw-pw-pw-pw", RoleAdmin)
+	_, _ = s.CreateUser(ctx, "keeper", "pw-pw-pw-pw", RoleAdmin) // the demotion's other admin
+	sess, _ := s.IssueToken(ctx, admin.ID, KindSession, "phone", 0)
+	other, _ := s.IssueToken(ctx, admin.ID, KindSession, "laptop", 0)
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2"} { // two touches
+		if _, _, err := s.ResolveRequest(ctx, sess, Presence{IP: ip}, KindSession); err != nil {
+			t.Fatal(err)
+		}
+	}
+	warm(t, s, other, KindSession)
+
+	// A demotion: the next lookup has the new role.
+	role := RoleUser
+	if err := s.UpdateUser(ctx, admin.ID, UserChanges{Role: &role}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := s.ResolveRequest(ctx, other, Presence{}, KindSession); err != nil || got.Role != RoleUser {
+		t.Fatalf("after the demotion: %+v, %v; want role user", got, err)
+	}
+	// A password change empties the cache: the lookups are read again.
+	warm(t, s, other, KindSession)
+	pw := "new-pw-new-pw"
+	if err := s.SetPassword(ctx, admin.ID, pw); err != nil {
+		t.Fatal(err)
+	}
+	if cached(s, other) {
+		t.Fatal("a password change left a lookup cached")
+	}
+	if _, err := s.Authenticate(ctx, "boss", "pw-pw-pw-pw"); err == nil {
+		t.Fatal("the old password still signs in")
+	}
+	if _, err := s.Authenticate(ctx, "boss", pw); err != nil {
+		t.Fatalf("the new password = %v", err)
+	}
+	// A sign-out after the touches is refused at once.
+	warm(t, s, sess, KindSession)
+	if err := s.RevokeToken(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, sess, Presence{IP: "10.0.0.2"}, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a signed-out session after touches = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, other, Presence{}, KindSession); err != nil {
+		t.Fatalf("the other session after the sign-out = %v, want it valid", err)
 	}
 }

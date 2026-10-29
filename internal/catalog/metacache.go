@@ -61,7 +61,7 @@ func (c *Catalog) GetMetaCache(ctx context.Context, key string) (*MetaCacheEntry
 
 // PutMetaCache inserts or replaces key's row, stamped now for retention.
 func (c *Catalog) PutMetaCache(ctx context.Context, e MetaCacheEntry) error {
-	_, err := c.db.ExecContext(ctx,
+	_, err := c.db.ExecUserState(ctx,
 		`INSERT INTO meta_cache(key, version, source, payload, expires_at, stored_at) VALUES(?,?,?,?,?,?)
 		 ON CONFLICT(key) DO UPDATE SET version = excluded.version, source = excluded.source,
 		     payload = excluded.payload, expires_at = excluded.expires_at, stored_at = excluded.stored_at`,

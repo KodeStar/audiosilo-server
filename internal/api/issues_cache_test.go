@@ -16,7 +16,7 @@ import (
 )
 
 // TestIssuesSummaryCachedUntilAWrite (server#245): the Health summary and the
-// admin book lists are answered from the list cache while nothing is written,
+// admin book lists are answered from the list cache while no content is written,
 // and a fix (here an ignore, then a re-index) is in the very next answer. A
 // member is still refused, cached answer or not.
 func TestIssuesSummaryCachedUntilAWrite(t *testing.T) {
@@ -32,8 +32,8 @@ func TestIssuesSummaryCachedUntilAWrite(t *testing.T) {
 	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: "AC3/Book", Title: "AC3", Codec: "ac3"}); err != nil {
 		t.Fatal(err)
 	}
-	// The member's first request writes its token's last_seen (a write, which
-	// would empty the cache): made now, so their refusals below write nothing
+	// The member's first request writes its token's last_seen (user state, which
+	// leaves the cache as it is): made now, so their refusals below write nothing
 	// and would be answered from the cache if it were consulted before the role.
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/issues", memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member issues = %d, want 403", resp.StatusCode)

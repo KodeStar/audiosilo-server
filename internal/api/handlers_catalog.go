@@ -37,7 +37,7 @@ const (
 // handleAdminListBooks serves GET /admin/books: a keyset page of books across
 // every library, filtered, searched and sorted (see bookFilterFromQuery).
 func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	q := r.URL.Query()
 	f, msg := bookFilterFromQuery(q)
 	if msg != "" {
@@ -72,14 +72,14 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 // handleAdminBookFacets serves GET /admin/books/facets: the facet counts for the
 // same filter parameters as the list.
 func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	f, msg := bookFilterFromQuery(r.URL.Query())
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	// Counted over every matching book (about 100 ms at 5,000), and like a page
-	// the database's answer to the query string alone: kept until the next write.
+	// the database's answer to the query string alone: kept until the next content write.
 	write := a.cachedList(w, r, gen, cacheable, nil)
 	if write == nil {
 		return

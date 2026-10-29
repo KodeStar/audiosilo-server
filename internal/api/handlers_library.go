@@ -182,11 +182,11 @@ func (a *API) browseScope(w http.ResponseWriter, r *http.Request) (*catalog.Libr
 }
 
 // browseList is browseScope for a list answered through the list cache
-// (listcache.go): it reads the write generation before any read, then answers a
+// (listcache.go): it reads the content generation before any read, then answers a
 // cache hit itself (write nil, as it does an error). Only a books library's
 // answers are cached.
 func (a *API) browseList(w http.ResponseWriter, r *http.Request) (*catalog.Library, catalog.Scope, func(any)) {
-	gen, cacheable := a.cat.Generation()
+	gen, cacheable := a.cat.ContentGeneration()
 	lib, scope, ok := a.browseScope(w, r)
 	if !ok {
 		return nil, scope, nil
@@ -454,7 +454,7 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 // handleSearch runs a full-text search across the caller's accessible content,
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
@@ -477,7 +477,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 // endpoint so clients render one merged "recently added" list (rather than
 // fanning out to each library's /books and concatenating).
 func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load books")

@@ -578,6 +578,13 @@ func TestHeartbeatCacheNeverGoesBack(t *testing.T) {
 	if h, err := q.LastHeartbeat(ctx); err != nil || h != nil {
 		t.Fatalf("a stale read undid Forget: %+v, %v", h, err)
 	}
+	// A heartbeat whose write landed before an unpair, cached after its Forget.
+	gen = q.heartbeatGen()
+	q.Forget()
+	q.remember(gen, old)
+	if h, err := q.LastHeartbeat(ctx); err != nil || h != nil {
+		t.Fatalf("a heartbeat saved before an unpair outlived its Forget: %+v, %v", h, err)
+	}
 }
 
 // A failed job's report lands whatever its error quotes (a tool's output with a
