@@ -98,9 +98,11 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	moved("token revoke", exec(`UPDATE tokens SET revoked = 1, last_seen = 'later' WHERE id = 1`))
 	moved("token delete", exec(`DELETE FROM tokens WHERE id = 1`))
 	still("unchanged heartbeat", exec(`UPDATE bridge_status SET heartbeat_at = 'now', status = '{}' WHERE id = 1`))
-	moved("new heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'later', status = '{"version":"2"}' WHERE id = 1`))
+	still("new heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'later', status = '{"version":"2"}' WHERE id = 1`))
+	moved("pairing change", exec(`UPDATE bridge_status SET heartbeat_at = 'later', paired_at = 'now' WHERE id = 1`))
 	still("lease renewal", exec(`UPDATE bridge_jobs SET lease_until = 'soon', updated_at = 'now', state = 'running', progress = COALESCE(NULL, progress) WHERE id = 1`))
-	moved("progress report", exec(`UPDATE bridge_jobs SET lease_until = 'later', progress = '{"step":2}' WHERE id = 1`))
+	still("progress report", exec(`UPDATE bridge_jobs SET lease_until = 'later', progress = '{"step":2}' WHERE id = 1`))
+	moved("job error", exec(`UPDATE bridge_jobs SET progress = '{"step":3}', error = 'oops' WHERE id = 1`))
 	moved("job finished", exec(`UPDATE bridge_jobs SET state = 'done' WHERE id = 1`))
 	// A default write moves it whatever it writes.
 	moved("default progress update", func() error {

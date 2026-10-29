@@ -688,6 +688,12 @@ func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
 	if resp, _ := b.do(t, "PUT", "/api/v1/bridge/status", "nope", `{"version":"0.1.0"}`); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("denied: a refused token = %d, want 401", resp.StatusCode)
 	}
+	// A heartbeat leaves the content generation (server#258), so the bridge
+	// token is still in the token cache; a content write empties it, and the
+	// next request checks the token against the closed database.
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET name = name`); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.db.Close(); err != nil {
 		t.Fatal(err)
 	}

@@ -237,7 +237,7 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 // WithTx committed or rolled back), except a user-state write (ExecUserState,
 // WithUserStateTx) that changed only what userStateTables lists as user state
 // (a listener's progress, sessions, history and annotations, a token's
-// last-seen touch, the Bridge's unchanged heartbeat and lease renewals), and
+// last-seen touch, the Bridge's heartbeats and job progress), and
 // never otherwise. Every write goes through those (the reader pool is
 // query_only), so an answer computed from reads that began after
 // ContentGeneration returned g, and that reads no user state, is current for as

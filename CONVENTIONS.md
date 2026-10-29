@@ -551,8 +551,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   count: per table, a rule says whether new and removed rows are user state (`progress`'s are
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
-  `bridge_status` (`heartbeat_at`) and `bridge_jobs` (`lease_until`, `updated_at`), which
-  columns an UPDATE may change by value. Anything else on a listed table moves the generation;
+  `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
+  `progress`), which columns an UPDATE may change by value. Anything else on a listed table moves the generation;
   a table the list doesn't name is a misfiling (logged; a panic in a test binary), and a
   rule's table or column a newer server's schema lacks (a rollback) only makes more writes
   content. Durability (`WithDurableTx`) is orthogonal. The user-state writes: `SaveProgress`
@@ -562,10 +562,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
   its new last-seen and address; a lookup that read the row before the touch never caches it
-  after: `store.GenMap.PutMarked`), the Bridge's heartbeat while it is online
-  (`bridge.SaveHeartbeat`; a new status or a return after the online window moves the
-  generation) and its job reports (`bridge.UpdateHeld`; only a lease renewal stays user
-  state). Kept as content on purpose: collections, grants, shares, users, libraries, books,
+  after: `store.GenMap.PutMarked`), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
+  its status: with an ASR worker attached every beat's differs, `workers[].last_seen`; GET
+  /server's `bridge` block reads it through `bridge.Service.LastHeartbeat`'s own cache, not the
+  generation; a pairing or an unpair is content) and its job reports (`bridge.UpdateHeld`: a
+  lease renewal or progress, its message and park included, stay user state; a new state,
+  result or error, or another job's lease expiring, moves the generation). No content cache
+  reads `bridge_status` or `bridge_jobs`. Kept as content on purpose: collections, grants, shares, users, libraries, books,
   scans, matches, covers, favourites, goals, household sharing, the pairing touch, retention
   and prunes (rare, or read by what is cached). There is no global "every write" counter:
   nothing reads one. Each consumer, audited against the tables its answer reads:
@@ -1830,7 +1833,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
   private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
   answers without the writer, so an idle paired Bridge's polls leave the content generation alone (as
-  do its unchanged heartbeats and lease-only job reports: see Content generation, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  do its heartbeats and its lease and progress job reports: see Content generation, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.

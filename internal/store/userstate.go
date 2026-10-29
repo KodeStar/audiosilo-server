@@ -15,7 +15,8 @@ import (
 
 // User-state writes (server#258). Listening writes all the time: a progress
 // save and its session every few seconds per listener, a token's last-seen
-// touch, history, bookmarks, the Bridge's heartbeat. None of them changes what
+// touch, history, bookmarks, the Bridge's heartbeat and its jobs' progress.
+// None of them changes what
 // the content caches answer (the player's lists, the admin's book pages and
 // Health, the library and token caches), bar a touched token's own row in the
 // token cache, which the touch drops itself (auth.Service.resolve), so they go
@@ -71,10 +72,17 @@ var userStateTables = map[string]tableRule{
 	// and drops the touched one itself. Any other change (a revoke, a new
 	// token) moves the generation.
 	"tokens": {free: []string{"last_seen", "last_ip", "client_app", "client_version", "client_platform"}},
-	// A Bridge's heartbeat with the status it last sent (bridge.SaveHeartbeat).
-	"bridge_status": {free: []string{"heartbeat_at"}},
-	// A job report that only renews the lease (bridge.UpdateHeld).
-	"bridge_jobs": {free: []string{"lease_until", "updated_at"}},
+	// A Bridge's heartbeat (bridge.SaveHeartbeat): when it was heard and what
+	// it sent, which changes on every beat while an ASR worker is attached
+	// (workers[].last_seen). No content cache reads the row: GET /server's
+	// bridge block has its own cache (bridge.Service.LastHeartbeat). A pairing
+	// or an unpair (its other columns) moves the generation.
+	"bridge_status": {free: []string{"heartbeat_at", "status"}},
+	// A job report (bridge.UpdateHeld) that renews the lease or reports
+	// progress (its message and park included). No content cache reads a job;
+	// a new state, result or error, or a job added or removed, moves the
+	// generation.
+	"bridge_jobs": {free: []string{"lease_until", "updated_at", "progress"}},
 }
 
 // userStateRules is userStateTables with each column rule's watched columns,

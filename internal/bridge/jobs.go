@@ -1294,12 +1294,13 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		fromCode string
 		exp      expiry
 	)
-	// A user-state transaction (server#258): a report that only renews the
-	// lease (a running job's keepalive with nothing new) changes no more than
-	// bridge_jobs' lease_until and updated_at, and leaves the content generation
-	// alone; one that changes the job's state, progress, result or error, or
-	// expires another job's lease, moves it like any write (store's rule for
-	// bridge_jobs, checked by value).
+	// A user-state transaction (server#258): a report that renews the lease or
+	// reports progress (a running job's keepalive, its step and message)
+	// changes no more than bridge_jobs' lease_until, updated_at and progress,
+	// which no content cache reads, and leaves the content generation alone;
+	// one that changes the job's state, result or error, or expires another
+	// job's lease, moves it like any write (store's rule for bridge_jobs,
+	// checked by value).
 	err := s.db.WithUserStateTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
 		var err error
