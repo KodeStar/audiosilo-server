@@ -53,9 +53,10 @@ func withMmapDetector(f func(path string) bool) Option {
 	return func(c *openConfig) { c.mappable = f }
 }
 
-// mmapMode is mode as WithReaderMmap reads it: lower case, "" as MmapAuto.
+// mmapMode is mode as WithReaderMmap reads it: MmapOn or MmapOff in any case,
+// anything else (and "") MmapAuto, so the start log names the mode it ran.
 func mmapMode(mode string) string {
-	if m := strings.ToLower(mode); m != "" {
+	if m := strings.ToLower(mode); m == MmapOn || m == MmapOff {
 		return m
 	}
 	return MmapAuto

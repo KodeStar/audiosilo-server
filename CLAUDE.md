@@ -313,7 +313,7 @@ keep this index in step (one line per topic).
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
   - Native deep-link association
-  - SQLite (incl. the readers' mmap on FUSE, `database.mmap`)
+  - SQLite (incl. the readers' mmap on shfs or mergerfs, `database.mmap`)
   - Pagination
   - JSON compression (`api/compress.go`)
   - List cache (`api/listcache.go`)
