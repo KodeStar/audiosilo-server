@@ -524,6 +524,42 @@ export function parkHint(
   return hint ?? (error || undefined);
 }
 
+/**
+ * The reasons the server writes on a job it cancels itself, in plain words
+ * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, and MoveJobs): shown as
+ * they are. Any other error on a cancelled job is the park's or the Bridge's
+ * own text (a supervisor's, say), never shown (BRIDGE-02).
+ */
+const SERVER_CANCEL_REASONS: readonly string[] = [
+  'a generate job for the book replaced it',
+  'a generate job for the book replaced it; it finds the chapters itself',
+  'a generate job for the book replaced what it was sharing',
+  'a generate job for the book replaced it; make the read-along again after',
+  'the book moved onto another job of this kind',
+];
+
+/** How a cancelled job reads: who cancelled it, the server's reason, and the park it was cancelled from. */
+export interface CancelledView {
+  /** An admin asked (cancel_requested), not the server for a reason of its own. */
+  byAdmin: boolean;
+  /** The server's own reason, when it cancelled the job itself. */
+  reason?: string;
+  /** The park the job was waiting in, with the Bridge's plain hint (never the raw error). */
+  park?: { code: string; hint?: string };
+}
+
+export function cancelledView(
+  job: Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>,
+): CancelledView {
+  if (SERVER_CANCEL_REASONS.includes(job.error)) return { byAdmin: false, reason: job.error };
+  const park = generateProgress(job.progress).park;
+  const hint = park ? parkHint(park.code, park.hint, '') : undefined;
+  return {
+    byAdmin: job.cancel_requested,
+    ...(park ? { park: { code: park.code, ...(hint ? { hint } : {}) } } : {}),
+  };
+}
+
 /** A parked job's page on the Bridge (`<ui_url>#/jobs/<id>`), only for an http(s) ui_url. */
 export function bridgeJobLink(uiUrl: string | undefined, jobId: number): string | undefined {
   return bridgeTabLink(uiUrl, `jobs/${jobId}`);

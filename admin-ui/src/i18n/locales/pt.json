@@ -3064,6 +3064,8 @@
   "bridge.jobs.attempt": "tentativa {{n}}",
   "bridge.jobs.cancel": "Cancelar",
   "bridge.jobs.cancelAria": "Cancelar o trabalho {{id}} ({{kind}})",
+  "bridge.jobs.cancelledByAdmin": "Cancelado por um administrador.",
+  "bridge.jobs.cancelledPark": "Estava à espera de atenção: {{reason}}",
   "bridge.jobs.details": "Detalhes",
   "bridge.jobs.result": "Resultado",
   "bridge.jobs.params": "Opções",

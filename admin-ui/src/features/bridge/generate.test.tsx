@@ -628,6 +628,76 @@ describe('the Bridge page', () => {
     ).toBeInTheDocument();
   });
 
+  it("words an admin's cancel, with and without a park, never the raw error (BRIDGE-02)", async () => {
+    const supervisor =
+      'supervisor: parked book requires a bounded recovery plan: park code chapters_not_detected';
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            paired_by: null,
+            pairing: null,
+            online: true,
+            kinds: [],
+            features: [],
+            libraries: [],
+            workers: [],
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              // Cancelled while parked: the park's wording, as the parked row read.
+              job({
+                id: 11,
+                kind: 'chapters.detect',
+                state: 'cancelled',
+                cancel_requested: true,
+                error: supervisor,
+                progress: { stage: 'markers', park: { code: 'chapters_not_detected' } },
+              }),
+              // A park with the Bridge's own hint keeps that hint.
+              job({
+                id: 12,
+                state: 'cancelled',
+                cancel_requested: true,
+                error: 'supervisor: escalated',
+                progress: { park: { code: 'supervisor_escalated', hint: 'Check the transcript.' } },
+              }),
+              // No park (cancelled while it ran), another kind: only who cancelled it.
+              job({
+                id: 13,
+                kind: 'bridge.verify',
+                path: null,
+                state: 'cancelled',
+                cancel_requested: true,
+                error: 'supervisor: stopped mid-run',
+                progress: {},
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    const rows = within(jobs).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(within(row).getByText('Cancelled by an admin.')).toBeInTheDocument();
+      expect(row.textContent).not.toContain('supervisor:');
+    }
+    expect(rows[0]).toHaveTextContent(
+      "It was waiting for attention: The chapters couldn't be found in the narration.",
+    );
+    expect(rows[1]).toHaveTextContent(
+      'It was waiting for attention: The Bridge stopped the job for a person to look at.',
+    );
+    expect(within(rows[1]).getByText('Check the transcript.')).toBeInTheDocument();
+    expect(rows[2]).not.toHaveTextContent('It was waiting');
+  });
+
   it('words a chapter detection job: its stage, what it found, and why it stopped', async () => {
     mockFetch(
       signedInRoutes({

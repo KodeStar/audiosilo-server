@@ -2906,6 +2906,8 @@
   "bridge.jobs.attempt": "Versuch {{n}}",
   "bridge.jobs.cancel": "Abbrechen",
   "bridge.jobs.cancelAria": "Aufgabe {{id}} ({{kind}}) abbrechen",
+  "bridge.jobs.cancelledByAdmin": "Von einem Admin abgebrochen.",
+  "bridge.jobs.cancelledPark": "Er wartete auf Aufmerksamkeit: {{reason}}",
   "bridge.jobs.details": "Details",
   "bridge.jobs.result": "Ergebnis",
   "bridge.jobs.params": "Optionen",

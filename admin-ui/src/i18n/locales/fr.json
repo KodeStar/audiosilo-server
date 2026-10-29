@@ -3064,6 +3064,8 @@
   "bridge.jobs.attempt": "tentative {{n}}",
   "bridge.jobs.cancel": "Annuler",
   "bridge.jobs.cancelAria": "Annuler la tâche {{id}} ({{kind}})",
+  "bridge.jobs.cancelledByAdmin": "Annulé par un administrateur.",
+  "bridge.jobs.cancelledPark": "Il attendait une intervention : {{reason}}",
   "bridge.jobs.details": "Détails",
   "bridge.jobs.result": "Résultat",
   "bridge.jobs.params": "Options",

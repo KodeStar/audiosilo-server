@@ -13,6 +13,7 @@ import {
 } from '@/lib/format';
 import {
   bridgeJobLink,
+  cancelledView,
   coverageDown,
   generateProgress,
   generateResult,
@@ -106,13 +107,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
     ) : null;
   }
 
-  // Cancelled: why, when the server or the Bridge said (a book moved onto
-  // another job of its kind, say); an admin's own cancel says nothing more.
-  if (job.state === 'cancelled') {
-    return job.error ? (
-      <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{job.error}</p>
-    ) : null;
-  }
+  if (job.state === 'cancelled') return <CancelledStatus job={job} />;
 
   if (job.state === 'needs_attention') {
     const link = bridgeJobLink(uiUrl, job.id);
@@ -259,4 +254,34 @@ function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult |
         r?.description ? t('bridge.generate.descriptionMade') : undefined,
       ].filter((s): s is string => Boolean(s));
   }
+}
+
+/**
+ * A cancelled job (any kind): the server's reason when it cancelled the job
+ * itself (a book moved onto another job of its kind, say); an admin's cancel
+ * says so, with the park it was waiting in, in the words the parked row used.
+ * The job's raw error (a supervisor's text) is never shown (BRIDGE-02).
+ */
+export function CancelledStatus({ job }: { job: BridgeJob }) {
+  const { t } = useTranslation();
+  const v = cancelledView(job);
+  if (v.reason) {
+    return (
+      <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{v.reason}</p>
+    );
+  }
+  if (!v.byAdmin && !v.park) return null;
+  return (
+    <div className="flex flex-col gap-0.5 text-[12.5px] text-muted-foreground">
+      {v.byAdmin ? <p>{t('bridge.jobs.cancelledByAdmin')}</p> : null}
+      {v.park ? (
+        <p className="[overflow-wrap:anywhere]">
+          {t('bridge.jobs.cancelledPark', {
+            reason: t(parkKey(v.park.code), { code: v.park.code }),
+          })}
+        </p>
+      ) : null}
+      {v.park?.hint ? <p className="[overflow-wrap:anywhere]">{v.park.hint}</p> : null}
+    </div>
+  );
 }

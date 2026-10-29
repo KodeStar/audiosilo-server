@@ -2906,6 +2906,8 @@
   "bridge.jobs.attempt": "attempt {{n}}",
   "bridge.jobs.cancel": "Cancel",
   "bridge.jobs.cancelAria": "Cancel job {{id}} ({{kind}})",
+  "bridge.jobs.cancelledByAdmin": "Cancelled by an admin.",
+  "bridge.jobs.cancelledPark": "It was waiting for attention: {{reason}}",
   "bridge.jobs.details": "Details",
   "bridge.jobs.result": "Result",
   "bridge.jobs.params": "Options",
