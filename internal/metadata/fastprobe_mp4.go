@@ -36,6 +36,7 @@ type mp4Track struct {
 	stco        mp4Leaf
 	co64        bool
 	stz2        bool
+	syncOrCtts  bool // an stss or ctts: keyframes or a DTS shift mov_fix_index heeds
 	sttsEntries int
 }
 
@@ -494,6 +495,10 @@ func (s *mp4State) atom(typ string, body, size int64, parent string, depth int) 
 			t.stsz = mp4Leaf{body, size}
 			t.stz2 = typ == "stz2"
 		}
+	case "stss", "ctts":
+		if t != nil {
+			t.syncOrCtts = true
+		}
 	case "stco", "co64":
 		if t != nil {
 			t.stco = mp4Leaf{body, size}
@@ -914,8 +919,30 @@ func (s *mp4State) readChapterTrack(t *mp4Track) error {
 	if t.sttsSum > 0 {
 		stDur = min(stDur, t.sttsSum)
 	}
-	if len(t.elst) == 1 {
-		stDur = min(stDur, rescale(t.elst[0].dur, t.timescale, s.mvTimescale))
+	if len(t.elst) == 1 && len(samples) > 0 {
+		// mov_fix_index for the one edit (media time 0, checked above): it keeps
+		// the samples up to the first that reaches the edit's end and drops the
+		// rest, so a trailing sample at the end (zero length, as muxers write
+		// after the last chapter) is never a chapter, and an edit of length 0
+		// keeps only the first. The stream's duration ends at the edit's end.
+		if s.mvTimescale == 0 || t.syncOrCtts {
+			return unsure("mp4: chapter track edit list not modelled")
+		}
+		d := rescale(t.elst[0].dur, t.timescale, s.mvTimescale)
+		if d < 0 { // get_edit_list_entry: past INT64_MAX is 0
+			d = 0
+		}
+		for i := range samples {
+			frame := d // the last sample's length is the edit's
+			if i+1 < len(samples) {
+				frame = samples[i+1].ts - samples[i].ts
+			}
+			if samples[i].ts+frame >= d {
+				samples = samples[:i+1]
+				break
+			}
+		}
+		stDur = min(stDur, d)
 	}
 	for i, smp := range samples {
 		end, hasEnd := stDur, true
