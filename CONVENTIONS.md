@@ -2304,7 +2304,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fetches dial through `internal/netguard` (the dialled address checked: providers public :443, artwork
   public any port; no proxy, no cookies, providers no redirects, artwork <= 3 without a downgrade), within
   bounded bodies, per-user and per-provider token buckets (`internal/podcast/quota`), two provider and
-  image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches; turning the module off
+  four image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches. The artwork's
+  admission is its own, sized by a results page (BRIDGE-03): a miss past the image slots queues for one
+  (up to 40 waiting, each at most the fetch budget, then 503 `discovery_busy`), and its per-user and
+  server-wide buckets let two pages through (burst 40, 120 a minute), so a page's artwork asked for at
+  once is all served and search's own budgets are untouched; turning the module off
   (`syncModules`) or shutdown calls `Reset`, so nothing publishes afterwards. Artwork is only a URL a
   result registered (`sha256` id), re-encoded to a <= 320 px JPEG (`media.ThumbnailJPEG`). Build tag
   `podcastdiscoverytest` alone honours `AUDIOSILO_TEST_PODCAST_DISCOVERY_ORIGIN=http://127.0.0.1:<port>`

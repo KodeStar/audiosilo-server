@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -19,7 +18,8 @@ func ValidArtworkID(id string) bool { return feed.ValidHex(id, 64) }
 // evicted is artwork_not_found and fetches nothing: a caller can never name a
 // URL. Each request spends one of the user's artwork tokens, a cache hit
 // included; a miss also spends the server's image bucket and holds one of four
-// image slots.
+// image slots, queueing for one (at most maxArtQueue misses waiting, each up
+// to the fetch budget) when all four are busy.
 func (s *Service) Artwork(ctx context.Context, user, id string) ([]byte, *Error) {
 	if !ValidArtworkID(id) {
 		return nil, errArtNotFound
@@ -55,36 +55,30 @@ func (s *Service) Artwork(ctx context.Context, user, id string) ([]byte, *Error)
 }
 
 func (s *Service) startArtLocked(id, raw string) (*flight, *Error) {
-	if !s.imageSlots.TryAcquire() {
+	if len(s.arts) >= maxImageSlots+maxArtQueue { // fetching or queued
 		return nil, errBusy
 	}
 	if d := s.imageMiss.Take(""); !d.OK {
-		s.imageSlots.Release()
 		return nil, errProviderRateLimited.withRetry(d.RetryAfter)
 	}
-	ctx, cancel := context.WithTimeout(s.root, s.budget)
+	ctx, cancel := context.WithCancel(s.root)
 	f := &flight{done: make(chan struct{}), cancel: cancel}
 	s.arts[id] = f
 	gen := s.gen
 	go func() {
 		defer cancel()
-		jpg, err := s.fetchImage(ctx, raw)
-		s.imageSlots.Release() // before the waiters hear, as a search's
+		jpg, e := s.queuedImage(ctx, raw)
 		s.mu.Lock()
 		if s.arts[id] == f {
 			delete(s.arts, id)
 		}
-		var e *Error
 		switch {
 		case gen != s.gen || !s.opts.Enabled():
 			e = ErrModuleOff
-		case err == nil:
+		case e == nil:
 			s.images.put(id, jpg, len(jpg)+len(id))
-		default:
-			e = errArtUnavailable
-			if ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				s.artFails.put(id, true, 1)
-			}
+		case e == errArtUnavailable:
+			s.artFails.put(id, true, 1)
 		}
 		if e != nil {
 			jpg = nil
@@ -94,6 +88,37 @@ func (s *Service) startArtLocked(id, raw string) (*flight, *Error) {
 		close(f.done)
 	}()
 	return f, nil
+}
+
+// queuedImage waits up to the fetch budget for an image slot, then fetches
+// raw within the budget. Its errors: errBusy when no slot came free in time,
+// errArtUnavailable for a fetch that failed or timed out (remembered for
+// artFailureTTL), or ErrModuleOff when ctx ended (every waiter left, or
+// Reset), which is neither cached nor remembered.
+func (s *Service) queuedImage(ctx context.Context, raw string) ([]byte, *Error) {
+	queue, stop := context.WithTimeout(ctx, s.budget)
+	ok := s.imageSlots.Acquire(queue)
+	stop()
+	switch {
+	case ctx.Err() != nil:
+		if ok {
+			s.imageSlots.Release()
+		}
+		return nil, ErrModuleOff
+	case !ok:
+		return nil, errBusy
+	}
+	fetch, cancel := context.WithTimeout(ctx, s.budget)
+	defer cancel()
+	jpg, err := s.fetchImage(fetch, raw)
+	s.imageSlots.Release() // before the waiters hear, as a search's
+	switch {
+	case err == nil:
+		return jpg, nil
+	case ctx.Err() != nil:
+		return nil, ErrModuleOff
+	}
+	return nil, errArtUnavailable
 }
 
 // fetchImage GETs the image (no credential, cookie or caller header: only
