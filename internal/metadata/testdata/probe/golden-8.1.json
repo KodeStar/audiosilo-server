@@ -1,0 +1,1421 @@
+{
+  "ffprobe": "ffprobe version 8.1.3",
+  "files": {
+    "craft-ape.mp3": {
+      "ffprobe": {
+        "duration": "5.372833",
+        "codec": "mp3",
+        "tags": {
+          "genre": "Other",
+          "title": "V1 With Ape"
+        }
+      }
+    },
+    "craft-chap-unordered.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "title": "Chaptered"
+        },
+        "chapters": [
+          {
+            "start": "4.000000",
+            "end": "5.300000",
+            "title": "Third ✓"
+          },
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "First"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.000000",
+            "title": "c1"
+          }
+        ]
+      }
+    },
+    "craft-concat.mp3": {
+      "ffprobe": {
+        "duration": "10.234832",
+        "codec": "mp3"
+      },
+      "fallback": "mp3: concatenated file (Xing size)"
+    },
+    "craft-flac-chapters.flac": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist;Second Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "narrator": "Flac Narrator",
+          "series": "Flac Series",
+          "title": "Plain Title"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.500000",
+            "title": "Intro"
+          },
+          {
+            "start": "2.500000",
+            "end": "4.250000",
+            "title": "Middle"
+          },
+          {
+            "start": "4.250000",
+            "end": "5.300000",
+            "title": ""
+          }
+        ]
+      }
+    },
+    "craft-flac-cuesheet.flac": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": ""
+          },
+          {
+            "start": "2.000000",
+            "end": "4.000000",
+            "title": ""
+          },
+          {
+            "start": "4.000000",
+            "end": "5.300000",
+            "title": ""
+          }
+        ]
+      },
+      "fallback": "flac: CUESHEET"
+    },
+    "craft-id3-empty-utf16.mp3": {
+      "ffprobe": {
+        "duration": "5.350333",
+        "codec": "mp3",
+        "tags": {
+          "series": ""
+        }
+      }
+    },
+    "craft-id3v22.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Two Two Album",
+          "artist": "Two Artist",
+          "date": "1999",
+          "genre": "Speech",
+          "title": "Two Two Title"
+        }
+      }
+    },
+    "craft-id3v23-full.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Café Book",
+          "album_artist": "Ann Author",
+          "artist": "Ann Author",
+          "composer": "Nick Narr",
+          "date": "2004-05-12",
+          "genre": "Speech",
+          "narrator": "Ned Reader",
+          "series": "The Series #3",
+          "series-part": "3",
+          "title": "Kapitel 1 – Anfang"
+        }
+      }
+    },
+    "craft-id3v24-oddframes.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name Long Album Name ",
+          "artist": "Compressed Artist",
+          "title": "Odd Frames"
+        }
+      }
+    },
+    "craft-id3v24-unsync.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Unsync Album ÿ",
+          "artist": "Ünï Cödé 🎧",
+          "date": "2012-03-04",
+          "genre": "Fantasy",
+          "grouping": "Grouped, Book 5",
+          "title": "Unsync ÿ Title"
+        }
+      }
+    },
+    "craft-junk-cbr.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3",
+        "tags": {
+          "title": "Junk CBR"
+        }
+      }
+    },
+    "craft-junk-vbr.mp3": {
+      "ffprobe": {
+        "duration": "5.022918",
+        "codec": "mp3",
+        "tags": {
+          "title": "Junk VBR"
+        }
+      },
+      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+    },
+    "craft-m4b-chpl-differs.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "craft-m4b-chpl-more.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          },
+          {
+            "start": "4.500000",
+            "end": "5.300000",
+            "title": "c-four"
+          }
+        ]
+      }
+    },
+    "craft-m4b-chplonly.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "craft-m4b-mdhd-short.m4b": {
+      "ffprobe": {
+        "duration": "3.323220",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "craft-m4b-noelst.m4b": {
+      "ffprobe": {
+        "duration": "5.323220",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "craft-m4b-textonly.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "craft-m4b-truncated.m4b": {
+      "ffprobe_error": "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x] moov atom not found; Invalid data found when processing input",
+      "fallback": "mp4: no moov"
+    },
+    "craft-mka-a.mka": {
+      "ffprobe": {
+        "duration": "5.328979",
+        "codec": "mp3",
+        "tags": {
+          "artist": "Craft Artist",
+          "genre": "Mystery",
+          "series": "Craft Series",
+          "title": "Info Title"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "1.300000",
+            "title": "One"
+          },
+          {
+            "start": "1.300000",
+            "end": "3.300000",
+            "title": "Two (no end)"
+          },
+          {
+            "start": "3.300000",
+            "end": "4.800000",
+            "title": "Four last wins"
+          }
+        ]
+      }
+    },
+    "craft-mka-nodur.mka": {
+      "ffprobe": {
+        "duration": "5.570000",
+        "codec": "mp3",
+        "tags": {
+          "title": "Info Title"
+        }
+      },
+      "fallback": "mkv: no Segment duration"
+    },
+    "craft-mka-seekhead.mka": {
+      "ffprobe": {
+        "duration": "5.328979",
+        "codec": "mp3",
+        "tags": {
+          "album": "Seek Album",
+          "artist": "Seek Artist",
+          "title": "Info Title"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.600000",
+            "title": "Seek One"
+          },
+          {
+            "start": "2.600000",
+            "end": "5.000000",
+            "title": "Seek Two"
+          }
+        ]
+      }
+    },
+    "craft-truncated-cbr.mp3": {
+      "ffprobe": {
+        "duration": "3.210167",
+        "codec": "mp3"
+      }
+    },
+    "craft-truncated-vbr.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "craft-two-id3.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "First Tag Album",
+          "artist": "Second Tag Artist"
+        }
+      }
+    },
+    "craft-v1-and-v2.mp3": {
+      "ffprobe": {
+        "duration": "5.350333",
+        "codec": "mp3",
+        "tags": {
+          "title": "V2 Title"
+        }
+      }
+    },
+    "craft-v1-genre255.mp3": {
+      "ffprobe": {
+        "duration": "5.350333",
+        "codec": "mp3",
+        "tags": {
+          "album": "Album",
+          "artist": "Artist",
+          "date": "abcd",
+          "title": "Only V1 é"
+        }
+      }
+    },
+    "flac-bare.flac": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac"
+      }
+    },
+    "flac-chap.flac": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        }
+      }
+    },
+    "flac-tags.flac": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "lame-abr.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "lame-cbr-info.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3"
+      }
+    },
+    "lame-cbr-noxing.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3"
+      }
+    },
+    "lame-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Lame Album",
+          "artist": "Lame Artist",
+          "date": "2001",
+          "genre": "Speech",
+          "title": "Lame Title"
+        }
+      }
+    },
+    "lame-v1only.mp3": {
+      "ffprobe": {
+        "duration": "5.361000",
+        "codec": "mp3",
+        "tags": {
+          "album": "V1 Album",
+          "artist": "V1 Artist",
+          "date": "1999",
+          "title": "V1 Only Title"
+        }
+      }
+    },
+    "lame-vbr-noxing.mp3": {
+      "ffprobe": {
+        "duration": "5.089446",
+        "codec": "mp3"
+      },
+      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+    },
+    "lame-vbr.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "lsf-cbr-noxing.mp3": {
+      "ffprobe": {
+        "duration": "4.153500",
+        "codec": "mp3"
+      }
+    },
+    "lsf-vbr.mp3": {
+      "ffprobe": {
+        "duration": "4.100000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "m4a-alac-bare.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "alac"
+      }
+    },
+    "m4a-alac-chap.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "alac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "m4a-alac-tags.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "alac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "m4b-aac-bare.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac"
+      }
+    },
+    "m4b-aac-chap.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "m4b-aac-tags.m4b": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "aac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mka-aac-bare.mka": {
+      "ffprobe": {
+        "duration": "5.323000",
+        "codec": "aac"
+      }
+    },
+    "mka-aac-chap.mka": {
+      "ffprobe": {
+        "duration": "5.323000",
+        "codec": "aac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mka-aac-tags.mka": {
+      "ffprobe": {
+        "duration": "5.323000",
+        "codec": "aac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mka-flac-bare.mka": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac"
+      }
+    },
+    "mka-flac-chap.mka": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mka-flac-tags.mka": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mka-mp3-bare.mka": {
+      "ffprobe": {
+        "duration": "5.325000",
+        "codec": "mp3"
+      }
+    },
+    "mka-mp3-chap.mka": {
+      "ffprobe": {
+        "duration": "5.325000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mka-mp3-tags.mka": {
+      "ffprobe": {
+        "duration": "5.325000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mka-opus-bare.mka": {
+      "ffprobe": {
+        "duration": "5.308000",
+        "codec": "opus"
+      }
+    },
+    "mka-opus-chap.mka": {
+      "ffprobe": {
+        "duration": "5.308000",
+        "codec": "opus",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mka-opus-tags.mka": {
+      "ffprobe": {
+        "duration": "5.308000",
+        "codec": "opus",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mka-vorbis-bare.mka": {
+      "ffprobe": {
+        "duration": "5.303000",
+        "codec": "vorbis"
+      }
+    },
+    "mka-vorbis-chap.mka": {
+      "ffprobe": {
+        "duration": "5.303000",
+        "codec": "vorbis",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mka-vorbis-tags.mka": {
+      "ffprobe": {
+        "duration": "5.303000",
+        "codec": "vorbis",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mp3-cbr-bare.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-cbr-chap.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mp3-cbr-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.329000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mp3-v1-bare.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-v1-chap.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-v1-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-v23-bare.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-v23-chap.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mp3-v23-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mp3-v24-bare.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp3-v24-chap.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mp3-v24-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "mp3-vbrnoxing-bare.mp3": {
+      "ffprobe": {
+        "duration": "5.118860",
+        "codec": "mp3"
+      },
+      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+    },
+    "mp3-vbrnoxing-chap.mp3": {
+      "ffprobe": {
+        "duration": "5.118860",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "narrator": "Nora Reader",
+          "series": "The Spike Series",
+          "series-part": "3",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      },
+      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+    },
+    "mp3-vbrnoxing-tags.mp3": {
+      "ffprobe": {
+        "duration": "5.118860",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      },
+      "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
+    },
+    "mp4-mp3-bare.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3"
+      }
+    },
+    "mp4-mp3-chap.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "The Spike Book (Unabridged)",
+          "album_artist": "Jane Author",
+          "artist": "Jane Author",
+          "composer": "Nick Narrator",
+          "date": "2019-04-02",
+          "genre": "Fantasy; Audiobook",
+          "grouping": "Grouped Series #2",
+          "title": "Chapter Title Track"
+        },
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.300000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "mp4-mp3-tags.m4a": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "mp3",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      }
+    },
+    "oggflac-bare.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac"
+      }
+    },
+    "oggflac-chap.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac"
+      }
+    },
+    "oggflac-tags.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "flac"
+      }
+    },
+    "oggopus-bare.ogg": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus"
+      }
+    },
+    "oggopus-chap.ogg": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus",
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.307000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "oggopus-tags.ogg": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus"
+      }
+    },
+    "opus-bare.opus": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus"
+      }
+    },
+    "opus-chap.opus": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus",
+        "chapters": [
+          {
+            "start": "0.000000",
+            "end": "2.000000",
+            "title": "Opening"
+          },
+          {
+            "start": "2.000000",
+            "end": "4.123000",
+            "title": "Middle part é"
+          },
+          {
+            "start": "4.123000",
+            "end": "5.307000",
+            "title": "The End"
+          }
+        ]
+      }
+    },
+    "opus-tags.opus": {
+      "ffprobe": {
+        "duration": "5.306500",
+        "codec": "opus"
+      }
+    },
+    "vorbis-bare.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "vorbis"
+      }
+    },
+    "vorbis-chap.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "vorbis"
+      }
+    },
+    "vorbis-tags.ogg": {
+      "ffprobe": {
+        "duration": "5.300000",
+        "codec": "vorbis"
+      }
+    }
+  }
+}
