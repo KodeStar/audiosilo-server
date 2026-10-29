@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strconv"
-	"strings"
 )
 
 // A book's ebook (Bridge Phase 3b, migration 0056): the one .epub beside its
@@ -15,7 +13,9 @@ import (
 // data like cover_path, derived from the files and never parsed: books.ebook_path
 // is the readable file's library-relative path ('' for none) and books.ebook_sig
 // the signature of the file the rule names (EbookSig, '' for none), which the scan
-// compares to record a new, changed or gone ebook without re-indexing the book.
+// compares to record a new, changed or gone ebook without re-indexing the book;
+// books.ebook_size its size (0058, server#228: its own column, no longer read
+// back out of the signature).
 
 // Ebook is a book's ebook on the wire (Book.Ebook, omitted when it has none):
 // the file's library-relative path and its size in bytes when last scanned. A
@@ -32,10 +32,21 @@ type Ebook struct {
 // it couldn't be read right now, so UpsertBook keeps what is stored (a new row
 // gets none, which the next scan reads again). Was is for SetEbooks.
 type EbookReading struct {
-	Path   string
-	Sig    string
+	Path string
+	Sig  string
+	// Size is the file's size in bytes (books.ebook_size, Ebook.Size), 0 when
+	// Path is "".
+	Size   int64
 	Unread bool
 	Was    *EbookState
+}
+
+// ebookSize is books.ebook_size for r: its Size, 0 for no readable ebook.
+func (r EbookReading) ebookSize() int64 {
+	if r.Path == "" {
+		return 0
+	}
+	return r.Size
 }
 
 // EbookState is a book row as a scan read it (Signature.EbookSig and IndexedAt)
@@ -50,19 +61,17 @@ type EbookState struct {
 
 // EbookSig is the signature of the ebook file name (its base name) with info:
 // its size, its modification time and its name, so a renamed file reads as a
-// change even when its size and time are kept. The size leads (ebookOf reads it).
+// change even when its size and time are kept.
 func EbookSig(name string, info fs.FileInfo) string {
 	return fmt.Sprintf("%d:%d:%s", info.Size(), info.ModTime().UnixNano(), name)
 }
 
-// ebookOf is the wire Ebook of a stored row (ebook_path, ebook_sig): nil when the
-// book has none, else the path with the size its signature holds.
-func ebookOf(path, sig string) *Ebook {
+// ebookOf is the wire Ebook of a stored row (ebook_path, ebook_size): nil when
+// the book has none.
+func ebookOf(path string, size int64) *Ebook {
 	if path == "" {
 		return nil
 	}
-	head, _, _ := strings.Cut(sig, ":")
-	size, _ := strconv.ParseInt(head, 10, 64)
 	return &Ebook{Path: path, Size: size}
 }
 
@@ -77,8 +86,8 @@ func (c *Catalog) SetEbooks(ctx context.Context, libraryID int64, readings map[s
 	}
 	return c.db.WithTx(ctx, "SetEbooks", func(tx *sql.Tx) error {
 		for relPath, r := range readings {
-			q, args := `UPDATE books SET ebook_path = ?, ebook_sig = ? WHERE library_id = ? AND rel_path = ?`,
-				[]any{r.Path, r.Sig, libraryID, relPath}
+			q, args := `UPDATE books SET ebook_path = ?, ebook_sig = ?, ebook_size = ? WHERE library_id = ? AND rel_path = ?`,
+				[]any{r.Path, r.Sig, r.ebookSize(), libraryID, relPath}
 			if r.Was != nil {
 				q += ` AND ebook_sig = ? AND indexed_at = ?`
 				args = append(args, r.Was.Sig, r.Was.IndexedAt)

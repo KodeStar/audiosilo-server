@@ -186,6 +186,8 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 			files.Chapters, err = metadata.ReadChapterList(p)
 		case metadata.AttachmentBridge:
 			files.Provenance, err = metadata.ReadProvenance(p)
+		case metadata.AttachmentReadalong:
+			files.Readalong, err = metadata.ReadReadalong(p)
 		}
 		if err != nil {
 			s.log.Warn("unusable .audiosilo attachment", "library", lib.Name, "path", rel, "err", err)
@@ -213,11 +215,15 @@ type AttachmentsHeld struct {
 	Description bool `json:"description"`
 	Chapters    bool `json:"chapters"`
 	Bridge      bool `json:"bridge"`
+	// Readalong: a read-along map whose head checked (Phase 3c; an older
+	// Bridge ignores it).
+	Readalong bool `json:"readalong"`
 }
 
 // RefreshAttachments reads the .audiosilo/ attachments of the indexed book at
 // relPath again and records them, never reading its audio: the Bridge's call
-// once it has written them. relPath is the book's path, or a path inside it (a
+// once it has written them. A book with a read-along map has its ebook hashed
+// (hashReadalongEbooks) when its digest isn't current. relPath is the book's path, or a path inside it (a
 // part, a disc folder). ErrNotIndexable when no indexed book is there; an error
 // (nothing recorded) when the folder couldn't be listed or a file couldn't be
 // read right now.
@@ -248,9 +254,14 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	}); err != nil {
 		return nil, err
 	}
+	if files.Readalong != nil {
+		// A map the Bridge just wrote: its ebook's digest, so the map reads ready
+		// at once (a failure is logged and left for GET /readalong to retry).
+		s.hashReadalongEbooks(ctx, lib, book.RelPath)
+	}
 	return &AttachmentsRefresh{Path: book.RelPath, Attachments: AttachmentsHeld{Characters: files.Characters != nil,
 		Recaps: files.Recaps != nil, Description: files.Description != nil, Chapters: files.Chapters != nil,
-		Bridge: files.Provenance != nil}}, nil
+		Bridge: files.Provenance != nil, Readalong: files.Readalong != nil}}, nil
 }
 
 // attachmentsOfWalk sets each book's attachments signature from the .audiosilo

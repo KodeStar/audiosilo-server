@@ -164,8 +164,12 @@ type Book struct {
 	// read of a book; nil, and omitted, when it has none. EbookFile is the scan's
 	// reading of it (the walk's candidate, then checked: library.checkEbook);
 	// UpsertBook records it, or keeps what is stored when it is Unread.
-	Ebook     *Ebook             `json:"ebook,omitempty"`
-	EbookFile EbookReading       `json:"-"`
+	Ebook     *Ebook       `json:"ebook,omitempty"`
+	EbookFile EbookReading `json:"-"`
+	// Readalong is the state of the book's read-along map (Bridge Phase 3c,
+	// readalong.go), set by the api on GET /libraries/{id}/item only (never a
+	// list row); nil, and omitted, with no ebook or no valid map.
+	Readalong *Readalong         `json:"readalong,omitempty"`
 	Files     []BookFile         `json:"files,omitempty"`
 	Chapters  []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list

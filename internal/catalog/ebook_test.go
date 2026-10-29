@@ -26,15 +26,54 @@ func ebookAt(t *testing.T, c *Catalog, libraryID int64, rel string) *Ebook {
 	return b.Ebook
 }
 
-// The wire ebook's size is the signature's lead, whatever the name holds.
+// The wire ebook is the stored path and size (its own column, server#228),
+// none without a path; the signature leads with the size and ends with the name.
 func TestEbookOf(t *testing.T) {
 	t.Parallel()
-	info := fakeInfo{size: 1234, mod: time.Unix(1700000000, 5)}
-	if e := ebookOf("A/My: Book.epub", EbookSig("My: Book.epub", info)); e == nil || e.Size != 1234 || e.Path != "A/My: Book.epub" {
+	if e := ebookOf("A/My: Book.epub", 1234); e == nil || e.Size != 1234 || e.Path != "A/My: Book.epub" {
 		t.Errorf("ebookOf = %+v, want A/My: Book.epub of 1234 bytes", e)
 	}
-	if e := ebookOf("", "12:3:x.epub"); e != nil {
+	if e := ebookOf("", 12); e != nil {
 		t.Errorf("no path: ebookOf = %+v, want none", e)
+	}
+	info := fakeInfo{size: 1234, mod: time.Unix(1700000000, 5)}
+	if sig := EbookSig("My: Book.epub", info); sig != "1234:1700000000000000005:My: Book.epub" {
+		t.Errorf("EbookSig = %q", sig)
+	}
+}
+
+// The size is recorded with the reading (UpsertBook and SetEbooks), and none
+// for a reading with no readable ebook, so the wire never reads it back out of
+// the signature.
+func TestEbookSizeColumn(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "Book", IsFolder: true, Title: "T",
+		EbookFile: EbookReading{Path: "Book/b.epub", Sig: "999:1:b.epub", Size: 77}}); err != nil {
+		t.Fatal(err)
+	}
+	if e := ebookAt(t, c, lib.ID, "Book"); e == nil || e.Size != 77 {
+		t.Fatalf("upserted ebook = %+v, want the reading's size 77 (not the signature's)", e)
+	}
+	if err := c.SetEbooks(ctx, lib.ID, map[string]EbookReading{"Book": {Path: "Book/c.epub", Sig: "5:2:c.epub", Size: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	if e := ebookAt(t, c, lib.ID, "Book"); e == nil || e.Size != 5 || e.Path != "Book/c.epub" {
+		t.Fatalf("backfilled ebook = %+v, want Book/c.epub of 5 bytes", e)
+	}
+	if err := c.SetEbooks(ctx, lib.ID, map[string]EbookReading{"Book": {Sig: "5:3:c.epub", Size: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	var size int64
+	if err := c.db.QueryRowContext(ctx, `SELECT ebook_size FROM books WHERE rel_path = 'Book'`).Scan(&size); err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 || ebookAt(t, c, lib.ID, "Book") != nil {
+		t.Errorf("an unreadable ebook: size %d, want none", size)
 	}
 }
 
@@ -53,7 +92,7 @@ func TestUpsertBookKeepsUnreadEbook(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	upsert("Book", EbookReading{Path: "Book/Book.epub", Sig: "10:1:Book.epub"})
+	upsert("Book", EbookReading{Path: "Book/Book.epub", Sig: "10:1:Book.epub", Size: 10})
 	upsert("Book", EbookReading{Unread: true})
 	if e := ebookAt(t, c, lib.ID, "Book"); e == nil || e.Path != "Book/Book.epub" || e.Size != 10 {
 		t.Fatalf("after an unread re-index: ebook = %+v, want the stored Book/Book.epub", e)

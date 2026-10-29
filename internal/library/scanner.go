@@ -643,6 +643,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		}
 		report(len(books))
 	}
+	// The ebooks of books with a read-along map that have no digest for the file
+	// they have now (a map new or read again, an ebook changed): only those, as
+	// hashing every ebook would read whole libraries over a network share.
+	s.hashReadalongEbooks(ctx, lib, "")
 	s.log.Info("library scanned", "library", lib.Name,
 		"added", res.Added, "updated", res.Updated, "moved", res.Moved, "removed", res.Removed,
 		"elapsed", time.Since(start))

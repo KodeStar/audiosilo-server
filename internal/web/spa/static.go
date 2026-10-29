@@ -196,7 +196,7 @@ func (f *Files) Serve(w http.ResponseWriter, r *http.Request, name string, info 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if rep.gz != nil && r.Header.Get("Range") == "" && acceptsGzip(r.Header.Get("Accept-Encoding")) {
+	if rep.gz != nil && r.Header.Get("Range") == "" && AcceptsGzip(r.Header.Get("Accept-Encoding")) {
 		serveGzip(w, r, name, info.ModTime(), rep)
 		return
 	}
@@ -330,9 +330,9 @@ func ETagListMatches(list, etag string) bool {
 	return false
 }
 
-// acceptsGzip reports whether an Accept-Encoding value allows gzip: listed (or
+// AcceptsGzip reports whether an Accept-Encoding value allows gzip: listed (or
 // x-gzip) with a non-zero q, or not listed while "*" is.
-func acceptsGzip(header string) bool {
+func AcceptsGzip(header string) bool {
 	gzipQ, starQ := -1.0, -1.0
 	for _, part := range strings.Split(header, ",") {
 		coding, params, _ := strings.Cut(part, ";")

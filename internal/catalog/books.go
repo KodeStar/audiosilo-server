@@ -74,8 +74,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     released, released_checked, genres_checked,
 			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
-			     file_order, file_order_indexed_at, ebook_path, ebook_sig)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?,?,?)
+			     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -101,7 +101,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     -- An ebook that could not be read right now (EbookReading.Unread)
 			     -- keeps the stored reading.
 			     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
-			     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END
+			     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
+			     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -112,7 +113,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
 			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-			b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
+			b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
+			b.EbookFile.Unread).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -664,21 +666,22 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
-	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_sig`
+	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
 // after the scan, derives the cover fields, the series list and the labels from
 // the columns behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
-	var more, art, color, attachments, genres, tags, ebookPath, ebookSig string
+	var more, art, color, attachments, genres, tags, ebookPath string
+	var ebookSize int64
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color, &attachments,
-			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSig},
+			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
 		func() {
-			b.Ebook = ebookOf(ebookPath, ebookSig)
+			b.Ebook = ebookOf(ebookPath, ebookSize)
 			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)
 			b.CoverVersion = CoverVersion(art)
 			b.GeneratedParts = sigParts(attachments)
