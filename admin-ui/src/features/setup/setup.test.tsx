@@ -350,12 +350,49 @@ describe('folder, naming and metadata', () => {
 
   it('Continue past naming with nothing left to name keeps it done', async () => {
     const calls = mockFetch(
-      flowRoutes({ steps: { folder: 'done', naming: 'done', metadata: 'done' } }),
+      flowRoutes({ steps: { folder: 'skipped', naming: 'done', metadata: 'done' } }),
     );
     renderApp('/setup?step=naming');
     expect(await screen.findByText('No folder to name yet')).toBeVisible();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]));
+  });
+});
+
+describe('a folder chosen in another browser (ADMIN-02)', () => {
+  it('reopens the folder step as not done, even from a link to naming, and still creates the library', async () => {
+    // Browser A chose the folder and left; this browser has no draft and the server no library.
+    let created: AdminLibrary[] = [];
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': () => ({ body: { libraries: created } }),
+          'POST /admin/libraries': (req) => {
+            const body = req.body as { name: string; root: string };
+            created = libraries([{ ...body, id: 7 }]).slice(0, 1);
+            return { status: 201, body: created[0] };
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(screen.getByText('Choose the folder again')).toBeVisible();
+    const steps = screen.getByRole('navigation', { name: 'Setup steps' });
+    expect(within(steps).queryByText(', done')).toBeNull();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Books folder'), '/audiobooks');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
+    expect(screen.queryByText('Choose the folder again')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    const post = calls.find((c) => c.path === '/admin/libraries' && c.method === 'POST');
+    expect(post?.body).toMatchObject({ kind: 'books', root: '/audiobooks' });
   });
 });
 

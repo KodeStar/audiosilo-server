@@ -22,7 +22,16 @@ import { StepStop, previewQuery, type StepProps } from './step-actions';
  * in words that catch the Docker host-path mistake. The library is created
  * later, after its naming and region (decision 5); here it becomes the draft.
  */
-export function FolderStep({ env, libraries, draft, setDraft, leave, back, last }: StepProps) {
+export function FolderStep({
+  env,
+  libraries,
+  draft,
+  setDraft,
+  leave,
+  back,
+  last,
+  folderLost,
+}: StepProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -110,6 +119,11 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
   return (
     <>
       <div className="flex flex-col gap-5">
+        {folderLost ? (
+          <Notice tone="info" icon={FolderOpen} role="status" title={t('setup.folder.lost')}>
+            {t('setup.folder.lostBody')}
+          </Notice>
+        ) : null}
         <Field
           htmlFor="setup-folder"
           label={t('setup.folder.label')}

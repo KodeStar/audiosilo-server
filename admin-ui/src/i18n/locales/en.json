@@ -3219,6 +3219,8 @@
   "setup.folder.hints": "Folders mounted into the server:",
   "setup.folder.required": "Type the folder's path first.",
   "setup.folder.requiredOrSkip": "Type the folder that holds your books, or skip this step to add a library later.",
+  "setup.folder.lost": "Choose the folder again",
+  "setup.folder.lostBody": "This step was finished in another browser, and the folder chosen there is kept only in that browser. Type it here to go on: the library is made after the next two steps.",
   "setup.folder.error.path_not_absolute": "Type the whole path, starting from the top, like /audiobooks or C:\\Audiobooks.",
   "setup.folder.error.folder_unreadable": "{{root}} isn't there, or the server can't read it. In Docker, type the folder inside the container (the right-hand side of the volume), not the one on your computer, and check the container's user can read it.",
   "setup.folder.error.root_overlaps": "{{root}} overlaps a podcast library's folder. Choose a folder that isn't inside it and doesn't contain it.",

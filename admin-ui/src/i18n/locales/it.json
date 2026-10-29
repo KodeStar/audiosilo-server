@@ -3397,6 +3397,8 @@
   "setup.folder.hints": "Cartelle montate nel server:",
   "setup.folder.required": "Scrivi prima il percorso della cartella.",
   "setup.folder.requiredOrSkip": "Scrivi la cartella con i tuoi libri, oppure salta questo passaggio per aggiungere una libreria in seguito.",
+  "setup.folder.lost": "Scegli di nuovo la cartella",
+  "setup.folder.lostBody": "Questo passaggio è stato completato in un altro browser e la cartella scelta lì è salvata solo in quel browser. Scrivila qui per continuare: la libreria viene creata dopo i due passaggi successivi.",
   "setup.folder.error.path_not_absolute": "Scrivi il percorso completo dalla radice, come /audiobooks o C:\\Audiobooks.",
   "setup.folder.error.folder_unreadable": "{{root}} non esiste o il server non riesce a leggerla. In Docker scrivi la cartella dentro il container (il lato destro del volume), non quella del tuo computer, e verifica che l'utente del container possa leggerla.",
   "setup.folder.error.root_overlaps": "{{root}} si sovrappone alla cartella di una libreria di podcast. Scegli una cartella che non sia al suo interno e non la contenga.",

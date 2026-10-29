@@ -3397,6 +3397,8 @@
   "setup.folder.hints": "Carpetas montadas en el servidor:",
   "setup.folder.required": "Escribe primero la ruta de la carpeta.",
   "setup.folder.requiredOrSkip": "Escribe la carpeta con tus libros, u omite este paso para añadir una biblioteca más tarde.",
+  "setup.folder.lost": "Vuelve a elegir la carpeta",
+  "setup.folder.lostBody": "Este paso se terminó en otro navegador, y la carpeta elegida allí solo se guarda en ese navegador. Escríbela aquí para continuar: la biblioteca se crea después de los dos pasos siguientes.",
   "setup.folder.error.path_not_absolute": "Escribe la ruta completa desde el principio, como /audiobooks o C:\\Audiobooks.",
   "setup.folder.error.folder_unreadable": "{{root}} no existe o el servidor no puede leerla. En Docker, escribe la carpeta dentro del contenedor (la parte derecha del volumen), no la de tu ordenador, y comprueba que el usuario del contenedor puede leerla.",
   "setup.folder.error.root_overlaps": "{{root}} se solapa con la carpeta de una biblioteca de pódcasts. Elige una carpeta que no esté dentro de ella ni la contenga.",

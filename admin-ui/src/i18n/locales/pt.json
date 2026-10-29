@@ -3397,6 +3397,8 @@
   "setup.folder.hints": "Pastas montadas no servidor:",
   "setup.folder.required": "Escreva primeiro o caminho da pasta.",
   "setup.folder.requiredOrSkip": "Escreva a pasta com os seus livros, ou salte este passo para adicionar uma biblioteca mais tarde.",
+  "setup.folder.lost": "Escolha a pasta de novo",
+  "setup.folder.lostBody": "Este passo foi concluído noutro navegador, e a pasta escolhida aí só fica guardada nesse navegador. Escreva-a aqui para continuar: a biblioteca é criada depois dos dois passos seguintes.",
   "setup.folder.error.path_not_absolute": "Escreva o caminho completo desde o início, como /audiobooks ou C:\\Audiobooks.",
   "setup.folder.error.folder_unreadable": "{{root}} não existe ou o servidor não a consegue ler. No Docker, escreva a pasta dentro do contentor (o lado direito do volume), não a do seu computador, e verifique que o utilizador do contentor a consegue ler.",
   "setup.folder.error.root_overlaps": "{{root}} sobrepõe-se à pasta de uma biblioteca de podcasts. Escolha uma pasta que não esteja dentro dela nem a contenha.",

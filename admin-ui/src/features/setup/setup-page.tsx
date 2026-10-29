@@ -17,6 +17,7 @@ import {
   SETUP_STEPS,
   type AdminSettings,
   type SetupMark,
+  type SetupMarks,
   type SetupState,
   type SetupStepId,
 } from '@/api/types';
@@ -33,6 +34,7 @@ import { NamingStep } from './naming-step';
 import { BackupsStep, MetadataStep, ReachStep } from './settings-steps';
 import {
   finishMarks,
+  folderLost,
   hasBookLibrary,
   nextStep,
   parseDraft,
@@ -135,9 +137,11 @@ function Flow({
   // before this renders again, and where the flow goes next depends on it.
   const draftNow = useRef(draft);
   const [createdId, setCreatedId] = useState<number | null>(null);
-  const current =
-    step ??
-    resumeStep(state.steps, { hasDraft: !!draft, hasLibraries: hasBookLibrary(props.libraries) });
+  const facts = { hasDraft: !!draft, hasLibraries: hasBookLibrary(props.libraries) };
+  // A library made on this visit clears the draft before the list has
+  // refetched: the folder isn't lost then.
+  const lost = createdId === null && folderLost(state.steps, facts);
+  const current = resumeStep(state.steps, facts, step);
   const next = nextStep(current, state, draft);
   const prev = previousStep(current);
 
@@ -196,7 +200,10 @@ function Flow({
   const Step = STEP[current];
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
-      <Stepper state={state} current={current} />
+      <Stepper
+        marks={lost ? { ...state.steps, folder: undefined } : state.steps}
+        current={current}
+      />
       <div className="min-w-0">
         <div className="mb-5 flex flex-col gap-2">
           <div className="eyebrow">
@@ -225,6 +232,7 @@ function Flow({
             back={prev ? () => go(prev) : null}
             last={next === null}
             onCreated={setCreatedId}
+            folderLost={lost}
           />
         </section>
       </div>
@@ -237,13 +245,13 @@ function Flow({
  * pink, any of them a click away. A column beside the step on a wide screen,
  * a row of numbered dots on a phone.
  */
-function Stepper({ state, current }: { state: SetupState; current: SetupStepId }) {
+function Stepper({ marks, current }: { marks: SetupMarks; current: SetupStepId }) {
   const { t } = useTranslation();
   return (
     <nav aria-label={t('setup.steps')}>
       <ol className="flex gap-1.5 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-visible">
         {SETUP_STEPS.map((id, i) => {
-          const mark = state.steps[id];
+          const mark = marks[id];
           const here = id === current;
           const Mark = here
             ? null

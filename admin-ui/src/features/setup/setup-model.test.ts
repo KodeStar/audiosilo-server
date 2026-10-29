@@ -20,6 +20,7 @@ import {
   previousStep,
   proxyToTrust,
   reachOffers,
+  folderLost,
   resumeStep,
   shouldRedirect,
   showFinishCard,
@@ -35,6 +36,16 @@ const state = (over: Partial<SetupState> = {}): SetupState => ({
 });
 
 const fresh = { hasDraft: false, hasLibraries: false };
+
+describe('folderLost', () => {
+  it('is a done folder step with no draft and no library', () => {
+    expect(folderLost({ folder: 'done' }, fresh)).toBe(true);
+    expect(folderLost({ folder: 'done' }, { ...fresh, hasDraft: true })).toBe(false);
+    expect(folderLost({ folder: 'done' }, { ...fresh, hasLibraries: true })).toBe(false);
+    expect(folderLost({ folder: 'skipped' }, fresh)).toBe(false);
+    expect(folderLost({}, fresh)).toBe(false);
+  });
+});
 
 describe('resumeStep', () => {
   it('opens a fresh server at the folder step', () => {
@@ -58,6 +69,19 @@ describe('resumeStep', () => {
     expect(
       resumeStep({ folder: 'done', naming: 'done' }, { hasDraft: false, hasLibraries: true }),
     ).toBe('metadata');
+  });
+
+  it('asks for the folder again when deep-linked to a step that needs it', () => {
+    // Browser B, sent to ?step=naming after browser A chose the folder.
+    expect(resumeStep({ folder: 'done' }, fresh, 'naming')).toBe('folder');
+    expect(resumeStep({ folder: 'done' }, fresh, 'metadata')).toBe('folder');
+    // Steps after the library is made don't need the folder.
+    expect(resumeStep({ folder: 'done' }, fresh, 'reach')).toBe('reach');
+    // With the draft here, or a library, the link opens as asked.
+    expect(resumeStep({ folder: 'done' }, { ...fresh, hasDraft: true }, 'naming')).toBe('naming');
+    expect(resumeStep({ folder: 'done' }, { ...fresh, hasLibraries: true }, 'naming')).toBe(
+      'naming',
+    );
   });
 
   it('a skipped folder never sends the admin back to it', () => {

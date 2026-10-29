@@ -3219,6 +3219,8 @@
   "setup.folder.hints": "Im Server eingehängte Ordner:",
   "setup.folder.required": "Gib zuerst den Pfad des Ordners ein.",
   "setup.folder.requiredOrSkip": "Gib den Ordner mit deinen Büchern ein oder überspringe diesen Schritt, um später eine Bibliothek hinzuzufügen.",
+  "setup.folder.lost": "Wähle den Ordner erneut",
+  "setup.folder.lostBody": "Dieser Schritt wurde in einem anderen Browser abgeschlossen, und der dort gewählte Ordner ist nur in diesem Browser gespeichert. Gib ihn hier ein, um weiterzumachen: Die Bibliothek wird nach den nächsten zwei Schritten angelegt.",
   "setup.folder.error.path_not_absolute": "Gib den ganzen Pfad von oben an ein, etwa /audiobooks oder C:\\Audiobooks.",
   "setup.folder.error.folder_unreadable": "{{root}} gibt es nicht, oder der Server kann ihn nicht lesen. In Docker gib den Ordner im Container an (die rechte Seite des Volumes), nicht den auf deinem Computer, und prüfe, ob der Benutzer des Containers ihn lesen kann.",
   "setup.folder.error.root_overlaps": "{{root}} überschneidet sich mit dem Ordner einer Podcast-Bibliothek. Wähle einen Ordner, der weder darin liegt noch ihn enthält.",
