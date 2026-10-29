@@ -26,6 +26,21 @@ type ProbeChapter struct {
 	Title string `json:"title"`
 }
 
+// ProbeGolden is a fixture folder's golden-<release>.json: that release's
+// ffprobe's answer for each fixture, and the probe's fallback reason where it
+// leaves one to ffprobe. cmd/probediff writes it; probe_golden_test.go reads it.
+type ProbeGolden struct {
+	FFprobe string                       `json:"ffprobe"` // the ffprobe that wrote it (its -version line)
+	Files   map[string]ProbeGoldenAnswer `json:"files"`
+}
+
+// ProbeGoldenAnswer is one fixture's entry in a ProbeGolden.
+type ProbeGoldenAnswer struct {
+	FFprobe  *ProbeView `json:"ffprobe,omitempty"`
+	Error    string     `json:"ffprobe_error,omitempty"`
+	Fallback string     `json:"fallback,omitempty"`
+}
+
 // ProbeInProcess is the in-process probe's view of the file at path as the
 // ffprobe at ffprobePath would answer (its release's rules), or why it leaves
 // the file to ffprobe (the view nil then); an error when the file can't be

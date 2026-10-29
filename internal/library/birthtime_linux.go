@@ -11,16 +11,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// birthTime returns the file's creation (birth) time via statx. Btime needs a
-// path (it isn't in the standard stat struct on Linux) and isn't supported by
-// every filesystem, so callers fall back to mtime when ok is false.
-func birthTime(absPath string, _ os.FileInfo) (time.Time, bool) {
-	bt, ok, _ := statxBirth(absPath)
-	return bt, ok
-}
-
-// statxBirth is birthTime with statx's error: ok is false, with no error, on a
-// filesystem that doesn't record a birth time.
+// statxBirth is the file's creation (birth) time via statx. Btime needs a path
+// (it isn't in the standard stat struct on Linux) and isn't recorded by every
+// filesystem: ok is then false, with no error, and the mtime stands in.
 func statxBirth(absPath string) (time.Time, bool, error) {
 	var stx unix.Statx_t
 	if err := unix.Statx(unix.AT_FDCWD, absPath, 0, unix.STATX_BTIME, &stx); err != nil {
@@ -47,7 +40,7 @@ func addedFrom(absPath string, found int64) (string, bool) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", false
 	case ok && !bt.IsZero():
-		return bt.UTC().Format(time.RFC3339), true
+		return formatAdded(bt.Unix()), true
 	}
 	return formatAdded(found), true
 }

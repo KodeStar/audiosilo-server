@@ -5,6 +5,7 @@ package metadata
 // CHAPTERxxx chapters (oggparsevorbis.c ogm_chapter).
 
 import (
+	"bytes"
 	"encoding/binary"
 	"strings"
 )
@@ -68,13 +69,13 @@ func ogmChapter(cl *chapterList, key, val string) bool {
 		if !ok4 {
 			return false
 		}
-		cl.add(int64(cnum), 1, 1000, int64(ms+1000*(sec+60*(m+60*h))), 0, false, "", false)
+		cl.add(int64(cnum), 1, 1000, int64(ms+1000*(sec+60*(m+60*h))), 0, false, "")
 		return true
 	}
 	if asciiFold(key[kl-4:], "NAME") {
 		for _, c := range cl.c {
 			if c.id == int64(cnum) {
-				c.title, c.hasTitle = val, true
+				c.title = val
 				return true
 			}
 		}
@@ -103,15 +104,15 @@ func vorbisComment(buf []byte, d *avDict, cl *chapterList) {
 			break
 		}
 		c := buf[p : p+s]
-		if eq := strings.IndexByte(string(c), '='); eq > 0 && eq < len(c)-1 {
-			t, v := string(c[:eq]), string(c[eq+1:])
-			t, v = cutNUL(t), cutNUL(v)
-			if asciiFold(t, "METADATA_BLOCK_PICTURE") {
-			} else if !ogmChapter(cl, t, v) {
-				if _, ok := d.get(t); ok {
-					d.set(t, ";", dictAppend)
+		if eq := bytes.IndexByte(c, '='); eq > 0 && eq < len(c)-1 {
+			// A picture's value (base64, often megabytes) is never copied.
+			if t := cutNUL(string(c[:eq])); !asciiFold(t, "METADATA_BLOCK_PICTURE") {
+				if v := cutNUL(string(c[eq+1:])); !ogmChapter(cl, t, v) {
+					if _, ok := d.get(t); ok {
+						d.set(t, ";", dictAppend)
+					}
+					d.set(t, v, dictAppend)
 				}
-				d.set(t, v, dictAppend)
 			}
 		}
 		p += s
@@ -120,21 +121,29 @@ func vorbisComment(buf []byte, d *avDict, cl *chapterList) {
 	d.conv(vorbisCommentConv)
 }
 
-func probeFLAC(b *blockFile) (*probeResult, error) {
+// noID3Front is unsure of a file that opens with an ID3v2 tag (format names it).
+func noID3Front(b *blockFile, format string) error {
 	var id3 avDict
 	var chaps []id3Chap
 	off, err := readID3v2(b, 0, &id3, &chaps)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if off != 0 {
-		return nil, unsure("flac: ID3v2 tag in front")
+		return unsure(format + ": ID3v2 tag in front")
 	}
-	m, ok := b.bytesAt(off, 4)
+	return nil
+}
+
+func probeFLAC(b *blockFile) (*probeResult, error) {
+	if err := noID3Front(b, "flac"); err != nil {
+		return nil, err
+	}
+	m, ok := b.bytesAt(0, 4)
 	if !ok || string(m) != "fLaC" {
 		return nil, unsure("flac: no fLaC marker")
 	}
-	at := off + 4
+	at := int64(4)
 	var d avDict
 	var cl chapterList
 	var samples, sr int64
@@ -214,6 +223,9 @@ type oggPage struct {
 	data    []byte
 	size    int64
 }
+
+// oggMagic opens every Ogg page.
+var oggMagic = []byte("OggS")
 
 // parseOggPage reads a page at buf[0:] (CRC checked, as oggdec does).
 func parseOggPage(buf []byte) (*oggPage, bool) {
@@ -404,14 +416,8 @@ func (v *vorbisParse) duration(b []byte) int {
 }
 
 func probeOgg(b *blockFile) (*probeResult, error) {
-	var id3 avDict
-	var chaps []id3Chap
-	off, err := readID3v2(b, 0, &id3, &chaps)
-	if err != nil {
+	if err := noID3Front(b, "ogg"); err != nil {
 		return nil, err
-	}
-	if off != 0 {
-		return nil, unsure("ogg: ID3v2 tag in front")
 	}
 	// Read pages from the start until the first data page of the stream.
 	var serial uint32
@@ -470,12 +476,17 @@ func probeOgg(b *blockFile) (*probeResult, error) {
 			break
 		}
 		for i, p := range pk {
-			if partial != nil {
-				p = append(partial, p...)
+			cont := partial != nil
+			if cont {
+				p = append(partial, p...) // owned: partial was a copy
 				partial = nil
 			}
 			if !complete[i] {
-				partial = append([]byte(nil), p...)
+				if cont {
+					partial = p // grows in place, not copied per page
+				} else {
+					partial = append([]byte(nil), p...)
+				}
 				continue
 			}
 			if codec == "" {
@@ -581,7 +592,7 @@ func probeOgg(b *blockFile) (*probeResult, error) {
 	}
 	lastGranule := int64(-1)
 	for i := 0; i+27 <= len(tail); {
-		j := strings.Index(string(tail[i:]), "OggS")
+		j := bytes.Index(tail[i:], oggMagic)
 		if j < 0 {
 			break
 		}

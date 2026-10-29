@@ -232,7 +232,7 @@ func readID3v2(b *blockFile, off int64, d *avDict, chaps *[]id3Chap) (int64, err
 			h[6]&0x80 == 0 && h[7]&0x80 == 0 && h[8]&0x80 == 0 && h[9]&0x80 == 0) {
 			break
 		}
-		size := int64(h[6]&0x7f)<<21 | int64(h[7]&0x7f)<<14 | int64(h[8]&0x7f)<<7 | int64(h[9]&0x7f)
+		size := int64(syncsafeToSize(binary.BigEndian.Uint32(h[6:10])))
 		end := off + 10 + size
 		if err := parseID3v2(b, off+10, size, h[3], h[5], d, chaps); err != nil {
 			return 0, err
@@ -503,20 +503,25 @@ func mergeDate(d *avDict) {
 		}
 		return "", false
 	}
-	y, ok := get("TYER")
-	if !ok {
-		if y, ok = get("TYE"); !ok {
-			return
+	// first is the v2.3 frame, else its v2.2 twin.
+	first := func(k3, k2 string) (string, bool) {
+		if v, ok := get(k3); ok {
+			return v, true
 		}
+		return get(k2)
+	}
+	y, ok := first("TYER", "TYE")
+	if !ok {
+		return
 	}
 	date := y
 	d.del("TYER")
 	d.del("TYE")
-	if t, ok := get("TDAT"); ok || func() bool { t, ok = get("TDA"); return ok }() {
+	if t, ok := first("TDAT", "TDA"); ok {
 		date += "-" + t[2:4] + "-" + t[0:2]
 		d.del("TDAT")
 		d.del("TDA")
-		if t, ok := get("TIME"); ok || func() bool { t, ok = get("TIM"); return ok }() {
+		if t, ok := first("TIME", "TIM"); ok {
 			date += " " + t[0:2] + ":" + t[2:4]
 			d.del("TIME")
 			d.del("TIM")
@@ -675,14 +680,11 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 			sr = c.sampleRate
 			pos := base + 4
 			fsize := b.size - pos
-			lsfIdx, monoIdx := 0, 0
-			if c.lsf == 1 {
-				lsfIdx = 1
-			}
+			monoIdx := 0
 			if c.channels == 1 {
 				monoIdx = 1
 			}
-			xo := [2][2]int64{{32, 17}, {17, 9}}[lsfIdx][monoIdx]
+			xo := [2][2]int64{{32, 17}, {17, 9}}[c.lsf][monoIdx]
 			at := pos + xo
 			if t, ok := b.bytesAt(at, 4); ok && (string(t) == "Xing" || string(t) == "Info") {
 				at += 4
@@ -782,7 +784,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 
 	var cl chapterList
 	for i, ch := range chaps {
-		c := cl.add(int64(i), 1, 1000, int64(ch.start), int64(ch.end), true, ch.elementID, true)
+		c := cl.add(int64(i), 1, 1000, int64(ch.start), int64(ch.end), true, ch.elementID)
 		if t, ok := ch.meta.get("title"); ok {
 			c.title = t
 		}

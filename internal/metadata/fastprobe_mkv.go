@@ -13,24 +13,22 @@ import (
 )
 
 const (
-	mkvEBML        = 0x1A45DFA3
-	mkvSegment     = 0x18538067
-	mkvSeekHead    = 0x114D9B74
-	mkvInfo        = 0x1549A966
-	mkvTracks      = 0x1654AE6B
-	mkvChapters    = 0x1043A770
-	mkvTags        = 0x1254C367
-	mkvCluster     = 0x1F43B675
-	mkvCues        = 0x1C53BB6B
-	mkvAttachments = 0x1941A469
+	mkvEBML     = 0x1A45DFA3
+	mkvSegment  = 0x18538067
+	mkvSeekHead = 0x114D9B74
+	mkvInfo     = 0x1549A966
+	mkvTracks   = 0x1654AE6B
+	mkvChapters = 0x1043A770
+	mkvTags     = 0x1254C367
+	mkvCluster  = 0x1F43B675
+	mkvCues     = 0x1C53BB6B
 )
 
 // ebmlElem is one element: id, where its payload starts, its size (-1 unknown).
 type ebmlElem struct {
-	id        uint32
-	data      int64
-	size      int64
-	headerLen int
+	id   uint32
+	data int64
+	size int64
 }
 
 func readVint(b []byte, keepMarker bool) (uint64, int, bool) {
@@ -75,7 +73,7 @@ func elemAt(b *blockFile, off int64) (ebmlElem, bool) {
 	if !ok {
 		return ebmlElem{}, false
 	}
-	e := ebmlElem{id: uint32(id), data: off + int64(n+m), headerLen: n + m}
+	e := ebmlElem{id: uint32(id), data: off + int64(n+m)}
 	if sz == math.MaxUint64 {
 		e.size = -1
 	} else {
@@ -87,15 +85,21 @@ func elemAt(b *blockFile, off int64) (ebmlElem, bool) {
 	return e, true
 }
 
-// children splits an in-memory master payload into its elements.
-func children(p []byte) []struct {
+// ebmlChild is one element of an in-memory master payload.
+type ebmlChild struct {
 	id   uint32
 	data []byte
-} {
-	var out []struct {
-		id   uint32
-		data []byte
-	}
+}
+
+// seekEntry is a SeekHead entry: the id of a level-1 element and its position.
+type seekEntry struct {
+	id  uint32
+	pos int64
+}
+
+// children splits an in-memory master payload into its elements.
+func children(p []byte) []ebmlChild {
+	var out []ebmlChild
 	for i := 0; i < len(p); {
 		id, n, ok := readVint(p[i:], true)
 		if !ok || n > 4 {
@@ -105,10 +109,7 @@ func children(p []byte) []struct {
 		if !ok || sz == math.MaxUint64 || uint64(len(p)-i-n-m) < sz {
 			break
 		}
-		out = append(out, struct {
-			id   uint32
-			data []byte
-		}{uint32(id), p[i+n+m : i+n+m+int(sz)]})
+		out = append(out, ebmlChild{uint32(id), p[i+n+m : i+n+m+int(sz)]})
 		i += n + m + int(sz)
 	}
 	return out
@@ -138,7 +139,6 @@ type mkvChapter struct {
 	uid, start, end  uint64
 	hasStart, hasEnd bool
 	title            string
-	hasTitle         bool
 }
 
 type mkvSimpleTag struct {
@@ -196,10 +196,7 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 		segEnd = min(seg.data+seg.size, b.size)
 	}
 	s := &mkvState{b: b, timescale: 1000000, parsed: map[int64]bool{}}
-	var seeks []struct {
-		id  uint32
-		pos int64
-	}
+	var seeks []seekEntry
 	at := seg.data
 	for at < segEnd {
 		c, ok := elemAt(b, at)
@@ -230,10 +227,7 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 					}
 				}
 				if pos >= 0 {
-					seeks = append(seeks, struct {
-						id  uint32
-						pos int64
-					}{id, pos})
+					seeks = append(seeks, seekEntry{id, pos})
 				}
 			}
 		default:
@@ -283,27 +277,21 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 	// Chapters (ids are uids), then the tags.
 	var cl chapterList
 	var maxStart uint64
-	type kept struct {
-		ch  *avChapter
-		uid uint64
-	}
-	var keptCh []kept
 	for _, c := range s.chapters {
 		if c.hasStart && c.uid != 0 && (maxStart == 0 || c.start > maxStart) {
 			if c.uid > math.MaxInt64 {
 				return nil, unsure("mkv: chapter uid over int64")
 			}
-			ch := cl.add(int64(c.uid), 1, 1000000000, int64(c.start), int64(c.end), c.hasEnd, c.title, c.hasTitle)
-			keptCh = append(keptCh, kept{ch, c.uid})
+			cl.add(int64(c.uid), 1, 1000000000, int64(c.start), int64(c.end), c.hasEnd, c.title)
 			maxStart = c.start
 		}
 	}
 	// A chapter whose end comes from the format's end needs the start time
 	// FFmpeg reads from the packets: not modelled.
 	var last *avChapter
-	for _, k := range keptCh {
-		if last == nil || k.ch.start > last.start {
-			last = k.ch
+	for _, ch := range cl.c {
+		if last == nil || ch.start > last.start {
+			last = ch
 		}
 	}
 	if last != nil && !last.hasEnd {
@@ -323,11 +311,7 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 		case t.trackUID != 0:
 			continue
 		}
-		prefix := ""
-		if t.hasTargetType {
-			prefix = t.targetType
-		}
-		convertMKVTags(&d, t.tags, prefix, t.hasTargetType)
+		convertMKVTags(&d, t.tags, t.targetType, t.hasTargetType)
 	}
 	return result(durUS, s.codec, &d, cl.finish(durUS, 0, false)), nil
 }
@@ -453,7 +437,7 @@ func (s *mkvState) level1(c ebmlElem, pos int64) {
 					case 0x80:
 						for _, g := range children(f.data) {
 							if g.id == 0x85 {
-								ch.title, ch.hasTitle = cutNUL(string(g.data)), true
+								ch.title = cutNUL(string(g.data))
 							}
 						}
 					}

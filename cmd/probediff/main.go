@@ -182,20 +182,6 @@ func report(rs []result, timing bool) bool {
 
 var ffAddr = regexp.MustCompile(`@ 0x[0-9a-f]+`)
 
-// goldenFile is a fixture folder's golden-<release>.json: that release's
-// ffprobe's answer for each fixture, and the probe's fallback reason where it
-// leaves one to ffprobe. internal/metadata's probe_golden_test.go reads it.
-type goldenFile struct {
-	FFprobe string                  `json:"ffprobe"` // the ffprobe that wrote it (its -version line)
-	Files   map[string]goldenAnswer `json:"files"`
-}
-
-type goldenAnswer struct {
-	FFprobe  *metadata.ProbeView `json:"ffprobe,omitempty"`
-	Error    string              `json:"ffprobe_error,omitempty"`
-	Fallback string              `json:"fallback,omitempty"`
-}
-
 // writeGolden writes dir/golden-<release>.json from the fixtures in dir. It
 // fails when the probe answers a fixture differently from ffprobe, or follows
 // no rules for its release: a golden file never records a mismatch.
@@ -208,10 +194,10 @@ func writeGolden(ctx context.Context, dir, ffprobe string) error {
 	if err != nil {
 		return fmt.Errorf("%s -version: %w", ffprobe, err)
 	}
-	g := goldenFile{FFprobe: strings.SplitN(string(ver), " Copyright", 2)[0], Files: map[string]goldenAnswer{}}
+	g := metadata.ProbeGolden{FFprobe: strings.SplitN(string(ver), " Copyright", 2)[0], Files: map[string]metadata.ProbeGoldenAnswer{}}
 	for _, path := range audioFiles(dir) {
 		name, _ := filepath.Rel(dir, path)
-		var a goldenAnswer
+		var a metadata.ProbeGoldenAnswer
 		ff, err := metadata.ProbeFFprobe(ctx, path, ffprobe)
 		if err != nil {
 			// ffprobe names its demuxer by address ("[mov,mp4 @ 0xc7ac5c000]"), new each run.

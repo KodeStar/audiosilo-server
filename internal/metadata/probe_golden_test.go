@@ -15,16 +15,6 @@ import (
 // (scripts/gen-probe-fixtures.sh).
 const probeFixtures = "testdata/probe"
 
-// probeGolden is a golden-<release>.json (cmd/probediff writes it).
-type probeGolden struct {
-	FFprobe string `json:"ffprobe"`
-	Files   map[string]struct {
-		FFprobe  *ProbeView `json:"ffprobe"`
-		Error    string     `json:"ffprobe_error"`
-		Fallback string     `json:"fallback"`
-	} `json:"files"`
-}
-
 // fixtureFiles is every audio fixture under dir, by its slash path in dir.
 func fixtureFiles(t *testing.T, dir string) []string {
 	t.Helper()
@@ -66,7 +56,7 @@ func TestProbeMatchesGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("no golden for release %s (scripts/gen-probe-fixtures.sh writes it): %v", release, err)
 			}
-			var g probeGolden
+			var g ProbeGolden
 			if err := json.Unmarshal(data, &g); err != nil {
 				t.Fatal(err)
 			}

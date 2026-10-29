@@ -19,13 +19,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
+	"math/bits"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ffRules is the FFmpeg release whose answers the in-process probe gives: the
@@ -59,7 +62,10 @@ type pathRules struct {
 // for it); ffNone when it can't be run or names a release the probe doesn't
 // know. A caller whose ctx ends first gets ffNone, and the next one asks again.
 func ffprobeRules(ctx context.Context, ffprobePath string) ffRules {
-	e, _ := rulesByPath.LoadOrStore(ffprobePath, &pathRules{})
+	e, ok := rulesByPath.Load(ffprobePath)
+	if !ok {
+		e, _ = rulesByPath.LoadOrStore(ffprobePath, &pathRules{})
+	}
 	r := e.(*pathRules)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -205,9 +211,13 @@ func (b *blockFile) block(i int64) []byte {
 	buf := make([]byte, min(bfBlock, b.size-i*bfBlock))
 	n, _ := b.raw(buf, i*bfBlock)
 	buf = buf[:n]
-	if len(b.blocks) < maxBlocks {
-		b.blocks[i] = buf
+	if len(b.blocks) >= maxBlocks {
+		for k := range b.blocks { // full: any block makes room
+			delete(b.blocks, k)
+			break
+		}
 	}
+	b.blocks[i] = buf
 	return buf
 }
 
@@ -346,19 +356,22 @@ func (d *avDict) set(k, v string, flags int) {
 		if flags&dictAppend != 0 {
 			v = d.e[i].v + v
 		}
-		last := len(d.e) - 1
-		d.e[i] = d.e[last]
-		d.e = d.e[:last]
+		d.removeAt(i)
 	}
 	d.e = append(d.e, dictEntry{k, v})
 }
 
 func (d *avDict) del(k string) {
 	if i := d.find(k); i >= 0 {
-		last := len(d.e) - 1
-		d.e[i] = d.e[last]
-		d.e = d.e[:last]
+		d.removeAt(i)
 	}
+}
+
+// removeAt is av_dict_set's removal: the last entry takes the slot.
+func (d *avDict) removeAt(i int) {
+	last := len(d.e) - 1
+	d.e[i] = d.e[last]
+	d.e = d.e[:last]
 }
 
 // conv is ff_metadata_conv with only a source table.
@@ -382,11 +395,7 @@ func (d *avDict) conv(table [][2]string) {
 func (d *avDict) tags() map[string]string {
 	out := make(map[string]string, len(d.e))
 	for _, e := range d.e {
-		v := e.v
-		if i := strings.IndexByte(v, 0); i >= 0 {
-			v = v[:i]
-		}
-		out[strings.ToLower(e.k)] = string([]rune(v))
+		out[strings.ToLower(e.k)] = validUTF8(cutNUL(e.v))
 	}
 	return out
 }
@@ -398,6 +407,26 @@ func (d *avDict) tags() map[string]string {
 func rescale(a, b, c int64) int64 {
 	if c == 0 {
 		return 0
+	}
+	if c > 0 {
+		// The product and its rounding fit in 64 bits: the same answer
+		// without big.Int (finish calls this for every pair of chapters).
+		ua, ub := uint64(a), uint64(b)
+		neg := (a < 0) != (b < 0)
+		if a < 0 {
+			ua = -ua
+		}
+		if b < 0 {
+			ub = -ub
+		}
+		hi, lo := bits.Mul64(ua, ub)
+		if half := uint64(c) >> 1; hi == 0 && lo <= math.MaxInt64-half {
+			q := int64((lo + half) / uint64(c))
+			if neg && a != 0 && b != 0 {
+				q = -q
+			}
+			return q
+		}
 	}
 	x := new(big.Int).Mul(big.NewInt(a), big.NewInt(b))
 	cc := big.NewInt(c)
@@ -428,7 +457,6 @@ type avChapter struct {
 	start, end int64
 	hasEnd     bool
 	title      string
-	hasTitle   bool
 }
 
 type chapterList struct {
@@ -437,7 +465,7 @@ type chapterList struct {
 }
 
 // add is avpriv_new_chapter.
-func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title string, hasTitle bool) *avChapter {
+func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title string) *avChapter {
 	var ch *avChapter
 	if len(l.c) == 0 {
 		l.monotonic = true
@@ -455,7 +483,7 @@ func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title str
 		ch = &avChapter{}
 		l.c = append(l.c, ch)
 	}
-	ch.title, ch.hasTitle = title, hasTitle
+	ch.title = title
 	ch.id, ch.num, ch.den, ch.start, ch.end, ch.hasEnd = id, num, den, start, end, hasEnd
 	return ch
 }
@@ -504,7 +532,7 @@ func (l *chapterList) finish(durUS, startUS int64, hasStart bool) []Chapter {
 	out := make([]Chapter, 0, len(l.c))
 	for i, ch := range l.c {
 		out = append(out, Chapter{
-			Index: i, Title: string([]rune(cutNUL(ch.title))),
+			Index: i, Title: validUTF8(cutNUL(ch.title)),
 			Start: printTime(ch.start, ch.num, ch.den), End: printTime(ch.end, ch.num, ch.den),
 		})
 	}
@@ -515,6 +543,15 @@ func cmpChapterStart(a, b *avChapter) int {
 	x := new(big.Int).Mul(big.NewInt(a.start), big.NewInt(a.num*b.den))
 	y := new(big.Int).Mul(big.NewInt(b.start), big.NewInt(b.num*a.den))
 	return x.Cmp(y)
+}
+
+// validUTF8 is s with each invalid byte as U+FFFD, as ffprobe's JSON writer
+// leaves it (string([]rune(s)), skipped when s is already valid).
+func validUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return string([]rune(s))
 }
 
 func cutNUL(s string) string {

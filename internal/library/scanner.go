@@ -1562,11 +1562,11 @@ func relPathOf(root, absDir string) string {
 // where the OS/filesystem records it, otherwise its mtime. Formatted as RFC3339
 // UTC to match the other timestamp columns and sort lexicographically.
 func addedAt(absPath string, info os.FileInfo) string {
-	t := info.ModTime()
-	if bt, ok := birthTime(absPath, info); ok && !bt.IsZero() {
-		t = bt
+	found := lstatAdded(info)
+	if a, ok := addedFrom(absPath, found); ok {
+		return a
 	}
-	return t.UTC().Format(time.RFC3339)
+	return formatAdded(found)
 }
 
 // formatAdded is addedAt's format of a time in Unix seconds (the format has

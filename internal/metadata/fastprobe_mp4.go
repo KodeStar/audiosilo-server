@@ -643,7 +643,7 @@ func (s *mp4State) readChpl(body, size int64) {
 		}
 		title := string(c.b[c.pos : c.pos+l])
 		c.pos += l
-		s.chapters.add(int64(i), 1, 10000000, startV, 0, false, title, true)
+		s.chapters.add(int64(i), 1, 10000000, startV, 0, false, title)
 	}
 }
 
@@ -945,14 +945,14 @@ func (s *mp4State) readChapterTrack(t *mp4Track) error {
 					u = append(u, w)
 				}
 				title = string(utf16.Decode(u))
-				if l%2 == 1 || l > smp.size-2 {
+				if l%2 == 1 {
 					return unsure("mp4: odd UTF-16 chapter title")
 				}
 			} else {
 				title = cutNUL(string(raw))
 			}
 		}
-		s.chapters.add(int64(i), 1, t.timescale, smp.ts, end, hasEnd, title, true)
+		s.chapters.add(int64(i), 1, t.timescale, smp.ts, end, hasEnd, title)
 	}
 	return nil
 }
