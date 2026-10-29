@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -149,5 +150,68 @@ func TestParseVersion(t *testing.T) {
 		if got := parseVersion(in); got != want {
 			t.Errorf("parseVersion(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// writeStubs writes ffmpeg and ffprobe stubs into dir whose -version names
+// version.
+func writeStubs(t *testing.T, dir, version string) {
+	t.Helper()
+	for _, tool := range []string{"ffmpeg", "ffprobe"} {
+		script := "#!/bin/sh\necho '" + tool + " version " + version + " Copyright (c) 2007-2026'\n"
+		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A cached master build (an older server's download, which turns the
+// in-process probe off) is replaced by the pinned branch's on Linux and
+// Windows, once; a failed download keeps it; a release build or another
+// platform's source is left as it is (server#269).
+func TestEnsureReplacesCachedMaster(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts")
+	}
+	const master = "N-121510-g6e6a2b6f2c-20251028"
+	for _, tc := range []struct {
+		name, platform, cached string
+		dlErr                  error
+		wantDownloads          int
+		wantVersion            string
+	}{
+		{"master on linux", "linux/amd64", master, nil, 1, "n8.1.3-25-g611cec792a-20261029"},
+		{"master on windows", "windows/arm64", master, nil, 1, "n8.1.3-25-g611cec792a-20261029"},
+		{"master, download fails", "linux/amd64", master, errors.New("offline"), 1, master},
+		{"release build", "linux/amd64", "n8.1.3-25-g611cec792a-20261029", nil, 0, "n8.1.3-25-g611cec792a-20261029"},
+		{"distribution build", "linux/amd64", "7.1.1-3ubuntu1", nil, 0, "7.1.1-3ubuntu1"},
+		{"macOS master", "darwin/arm64", master, nil, 0, master},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeStubs(t, dir, tc.cached)
+			downloads := 0
+			dl := func(_ context.Context, s spec, into string) error {
+				downloads++
+				if !strings.Contains(s.combinedURL, "ffmpeg-n8.1-latest-") {
+					t.Errorf("downloaded %q", s.combinedURL)
+				}
+				if tc.dlErr != nil {
+					return tc.dlErr
+				}
+				writeStubs(t, into, "n8.1.3-25-g611cec792a-20261029")
+				return nil
+			}
+			goos, goarch, _ := strings.Cut(tc.platform, "/")
+			fm, fp := ensure(context.Background(), dir, discard(), goos, goarch, dl)
+			if fm == "" || fp == "" || downloads != tc.wantDownloads {
+				t.Fatalf("ensure = %q, %q after %d downloads, want both after %d", fm, fp, downloads, tc.wantDownloads)
+			}
+			if v, err := Version(context.Background(), fp); err != nil || v != tc.wantVersion {
+				t.Fatalf("ffprobe version %q %v, want %q", v, err, tc.wantVersion)
+			}
+		})
 	}
 }

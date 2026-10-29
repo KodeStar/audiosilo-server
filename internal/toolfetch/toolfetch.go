@@ -111,6 +111,11 @@ func cachedOne(dir, tool string) string {
 // tool couldn't be made available (offline, unsupported platform, or a failed
 // integrity check) - the caller degrades gracefully and retries next start.
 func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe string) {
+	return ensure(ctx, dir, log, runtime.GOOS, runtime.GOARCH, download)
+}
+
+// ensure is Ensure for platform goos/goarch, downloading with dl.
+func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error) (ffmpeg, ffprobe string) {
 	// Verify the cached copies rather than trusting a bare stat - a download killed
 	// mid-write (before writeExec became atomic, or a disk/FS fault) can leave a
 	// non-runnable binary that a stat happily reports as present. verified discards a
@@ -119,13 +124,13 @@ func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe 
 		ffmpeg = verified(ctx, ffmpeg, log)
 		ffprobe = verified(ctx, ffprobe, log)
 		if ffmpeg != "" && ffprobe != "" {
-			return ffmpeg, ffprobe
+			return replaceMaster(ctx, dir, log, goos, goarch, dl, ffmpeg, ffprobe)
 		}
 	}
-	s, ok := specFor(runtime.GOOS, runtime.GOARCH)
+	s, ok := specFor(goos, goarch)
 	if !ok {
 		log.Warn("no ffmpeg auto-download source for this platform; install ffmpeg to enable chapters/transcoding",
-			"platform", runtime.GOOS+"/"+runtime.GOARCH)
+			"platform", goos+"/"+goarch)
 		return Cached(dir)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -133,7 +138,7 @@ func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe 
 		return Cached(dir)
 	}
 	log.Info("ffmpeg/ffprobe not found locally - downloading a static build (one time)", "into", dir)
-	if err := download(ctx, s, dir); err != nil {
+	if err := dl(ctx, s, dir); err != nil {
 		log.Warn("ffmpeg auto-download failed; running without it (will retry next start)", "err", err)
 		return Cached(dir)
 	}
@@ -145,6 +150,25 @@ func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe 
 		log.Info("ffmpeg/ffprobe downloaded", "ffmpeg", ffmpeg != "", "ffprobe", ffprobe != "")
 	}
 	return ffmpeg, ffprobe
+}
+
+// replaceMaster swaps a cached BtbN master build (an older server's download,
+// whose "N-..." version the in-process probe doesn't know) for the pinned
+// branch's, once: the old pair stays when the download fails, and the next
+// start tries again. Any other cached pair is returned as it is.
+func replaceMaster(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, ffmpeg, ffprobe string) (string, string) {
+	s, ok := specFor(goos, goarch)
+	if v, err := Version(ctx, ffprobe); err != nil || !strings.HasPrefix(v, "N-") || !ok || s.combinedURL == "" {
+		return ffmpeg, ffprobe
+	}
+	log.Info("the cached ffmpeg/ffprobe is a master build - downloading the "+btbnBranch+" release build (one time)", "into", dir)
+	if err := dl(ctx, s, dir); err != nil {
+		log.Warn("ffmpeg release download failed; keeping the cached build (will retry next start)", "err", err)
+		return ffmpeg, ffprobe
+	}
+	// A tool that fails its self-check is removed: the next start downloads it.
+	newMpeg, newProbe := Cached(dir)
+	return verified(ctx, newMpeg, log), verified(ctx, newProbe, log)
 }
 
 // verified returns path if `<path> -version` runs, else "" (and removes the file).
