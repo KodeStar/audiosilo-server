@@ -279,18 +279,21 @@ const (
 
 // dupJoin is a bit set of the kinds of join that put a copy in its group, marked on
 // one copy of each join, so a group's joins are its members' bits ORed together. A
-// join by author/title/narrator marks nothing: it is the reason when no other is.
+// join by author/title/narrator marks nothing: it is the reason when no other is,
+// and identical audio is read off the members (dupSet.sameFiles).
 type dupJoin uint8
 
 const (
-	joinFiles dupJoin = 1 << iota // identical audio: hash and size
-	joinID                        // a shared ASIN/ISBN, whatever the lengths
+	joinID dupJoin = 1 << iota // a shared ASIN/ISBN, whatever the lengths
 )
 
 // dupSet is one group of copies: indexes into the rows, best copy first.
 type dupSet struct {
 	members []int
 	joins   dupJoin
+	// sameFiles: every member holds the same audio (fingerprint and size), so
+	// the group is byte-identical copies, not just some of them (ADMIN-04).
+	sameFiles bool
 	// lengthsDiffer: the group's shortest and longest known lengths are not
 	// sameLength (so some two are not); an unknown length (no ffprobe) is no
 	// evidence either way.
@@ -303,13 +306,14 @@ type dupSet struct {
 // then holds a different recording, and naming it a copy would invite deleting it.
 // The lengths are the whole group's, not one identifier's holders', so a book of
 // unknown length sharing one identifier with each of two different recordings
-// can't make them look like copies. Then identical audio, a shared identifier,
-// and author/title/narrator, strongest evidence first.
+// can't make them look like copies. Then identical audio (only when every copy
+// is: a group that identical audio joins only in part says what joins the rest),
+// a shared identifier, and author/title/narrator, strongest evidence first.
 func (s dupSet) reason() string {
 	switch {
 	case s.joins&joinID != 0 && s.lengthsDiffer:
 		return dupIDLengthDiffers
-	case s.joins&joinFiles != 0:
+	case s.sameFiles:
 		return dupSameFiles
 	case s.joins&joinID != 0:
 		return dupSameID
@@ -364,15 +368,17 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across boo
 	}
 	set := newDisjointSet(len(rows))
 	joins := make([]dupJoin, len(rows))
-	files := map[string]int{}    // the first book with this audio
-	byID := map[string]int{}     // the first book with this ASIN/ISBN
-	byMeta := map[string][]int{} // every book with this author/title/narrator
+	files := map[string]int{}       // the first book with this audio
+	audio := make([]int, len(rows)) // the first book with each row's audio, -1 for none
+	byID := map[string]int{}        // the first book with this ASIN/ISBN
+	byMeta := map[string][]int{}    // every book with this author/title/narrator
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
 		if across {
 			lib = ""
 		}
+		audio[i] = -1
 		for _, sig := range identitySignals(r.quality()) {
 			switch {
 			case strings.HasPrefix(sig, "m:"):
@@ -381,9 +387,10 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across boo
 				key := lib + sig + ":" + strconv.FormatInt(r.size, 10)
 				if j, ok := files[key]; ok {
 					set.union(i, j)
-					joins[i] |= joinFiles
+					audio[i] = j
 				} else {
 					files[key] = i
+					audio[i] = i
 				}
 			default: // "a:" or "i:"
 				if j, ok := byID[lib+sig]; ok {
@@ -413,11 +420,12 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64, across boo
 		if across && libraryID != 0 && !slices.ContainsFunc(members, func(i int) bool { return rows[i].libraryID == libraryID }) {
 			continue
 		}
-		ds := dupSet{members: members, ignored: true}
+		ds := dupSet{members: members, ignored: true, sameFiles: true}
 		shortest, longest := 0.0, 0.0 // known lengths; 0 = none known
 		for _, i := range members {
 			ds.joins |= joins[i]
 			ds.ignored = ds.ignored && rows[i].ignored
+			ds.sameFiles = ds.sameFiles && audio[i] >= 0 && audio[i] == audio[members[0]]
 			if d := rows[i].duration; d > 0 {
 				if longest == 0 {
 					shortest = d

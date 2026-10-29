@@ -472,8 +472,20 @@ func TestDuplicateReasons(t *testing.T) {
 		{"identical audio outranks a shared ASIN", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B06", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "b", Title: "Two", ASIN: "B06", ContentHash: "h", Size: 10, Duration: 36000},
-			{RelPath: "c", Title: "Three", ASIN: "B06", Duration: 36030},
+			{RelPath: "c", Title: "Three", ASIN: "B06", ContentHash: "h", Size: 10, Duration: 36030},
 		}, dupSameFiles, 3},
+		// ADMIN-04: two identical copies and a third the ASIN joins: not every
+		// copy is identical audio, so the group says what joins them all.
+		{"identical audio in part is not identical copies", []Book{
+			{RelPath: "a", Title: "One", ASIN: "B09", ContentHash: "h", Size: 10, Duration: 36000},
+			{RelPath: "b", Title: "Two", ASIN: "B09", ContentHash: "h", Size: 10, Duration: 36000},
+			{RelPath: "c", Title: "Three", ASIN: "B09", Duration: 36030},
+		}, dupSameID, 3},
+		{"identical audio in part, the rest by author/title/narrator", []Book{
+			{RelPath: "a", Title: "Dune", Author: "Frank Herbert", ContentHash: "h", Size: 10, Duration: 36000},
+			{RelPath: "b", Title: "Dune", Author: "Frank Herbert", ContentHash: "h", Size: 10, Duration: 36000},
+			{RelPath: "c", Title: "Dune", Author: "Frank Herbert", ContentHash: "g", Size: 12, Duration: 36020},
+		}, dupSameBook, 3},
 		// The third shares the copies' ASIN at another length: a different recording
 		// in the group, so it is never worded as identical copies.
 		{"different lengths outrank identical audio", []Book{

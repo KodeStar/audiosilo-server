@@ -1514,7 +1514,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
   lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
   recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
-  recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
+  recording, and the console then calls no copy the one to keep) > `same_files` (only when every
+  copy holds the same audio: a group identical audio joins in part takes the next reason, ADMIN-04) > `same_id` >
   `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
   groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
