@@ -22,6 +22,7 @@ import {
   type ThumbSize,
 } from './client';
 import { loadCommunityCover, loadThumb } from './cover-batch';
+import { thumbCache } from './thumb-cache';
 import { loadWork, type WorkAnswer } from './work-batch';
 import type {
   AdminBook,
@@ -85,8 +86,8 @@ export const keys = {
   audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
   /** Every cover thumbnail (a prefix). */
   thumbs: ['thumb'] as const,
-  thumb: (libraryId: number, path: string, size: ThumbSize) =>
-    ['thumb', libraryId, path, size] as const,
+  thumb: (libraryId: number, path: string, size: ThumbSize, version = '') =>
+    ['thumb', libraryId, path, size, version] as const,
   libraries: ['admin', 'libraries'] as const,
   recentBooks: (libraryId: number) => ['books', 'recent', libraryId] as const,
   /** Every listing of one library's folders (a prefix: a scan changes them). */
@@ -383,24 +384,35 @@ export function useUpdateStatus() {
 
 /**
  * A cover thumbnail as a data: URL (null = the book has no art), batched with
- * every other cover asked for in the same moment (cover-batch.ts). Covers rarely
- * change: fresh for an hour (invalidateCover after an upload), but dropped five
- * minutes after the last cover using it unmounts, so scrolling a long grid
- * doesn't hold every data: URL in memory.
+ * every other cover asked for in the same moment (cover-batch.ts). With the
+ * row's `version` (its cover_version) it is also kept across reloads in the
+ * thumbnail cache (thumb-cache.ts), and a new version is a new query. Covers
+ * rarely change: fresh for an hour (invalidateCover after an upload), but
+ * dropped from memory five minutes after the last cover using it unmounts, so
+ * scrolling a long grid doesn't hold every data: URL in memory.
  */
-export function useCover(libraryId: number, path: string, size: ThumbSize = 320) {
+export function useCover(
+  libraryId: number,
+  path: string,
+  size: ThumbSize = 320,
+  enabled = true,
+  version?: string,
+) {
   return useQuery({
-    queryKey: keys.thumb(libraryId, path, size),
-    queryFn: ({ signal }) => loadThumb({ library_id: libraryId, path }, size, signal),
+    queryKey: keys.thumb(libraryId, path, size, version),
+    queryFn: ({ signal }) => loadThumb({ library_id: libraryId, path }, size, signal, version),
+    enabled,
     staleTime: 60 * 60_000,
     gcTime: 5 * 60_000,
     retry: false,
   });
 }
 
-/** Refetches a book's cover everywhere it shows (every thumbnail size). */
+/** Refetches a book's cover everywhere it shows (every thumbnail size), kept ones too. */
 export function invalidateCover(qc: QueryClient, libraryId: number, path: string) {
-  void qc.invalidateQueries({ queryKey: ['thumb', libraryId, path] });
+  void thumbCache()
+    .forget(libraryId, path)
+    .finally(() => qc.invalidateQueries({ queryKey: ['thumb', libraryId, path] }));
 }
 
 /**
@@ -742,12 +754,25 @@ export function useIssues() {
   return useQuery({ queryKey: keys.issueSummary, queryFn: api.issues, staleTime: 30_000 });
 }
 
-/** Groups of copies of one book: the open ones, or with `ignored` the ignored ones. */
+/** How many duplicate groups a page of the Health list loads. */
+export const DUPLICATES_PAGE = 50;
+
+/**
+ * Groups of copies of one book, a page at a time (`fetchNextPage` for more): the
+ * open ones, or with `ignored` the ignored ones.
+ */
 export function useDuplicates(ignored: boolean, across = false) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: keys.duplicates(ignored, across),
-    queryFn: () =>
-      api.duplicates({ ignored: ignored || undefined, across }).then((r) => r.groups ?? []),
+    queryFn: ({ pageParam }) =>
+      api.duplicates({
+        ignored: ignored || undefined,
+        across,
+        limit: DUPLICATES_PAGE,
+        cursor: pageParam,
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor || undefined,
   });
 }
 

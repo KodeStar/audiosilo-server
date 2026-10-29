@@ -42,7 +42,8 @@ func (e *testEnv) cachedBodies(marker string) {
 	e.api.lists.mu.Lock()
 	defer e.api.lists.mu.Unlock()
 	for _, el := range e.api.lists.entries {
-		el.Value.(*listEntry).body = []byte(marker)
+		e := el.Value.(*listEntry)
+		e.body, e.gz = []byte(marker), nil
 	}
 }
 
@@ -202,18 +203,18 @@ func TestListCacheGenerations(t *testing.T) {
 	t.Parallel()
 	c := newListCache()
 	k := func(s string) [sha256.Size]byte { return sha256.Sum256([]byte(s)) }
-	c.put(5, k("a"), []byte("five"))
-	if _, ok := c.get(4, k("a")); ok {
+	c.put(5, k("a"), []byte("five"), nil)
+	if _, _, ok := c.get(4, k("a")); ok {
 		t.Fatal("an older generation read a newer entry")
 	}
-	c.put(4, k("b"), []byte("four"))
-	if b, ok := c.get(5, k("a")); !ok || string(b) != "five" {
+	c.put(4, k("b"), []byte("four"), nil)
+	if b, _, ok := c.get(5, k("a")); !ok || string(b) != "five" {
 		t.Fatalf("generation 5's entry after an older request: %q, %v", b, ok)
 	}
-	if _, ok := c.get(5, k("b")); ok {
+	if _, _, ok := c.get(5, k("b")); ok {
 		t.Fatal("an older generation's answer was stored")
 	}
-	if _, ok := c.get(6, k("a")); ok {
+	if _, _, ok := c.get(6, k("a")); ok {
 		t.Fatal("a newer generation read an older entry")
 	}
 	if len(c.entries) != 0 || c.size != 0 {
@@ -222,23 +223,23 @@ func TestListCacheGenerations(t *testing.T) {
 
 	big := make([]byte, listCacheMaxEntry)
 	for i := range listCacheBytes/listCacheMaxEntry + 1 {
-		c.put(6, k(fmt.Sprint(i)), big)
+		c.put(6, k(fmt.Sprint(i)), big, nil)
 	}
 	if c.size > listCacheBytes {
 		t.Fatalf("size %d over the bound %d", c.size, listCacheBytes)
 	}
-	if _, ok := c.get(6, k("0")); ok {
+	if _, _, ok := c.get(6, k("0")); ok {
 		t.Fatal("the least recently used entry was kept past the bound")
 	}
-	c.put(6, k("huge"), make([]byte, listCacheMaxEntry+1))
-	if _, ok := c.get(6, k("huge")); ok {
+	c.put(6, k("huge"), make([]byte, listCacheMaxEntry+1), nil)
+	if _, _, ok := c.get(6, k("huge")); ok {
 		t.Fatal("an answer over listCacheMaxEntry was kept")
 	}
 
 	// Tiny answers count their entry too, so a flood of them stays inside the
 	// bound in entries as well as in bytes.
 	for i := range listCacheBytes/listEntryCost + 1 {
-		c.put(7, k(fmt.Sprint(i)), []byte("{}\n"))
+		c.put(7, k(fmt.Sprint(i)), []byte("{}\n"), nil)
 	}
 	if n := len(c.entries); c.size > listCacheBytes || n > listCacheBytes/listEntryCost {
 		t.Fatalf("%d tiny entries, %d bytes: over the bound %d", n, c.size, listCacheBytes)

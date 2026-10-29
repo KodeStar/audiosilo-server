@@ -1168,6 +1168,17 @@ export interface DuplicateGroup {
   books: DuplicateMember[];
 }
 
+/**
+ * catalog.DuplicatePage, GET /admin/issues/duplicates: a page of groups in a
+ * stable order (by library, then the kept copy's path); `total` counts every
+ * page's groups, `next_cursor` is absent on the last page.
+ */
+export interface DuplicatePage {
+  groups: DuplicateGroup[];
+  total: number;
+  next_cursor?: string;
+}
+
 /** library.DirListing (internal/library/dirs.go), GET /admin/fs/dirs. */
 export interface DirListing {
   path: string;
@@ -1448,6 +1459,8 @@ export interface AdminBook {
   custom_cover: boolean;
   /** Colours read from the cover art. Absent until the server has read the current art's colour. */
   cover_color?: CoverColor;
+  /** Changes when the cover art does (catalog.CoverVersion): the thumbnail cache's key. */
+  cover_version?: string;
   chapter_count: number;
   file_count: number;
   asin: string;
@@ -1947,6 +1960,8 @@ export interface CoverThumb {
   path: string;
   /** A data: URL of a JPEG thumbnail, or "" when the book has no art. */
   data: string;
+  /** The cover_version the book's row has for this art (absent without art): the cache keeps it under that. */
+  version?: string;
 }
 
 /** One entry of POST /admin/books/works (handlers_catalog.go bookWork), in request order. */

@@ -522,11 +522,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   replaced or used, a pairing token used, Bridge pair code issued, pair/unpair)
   or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; progress,
-  heartbeats and other listening writes never do.
+  heartbeats and other listening writes never do. The readers (never the writer) map the file
+  (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`, any case) is
+  `on`, or `auto` (the default) and the database file is on Linux on Unraid's shfs: statfs says
+  FUSE (`0x65735546`), then the `/proc/self/mountinfo` line for the file's device (stat's
+  `st_dev` against the `major:minor` field, no path matching) is `fuse.shfs`
+  (`mappableFSTypes`); any failure, or no line for the device, says off. Measured
+  2-9x faster on Unraid `/mnt/user`, little on a local disk; never on other FUSE filesystems (mergerfs: direct_io; sshfs,
+  rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
+  start logs which (`database readers: mmap`).
+  Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
+- **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
+  timeout. A request is compressible only when it is a GET under `/api/v1/` without Range, outside
+  the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/` and `/api/v1/bridge/`
+  (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
+  (BREACH). A new GET that returns a credential, or a long poll / stream, joins
+  `compressExcluded`. The answer is gzipped (BestSpeed) when it is `application/json`, at least
+  1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
+  to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
+  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
-  (8 MiB LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
+  (8 MiB LRU counting each answer's buffers, its JSON and its gzip, and entry, 1 MiB an
+  answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
   merge paths whose bytes aren't UTF-8), under the content generation read before
   the request's first read; any content write moves the generation and empties it
@@ -1343,7 +1362,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
   while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
   **The player's community covers** (rail entries, "Previous books", the recording) come
-  through `GET /libraries/{id}/meta/cover?path=&url=&size=160|320|640` (`handleMetaCover`,
+  through `GET /libraries/{id}/meta/cover?path=&url=&size=96|160|320|640` (`handleMetaCover`,
   capability `meta_covers` = `metadataOn()`; media auth, so `?token=`): the web player's
   CSP takes images only from the server, which stays so (`TestHTMLCSPImagesStaySameOrigin`),
   and a listener's device never contacts a cover host. Not an open proxy: the path is
@@ -1362,10 +1381,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the pixel bound). It stays under the request timeout (`isStreamingPath` matches
   only `/libraries/{id}/cover|stream|ebook` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
-  covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
-  thumbnails as `data:` URLs in request order (`""` = no art), resolved like
+  covers: `{books:[{library_id,path}], size: 96|160|320|640}` (<= 60; 96 for a table row) returns JPEG
+  thumbnails as `data:` URLs in request order (`""` = no art; each with the `version`, the
+  `cover_version` its admin row has once the request's colours are recorded), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
-  one `catalog.CoverSources` query per library for the whole batch.
+  one `catalog.CoverSources` query per library for the whole batch. Admin book rows carry
+  `cover_version`, and the console keeps the thumbnails it got in a bounded IndexedDB cache
+  keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), a thumbnail kept
+  under the version the answer names (never under an older row's version that asked for it),
+  cleared on sign-out.
   One request per page of covers instead of one per cover, no token in any URL,
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
@@ -1374,7 +1398,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   batch base64-encodes it), and
   `coverReads` bounds the art being read or waiting to be decoded and `thumbSem` the
   decodes, both across requests. The player gets
-  the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
+  the same thumbnails from `GET /libraries/{id}/cover?size=96|160|320|640` (capability
   `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
   304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
   `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
@@ -1487,7 +1511,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
   `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
-  groups, or with `?ignored=true` only the ignored ones), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
+  (<= 500, the default) after `?cursor=`, keyset on the kept copy's library + path, a paged one
+  ending early past 300 copies; `{groups, total, next_cursor?}`), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
   /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
   request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
   /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`

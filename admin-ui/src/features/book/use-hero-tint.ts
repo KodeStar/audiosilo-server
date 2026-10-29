@@ -30,9 +30,10 @@ export function useHeroTint(
   path: string,
   title: string,
   author: string,
+  version?: string,
 ): HeroTint | undefined {
   // The backdrop's thumbnail (it is blurred anyway): shared, and plenty to sample.
-  const cover = useCover(libraryId, path, 160);
+  const cover = useCover(libraryId, path, 160, true, version);
   const art = cover.data;
   const [sampled, setSampled] = useState<{ url: string; tint?: HeroTint }>();
 

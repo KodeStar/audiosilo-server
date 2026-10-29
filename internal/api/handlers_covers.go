@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -46,16 +47,26 @@ const (
 	maxConcurrentThumbnails = 4
 )
 
-// thumbSizes are the sizes a client may ask for; a fixed set keeps the cache
-// from holding one copy per arbitrary size.
-var thumbSizes = []int{160, defaultThumbSize, 640}
+// thumbSizes are the sizes a client may ask for, smallest first; a fixed set
+// keeps the cache from holding one copy per arbitrary size. 96 is for a table
+// row's 36-48px cover.
+var thumbSizes = []int{96, colorThumbSize, defaultThumbSize, 640}
+
+// colorThumbSize is the thumbnail colorCover makes when none is cached.
+const colorThumbSize = 160
 
 // coverThumb is one entry of the response, in request order. Data is a data: URL,
 // or "" when the book has no cover art (or no book is indexed at the path).
+// Version is the book's cover_version for this art, as its admin row has it once
+// the request's colours are recorded (a first thumbnail moves the row's version
+// to the art's own, RecordCoverColors), so the console files a thumbnail under
+// the version a reload's row names: never under an older row's version that
+// asked for it (the art has moved on since that row was read).
 type coverThumb struct {
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
 	Data      string `json:"data"`
+	Version   string `json:"version,omitempty"`
 }
 
 // maxCoverReads bounds the art reads in progress across all requests (a slow
@@ -125,6 +136,13 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			out[i].Data = jpegDataURL(jpg)
+			// The version the row has once this colour is recorded (as
+			// RecordCoverColors moves it), else the one it has now.
+			identity := src.Art
+			if rec != nil {
+				identity = cmp.Or(rec.Version, rec.Art)
+			}
+			out[i].Version = catalog.CoverVersion(identity)
 			recs[i] = rec
 		})
 	}
@@ -261,7 +279,7 @@ func (a *API) colorRecord(libraryID int64, path string, src catalog.CoverSource,
 
 // colorCover is the background colour pass's Colorer (covercolors): the colour of
 // a due book's cover, read like a thumbnail's. A thumbnail of the art already in
-// the cache is used as it is; otherwise one of the smallest size is made and not
+// the cache is used as it is; otherwise a colorThumbSize one is made and not
 // cached, so a pass over a library never pushes out the thumbnails people are
 // looking at. A book with no art, or none that decodes, gets a record of that (a
 // zero Color); one whose art files aren't there is covercolors.ErrArtMissing, not
@@ -282,7 +300,7 @@ func (a *API) colorCover(ctx context.Context, lib *catalog.Library, due catalog.
 	}
 	if !cached {
 		var err error
-		if jpg, err = a.makeThumbnail(ctx, lib, due.Path, art, thumbSizes[0]); err != nil {
+		if jpg, err = a.makeThumbnail(ctx, lib, due.Path, art, colorThumbSize); err != nil {
 			return none, err
 		}
 	}

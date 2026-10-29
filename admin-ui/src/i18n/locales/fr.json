@@ -1472,6 +1472,7 @@
   "health.dup.reason.id_length_differs_many": "{{count}} livres avec le même ASIN ou ISBN, mais de durées différentes",
   "health.dup.lengthDiffers": "Il peut s'agir d'enregistrements différents : l'un est peut-être associé au mauvais, ou incomplet. Associez-le à nouveau, ou indiquez que ce sont des livres différents.",
   "health.dup.position": "{{n}} sur {{total}}",
+  "health.dup.showAll": "Afficher les {{n}} copies",
   "health.dup.keep": "À conserver",
   "health.dup.copy": "Autre copie",
   "health.dup.openBook": "Ouvrir le livre",

@@ -662,7 +662,9 @@ func (a *API) Handler() http.Handler {
 	// rate limiting by route class, then a per-request timeout. timeout is innermost so it
 	// bounds only the handler/DB work (not the rate-limit/CORS layers) and so a
 	// stuck DB connection fails fast with 503 instead of hanging forever.
-	var h http.Handler = mux
+	// compress wraps the mux itself (the list cache reads its verdict from the
+	// context) and sits inside the timeout, whose buffer takes its writes.
+	h := compress(mux)
 	h = a.timeout(h)
 	h = a.rateLimit(mux, h)
 	h = a.realIP(h)

@@ -122,6 +122,7 @@ export const BookTile = memo(function BookTile({
               title={book.title}
               author={book.author}
               size={320}
+              version={book.cover_version}
             />
           </span>
           <span className="flex min-w-0 flex-col gap-px">

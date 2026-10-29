@@ -314,8 +314,9 @@ keep this index in step (one line per topic).
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
   - Native deep-link association
-  - SQLite
+  - SQLite (incl. the readers' mmap on shfs, `database.mmap`)
   - Pagination
+  - JSON compression (`api/compress.go`)
   - List cache (`api/listcache.go`)
   - Content generation (`store/userstate.go`: user-state writes, the per-cache audit)
   - Path safety

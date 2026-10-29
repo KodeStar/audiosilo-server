@@ -158,13 +158,28 @@ func TestAdminCovers(t *testing.T) {
 	if got[2].Data != "" || got[3].Data != "" {
 		t.Fatalf("bare/missing = %q %q, want empty", got[2].Data, got[3].Data)
 	}
+	// Each thumbnail names the cover_version its row has after the request (the
+	// console keeps it under that one), the sidecar's too, whose first thumbnail
+	// moved the row's version to the art's own.
+	for i, path := range []string{"Sidecar", "Custom"} {
+		b, err := e.cat.GetBookByPath(context.Background(), libID, path)
+		if err != nil || got[i].Version == "" || got[i].Version != b.CoverVersion {
+			t.Fatalf("%s version = %q, row's %q (%v)", path, got[i].Version, b.CoverVersion, err)
+		}
+	}
+	if got[2].Version != "" {
+		t.Fatalf("bare version = %q, want none", got[2].Version)
+	}
 	other := postCovers(t, e, adminTok, coversBody(libID+99, 0, "Sidecar"))
 	if other[0].Data != "" {
 		t.Fatal("an unknown library returned art")
 	}
-	// The default size is 320.
+	// The default size is 320; a table row's 96 is one of the sizes.
 	if w, _ := thumbSize(t, postCovers(t, e, adminTok, coversBody(libID, 0, "Sidecar"))[0].Data); w != 320 {
 		t.Fatalf("default thumb width = %d, want 320", w)
+	}
+	if w, h := thumbSize(t, postCovers(t, e, adminTok, coversBody(libID, 96, "Sidecar"))[0].Data); w != 96 || h != 96 {
+		t.Fatalf("small thumb = %dx%d, want 96x96", w, h)
 	}
 }
 

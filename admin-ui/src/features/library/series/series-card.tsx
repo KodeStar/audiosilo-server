@@ -26,7 +26,7 @@ import {
   type Placed,
   type SeriesStatus,
 } from './series-model';
-import { useInView } from './use-in-view';
+import { useInView } from '@/lib/use-in-view';
 
 /**
  * One series: its name (a link to its books), author and what the server
@@ -260,6 +260,7 @@ function Shelf({
                   title={b.title}
                   author={b.author}
                   size={160}
+                  version={b.cover_version}
                 />
               </div>
             ))}
