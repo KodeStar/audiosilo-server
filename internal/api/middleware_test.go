@@ -296,8 +296,8 @@ func apiWithConfig(c *config.Config) *API {
 // denied, none, a preflight), so a cached answer made without the grant is
 // never reused for a granted origin's request; with none set, nothing varies
 // and nothing is granted.
-// Through the whole chain: a timed handler's own Vary (spa's Accept-Encoding)
-// adds to cors's Origin instead of replacing it.
+// Through the whole chain: a timed handler's own Vary (spa's Accept-Encoding,
+// compress's on a JSON answer) adds to cors's Origin instead of replacing it.
 func TestCORSVaryOriginThroughTheChain(t *testing.T) {
 	t.Parallel()
 	on := newTestEnvWith(t, func(c *config.Config) { c.CORSOrigins = []string{"https://app.example.com"} })
@@ -308,8 +308,9 @@ func TestCORSVaryOriginThroughTheChain(t *testing.T) {
 		want       []string
 	}{
 		{"static", "/assets/connect.js", on, []string{"Origin", "Accept-Encoding"}},
-		{"api", "/api/v1/server", on, []string{"Origin"}},
+		{"api", "/api/v1/server", on, []string{"Origin", "Accept-Encoding"}}, // a JSON answer (compress.go)
 		{"static, cors unset", "/assets/connect.js", off, []string{"Accept-Encoding"}},
+		{"api, cors unset", "/api/v1/server", off, []string{"Accept-Encoding"}},
 	} {
 		resp, _ := c.e.doHeaders(t, "GET", c.path, "", "", map[string]string{"Origin": "https://app.example.com", "Accept-Encoding": "gzip"})
 		if got := resp.Header.Values("Vary"); !slices.Equal(got, c.want) {

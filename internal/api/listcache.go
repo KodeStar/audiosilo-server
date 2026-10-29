@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -56,6 +57,7 @@ type listCache struct {
 type listEntry struct {
 	key  [sha256.Size]byte
 	body []byte
+	gz   []byte // body gzipped (gzipBytes), nil below gzipMinSize
 }
 
 func newListCache() *listCache {
@@ -75,21 +77,24 @@ func (c *listCache) at(gen uint64) bool {
 	return gen == c.gen
 }
 
-func (c *listCache) get(gen uint64, key [sha256.Size]byte) ([]byte, bool) {
+// get returns the answer stored under key and its gzip (nil for a small one).
+func (c *listCache) get(gen uint64, key [sha256.Size]byte) (body, gz []byte, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.at(gen) {
-		return nil, false
+		return nil, nil, false
 	}
 	el, ok := c.entries[key]
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	c.order.MoveToFront(el)
-	return el.Value.(*listEntry).body, true
+	e := el.Value.(*listEntry)
+	return e.body, e.gz, true
 }
 
-func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
+// put keeps body and gz, its gzip, under key; both are dropped together.
+func (c *listCache) put(gen uint64, key [sha256.Size]byte, body, gz []byte) {
 	if len(body) > listCacheMaxEntry {
 		return
 	}
@@ -102,19 +107,20 @@ func (c *listCache) put(gen uint64, key [sha256.Size]byte, body []byte) {
 		c.order.MoveToFront(el)
 		return
 	}
-	cost := entryCost(body)
+	e := &listEntry{key: key, body: body, gz: gz}
+	cost := e.cost()
 	for c.size+cost > listCacheBytes && c.order.Len() > 0 {
 		old := c.order.Remove(c.order.Back()).(*listEntry)
 		delete(c.entries, old.key)
-		c.size -= entryCost(old.body)
+		c.size -= old.cost()
 	}
-	c.entries[key] = c.order.PushFront(&listEntry{key: key, body: body})
+	c.entries[key] = c.order.PushFront(e)
 	c.size += cost
 }
 
-// entryCost is what keeping body costs the cache: its capacity (the encoder's
-// buffer, kept as it grew, may be up to twice its length) and the entry around it.
-func entryCost(body []byte) int { return cap(body) + listEntryCost }
+// cost is what keeping e costs the cache: its buffers' capacity (the encoder's
+// buffer, kept as it grew, may be up to twice its length) and the entry around them.
+func (e *listEntry) cost() int { return cap(e.body) + cap(e.gz) + listEntryCost }
 
 // listCacheKey is the key of an answer to r computed for scopes and extra (what
 // else the answer is computed from besides the database, such as the Health
@@ -132,23 +138,43 @@ func listCacheKey(r *http.Request, scopes []catalog.Scope, extra ...any) [sha256
 // is the generation read before the request's first read (a.cat.ContentGeneration),
 // and extra is what the answer is computed from besides the database and r
 // (listCacheKey). It answers from the cache and returns nil, or returns a
-// write func that encodes v exactly as writeJSON does, keeps it when
-// cacheable, and writes it.
+// write func that encodes v exactly as writeJSON does, keeps it (and its gzip,
+// compress.go) when cacheable, and writes it. A client that takes gzip
+// (gzipAccepted) is sent the stored gzip, so a hit compresses nothing.
 func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cacheable bool, scopes []catalog.Scope, extra ...any) (write func(v any)) {
 	if !cacheable {
 		return func(v any) { writeJSON(w, http.StatusOK, v) }
 	}
 	key := listCacheKey(r, scopes, extra...)
-	if body, hit := a.lists.get(gen, key); hit {
-		writeJSONBytes(w, body)
+	if body, gz, hit := a.lists.get(gen, key); hit {
+		writeCachedJSON(w, r, body, gz)
 		return nil
 	}
 	return func(v any) {
 		var buf bytes.Buffer
+		var gz []byte
 		if err := json.NewEncoder(&buf).Encode(v); err == nil {
-			a.lists.put(gen, key, buf.Bytes())
+			if buf.Len() >= gzipMinSize {
+				gz = gzipBytes(buf.Bytes())
+			}
+			a.lists.put(gen, key, buf.Bytes(), gz)
 		}
 		// A value that won't encode writes nothing: the empty 200 writeJSON answers.
-		writeJSONBytes(w, buf.Bytes())
+		writeCachedJSON(w, r, buf.Bytes(), gz)
 	}
+}
+
+// writeCachedJSON writes a cached 200 answer: gz, its gzip, when there is one
+// and the client takes it (the compress middleware then passes it through as
+// already encoded), else body as writeJSON would have.
+func writeCachedJSON(w http.ResponseWriter, r *http.Request, body, gz []byte) {
+	if gz == nil || !gzipAccepted(r) {
+		writeJSONBytes(w, body)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Encoding", "gzip")
+	h.Set("Content-Length", strconv.Itoa(len(gz)))
+	addVary(h, "Accept-Encoding")
+	writeJSONBytes(w, gz)
 }
