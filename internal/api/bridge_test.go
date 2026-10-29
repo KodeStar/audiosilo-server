@@ -687,6 +687,25 @@ func TestServerInfoWithoutBridge(t *testing.T) {
 // Security-critical: a 401 stops the Bridge calling in (it retries every few
 // minutes), so only a refused token is one; a token the server can't check (its database failing)
 // is a 503 the Bridge retries.
+// A heartbeat the server couldn't save (the database) is a 503, as a token it
+// couldn't check is (server#263): the Bridge retries at once, where a 500 read
+// as a server fault. The token is still cached (a heartbeat leaves the content
+// generation), so the request passes requireBridge and fails at the save.
+func TestBridgeHeartbeatSaveFailureIs503(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	if resp, body := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.1.0"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("allowed: a heartbeat = %d %s, want 200", resp.StatusCode, body)
+	}
+	if err := b.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.1.0"}`)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "could not save the status") {
+		t.Fatalf("a heartbeat the server couldn't save = %d %s, want 503", resp.StatusCode, body)
+	}
+}
+
 func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)

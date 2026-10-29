@@ -205,8 +205,10 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
+		// The database, as for a token the server couldn't check (requireBridge):
+		// 503, which the Bridge retries at once.
 		a.log.Warn("bridge heartbeat failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not save the status")
+		writeError(w, http.StatusServiceUnavailable, "could not save the status, try again")
 		return
 	}
 	libs, err := a.cat.ListLibraries(r.Context())
