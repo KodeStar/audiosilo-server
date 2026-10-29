@@ -72,6 +72,11 @@ func mixedLibrary(t *testing.T) string {
 	return root
 }
 
+// mixedDiscSets is how many books split across disc folders mixedLibrary holds
+// (each author's Discs/CD1, CD2): a scan indexes each disc but counts each set
+// as one book added (PLAYER-08).
+const mixedDiscSets = 4
+
 // fixedClock is a catalog clock that never moves, so two scans' rows compare.
 func fixedClock() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC) }
 
@@ -189,7 +194,7 @@ func TestScanConcurrentReadProblemDoesNotStopScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Books) != res.Books || res.Added != res.Books {
+	if len(page.Books) != res.Books || res.Added != res.Books-mixedDiscSets {
 		t.Fatalf("indexed %d of %d books (added %d)", len(page.Books), res.Books, res.Added)
 	}
 	for n := range 4 {
@@ -240,7 +245,7 @@ sleep 0.2; rm %[1]q/$$; echo '{}'`, running, log))
 	root := mixedLibrary(t)
 	const limit = 3
 	res, _, _, _ := scanWith(t, root, probe, limit)
-	if res.Added != res.Books {
+	if res.Added != res.Books-mixedDiscSets {
 		t.Fatalf("added %d of %d", res.Added, res.Books)
 	}
 	f, err := os.Open(log)
@@ -301,7 +306,7 @@ func TestScanConcurrentStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Added != res.Books || res.Books == 0 {
+	if res.Added != res.Books-mixedDiscSets || res.Books == 0 {
 		t.Fatalf("rescan added %d of %d", res.Added, res.Books)
 	}
 }
