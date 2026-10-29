@@ -263,14 +263,18 @@ export function bridgeServerUrl(suggested: string): { url: string; loopback: boo
  * The Bridge's service for the server's compose file, from audiosilo-bridge's
  * compose.example.yaml. It mounts every library folder read-write at the
  * server's own path (`roots`, one volume each), so the Bridge finds each
- * library with no mapping. The agent container (characters and recaps) is in
- * Running a Bridge.
+ * library with no mapping; with no library yet, an example volume says so.
+ * The agent container (characters and recaps) is in Running a Bridge.
  */
 export function bridgeCompose(roots: readonly string[]): string {
   const at = [...new Set(roots.map((r) => r.trim()).filter(Boolean))];
   const volumes = (at.length ? at : ['/audiobooks']).map(
     (root) => `      - /path/to/${hostFolder(root)}:${root}:rw`,
   );
+  // With no library yet there's no server path to give: say the line is an example.
+  const volumesNote = at.length
+    ? '# Each library folder, at the same path the server uses:'
+    : "# Your books folder, at the path the server will use (no library yet, so this one's an example):";
   return `  bridge:
     image: ghcr.io/kodestar/audiosilo-bridge:latest
     restart: unless-stopped
@@ -287,7 +291,7 @@ export function bridgeCompose(roots: readonly string[]): string {
       - "8091:8091"
     volumes:
       - ./bridge-data:/bridge-data
-      # Each library folder, at the same path the server uses:
+      ${volumesNote}
 ${volumes.join('\n')}
       - staging:/staging
 
