@@ -209,8 +209,10 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 }
 
 // logReaderMmap says at start whether the readers map the database (mode as
-// configured, asked what readerMmap chose, got what SQLite reports: 0 where the
-// build or platform can't map).
+// configured, asked what readerMmap chose, got what SQLite reports for one
+// reader connection: the limit it took, 0 where the build or platform can't
+// map). It is the limit, not a mapping made: a reader whose mmap() fails later
+// (a FUSE mount that refuses shared mappings) falls back to reads unlogged.
 func (db *DB) logReaderMmap(ctx context.Context, mode string, asked int64) {
 	if mode == "" {
 		mode = MmapAuto

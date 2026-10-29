@@ -49,7 +49,7 @@ const (
 type listCache struct {
 	mu      sync.Mutex
 	gen     uint64 // the generation the entries belong to
-	size    int    // bytes held (entryCost of each entry)
+	size    int    // bytes held (each entry's cost)
 	order   *list.List
 	entries map[[sha256.Size]byte]*list.Element
 }
@@ -154,7 +154,9 @@ func (a *API) cachedList(w http.ResponseWriter, r *http.Request, gen uint64, cac
 		var buf bytes.Buffer
 		var gz []byte
 		if err := json.NewEncoder(&buf).Encode(v); err == nil {
-			if buf.Len() >= gzipMinSize {
+			// Only an answer the cache can keep: one too big for it is
+			// compressed by the middleware, and only for a client that takes it.
+			if n := buf.Len(); n >= gzipMinSize && n <= listCacheMaxEntry {
 				gz = gzipBytes(buf.Bytes())
 			}
 			a.lists.put(gen, key, buf.Bytes(), gz)

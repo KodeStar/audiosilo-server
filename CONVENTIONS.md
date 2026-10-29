@@ -540,7 +540,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
-  (8 MiB LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
+  (8 MiB LRU counting each answer's buffers, its JSON and its gzip, and entry, 1 MiB an
+  answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
   merge paths whose bytes aren't UTF-8), under the content generation read before
   the request's first read; any content write moves the generation and empties it

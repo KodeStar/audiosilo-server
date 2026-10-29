@@ -198,11 +198,12 @@ const MaxScanConcurrency = 64
 // DatabaseConfig tunes the SQLite database.
 type DatabaseConfig struct {
 	// Mmap is whether the database's readers map the file (store.WithReaderMmap):
-	// "auto" (or empty, the default) only when the data folder is on a FUSE
-	// filesystem on Linux (an Unraid /mnt/user share, mergerfs), where it is
-	// measured several times faster; "on" always; "off" never (a FUSE layer that
-	// misbehaves: an I/O error under a mapping crashes the server, where a read
-	// would fail one request). Read once at start (database.mmap, AUDIOSILO_DB_MMAP).
+	// "auto" (or empty, the default) only when the database file (in the data
+	// folder; a symlink is followed) is on a FUSE filesystem on Linux (an Unraid
+	// /mnt/user share, mergerfs), where it is measured several times faster;
+	// "on" always; "off" never (a FUSE layer that misbehaves: an I/O error under
+	// a mapping crashes the server, where a read would fail one request). Read
+	// once at start (database.mmap, AUDIOSILO_DB_MMAP).
 	Mmap string `yaml:"mmap,omitempty"`
 }
 
