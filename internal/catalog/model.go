@@ -230,6 +230,11 @@ type catalogDB interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	WithTx(context.Context, string, func(*sql.Tx) error) error
+	// ExecUserState and WithUserStateTx write only user state (the tables
+	// store's userStateTables lists): on a store.DB they leave the content
+	// caches warm.
+	ExecUserState(context.Context, string, ...any) (sql.Result, error)
+	WithUserStateTx(context.Context, string, func(*sql.Tx) error) error
 	Ping(context.Context) error
 }
 
@@ -302,32 +307,6 @@ func (c *Catalog) ContentGeneration() (uint64, bool) {
 		return 0, false
 	}
 	return g.ContentGeneration(), true
-}
-
-// userStateDB is a database that writes user state without moving the content
-// generation (store.DB.ExecUserState, WithUserStateTx).
-type userStateDB interface {
-	ExecUserState(context.Context, string, ...any) (sql.Result, error)
-	WithUserStateTx(context.Context, string, func(*sql.Tx) error) error
-}
-
-// execUserState is ExecContext for a write of user state only (the tables
-// store's userStateTables lists): on a store.DB it leaves the content caches
-// warm; on anything else it is ExecContext.
-func (c *Catalog) execUserState(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	if u, ok := c.db.(userStateDB); ok {
-		return u.ExecUserState(ctx, query, args...)
-	}
-	return c.db.ExecContext(ctx, query, args...)
-}
-
-// withUserStateTx is WithTx for a transaction writing user state only, as
-// execUserState.
-func (c *Catalog) withUserStateTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
-	if u, ok := c.db.(userStateDB); ok {
-		return u.WithUserStateTx(ctx, name, fn)
-	}
-	return c.db.WithTx(ctx, name, fn)
 }
 
 // New returns a Catalog. now may be nil to use time.Now.

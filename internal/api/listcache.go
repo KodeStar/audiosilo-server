@@ -22,8 +22,8 @@ import (
 //
 // It is exact because it is keyed on the database's content generation
 // (store.DB.ContentGeneration, which moves after every write has finished but
-// a user-state one: a progress save, a listening session, a token's last-seen
-// touch, history, bookmarks, ratings, the queue) as well as
+// a user-state one: listening, a token's last-seen touch and the rest of
+// store's userStateTables) as well as
 // on everything the answer is computed from: the path, the raw query string
 // and the caller's scopes (their access, as the catalog computed it for this
 // request). The answers are pure functions of those and the database: no

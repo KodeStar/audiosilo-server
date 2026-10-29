@@ -72,7 +72,8 @@ var userStateTables = map[string]tableRule{
 
 // userStateRules is userStateTables with each column rule's watched columns,
 // read from db's schema (PRAGMA table_info: the column order the pre-update
-// hook's values come in).
+// hook's values come in); an error for a rule naming a table or column the
+// schema lacks.
 func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, error) {
 	out := make(map[string]tableRule, len(userStateTables))
 	for table, rule := range userStateTables {
@@ -80,6 +81,11 @@ func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, erro
 			cols, err := tableColumns(ctx, db, table)
 			if err != nil {
 				return nil, fmt.Errorf("user-state rule for %s: %w", table, err)
+			}
+			for _, c := range rule.free {
+				if !slices.Contains(cols, c) {
+					return nil, fmt.Errorf("user-state rule for %s: no column %s", table, c)
+				}
 			}
 			for i, c := range cols {
 				if !slices.Contains(rule.free, c) {
@@ -93,7 +99,7 @@ func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, erro
 }
 
 // tableColumns lists table's columns in their order; an error for a table
-// that doesn't exist or lacks a column a rule names.
+// that doesn't exist.
 func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
@@ -114,11 +120,6 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, erro
 	if len(cols) == 0 {
 		return nil, fmt.Errorf("no table %s", table)
 	}
-	for _, c := range userStateTables[table].free {
-		if !slices.Contains(cols, c) {
-			return nil, fmt.Errorf("no column %s.%s", table, c)
-		}
-	}
 	return cols, nil
 }
 
@@ -127,7 +128,7 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, erro
 // changed something outside its table's rule.
 func (db *DB) ExecUserState(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	var res sql.Result
-	err := db.userStateWrite(ctx, func(conn *sql.Conn) error {
+	err := db.userStateWrite(ctx, "", time.Now(), func(conn *sql.Conn) error {
 		var err error
 		res, err = conn.ExecContext(ctx, query, args...)
 		return err
@@ -142,34 +143,40 @@ func (db *DB) ExecUserState(ctx context.Context, query string, args ...any) (sql
 // slow-transaction log.
 func (db *DB) WithUserStateTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
 	start := time.Now()
-	return db.userStateWrite(ctx, func(conn *sql.Conn) error {
+	return db.userStateWrite(ctx, name, start, func(conn *sql.Conn) error {
 		return db.withTx(ctx, name, start, conn, fn)
 	})
 }
 
 // userStateWrite runs write on the writer's one connection with the pre-update
 // hook watching it, and moves the content generation afterwards when the hook
-// saw a change outside the rules, or could not be set.
-func (db *DB) userStateWrite(ctx context.Context, write func(*sql.Conn) error) error {
+// saw a change outside the rules, or could not be set. name and start, when
+// name is set, log a wait for the writer that timed out, as WithTx logs it.
+func (db *DB) userStateWrite(ctx context.Context, name string, start time.Time, write func(*sql.Conn) error) error {
 	conn, err := db.writer.Conn(ctx)
 	if err != nil {
+		if name != "" {
+			db.logSlow(name, start, err)
+		}
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 	w := &userStateWatch{rules: db.userState}
-	if !w.set(conn) {
-		defer db.content.Add(1) // unwatched: a write like any other
-		return write(conn)
-	}
+	// Deferred before the unset, so it runs after it: once the statement or the
+	// transaction finished.
 	defer func() {
-		w.unset(conn)
 		if w.content {
-			db.content.Add(1) // after the statement or the transaction finished
+			db.content.Add(1)
 		}
 		if w.misfiled != "" {
 			db.misfiled(w.misfiled)
 		}
 	}()
+	if w.set(conn) {
+		defer w.unset(conn)
+	} else {
+		w.content = true // unwatched: a write like any other
+	}
 	return write(conn)
 }
 

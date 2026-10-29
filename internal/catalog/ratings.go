@@ -85,7 +85,7 @@ func (c *Catalog) SetRating(ctx context.Context, userID int64, ref Ref, stars in
 	}
 	now := c.stamp()
 	var r Rating
-	err = c.withUserStateTx(ctx, "SetRating", func(tx *sql.Tx) error {
+	err = c.db.WithUserStateTx(ctx, "SetRating", func(tx *sql.Tx) error {
 		return scanRating(tx.QueryRowContext(ctx,
 			`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
 			 VALUES(?,?,?,?,?,?,?)
@@ -102,7 +102,7 @@ func (c *Catalog) SetRating(ctx context.Context, userID int64, ref Ref, stars in
 
 // DeleteRating clears a user's rating of the book at ref. Idempotent.
 func (c *Catalog) DeleteRating(ctx context.Context, userID int64, ref Ref) error {
-	_, err := c.execUserState(ctx,
+	_, err := c.db.ExecUserState(ctx,
 		`DELETE FROM ratings WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 		userID, ref.LibraryID, ref.Path)
 	return err

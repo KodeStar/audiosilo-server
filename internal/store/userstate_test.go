@@ -44,28 +44,36 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db, misfiled := openUserState(t)
-	still := func(name string, f func() error) {
+	check := func(name string, wantMoved bool, f func() error) {
 		t.Helper()
 		before := db.ContentGeneration()
 		if err := f(); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if after := db.ContentGeneration(); after != before {
-			t.Errorf("%s: content generation %d -> %d, want it left", name, before, after)
+		if after := db.ContentGeneration(); (after != before) != wantMoved {
+			t.Errorf("%s: content generation %d -> %d, want moved %v", name, before, after, wantMoved)
 		}
 	}
-	moved := func(name string, f func() error) {
-		t.Helper()
-		before := db.ContentGeneration()
-		if err := f(); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if after := db.ContentGeneration(); after <= before {
-			t.Errorf("%s: content generation %d -> %d, want it moved", name, before, after)
-		}
-	}
+	still := func(name string, f func() error) { t.Helper(); check(name, false, f) }
+	moved := func(name string, f func() error) { t.Helper(); check(name, true, f) }
 	exec := func(q string, args ...any) func() error {
 		return func() error { _, err := db.ExecUserState(ctx, q, args...); return err }
+	}
+	// rollback runs q in a user-state transaction that then rolls back.
+	boom := errors.New("roll back")
+	rollback := func(q string, args ...any) func() error {
+		return func() error {
+			err := db.WithUserStateTx(ctx, "test", func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+					return err
+				}
+				return boom
+			})
+			if errors.Is(err, boom) {
+				return nil
+			}
+			return err
+		}
 	}
 	saveProgress := `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at)
 		VALUES(1, 1, 'Book', ?, 100, 0, 1, 1, 0, 'now')
@@ -109,31 +117,8 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	// Rolled back: a user-state transaction within its rules moves nothing; one
 	// that changed content before rolling back still moves it (the check is on
 	// what it changed); a default one moves it, as ever.
-	boom := errors.New("roll back")
-	still("user-state rollback", func() error {
-		err := db.WithUserStateTx(ctx, "test", func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, saveProgress, 9.0); err != nil {
-				return err
-			}
-			return boom
-		})
-		if errors.Is(err, boom) {
-			return nil
-		}
-		return err
-	})
-	moved("user-state rollback of content", func() error {
-		err := db.WithUserStateTx(ctx, "test", func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM progress`); err != nil {
-				return err
-			}
-			return boom
-		})
-		if errors.Is(err, boom) {
-			return nil
-		}
-		return err
-	})
+	still("user-state rollback", rollback(saveProgress, 9.0))
+	moved("user-state rollback of content", rollback(`DELETE FROM progress`))
 	moved("default rollback", func() error {
 		_ = db.WithTx(ctx, "test", func(*sql.Tx) error { return boom })
 		return nil
@@ -212,9 +197,9 @@ func TestUserStateMisfiled(t *testing.T) {
 	}
 }
 
-// TestUserStateRulesMatchTheSchema: every rule names a table, and a column
-// rule only columns, the migrations created (Open fails otherwise; this says
-// which).
+// TestUserStateRulesMatchTheSchema: every rule names a table the migrations
+// created (Open checks only a column rule's table and columns), and a column
+// rule leaves some column watched.
 func TestUserStateRulesMatchTheSchema(t *testing.T) {
 	t.Parallel()
 	db, _ := openUserState(t)

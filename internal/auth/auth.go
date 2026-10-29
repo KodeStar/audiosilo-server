@@ -404,14 +404,15 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 // signed-in caller (GET /server), so it never waits on the writer. Like
 // ResolveRequest, it never accepts a cast token.
 func (s *Service) Peek(ctx context.Context, secret string, kinds ...string) (*User, error) {
-	u, _, err := s.checkToken(ctx, secret, nil, kinds)
+	u, _, err := s.checkToken(ctx, hashSecret(secret), nil, kinds)
 	return u, err
 }
 
 // resolve is ResolveRequest and ResolveCastRequest: the token's checks
 // (checkToken), then the touch.
 func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
-	u, row, err := s.checkToken(ctx, secret, media, kinds)
+	hash := hashSecret(secret)
+	u, row, err := s.checkToken(ctx, hash, media, kinds)
 	if err != nil {
 		return nil, Credential{}, err
 	}
@@ -434,7 +435,7 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	// cache keyed on it, where it was (store.DB.ExecUserState), and drops the
 	// token's own cached row, whose last_seen, address and app it changed, so
 	// the next request reads them again (needsTouch).
-	defer s.tokens.Delete(hashSecret(secret))
+	defer s.tokens.Delete(hash)
 	_, _ = s.db.ExecUserState(ctx,
 		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
 		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
@@ -445,13 +446,13 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	return u, cred, nil
 }
 
-// checkToken is whether secret is a valid token of one of kinds, writing
+// checkToken is whether hash (hashSecret's) is a valid token of one of kinds, writing
 // nothing: lookupToken's checks, then a cast token only when media names the
 // book media the request reads and its grant covers it, and a bridge token
 // (only ever listed by the Bridge's own routes) only while its admin is still
 // an admin (lookupToken already refuses a disabled one).
-func (s *Service) checkToken(ctx context.Context, secret string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
-	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+func (s *Service) checkToken(ctx context.Context, hash string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
+	u, row, err := s.lookupToken(ctx, hash, kinds...)
 	if err != nil {
 		return nil, tokenRow{}, err
 	}

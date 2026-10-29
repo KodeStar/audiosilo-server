@@ -16,13 +16,13 @@ func TestHeartbeatContentGeneration(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	q.beat(t, KindVerify)
-	stamp := func() string {
+	stamp := func() time.Time {
 		t.Helper()
-		var at string
-		if err := q.db.QueryRowContext(ctx, `SELECT heartbeat_at FROM bridge_status WHERE id = 1`).Scan(&at); err != nil {
-			t.Fatal(err)
+		h, err := readHeartbeat(ctx, q.db)
+		if err != nil || h == nil {
+			t.Fatalf("heartbeat = %+v, %v", h, err)
 		}
-		return at
+		return h.At
 	}
 	check := func(what string, moved bool, beat func()) {
 		t.Helper()
@@ -31,7 +31,7 @@ func TestHeartbeatContentGeneration(t *testing.T) {
 		if got := q.db.ContentGeneration() != gen; got != moved {
 			t.Fatalf("%s: content generation moved %v, want %v", what, got, moved)
 		}
-		if stamp() == at {
+		if stamp().Equal(at) {
 			t.Fatalf("%s: heartbeat_at not updated", what)
 		}
 	}
@@ -42,17 +42,14 @@ func TestHeartbeatContentGeneration(t *testing.T) {
 	q.advance(30 * time.Second)
 	check("new kinds", true, func() { q.beat(t, KindVerify, KindDescribe) })
 	q.advance(30 * time.Second)
-	check("a new version", true, func() {
+	beatV2 := func() {
 		if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.2.0", Kinds: []string{KindVerify, KindDescribe}}); err != nil {
 			t.Fatal(err)
 		}
-	})
+	}
+	check("a new version", true, beatV2)
 	q.advance(OnlineWindow + time.Minute)
-	check("back after the online window", true, func() {
-		if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.2.0", Kinds: []string{KindVerify, KindDescribe}}); err != nil {
-			t.Fatal(err)
-		}
-	})
+	check("back after the online window", true, beatV2)
 	if h, err := q.Online(ctx); err != nil || h == nil || h.Version != "0.2.0" {
 		t.Fatalf("online heartbeat = %+v, %v", h, err)
 	}
