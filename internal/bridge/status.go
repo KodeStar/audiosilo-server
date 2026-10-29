@@ -351,7 +351,7 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 	// minute, and while an ASR worker is attached every beat's status differs
 	// (workers[].last_seen). No content cache reads it (store's rule for
 	// bridge_status); GET /server and the console read it through
-	// LastHeartbeat's own cache, which remember updates here.
+	// LastHeartbeat's own cache, which this save refreshes (remember).
 	res, err := s.db.ExecUserState(ctx,
 		`UPDATE bridge_status SET heartbeat_at = ?, status = ?
 		  WHERE id = 1 AND paired_at IS NOT NULL AND `+auth.BridgeTokenLiveSQL, at(now), string(body), token)

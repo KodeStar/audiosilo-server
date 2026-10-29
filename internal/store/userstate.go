@@ -16,12 +16,12 @@ import (
 // User-state writes (server#258). Listening writes all the time: a progress
 // save and its session every few seconds per listener, a token's last-seen
 // touch, history, bookmarks, the Bridge's heartbeat and its jobs' progress.
-// None of them changes what
-// the content caches answer (the player's lists, the admin's book pages and
-// Health, the library and token caches), bar a touched token's own row in the
-// token cache, which the touch drops itself (auth.Service.resolve), so they go
-// through ExecUserState or WithUserStateTx, which leave the content generation
-// (ContentGeneration) where it was, and those caches warm.
+// None of them changes what the content caches answer (the player's lists, the
+// admin's book pages and Health, the library and token caches), bar a touched
+// token's own row in the token cache, which the touch drops itself
+// (auth.Service.resolve), so they go through ExecUserState or WithUserStateTx,
+// which leave the content generation (ContentGeneration) where it was, and
+// those caches warm.
 //
 // The classification is checked, not trusted: while a user-state write runs,
 // SQLite's pre-update hook sees every row it changes (its triggers' and

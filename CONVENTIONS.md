@@ -552,8 +552,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`), which columns an UPDATE may change by value. Anything else on a listed table moves the generation;
-  a table the list doesn't name is a misfiling (logged; a panic in a test binary), and a
+  `progress`), which columns an UPDATE may change by value. Anything else on a listed table
+  moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a test binary), and a
   rule's table or column a newer server's schema lacks (a rollback) only makes more writes
   content. Durability (`WithDurableTx`) is orthogonal. The user-state writes: `SaveProgress`
   (an update of the row), `RecordHeartbeat` (listening sessions), bookmarks and notes (add,
@@ -566,10 +566,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its status: with an ASR worker attached every beat's differs, `workers[].last_seen`; GET
   /server's `bridge` block reads it through `bridge.Service.LastHeartbeat`'s own cache, not the
   generation; a pairing or an unpair is content) and its job reports (`bridge.UpdateHeld`: a
-  lease renewal or progress, its message and park included, stay user state; a new state,
-  result or error, or another job's lease expiring, moves the generation). No content cache
-  reads `bridge_status` or `bridge_jobs`. Kept as content on purpose: collections, grants, shares, users, libraries, books,
-  scans, matches, covers, favourites, goals, household sharing, the pairing touch, retention
+  report that renews the lease or carries progress, its message and park included, stays user
+  state; a new state, result or error, or another job's lease expiring, moves the
+  generation). No content cache reads `bridge_status` or `bridge_jobs`. Kept as content on
+  purpose: collections, grants, shares, users, libraries, books, scans, matches, covers, favourites, goals, household sharing, the pairing touch, retention
   and prunes (rare, or read by what is cached). There is no global "every write" counter:
   nothing reads one. Each consumer, audited against the tables its answer reads:
   the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
