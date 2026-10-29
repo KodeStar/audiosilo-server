@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -56,10 +57,16 @@ const colorThumbSize = 160
 
 // coverThumb is one entry of the response, in request order. Data is a data: URL,
 // or "" when the book has no cover art (or no book is indexed at the path).
+// Version is the book's cover_version for this art, as its admin row has it once
+// the request's colours are recorded (a first thumbnail moves the row's version
+// to the art's own, RecordCoverColors), so the console files a thumbnail under
+// the version a reload's row names: never under an older row's version that
+// asked for it (the art has moved on since that row was read).
 type coverThumb struct {
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
 	Data      string `json:"data"`
+	Version   string `json:"version,omitempty"`
 }
 
 // maxCoverReads bounds the art reads in progress across all requests (a slow
@@ -129,6 +136,13 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			out[i].Data = jpegDataURL(jpg)
+			// The version the row has once this colour is recorded (as
+			// RecordCoverColors moves it), else the one it has now.
+			identity := src.Art
+			if rec != nil {
+				identity = cmp.Or(rec.Version, rec.Art)
+			}
+			out[i].Version = catalog.CoverVersion(identity)
 			recs[i] = rec
 		})
 	}

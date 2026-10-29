@@ -1,21 +1,26 @@
 import { mockFetch } from '@/test/fetch-mock';
 import type { BookRef } from './types';
 import { MAX_COVER_BATCH, loadThumb } from './cover-batch';
-import { clearThumbCache } from './thumb-cache';
+import { clearThumbCache, thumbCache } from './thumb-cache';
 
 // Covers requested together go out as one POST /admin/covers per 60 books (and
 // per size), each request answered from the batch it rode in.
 
-function coversRoute() {
+/** The server's answer, each cover of the book's current cover_version (`version`). */
+function coversRoute(version = 'v1') {
   return (req: { body: unknown }) => ({
     body: {
-      covers: (req.body as { books: BookRef[] }).books.map((b) => ({
-        ...b,
-        data: b.path === 'none' ? '' : `data:image/jpeg;base64,${b.path}`,
-      })),
+      covers: (req.body as { books: BookRef[] }).books.map((b) =>
+        b.path === 'none'
+          ? { ...b, data: '' }
+          : { ...b, data: `data:image/jpeg;base64,${b.path}`, version },
+      ),
     },
   });
 }
+
+/** Lets the puts loadThumb doesn't wait for land. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -98,7 +103,7 @@ describe('loadThumb', () => {
     const calls = mockFetch({ 'POST /admin/covers': coversRoute() });
     const a = { library_id: 1, path: 'a' };
     expect(await loadThumb(a, 96, undefined, 'v1')).toBe('data:image/jpeg;base64,a');
-    await new Promise((r) => setTimeout(r, 0)); // the put is not awaited
+    await settle();
     expect(await loadThumb(a, 96, undefined, 'v1')).toBe('data:image/jpeg;base64,a');
     expect(calls).toHaveLength(1);
     // A new cover_version, another size, or no version at all asks the server.
@@ -112,18 +117,54 @@ describe('loadThumb', () => {
     const calls = mockFetch({ 'POST /admin/covers': coversRoute() });
     const none = { library_id: 1, path: 'none' };
     expect(await loadThumb(none, 160, undefined, 'v1')).toBeNull();
-    await new Promise((r) => setTimeout(r, 0));
+    await settle();
     expect(await loadThumb(none, 160, undefined, 'v1')).toBeNull();
     expect(calls).toHaveLength(2);
   });
 
+  it("keeps art under the server's version, not an older row's", async () => {
+    // The cover was just replaced: the server's art is of v2 while the row still says v1.
+    const calls = mockFetch({ 'POST /admin/covers': coversRoute('v2') });
+    const a = { library_id: 1, path: 'a' };
+    expect(await loadThumb(a, 160, undefined, 'v1')).toBe('data:image/jpeg;base64,a');
+    await settle();
+    // Not kept under v1 (it would show if the cover went back to v1's)...
+    await loadThumb(a, 160, undefined, 'v1');
+    expect(calls).toHaveLength(2);
+    // ...but under v2, which the refetched row names.
+    await settle();
+    expect(await loadThumb(a, 160, undefined, 'v2')).toBe('data:image/jpeg;base64,a');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('keeps nothing that arrives after a sign-out cleared the cache', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const route = coversRoute();
+    const calls = mockFetch({
+      'POST /admin/covers': async (req: { body: unknown }) => {
+        await gate;
+        return route(req);
+      },
+    });
+    const a = { library_id: 1, path: 'a' };
+    const late = loadThumb(a, 320, undefined, 'v1');
+    await new Promise((r) => setTimeout(r, 50)); // the batch is out
+    await clearThumbCache();
+    release();
+    expect(await late).toBe('data:image/jpeg;base64,a');
+    await settle();
+    expect((await thumbCache().size()).entries).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
   it('still batches the misses of a page asked for together', async () => {
     const calls = mockFetch({ 'POST /admin/covers': coversRoute() });
-    await loadThumb({ library_id: 1, path: 'p0' }, 320, undefined, 'v');
-    await new Promise((r) => setTimeout(r, 0));
+    await loadThumb({ library_id: 1, path: 'p0' }, 320, undefined, 'v1');
+    await settle();
     await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
-        loadThumb({ library_id: 1, path: `p${i}` }, 320, undefined, 'v'),
+        loadThumb({ library_id: 1, path: `p${i}` }, 320, undefined, 'v1'),
       ),
     );
     expect(calls).toHaveLength(2);

@@ -14,8 +14,14 @@ import type { BookRef } from './types';
 /** The server's per-request cap (handlers_covers.go maxCoverBatch). */
 export const MAX_COVER_BATCH = 60;
 
+/** A thumbnail as the batch answers it: its data: URL and the cover_version it is of. */
+interface Thumb {
+  data: string | null;
+  version?: string;
+}
+
 /** One batcher per size: a request carries a single size. */
-const bySize = new Map<ThumbSize, Batched<BookRef, string | null>>();
+const bySize = new Map<ThumbSize, Batched<BookRef, Thumb>>();
 
 /**
  * A book's cover thumbnail as a data: URL, or null when it has no art. An
@@ -23,7 +29,11 @@ const bySize = new Map<ThumbSize, Batched<BookRef, string | null>>();
  * this request, and a book nobody waits for any more isn't sent. With the
  * row's cover `version` the thumbnail comes from, and goes into, the
  * thumbnail cache (thumb-cache.ts), so a reload doesn't fetch it again; a
- * book without art isn't kept (its art may only be unreadable for now).
+ * book without art isn't kept (its art may only be unreadable for now). It is
+ * kept under the version the server names, which is not the row's when the row
+ * is older than the art (a cover just replaced, refetched before its row; a
+ * first thumbnail, which moves the version to the art's own), so the next
+ * row's version finds it. A sign-out while it was on its way keeps nothing.
  */
 export async function loadThumb(
   ref: BookRef,
@@ -32,13 +42,17 @@ export async function loadThumb(
   version?: string,
 ): Promise<string | null> {
   const key = version ? thumbKey(ref, size, version) : undefined;
+  const cache = thumbCache();
+  const epoch = cache.epoch;
   if (key) {
-    const hit = await thumbCache().get(key);
+    const hit = await cache.get(key);
     if (hit) return hit;
   }
-  const data = await batched(size)(ref, signal);
-  if (key && data) void thumbCache().put(key, data);
-  return data;
+  const thumb = await batched(size)(ref, signal);
+  if (key && thumb.data && thumb.version) {
+    void cache.put(thumbKey(ref, size, thumb.version), thumb.data, epoch);
+  }
+  return thumb.data;
 }
 
 function batched(size: ThumbSize) {
@@ -54,10 +68,15 @@ function batched(size: ThumbSize) {
   return load;
 }
 
-async function sendCovers(refs: BookRef[], size: ThumbSize) {
+async function sendCovers(refs: BookRef[], size: ThumbSize): Promise<Thumb[]> {
   const { covers } = await api.coverThumbs(refs, size);
-  const byKey = new Map((covers ?? []).map((c) => [refKey(c), c.data || null]));
-  return refs.map((r) => byKey.get(refKey(r)) ?? null);
+  const byKey = new Map(
+    (covers ?? []).map((c): [string, Thumb] => [
+      refKey(c),
+      { data: c.data || null, version: c.version },
+    ]),
+  );
+  return refs.map((r) => byKey.get(refKey(r)) ?? { data: null });
 }
 
 /** One community-cover batcher per size (POST /admin/meta/covers carries one size). */

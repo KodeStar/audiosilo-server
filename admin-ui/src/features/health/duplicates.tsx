@@ -67,7 +67,9 @@ function DuplicateList({
   roots: Record<number, string>;
 }) {
   const { t } = useTranslation();
-  if (groups.isError) {
+  // Only with nothing loaded: a later page that failed keeps the pages there are
+  // (its Show more asks again), as does a refetch that failed.
+  if (groups.isError && !groups.data) {
     return (
       <QueryError
         title={t('health.listError')}
@@ -97,19 +99,21 @@ function DuplicatePages({
 }) {
   const pages = groups.data?.pages;
   // The server lists the open, or only the ignored, groups. A group can shift
-  // across a page boundary between two page loads (a copy came or went): shown once.
+  // across a page boundary between two page loads (a better copy came, so another
+  // copy leads it and sorts it elsewhere): shown once, where any of its copies first was.
   const shown = useMemo(() => {
     const seen = new Set<string>();
     return (pages ?? [])
       .flatMap((p) => p.groups)
       .filter((g) => {
-        const key = refKey(g.books[0]);
-        if (seen.has(key)) return false;
-        seen.add(key);
+        const keys = g.books.map(refKey);
+        if (keys.some((k) => seen.has(k))) return false;
+        for (const k of keys) seen.add(k);
         return true;
       });
   }, [pages]);
-  const total = Math.max(pages?.[0]?.total ?? 0, shown.length);
+  // The newest page's count is the freshest.
+  const total = Math.max(pages?.at(-1)?.total ?? 0, shown.length);
   const { fetchNextPage } = groups;
   const more = useCallback(() => void fetchNextPage(), [fetchNextPage]);
   if (shown.length === 0) return <AllClear ignored={ignored} />;

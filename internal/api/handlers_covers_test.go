@@ -158,6 +158,18 @@ func TestAdminCovers(t *testing.T) {
 	if got[2].Data != "" || got[3].Data != "" {
 		t.Fatalf("bare/missing = %q %q, want empty", got[2].Data, got[3].Data)
 	}
+	// Each thumbnail names the cover_version its row has after the request (the
+	// console keeps it under that one), the sidecar's too, whose first thumbnail
+	// moved the row's version to the art's own.
+	for i, path := range []string{"Sidecar", "Custom"} {
+		b, err := e.cat.GetBookByPath(context.Background(), libID, path)
+		if err != nil || got[i].Version == "" || got[i].Version != b.CoverVersion {
+			t.Fatalf("%s version = %q, row's %q (%v)", path, got[i].Version, b.CoverVersion, err)
+		}
+	}
+	if got[2].Version != "" {
+		t.Fatalf("bare version = %q, want none", got[2].Version)
+	}
 	other := postCovers(t, e, adminTok, coversBody(libID+99, 0, "Sidecar"))
 	if other[0].Data != "" {
 		t.Fatal("an unknown library returned art")

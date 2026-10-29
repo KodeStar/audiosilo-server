@@ -1328,11 +1328,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   only `/libraries/{id}/cover|stream|ebook` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 96|160|320|640}` (<= 60; 96 for a table row) returns JPEG
-  thumbnails as `data:` URLs in request order (`""` = no art), resolved like
+  thumbnails as `data:` URLs in request order (`""` = no art; each with the `version`, the
+  `cover_version` its admin row has once the request's colours are recorded), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
   one `catalog.CoverSources` query per library for the whole batch. Admin book rows carry
   `cover_version`, and the console keeps the thumbnails it got in a bounded IndexedDB cache
-  keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), cleared on sign-out.
+  keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), a thumbnail kept
+  under the version the answer names (never under an older row's version that asked for it),
+  cleared on sign-out.
   One request per page of covers instead of one per cover, no token in any URL,
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header

@@ -870,6 +870,32 @@ describe('library health', () => {
     expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
   });
 
+  it('keeps the loaded duplicate groups when a later page fails', async () => {
+    const pair = (n: number): DuplicateGroup => ({
+      reason: 'same_files',
+      ignored: false,
+      books: [
+        { ...adminBook({ path: `Book ${n}`, title: `Book ${n}` }), listeners: 0 },
+        { ...adminBook({ path: `Copies/Book ${n}`, title: `Book ${n}` }), listeners: 0 },
+      ],
+    });
+    mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': (req) =>
+          req.query.get('cursor') === 'c1'
+            ? { status: 500, body: { error: 'could not find duplicates' } }
+            : { body: { groups: [pair(1)], total: 2, next_cursor: 'c1' } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    await screen.findByRole('heading', { name: 'Book 1' });
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show more' })).toBeEnabled());
+    // Still listed, with Show more to ask again: not replaced by the error.
+    expect(screen.getByRole('heading', { name: 'Book 1' })).toBeInTheDocument();
+  });
+
   it('shows a few copies of a large group until asked, and ignores them all', async () => {
     const books = Array.from({ length: 14 }, (_, i) => ({
       ...adminBook({ path: `Copy ${i + 1}`, title: 'Dune' }),

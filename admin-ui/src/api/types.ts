@@ -1960,6 +1960,8 @@ export interface CoverThumb {
   path: string;
   /** A data: URL of a JPEG thumbnail, or "" when the book has no art. */
   data: string;
+  /** The cover_version the book's row has for this art (absent without art): the cache keeps it under that. */
+  version?: string;
 }
 
 /** One entry of POST /admin/books/works (handlers_catalog.go bookWork), in request order. */

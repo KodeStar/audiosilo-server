@@ -74,6 +74,7 @@ function bookPrefix(ref: BookRef) {
 export class ThumbCache {
   private index: Promise<Map<string, ThumbEntry>> | undefined;
   private bytes = 0;
+  private cleared = 0;
   private store: ThumbStore;
   private limits: ThumbLimits;
   private now: () => number;
@@ -83,6 +84,14 @@ export class ThumbCache {
     this.store = store;
     this.limits = limits;
     this.now = now;
+  }
+
+  /**
+   * Moves on with every clear: a put given the epoch read before its fetch keeps
+   * nothing once the cache was cleared since (a sign-out while it was on its way).
+   */
+  get epoch() {
+    return this.cleared;
   }
 
   private load() {
@@ -104,7 +113,7 @@ export class ThumbCache {
     if (!entry) return undefined;
     const now = this.now();
     if (now - entry.stored > MAX_AGE_MS) {
-      await this.remove(index, [key]);
+      void this.remove(index, [key]); // the miss needn't wait for the write
       return undefined;
     }
     const data = await this.store.get(key).catch(() => undefined);
@@ -120,9 +129,13 @@ export class ThumbCache {
     return data;
   }
 
-  /** Keeps a thumbnail under key, then evicts down to the limits. */
-  async put(key: string, data: string): Promise<void> {
+  /**
+   * Keeps a thumbnail under key, then evicts down to the limits; nothing when
+   * `epoch` is given and the cache was cleared since it was read.
+   */
+  async put(key: string, data: string, epoch?: number): Promise<void> {
     const index = await this.load();
+    if (epoch !== undefined && epoch !== this.cleared) return;
     const old = index.get(key);
     if (old) this.bytes -= old.bytes;
     const now = this.now();
@@ -146,6 +159,7 @@ export class ThumbCache {
 
   /** Forgets everything (sign-out). */
   async clear(): Promise<void> {
+    this.cleared++;
     const index = await this.load();
     index.clear();
     this.bytes = 0;
@@ -244,56 +258,75 @@ function committed(tx: IDBTransaction) {
   });
 }
 
-/** Opens the console's thumbnail database; rejects where IndexedDB can't be used. */
-export function openIndexedDBStore(idb: IDBFactory = indexedDB): Promise<ThumbStore> {
+/**
+ * Opens the console's thumbnail database; rejects where IndexedDB can't be used.
+ * Async, so a synchronous throw (Firefox's `indexedDB` is null with it turned
+ * off, and `open` throws a SecurityError with site data blocked) rejects too.
+ */
+export async function openIndexedDBStore(idb: IDBFactory = indexedDB): Promise<ThumbStore> {
   const open = idb.open(DB_NAME, 1);
   open.onupgradeneeded = () => {
     open.result.createObjectStore(META, { keyPath: 'key' });
     open.result.createObjectStore(DATA);
   };
-  return done(open).then((db) => {
-    // Another tab's newer version (none yet) or a cleared site: let it go.
-    db.onversionchange = () => db.close();
-    const write = (fn: (meta: IDBObjectStore, data: IDBObjectStore) => void) => {
-      const tx = db.transaction([META, DATA], 'readwrite');
-      fn(tx.objectStore(META), tx.objectStore(DATA));
+  const db = await done(open);
+  // Another tab's newer version (none yet) or a cleared site: let it go.
+  db.onversionchange = () => db.close();
+  const write = (fn: (meta: IDBObjectStore, data: IDBObjectStore) => void) => {
+    const tx = db.transaction([META, DATA], 'readwrite');
+    fn(tx.objectStore(META), tx.objectStore(DATA));
+    return committed(tx);
+  };
+  return {
+    entries: () =>
+      done(db.transaction(META).objectStore(META).getAll() as IDBRequest<ThumbEntry[]>),
+    get: (key) =>
+      done(db.transaction(DATA).objectStore(DATA).get(key) as IDBRequest<string | undefined>),
+    put: (entry, data) =>
+      write((meta, d) => {
+        meta.put(entry);
+        d.put(data, entry.key);
+      }),
+    touch: (entry) => {
+      const tx = db.transaction(META, 'readwrite');
+      tx.objectStore(META).put(entry);
       return committed(tx);
-    };
-    return {
-      entries: () =>
-        done(db.transaction(META).objectStore(META).getAll() as IDBRequest<ThumbEntry[]>),
-      get: (key) =>
-        done(db.transaction(DATA).objectStore(DATA).get(key) as IDBRequest<string | undefined>),
-      put: (entry, data) =>
-        write((meta, d) => {
-          meta.put(entry);
-          d.put(data, entry.key);
-        }),
-      touch: (entry) => {
-        const tx = db.transaction(META, 'readwrite');
-        tx.objectStore(META).put(entry);
-        return committed(tx);
-      },
-      remove: (keys) =>
-        write((meta, d) => {
-          for (const k of keys) {
-            meta.delete(k);
-            d.delete(k);
-          }
-        }),
-      clear: () =>
-        write((meta, d) => {
-          meta.clear();
-          d.clear();
-        }),
-    } satisfies ThumbStore;
+    },
+    remove: (keys) =>
+      write((meta, d) => {
+        for (const k of keys) {
+          meta.delete(k);
+          d.delete(k);
+        }
+      }),
+    clear: () =>
+      write((meta, d) => {
+        meta.clear();
+        d.clear();
+      }),
+  } satisfies ThumbStore;
+}
+
+/**
+ * How long opening IndexedDB may take before the cache settles for memory: an
+ * open that never answers (blocked, or a browser bug) would otherwise hold
+ * every cover waiting on the cache.
+ */
+const OPEN_TIMEOUT_MS = 5000;
+
+/** IndexedDB opened, or a rejection once OPEN_TIMEOUT_MS has passed. */
+function openWithin(ms: number): Promise<ThumbStore> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('IndexedDB open timed out')), ms);
   });
+  return Promise.race([openIndexedDBStore(), late]).finally(() => clearTimeout(timer));
 }
 
 /**
  * A ThumbStore that opens IndexedDB on first use and, where that fails
- * (private browsing in some browsers, blocked site data), keeps the entries in
- * memory instead, with the smaller limits.
+ * (private browsing in some browsers, blocked site data, an open that never
+ * answers), keeps the entries in memory instead, with the smaller limits.
  */
 function fallbackStore(onMemory: () => void): ThumbStore {
   let store: Promise<ThumbStore> | undefined;
@@ -301,7 +334,7 @@ function fallbackStore(onMemory: () => void): ThumbStore {
     (store ??= (
       typeof indexedDB === 'undefined'
         ? Promise.reject(new Error('no IndexedDB'))
-        : openIndexedDBStore()
+        : openWithin(OPEN_TIMEOUT_MS)
     ).catch(() => {
       onMemory();
       return memoryStore();

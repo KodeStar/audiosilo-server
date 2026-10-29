@@ -62,7 +62,7 @@ hero, whose blurred backdrop and tint use the 160px one). A thumbnail nobody sho
 time its batch goes out isn't asked for, and unused ones leave the in-memory cache after five
 minutes. A cover passed its row's `cover_version` is also kept across reloads in
 `src/api/thumb-cache.ts`: IndexedDB (memory where that fails), keyed by book, size and version
-(new art is a new key), at most 5,000 thumbnails or ~50 MB with the least recently used out first,
+(new art is a new key; a thumbnail is kept under the version the server names, not an older row's), at most 5,000 thumbnails or ~50 MB with the least recently used out first,
 each asked for again after a week, all cleared on sign-out. Long lists (Health > Duplicates) ask
 for a cover only once it nears the viewport (`BookCover load`, `src/lib/use-in-view.ts`). A match candidate's cover is
 an image on another host, so the server fetches it too: `useCommunityCover(url)` batches them into

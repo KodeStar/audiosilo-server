@@ -126,6 +126,16 @@ describe('ThumbCache', () => {
     await expect(cache.clear()).resolves.toBeUndefined();
   });
 
+  it('keeps no put whose epoch was read before a clear', async () => {
+    const cache = new ThumbCache(memoryStore(), big);
+    const before = cache.epoch;
+    await cache.clear();
+    await cache.put(thumbKey(dune, 320, 'v1'), 'data:a', before);
+    expect(await cache.get(thumbKey(dune, 320, 'v1'))).toBeUndefined();
+    await cache.put(thumbKey(dune, 320, 'v1'), 'data:a', cache.epoch);
+    expect(await cache.get(thumbKey(dune, 320, 'v1'))).toBe('data:a');
+  });
+
   it('drops an entry another tab removed from the store', async () => {
     const store = memoryStore();
     const cache = new ThumbCache(store, big);
@@ -137,6 +147,16 @@ describe('ThumbCache', () => {
 });
 
 describe('openIndexedDBStore', () => {
+  it('rejects, never throws, where IndexedDB is turned off or blocked', async () => {
+    const blocked = {
+      open: () => {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    } as unknown as IDBFactory;
+    await expect(openIndexedDBStore(blocked)).rejects.toThrow('insecure');
+    await expect(openIndexedDBStore(null as unknown as IDBFactory)).rejects.toBeDefined();
+  });
+
   it('keeps entries in IndexedDB across opens, and removes and clears them', async () => {
     const idb = new IDBFactory();
     const store = await openIndexedDBStore(idb);
