@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
@@ -69,7 +68,7 @@ func (a *API) handleEbook(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "application/epub+zip")
 	h.Set("Content-Security-Policy", ebookCSP)
 	h.Set("Cache-Control", "private, no-cache")
-	h.Set("ETag", fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano()))
+	h.Set("ETag", fileETag(info))
 	http.ServeContent(w, r, path.Base(book.Ebook.Path), info.ModTime(), f)
 }
 

@@ -89,12 +89,15 @@ const BOOK_KINDS: readonly string[] = [
 const FILE_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
 /**
- * Whether a kind writes the book's files (its end changes the book; a share or
+ * The kinds that write the book's files (their end changes the book; a share or
  * correction doesn't): the generated files, or a read-along map, which a
  * describe job doesn't wait for (the server queues one beside it).
  */
+const WRITING_KINDS: readonly string[] = [...FILE_KINDS, KIND_READALONG];
+
+/** Whether a kind writes the book's files (WRITING_KINDS). */
 export function isFileKind(kind: string): boolean {
-  return FILE_KINDS.includes(kind) || kind === KIND_READALONG;
+  return WRITING_KINDS.includes(kind);
 }
 
 /**
@@ -362,9 +365,21 @@ export function generateBlocker(
   contributions = true,
 ): BridgeJob | undefined {
   if (!jobs) return openJob && blocksGenerate(openJob, contributions) ? openJob : undefined;
-  return GENERATE_BLOCKER_KINDS.map((k) => latestJobOf(jobs, k)).find(
-    (j): j is BridgeJob => j !== undefined && blocksGenerate(j, contributions),
-  );
+  return newestBlocker(jobs, GENERATE_BLOCKER_KINDS, (j) => blocksGenerate(j, contributions));
+}
+
+/**
+ * The first of kinds whose newest job on the book (the list is newest first)
+ * holds a new job back by `blocks`, if any.
+ */
+export function newestBlocker(
+  jobs: readonly BridgeJob[] | undefined,
+  kinds: readonly string[],
+  blocks: (j: BridgeJob) => boolean,
+): BridgeJob | undefined {
+  return kinds
+    .map((k) => latestJobOf(jobs, k))
+    .find((j): j is BridgeJob => j !== undefined && blocks(j));
 }
 
 /** The book's newest job of a kind (the list is newest first), if any. */

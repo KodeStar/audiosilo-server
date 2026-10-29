@@ -76,13 +76,13 @@ func sameAudio(mapped, book []metadata.ReadalongFile) bool {
 	if len(lengths) != len(book) {
 		return false
 	}
-	seen := make(map[string]bool, len(mapped))
 	for _, f := range mapped {
+		// Each matched path leaves the set, so a map naming one twice misses.
 		d, ok := lengths[f.Path]
-		if !ok || seen[f.Path] || !(math.Abs(d-f.Duration) <= readalongDurationSlack) {
+		if !ok || !(math.Abs(d-f.Duration) <= readalongDurationSlack) {
 			return false
 		}
-		seen[f.Path] = true
+		delete(lengths, f.Path)
 	}
 	return true
 }

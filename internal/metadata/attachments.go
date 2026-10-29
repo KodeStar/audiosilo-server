@@ -378,8 +378,14 @@ func cleanTime(v string) string {
 // maxProvenanceText or carries a control character: these are shown in the
 // console and logged, and a value is no reason to refuse the file.
 func cleanProvenance(v string) string {
+	return cleanText(v, maxProvenanceText)
+}
+
+// cleanText is v trimmed, or "" when it is longer than limit bytes, isn't
+// UTF-8 or carries a control character.
+func cleanText(v string, limit int) string {
 	v = strings.TrimSpace(v)
-	if len(v) > maxProvenanceText || !utf8.ValidString(v) {
+	if len(v) > limit || !utf8.ValidString(v) {
 		return ""
 	}
 	for _, r := range v {

@@ -115,11 +115,10 @@ export function useGenerateEstimate(
  * confirmation opens. Its key sits under the book's estimates, so a job that
  * ends refreshes it with them.
  */
-export function useReadalongEstimate(libraryId: number, path: string, enabled: boolean) {
+export function useReadalongEstimate(libraryId: number, path: string) {
   return useQuery({
     queryKey: [...keys.bridgeEstimate(libraryId, path), 'readalong'] as const,
     queryFn: () => api.readalongEstimate(libraryId, path),
-    enabled,
     retry: false,
     refetchOnMount: 'always',
   });

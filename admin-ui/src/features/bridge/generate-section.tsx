@@ -21,6 +21,14 @@ import { GenerateStatus } from './generate-status';
 import { generateNeed } from './setup-model';
 import { useBookGenerateJob, useBridgeStatus, useGenerateEstimate } from './use-generate';
 
+/** The blocker kinds generating waits for in the section, with the line that says so. */
+const WAIT_KEYS: Partial<
+  Record<string, 'bridge.generate.afterDetect' | 'bridge.generate.afterReadalong'>
+> = {
+  [KIND_DETECT]: 'bridge.generate.afterDetect',
+  [KIND_READALONG]: 'bridge.generate.afterReadalong',
+};
+
 /**
  * The Community card's characters-and-recaps part: the book's generate job
  * while one is open (its stage, ETA, cost; why it's parked, with a link into
@@ -64,9 +72,10 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   const blocker = jobOpen
     ? undefined
     : generateBlocker(jobs, estimate.data?.open_job, contributions);
-  const detect = blocker?.kind === KIND_DETECT ? blocker : undefined;
-  // A read-along being made: the same audio on the Bridge, so it waits too.
-  const aligning = blocker?.kind === KIND_READALONG ? blocker : undefined;
+  // A detection or a read-along being made: the same audio on the Bridge, so
+  // generating waits for it, its status in the section.
+  const waitKey = blocker ? WAIT_KEYS[blocker.kind] : undefined;
+  const waiting = waitKey ? blocker : undefined;
   const sharing = blocker?.kind === KIND_CONTRIBUTE;
   const idle = !jobOpen && !blocker;
   // The Bridge's status: its page for a parked job's link, its checklist for
@@ -93,7 +102,7 @@ export function GenerateSection({ book }: { book: AdminBook }) {
     <JobSection
       id="generate-title"
       title={t('bridge.generate.title')}
-      job={detect ?? aligning ?? (showJob ? job : undefined)}
+      job={waiting ?? (showJob ? job : undefined)}
     >
       {generated && !jobOpen ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.localNote')}</p>
@@ -121,17 +130,10 @@ export function GenerateSection({ book }: { book: AdminBook }) {
       {sharing ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.afterShare')}</p>
       ) : null}
-      {detect ? (
+      {waiting && waitKey ? (
         <>
-          <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.afterDetect')}</p>
-          <GenerateStatus job={detect} />
-        </>
-      ) : aligning ? (
-        <>
-          <p className="text-[12.5px] text-muted-foreground">
-            {t('bridge.generate.afterReadalong')}
-          </p>
-          <GenerateStatus job={aligning} />
+          <p className="text-[12.5px] text-muted-foreground">{t(waitKey)}</p>
+          <GenerateStatus job={waiting} />
         </>
       ) : showJob && job ? (
         <GenerateStatus job={job} uiUrl={uiUrl} />

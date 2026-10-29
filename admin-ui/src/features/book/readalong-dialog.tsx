@@ -89,7 +89,7 @@ function ReadalongForm({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
-  const estimate = useReadalongEstimate(book.library_id, book.path, true);
+  const estimate = useReadalongEstimate(book.library_id, book.path);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const e = estimate.data;

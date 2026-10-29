@@ -514,10 +514,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	a.warmRemux(lib, book)
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
-	if book.Ebook != nil {
-		book.Readalong = a.readalongOf(r.Context(), lib, book.RelPath, book.IsFolder, book.Ebook.Path,
-			catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files))
-	}
+	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
 }
 

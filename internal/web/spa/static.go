@@ -243,7 +243,7 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 			return err
 		}
 		sum.Write(data)
-		rep.gz = gzipped(data)
+		rep.gz = Gzipped(data)
 	} else if _, err := io.Copy(sum, content); err != nil {
 		return err
 	}
@@ -255,10 +255,10 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 	return nil
 }
 
-// gzipped compresses data at the default level (a few percent larger than the
+// Gzipped compresses data at the default level (a few percent larger than the
 // best, several times faster on the first request for a big bundle), or returns
 // nil when that doesn't make it smaller.
-func gzipped(data []byte) []byte {
+func Gzipped(data []byte) []byte {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(data); err != nil || zw.Close() != nil || buf.Len() >= len(data) {

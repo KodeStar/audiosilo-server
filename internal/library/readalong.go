@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -46,7 +47,7 @@ func EbookDigest(root, rel string, noLink bool) (sha, sig string, err error) {
 
 // hashReadalongEbooks hashes the ebooks of the library's books that have a
 // read-along map and no current digest (catalog.ReadalongEbooksDue; only the
-// book at bookPath when it isn't ""), recording each (SetEbookDigest). One that
+// book at bookPath when it isn't ""), recording each (HashEbook). One that
 // can't be read now is logged and left for the next look (the scan, the
 // Bridge's rescan, or GET /readalong on demand). It stops with ctx.
 func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, bookPath string) {
@@ -59,15 +60,25 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		if ctx.Err() != nil {
 			return
 		}
-		sha, sig, err := EbookDigest(lib.Root, d.EbookPath, d.IsFolder)
-		if err != nil {
+		if _, err := HashEbook(ctx, s.cat, s.log, lib, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)
-			continue
-		}
-		if err := s.cat.SetEbookDigest(ctx, lib.ID, d.BookPath, sig, sha); err != nil {
-			s.log.Warn("record ebook digest failed", "library", lib.Name, "path", d.BookPath, "err", err)
 		}
 	}
+}
+
+// HashEbook hashes the ebook (ebookPath) of the book at bookPath now
+// (EbookDigest) and records the digest (only while the index still holds that
+// file: catalog.SetEbookDigest). A failure to record it is logged, never the
+// answer's.
+func HashEbook(ctx context.Context, cat *catalog.Catalog, log *slog.Logger, lib catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
+	sha, sig, err := EbookDigest(lib.Root, ebookPath, folder)
+	if err != nil {
+		return "", err
+	}
+	if err := cat.SetEbookDigest(ctx, lib.ID, bookPath, sig, sha); err != nil {
+		log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
+	}
+	return sha, nil
 }
 
 // ReadReadalongMap reads the read-along map of the book at bookPath (folder

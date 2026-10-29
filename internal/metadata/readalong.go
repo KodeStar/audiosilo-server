@@ -1,13 +1,11 @@
 package metadata
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"math"
 	"strings"
-	"unicode/utf8"
 )
 
 // A book's read-along map (Bridge Phase 3c): .audiosilo/readalong.json, where
@@ -91,12 +89,9 @@ type ReadalongCoverage struct {
 // readalongJSON is a map as the server decodes it: the head with every value
 // it checks present or absent (pointers), and the sections left undecoded.
 type readalongJSON struct {
-	Format string `json:"format"`
-	Ebook  *struct {
-		File   string `json:"file"`
-		SHA256 string `json:"sha256"`
-	} `json:"ebook"`
-	Audio *struct {
+	Format string          `json:"format"`
+	Ebook  *ReadalongEbook `json:"ebook"`
+	Audio  *struct {
 		Duration float64 `json:"duration"`
 		Files    []struct {
 			Path     string   `json:"path"`
@@ -109,7 +104,16 @@ type readalongJSON struct {
 		Text  *float64 `json:"text"`
 		Audio *float64 `json:"audio"`
 	} `json:"coverage"`
-	Sections json.RawMessage `json:"sections"`
+	Sections jsonArray `json:"sections"`
+}
+
+// jsonArray records whether a value is a JSON array without keeping it (the
+// sections are most of a map, up to MaxReadalongFile bytes, and never stored).
+type jsonArray bool
+
+func (a *jsonArray) UnmarshalJSON(b []byte) error {
+	*a = len(b) > 0 && b[0] == '['
+	return nil
 }
 
 // ReadReadalong reads and checks a read-along map's head (ParseReadalongHead),
@@ -154,12 +158,12 @@ func ParseReadalongHead(data []byte) (*ReadalongHead, error) {
 	if j.Coverage == nil || !unitInterval(j.Coverage.Text) || !unitInterval(j.Coverage.Audio) {
 		return nil, invalidAttachment("a read-along map's coverage")
 	}
-	if s := bytes.TrimSpace(j.Sections); len(s) == 0 || s[0] != '[' {
+	if !j.Sections {
 		return nil, invalidAttachment("a read-along map with no sections")
 	}
 	h := &ReadalongHead{
 		Format:      ReadalongFormat,
-		Ebook:       ReadalongEbook{File: cleanReadalongName(j.Ebook.File), SHA256: strings.ToLower(j.Ebook.SHA256)},
+		Ebook:       ReadalongEbook{File: cleanText(j.Ebook.File, maxReadalongPath), SHA256: strings.ToLower(j.Ebook.SHA256)},
 		Audio:       ReadalongAudio{Duration: max(j.Audio.Duration, 0), Files: make([]ReadalongFile, 0, len(j.Audio.Files))},
 		GeneratedAt: cleanTime(j.GeneratedAt),
 		Coverage:    ReadalongCoverage{Text: *j.Coverage.Text, Audio: *j.Coverage.Audio},
@@ -197,16 +201,4 @@ func isSHA256(s string) bool {
 // unitInterval reports whether v is present and from 0 to 1.
 func unitInterval(v *float64) bool {
 	return v != nil && *v >= 0 && *v <= 1
-}
-
-// cleanReadalongName is the ebook's file name as a map gives it, for a person:
-// trimmed, or "" when it is longer than a path may be, isn't UTF-8 or carries a
-// control character (a value, never a reason to refuse the file).
-func cleanReadalongName(v string) string {
-	v = strings.TrimSpace(v)
-	if len(v) > maxReadalongPath || !utf8.ValidString(v) ||
-		strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return ""
-	}
-	return v
 }

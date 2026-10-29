@@ -148,14 +148,21 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if out.OpenJob, err = a.bridge.OpenJob(ctx, kind, lib.ID, book.RelPath); err == nil && out.OpenJob == nil {
-		out.OpenJob, err = a.bridge.Blocker(ctx, kind, lib.ID, book.RelPath)
-	}
-	if err != nil {
+	if out.OpenJob, err = a.openOrBlocker(ctx, kind, lib.ID, book.RelPath); err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// openOrBlocker is the open job of kind for the book at path, else the open
+// job of another kind that would refuse one (bridge.Service.Blocker), else nil.
+func (a *API) openOrBlocker(ctx context.Context, kind string, libraryID int64, path string) (*bridge.Job, error) {
+	j, err := a.bridge.OpenJob(ctx, kind, libraryID, path)
+	if err != nil || j != nil {
+		return j, err
+	}
+	return a.bridge.Blocker(ctx, kind, libraryID, path)
 }
 
 // communityContent is what the book's community work carries
@@ -248,15 +255,9 @@ func (a *API) writeReadalongEstimate(w http.ResponseWriter, r *http.Request, lib
 	cost := h.EstimateSidecars(book.Duration, false)
 	out := readalongEstimate{Kind: bridge.KindReadalong, ASRHours: cost.ASRHours, Figures: cost.Figures,
 		Writable: h.Writable(lib.ID), Ebook: book.Ebook}
-	if book.Ebook != nil {
-		out.Readalong = a.readalongOf(ctx, lib, book.RelPath, book.IsFolder, book.Ebook.Path,
-			catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files))
-	}
+	out.Readalong = a.readalongOfBook(ctx, lib, book)
 	var err error
-	if out.OpenJob, err = a.bridge.OpenJob(ctx, bridge.KindReadalong, lib.ID, book.RelPath); err == nil && out.OpenJob == nil {
-		out.OpenJob, err = a.bridge.Blocker(ctx, bridge.KindReadalong, lib.ID, book.RelPath)
-	}
-	if err != nil {
+	if out.OpenJob, err = a.openOrBlocker(ctx, bridge.KindReadalong, lib.ID, book.RelPath); err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
 		return
 	}

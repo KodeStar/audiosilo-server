@@ -1,8 +1,6 @@
 package api
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -75,7 +73,12 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
 		return
 	}
-	sha, err := a.ebookDigest(r.Context(), lib, book.RelPath, book.Ebook.Path, book.IsFolder)
+	ctx := r.Context()
+	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
+	var digest string
+	if err == nil {
+		digest, err = a.digestOf(ctx, lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder)
+	}
 	switch {
 	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
 		writeErrorCode(w, http.StatusNotFound, codeNoReadalong, msgNoReadalong)
@@ -85,24 +88,22 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	files := catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files)
-	if st := catalog.ReadalongState(head, sha, files); st.State != catalog.ReadalongReady {
+	if st := catalog.ReadalongState(head, digest, files); st.State != catalog.ReadalongReady {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": msgReadalongStale, "code": codeReadalongStale,
 			"reason": st.Reason})
 		return
 	}
-	h := w.Header()
-	h.Set("Cache-Control", "private, no-cache")
-	h.Add("Vary", "Accept-Encoding")
-	etag := fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano())
-	h.Set("ETag", etag)
-	if inm := r.Header.Get("If-None-Match"); inm != "" && spa.ETagListMatches(inm, etag) {
-		w.WriteHeader(http.StatusNotModified)
+	w.Header().Add("Vary", "Accept-Encoding")
+	c := conditional{etag: fileETag(info), cacheControl: customCoverCache}
+	if c.notModified(w, r) {
 		return
 	}
+	c.setHeaders(w)
+	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	body := data
 	if spa.AcceptsGzip(r.Header.Get("Accept-Encoding")) {
-		if gz := gzipBytes(data); gz != nil {
+		if gz := spa.Gzipped(data); gz != nil {
 			h.Set("Content-Encoding", "gzip")
 			body = gz
 		}
@@ -114,54 +115,40 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// gzipBytes is data gzipped, nil when that fails.
-func gzipBytes(data []byte) []byte {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(data); err != nil || zw.Close() != nil {
-		return nil
-	}
-	return buf.Bytes()
+// fileETag is the ETag of a file served as it is on disk (/ebook, /readalong):
+// its size and mtime.
+func fileETag(info fs.FileInfo) string {
+	return fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano())
 }
 
-// ebookDigest is the sha256 of the ebook (ebookPath) of the book at bookPath:
-// the index's when it is current (computed for the ebook the book has now),
-// else hashed now (library.EbookDigest) and recorded for the next ask.
-func (a *API) ebookDigest(ctx context.Context, lib *catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
-	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, bookPath)
-	if err != nil {
-		return "", err
-	}
+// digestOf is the sha256 of the ebook (ebookPath) of the book at bookPath, idx
+// its index row (catalog.BookReadalongAt): the index's when it is current
+// (computed for the ebook the book has now), else hashed now and recorded for
+// the next ask (library.HashEbook).
+func (a *API) digestOf(ctx context.Context, lib *catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
 	if idx.DigestCurrent {
 		return idx.EbookSHA256, nil
 	}
-	return a.hashEbook(ctx, lib, bookPath, ebookPath, folder)
+	return library.HashEbook(ctx, a.cat, a.log, *lib, bookPath, ebookPath, folder)
 }
 
-// hashEbook hashes the book's ebook now and records the digest (only while the
-// index still holds that file: catalog.SetEbookDigest); a failure to record it
-// is logged, never the answer's.
-func (a *API) hashEbook(ctx context.Context, lib *catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
-	sha, sig, err := library.EbookDigest(lib.Root, ebookPath, folder)
-	if err != nil {
-		return "", err
-	}
-	if err := a.cat.SetEbookDigest(ctx, lib.ID, bookPath, sig, sha); err != nil {
-		a.log.Warn("record ebook digest failed", "library", lib.ID, "path", bookPath, "err", err)
-	}
-	return sha, nil
-}
-
-// readalongOf is Book.readalong for a book (its own path, whether it is a
-// folder book, its ebook's path, "" for none, and its audio files as a map
-// names them: catalog.BookAudioFiles): nil when it has no ebook or no valid
-// map in the index. The ebook's digest is the index's, hashed now when it isn't
-// current (a map just found; once per ebook). A failure is logged and reads as
-// no block: the book's page must still answer.
-func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath string, folder bool, ebookPath string, files []metadata.ReadalongFile) *catalog.Readalong {
-	if ebookPath == "" {
+// readalongOfBook is Book.readalong for book (readalongOf): nil when it has no
+// ebook.
+func (a *API) readalongOfBook(ctx context.Context, lib *catalog.Library, book *catalog.Book) *catalog.Readalong {
+	if book.Ebook == nil {
 		return nil
 	}
+	return a.readalongOf(ctx, lib, book.RelPath, book.IsFolder, book.Ebook.Path,
+		catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files))
+}
+
+// readalongOf is Book.readalong for a book with an ebook (its own path, whether
+// it is a folder book, its ebook's path, and its audio files as a map names
+// them: catalog.BookAudioFiles): nil when it has no valid map in the index. The
+// ebook's digest is the index's, hashed now when it isn't current (a map just
+// found; once per ebook). A failure is logged and reads as no block: the book's
+// page must still answer.
+func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath string, folder bool, ebookPath string, files []metadata.ReadalongFile) *catalog.Readalong {
 	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, bookPath)
 	if err != nil {
 		a.log.Warn("read read-along state failed", "library", lib.ID, "path", bookPath, "err", err)
@@ -170,12 +157,10 @@ func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath st
 	if idx.Head == nil {
 		return nil
 	}
-	sha := idx.EbookSHA256
-	if !idx.DigestCurrent {
-		if sha, err = a.hashEbook(ctx, lib, bookPath, ebookPath, folder); err != nil {
-			a.log.Warn("hash ebook failed", "library", lib.ID, "path", ebookPath, "err", err)
-			return nil
-		}
+	sha, err := a.digestOf(ctx, lib, idx, bookPath, ebookPath, folder)
+	if err != nil {
+		a.log.Warn("hash ebook failed", "library", lib.ID, "path", ebookPath, "err", err)
+		return nil
 	}
 	return catalog.ReadalongState(idx.Head, sha, files)
 }

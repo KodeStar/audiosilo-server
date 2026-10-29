@@ -5,7 +5,7 @@ import {
   FEATURE_READALONG,
   KIND_DETECT,
   KIND_GENERATE,
-  latestJobOf,
+  newestBlocker,
 } from '@/features/bridge/generate-model';
 
 // The book page's Read-along card (Bridge Phase 3c): the book's read-along map
@@ -48,9 +48,7 @@ export function blocksReadalong(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_re
 
 /** The book's newest job that keeps a read-along from being queued now, if any. */
 export function readalongBlocker(jobs: readonly BridgeJob[] | undefined): BridgeJob | undefined {
-  return READALONG_BLOCKER_KINDS.map((k) => latestJobOf(jobs, k)).find(
-    (j): j is BridgeJob => j !== undefined && blocksReadalong(j),
-  );
+  return newestBlocker(jobs, READALONG_BLOCKER_KINDS, blocksReadalong);
 }
 
 /** What the book has: a map that is ready, one made for another ebook or audio, or none. */
