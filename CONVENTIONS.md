@@ -607,7 +607,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   bounded by it: past it, a 503 like any timed-out lookup (`writeCatalogError`'s
   `context.DeadlineExceeded`; `TestEbookLookupBounded`). It is limited with the authenticated
   API, per credential (`requireAuth`, no media route). The player's
-  `Book` carries `ebook: {path, size}` (omitempty; `catalog.Ebook`, the size from `ebook_sig`) on
+  `Book` carries `ebook: {path, size}` (omitempty; `catalog.Ebook`, the size from `books.ebook_size`,
+  `0058`, recorded with the path: server#228, never parsed out of `ebook_sig` per row) on
   every endpoint returning a Book, so a client never asks for a book with none. **Reading
   progress**: `GET`/`PUT /libraries/{id}/reading-progress?path=` (`readingBook`: from the index
   alone, `catalog.BookEbookAt`, a part path its book's, on demand only when no indexed book is there;
@@ -621,6 +622,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   never diverge) or one over 200 bytes, a negative base or an unknown field (`device_name` is
   accepted and ignored: the name is the token's, `Credential.DeviceName`, never the body's; an
   echoed `other_place` is accepted, a whole stored row isn't). No listening heartbeat on a save.
+  **The read-along map** (Bridge Phase 3c, capability `readalong`, `api/handlers_readalong.go`): `GET
+  /libraries/{id}/readalong?path=<the book's own path>` serves the book's `.audiosilo/readalong.json`
+  (see Bridge attachments) as `application/json`, gzipped for a client that accepts it
+  (`spa.AcceptsGzip`; `Vary: Accept-Encoding`), `Cache-Control: private, no-cache` and a strong ETag of
+  the file's size and mtime (the same for both encodings; 304 on a match). **Header auth only**, as
+  `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
+  at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
+  a real `.audiosilo` folder that isn't ignored, a regular file never through a link) and checks
+  it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`, the
+  ebook's digest the index's when current, else hashed now and recorded); the indexed head never
+  vouches for the bytes sent. A part's path, a podcast library, a book with no ebook, no map, or a
+  map that fails its checks: 404 `no_readalong`; a map made from another ebook or other audio: 409
+  `readalong_stale` with `reason` (`ebook_changed`, `audio_changed`); outside scope 403. The player's
+  `Book.readalong` (`{state: ready, coverage, generated_at}` or `{state: stale, reason}`;
+  `catalog.Readalong`) is on `GET /libraries/{id}/item` and the console's book detail only, never a
+  list row, omitted with no ebook or no valid map (`api.readalongOf`, from the indexed head; a failure
+  is logged and reads as none). An ebook edit is seen once a scan records its new `ebook_sig`.
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML
@@ -833,6 +851,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
   regular file inside the library checked before it is opened (a FIFO's open would wait for a writer,
   `TestOpenEbookFIFO`) and, once open, still the very file its name leads to (`os.SameFile`).
+  `books.ebook_size` (`0058`, backfilled from the signature) is the recorded file's size, written
+  with `ebook_path` (`UpsertBook`, `SetEbooks`). Only a book with a read-along map has its ebook
+  hashed (Bridge Phase 3c: `books.ebook_sha256`, computed for the `ebook_sig` in
+  `ebook_hashed_sig`, so a digest whose sig isn't the row's is stale): the scan's post-pass
+  (`Scanner.hashReadalongEbooks`, after the walk; `RefreshAttachments` for its one book) hashes the
+  books `catalog.ReadalongEbooksDue` lists (a stored valid head, an ebook, a digest not current) through
+  `library.EbookDigest` (`OpenEbook`), and `SetEbookDigest` records it only while the row still names
+  that file (compare-and-set on `ebook_sig`). Hashing every ebook would read a library whole over a
+  network share.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
   found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
@@ -893,8 +920,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   left as it was by the backfill and recorded as none by a re-index, so the next scan reads it
   again (`readABS`' `read`); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
   **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
-  migrations `0048`, `0050`, `0051`; BRIDGE-PLAN.md Phases 1a, 1c and 1d): the Bridge writes a book's generated `characters.json`,
-  `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration) and `bridge.json` (provenance) into `.audiosilo/` in a folder book's own folder, or beside
+  migrations `0048`, `0050`, `0051`, `0058`; BRIDGE-PLAN.md Phases 1a, 1c, 1d and 3c): the Bridge writes a book's generated `characters.json`,
+  `recaps.json`, `description.json`, `chapters.json` (chapters found in the narration), `bridge.json` (provenance) and
+  `readalong.json` (Phase 3c's read-along map) into `.audiosilo/` in a folder book's own folder, or beside
   a single-file book with its stem before each name (`Book.characters.json`). They are NOT a metadata
   layer (nothing in the effective row reads them, but `chapters.json`, a chapter source: see Generated
   chapters, so `SetAttachments` re-resolves a book (`refreshEffective`) and fires `changed()` when its
@@ -906,8 +934,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `TestDescriptionBoundsMatchTheSchema` reads them from audiosilo-meta's embedded `SchemaFS`, imported
   as `metaschema`), no control character but a line break; a blank text is none, anything else fails
   the file. A signature lists only the names a book has, in `AttachmentNames` order (characters, recaps,
-  description, chapters, bridge), and adding a name kept the others in order, so a book without one keeps
-  its stored signature byte for byte.
+  description, chapters, bridge, readalong), and adding a name kept the others in order, so a book without one keeps
+  its stored signature byte for byte. **A read-along map** (`metadata/readalong.go`) has its own bound,
+  `MaxReadalongFile` = 16 MiB (one span per sentence: about 1.2 MB for 23.5 h); only its head is
+  stored (`book_attachments.readalong`, never the sections): format exactly `audiosilo-readalong/v1`,
+  `ebook.sha256` 64 hex (stored lowercase), 1 to 5000 `audio.files` each with a path of 1 to 1024
+  bytes and a duration above 0, `coverage.text`/`coverage.audio` present and in [0,1], `sections`
+  an array; anything else fails the file (a map that fails is none). Generator values and
+  `generated_at` are cleaned like bridge.json's (a value lost, never the file). `catalog.ReadalongState`
+  compares the head with the book now: the ebook's sha256 first (`ebook_changed`), then its audio
+  files (`catalog.BookAudioFiles`: book-relative paths, a single-file book its base name; another
+  count, another set, or a length off by more than 0.05 s: `audio_changed`), else ready. A map is not
+  a generated part (`Book.generated` stays the same).
   bridge.json's `description.generated_at` is read as `AttachmentProvenance.DescriptionAt` (the rest of
   that object is the Bridge's; an object of another shape costs only that time, never the file). The discovery walk lists each `.audiosilo` folder
   ONCE (never walks into it; no audio lives there), and a book's signature (`books.attachments_sig`:
@@ -1670,7 +1708,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (3b-2) downloads it with the header into a local file. Nothing needs a URL carrying a credential,
   so none exists. Only if 3b-2's proof shows a WebView can't read a local file does a `reader` kind
   on `cast_grants` (own kind, `/ebook` only, 10 min) get planned and reviewed.
-- **The Bridge (BRIDGE-PLAN.md Phases 0, 1a, 1c, 1d and 2b, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
+- **The Bridge (BRIDGE-PLAN.md Phases 0, 1a, 1c, 1d, 2b and 3c, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
   `api/handlers_bridge.go`, `handlers_bridge_estimate.go`; security-critical)**: the optional companion (repo `audiosilo-bridge`,
   private) that writes to the libraries and runs the heavy jobs, so this server stays read-only. **The
   server never connects to the Bridge**: it stores intents (jobs) and the Bridge's last heartbeat, and
@@ -1804,7 +1842,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `full` (or none) indexes it (`IndexPath`; with `from`, the book's path before a move the Bridge made,
   `Scanner.IndexMoved` carries its durable state when the old book is gone from disk and the
   fingerprints match, else ignores it), mode `attachments` re-reads only the book's `.audiosilo/` files
-  (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, description, chapters, bridge}}`); 404
+  (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, description, chapters, bridge, readalong}}`); 404
   `not_indexable`. Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET
   /admin/bridge/jobs/{id}`, `GET /admin/bridge/estimate?library_id=&path=&kind=[&brief=1]` (the
@@ -1824,10 +1862,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` or `sidecars.contribute` job, never
   a share held while `contributions` is off; its `kind` says which, additive: the player's Generate holds
   back for those two kinds);
-  `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
+  `brief=1` skips the folder look and the series scan, for a card or a batch; `kind=readalong.align`
+  answers its own shape, below; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
-  and `work_id` from the metadata cache alone, `CachedWorkID`), never on the sample-book answer.
+  `work_id` from the metadata cache alone, `CachedWorkID`, and Phase 3c's `ebook {path, size}`, omitted
+  with none), never on the sample-book answer; each `files[]` entry carries its indexed `duration`
+  (Phase 3c, additive; a single-file book's is the book's).
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and
   each generate or describe job's status; the book page's aside and each series card generate characters and
   recaps, a series card queueing those of its books without recaps in reading order). The admin book
@@ -1869,7 +1910,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`useBookGenerateJob` with `KIND_DETECT`, on any server that knows the Bridge, metadata or not:
   `detectJobsKnown`) and fetches the book again when it ends; an open detect job counts in the page's job
   poll (`BOOK_KINDS`) and holds back "Write a description" (the Bridge can't describe a book while its
-  detection runs or is parked); the Bridge page words them through `GenerateStatus` ("24 chapters found"). Jobs are carried by
+  detection runs or is parked); the Bridge page words them through `GenerateStatus` ("24 chapters found").
+  **Read-along** (Phase 3c, feature `readalong`): `readalong.align` makes a book's read-along map
+  (`.audiosilo/readalong.json`, see Bridge attachments and Path-addressed API) by speech recognition and
+  alignment, no agent; book required, params `{}` or none (`noParams`), writes (`library_not_writable`),
+  books libraries only; refused 409 `no_ebook` for a book with no ebook (the queue handler, before
+  enqueueing), and 409 `generate_open` / `detect_open` while either is open for the book (parked too:
+  a read-along cancels neither; both run over the same audio, one engine book per audio path on the
+  Bridge). A NEW `sidecars.generate` or `chapters.detect` is refused 409 `readalong_open`
+  (`ErrReadalongOpen`) while a read-along job is open, except that a generate job cancels a PARKED
+  one ("make the read-along again after"; so Generate holds back only for a queued or working one); a
+  detect job cancels none. Re-aligning a ready map is
+  allowed (no bulk action: per book only). `GET /admin/bridge/estimate?kind=readalong.align&library_id=&path=`
+  answers `{kind, asr_hours, figures, writable, ebook: {path,size}|null, readalong: Book.readalong|null,
+  open_job?}` (`asr_hours` the whole audio at the Bridge's `asr_seconds_per_audio_hour`, the most it
+  may take: less when the Bridge kept the book's transcript; `open_job` the book's open read-along job,
+  else the generate or detect job it would wait for). Notifications word it "Read-along ready: <book>
+  (N% lined up)" (the result's `coverage.text` rounded down; the event's `coverage`) and "Read-along
+  failed: <book>". The console's book page shows a **Read-along** card for a book with an ebook
+  (`features/book/readalong-*`: the map's state, coverage and stale reason, Make / Make again with a
+  confirmation quoting "up to N h of transcription, less if the Bridge still has this book's transcript;
+  no agent cost", the job's status through `GenerateStatus`, an open generate or detect job's status in
+  place of the offer), `KIND_READALONG` counts in the page's job poll, the Community card's Generate
+  shows an open read-along in place of the action (`generateBlocker`), and the series batch and Health's
+  Detect chapters pass a book refused `readalong_open` over by name. Jobs are carried by
   `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
   open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
   key), and go with their library. **Hidden folders**: no route reaches content through a hidden
