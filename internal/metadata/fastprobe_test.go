@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -569,4 +570,27 @@ func TestExtractFallsBackPastTheProbeBudget(t *testing.T) {
 	if n := runs(t, log); n != 1 {
 		t.Errorf("ffprobe read %d files, want the one past the budget", n)
 	}
+}
+
+// failReader fails its test when read.
+type failReader struct{ t *testing.T }
+
+func (r failReader) ReadAt([]byte, int64) (int, error) {
+	r.t.Error("read past the budget")
+	return 0, io.EOF
+}
+
+// A read the budget can't cover is refused before its buffer is made (an MKV's
+// EBML header can name a size up to the file's).
+func TestBlockFileBudgetBeforeAllocation(t *testing.T) {
+	t.Parallel()
+	b := newBlockFile(failReader{t}, 1<<40)
+	b.arm(context.Background(), maxProbeBytes)
+	defer func() {
+		if r := recover(); r != probeLimit("limit: probe read budget") {
+			t.Errorf("recovered %v, want the budget", r)
+		}
+	}()
+	b.bytesAt(0, 1<<39)
+	t.Error("a read past the budget was made")
 }

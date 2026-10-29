@@ -761,8 +761,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a crafted table past a bound (a chapter track over 65536 samples or with counts past its
   tables, MKV SimpleTags over 4096 or 8 deep, a compressed ID3 frame over 16 MiB), a read error,
   a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
-  caller's context, and `min(timeout, maxProbeTime)` = 5 s, the timeout ExtractTimeout gives
-  ffprobe) or after `maxProbeBytes` (64 MiB; the real-library p95 is ~0.9 MiB) read, checked on
+  caller's context, and `min(timeout, maxProbeTime)`: at most 5 s, under the timeout ExtractTimeout
+  gives ffprobe) or after `maxProbeBytes` (64 MiB; the real-library p95 is ~0.9 MiB) read, checked on
   every block read, before inflating an ID3 frame or growing a repeated Vorbis key
   (`blockFile.check`) and, every 256 ticks, in the walks that loop without reading
   (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps

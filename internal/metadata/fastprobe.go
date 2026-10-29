@@ -330,6 +330,12 @@ func (b *blockFile) bytesAt(off int64, n int) ([]byte, bool) {
 	if off < 0 || n < 0 || off+int64(n) > b.size {
 		return nil, false
 	}
+	// A read raw would refuse for the budget is refused before its buffer is
+	// made: a size field up to the file's (an MKV's EBML header) is no
+	// allocation of the whole file.
+	if b.ctx != nil && n > 4*bfBlock && int64(n) > b.budget {
+		panic(probeLimit("limit: probe read budget"))
+	}
 	buf := make([]byte, n)
 	m, _ := b.ReadAt(buf, off)
 	return buf, m == n
