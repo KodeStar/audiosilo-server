@@ -45,18 +45,22 @@ func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig s
 	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), info), nil
 }
 
-// EbookSigNow is the signature (catalog.EbookSig) of the ebook at
-// library-relative rel as it is on disk now, by OpenEbook's rules (noLink as
-// there) without opening it: one stat. A request compares it with the stored
-// digest's (catalog.ReadalongIndexed.HashedSig), so an ebook replaced since the
-// last scan is hashed again, never answered with the old file's digest.
-// ErrNoEbook (or fs.ErrNotExist) when there is no such file now.
-func EbookSigNow(root, rel string, noLink bool) (string, error) {
-	_, info, err := lookEbook(root, rel, noLink)
+// EbookDigestNow is the sha256 of the ebook (ebookPath) of the book at
+// bookPath, idx its index row (catalog.BookReadalongAt): the stored digest
+// while the file on disk still has the signature it was computed for (one
+// stat; the index's ebook_sig is only as new as the last scan, so an EPUB
+// replaced since is never answered with the old file's digest), else hashed
+// now and recorded with the new file's signature (HashEbook). ErrNoEbook (or
+// fs.ErrNotExist) when there is no such file now.
+func (s *Scanner) EbookDigestNow(ctx context.Context, lib catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
+	_, info, err := lookEbook(lib.Root, ebookPath, folder)
 	if err != nil {
 		return "", err
 	}
-	return catalog.EbookSig(path.Base(rel), info), nil
+	if idx.HashedSig == catalog.EbookSig(path.Base(ebookPath), info) {
+		return idx.EbookSHA256, nil
+	}
+	return s.HashEbook(ctx, lib, bookPath, ebookPath, folder)
 }
 
 // ctxReader is r that fails with ctx's error once ctx is done.

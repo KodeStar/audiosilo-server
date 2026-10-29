@@ -77,7 +77,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, book.RelPath)
 	var digest string
 	if err == nil {
-		digest, err = a.digestOf(ctx, lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder)
+		digest, err = a.scanner.EbookDigestNow(ctx, *lib, idx, book.RelPath, book.Ebook.Path, book.IsFolder)
 	}
 	switch {
 	case errors.Is(err, library.ErrNoEbook), errors.Is(err, fs.ErrNotExist):
@@ -125,24 +125,6 @@ func fileETag(info fs.FileInfo) string {
 	return fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano())
 }
 
-// digestOf is the sha256 of the ebook (ebookPath) of the book at bookPath, idx
-// its index row (catalog.BookReadalongAt): the stored one while the file on
-// disk still has the signature it was computed for (one stat:
-// library.EbookSigNow; the index's ebook_sig is only as new as the last scan,
-// so an EPUB replaced since would otherwise answer with the old file's
-// digest), else hashed now and recorded with the new file's signature, so the
-// next ask doesn't hash it again (library.Scanner.HashEbook).
-func (a *API) digestOf(ctx context.Context, lib *catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
-	sig, err := library.EbookSigNow(lib.Root, ebookPath, folder)
-	if err != nil {
-		return "", err
-	}
-	if idx.HashedSig != "" && idx.HashedSig == sig && idx.EbookSHA256 != "" {
-		return idx.EbookSHA256, nil
-	}
-	return a.scanner.HashEbook(ctx, *lib, bookPath, ebookPath, folder)
-}
-
 // readalongOfBook is Book.readalong for book (readalongOf): nil when it has no
 // ebook.
 func (a *API) readalongOfBook(ctx context.Context, lib *catalog.Library, book *catalog.Book) *catalog.Readalong {
@@ -155,10 +137,9 @@ func (a *API) readalongOfBook(ctx context.Context, lib *catalog.Library, book *c
 
 // readalongOf is Book.readalong for a book with an ebook (its own path, whether
 // it is a folder book, its ebook's path, and its audio files as a map names
-// them: catalog.BookAudioFiles): nil when it has no valid map in the index. The
-// ebook's digest is digestOf's (the stored one while the file on disk is the
-// one it was computed for, else hashed now and recorded). A failure is logged
-// and reads as no block: the book's page must still answer.
+// them: catalog.BookAudioFiles): nil when it has no valid map in the index, the
+// ebook's digest library.Scanner.EbookDigestNow's. A failure is logged and
+// reads as no block: the book's page must still answer.
 func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath string, folder bool, ebookPath string, files []metadata.ReadalongFile) *catalog.Readalong {
 	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, bookPath)
 	if err != nil {
@@ -168,7 +149,7 @@ func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath st
 	if idx.Head == nil {
 		return nil
 	}
-	sha, err := a.digestOf(ctx, lib, idx, bookPath, ebookPath, folder)
+	sha, err := a.scanner.EbookDigestNow(ctx, *lib, idx, bookPath, ebookPath, folder)
 	if err != nil {
 		a.log.Warn("hash ebook failed", "library", lib.ID, "path", ebookPath, "err", err)
 		return nil

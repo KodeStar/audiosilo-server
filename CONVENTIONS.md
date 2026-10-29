@@ -633,7 +633,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   more when the Bridge renamed a new map in as it was opened: `metadata.ErrReplacedWhileOpening`) and
   checks it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`,
   the ebook's digest the stored one only while the file on disk still has the signature it was
-  computed for, one stat: `library.EbookSigNow` against `ebook_hashed_sig`, else hashed now and
+  computed for, one stat against `ebook_hashed_sig`: `library.Scanner.EbookDigestNow`, else hashed now and
   recorded with the new signature, so an EPUB replaced since the last scan is never answered with
   the old file's digest and is hashed once, not on every ask); the indexed head never
   vouches for the bytes sent. A part's path, a podcast library, a book with no ebook, no map, or a
