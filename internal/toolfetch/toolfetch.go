@@ -46,18 +46,33 @@ type spec struct {
 
 const btbn = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
 
+// btbnBranch is the FFmpeg release branch the Linux and Windows builds come
+// from: BtbN's "latest" release carries an n<branch>-latest asset per platform,
+// rebuilt at each point release, whose -version reads "n8.1...". Never master:
+// its "N-..." version names no release, and the in-process probe follows a
+// known release's rules only (metadata.rulesFor), so a master build turned it
+// off on every native Linux and Windows install (server#269). Move it only to
+// a branch metadata's knownRules has.
+const btbnBranch = "8.1"
+
+// btbnAsset is the URL of BtbN's newest btbnBranch build for platform
+// ("linux64", "win64", ...), an archive of kind ext ("tar.xz" or "zip").
+func btbnAsset(platform, ext string) string {
+	return btbn + "/ffmpeg-n" + btbnBranch + "-latest-" + platform + "-lgpl-" + btbnBranch + "." + ext
+}
+
 // specFor returns the download spec for an OS/arch, or ok=false when there's no
 // known static source (the caller then just runs without ffmpeg).
 func specFor(goos, goarch string) (spec, bool) {
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-		return spec{combinedURL: btbn + "/ffmpeg-master-latest-linux64-lgpl.tar.xz", combinedKind: "tar.xz"}, true
+		return spec{combinedURL: btbnAsset("linux64", "tar.xz"), combinedKind: "tar.xz"}, true
 	case "linux/arm64":
-		return spec{combinedURL: btbn + "/ffmpeg-master-latest-linuxarm64-lgpl.tar.xz", combinedKind: "tar.xz"}, true
+		return spec{combinedURL: btbnAsset("linuxarm64", "tar.xz"), combinedKind: "tar.xz"}, true
 	case "windows/amd64":
-		return spec{combinedURL: btbn + "/ffmpeg-master-latest-win64-lgpl.zip", combinedKind: "zip"}, true
+		return spec{combinedURL: btbnAsset("win64", "zip"), combinedKind: "zip"}, true
 	case "windows/arm64":
-		return spec{combinedURL: btbn + "/ffmpeg-master-latest-winarm64-lgpl.zip", combinedKind: "zip"}, true
+		return spec{combinedURL: btbnAsset("winarm64", "zip"), combinedKind: "zip"}, true
 	case "darwin/amd64", "darwin/arm64":
 		// evermeet ships x86_64 only; on Apple Silicon it runs under Rosetta 2,
 		// which is fine to exec from an arm64 server.

@@ -780,7 +780,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
   rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
   gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
-  `-version` turns the probe off and ffprobe reads every file, as before). Anything a reader does
+  `-version` turns the probe off and ffprobe reads every file, as before; the start-up log says
+  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master,
+  server#269). Anything a reader does
   not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
   `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3

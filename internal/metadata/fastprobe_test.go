@@ -32,6 +32,8 @@ func TestRulesFor(t *testing.T) {
 		{"ffprobe version 7.1 Copyright", ff7},
 		{"ffprobe version 8.1.3 Copyright (c) 2007-2026 the FFmpeg developers", ff8},
 		{"ffprobe version n8.1.3-12-gdeadbeef Copyright", ff8},
+		{"ffprobe version n8.1.3-25-g611cec792a-20261029 Copyright (c) 2007-2026 the FFmpeg developers", ff8}, // BtbN's n8.1-latest (toolfetch)
+		{"ffprobe version n8.1-7-g1a2b3c4d5e-20261028 Copyright (c) 2007-2026", ff8},
 		{"ffprobe version 8.1-static https://johnvansickle.com", ff8},
 		{"ffprobe version 8.0 Copyright", ffNone},
 		{"ffprobe version 7.0.2 Copyright", ffNone},

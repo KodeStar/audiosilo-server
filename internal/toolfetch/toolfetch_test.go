@@ -9,10 +9,32 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// Linux and Windows fetch BtbN's newest build of the pinned release branch
+// (n8.1, whose -version the in-process probe knows), never master.
+func TestSpecForBtbNAssets(t *testing.T) {
+	t.Parallel()
+	const base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+	for platform, want := range map[string]spec{
+		"linux/amd64":   {combinedURL: base + "ffmpeg-n8.1-latest-linux64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
+		"linux/arm64":   {combinedURL: base + "ffmpeg-n8.1-latest-linuxarm64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
+		"windows/amd64": {combinedURL: base + "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip", combinedKind: "zip"},
+		"windows/arm64": {combinedURL: base + "ffmpeg-n8.1-latest-winarm64-lgpl-8.1.zip", combinedKind: "zip"},
+	} {
+		goos, goarch, _ := strings.Cut(platform, "/")
+		if got, ok := specFor(goos, goarch); !ok || got != want {
+			t.Errorf("specFor(%s) = %+v, want %+v", platform, got, want)
+		}
+		if got, _ := specFor(goos, goarch); strings.Contains(got.combinedURL, "master") {
+			t.Errorf("specFor(%s) fetches master: %s", platform, got.combinedURL)
+		}
+	}
+}
 
 func TestSpecFor(t *testing.T) {
 	t.Parallel()

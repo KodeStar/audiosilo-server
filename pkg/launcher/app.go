@@ -400,6 +400,13 @@ func resolveTools(ctx context.Context, dataDir string, opts Options, log *slog.L
 	if opts.FFmpegPath != "" && ffmpeg == "" {
 		log.Warn("ffmpeg unavailable; on-the-fly transcoding is disabled")
 	}
+	if ffprobe != "" {
+		if rel := metadata.ProbeRelease(ctx, ffprobe); rel != "" {
+			log.Info("in-process probe on", "ffprobe", ffprobe, "rules", rel)
+		} else {
+			log.Info("in-process probe off: ffprobe is not a release it knows, so ffprobe reads every file", "ffprobe", ffprobe)
+		}
+	}
 	return ffmpeg, ffprobe
 }
 
