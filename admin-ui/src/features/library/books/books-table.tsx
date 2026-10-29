@@ -366,7 +366,8 @@ function TitleCell({ book: b, selecting }: { book: AdminBook; selecting: boolean
           path={b.path}
           title={b.title}
           author={b.author}
-          size={160}
+          size={96}
+          version={b.cover_version}
         />
       </span>
       <span className="flex min-w-0 flex-col">

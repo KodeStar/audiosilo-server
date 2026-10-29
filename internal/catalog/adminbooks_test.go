@@ -114,12 +114,48 @@ func TestListAdminBooksRowShape(t *testing.T) {
 	}
 	got := page.Books[0]
 	got.id, got.moreSeries = 0, ""
+	// The player's cover version, the same token for the same art.
+	player, err := c.GetBookByPath(ctx, libA, "Herbert/Dune")
+	if err != nil || player.CoverVersion == "" || got.CoverVersion != player.CoverVersion {
+		t.Fatalf("cover_version = %q, player's %+v (%v)", got.CoverVersion, player, err)
+	}
+	got.CoverVersion = ""
 	want := AdminBook{LibraryID: libA, SeriesList: []SeriesRef{}, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
 		Narrator: "Scott Brick", Authors: []string{"Frank Herbert"}, Narrators: []string{"Scott Brick"}, Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
 		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}, ChaptersSource: ChaptersFromFiles,
 		Genres: []string{}, Tags: []string{}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("row = %+v\nwant  %+v", got, want)
+	}
+}
+
+// An admin row's cover_version moves with the art: a custom cover gives it a new
+// one, removing it brings the file art's back (the console's thumbnail cache is
+// keyed by it).
+func TestAdminBookCoverVersion(t *testing.T) {
+	t.Parallel()
+	c, ctx, libA, _ := seedAdminLibrary(t)
+	version := func() string {
+		t.Helper()
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{LibraryID: libA, Query: "dune"}})
+		if err != nil || len(page.Books) != 1 {
+			t.Fatalf("%v %v", page, err)
+		}
+		return page.Books[0].CoverVersion
+	}
+	file := version()
+	if err := c.SetCover(ctx, libA, "Herbert/Dune", pngBytes, 0, SourceEdited); err != nil {
+		t.Fatal(err)
+	}
+	custom := version()
+	if custom == "" || custom == file {
+		t.Fatalf("after upload cover_version = %q, file art's %q", custom, file)
+	}
+	if err := c.DeleteCover(ctx, libA, "Herbert/Dune"); err != nil {
+		t.Fatal(err)
+	}
+	if v := version(); v != file {
+		t.Fatalf("after delete cover_version = %q, want the file art's %q", v, file)
 	}
 }
 

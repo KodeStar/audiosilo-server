@@ -18,7 +18,7 @@ import { LibraryFilter } from '../library-filter';
 import { useLibraryBookCount, useLibraryParam, useSearchPage } from '../library-param';
 import { SeriesCard } from './series-card';
 import { SERIES_PAGE, filterSeries } from './series-model';
-import { useInView } from './use-in-view';
+import { useInView } from '@/lib/use-in-view';
 
 /**
  * Library > Series: one card per series with its books as spines, a page of

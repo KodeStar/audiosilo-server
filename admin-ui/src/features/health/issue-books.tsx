@@ -166,6 +166,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                   title={b.title}
                   author={b.author}
                   size={160}
+                  version={b.cover_version}
                 />
               </Link>
               <div className="flex min-w-0 flex-1 flex-col">

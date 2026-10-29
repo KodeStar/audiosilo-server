@@ -1,10 +1,11 @@
-import { useId } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye } from 'lucide-react';
 import { useBookLibraries, useDuplicates, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { LoadMore } from '@/components/load-more';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +15,7 @@ import { audioLine } from '@/features/book/book-model';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { formatBytes, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
+import { useInView } from '@/lib/use-in-view';
 import { cn } from '@/lib/utils';
 import { AllClear } from './all-clear';
 import { useIssueActions, type IssueActions } from './use-issue-actions';
@@ -25,6 +27,9 @@ import { useIssueActions, type IssueActions } from './use-issue-actions';
  * copy turns up). With `ignored`, the groups an admin said are different. Books
  * sharing an ASIN/ISBN at different lengths may be different recordings, so no
  * copy is called the one to keep there: the card says what to check instead.
+ * The groups come a page at a time (more as the list scrolls), each copy's cover
+ * once its column nears the viewport, and a group of many copies shows the first
+ * few until asked for the rest.
  */
 export function Duplicates({
   ignored,
@@ -62,7 +67,9 @@ function DuplicateList({
   roots: Record<number, string>;
 }) {
   const { t } = useTranslation();
-  if (groups.isError) {
+  // Only with nothing loaded: a later page that failed keeps the pages there are
+  // (its Show more asks again), as does a refetch that failed.
+  if (groups.isError && !groups.data) {
     return (
       <QueryError
         title={t('health.listError')}
@@ -76,18 +83,62 @@ function DuplicateList({
       <div className="skel h-[260px] rounded-xl" role="status" aria-label={t('common.loading')} />
     );
   }
-  const shown = groups.data; // the server lists the open, or only the ignored, groups
+  return <DuplicatePages ignored={ignored} groups={groups} actions={actions} roots={roots} />;
+}
+
+function DuplicatePages({
+  ignored,
+  groups,
+  actions,
+  roots,
+}: {
+  ignored: boolean;
+  groups: ReturnType<typeof useDuplicates>;
+  actions: IssueActions;
+  roots: Record<number, string>;
+}) {
+  const pages = groups.data?.pages;
+  // The server lists the open, or only the ignored, groups. A group can shift
+  // across a page boundary between two page loads (a better copy came, so another
+  // copy leads it and sorts it elsewhere): shown once, where any of its copies first was.
+  const shown = useMemo(() => {
+    const seen = new Set<string>();
+    return (pages ?? [])
+      .flatMap((p) => p.groups)
+      .filter((g) => {
+        const keys = g.books.map(refKey);
+        if (keys.some((k) => seen.has(k))) return false;
+        for (const k of keys) seen.add(k);
+        return true;
+      });
+  }, [pages]);
+  // The newest page's count is the freshest.
+  const total = Math.max(pages?.at(-1)?.total ?? 0, shown.length);
+  const { fetchNextPage } = groups;
+  const more = useCallback(() => void fetchNextPage(), [fetchNextPage]);
   if (shown.length === 0) return <AllClear ignored={ignored} />;
-  return shown.map((g, i) => (
-    <GroupCard
-      key={refKey(g.books[0])}
-      group={g}
-      index={i}
-      total={shown.length}
-      actions={actions}
-      roots={roots}
-    />
-  ));
+  return (
+    <>
+      {shown.map((g, i) => (
+        <GroupCard
+          key={refKey(g.books[0])}
+          group={g}
+          index={i}
+          total={total}
+          actions={actions}
+          roots={roots}
+        />
+      ))}
+      {groups.hasNextPage ? (
+        <LoadMore
+          onMore={more}
+          loading={groups.isFetchingNextPage}
+          loaded={pages?.length ?? 0}
+          auto={!groups.isFetchNextPageError}
+        />
+      ) : null}
+    </>
+  );
 }
 
 /** "Include other libraries": also group copies in different libraries. */
@@ -115,6 +166,9 @@ function AcrossToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) =
   );
 }
 
+/** The copies a group shows until asked for the rest. */
+const COPIES_SHOWN = 10;
+
 function GroupCard({
   group: g,
   index,
@@ -135,6 +189,9 @@ function GroupCard({
   const spans = new Set(g.books.map((b) => b.library_id)).size > 1;
   // Maybe different recordings: no copy is suggested over another.
   const unsure = g.reason === 'id_length_differs';
+  // A group of many copies (identical audio across a big library) shows a few.
+  const [all, setAll] = useState(false);
+  const copies = all ? g.books : g.books.slice(0, COPIES_SHOWN);
   return (
     <section className="rounded-xl border bg-card" aria-labelledby={`dup-${index}`}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b px-5 py-4">
@@ -160,7 +217,7 @@ function GroupCard({
         </Badge>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2">
-        {g.books.map((b, i) => (
+        {copies.map((b, i) => (
           <CopyColumn
             key={refKey(b)}
             book={b}
@@ -173,6 +230,11 @@ function GroupCard({
         ))}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3">
+        {copies.length < g.books.length ? (
+          <Button variant="outline" size="sm" className="mr-auto" onClick={() => setAll(true)}>
+            {t('health.dup.showAll', { n: formatNumber(g.books.length, lang) })}
+          </Button>
+        ) : null}
         {g.ignored ? (
           <Button variant="outline" size="sm" onClick={() => void actions.unignore(g.books)}>
             <Eye aria-hidden="true" />
@@ -206,6 +268,8 @@ function CopyColumn({
   lang: string;
 }) {
   const { t } = useTranslation();
+  // The cover is asked for once the column nears the viewport.
+  const [ref, seen] = useInView<HTMLDivElement>();
   const none = t('health.dup.none');
   const rows: [string, React.ReactNode, boolean?][] = [
     ...(library !== undefined
@@ -225,6 +289,7 @@ function CopyColumn({
   ];
   return (
     <div
+      ref={ref}
       className={cn(
         'flex min-w-0 flex-col gap-3 p-5',
         !keep && 'border-t md:border-t-0 md:border-l',
@@ -242,6 +307,8 @@ function CopyColumn({
             title={b.title}
             author={b.author}
             size={160}
+            load={seen}
+            version={b.cover_version}
           />
         </Link>
         <div className="flex flex-col items-start gap-1.5">

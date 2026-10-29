@@ -1,6 +1,10 @@
 package catalog
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -159,6 +163,13 @@ func TestIssueCountsAndIgnores(t *testing.T) {
 	}
 }
 
+// DuplicateGroups is the tests' first page of groups (DuplicatePage without a
+// limit or cursor).
+func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored, across bool) ([]DuplicateGroup, error) {
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: libraryID, Ignored: ignored, Across: across})
+	return page.Groups, err
+}
+
 func TestDuplicateGroups(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -224,6 +235,131 @@ func TestDuplicateGroups(t *testing.T) {
 	}
 	if groups, _ := c.DuplicateGroups(ctx, lib.ID, false, false); len(groups) != 2 {
 		t.Fatalf("a new copy didn't bring the group back: %+v", groups)
+	}
+}
+
+// TestDuplicatePage: the groups a page at a time, in the unpaged order, each
+// cursor the last group's place; a group that leaves between pages moves
+// nothing else; the last page has no cursor; total counts every page's groups.
+func TestDuplicatePage(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	uid := seedUser(t, c, ctx)
+	// Seven pairs of identical audio, "Book 1" .. "Book 7" kept over their copies.
+	// Lower case paths sort among upper case ones (compareFold), as the list does.
+	names := []string{"Book 1", "book 2", "Book 3", "book 4", "Book 5", "book 6", "Book 7"}
+	for i, name := range names {
+		hash := fmt.Sprintf("h%d", i)
+		for _, b := range []*Book{
+			{LibraryID: lib.ID, RelPath: name, Title: name, Format: "m4b", ContentHash: hash, Size: 100},
+			{LibraryID: lib.ID, RelPath: "zz/" + name, Title: name, Format: "mp3", ContentHash: hash, Size: 100},
+		} {
+			if _, err := c.UpsertBook(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	all, err := c.DuplicateGroups(ctx, lib.ID, false, false)
+	if err != nil || len(all) != len(names) {
+		t.Fatalf("unpaged = %d groups (%v), want %d", len(all), err, len(names))
+	}
+	keeps := func(gs []DuplicateGroup) []string {
+		var out []string
+		for _, g := range gs {
+			out = append(out, g.Books[0].Path)
+		}
+		return out
+	}
+	if got := keeps(all); !slices.Equal(got, names) {
+		t.Fatalf("unpaged order = %v, want %v", got, names)
+	}
+
+	var paged []string
+	cursor, pages := "", 0
+	for {
+		page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Limit: 3, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages++
+		if page.Total != len(names) {
+			t.Fatalf("page %d total = %d, want %d", pages, page.Total, len(names))
+		}
+		if len(page.Groups) > 3 || len(page.Groups) == 0 {
+			t.Fatalf("page %d = %d groups", pages, len(page.Groups))
+		}
+		paged = append(paged, keeps(page.Groups)...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if pages != 3 || !slices.Equal(paged, names) {
+		t.Fatalf("paged %d pages: %v, want 3 pages of %v", pages, paged, names)
+	}
+
+	// The cursor names a place, not a group: the first page's last group leaving
+	// (ignored) still has the second page start after it.
+	first, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := first.Groups[2].Books
+	refs := []Ref{{LibraryID: lib.ID, Path: gone[0].Path}, {LibraryID: lib.ID, Path: gone[1].Path}}
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, refs, uid); err != nil {
+		t.Fatal(err)
+	}
+	second, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Limit: 3, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := keeps(second.Groups); !slices.Equal(got, names[3:6]) || second.Total != len(names)-1 {
+		t.Fatalf("after an ignore: page 2 = %v (total %d), want %v", got, second.Total, names[3:6])
+	}
+	// The ignored view pages the same way: one group, no cursor.
+	ign, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Ignored: true, Limit: 3})
+	if err != nil || len(ign.Groups) != 1 || ign.NextCursor != "" || ign.Total != 1 {
+		t.Fatalf("ignored page = %+v %v", ign, err)
+	}
+	// Past the end: an empty page, never null.
+	last := encodeCursor("zzz", lib.ID)
+	if end, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Cursor: last}); err != nil ||
+		end.Groups == nil || len(end.Groups) != 0 || end.NextCursor != "" {
+		t.Fatalf("past the end = %+v %v", end, err)
+	}
+	if _, err := c.DuplicatePage(ctx, DuplicateQuery{Cursor: "not a cursor!"}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("bad cursor err = %v, want ErrInvalidCursor", err)
+	}
+}
+
+// TestDuplicatePageBookBound: a page ends before the group that would take it
+// past maxDuplicatePageBooks copies, but always holds one group.
+func TestDuplicatePageBookBound(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	big := maxDuplicatePageBooks/2 + 10
+	for g, name := range []string{"A", "B"} {
+		for i := range big {
+			if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: fmt.Sprintf("%s/%03d", name, i),
+				Title: name, ContentHash: fmt.Sprintf("h%d", g), Size: 100}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Limit: 50})
+	if err != nil || len(page.Groups) != 1 || len(page.Groups[0].Books) != big || page.NextCursor == "" || page.Total != 2 {
+		t.Fatalf("first page = %d groups, cursor %q, total %d (%v), want one of %d and a cursor",
+			len(page.Groups), page.NextCursor, page.Total, err, big)
+	}
+	next, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: lib.ID, Limit: 50, Cursor: page.NextCursor})
+	if err != nil || len(next.Groups) != 1 || next.Groups[0].Books[0].Path[:1] != "B" || next.NextCursor != "" {
+		t.Fatalf("second page = %+v %v", next.Groups, err)
+	}
+	// A caller that doesn't page gets every group (up to 500) at once, as before.
+	if all, err := c.DuplicateGroups(ctx, lib.ID, false, false); err != nil || len(all) != 2 {
+		t.Fatalf("unpaged = %d groups (%v), want 2", len(all), err)
 	}
 }
 
