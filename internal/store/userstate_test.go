@@ -100,6 +100,11 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	still("unchanged heartbeat", exec(`UPDATE bridge_status SET heartbeat_at = 'now', status = '{}' WHERE id = 1`))
 	still("new heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'later', status = '{"version":"2"}' WHERE id = 1`))
 	moved("pairing change", exec(`UPDATE bridge_status SET heartbeat_at = 'later', paired_at = 'now' WHERE id = 1`))
+	// S263-HOOK: a heartbeat with a 64 KiB status classifies the same, the
+	// hook reading only up to the last watched column (TestUserStateRuleWidth).
+	big := `{"pad":"` + strings.Repeat("x", 64<<10) + `"}`
+	still("large heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'big', status = ? WHERE id = 1`, big))
+	moved("pairing change with a large status", exec(`UPDATE bridge_status SET status = ?, paired_by = NULL, paired_at = 'again' WHERE id = 1`, big+" "))
 	still("lease renewal", exec(`UPDATE bridge_jobs SET lease_until = 'soon', updated_at = 'now', state = 'running', progress = COALESCE(NULL, progress) WHERE id = 1`))
 	still("progress report", exec(`UPDATE bridge_jobs SET lease_until = 'later', progress = '{"step":2}' WHERE id = 1`))
 	moved("job error", exec(`UPDATE bridge_jobs SET progress = '{"step":3}', error = 'oops' WHERE id = 1`))
@@ -259,6 +264,35 @@ func TestUserStateRulesMatchTheSchema(t *testing.T) {
 		if got := db.userState[table]; rule.free != nil && len(got.watched) == 0 {
 			t.Errorf("%s: no watched columns", table)
 		}
+	}
+}
+
+// TestUserStateRuleWidth (S263-HOOK): a column rule's width is its last watched
+// column plus one, so every column the hook leaves unread is one the rule frees:
+// bridge_status.status, the heartbeat's up to 64 KiB, is never read.
+func TestUserStateRuleWidth(t *testing.T) {
+	t.Parallel()
+	db, _ := openUserState(t)
+	for table, rule := range db.userState {
+		if rule.free == nil {
+			continue
+		}
+		cols, err := tableColumns(context.Background(), db.writer, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := rule.watched[len(rule.watched)-1] + 1; rule.width != want {
+			t.Errorf("%s: width %d, want %d", table, rule.width, want)
+		}
+		for _, c := range cols[rule.width:] {
+			if !slices.Contains(rule.free, c) {
+				t.Errorf("%s: column %s past the width is watched", table, c)
+			}
+		}
+	}
+	cols, _ := tableColumns(context.Background(), db.writer, "bridge_status")
+	if i := slices.Index(cols, "status"); i < db.userState["bridge_status"].width {
+		t.Errorf("bridge_status: status (column %d) is read (width %d)", i, db.userState["bridge_status"].width)
 	}
 }
 

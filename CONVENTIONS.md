@@ -573,7 +573,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`), which columns an UPDATE may change by value. Anything else on a listed table
+  `progress`), which columns an UPDATE may change by value (the hook reads a row only up to
+  the rule's last watched column, `tableRule.width`, so a freed column after them, the
+  heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
