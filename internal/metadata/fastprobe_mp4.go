@@ -932,12 +932,10 @@ func (s *mp4State) readChapterTrack(t *mp4Track) error {
 		if d < 0 { // get_edit_list_entry: past INT64_MAX is 0
 			d = 0
 		}
-		for i := range samples {
-			frame := d // the last sample's length is the edit's
-			if i+1 < len(samples) {
-				frame = samples[i+1].ts - samples[i].ts
-			}
-			if samples[i].ts+frame >= d {
+		// A sample ends where the next starts; the last one's length is the
+		// edit's, so it always reaches the end.
+		for i := 0; i+1 < len(samples); i++ {
+			if samples[i+1].ts >= d {
 				samples = samples[:i+1]
 				break
 			}

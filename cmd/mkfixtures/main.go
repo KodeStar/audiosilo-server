@@ -298,19 +298,8 @@ func boxAt(b []byte, typ string, nth int) int {
 // patchType renames the n-th box of type from to type to (same size).
 func patchType(b []byte, from, to string, nth int) []byte {
 	o := append([]byte(nil), b...)
-	i := 0
-	for k := 0; ; k++ {
-		j := bytes.Index(o[i:], []byte(from))
-		if j < 0 {
-			panic("no " + from)
-		}
-		i += j
-		if k == nth {
-			copy(o[i:], to)
-			return o
-		}
-		i++
-	}
+	copy(o[boxAt(o, from, nth)-4:], to)
+	return o
 }
 
 func m4bs() {

@@ -40,11 +40,11 @@ var id3v22Conv = [][2]string{
 }
 
 // id3Extra is what id3v2.c keeps of an ID3v2 tag beyond its text: the CHAP
-// frames and how many APIC/PIC frames read_apic keeps, each an attached picture
+// frames and whether read_apic kept an APIC/PIC frame, an attached picture
 // stream (ff_id3v2_parse_apic) that a bitrate-estimated duration counts.
 type id3Extra struct {
-	chaps    []id3Chap
-	pictures int
+	chaps      []id3Chap
+	hasPicture bool
 }
 
 // id3Chap is one CHAP frame as id3v2.c keeps it.
@@ -338,7 +338,7 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 			end := min(pb.pos+int(tlen), len(pb.b))
 			data := pb.b[min(pb.pos, end):end]
 			if unsync || tunsync {
-				var o []byte
+				o := make([]byte, 0, len(data))
 				for i := 0; i < len(data); i++ {
 					o = append(o, data[i])
 					if data[i] == 0xff && i+1 < len(data) && data[i+1] == 0 {
@@ -375,7 +375,7 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 				}
 			case isPic:
 				if readAPIC(fc, len(data), isv34) {
-					ex.pictures++
+					ex.hasPicture = true
 				}
 			}
 		case tag[0] == 0:
@@ -402,24 +402,11 @@ func readAPIC(c *cursor, taglen int, isv34 bool) bool {
 	var mime string
 	if isv34 {
 		// avio_get_str(pb, taglen, mimetype, 64): up to the NUL, which must come
-		// before the frame's last byte; the buffer keeps 63 bytes.
-		n := 0
-		var m []byte
-		for n < taglen {
-			ch := c.r8()
-			n++
-			if ch == 0 {
-				break
-			}
-			if len(m) < 63 {
-				m = append(m, ch)
-			}
-		}
-		if n >= taglen {
+		// before the frame's last byte (its 63-byte cap matches nothing longer).
+		mime, _ = decodeStr(c, 0, &taglen)
+		if taglen <= 0 {
 			return false
 		}
-		taglen -= n
-		mime = string(m)
 	} else {
 		mime = cutNUL(string([]byte{c.r8(), c.r8(), c.r8()}))
 		taglen -= 3
@@ -855,7 +842,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		// estimate_timings_from_bit_rate gives every stream with no duration
 		// one by the bitrate, an attached picture's in its 1/90000, and the
 		// format's duration is the longest of them (update_stream_timings).
-		if ex.pictures > 0 {
+		if ex.hasPicture {
 			durUS = max(durUS, tbToUS(rescale(b.size-off, 8*90000, int64(br)), 1, 90000))
 		}
 	}
