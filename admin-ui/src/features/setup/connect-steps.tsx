@@ -215,9 +215,10 @@ function WebPlayerButton() {
 }
 
 /**
- * Step 8: add a Bridge (optional). What it does, the compose snippet, and a
- * pairing code through the same dialog as Settings > Bridge. Once a Bridge is
- * paired, its own setup checklist (F2) shows instead.
+ * Step 8: add a Bridge (optional). What it does, the compose snippet (a
+ * volume per library root), and a pairing code through the same dialog as
+ * Settings > Bridge. Once a Bridge is paired, its own setup checklist (F2)
+ * shows instead.
  */
 export function BridgeStep({ libraries, leave, back, last }: StepProps) {
   const { t } = useTranslation();
@@ -263,7 +264,9 @@ export function BridgeStep({ libraries, leave, back, last }: StepProps) {
       <StepFooter
         back={back}
         onSkip={() => leave('skipped')}
-        onContinue={() => leave(status?.paired ? 'done' : 'skipped')}
+        // The primary button (Finish setup) counts the step as done, paired or
+        // not: the Bridge is optional, and Skip is there to say "later" (ADMIN-05).
+        onContinue={() => leave('done')}
         last={last}
       />
       <PairDialog

@@ -525,7 +525,8 @@ describe('the end of the flow', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     // Reached by a jump: every step without a mark goes down as skipped,
-    // the folder too, since no library was made.
+    // the folder too, since no library was made. Finish counts the Bridge
+    // step as done, so the card doesn't ask for it at once (ADMIN-05).
     expect(puts(calls)).toEqual([
       {
         steps: {
@@ -536,14 +537,46 @@ describe('the end of the flow', () => {
           abs: 'skipped',
           backups: 'skipped',
           phone: 'skipped',
-          bridge: 'skipped',
+          bridge: 'done',
         },
         finished: true,
       },
     ]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
-    expect(within(card).getByRole('link', { name: /Add a Bridge/ })).toBeVisible();
+    expect(within(card).queryByRole('link', { name: /Add a Bridge/ })).toBeNull();
+  });
+
+  it('Skip and finish on the Bridge step still leaves it to do later', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done', metadata: 'done' } },
+        { 'GET /admin/bridge': { body: bridgeUnpaired } },
+      ),
+    );
+    const { router } = renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Skip and finish' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(puts(calls)[0]).toMatchObject({ steps: { bridge: 'skipped' }, finished: true });
+  });
+
+  it("gives the compose snippet a volume for each library's root (ADMIN-07)", async () => {
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done', metadata: 'done' } },
+        {
+          'GET /admin/bridge': { body: bridgeUnpaired },
+          'GET /admin/libraries': { body: { libraries: libraries().slice(0, 2) } },
+        },
+      ),
+    );
+    renderApp('/setup?step=bridge');
+    const snippet = await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    expect(snippet.textContent?.match(/^ {6}- \/path\/to\/.*:rw$/gm)).toEqual([
+      '      - /path/to/fiction:/mnt/tank/fiction:rw',
+      '      - /path/to/kids:/mnt/nas/kids:rw',
+    ]);
   });
 
   it('Finish keeps the marks already made and skips only the unmarked steps', async () => {
@@ -559,7 +592,7 @@ describe('the end of the flow', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(puts(calls)).toEqual([
       {
-        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'skipped' },
+        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'done' },
         finished: true,
       },
     ]);
