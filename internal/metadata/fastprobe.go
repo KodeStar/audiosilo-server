@@ -306,7 +306,28 @@ func (r *blockReader) Seek(offset int64, whence int) (int64, error) {
 
 type dictEntry struct{ k, v string }
 
-type avDict struct{ e []dictEntry }
+// idx finds a key's entry in constant time (keys are unique), so a file with
+// thousands of tags is not quadratic as FFmpeg's linear search is.
+type avDict struct {
+	e   []dictEntry
+	idx map[string]int // the key with ASCII folded to lower case -> its entry
+}
+
+// foldKey is k with ASCII upper case folded to lower, as av_dict_get matches.
+func foldKey(k string) string {
+	for i := 0; i < len(k); i++ {
+		if 'A' <= k[i] && k[i] <= 'Z' {
+			b := []byte(k)
+			for j := i; j < len(b); j++ {
+				if 'A' <= b[j] && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return k
+}
 
 const (
 	dictDontOverwrite = 1 << iota
@@ -333,10 +354,8 @@ func asciiFold(a, b string) bool {
 }
 
 func (d *avDict) find(k string) int {
-	for i, e := range d.e {
-		if asciiFold(e.k, k) {
-			return i
-		}
+	if i, ok := d.idx[foldKey(k)]; ok {
+		return i
 	}
 	return -1
 }
@@ -358,6 +377,10 @@ func (d *avDict) set(k, v string, flags int) {
 		}
 		d.removeAt(i)
 	}
+	if d.idx == nil {
+		d.idx = map[string]int{}
+	}
+	d.idx[foldKey(k)] = len(d.e)
 	d.e = append(d.e, dictEntry{k, v})
 }
 
@@ -370,7 +393,11 @@ func (d *avDict) del(k string) {
 // removeAt is av_dict_set's removal: the last entry takes the slot.
 func (d *avDict) removeAt(i int) {
 	last := len(d.e) - 1
-	d.e[i] = d.e[last]
+	delete(d.idx, foldKey(d.e[i].k))
+	if i != last {
+		d.e[i] = d.e[last]
+		d.idx[foldKey(d.e[i].k)] = i
+	}
 	d.e = d.e[:last]
 }
 
@@ -464,8 +491,11 @@ type chapterList struct {
 	monotonic bool
 }
 
-// add is avpriv_new_chapter.
+// add is avpriv_new_chapter: nil (no chapter) when it ends before it starts.
 func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title string) *avChapter {
+	if hasEnd && start > end {
+		return nil
+	}
 	var ch *avChapter
 	if len(l.c) == 0 {
 		l.monotonic = true
@@ -518,7 +548,10 @@ func (l *chapterList) finish(durUS, startUS int64, hasStart bool) []Chapter {
 		if maxTime != 0 {
 			end = rescale(maxTime, ch.den, 1000000*ch.num)
 		}
-		for _, ch1 := range tt[i+1:] {
+		// Only the next chapter in the timetable: one starting with ch leaves
+		// ch to the format's end.
+		if i+1 < len(tt) {
+			ch1 := tt[i+1]
 			next := rescale(ch1.start, ch1.num*ch.den, ch1.den*ch.num)
 			if next > ch.start && next < end {
 				end = next
@@ -545,13 +578,53 @@ func cmpChapterStart(a, b *avChapter) int {
 	return x.Cmp(y)
 }
 
-// validUTF8 is s with each invalid byte as U+FFFD, as ffprobe's JSON writer
-// leaves it (string([]rune(s)), skipped when s is already valid).
+// validUTF8 is s as ffprobe's JSON writer leaves it (validate_string): each
+// sequence av_utf8_decode rejects, U+FFFE and U+FFFF among them, becomes one
+// U+FFFD.
 func validUTF8(s string) string {
-	if utf8.ValidString(s) {
+	if utf8.ValidString(s) && !strings.ContainsAny(s, "\uFFFE\uFFFF") {
 		return s
 	}
-	return string([]rune(s))
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		n, ok := avUTF8Decode(s[i:])
+		if ok {
+			b.WriteString(s[i : i+n])
+		} else {
+			b.WriteString("\uFFFD")
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// avUTF8Decode is av_utf8_decode with no flags on a non-empty s: the bytes
+// the sequence at s[0] takes and whether it is accepted. A bad or missing
+// continuation byte takes only the lead byte; an overlong, out-of-range,
+// surrogate or non-character code takes the whole sequence.
+func avUTF8Decode(s string) (int, bool) {
+	code := uint64(s[0])
+	if code&0xc0 == 0x80 || code >= 0xfe {
+		return 1, false
+	}
+	top := (code & 128) >> 1
+	p, tail := 1, 0
+	for code&top != 0 {
+		tail++
+		if p >= len(s) || s[p]&0xc0 != 0x80 {
+			return 1, false
+		}
+		code = code<<6 + uint64(s[p]&0x3f)
+		p++
+		top <<= 5
+	}
+	code &= top<<1 - 1
+	minCode := [6]uint64{0, 0x80, 0x800, 0x10000, 0x200000, 0x4000000}
+	switch {
+	case code < minCode[tail], code > 0x10ffff, code >= 0xd800 && code <= 0xdfff, code == 0xfffe, code == 0xffff:
+		return p, false
+	}
+	return p, true
 }
 
 func cutNUL(s string) string {

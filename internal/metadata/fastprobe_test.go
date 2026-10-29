@@ -1,7 +1,11 @@
 package metadata
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -293,6 +297,143 @@ func TestAVDict(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "c=3,b=2,A=4" {
 		t.Errorf("entries %v", got)
+	}
+	d.del("C") // the last entry, A, takes c's slot: its index moves with it
+	for k, want := range map[string]string{"a": "4", "B": "2"} {
+		if v, ok := d.get(k); !ok || v != want {
+			t.Errorf("get(%q) = %q %v, want %q", k, v, ok, want)
+		}
+	}
+	if _, ok := d.get("c"); ok || len(d.e) != 2 {
+		t.Errorf("c deleted: %v", d.e)
+	}
+}
+
+// ffprobe's string validation: one U+FFFD for each sequence av_utf8_decode
+// rejects. An overlong form, a surrogate, a non-character or a code past
+// U+10FFFF takes its whole sequence; a bad or missing continuation byte only
+// the lead byte.
+func TestValidUTF8(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"plain é ✓": "plain é ✓",
+		"A\xc0\xafB\xed\xa0\x80C\xef\xbf\xbeD\xf8\x88\x80\x80\x80E\xe9F": "A\uFFFDB\uFFFDC\uFFFDD\uFFFDE\uFFFDF",
+		"x\xe9":    "x\uFFFD",
+		"\xff\xbf": "\uFFFD\uFFFD",
+		"a\uFFFFb": "a\uFFFDb",
+	} {
+		if got := validUTF8(in); got != want {
+			t.Errorf("validUTF8(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// avpriv_new_chapter drops a chapter that ends before it starts, and
+// compute_chapters_end ends an open chapter at the next one in start order
+// only: one sharing its start leaves it to the format's end.
+func TestChapterListRules(t *testing.T) {
+	t.Parallel()
+	var l chapterList
+	l.add(0, 1, 1000, 0, 0, false, "a")
+	l.add(1, 1, 1000, 0, 0, false, "b")
+	l.add(2, 1, 1000, 2000, 0, false, "c")
+	if c := l.add(3, 1, 1000, 3000, 1000, true, "backwards"); c != nil {
+		t.Errorf("a chapter ending before its start was added: %+v", c)
+	}
+	var got []string
+	for _, c := range l.finish(5000000, 0, false) {
+		got = append(got, fmt.Sprintf("%s %g-%g", c.Title, c.Start, c.End))
+	}
+	if strings.Join(got, "|") != "a 0-5|b 0-2|c 2-5" {
+		t.Errorf("chapters %q", got)
+	}
+}
+
+// zlib's uncompress: the whole stream with its checksum, in no more than the
+// declared size; anything else and FFmpeg skips the frame.
+func TestUncompress(t *testing.T) {
+	t.Parallel()
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	_, _ = w.Write([]byte("hello world"))
+	_ = w.Close()
+	zb := z.Bytes()
+	if u, ok := uncompress(zb, 11); !ok || string(u) != "hello world" {
+		t.Errorf("exact size: %q %v", u, ok)
+	}
+	if u, ok := uncompress(zb, 100); !ok || string(u) != "hello world" {
+		t.Errorf("declared larger: %q %v", u, ok)
+	}
+	if u, ok := uncompress(zb, 10); ok {
+		t.Errorf("declared smaller: %q, want a failure", u)
+	}
+	if u, ok := uncompress(zb[:len(zb)-4], 11); ok {
+		t.Errorf("no checksum: %q, want a failure", u)
+	}
+}
+
+// read_ttag's genre test is sscanf's %d into an unsigned int: strtol's value
+// (clamped when out of range) cut to 32 bits, then at most 191.
+func TestID3Genre(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]int{"12": 12, " 12": 12, "(13": 13, "(13)Pop": 13, "4294967297": 1, "(4294967298)": 2, "-99999999999999999999": 0} {
+		if g, ok := id3Genre(in); !ok || g != want {
+			t.Errorf("id3Genre(%q) = %d %v, want %d", in, g, ok, want)
+		}
+	}
+	for _, in := range []string{"192", "(-1)", "-1", "99999999999999999999", "Pop", ""} {
+		if g, ok := id3Genre(in); ok {
+			t.Errorf("id3Genre(%q) = %d, want no genre", in, g)
+		}
+	}
+}
+
+// A chapter track's tables are read only as far as they go and only in the
+// shape FFmpeg reads without repairing: anything else, or too many samples,
+// leaves the file to ffprobe rather than walking billions of chunks or samples.
+func TestMP4ChapterTrackBounds(t *testing.T) {
+	t.Parallel()
+	words := func(w ...uint32) []byte {
+		b := make([]byte, 4*len(w))
+		for i, x := range w {
+			binary.BigEndian.PutUint32(b[4*i:], x)
+		}
+		return b
+	}
+	for name, tc := range map[string]struct {
+		stsz, stsc, stco []byte
+		want             string
+	}{
+		"a chunk count past stco":    {words(0, 16, 1), words(0, 1, 1, 1, 1), words(0, 0xffffffff, 100), "mp4: chapter track tables"},
+		"an stsc count past stsc":    {words(0, 16, 1), words(0, 0xffffffff, 1, 1, 1), words(0, 1, 100), "mp4: chapter track tables"},
+		"an stsc not from chunk 1":   {words(0, 16, 1), words(0, 1, 0x7fffffff, 1, 1), words(0, 1, 100), "mp4: chapter track stsc"},
+		"an stsc entry of 0 samples": {words(0, 16, 1), words(0, 1, 1, 0, 1), words(0, 1, 100), "mp4: chapter track stsc"},
+		"billions of fixed samples":  {words(0, 16, 0x7fffffff), words(0, 1, 1, 0x7fffffff, 1), words(0, 1, 100), "mp4: chapter track with too many samples"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var file []byte
+			leaf := func(b []byte) mp4Leaf {
+				l := mp4Leaf{int64(len(file)), int64(len(b))}
+				file = append(file, b...)
+				return l
+			}
+			tr := &mp4Track{timescale: 1000, stts: [][2]uint32{{1, 1000}}}
+			tr.stsz, tr.stsc, tr.stco = leaf(tc.stsz), leaf(tc.stsc), leaf(tc.stco)
+			p := filepath.Join(t.TempDir(), "tables")
+			if err := os.WriteFile(p, file, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.Open(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			s := &mp4State{b: newBlockFile(f, int64(len(file)))}
+			if err := s.readChapterTrack(tr); err == nil || err.Error() != tc.want {
+				t.Errorf("%v, want %s", err, tc.want)
+			}
+		})
 	}
 }
 

@@ -48,7 +48,6 @@ type mp4State struct {
 	dict        avDict
 	chapters    chapterList
 	foundMoov   bool
-	foundMdat   bool
 	err         error
 	mdta        bool
 	metaKeys    []string
@@ -292,9 +291,8 @@ func (s *mp4State) walk(start, size int64, parent string, depth int) {
 		if s.err != nil {
 			return
 		}
-		if parent == "root" && s.foundMoov && s.foundMdat {
-			return
-		}
+		// mov_read_default stops after moov and mdat only on a stream it cannot
+		// seek or at the end of the file: a file's later root boxes still count.
 		total += asize
 		at = body + asize
 	}
@@ -317,10 +315,11 @@ func (s *mp4State) atom(typ string, body, size int64, parent string, depth int) 
 	t := s.cur()
 	switch typ {
 	case "moov":
-		s.foundMoov = true
-		s.walk(body, size, typ, depth+1)
-	case "mdat":
-		s.foundMdat = true
+		// mov_read_moov: a second moov is skipped; found once parsed.
+		if !s.foundMoov {
+			s.walk(body, size, typ, depth+1)
+			s.foundMoov = true
+		}
 	case "moof", "mvex", "trex", "trun", "tfhd", "sidx":
 		s.err = unsure("mp4: fragmented")
 	case "cmov":
@@ -795,7 +794,7 @@ func (s *mp4State) udtaString(typ string, body, size int64) {
 	}
 	var str string
 	switch {
-	case s.itunes && dataType == 0:
+	case dataType == 3 || s.itunes && dataType == 0: // mov_read_mac_string
 		for _, x := range data {
 			if x >= 0x80 {
 				s.err = unsure("mp4: Mac-encoded item")
@@ -814,6 +813,10 @@ func (s *mp4State) udtaString(typ string, body, size int64) {
 	s.dict.set(key, cutNUL(str), 0)
 }
 
+// maxChapterSamples bounds a chapter track's samples: more is a crafted
+// table, left to ffprobe rather than walked.
+const maxChapterSamples = 1 << 16
+
 // readChapterTrack is mov_read_chapters for a text track.
 func (s *mp4State) readChapterTrack(t *mp4Track) error {
 	if len(t.elst) > 1 || (len(t.elst) == 1 && t.elst[0].time != 0) {
@@ -830,33 +833,46 @@ func (s *mp4State) readChapterTrack(t *mp4Track) error {
 	}
 	fixed := binary.BigEndian.Uint32(sz[4:8])
 	nSamples := int(binary.BigEndian.Uint32(sz[8:12]))
+	nChunks := int(binary.BigEndian.Uint32(co[4:8]))
+	nStsc := int(binary.BigEndian.Uint32(sc[4:8]))
+	entry := 4
+	if t.co64 {
+		entry = 8
+	}
+	switch {
+	case nSamples > maxChapterSamples:
+		return unsure("mp4: chapter track with too many samples")
+	// FFmpeg reads a table's entries on past its box: not modelled. Counts
+	// inside the tables also bound the walk below.
+	case fixed == 0 && nSamples > (len(sz)-12)/4, nChunks > (len(co)-8)/entry, nStsc > (len(sc)-8)/12:
+		return unsure("mp4: chapter track tables")
+	// A track FFmpeg drops as a broken header (mov_read_trak).
+	case nChunks > 0 && (nStsc == 0 || len(t.stts) == 0 || fixed == 0 && nSamples == 0), nChunks == 0 && nSamples > 0:
+		return unsure("mp4: chapter track tables")
+	}
 	sizeOf := func(i int) int64 {
 		if fixed != 0 {
 			return int64(fixed)
 		}
-		if 12+i*4+4 > len(sz) {
-			return -1
-		}
 		return int64(binary.BigEndian.Uint32(sz[12+i*4:]))
 	}
-	nChunks := int(binary.BigEndian.Uint32(co[4:8]))
 	chunkOff := func(i int) int64 {
 		if t.co64 {
-			if 8+i*8+8 > len(co) {
-				return -1
-			}
 			return int64(binary.BigEndian.Uint64(co[8+i*8:]))
-		}
-		if 8+i*4+4 > len(co) {
-			return -1
 		}
 		return int64(binary.BigEndian.Uint32(co[8+i*4:]))
 	}
-	nStsc := int(binary.BigEndian.Uint32(sc[4:8]))
+	// stsc: FFmpeg repairs entries out of order or with no samples
+	// (mov_read_stsc) and gives chunks before the first entry its count; only
+	// a table that needs neither is read.
 	type sce struct{ first, per int }
-	var stsc []sce
-	for i := 0; i < nStsc && 8+i*12+12 <= len(sc); i++ {
-		stsc = append(stsc, sce{int(binary.BigEndian.Uint32(sc[8+i*12:])), int(binary.BigEndian.Uint32(sc[8+i*12+4:]))})
+	stsc := make([]sce, nStsc)
+	for i := range stsc {
+		e := sce{int(binary.BigEndian.Uint32(sc[8+i*12:])), int(binary.BigEndian.Uint32(sc[8+i*12+4:]))}
+		if e.per < 1 || binary.BigEndian.Uint32(sc[8+i*12+8:]) < 1 || i == 0 && e.first != 1 || i > 0 && e.first <= stsc[i-1].first {
+			return unsure("mp4: chapter track stsc")
+		}
+		stsc[i] = e
 	}
 	// Sample positions and timestamps.
 	type sample struct {
@@ -882,17 +898,15 @@ func (s *mp4State) readChapterTrack(t *mp4Track) error {
 		sttsLeft--
 		return int64(t.stts[sttsIdx][1])
 	}
+	cur := 0 // the stsc entry for chunk ch
 	for ch := 0; ch < nChunks && si < nSamples; ch++ {
-		per := 0
-		for _, e := range stsc {
-			if e.first <= ch+1 {
-				per = e.per
-			}
+		for cur+1 < len(stsc) && stsc[cur+1].first == ch+1 {
+			cur++
 		}
 		off := chunkOff(ch)
-		for k := 0; k < per && si < nSamples; k++ {
+		for k := 0; k < stsc[cur].per && si < nSamples; k++ {
 			size := sizeOf(si)
-			if size < 0 || off < 0 {
+			if off < 0 {
 				return unsure("mp4: chapter track tables")
 			}
 			samples = append(samples, sample{off, size, ts})

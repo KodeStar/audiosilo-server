@@ -54,8 +54,8 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 	errs := make([]error, len(books))
 	for start := 0; start < len(books); {
 		end := start // past the last book the transaction began
-		began := time.Now()
 		err := c.db.WithTx(ctx, "UpsertBooks", func(tx *sql.Tx) error {
+			began := time.Now() // once it holds the writer: the wait for it is not its run
 			for i := start; i < len(books) && (i == start || budget <= 0 || time.Since(began) < budget); i++ {
 				end = i + 1
 				if _, err := tx.ExecContext(ctx, `SAVEPOINT `+upsertSavepoint); err != nil {

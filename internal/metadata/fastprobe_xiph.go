@@ -7,6 +7,7 @@ package metadata
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"strings"
 )
 
@@ -15,7 +16,8 @@ var vorbisCommentConv = [][2]string{
 }
 
 // scanfInt is sscanf's %<width>d at s: optional whitespace, then up to width
-// characters of sign and digits; the rest of s after it.
+// characters of sign and digits, an out-of-range value clamped as strtol does;
+// the rest of s after it.
 func scanfInt(s string, width int) (int, string, bool) {
 	i := 0
 	for i < len(s) && strings.IndexByte(" \t\n\v\f\r", s[i]) >= 0 {
@@ -28,15 +30,21 @@ func scanfInt(s string, width int) (int, string, bool) {
 		j++
 	}
 	k := j
-	n := 0
+	n, clamped := 0, false
 	for k < len(s) && k-i < width && s[k] >= '0' && s[k] <= '9' {
-		n = n*10 + int(s[k]-'0')
+		if d := int(s[k] - '0'); n <= (math.MaxInt-d)/10 {
+			n = n*10 + d
+		} else {
+			n, clamped = math.MaxInt, true
+		}
 		k++
 	}
-	if k == j {
+	switch {
+	case k == j:
 		return 0, s, false
-	}
-	if neg {
+	case neg && clamped:
+		n = math.MinInt
+	case neg:
 		n = -n
 	}
 	return n, s[k:], true

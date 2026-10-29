@@ -166,9 +166,20 @@ type mkvState struct {
 	audioSeen           bool
 	chapters            []mkvChapter
 	tags                []mkvTag
-	parsed              map[int64]bool
+	parsed              map[int64]bool  // level-1 elements read, by position
+	parsedID            map[uint32]bool // and by id
+	simpleTags          int
 	err                 error
 }
+
+// A file's SimpleTags are bounded in number and in how deep they nest: FFmpeg
+// fails past its EBML depth of 16, and converting them takes a pass over the
+// tags for each SimpleTag with SimpleTags inside. A crafted file is left to
+// ffprobe rather than walked.
+const (
+	maxSimpleTags     = 4096
+	maxSimpleTagDepth = 8
+)
 
 func probeMKV(b *blockFile) (*probeResult, error) {
 	e, ok := elemAt(b, 0)
@@ -195,7 +206,7 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 	if seg.size >= 0 {
 		segEnd = min(seg.data+seg.size, b.size)
 	}
-	s := &mkvState{b: b, timescale: 1000000, parsed: map[int64]bool{}}
+	s := &mkvState{b: b, timescale: 1000000, parsed: map[int64]bool{}, parsedID: map[uint32]bool{}}
 	var seeks []seekEntry
 	at := seg.data
 	for at < segEnd {
@@ -211,6 +222,7 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 		}
 		switch c.id {
 		case mkvSeekHead:
+			s.parsed[at] = true
 			p := s.payload(c)
 			for _, sk := range children(p) {
 				if sk.id != 0x4DBB {
@@ -238,14 +250,19 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 		}
 		at = c.data + c.size
 	}
-	// matroska_execute_seekhead: the level-1 elements not read yet.
+	// matroska_execute_seekhead: the level-1 elements not read yet, by
+	// position for Tags (a file may have several) and by id for the rest.
 	for _, sk := range seeks {
-		if sk.id == mkvCues || sk.id == mkvCluster || sk.id == mkvSeekHead {
+		if sk.id == mkvCues || sk.id == mkvCluster {
 			continue
 		}
 		pos := seg.data + sk.pos
-		if s.parsed[pos] {
+		if s.parsed[pos] || sk.id != mkvTags && s.parsedID[sk.id] {
 			continue
+		}
+		if sk.id == mkvSeekHead {
+			// FFmpeg follows a second SeekHead's entries too: not modelled.
+			return nil, unsure("mkv: a second SeekHead")
 		}
 		c, ok := elemAt(b, pos)
 		if !ok || c.id != sk.id || c.size < 0 {
@@ -256,11 +273,8 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 			return nil, s.err
 		}
 	}
-	if s.codec == "" {
-		if !s.audioSeen {
-			return nil, unsure("mkv: no audio track")
-		}
-		return nil, s.err
+	if s.codec == "" { // an audio track's unknown codec returned above
+		return nil, unsure("mkv: no audio track")
 	}
 	if !s.hasDuration || s.duration == 0 || math.IsNaN(s.duration) {
 		return nil, unsure("mkv: no Segment duration")
@@ -316,6 +330,14 @@ func probeMKV(b *blockFile) (*probeResult, error) {
 	return result(durUS, s.codec, &d, cl.finish(durUS, 0, false)), nil
 }
 
+// cKey is k cut to matroska_convert_tag's 1024-byte key buffer.
+func cKey(k string) string {
+	if len(k) > 1023 {
+		return k[:1023]
+	}
+	return k
+}
+
 func convertMKVTags(d *avDict, tags []mkvSimpleTag, prefix string, hasPrefix bool) {
 	for _, t := range tags {
 		lang := ""
@@ -325,9 +347,9 @@ func convertMKVTags(d *avDict, tags []mkvSimpleTag, prefix string, hasPrefix boo
 		if !t.hasName {
 			continue
 		}
-		key := t.name
+		key := cKey(t.name)
 		if hasPrefix {
-			key = prefix + "/" + t.name
+			key = cKey(prefix + "/" + t.name)
 		}
 		set := func(k string) {
 			if t.hasStr {
@@ -343,7 +365,7 @@ func convertMKVTags(d *avDict, tags []mkvSimpleTag, prefix string, hasPrefix boo
 			set(key)
 		}
 		if lang != "" {
-			set(key + "-" + lang)
+			set(cKey(key + "-" + lang))
 		}
 	}
 	d.conv([][2]string{{"LEAD_PERFORMER", "performer"}, {"PART_NUMBER", "track"}})
@@ -368,7 +390,7 @@ func (s *mkvState) level1(c ebmlElem, pos int64) {
 	default:
 		return
 	}
-	s.parsed[pos] = true
+	s.parsed[pos], s.parsedID[c.id] = true, true
 	p := s.payload(c)
 	if p == nil {
 		return
@@ -467,7 +489,10 @@ func (s *mkvState) level1(c ebmlElem, pos int64) {
 						}
 					}
 				case 0x67C8:
-					t.tags = append(t.tags, parseSimpleTag(f.data))
+					t.tags = append(t.tags, s.parseSimpleTag(f.data, 1))
+					if s.err != nil {
+						return
+					}
 				}
 			}
 			s.tags = append(s.tags, t)
@@ -475,8 +500,12 @@ func (s *mkvState) level1(c ebmlElem, pos int64) {
 	}
 }
 
-func parseSimpleTag(p []byte) mkvSimpleTag {
+func (s *mkvState) parseSimpleTag(p []byte, depth int) mkvSimpleTag {
 	t := mkvSimpleTag{lang: "und"}
+	if s.simpleTags++; s.simpleTags > maxSimpleTags || depth > maxSimpleTagDepth {
+		s.err = unsure("mkv: SimpleTags too many or too deep")
+		return t
+	}
 	for _, f := range children(p) {
 		switch f.id {
 		case 0x45A3:
@@ -488,7 +517,9 @@ func parseSimpleTag(p []byte) mkvSimpleTag {
 		case 0x4487:
 			t.str, t.hasStr = cutNUL(string(f.data)), true
 		case 0x67C8:
-			t.sub = append(t.sub, parseSimpleTag(f.data))
+			if t.sub = append(t.sub, s.parseSimpleTag(f.data, depth+1)); s.err != nil {
+				return t
+			}
 		}
 	}
 	return t

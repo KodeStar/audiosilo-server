@@ -14,8 +14,8 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
-	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -168,46 +168,19 @@ func readTTag(c *cursor, taglen int, d *avDict, key string) {
 }
 
 // id3Genre is read_ttag's genre test: sscanf(dst, "(%d)") or sscanf(dst, "%d")
-// converting, then genre <= 191 (unsigned, so a negative one fails).
+// into an unsigned int (strtol's value cut to 32 bits), then genre <= 191.
 func id3Genre(s string) (int, bool) {
-	n, ok := scanInt(s, true)
+	n, ok := 0, false
+	if strings.HasPrefix(s, "(") {
+		n, _, ok = scanfInt(s[1:], math.MaxInt)
+	}
 	if !ok {
-		n, ok = scanInt(s, false)
+		n, _, ok = scanfInt(s, math.MaxInt)
 	}
-	if !ok || n < 0 || n > 191 {
-		return 0, false
+	if g := uint32(int32(n)); ok && g <= 191 {
+		return int(g), true
 	}
-	return int(n), true
-}
-
-// scanInt is sscanf's %d at the start of s (after a literal "(" when paren).
-func scanInt(s string, paren bool) (int64, bool) {
-	if paren {
-		if !strings.HasPrefix(s, "(") {
-			return 0, false
-		}
-		s = s[1:]
-	}
-	i := 0
-	for i < len(s) && strings.IndexByte(" \t\n\v\f\r", s[i]) >= 0 {
-		i++
-	}
-	j := i
-	if j < len(s) && (s[j] == '+' || s[j] == '-') {
-		j++
-	}
-	k := j
-	for k < len(s) && s[k] >= '0' && s[k] <= '9' {
-		k++
-	}
-	if k == j {
-		return 0, false
-	}
-	n, err := strconv.ParseInt(s[i:k], 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+	return 0, false
 }
 
 func syncsafeToSize(v uint32) uint32 {
@@ -368,12 +341,11 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 				if dlen/32768 > uint32(len(data)) || len(data) == 0 {
 					break
 				}
-				zr, err := zlib.NewReader(bytes.NewReader(data))
-				if err != nil {
-					break
+				if dlen > maxID3Uncompressed {
+					return unsure("mp3: compressed ID3 frame too large")
 				}
-				u, err := io.ReadAll(io.LimitReader(zr, int64(dlen)))
-				if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+				u, ok := uncompress(data, int(dlen))
+				if !ok {
 					break
 				}
 				data = u
@@ -648,6 +620,40 @@ func mp3Check(b *blockFile, pos int64) (int, uint32) {
 	return m.frameSize, v
 }
 
+// maxID3Uncompressed bounds a compressed ID3 frame's declared size: FFmpeg
+// allows 32768 times the compressed bytes, a few GiB from a crafted frame.
+const maxID3Uncompressed = 16 << 20
+
+// uncompress is zlib's uncompress into n bytes: the whole stream, checksum
+// included, and no more than n bytes of it, else nothing (FFmpeg then skips
+// the frame).
+func uncompress(data []byte, n int) ([]byte, bool) {
+	zr, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, false
+	}
+	u, err := io.ReadAll(io.LimitReader(zr, int64(n)+1))
+	if err != nil || len(u) > n {
+		return nil, false
+	}
+	return u, true
+}
+
+// otherContainer reports whether the data at off starts as a container that
+// ffprobe's content probe picks over MP3 (WAV, AIFF, FLAC, Ogg, Matroska, MP4):
+// its MP3 frames, if any, are found inside it, but ffprobe reads that format.
+func otherContainer(b *blockFile, off int64) bool {
+	h, ok := b.bytesAt(off, 8)
+	if !ok {
+		return false
+	}
+	switch string(h[:4]) {
+	case "RIFF", "RIFX", "RF64", "FORM", "fLaC", "OggS", "\x1a\x45\xdf\xa3":
+		return true
+	}
+	return string(h[4:8]) == "ftyp"
+}
+
 func probeMP3(b *blockFile) (*probeResult, error) {
 	d := &avDict{}
 	var chaps []id3Chap
@@ -659,6 +665,9 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		readID3v1(b, d)
 	}
 	base := off
+	if otherContainer(b, 0) || otherContainer(b, base) {
+		return nil, unsure("mp3: another container's header")
+	}
 
 	// mp3_parse_vbr_tags at base.
 	var frames, hdrSize uint32
@@ -748,6 +757,8 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 			if fs2 >= 0 && h1&mp3Mask == h2&mp3Mask {
 				off += i
 				break
+			} else if fs2 == -2 {
+				return nil, unsure("mp3: a frame past the end (ffprobe errors)")
 			}
 		} else if fs == -2 {
 			return nil, unsure("mp3: no two consecutive frames (ffprobe errors)")
@@ -785,7 +796,7 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 	var cl chapterList
 	for i, ch := range chaps {
 		c := cl.add(int64(i), 1, 1000, int64(ch.start), int64(ch.end), true, ch.elementID)
-		if t, ok := ch.meta.get("title"); ok {
+		if t, ok := ch.meta.get("title"); ok && c != nil {
 			c.title = t
 		}
 	}
