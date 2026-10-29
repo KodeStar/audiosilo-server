@@ -781,7 +781,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
   gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
   `-version` turns the probe off and ffprobe reads every file, as before). Anything a reader does
-  not model exactly is `unsure` and that one file goes to ffprobe, silently: VBR MP3 with no
+  not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
+  `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),

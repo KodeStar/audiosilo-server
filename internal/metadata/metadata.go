@@ -7,12 +7,14 @@ package metadata
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode"
@@ -198,8 +200,28 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		return nil, nil
 	}
 	b.ff = ff
-	p, _ := fastProbe(ctx, b, m.Format, timeout)
+	p, reason := fastProbe(ctx, b, m.Format, timeout)
+	if reason != "" {
+		// Silent by design (ffprobe answers instead), but worth seeing when a
+		// scan is slower than expected: which files, and why (server#269).
+		probeLogger().Debug("in-process probe: ffprobe reads this file", "path", path, "reason", reason)
+	}
 	return p, nil
+}
+
+// probeLog is where the in-process probe's fallbacks are logged, at debug
+// (SetLogger); nil until one is set, then slog.Default().
+var probeLog atomic.Pointer[slog.Logger]
+
+// SetLogger sets the logger the in-process probe reports its fallbacks to (at
+// debug: a file it left to ffprobe, and why). The launcher sets the server's.
+func SetLogger(l *slog.Logger) { probeLog.Store(l) }
+
+func probeLogger() *slog.Logger {
+	if l := probeLog.Load(); l != nil {
+		return l
+	}
+	return slog.Default()
 }
 
 // ffprobeOnly holds the ffprobe paths ForceFFprobeForTests named.

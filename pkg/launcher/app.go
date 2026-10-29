@@ -30,6 +30,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/modules/builtin"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
@@ -94,6 +95,7 @@ func Run(ctx context.Context, opts Options) error {
 	// goes where it went before.
 	logs := logring.NewRing(logRingSize)
 	log = slog.New(logring.NewHandler(log.Handler(), logs, slog.LevelInfo))
+	metadata.SetLogger(log) // the in-process probe's fallbacks, at debug
 
 	abs, err := filepath.Abs(opts.DataDir)
 	if err != nil {
