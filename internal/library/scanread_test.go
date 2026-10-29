@@ -221,6 +221,7 @@ func stubProbe(t *testing.T, script string) string {
 	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil { //nolint:gosec // G306: the stand-in must be executable
 		t.Fatal(err)
 	}
+	metadata.ForceFFprobeForTests(p) // the stand-in, not the in-process probe, reads every file
 	return p
 }
 

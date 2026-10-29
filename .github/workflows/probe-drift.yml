@@ -1,0 +1,51 @@
+# The in-process probe's drift check (server#261). The probe answers as the
+# configured ffprobe does, by the rules of its FFmpeg release
+# (internal/metadata/fastprobe.go). This job runs the live comparison over the
+# fixture corpus against the ffprobe the Docker image ships (the Dockerfile's
+# Alpine base), so an FFmpeg rule change, or a release the probe has no rules
+# for, fails here before it changes a stored value. Weekly too: Alpine updates
+# ffmpeg with no change in this repo.
+name: probe-drift
+
+on:
+  pull_request:
+    paths:
+      - internal/metadata/**
+      - Dockerfile
+      - .github/workflows/probe-drift.yml
+  push:
+    branches: [main]
+    paths:
+      - internal/metadata/**
+      - Dockerfile
+      - .github/workflows/probe-drift.yml
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-ffprobe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the metadata tests
+        run: CGO_ENABLED=0 go test -c -o probe.test ./internal/metadata
+
+      # AUDIOSILO_PROBE_LIVE makes the live test fail rather than skip when the
+      # image's ffprobe is missing or of a release the probe has no rules for.
+      - name: Compare the probe with the image's ffprobe
+        run: |
+          base=$(awk '/^FROM alpine:/ {print $2}' Dockerfile | tail -1)
+          echo "image base: $base"
+          docker run --rm -v "$PWD:/src:ro" -w /src/internal/metadata -e AUDIOSILO_PROBE_LIVE=1 "$base" \
+            sh -c 'apk add --no-cache ffmpeg >/dev/null && ffprobe -version | head -1 &&
+              /src/probe.test -test.v -test.run "^(TestProbeMatchesLiveFFprobe|TestProbeMatchesGoldens)$"'

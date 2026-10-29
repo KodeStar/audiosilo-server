@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // previewFixture is a books folder whose tags and folders disagree: a tagged
@@ -220,6 +221,7 @@ func TestPreviewTimeBudget(t *testing.T) {
 	if err := os.WriteFile(slow, []byte("#!/bin/sh\nexec sleep 20\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	metadata.ForceFFprobeForTests(slow)
 	s := NewScanner(nil, slow, slog.Default())
 	start := time.Now()
 	p, err := s.Preview(t.Context(), root, nil, PreviewLimits{MaxTime: 300 * time.Millisecond})

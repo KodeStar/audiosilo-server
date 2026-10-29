@@ -55,6 +55,9 @@ type Scanner struct {
 	concurrency int
 	// probeTimeout is each ffprobe run's (metadata.ProbeTimeout; tests shorten it).
 	probeTimeout time.Duration
+	// batched, when set (tests), hears each book a scan takes into its write
+	// batch, with the batch's length then.
+	batched func(n int)
 
 	// The files this server has seen ffprobe reject (problemCleared), by
 	// absolute path.
@@ -389,21 +392,20 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	slots := newReadSlots(s.readers(), s.probeTimeout)
 	window := 2 * slots.size()
 	var pending []*bookRead
-	// writeNext writes the oldest book read, once its read is done; ctx's error
-	// when the scan was stopped by then (the read may have been cut short).
-	writeNext := func() error {
-		r := pending[0]
-		<-r.done
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		pending = pending[1:]
+	// The books read and waiting to be written: a few share a transaction
+	// (writeBatch), written once there are writeBatch of them, they have waited
+	// writeBatchAge, the writer would wait on a read, or the scan ends or stops.
+	var batch []*bookRead
+	var batchSince time.Time
+	// recordWrite counts a book written (err nil) or not, and logs its problem
+	// or the failure.
+	recordWrite := func(r *bookRead, err error) {
 		b := r.book
-		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
+		if err != nil {
 			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
 			res.Errors++
 			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
-			return nil
+			return
 		}
 		if b.ScanError != "" {
 			res.Errors++
@@ -424,12 +426,54 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				res.AddedTitles = append(res.AddedTitles, b.Title)
 			}
 		}
+	}
+	// flush writes the batch, in order. It runs past a Stop: its books were read
+	// before it (writeNext checks), and a stopped scan keeps what it read.
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		books := make([]*catalog.Book, len(batch))
+		for i, r := range batch {
+			books[i] = r.book
+		}
+		for i, err := range s.cat.UpsertBooks(context.WithoutCancel(ctx), books, writeBatchAge) {
+			recordWrite(batch[i], err)
+		}
+		clear(batch)
+		batch = batch[:0]
+	}
+	// writeNext takes the oldest book read into the batch, once its read is done
+	// (writing the batch first rather than waiting with it); ctx's error when the
+	// scan was stopped by then (the read may have been cut short).
+	writeNext := func() error {
+		r := pending[0]
+		if !r.finished() {
+			flush()
+		}
+		<-r.done
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pending = pending[1:]
+		if len(batch) == 0 {
+			batchSince = time.Now()
+		}
+		batch = append(batch, r)
+		if s.batched != nil {
+			s.batched(len(batch))
+		}
+		if len(batch) >= writeBatch {
+			flush()
+		}
 		return nil
 	}
-	// stopped ends the scan at a Stop (or its time limit): the reads under way are
-	// waited for and dropped (one cut short by the stop would record a false read
-	// problem), nothing more is written, and the backfills read so far are kept.
+	// stopped ends the scan at a Stop (or its time limit): the batch is written,
+	// the reads under way are waited for and dropped (one cut short by the stop
+	// would record a false read problem), nothing more is written, and the
+	// backfills read so far are kept.
 	stopped := func(err error) (*ScanResult, error) {
+		flush()
 		for _, r := range pending {
 			<-r.done
 		}
@@ -453,7 +497,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				return stopped(err)
 			}
 		}
-		done := i - len(pending)
+		if len(batch) > 0 && time.Since(batchSince) >= writeBatchAge {
+			flush()
+		}
+		done := i - len(pending) - len(batch)
 		report(done)
 		// Heartbeat so a long indexing pass (ffprobe per file over a network share)
 		// shows progress in the logs, not just in the admin UI counter.
@@ -586,8 +633,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if err := writeNext(); err != nil {
 			return stopped(err)
 		}
-		report(len(books) - len(pending))
+		report(len(books) - len(pending) - len(batch))
 	}
+	flush()
 	report(len(books))
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
 		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
@@ -652,6 +700,21 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		"elapsed", time.Since(start))
 	return res, nil
 }
+
+// writeBatch is how many books a scan writes in one transaction at most, and
+// writeBatchAge how long a book read waits to be written, and so how long one
+// of those transactions holds the writer, at most (catalog.UpsertBooks'
+// budget). A transaction's begin and commit cost a scan about as much as a
+// book's own writes (0.6 of 1.5 ms a book on a synthetic library, 1.3 of 3.9
+// ms on a real one: SCAN-SPIKE.md); shared by 64 books they cost a few percent
+// of that, and more books a transaction gain little while holding back every
+// other write (a listener's progress) for longer. A scan whose reads are slower than its
+// writes (ffprobe on every file) writes each book as its read is done, as
+// before: the writer never waits on a read holding books.
+const (
+	writeBatch    = 64
+	writeBatchAge = 250 * time.Millisecond
+)
 
 // maxRunEvents bounds one scan's log; past it, events are counted, not kept.
 const maxRunEvents = 300
@@ -1277,12 +1340,14 @@ func statAudio(ctx context.Context, dirs map[string][]audioFile, width int) (gon
 
 // statEntry is a directory entry whose Info statAudio has read, keeping only
 // what a book is built from (folderBook, fileBook: the size and mtime), not the
-// whole lstat, for every audio file of a library at once. It is its own
-// fs.FileInfo: Mode is the entry's type bits, Sys nil.
+// whole lstat, for every audio file of a library at once, and the added time
+// it tells (foundAdded). It is its own fs.FileInfo: Mode is the entry's type
+// bits, Sys nil.
 type statEntry struct {
 	fs.DirEntry
 	size    int64
 	modTime time.Time
+	found   int64 // foundAdded's time: the birth time Darwin's lstat carries, else the mtime
 	err     error
 }
 
@@ -1290,7 +1355,7 @@ func newStatEntry(de fs.DirEntry, info fs.FileInfo, err error) *statEntry {
 	if err != nil {
 		return &statEntry{DirEntry: de, err: err}
 	}
-	return &statEntry{DirEntry: de, size: info.Size(), modTime: info.ModTime()}
+	return &statEntry{DirEntry: de, size: info.Size(), modTime: info.ModTime(), found: lstatAdded(info)}
 }
 
 func (e *statEntry) Info() (fs.FileInfo, error) {
@@ -1497,11 +1562,25 @@ func relPathOf(root, absDir string) string {
 // where the OS/filesystem records it, otherwise its mtime. Formatted as RFC3339
 // UTC to match the other timestamp columns and sort lexicographically.
 func addedAt(absPath string, info os.FileInfo) string {
-	t := info.ModTime()
-	if bt, ok := birthTime(absPath, info); ok && !bt.IsZero() {
-		t = bt
+	found := lstatAdded(info)
+	if a, ok := addedFrom(absPath, found); ok {
+		return a
 	}
-	return t.UTC().Format(time.RFC3339)
+	return formatAdded(found)
+}
+
+// formatAdded is addedAt's format of a time in Unix seconds (the format has
+// no fraction, so the seconds are all of it).
+func formatAdded(sec int64) string { return time.Unix(sec, 0).UTC().Format(time.RFC3339) }
+
+// foundAdded is the time addedAt would read from info, a lstat the walk did
+// (the statEntry statAudio kept, or a directory entry's own), in Unix seconds:
+// the birth time where the stat carries one (lstatAdded), else the mtime.
+func foundAdded(info fs.FileInfo) int64 {
+	if e, ok := info.(*statEntry); ok {
+		return e.found
+	}
+	return lstatAdded(info)
 }
 
 // stampAddedAt sets b.AddedAt to when the book first appeared on disk: the
@@ -1510,8 +1589,13 @@ func addedAt(absPath string, info os.FileInfo) string {
 // first indexed and never updated, so a scan that finds a book unchanged has no
 // use for it, and on Linux the birth time is a statx per file on top of the
 // walk's lstat, which on a network share or a FUSE pool (Unraid's /mnt/user)
-// is most of a no-change scan's cost. A book none of whose files can be looked
-// at now (gone since discovery) is stamped now, as first seen.
+// is most of a no-change scan's cost. The walk's lstat (b.FoundAdded) is not
+// taken again (addedFrom): on Darwin it carries the birth time, so a file
+// costs nothing more; on Linux one statx reads the birth time, the walk's
+// mtime standing in where the filesystem has none. A book built without it
+// (a test's) lstats each file. A book none of whose files can be looked at now
+// (gone since discovery) is stamped now, as first seen; on Darwin, which looks
+// at none of them again, only a book discovery couldn't stat.
 func stampAddedAt(lib catalog.Library, b *catalog.Book) {
 	var paths []string
 	if b.IsFolder {
@@ -1522,13 +1606,20 @@ func stampAddedAt(lib catalog.Library, b *catalog.Book) {
 		paths = []string{b.RelPath}
 	}
 	var added string // RFC3339 UTC sorts lexicographically, so min string = earliest
-	for _, rel := range paths {
+	for i, rel := range paths {
 		abs := absOf(lib, rel)
-		info, err := os.Lstat(abs)
-		if err != nil {
-			continue
+		a, ok := "", false
+		if len(b.FoundAdded) == len(paths) {
+			a, ok = addedFrom(abs, b.FoundAdded[i])
 		}
-		if a := addedAt(abs, info); added == "" || a < added {
+		if !ok {
+			info, err := os.Lstat(abs)
+			if err != nil {
+				continue
+			}
+			a = addedAt(abs, info)
+		}
+		if added == "" || a < added {
 			added = a
 		}
 	}
@@ -1543,11 +1634,12 @@ func stampAddedAt(lib catalog.Library, b *catalog.Book) {
 func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Book {
 	rel, _ := filepath.Rel(lib.Root, absPath)
 	return &catalog.Book{
-		LibraryID: lib.ID,
-		RelPath:   filepath.ToSlash(rel),
-		Format:    ext(filepath.Base(absPath)),
-		Size:      info.Size(),
-		MTime:     info.ModTime().Unix(),
+		LibraryID:  lib.ID,
+		RelPath:    filepath.ToSlash(rel),
+		Format:     ext(filepath.Base(absPath)),
+		Size:       info.Size(),
+		MTime:      info.ModTime().Unix(),
+		FoundAdded: []int64{foundAdded(info)},
 	}
 }
 
@@ -1556,6 +1648,7 @@ func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Bo
 // if there are none. Its AddedAt is enrich's (stampAddedAt).
 func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.Book {
 	var files []catalog.BookFile
+	var found []int64
 	var totalSize, maxMTime int64
 	for _, f := range audio {
 		info, ierr := f.de.Info()
@@ -1566,6 +1659,7 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 		files = append(files, catalog.BookFile{
 			RelPath: filepath.ToSlash(frel), Seq: len(files), Format: ext(f.de.Name()), Size: info.Size(),
 		})
+		found = append(found, foundAdded(info))
 		totalSize += info.Size()
 		if m := info.ModTime().Unix(); m > maxMTime {
 			maxMTime = m
@@ -1576,13 +1670,14 @@ func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.
 	}
 	rel, _ := filepath.Rel(lib.Root, absDir)
 	return &catalog.Book{
-		LibraryID: lib.ID,
-		RelPath:   filepath.ToSlash(rel),
-		IsFolder:  true,
-		Format:    files[0].Format,
-		Size:      totalSize,
-		MTime:     maxMTime,
-		Files:     files,
+		LibraryID:  lib.ID,
+		RelPath:    filepath.ToSlash(rel),
+		IsFolder:   true,
+		Format:     files[0].Format,
+		Size:       totalSize,
+		MTime:      maxMTime,
+		Files:      files,
+		FoundAdded: found,
 	}
 }
 

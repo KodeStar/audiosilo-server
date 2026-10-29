@@ -764,6 +764,41 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed. An `.epub` is never
   audio: `/stream` refuses it (404) and `/fs` doesn't list it; a book's ebook is served only by
   `GET /libraries/{id}/ebook` (see Path-addressed API).
+- **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
+  file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
+  (at most 4 MiB kept); the probe answers what ffprobe would (format duration as its `"%f"`
+  string, first audio stream's codec, chapters, the format tags `applyProbe` reads:
+  `probeTagKeys`) for MP3, M4B/M4A/MP4, FLAC, Ogg Vorbis/Opus/FLAC and MKA, as ports of FFmpeg's
+  demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
+  rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
+  gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
+  `-version` turns the probe off and ffprobe reads every file, as before). Anything a reader does
+  not model exactly is `unsure` and that one file goes to ffprobe, silently: VBR MP3 with no
+  Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
+  prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
+  with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
+  a chapter track whose one edit needs keyframes or a DTS shift (stss/ctts; its samples are cut
+  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter),
+  a crafted table past a bound (a chapter track over 65536 samples or with counts past its
+  tables, MKV SimpleTags over 4096 or 8 deep, a compressed ID3 frame over 16 MiB), a read error,
+  a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
+  caller's context, and `min(timeout, maxProbeTime)`: at most 5 s, under the timeout ExtractTimeout
+  gives ffprobe) or after `maxProbeBytes` (64 MiB; the real-library p95 is ~0.9 MiB) read, checked on
+  every block read, before inflating an ID3 frame or growing a repeated Vorbis key
+  (`blockFile.check`) and, every 256 ticks, in the walks that loop without reading
+  (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
+  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
+  nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
+  `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
+  `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
+  release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
+  no ffprobe (`probe_golden_test.go`); `probe_live_test.go` compares the installed ffprobe
+  (`AUDIOSILO_PROBE_DIRS` adds folders), and CI's `probe-drift` workflow runs it against the
+  image's ffprobe (and weekly), failing on drift or a release with no rules. Adding a release:
+  its rules where they differ, its golden, a `knownRules` entry. `cmd/probediff <dirs>` is the
+  dev diff/timing tool. A test whose ffprobe is a stand-in script on valid files calls
+  `metadata.ForceFFprobeForTests(path)` (`library`'s `stubProbe` does).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -2577,7 +2612,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
   unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
   file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
-  listener after `UpsertBook`, `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
+  listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
   and a library's new metadata source re-resolving its books) wakes the background pass, so a
   scan, an applied match or a typed ASIN is checked without waiting for the
   10-minute tick. **Generated chapters** (Phase 1d, `catalog/generatedchapters.go`): a book's stored
@@ -2610,7 +2645,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
   reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
-- ffprobe is optional; code paths must degrade gracefully when it is absent
+- ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
+  are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`
   defaults to true). ffmpeg is likewise optional (transcoding off without it).
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`

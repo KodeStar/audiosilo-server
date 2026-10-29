@@ -66,9 +66,31 @@ type probeResult struct {
 }
 
 // probe runs ffprobe to obtain duration, the audio codec, chapters and container
-// tags. -select_streams a:0 limits -show_streams to the first audio stream so we
-// read the codec that actually needs (or doesn't need) transcoding.
+// tags (runFFprobe).
 func probe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*probeResult, error) {
+	parsed, err := runFFprobe(parent, path, ffprobePath, timeout)
+	if err != nil {
+		return nil, err
+	}
+	res := &probeResult{Tags: normalizeTags(parsed.Format.Tags)}
+	if len(parsed.Streams) > 0 {
+		res.Codec = parsed.Streams[0].CodecName
+	}
+	res.Duration, _ = strconv.ParseFloat(parsed.Format.Duration, 64)
+	for i, ch := range parsed.Chapters {
+		start, _ := strconv.ParseFloat(ch.StartTime, 64)
+		end, _ := strconv.ParseFloat(ch.EndTime, 64)
+		res.Chapters = append(res.Chapters, Chapter{
+			Index: i, Title: ch.Tags.Title, Start: start, End: end,
+		})
+	}
+	return res, nil
+}
+
+// runFFprobe runs ffprobe on path and returns its answer. -select_streams a:0
+// limits -show_streams to the first audio stream so we read the codec that
+// actually needs (or doesn't need) transcoding.
+func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.Duration) (*ffprobeOutput, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
@@ -91,19 +113,7 @@ func probe(parent context.Context, path, ffprobePath string, timeout time.Durati
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		return nil, err
 	}
-	res := &probeResult{Tags: normalizeTags(parsed.Format.Tags)}
-	if len(parsed.Streams) > 0 {
-		res.Codec = parsed.Streams[0].CodecName
-	}
-	res.Duration, _ = strconv.ParseFloat(parsed.Format.Duration, 64)
-	for i, ch := range parsed.Chapters {
-		start, _ := strconv.ParseFloat(ch.StartTime, 64)
-		end, _ := strconv.ParseFloat(ch.EndTime, 64)
-		res.Chapters = append(res.Chapters, Chapter{
-			Index: i, Title: ch.Tags.Title, Start: start, End: end,
-		})
-	}
-	return res, nil
+	return &parsed, nil
 }
 
 // maxProbeMessage bounds the ffprobe message kept for the Health page.
@@ -155,6 +165,9 @@ func normalizeTags(in map[string]string) map[string]string {
 	return out
 }
 
+// applyProbe lays a probe's answer over m. The format tags it reads are
+// probeTagKeys: a key read here joins that list, so the in-process probe's
+// parity checks cover it.
 func applyProbe(m *Metadata, p *probeResult) {
 	if p.Duration > 0 {
 		m.Duration = p.Duration

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // TestIndexPathSharesOneRead: two requests that index the same book on demand at
@@ -111,6 +112,7 @@ func newSlowProbeEnv(t *testing.T) (*Scanner, catalog.Library, context.Context, 
 	if err := os.WriteFile(probe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	metadata.ForceFFprobeForTests(probe)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
 	if err != nil {
 		t.Fatal(err)

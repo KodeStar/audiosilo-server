@@ -616,6 +616,7 @@ func TestIndexPathFollowsAMoveWhenCancelled(t *testing.T) {
 	if err := os.WriteFile(probe, []byte("#!/bin/sh\ntouch '"+started+"'\nsleep 0.5\necho '{}'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	metadata.ForceFFprobeForTests(probe)
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -23,6 +24,72 @@ import (
 // transaction, so an edited field is never visible with its scanned value. It
 // returns the book ID.
 func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
+	var id int64
+	err := c.db.WithTx(ctx, "UpsertBook", func(tx *sql.Tx) error {
+		var err error
+		id, err = c.upsertBook(ctx, tx, b)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	c.changed()
+	return id, nil
+}
+
+// upsertSavepoint is the savepoint each book of an UpsertBooks transaction is
+// written under, so one that fails is rolled back alone.
+const upsertSavepoint = "upsert_book"
+
+// UpsertBooks is UpsertBook for several books, in their order, sharing
+// transactions: a scan writes most of its books this way, and a transaction's
+// begin and commit cost about as much as a book's own writes. Each book is
+// still written on its own (under a savepoint): one that fails is rolled back
+// alone, the others written, and its error is at its index in the result (nil:
+// written). A transaction takes another book only while it has run for less
+// than budget (0: no bound), so a long batch holds the one writer no longer
+// than that, plus a book. A transaction that fails as a whole (its commit, say)
+// has its books written again one at a time (UpsertBook).
+func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Duration) []error {
+	errs := make([]error, len(books))
+	for start := 0; start < len(books); {
+		end := start // past the last book the transaction began
+		err := c.db.WithTx(ctx, "UpsertBooks", func(tx *sql.Tx) error {
+			began := time.Now() // once it holds the writer: the wait for it is not its run
+			for i := start; i < len(books) && (i == start || budget <= 0 || time.Since(began) < budget); i++ {
+				end = i + 1
+				if _, err := tx.ExecContext(ctx, `SAVEPOINT `+upsertSavepoint); err != nil {
+					return err
+				}
+				errs[i] = nil
+				if _, err := c.upsertBook(ctx, tx, books[i]); err != nil {
+					errs[i] = err
+					if _, err := tx.ExecContext(ctx, `ROLLBACK TO `+upsertSavepoint); err != nil {
+						return err // the transaction itself is gone (SQLite rolled it back)
+					}
+				}
+				if _, err := tx.ExecContext(ctx, `RELEASE `+upsertSavepoint); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			// Nothing of it was written: each of its books again, on its own.
+			end = max(end, start+1)
+			for i := start; i < end; i++ {
+				_, errs[i] = c.UpsertBook(ctx, books[i])
+			}
+		} else if slices.Contains(errs[start:end], nil) {
+			c.changed()
+		}
+		start = end
+	}
+	return errs
+}
+
+// upsertBook is UpsertBook's writes, in tx.
+func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
 	// The snapshot carries this upsert's indexed_at, which is how loadLayers tells
 	// it from one an older server left stale (see scannedStampKey).
 	indexedAt := c.ts()
@@ -65,89 +132,82 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		hasCover = &yes
 	}
 	var id int64
-	err = c.db.WithTx(ctx, "UpsertBook", func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx,
-			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
-			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
-			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
-			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
-			     released, released_checked, genres_checked,
-			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
-			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
-			     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
-			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
-			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
-			     series=excluded.series, series_index=excluded.series_index,
-			     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
-			     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
-			     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
-			     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at,
-			     published=excluded.published, description=excluded.description,
-			     has_cover=excluded.has_cover, scanned=excluded.scanned,
-			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
-			     scan_error_detail=excluded.scan_error_detail,
-			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
-			     released=excluded.released, released_checked=1, genres_checked=1,
-			     -- The rows below are the scan's: refreshEffective puts a community
-			     -- list back over them when it should.
-			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
-			     chapters_source='', chapters_fit='',
-			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
-			     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
-			                          ELSE excluded.attachments_sig END,
-			     attachments_indexed_at=excluded.attachments_indexed_at,
-			     file_order=excluded.file_order, file_order_indexed_at=excluded.file_order_indexed_at,
-			     -- An ebook that could not be read right now (EbookReading.Unread)
-			     -- keeps the stored reading.
-			     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
-			     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
-			     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END
-			     -- added_at intentionally not updated: it records first-seen, so a
-			     -- re-index of an existing book keeps its original added date.
-			 RETURNING id`,
-			b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
-			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
-			b.Published, b.Description, hasCover, scanned,
-			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
-			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
-			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-			b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
-			b.EbookFile.Unread).Scan(&id); err != nil {
-			return err
-		}
-		b.ID = id
-		if !b.Attachments.Unread {
-			if _, err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
-				return err
-			}
-		}
-		if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
-			return err
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id = ?`, id); err != nil {
-			return err
-		}
-		for _, f := range b.Files {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO book_files(book_id, rel_path, seq, duration, format, codec, size)
-				 VALUES(?,?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Codec, f.Size); err != nil {
-				return err
-			}
-		}
-
-		if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
-			return err
-		}
-		return refreshEffective(ctx, tx, id)
-	})
-	if err != nil {
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
+		     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
+		     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
+		     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
+		     released, released_checked, genres_checked,
+		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
+		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
+		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
+		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
+		     series=excluded.series, series_index=excluded.series_index,
+		     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
+		     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
+		     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
+		     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at,
+		     published=excluded.published, description=excluded.description,
+		     has_cover=excluded.has_cover, scanned=excluded.scanned,
+		     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
+		     scan_error_detail=excluded.scan_error_detail,
+		     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
+		     released=excluded.released, released_checked=1, genres_checked=1,
+		     -- The rows below are the scan's: refreshEffective puts a community
+		     -- list back over them when it should.
+		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
+		     chapters_source='', chapters_fit='',
+		     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
+		     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
+		                          ELSE excluded.attachments_sig END,
+		     attachments_indexed_at=excluded.attachments_indexed_at,
+		     file_order=excluded.file_order, file_order_indexed_at=excluded.file_order_indexed_at,
+		     -- An ebook that could not be read right now (EbookReading.Unread)
+		     -- keeps the stored reading.
+		     ebook_path=CASE WHEN ? THEN books.ebook_path ELSE excluded.ebook_path END,
+		     ebook_sig=CASE WHEN ? THEN books.ebook_sig ELSE excluded.ebook_sig END,
+		     ebook_size=CASE WHEN ? THEN books.ebook_size ELSE excluded.ebook_size END
+		     -- added_at intentionally not updated: it records first-seen, so a
+		     -- re-index of an existing book keeps its original added date.
+		 RETURNING id`,
+		b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
+		b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
+		b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
+		b.Published, b.Description, hasCover, scanned,
+		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
+		b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
+		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
+		b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
-	c.changed()
-	return id, nil
+	b.ID = id
+	if !b.Attachments.Unread {
+		if _, err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
+			return 0, err
+		}
+	}
+	if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id = ?`, id); err != nil {
+		return 0, err
+	}
+	for _, f := range b.Files {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_files(book_id, rel_path, seq, duration, format, codec, size)
+			 VALUES(?,?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Codec, f.Size); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
+		return 0, err
+	}
+	return id, refreshEffective(ctx, tx, id)
 }
 
 // BooksByPaths returns the books in a library whose rel_path is in paths, keyed
