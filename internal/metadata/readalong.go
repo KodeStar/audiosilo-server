@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -187,15 +188,8 @@ func ParseReadalongHead(data []byte) (*ReadalongHead, error) {
 
 // isSHA256 reports whether s is a sha256 digest in hex (64 digits, either case).
 func isSHA256(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, r := range s {
-		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
-			return false
-		}
-	}
-	return true
+	_, err := hex.DecodeString(s)
+	return len(s) == 64 && err == nil
 }
 
 // unitInterval reports whether v is present and from 0 to 1.

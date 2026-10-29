@@ -197,12 +197,18 @@ func TestEbookDigest(t *testing.T) {
 	root := t.TempDir()
 	epub := epubBytes(t, minimalEpub...)
 	writeFile(t, root, "A/b.epub", epub)
-	sha, sig, err := EbookDigest(root, "A/b.epub", true)
+	sha, sig, err := EbookDigest(context.Background(), root, "A/b.epub", true)
 	info, _ := os.Stat(filepath.Join(root, "A", "b.epub"))
 	if err != nil || sha != digestOf(epub) || sig != catalog.EbookSig("b.epub", info) {
 		t.Errorf("digest = %q %q %v", sha, sig, err)
 	}
-	if _, _, err := EbookDigest(root, "A/none.epub", true); err == nil {
+	if _, _, err := EbookDigest(context.Background(), root, "A/none.epub", true); err == nil {
 		t.Error("no file: no error")
+	}
+	// A request that has given up (its deadline, a cancelled scan) stops the hash.
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := EbookDigest(done, root, "A/b.epub", true); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: err = %v, want context.Canceled", err)
 	}
 }

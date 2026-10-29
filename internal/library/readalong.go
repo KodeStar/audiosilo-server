@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -31,18 +30,32 @@ var ErrNoReadalong = errors.New("library: no read-along map")
 // EbookDigest is the sha256 (lowercase hex) of the ebook at library-relative
 // rel, opened by OpenEbook's rules (noLink as there: a folder book's is never a
 // link), and the signature (catalog.EbookSig) of the very file it hashed, so the
-// digest is recorded only for the file the index holds.
-func EbookDigest(root, rel string, noLink bool) (sha, sig string, err error) {
+// digest is recorded only for the file the index holds. It stops with ctx (a
+// request's deadline, a cancelled scan), even part way through a slow share.
+func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig string, err error) {
 	f, info, err := OpenEbook(root, rel, noLink)
 	if err != nil {
 		return "", "", err
 	}
 	defer func() { _ = f.Close() }()
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
 		return "", "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), info), nil
+}
+
+// ctxReader is r that fails with ctx's error once ctx is done.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // hashReadalongEbooks hashes the ebooks of the library's books that have a
@@ -60,7 +73,7 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		if ctx.Err() != nil {
 			return
 		}
-		if _, err := HashEbook(ctx, s.cat, s.log, lib, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
+		if _, err := s.HashEbook(ctx, lib, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)
 		}
 	}
@@ -70,13 +83,13 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 // (EbookDigest) and records the digest (only while the index still holds that
 // file: catalog.SetEbookDigest). A failure to record it is logged, never the
 // answer's.
-func HashEbook(ctx context.Context, cat *catalog.Catalog, log *slog.Logger, lib catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
-	sha, sig, err := EbookDigest(lib.Root, ebookPath, folder)
+func (s *Scanner) HashEbook(ctx context.Context, lib catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
+	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder)
 	if err != nil {
 		return "", err
 	}
-	if err := cat.SetEbookDigest(ctx, lib.ID, bookPath, sig, sha); err != nil {
-		log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
+	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, sig, sha); err != nil {
+		s.log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
 	}
 	return sha, nil
 }
