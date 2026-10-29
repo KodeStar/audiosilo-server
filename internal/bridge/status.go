@@ -350,10 +350,9 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 	// A heartbeat while the Bridge is online is user state (server#258): an
 	// idle paired Bridge beats twice a minute, and only a new status (which the
 	// rule for bridge_status catches by value) or coming back online is news
-	// to anything. LastHeartbeat may be up to heartbeatTTL old, which only ever
-	// makes it older than the stored one, never online when that isn't.
+	// to anything.
 	exec := s.db.ExecContext
-	if prev, err := s.LastHeartbeat(ctx); err == nil && prev.Online(now) {
+	if prev, err := s.previousHeartbeat(ctx); err == nil && prev.Online(now) {
 		exec = s.db.ExecUserState
 	}
 	res, err := exec(ctx,
@@ -368,6 +367,21 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 	stored, _ := time.Parse(time.RFC3339, at(now)) // the stored precision
 	s.remember(&Heartbeat{Status: st, At: stored})
 	return nil
+}
+
+// previousHeartbeat is the heartbeat this process last saved or read, at any
+// age, so a beat costs no read: only SaveHeartbeat writes one, and a pairing or
+// an unpair made here drops it (Forget). LastHeartbeat's TTL is for a change
+// made elsewhere (an admin demoted or disabled), which refuses the save anyway
+// (BridgeTokenLiveSQL). With none held (a start, Forget) it is read.
+func (s *Service) previousHeartbeat(ctx context.Context) (*Heartbeat, error) {
+	s.hbMu.Lock()
+	h, held := s.hb, !s.hbRead.IsZero()
+	s.hbMu.Unlock()
+	if held {
+		return h, nil
+	}
+	return s.LastHeartbeat(ctx)
 }
 
 // heartbeatTTL is how long a read heartbeat is reused: well inside the 2-minute

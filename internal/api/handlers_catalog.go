@@ -79,7 +79,7 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Counted over every matching book (about 100 ms at 5,000), and like a page
-	// the database's answer to the query string alone: kept until the next write.
+	// the database's answer to the query string alone: kept until the next content write.
 	write := a.cachedList(w, r, gen, cacheable, nil)
 	if write == nil {
 		return

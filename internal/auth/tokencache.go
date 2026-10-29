@@ -14,7 +14,9 @@ const maxCachedTokens = 4096
 // revoked token is refused on the very next request. A token's own touch
 // (last_seen, address, app) is the one user-state write to the table: it leaves
 // the generation, so listening never empties the cache, and drops that token's
-// row (resolve), the only one it changed. Expiry, which needs no write, is checked
+// row (resolve), the only one it changed; a lookup that read the row before the
+// touch and puts it after the drop is dropped too (GenMap.PutMarked, with the
+// mark lookupToken takes before its read). Expiry, which needs no write, is checked
 // on every hit. Only a valid session, API key or bridge token is held: a cast
 // token's grant and parent and a pairing token's one use are read each time, and
 // nothing is held for a refusal.

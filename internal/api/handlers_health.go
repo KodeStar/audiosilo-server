@@ -42,8 +42,9 @@ type offlineLibrary struct {
 // included). It is exact: any content write (a fix, an ignore, a scan) moves
 // the generation, and the next request counts again (server#245). The one
 // user state it reads is how many people have progress on each duplicate copy
-// (its ranking), so a progress row added or removed is a content write too;
-// a save to an existing row is not (store's userStateTables).
+// (its ranking), so a progress row added, removed or moved to another book is
+// a content write too; a save to an existing row is not (store's
+// userStateTables).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {

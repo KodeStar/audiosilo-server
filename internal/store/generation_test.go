@@ -56,6 +56,18 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 			return errors.New("roll back")
 		})
 	})
+	// A transaction that never began (its caller gave up waiting for the writer)
+	// wrote nothing, and leaves it.
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	g0 := db.ContentGeneration()
+	if db.WithTx(gone, "test", func(*sql.Tx) error { return nil }) == nil ||
+		db.WithDurableTx(gone, "test", func(*sql.Tx) error { return nil }) == nil {
+		t.Fatal("a transaction began on a cancelled context")
+	}
+	if db.ContentGeneration() != g0 {
+		t.Errorf("transactions that never began moved the generation %d -> %d", g0, db.ContentGeneration())
+	}
 
 	// It moves only once the write has committed: at the COMMIT itself (the
 	// driver's commit hook on the one writer connection) it is still the old one.

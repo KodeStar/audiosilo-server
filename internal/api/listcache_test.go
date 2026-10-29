@@ -274,7 +274,7 @@ func TestListCacheKeyExact(t *testing.T) {
 }
 
 // TestListCacheBrowseLists: a library's authors, narrators and series (with and
-// without memberships) are answered from the cache until a write, the write (a
+// without memberships) are answered from the cache until a content write, the write (a
 // re-index crediting a new author, narrator and series) is in the next answer,
 // and a scoped listener's answer is never the admin's.
 func TestListCacheBrowseLists(t *testing.T) {
@@ -302,9 +302,9 @@ func TestListCacheBrowseLists(t *testing.T) {
 	reindex("A/Alpha One.m4b", "Alpha One", "A Author", "Ann Reader", "Alpha Saga")
 	reindex("B/Beta.m4b", "Beta", "B Author", "Bob Reader", "Beta Saga")
 
-	// The listener's first request touches its token, a write that empties the
-	// cache, so it comes first: the listener's lists below are asked at the
-	// generation the admin's answers are kept under.
+	// The listener's first request touches its token, a user-state write that
+	// leaves the generation (and so the cache) where it was: the listener's lists
+	// below are asked at the generation the admin's answers are kept under.
 	if resp, body := e.do(t, "GET", "/api/v1/me", listener, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("listener GET /me: %d %s", resp.StatusCode, body)
 	}

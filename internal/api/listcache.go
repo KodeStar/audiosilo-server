@@ -16,7 +16,7 @@ import (
 // lists: a library's /books pages, the recent shelf, search and the browse
 // lists (authors, narrators, series). A grid that
 // loads every page, a home screen opened again, a search typed twice: each is
-// the same answer while nothing was written, and building it is most of the
+// the same answer while no content was written, and building it is most of the
 // request (the books' rows, their file counts, FTS ranking, JSON). The admin
 // console's book pages and Health summary are kept the same way (server#245).
 //

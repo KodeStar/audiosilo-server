@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -27,11 +26,7 @@ func newContentGenEnv(t *testing.T) *contentGenEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	lib := listCacheLibrary(t, e)
-	tok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "phone", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &contentGenEnv{testEnv: e, lib: lib, tok: tok, paths: []string{
+	return &contentGenEnv{testEnv: e, lib: lib, tok: adminSession(t, e), paths: []string{
 		fmt.Sprintf("/api/v1/libraries/%d/books?limit=50", lib.ID),
 		fmt.Sprintf("/api/v1/libraries/%d/authors", lib.ID),
 		"/api/v1/books/recent?limit=48",
@@ -82,21 +77,18 @@ func (c *contentGenEnv) must(t *testing.T, method, path, body string) {
 func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 	t.Parallel()
 	c := newContentGenEnv(t)
-	at := func(route, path string) string {
-		return fmt.Sprintf("/api/v1/libraries/%d/%s?path=%s", c.lib.ID, route, url.QueryEscape(path))
-	}
 	// The book's first save makes its progress row: content (Health's
 	// duplicates count each copy's listeners), so it is made before the warm-up.
-	c.must(t, "PUT", at("progress", "A/Alpha One.m4b"), `{"position":1,"duration":60}`)
+	c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), `{"position":1,"duration":60}`)
 	c.warm(t)
 	gen := c.db.ContentGeneration()
 
 	for i := 2; i < 6; i++ {
-		c.must(t, "PUT", at("progress", "A/Alpha One.m4b"), fmt.Sprintf(`{"position":%d,"duration":60}`, i))
+		c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), fmt.Sprintf(`{"position":%d,"duration":60}`, i))
 	}
-	c.must(t, "POST", at("bookmarks", "A/Alpha One.m4b"), `{"position":3,"note":"here"}`)
-	c.must(t, "POST", at("history", "A/Alpha One.m4b"), `{"from_pos":1,"to_pos":5}`)
-	c.must(t, "PUT", at("rating", "A/Alpha One.m4b"), `{"rating":4}`)
+	c.must(t, "POST", bookURL(c.lib.ID, "bookmarks", "A/Alpha One.m4b"), `{"position":3,"note":"here"}`)
+	c.must(t, "POST", bookURL(c.lib.ID, "history", "A/Alpha One.m4b"), `{"from_pos":1,"to_pos":5}`)
+	c.must(t, "PUT", bookURL(c.lib.ID, "rating", "A/Alpha One.m4b"), `{"rating":4}`)
 	c.must(t, "POST", "/api/v1/me/queue", fmt.Sprintf(`{"library_id":%d,"path":"B/Beta.m4b"}`, c.lib.ID))
 	// A request from a new app touches the token (its app and address).
 	resp, _ := c.doHeaders(t, "GET", "/api/v1/me/progress", c.tok, "", map[string]string{"X-AudioSilo-Client": "web/9.9.9 (web)"})
@@ -113,7 +105,7 @@ func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 		}
 	}
 	// Listening still shows where it is per user (uncached): the last save won.
-	if _, body := c.do(t, "GET", at("progress", "A/Alpha One.m4b"), c.tok, ""); !strings.Contains(body, `"position":5`) {
+	if _, body := c.do(t, "GET", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), c.tok, ""); !strings.Contains(body, `"position":5`) {
 		t.Fatalf("progress after the saves: %s", body)
 	}
 }
@@ -148,7 +140,7 @@ func TestContentWritesEmptyTheListCache(t *testing.T) {
 			return c.cat.EditBook(ctx, c.lib.ID, "B/Beta.m4b", catalog.BookEdit{Set: map[string]string{"title": "Beta Edited"}})
 		}, `"title":"Beta Edited"`},
 		{"first progress row", func() error {
-			resp, _ := c.do(t, "PUT", fmt.Sprintf("/api/v1/libraries/%d/progress?path=%s", c.lib.ID, url.QueryEscape("B/Beta.m4b")),
+			resp, _ := c.do(t, "PUT", bookURL(c.lib.ID, "progress", "B/Beta.m4b"),
 				c.tok, `{"position":1,"duration":60}`)
 			if resp.StatusCode != http.StatusOK {
 				return fmt.Errorf("progress PUT %d", resp.StatusCode)
@@ -199,7 +191,7 @@ func TestGrantChangeReachesAWarmCache(t *testing.T) {
 	list := fmt.Sprintf("/api/v1/libraries/%d/books?limit=50", lib.ID)
 	save := func(pos int) {
 		t.Helper()
-		resp, body := e.do(t, "PUT", fmt.Sprintf("/api/v1/libraries/%d/progress?path=%s", lib.ID, url.QueryEscape("B/Beta.m4b")),
+		resp, body := e.do(t, "PUT", bookURL(lib.ID, "progress", "B/Beta.m4b"),
 			listener, fmt.Sprintf(`{"position":%d,"duration":60}`, pos))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("progress PUT: %d %s", resp.StatusCode, body)

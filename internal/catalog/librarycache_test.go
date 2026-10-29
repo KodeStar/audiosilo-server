@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// GetLibrary answers from its cache only while nothing is written: an edit
+// GetLibrary answers from its cache only while no content is written: an edit
 // through the catalog, a write of any table, a deletion each show at once, and
 // a caller changing the library it was given changes nothing kept.
 func TestGetLibraryCachedUntilAWrite(t *testing.T) {

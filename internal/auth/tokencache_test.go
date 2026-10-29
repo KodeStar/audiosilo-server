@@ -2,6 +2,8 @@ package auth
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -14,7 +16,7 @@ func cached(s *Service, secret string) bool {
 }
 
 // warm resolves secret until its lookup is answered from the cache (the first
-// resolve may touch the token, a write, which leaves its lookup unused).
+// resolve may touch the token, which drops its lookup).
 func warm(t *testing.T, s *Service, secret string, kinds ...string) {
 	t.Helper()
 	for range 3 {
@@ -28,8 +30,8 @@ func warm(t *testing.T, s *Service, secret string, kinds ...string) {
 	t.Fatal("a valid token's lookup was never cached")
 }
 
-// Allowed: a session and an API key are answered from the cache while nothing is
-// written, with the same user and credential the database gives.
+// Allowed: a session and an API key are answered from the cache while no content
+// is written, with the same user and credential the database gives.
 func TestTokenCacheAnswersValidTokens(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -241,6 +243,50 @@ func TestTokenCacheSurvivesTouches(t *testing.T) {
 	}
 	if s.db.ContentGeneration() != gen {
 		t.Fatal("resolves after the touch moved the content generation")
+	}
+}
+
+// Denied (server#258): a lookup that read a token's row before a touch landed
+// never caches that row after the touch dropped it. Each round empties the
+// cache (a content write), then races a request naming a new app version (a
+// touch) with header-less ones (covers, which read the row); once all are done,
+// a cached row is the stored one, or covers would carry the old app.
+func TestTokenCacheDropsARowReadBeforeATouch(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	tok, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	hash := hashSecret(tok)
+	stored := func() ClientInfo {
+		var c ClientInfo
+		if err := s.db.QueryRowContext(ctx, `SELECT client_app, client_version, client_platform FROM tokens WHERE token_hash = ?`,
+			hash).Scan(&c.App, &c.Version, &c.Platform); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for i := range 100 {
+		if _, err := s.db.ExecContext(ctx, `UPDATE users SET disabled = disabled WHERE 0`); err != nil {
+			t.Fatal(err)
+		}
+		app := ClientInfo{App: "AudioSilo", Version: fmt.Sprintf("2.%d.0", i%2), Platform: "ios"}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for j := range 9 {
+			p := Presence{IP: "10.0.0.1"}
+			if j == 0 {
+				p.Client = app
+			}
+			wg.Go(func() {
+				<-start
+				_, _, _ = s.ResolveRequest(ctx, tok, p, KindSession)
+			})
+		}
+		close(start)
+		wg.Wait()
+		if c, ok := s.tokens.Get(s.db.ContentGeneration(), hash); ok && c.row.client != stored() {
+			t.Fatalf("round %d: cached app %+v, stored %+v", i, c.row.client, stored())
+		}
 	}
 }
 

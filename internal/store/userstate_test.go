@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -80,7 +81,7 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 		ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET position = excluded.position`
 
 	// A new progress row is content (Health's duplicates count listeners), an
-	// update of it is not.
+	// update of its fields is not, and one moving it to another key is.
 	moved("progress insert", exec(saveProgress, 1.0))
 	still("progress update", exec(saveProgress, 2.0))
 	still("progress update in a tx", func() error {
@@ -89,6 +90,8 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 			return err
 		})
 	})
+	moved("progress re-key", exec(`UPDATE progress SET rel_path = 'Moved' WHERE user_id = 1`))
+	moved("progress re-key back", exec(`UPDATE progress SET rel_path = 'Book' WHERE user_id = 1`))
 	still("bookmark insert", exec(`INSERT INTO bookmarks(user_id, library_id, rel_path, position, created_at) VALUES(1, 1, 'Book', 5, 'now')`))
 	still("bookmark delete", exec(`DELETE FROM bookmarks WHERE user_id = 1`))
 	still("token touch", exec(`UPDATE tokens SET last_seen = 'now', last_ip = '10.0.0.1', client_app = 'web' WHERE id = 1`))
@@ -165,13 +168,16 @@ func TestUserStateMisfiled(t *testing.T) {
 	if db.ContentGeneration() == before || len(*misfiled) != 2 || (*misfiled)[1] != "collections" {
 		t.Fatalf("tx on collections: generation %d -> %d, misfiled %v", before, db.ContentGeneration(), *misfiled)
 	}
-	// A foreign key's action is seen too: deleting a user (misfiled) cascades.
+	// A foreign key's action is seen too: with a user's own row let through,
+	// deleting one is content and a misfiling only through what it cascades to
+	// (the collection made above, the token).
+	db.userState["users"] = tableRule{rows: true}
 	before = db.ContentGeneration()
 	*misfiled = nil
 	if _, err := db.ExecUserState(ctx, `DELETE FROM users WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
-	if db.ContentGeneration() == before || len(*misfiled) != 1 {
+	if db.ContentGeneration() == before || !slices.Equal(*misfiled, []string{"collections"}) {
 		t.Fatalf("cascading delete: generation %d -> %d, misfiled %v", before, db.ContentGeneration(), *misfiled)
 	}
 
@@ -190,25 +196,103 @@ func TestUserStateMisfiled(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM libraries WHERE name = 'l'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("libraries after the panic = %d, %v; want the write kept", n, err)
 	}
-	// The writer is usable afterwards, and no hook was left on it.
+	// The writer is usable afterwards.
 	before = db.ContentGeneration()
 	if _, err := db.ExecContext(ctx, `INSERT INTO libraries(name, root, created_at) VALUES('m', '/y', 'a')`); err != nil || db.ContentGeneration() == before {
 		t.Fatalf("a write after the panic = %v (generation %d -> %d)", err, before, db.ContentGeneration())
 	}
 }
 
+// TestUserStateWatchUnset: the hook sees the connection's writes while set
+// (allowed) and none once unset (denied), so a later write on the writer's
+// connection never reaches a finished watch.
+func TestUserStateWatchUnset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, _ := openUserState(t)
+	conn, err := db.writer.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	w := &userStateWatch{rules: db.userState}
+	if !w.set(conn) {
+		t.Fatal("the hook could not be set")
+	}
+	write := func(name string) {
+		t.Helper()
+		if _, err := conn.ExecContext(ctx, `INSERT INTO libraries(name, root, created_at) VALUES(?, '/w', 'a')`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("seen")
+	if !w.content || w.misfiled != "libraries" {
+		t.Fatalf("while set: content %v, misfiled %q", w.content, w.misfiled)
+	}
+	*w = userStateWatch{rules: db.userState}
+	w.unset(conn)
+	write("unseen")
+	if w.content || w.misfiled != "" {
+		t.Fatalf("after unset: content %v, misfiled %q", w.content, w.misfiled)
+	}
+}
+
 // TestUserStateRulesMatchTheSchema: every rule names a table the migrations
-// created (Open checks only a column rule's table and columns), and a column
-// rule leaves some column watched.
+// created and columns it has (Open takes a schema without them, a newer
+// server's, as more content), and a column rule leaves some column watched.
 func TestUserStateRulesMatchTheSchema(t *testing.T) {
 	t.Parallel()
 	db, _ := openUserState(t)
 	for table, rule := range userStateTables {
-		if _, err := tableColumns(context.Background(), db.writer, table); err != nil {
-			t.Errorf("%s: %v", table, err)
+		cols, err := tableColumns(context.Background(), db.writer, table)
+		if err != nil || len(cols) == 0 {
+			t.Errorf("%s: columns %v, %v", table, cols, err)
+			continue
+		}
+		for _, c := range rule.free {
+			if !slices.Contains(cols, c) {
+				t.Errorf("%s: no column %s", table, c)
+			}
 		}
 		if got := db.userState[table]; rule.free != nil && len(got.watched) == 0 {
 			t.Errorf("%s: no watched columns", table)
 		}
+	}
+}
+
+// TestUserStateRulesOnANewerSchema: a database a newer server changed (a
+// rollback) still opens, and what a rule no longer names is content: a freed
+// column renamed is watched, a column rule's dropped table has no rule.
+func TestUserStateRulesOnANewerSchema(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "newer.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`ALTER TABLE bridge_jobs RENAME COLUMN lease_until TO lease_ends`,
+		`DROP TABLE bridge_status`,
+		`INSERT INTO bridge_jobs(id, kind, dedupe_key, state, created_at, updated_at) VALUES(1, 'bridge.verify', 'k', 'running', 'a', 'a')`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = db.Close()
+	if db, err = Open(ctx, path); err != nil {
+		t.Fatalf("reopening a newer schema: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, ok := db.userState["bridge_status"]; ok {
+		t.Error("a dropped table kept its rule")
+	}
+	before := db.ContentGeneration()
+	if _, err := db.ExecUserState(ctx, `UPDATE bridge_jobs SET lease_ends = 'soon' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if db.ContentGeneration() == before {
+		t.Fatal("a renamed freed column's change stayed user state")
 	}
 }

@@ -253,7 +253,7 @@ type Catalog struct {
 	podcastStreams    map[Ref]int
 	podcastScheduleMu sync.Mutex
 	podcastVisit      Ref
-	// libs is GetLibrary's rows while nothing is written.
+	// libs is GetLibrary's rows while no content is written.
 	libs store.GenMap[int64, Library]
 }
 

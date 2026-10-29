@@ -17,9 +17,10 @@ import (
 // save and its session every few seconds per listener, a token's last-seen
 // touch, history, bookmarks, the Bridge's heartbeat. None of them changes what
 // the content caches answer (the player's lists, the admin's book pages and
-// Health, the library and token caches), so they go through ExecUserState or
-// WithUserStateTx, which leave the content generation (ContentGeneration)
-// where it was, and those caches warm.
+// Health, the library and token caches), bar a touched token's own row in the
+// token cache, which the touch drops itself (auth.Service.resolve), so they go
+// through ExecUserState or WithUserStateTx, which leave the content generation
+// (ContentGeneration) where it was, and those caches warm.
 //
 // The classification is checked, not trusted: while a user-state write runs,
 // SQLite's pre-update hook sees every row it changes (its triggers' and
@@ -43,14 +44,20 @@ type tableRule struct {
 	watched []int
 }
 
-// userStateTables are the tables of user state, each with its rule. A content
-// cache must read none of what a rule lets through (CONVENTIONS.md, Content
-// generation): a cache that does keys on something else.
+// userStateTables are the tables a user-state write may change, each with its
+// rule. User state here is what no content cache reads, not the data model's
+// durable per-user state: the community metadata cache (meta_cache, derived)
+// and the console's bell (server_events) are listed, favourites and goals are
+// not. No content cache reads what a rule lets through, bar the token cache,
+// whose touch drops the row it changed; a new cache that would needs a key of
+// its own, or that table out of the list (CONVENTIONS.md, Content generation).
 var userStateTables = map[string]tableRule{
-	// A progress row's fields are no list's, but a new or removed row changes
-	// the Health summary's duplicate ranking (how many people listen to each
-	// copy: catalog.duplicateSets).
-	"progress":           {},
+	// A progress row's fields are no list's, but a new, removed or re-keyed row
+	// changes the Health summary's duplicate ranking (how many people listen to
+	// each copy: catalog.duplicateSets), so its key (user_id, library_id,
+	// rel_path) is watched.
+	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
+		"updated_at", "started_at", "finished_at"}},
 	"listening_sessions": {rows: true},
 	"listening_history":  {rows: true},
 	"bookmarks":          {rows: true},
@@ -72,8 +79,11 @@ var userStateTables = map[string]tableRule{
 
 // userStateRules is userStateTables with each column rule's watched columns,
 // read from db's schema (PRAGMA table_info: the column order the pre-update
-// hook's values come in); an error for a rule naming a table or column the
-// schema lacks.
+// hook's values come in): every column the rule doesn't free. A schema a newer
+// server changed (Open still starts on one: a rollback) only ever makes more
+// writes content: a column rule's table that is gone is left out (a write to it
+// would be a misfiling), and a column it frees that is gone frees nothing.
+// TestUserStateRulesMatchTheSchema holds the rules to this server's schema.
 func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, error) {
 	out := make(map[string]tableRule, len(userStateTables))
 	for table, rule := range userStateTables {
@@ -82,10 +92,8 @@ func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, erro
 			if err != nil {
 				return nil, fmt.Errorf("user-state rule for %s: %w", table, err)
 			}
-			for _, c := range rule.free {
-				if !slices.Contains(cols, c) {
-					return nil, fmt.Errorf("user-state rule for %s: no column %s", table, c)
-				}
+			if len(cols) == 0 {
+				continue
 			}
 			for i, c := range cols {
 				if !slices.Contains(rule.free, c) {
@@ -98,8 +106,8 @@ func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, erro
 	return out, nil
 }
 
-// tableColumns lists table's columns in their order; an error for a table
-// that doesn't exist.
+// tableColumns lists table's columns in their order, none for a table that
+// doesn't exist.
 func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
@@ -114,13 +122,7 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, erro
 		}
 		cols = append(cols, c)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(cols) == 0 {
-		return nil, fmt.Errorf("no table %s", table)
-	}
-	return cols, nil
+	return cols, rows.Err()
 }
 
 // ExecUserState is ExecContext for a statement that writes only user state
@@ -144,7 +146,7 @@ func (db *DB) ExecUserState(ctx context.Context, query string, args ...any) (sql
 func (db *DB) WithUserStateTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
 	start := time.Now()
 	return db.userStateWrite(ctx, name, start, func(conn *sql.Conn) error {
-		return db.withTx(ctx, name, start, conn, fn)
+		return db.withTx(ctx, name, start, conn, false, fn)
 	})
 }
 
@@ -265,14 +267,12 @@ func watchedChanged(d *sqlite.SQLitePreUpdateData, watched []int) bool {
 }
 
 // sameValue reports whether two column values (nil, int64, float64, string,
-// []byte) are the same.
+// []byte) are the same. Only two []byte would panic on ==; any other pair of
+// different types is simply unequal.
 func sameValue(a, b any) bool {
 	if ab, ok := a.([]byte); ok {
 		bb, ok := b.([]byte)
 		return ok && bytes.Equal(ab, bb)
-	}
-	if _, ok := b.([]byte); ok {
-		return false
 	}
 	return a == b
 }

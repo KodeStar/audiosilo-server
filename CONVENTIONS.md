@@ -339,8 +339,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   work-id misses. A fresh row warms memory for its remaining TTL; a positive row
   however stale is served when the upstream fails (not on caller cancellation),
   held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
-  `source`; others are ignored. Derived, rebuildable, not user state; the
-  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
+  `source`; others are ignored. Derived, rebuildable, nobody's durable state (its writes
+  take the user-state path all the same, as no content cache reads it: see Content
+  generation); the launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
   (`w:`, caller-chosen ids) within a share of their own (`catalog.MetaCacheWorkRows`,
   2 000) so they never push the books' enrichments out. A work's later 404 (remote mode; never in
   mirror mode, see Mirror mode)
@@ -511,7 +512,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   RETURNING`, must use `ExecContext` or a `WithTx` transaction, or their user-state
   forms `ExecUserState` / `WithUserStateTx` (there is no other way to the writer:
   `store.DB.ContentGeneration`, which the list cache, the token cache and the library
-  cache key on, moves after each of those finishes, so a write that bypassed them
+  cache key on, moves after each content write finishes (a user-state one only when it
+  changed more than its tables' rules let through), so a write that bypassed them
   would leave a revoked token honoured; see Content generation). An in-memory DB has
   reader == writer and would hide a misroute, which is why the test stores are
   temp files. Commits are `synchronous=NORMAL` (a power cut can roll back the last
@@ -539,22 +541,28 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   away needs no write to show).
 - **Content generation** (`store/userstate.go`, server#258): `store.DB.ContentGeneration`
   moves after every write (`ExecContext`, `WithTx`, `WithDurableTx`/`ExecDurable`, failed and
-  rolled-back ones too) except a user-state one, `ExecUserState` / `WithUserStateTx` (catalog's
-  `execUserState` / `withUserStateTx`), which moves it only when it changed something outside
-  `userStateTables`. Default to both: a write is content unless it goes through the user-state
-  path. The check is SQLite's pre-update hook on the writer's connection for the write's
-  duration, so triggers and foreign-key actions count: per table, a rule says whether new and
-  removed rows are user state (`progress`'s are not: Health ranks duplicate copies by how many
-  people have progress on them) and, for `tokens` (`last_seen`, `last_ip`, `client_*`),
+  rolled-back ones too, not a transaction that never began) except a user-state one,
+  `ExecUserState` / `WithUserStateTx` (on `store.DB`; catalog's db interface has both), which
+  moves it only when it changed something outside `userStateTables`. Default to both: a write
+  is content unless it goes through the user-state path. User state here is what no content
+  cache reads, not the data model's durable per-user state: `meta_cache` (derived) and
+  `server_events` are listed, favourites and goals are not. The check is SQLite's pre-update
+  hook on the writer's connection for the write's duration, so triggers and foreign-key actions
+  count: per table, a rule says whether new and removed rows are user state (`progress`'s are
+  not: Health ranks duplicate copies by how many people have progress on them) and, for
+  `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`) and `bridge_jobs` (`lease_until`, `updated_at`), which
   columns an UPDATE may change by value. Anything else on a listed table moves the generation;
-  a table the list doesn't name is a misfiling (logged; a panic in a test binary). Durability
-  (`WithDurableTx`) is orthogonal. The user-state writes: `SaveProgress` (an update of the row),
-  `RecordHeartbeat` (listening sessions), bookmarks and notes (add, edit, delete), `AddHistory`,
+  a table the list doesn't name is a misfiling (logged; a panic in a test binary), and a
+  rule's table or column a newer server's schema lacks (a rollback) only makes more writes
+  content. Durability (`WithDurableTx`) is orthogonal. The user-state writes: `SaveProgress`
+  (an update of the row), `RecordHeartbeat` (listening sessions), bookmarks and notes (add,
+  edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
-  its new last-seen and address), the Bridge's heartbeat while it is online
+  its new last-seen and address; a lookup that read the row before the touch never caches it
+  after: `store.GenMap.PutMarked`), the Bridge's heartbeat while it is online
   (`bridge.SaveHeartbeat`; a new status or a return after the online window moves the
   generation) and its job reports (`bridge.UpdateHeld`; only a lease renewal stays user
   state). Kept as content on purpose: collections, grants, shares, users, libraries, books,
@@ -1366,7 +1374,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
   /admin/libraries/{id}` rescans only when the root or ignore rules change.
 - **Health issues (`catalog/issues.go`, `api/handlers_health.go`)**: computed from the index on
-  request (the summary is kept in the list cache until the next write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
+  request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (left out of the summary
@@ -1672,7 +1680,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
   only for a cast token, so every other token's lookup is one two-table query, and a valid session,
   API key or bridge token's is answered from `Service.tokens`, a `store.GenMap`, until the next
-  write: every change that could end a token is a write, and expiry is checked on each hit): **signing out the device that
+  content write or its own touch: every change that could end a token is a content write, and
+  expiry is checked on each hit): **signing out the device that
   minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
   disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
   `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its

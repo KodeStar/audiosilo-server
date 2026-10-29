@@ -45,3 +45,20 @@ func TestGenMapDelete(t *testing.T) {
 		t.Fatalf("the other key = %d, %v", v, ok)
 	}
 }
+
+// A value read before a Delete and put after it is dropped (denied), at the same
+// generation; one read after the Delete is kept (allowed).
+func TestGenMapPutMarked(t *testing.T) {
+	t.Parallel()
+	var m GenMap[string, int]
+	before := m.Mark() // a read begins
+	m.Delete("a")      // a user-state write changed what it is reading
+	m.PutMarked(5, before, "a", 1)
+	if _, ok := m.Get(5, "a"); ok {
+		t.Fatal("a value read before a Delete was kept")
+	}
+	m.PutMarked(5, m.Mark(), "a", 2)
+	if v, ok := m.Get(5, "a"); !ok || v != 2 {
+		t.Fatalf("a value read after the Delete = %d, %v", v, ok)
+	}
+}
