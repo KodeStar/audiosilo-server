@@ -41,6 +41,12 @@
         "codec": "mp3"
       }
     },
+    "craft-apic-webp.mp3": {
+      "ffprobe": {
+        "duration": "5.328750",
+        "codec": "mp3"
+      }
+    },
     "craft-chap-unordered.mp3": {
       "ffprobe": {
         "duration": "5.328980",

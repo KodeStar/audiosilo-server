@@ -413,6 +413,10 @@ func readAPIC(c *cursor, taglen int, isv34 bool) bool {
 	}
 	switch strings.ToLower(mime) {
 	case "image/gif", "image/jpeg", "image/jpg", "image/png", "image/tiff", "image/bmp", "jpg", "png":
+	case "image/webp": // ff_id3v2_mime_tags has it in 8.1, not 7.1
+		if c.ff < ff8 {
+			return false
+		}
 	default:
 		return false
 	}
@@ -421,7 +425,9 @@ func readAPIC(c *cursor, taglen int, isv34 bool) bool {
 	if _, ok := decodeStr(c, enc, &taglen); !ok {
 		return false
 	}
-	return taglen > 0 && len(c.b)-c.pos >= taglen
+	// The frame's data is all in c.b and taglen counts what is left of it, so
+	// avio_read's short read is only a picture of no bytes.
+	return taglen > 0
 }
 
 func readUSLT(c *cursor, taglen int, d *avDict) {

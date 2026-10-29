@@ -253,7 +253,7 @@ func mp3s() {
 	// stream's duration by the bitrate, in 1/90000, rounds up past the audio's at
 	// 32 kbps over an odd byte count, and the format's duration is the longer
 	// (estimate_timings_from_bit_rate). A picture of a type FFmpeg doesn't know
-	// is no stream.
+	// is no stream (image/webp is one from FFmpeg 8.1).
 	cbr32 := read("lame-cbr32-noxing.mp3")
 	if len(cbr32)%2 == 0 {
 		cbr32 = cbr32[:len(cbr32)-1]
@@ -267,6 +267,7 @@ func mp3s() {
 	write("apic-cbr.mp3", tag(3, 0, frame(3, "TIT2", text(0, "Pictured"), 0), frame(3, "APIC", pic("image/png"), 0)), cbr32)
 	write("apic-v22.mp3", tag(2, 0, frame(2, "PIC", append(append([]byte{0}, "PNG\x03\x00"...), png1x1...), 0)), cbr32)
 	write("apic-unknown-type.mp3", tag(3, 0, frame(3, "APIC", pic("image/x-unknown"), 0)), cbr32)
+	write("apic-webp.mp3", tag(3, 0, frame(3, "APIC", pic("image/webp"), 0)), cbr32) // a stream in 8.1, not 7.1
 	write("apic-none.mp3", tag(3, 0, frame(3, "TIT2", text(0, "No Picture"), 0)), cbr32)
 	write("concat.mp3", vbr, vbr)
 	write("truncated-vbr.mp3", vbr[:len(vbr)*6/10])
@@ -275,7 +276,7 @@ func mp3s() {
 
 // png1x1 is a one-pixel PNG.
 var png1x1 = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" +
-	"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+	"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82")
 
 // ---- MP4
 
