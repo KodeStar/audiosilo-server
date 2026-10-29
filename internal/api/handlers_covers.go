@@ -444,7 +444,7 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 	}
 	if src.CoverPath != "" {
 		if abs, err := library.SafeJoin(lib.Root, src.CoverPath); err == nil {
-			return fileArt("s", abs, func() ([]byte, error) {
+			return fileArt(catalog.ArtSidecar, abs, func() ([]byte, error) {
 				f, err := os.Open(abs)
 				if err != nil {
 					return nil, err
@@ -455,7 +455,7 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 		}
 	}
 	if abs, err := library.SafeJoin(lib.Root, src.AudioPath); err == nil {
-		return fileArt("e", abs, func() ([]byte, error) {
+		return fileArt(catalog.ArtEmbedded, abs, func() ([]byte, error) {
 			data, _, ok := media.EmbeddedCover(abs)
 			if !ok {
 				// No art, or a file that couldn't be read: EmbeddedCover can't
@@ -485,5 +485,5 @@ func fileArt(kind, abs string, load func() ([]byte, error)) *artSource {
 		}
 		return nil
 	}
-	return &artSource{version: fmt.Sprintf("%s%d-%d", kind, fi.Size(), fi.ModTime().UnixNano()), load: load}
+	return &artSource{version: catalog.FileArtVersion(kind, fi.Size(), fi.ModTime()), load: load}
 }

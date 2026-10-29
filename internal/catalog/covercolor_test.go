@@ -157,8 +157,9 @@ func TestCoverVersionFollowsArt(t *testing.T) {
 // TestCustomCoverVersion: a custom cover upload moves cover_version to the hash
 // of its stamp at once, and the file art's colour stops counting; a colour read
 // from the art as it was before the upload is not stored over it (compare-and-set
-// on the art); removing the cover reverts the version to the file art's, whose
-// colour counts again.
+// on the art); removing the cover gives a version of its own (never the custom
+// cover's, nor the one the file art had before it, which other art may have
+// replaced since), whose colour the next read records.
 func TestCustomCoverVersion(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -192,8 +193,13 @@ func TestCustomCoverVersion(t *testing.T) {
 	if err := c.DeleteCover(ctx, lib.ID, "A/B"); err != nil {
 		t.Fatal(err)
 	}
-	if cc, v := coverState(t, c, lib.ID, "A/B"); cc == nil || *cc != fileColor || v != fileVersion {
-		t.Fatalf("after delete: cover = %+v %q, want %+v %q", cc, v, fileColor, fileVersion)
+	cc, v := coverState(t, c, lib.ID, "A/B")
+	if cc != nil || v == "" || v == want || v == fileVersion {
+		t.Fatalf("after delete: cover = %+v %q, want no colour and a version other than %q and %q", cc, v, want, fileVersion)
+	}
+	recordCover(t, c, lib.ID, "A/B", coverSource(t, c, lib.ID, "A/B"), fileColor)
+	if cc, after := coverState(t, c, lib.ID, "A/B"); cc == nil || *cc != fileColor || after != v {
+		t.Fatalf("read after delete: cover = %+v %q, want %+v %q", cc, after, fileColor, v)
 	}
 }
 

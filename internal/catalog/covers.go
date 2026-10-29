@@ -9,7 +9,9 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // MaxCoverBytes caps a custom cover upload. A cover is shown at most a few hundred
@@ -68,24 +70,57 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 	return nil
 }
 
-// coverArtSQL is a books row's cover art identity from index data alone: "c" and
-// its custom cover's updated_at (CustomArtVersion) when it has one, else "f" and
-// its mtime, size and sidecar path. Migration 0023 backfills with the same
-// expression. It holds until a thumbnail reads the art itself: RecordCoverColors
-// then moves it to that art's own version (its file's size and mtime), so the
-// cover_version follows a sidecar or embedded image replaced in place, which
-// leaves the index (the audio's mtime and size, the sidecar's path) as it was.
+// coverArtSQL is a books row's cover art identity: "c" and its custom cover's
+// updated_at (CustomArtVersion) when it has one, else the art file's own version
+// (FileArtVersion: its kind, size and mtime, what a thumbnail of it is cached
+// under), which the scan reads when it indexes the book and a thumbnail records
+// (RecordCoverColors). A refresh that has no reading of the file (a custom cover
+// set, removed or moved, a join) keeps a file version the row holds; a row with
+// none (the custom cover just removed, a row indexed before the scan read the
+// file) takes "f" and the index's mtime, size and sidecar path, plus the custom
+// cover's identity it replaces, so the form never repeats an identity the row
+// had for other art. Migration 0023 backfilled the "f" form alone.
 const coverArtSQL = `COALESCE(
 	(SELECT 'c' || cv.updated_at FROM book_covers cv
 	  WHERE cv.library_id = books.library_id AND cv.path = books.rel_path),
-	'f' || books.mtime || ' ' || books.size || ' ' || books.cover_path)`
+	NULLIF(?1, ''),
+	CASE WHEN ?2 AND books.cover_art GLOB '[se][0-9]*' THEN books.cover_art END,
+	'f' || books.mtime || ' ' || books.size || ' ' || books.cover_path ||
+	  CASE WHEN books.cover_art GLOB 'c*' THEN ' ' || books.cover_art ELSE '' END)`
 
 // refreshCoverArt recomputes books.cover_art for the book at path (if one is
-// indexed there), after anything coverArtSQL reads has changed.
+// indexed there), after anything coverArtSQL reads has changed but not the art
+// file: a file version the row holds stays.
 func refreshCoverArt(ctx context.Context, tx *sql.Tx, libraryID int64, path string) error {
+	return writeCoverArt(ctx, tx, libraryID, path, "", true)
+}
+
+// writeCoverArt sets books.cover_art for the book at path by coverArtSQL, with
+// scanned the scan's reading of its art file ("" for none) and keep whether a
+// file version the row holds stands in for a missing reading. Art that is the
+// same as before keeps its identity, so its colour (tagged with its
+// cover_version) still holds.
+func writeCoverArt(ctx context.Context, tx *sql.Tx, libraryID int64, path, scanned string, keep bool) error {
 	_, err := tx.ExecContext(ctx,
-		`UPDATE books SET cover_art = `+coverArtSQL+` WHERE library_id = ? AND rel_path = ?`, libraryID, path)
+		`UPDATE books SET cover_art = `+coverArtSQL+` WHERE library_id = ?3 AND rel_path = ?4`,
+		scanned, keep, libraryID, path)
 	return err
+}
+
+// Art file kinds (FileArtVersion): a sidecar image beside the audio, or the art
+// embedded in the book's first audio file.
+const (
+	ArtSidecar  = "s"
+	ArtEmbedded = "e"
+)
+
+// FileArtVersion is the version of cover art read from a file of kind
+// (ArtSidecar, ArtEmbedded) with the given size and modification time: what a
+// thumbnail of it is cached under and the book's cover art identity once it is
+// read, so a file replaced in place gets a new one. The scan and the cover
+// handler both name file art by it.
+func FileArtVersion(kind string, size int64, mtime time.Time) string {
+	return kind + strconv.FormatInt(size, 10) + "-" + strconv.FormatInt(mtime.UnixNano(), 10)
 }
 
 // CustomCover is an uploaded cover image. Data is nil from CoverInfo.

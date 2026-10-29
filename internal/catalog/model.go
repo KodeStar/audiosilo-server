@@ -124,11 +124,16 @@ type Book struct {
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.
 	HasCover *bool `json:"-"`
+	// ArtVersion is the scan's reading of the book's cover art file
+	// (FileArtVersion: its sidecar image, else its first audio file), which
+	// UpsertBook records as its cover art identity; "" when the file couldn't be
+	// read. Index-only, never on the wire.
+	ArtVersion string `json:"-"`
 	// CoverVersion is a short opaque token that changes when the cover art does
 	// (a client appends it to cover URLs as a cache-buster): the hash of
-	// books.cover_art (CoverVersion), set whenever the book is indexed and when a
-	// custom cover is set or removed, and moved to the art's own version by a
-	// thumbnail of it. CoverColor is the cover's palette for the player's themed
+	// books.cover_art (CoverVersion), set whenever the book is indexed (the art
+	// file's own version, ArtVersion) and when a custom cover is set or removed,
+	// and moved to the art's own version by a thumbnail of it. CoverColor is the cover's palette for the player's themed
 	// screens, read from a thumbnail of the art (RecordCoverColors); absent until
 	// one has been made for this version.
 	CoverColor   *CoverColor `json:"cover_color,omitempty"`

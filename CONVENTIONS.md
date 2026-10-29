@@ -1402,8 +1402,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
   304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
   `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
-  from index data whenever a book is indexed (custom stamp, else mtime, size and
-  sidecar path; `SetCover`, `DeleteCover`, moves and joins recompute it). Every
+  whenever a book is indexed: its custom cover's stamp, else the art file's own version
+  (`catalog.FileArtVersion`: sidecar or first audio file, size and mtime, the scan's
+  `Book.ArtVersion`), so a re-index of unchanged art keeps the version and its colour,
+  and art replaced in place gets a new one; a scan that finds the audio unchanged still
+  records a replaced sidecar (`SetArtVersions`, compare-and-set). `SetCover`, `DeleteCover`,
+  moves and joins recompute it, keeping a file version the row holds; a row with none
+  takes the index form (mtime, size, sidecar path) plus the removed custom cover's
+  identity, so a version is never reused for other art (ADMIN-01). Every
   thumbnail (a cache hit too, a 304 revalidation included) records on a book what
   it lacks for the art it read: `cover_color` (`media.CoverPalette` on the scaled image:
   dominant bucket = `bg`, the most vibrant bucket nudged in HSL lightness to WCAG 4.5:1

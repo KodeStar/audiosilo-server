@@ -189,7 +189,10 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 			return 0, err
 		}
 	}
-	if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
+	// The art's identity from the scan's reading of the art file: the same art
+	// keeps its identity and colour through a re-index, and art replaced in place
+	// gets a new one.
+	if err := writeCoverArt(ctx, tx, b.LibraryID, b.RelPath, b.ArtVersion, false); err != nil {
 		return 0, err
 	}
 
@@ -324,8 +327,11 @@ type Signature struct {
 	Codec       string
 	ContentHash string
 	CoverPath   string
-	HasCover    *bool // nil = never checked (indexed before migration 0016)
-	IsFolder    bool
+	// CoverArt is books.cover_art as stored, so a scan that finds the audio
+	// unchanged still records a sidecar image replaced in place (SetArtVersions).
+	CoverArt string
+	HasCover *bool // nil = never checked (indexed before migration 0016)
+	IsFolder bool
 	// SuspectUnchecked: a folder book whose parts haven't been checked for holding
 	// several books (indexed before migration 0017; see books.suspect_parts).
 	SuspectUnchecked bool
@@ -418,7 +424,7 @@ func fileOrderKey(joined string) uint64 {
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
+		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
@@ -437,7 +443,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var stored sql.NullInt64
 		var files sql.NullString
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
-			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
+			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &files, &sig.EbookSig, &sig.IndexedAt); err != nil {
@@ -489,6 +495,31 @@ func (c *Catalog) SetHasCover(ctx context.Context, libraryID int64, flags map[st
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE books SET has_cover = (? OR cover_path <> '') WHERE library_id = ? AND rel_path = ?`,
 				has, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ArtChange is a scan's reading of a book's cover art file (FileArtVersion)
+// that differs from the identity the book held when the scan read it (Was).
+type ArtChange struct{ Was, Now string }
+
+// SetArtVersions records, by path, the art file versions a scan read for books
+// it found otherwise unchanged (a sidecar image replaced in place), in one
+// transaction. Each is compare-and-set on the identity the scan saw, so a custom
+// cover set or a re-index since keeps what it wrote; a colour read for the old
+// art no longer holds (it is tagged with the old cover_version).
+func (c *Catalog) SetArtVersions(ctx context.Context, libraryID int64, arts map[string]ArtChange) error {
+	if len(arts) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetArtVersions", func(tx *sql.Tx) error {
+		for relPath, a := range arts {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET cover_art = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
+				a.Now, libraryID, relPath, a.Was); err != nil {
 				return err
 			}
 		}

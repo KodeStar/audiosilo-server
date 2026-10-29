@@ -331,6 +331,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 
 	coverBackfill := map[string]bool{}
+	artBackfill := map[string]catalog.ArtChange{}
 	suspectBackfill := map[string]int{}
 	splitBackfill := map[string]string{}
 	releasedBackfill := map[string]string{}
@@ -548,6 +549,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				if old.HasCover == nil && readable(primary) {
 					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
 				}
+				// A sidecar image replaced in place changes no audio: its own
+				// version moves the book's cover_version (never back to one it had
+				// for other art). A custom cover's identity is left alone.
+				if old.CoverPath != "" && !strings.HasPrefix(old.CoverArt, "c") {
+					if v := artVersion(lib.Root, &catalog.Book{CoverPath: old.CoverPath}); v != "" && v != old.CoverArt {
+						artBackfill[b.RelPath] = catalog.ArtChange{Was: old.CoverArt, Now: v}
+					}
+				}
 				// Rows indexed before 0017 haven't been checked for holding several
 				// books; the same kind of tag read does it.
 				if old.SuspectUnchecked && b.IsFolder {
@@ -639,6 +648,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	report(len(books))
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
 		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
+	}
+	if err := s.cat.SetArtVersions(ctx, lib.ID, artBackfill); err != nil {
+		s.log.Warn("record cover art versions failed", "library", lib.Name, "err", err)
 	}
 	if err := s.cat.SetSuspectParts(ctx, lib.ID, suspectBackfill); err != nil {
 		s.log.Warn("record suspect folders failed", "library", lib.Name, "err", err)
@@ -911,6 +923,26 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Embedded art; UpsertBook adds a sibling cover (CoverPath) to the flag itself.
 	hasCover := md != nil && md.HasCover
 	b.HasCover = &hasCover
+	b.ArtVersion = artVersion(lib.Root, b)
+}
+
+// artVersion is the version of b's cover art file as the cover handler names it
+// (catalog.FileArtVersion): its sidecar image (CoverPath), else its first audio
+// file, where embedded art lives. "" when that file can't be read now.
+func artVersion(root string, b *catalog.Book) string {
+	kind, rel := catalog.ArtEmbedded, primaryPath(b)
+	if b.CoverPath != "" {
+		kind, rel = catalog.ArtSidecar, b.CoverPath
+	}
+	abs, err := SafeJoin(root, rel)
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return catalog.FileArtVersion(kind, fi.Size(), fi.ModTime())
 }
 
 // chooseTitle prefers a meaningful embedded title, falling back to the
