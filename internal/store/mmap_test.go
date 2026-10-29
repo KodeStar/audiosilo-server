@@ -42,17 +42,13 @@ func migratedPath(t *testing.T) string {
 	return path
 }
 
-// readerAndWriterMmap reads PRAGMA mmap_size on a reader and on the writer.
-func readerAndWriterMmap(t *testing.T, db *DB) (reader, writer int64) {
+// writerMmap reads PRAGMA mmap_size on the writer.
+func writerMmap(t *testing.T, db *DB) (n int64) {
 	t.Helper()
-	ctx := context.Background()
-	if err := db.reader.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&reader); err != nil {
+	if err := db.writer.QueryRowContext(context.Background(), "PRAGMA mmap_size").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.writer.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&writer); err != nil {
-		t.Fatal(err)
-	}
-	return reader, writer
+	return n
 }
 
 // TestReaderMmap: the readers map 256 MiB when the detector says the database is
@@ -106,7 +102,7 @@ func TestReaderMmap(t *testing.T) {
 					t.Fatalf("reader connection %d mmap_size = %d, want %d", i, n, c.want)
 				}
 			}
-			if _, w := readerAndWriterMmap(t, db); w != 0 {
+			if w := writerMmap(t, db); w != 0 {
 				t.Fatalf("writer mmap_size = %d", w)
 			}
 			wantAsked := 0

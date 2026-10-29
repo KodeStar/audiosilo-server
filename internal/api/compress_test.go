@@ -34,16 +34,7 @@ func gunzip(t *testing.T, b []byte) []byte {
 	return out
 }
 
-func hasVaryAE(h http.Header) bool {
-	for _, v := range h.Values("Vary") {
-		for _, t := range strings.Split(v, ",") {
-			if strings.EqualFold(strings.TrimSpace(t), "Accept-Encoding") {
-				return true
-			}
-		}
-	}
-	return false
-}
+func hasVaryAE(h http.Header) bool { return hasVary(h, "Accept-Encoding") }
 
 // serveCompress runs h behind compress for one request and returns the recorder.
 func serveCompress(h http.HandlerFunc, method, target string, headers map[string]string) *httptest.ResponseRecorder {
@@ -267,11 +258,17 @@ func compressLibrary(t *testing.T, e *testEnv, n int) (*catalog.Library, string)
 	return lib, tok
 }
 
-// raw GETs path through the whole chain with no transparent decoding: gzip
-// says whether to send Accept-Encoding: gzip.
+// raw requests path through the whole chain with no transparent decoding:
+// gzip says whether to send Accept-Encoding: gzip.
 func (e *testEnv) raw(t *testing.T, method, path, tok string, gzip bool, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
-	req, _ := http.NewRequest(method, e.srv.URL+path, nil)
+	return e.rawBody(t, method, path, tok, "", gzip, headers)
+}
+
+// rawBody is raw with a request body.
+func (e *testEnv) rawBody(t *testing.T, method, path, tok, body string, gzip bool, headers map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
@@ -407,15 +404,8 @@ func TestCompressLeavesMediaAndCredentials(t *testing.T) {
 	if resp.Header.Get("Content-Encoding") != "" {
 		t.Fatalf("cover: %d %v", resp.StatusCode, resp.Header)
 	}
-	req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"admin-password","device_name":"x"}`))
-	req.Header.Set("Accept-Encoding", "gzip")
-	req.Header.Set("Content-Type", "application/json")
-	login, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(login.Body)
-	login.Body.Close()
+	login, b := e.rawBody(t, "POST", "/api/v1/auth/login", "", `{"username":"admin","password":"admin-password","device_name":"x"}`,
+		true, map[string]string{"Content-Type": "application/json"})
 	if login.StatusCode != 200 || login.Header.Get("Content-Encoding") != "" || !bytes.Contains(b, []byte(`"token"`)) {
 		t.Fatalf("login: %d %v %s", login.StatusCode, login.Header, b)
 	}

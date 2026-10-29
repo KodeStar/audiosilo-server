@@ -45,12 +45,19 @@ func isStreamingPath(p string) bool {
 // longer than the request timeout; it stays header-auth only and is no media
 // route: it is limited with the authenticated API, per credential (requireAuth).
 func isLibraryMedia(p string) bool {
+	leaf, ok := libraryLeaf(p)
+	return ok && (leaf == "cover" || leaf == "stream" || leaf == "ebook")
+}
+
+// libraryLeaf is what follows /api/v1/libraries/{id}/ in p, ok only when p is
+// under a non-empty id.
+func libraryLeaf(p string) (leaf string, ok bool) {
 	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
 	if !ok {
-		return false
+		return "", false
 	}
 	id, leaf, ok := strings.Cut(rest, "/")
-	return ok && id != "" && (leaf == "cover" || leaf == "stream" || leaf == "ebook")
+	return leaf, ok && id != ""
 }
 
 // isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's

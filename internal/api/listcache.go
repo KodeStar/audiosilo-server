@@ -175,6 +175,5 @@ func writeCachedJSON(w http.ResponseWriter, r *http.Request, body, gz []byte) {
 	h := w.Header()
 	h.Set("Content-Encoding", "gzip")
 	h.Set("Content-Length", strconv.Itoa(len(gz)))
-	addVary(h, "Accept-Encoding")
-	writeJSONBytes(w, gz)
+	writeJSONBytes(w, gz) // the middleware adds Vary, as for every JSON answer
 }

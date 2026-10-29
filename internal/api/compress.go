@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,11 +74,7 @@ func compressible(r *http.Request) bool {
 // isMetaCover reports whether p is GET /libraries/{id}/meta/cover (a community
 // cover image).
 func isMetaCover(p string) bool {
-	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
-	if !ok {
-		return false
-	}
-	_, leaf, ok := strings.Cut(rest, "/")
+	leaf, ok := libraryLeaf(p)
 	return ok && leaf == "meta/cover"
 }
 
@@ -181,6 +176,10 @@ func (w *gzipWriter) Write(p []byte) (int, error) {
 	case gzGzip:
 		return w.zw.Write(p)
 	}
+	if len(w.held) == 0 && len(p) >= gzipMinSize { // writeJSON's one write: no copy
+		w.startGzip()
+		return w.zw.Write(p)
+	}
 	w.held = append(w.held, p...)
 	if len(w.held) >= gzipMinSize {
 		w.startGzip()
@@ -210,7 +209,6 @@ func (w *gzipWriter) finish() {
 		if w.status == 0 {
 			return // nothing written: net/http's empty 200
 		}
-		w.mode = gzIdentity
 		if w.Header().Get("Content-Length") == "" {
 			w.Header().Set("Content-Length", strconv.Itoa(len(w.held)))
 		}
@@ -220,14 +218,13 @@ func (w *gzipWriter) finish() {
 		_ = w.zw.Close()
 		w.zw.Reset(nil)
 		gzipWriters.Put(w.zw)
-		w.zw = nil
 	}
 }
 
 // isJSON reports whether the answer's Content-Type is application/json.
 func (w *gzipWriter) isJSON() bool {
-	mt, _, err := mime.ParseMediaType(w.Header().Get("Content-Type"))
-	return err == nil && mt == "application/json"
+	mt, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")
+	return strings.EqualFold(strings.TrimSpace(mt), "application/json")
 }
 
 // bodyAllowed reports whether a status carries a body (RFC 9110: not 204 or 304).
@@ -237,12 +234,19 @@ func bodyAllowed(code int) bool {
 
 // addVary adds token to h's Vary unless one of its values already names it.
 func addVary(h http.Header, token string) {
+	if !hasVary(h, token) {
+		h.Add("Vary", token)
+	}
+}
+
+// hasVary reports whether one of h's Vary values names token.
+func hasVary(h http.Header, token string) bool {
 	for _, v := range h.Values("Vary") {
-		for _, t := range strings.Split(v, ",") {
+		for t := range strings.SplitSeq(v, ",") {
 			if strings.EqualFold(strings.TrimSpace(t), token) {
-				return
+				return true
 			}
 		}
 	}
-	h.Add("Vary", token)
+	return false
 }
