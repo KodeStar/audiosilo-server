@@ -31,6 +31,13 @@ const goServer = process.env.AUDIOSILO_DEV_SERVER ?? 'http://127.0.0.1:8080';
 export default defineConfig({
   base: '/admin/',
   plugins: [react(), tailwindcss(), keepGitkeep, cspCheck()],
+  // A stale tab reloads once per build (src/lib/stale-build.ts): the id is new
+  // for every build, even when the chunk holding it hasn't changed.
+  define: {
+    __ADMIN_BUILD_ID__: JSON.stringify(
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    ),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -4,7 +4,11 @@ import { App } from '@/app';
 import { createQueryClient } from '@/lib/query-client';
 import { i18nReady } from '@/i18n';
 import { createAppRouter } from '@/router';
+import { installStaleBuildReload } from '@/lib/stale-build';
 import './styles/globals.css';
+
+// A tab still on an older build reloads into the new one when a chunk is gone.
+installStaleBuildReload();
 
 // Render once the console's language is loaded (a separate chunk unless English).
 void i18nReady.then(() =>
