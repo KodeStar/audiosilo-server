@@ -250,6 +250,9 @@ type catalogDB interface {
 	// caches warm.
 	ExecUserState(context.Context, string, ...any) (sql.Result, error)
 	WithUserStateTx(context.Context, string, func(*sql.Tx) error) error
+	// ExecDurable is ExecContext committed durably (store.DB.WithDurableTx): for
+	// a write that takes access away (a share's grant, rule or the share itself).
+	ExecDurable(context.Context, string, string, ...any) (sql.Result, error)
 	Ping(context.Context) error
 }
 
