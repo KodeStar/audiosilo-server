@@ -132,7 +132,7 @@ func Run(ctx context.Context, opts Options) error {
 	// the database as the older server left it can be restored.
 	_ = backup.BeforeUpgrade(ctx, abs, cfg.Backups.Dir, dbPath, log)
 
-	db, err := store.Open(ctx, dbPath, store.WithLogger(log))
+	db, err := store.Open(ctx, dbPath, store.WithLogger(log), store.WithReaderMmap(cfg.Database.Mmap))
 	if err != nil {
 		return err
 	}

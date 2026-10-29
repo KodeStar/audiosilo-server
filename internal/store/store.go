@@ -83,7 +83,9 @@ type DB struct {
 type Option func(*openConfig)
 
 type openConfig struct {
-	log *slog.Logger
+	log    *slog.Logger
+	mmap   string                 // the reader pool's mmap mode (WithReaderMmap)
+	onFUSE func(path string) bool // the auto mode's filesystem check (mmap_linux.go)
 }
 
 // WithLogger sets the logger used for slow-transaction warnings and pool-stats
@@ -150,7 +152,7 @@ func isMemoryDSN(dsn string) bool {
 // Open opens (creating if needed) the SQLite database at dsn and applies any
 // pending migrations. Pass ":memory:" for tests.
 func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
-	cfg := openConfig{log: slog.Default()}
+	cfg := openConfig{log: slog.Default(), onFUSE: onFUSE}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -181,7 +183,9 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 	// stuck writer can't block reads. An in-memory DB stays single-pool (a second
 	// pool would be a different, empty database).
 	if !isMemoryDSN(dsn) {
-		reader, err := sql.Open("sqlite", dsnPragmas(dsn, "query_only(ON)"))
+		// Asked once the writer has created the file, so statfs sees it.
+		mmap := readerMmap(cfg.mmap, func() bool { return cfg.onFUSE(dsnFile(dsn)) })
+		reader, err := sql.Open("sqlite", dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
 		if err != nil {
 			writer.Close()
 			return nil, fmt.Errorf("open sqlite reader: %w", err)
@@ -198,9 +202,25 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 			return nil, fmt.Errorf("ping sqlite reader: %w", err)
 		}
 		db.reader = reader
+		db.logReaderMmap(ctx, cfg.mmap, mmap)
 		db.startStatsSampler()
 	}
 	return db, nil
+}
+
+// logReaderMmap says at start whether the readers map the database (mode as
+// configured, asked what readerMmap chose, got what SQLite reports: 0 where the
+// build or platform can't map).
+func (db *DB) logReaderMmap(ctx context.Context, mode string, asked int64) {
+	if mode == "" {
+		mode = MmapAuto
+	}
+	var got int64
+	if err := db.reader.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&got); err != nil {
+		db.log.Warn("database readers: mmap_size unreadable", "mode", mode, "err", err)
+		return
+	}
+	db.log.Info("database readers: mmap", "on", got > 0, "mode", mode, "mmap_size", got, "asked", asked)
 }
 
 // QueryContext runs a read query on the reader pool.

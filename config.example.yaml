@@ -129,6 +129,18 @@ scan:
   # disk on a machine with cores to spare.
   concurrency: 0 # [AUDIOSILO_SCAN_CONCURRENCY]
 
+# The database (read at start only: no console setting).
+# database:
+  # Whether the database's readers map the file into memory (SQLite mmap_size,
+  # 256 MiB, readers only):
+  #   auto - only when the data folder is on a FUSE filesystem on Linux, such as an
+  #          Unraid /mnt/user share or mergerfs, where reads are several times
+  #          faster with it (the default)
+  #   on   - always
+  #   off  - never: a FUSE or network layer that misbehaves (an I/O error under a
+  #          mapping stops the server, where a plain read fails one request)
+  # mmap: auto # [AUDIOSILO_DB_MMAP]
+
 # Public demo mode. When enabled, an unauthenticated visitor can mint a throwaway
 # account via POST /api/v1/demo/session that is granted the named library; idle
 # demo accounts (and their data) are reaped automatically. Intended for a public

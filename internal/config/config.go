@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kodestar/audiosilo-server/internal/backup"
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // TLSMode selects how the server terminates TLS.
@@ -193,6 +194,17 @@ type ScanConfig struct {
 
 // MaxScanConcurrency bounds scan.concurrency.
 const MaxScanConcurrency = 64
+
+// DatabaseConfig tunes the SQLite database.
+type DatabaseConfig struct {
+	// Mmap is whether the database's readers map the file (store.WithReaderMmap):
+	// "auto" (or empty, the default) only when the data folder is on a FUSE
+	// filesystem on Linux (an Unraid /mnt/user share, mergerfs), where it is
+	// measured several times faster; "on" always; "off" never (a FUSE layer that
+	// misbehaves: an I/O error under a mapping crashes the server, where a read
+	// would fail one request). Read once at start (database.mmap, AUDIOSILO_DB_MMAP).
+	Mmap string `yaml:"mmap,omitempty"`
+}
 
 // ModulesConfig holds each managed module's settings (internal/modules), all
 // off by default. A module's toggle is modules.<id>.enabled (the console's
@@ -430,6 +442,8 @@ type Config struct {
 
 	// RateLimit is the API's request rate limits (boot only).
 	RateLimit RateLimitConfig `yaml:"rate_limit,omitempty"`
+	// Database tunes the SQLite database (boot only).
+	Database DatabaseConfig `yaml:"database,omitempty"`
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -728,6 +742,10 @@ func (c *Config) Validate() error {
 	}
 	if n := c.Scan.Concurrency; n < 0 || n > MaxScanConcurrency {
 		return fieldErr("scan.concurrency", fmt.Errorf("scan.concurrency must be from 0 (one per CPU) to %d", MaxScanConcurrency))
+	}
+	if m := c.Database.Mmap; m != "" && !slices.Contains(store.MmapModes, m) {
+		return fieldErr("database.mmap", fmt.Errorf("database.mmap must be one of %s, got %q",
+			strings.Join(store.MmapModes, ", "), m))
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))
