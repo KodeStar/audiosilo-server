@@ -166,6 +166,12 @@ type Book struct {
 	// UpsertBook records it, or keeps what is stored when it is Unread.
 	Ebook     *Ebook       `json:"ebook,omitempty"`
 	EbookFile EbookReading `json:"-"`
+	// FoundAdded is when each of the book's audio files first appeared on disk
+	// as the scan's discovery read it (its lstat: the birth time where that
+	// carries one, else the mtime; Unix seconds), in Files' order, or the
+	// book's own file's for a single-file book. Set by the scanner only, so the
+	// added_at it stamps needs no second lstat a file (library.stampAddedAt).
+	FoundAdded []int64 `json:"-"`
 	// Readalong is the state of the book's read-along map (Bridge Phase 3c,
 	// readalong.go), set by the api on GET /libraries/{id}/item only (never a
 	// list row); nil, and omitted, with no ebook or no valid map.
