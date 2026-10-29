@@ -217,10 +217,11 @@ type DuplicateMember struct {
 // for without a limit (the count is not bounded).
 const maxDuplicateGroups = 500
 
-// maxDuplicatePageBooks bounds the copies on one duplicates page: a page ends
-// early, before the group that would take it past this, once it holds one group,
-// so a few very large groups can't make a page megabytes (each copy is an admin
-// row). A single group larger than this is still one page.
+// maxDuplicatePageBooks bounds the copies on one duplicates page asked for with
+// a limit: it ends early, before the group that would take it past this, once
+// it holds one group, so a few very large groups can't make a page megabytes
+// (each copy is an admin row). A single group larger than this is still one
+// page. A request without a limit (a caller that doesn't page) gets its 500.
 const maxDuplicatePageBooks = 300
 
 // DuplicateQuery is what GET /admin/issues/duplicates asks: the groups of one
@@ -500,7 +501,7 @@ func (c *Catalog) DuplicatePage(ctx context.Context, q DuplicateQuery) (Duplicat
 	end, books := 0, 0
 	for end < len(sets) && end < limit {
 		n := len(sets[end].members)
-		if end > 0 && books+n > maxDuplicatePageBooks {
+		if q.Limit > 0 && end > 0 && books+n > maxDuplicatePageBooks {
 			break
 		}
 		books += n

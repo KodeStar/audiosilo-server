@@ -349,6 +349,10 @@ func TestDuplicatePageBookBound(t *testing.T) {
 	if err != nil || len(next.Groups) != 1 || next.Groups[0].Books[0].Path[:1] != "B" || next.NextCursor != "" {
 		t.Fatalf("second page = %+v %v", next.Groups, err)
 	}
+	// A caller that doesn't page gets every group (up to 500) at once, as before.
+	if all, err := c.DuplicateGroups(ctx, lib.ID, false, false); err != nil || len(all) != 2 {
+		t.Fatalf("unpaged = %d groups (%v), want 2", len(all), err)
+	}
 }
 
 // TestDuplicateGroupsAcross: asked for (#165), copies in different libraries
