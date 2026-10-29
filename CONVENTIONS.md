@@ -522,7 +522,21 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   replaced or used, a pairing token used, Bridge pair code issued, pair/unpair)
   or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; progress,
-  heartbeats and other listening writes never do.
+  heartbeats and other listening writes never do. The readers (never the writer) map the file
+  (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`) is `on`, or
+  `auto` (the default) and the database file is on FUSE (Linux statfs `0x65735546`: Unraid
+  `/mnt/user`, mergerfs; measured 2-9x faster there, little on a local disk, never on NFS/SMB where
+  an I/O error under a mapping is a SIGBUS crash); the start logs which (`database readers: mmap`).
+  Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
+- **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
+  timeout. A request is compressible only when it is a GET under `/api/v1/` without Range, outside
+  the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/` and `/api/v1/bridge/`
+  (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
+  (BREACH). A new GET that returns a credential, or a long poll / stream, joins
+  `compressExcluded`. The answer is gzipped (BestSpeed) when it is `application/json`, at least
+  1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
+  to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
+  gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.
 - **List cache** (`api/listcache.go`, server#243): `GET /libraries/{id}/books` (a
   books library), `/books/recent`, `/search` and a books library's browse lists
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
