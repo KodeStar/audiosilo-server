@@ -132,8 +132,8 @@ func vorbisComment(b *blockFile, buf []byte, d *avDict, cl *chapterList) {
 // noID3Front is unsure of a file that opens with an ID3v2 tag (format names it).
 func noID3Front(b *blockFile, format string) error {
 	var id3 avDict
-	var chaps []id3Chap
-	off, err := readID3v2(b, 0, &id3, &chaps)
+	var ex id3Extra
+	off, err := readID3v2(b, 0, &id3, &ex)
 	if err != nil {
 		return err
 	}

@@ -39,6 +39,14 @@ var id3v22Conv = [][2]string{
 	{"TRK", "track"},
 }
 
+// id3Extra is what id3v2.c keeps of an ID3v2 tag beyond its text: the CHAP
+// frames and how many APIC/PIC frames read_apic keeps, each an attached picture
+// stream (ff_id3v2_parse_apic) that a bitrate-estimated duration counts.
+type id3Extra struct {
+	chaps    []id3Chap
+	pictures int
+}
+
 // id3Chap is one CHAP frame as id3v2.c keeps it.
 type id3Chap struct {
 	elementID  string
@@ -197,8 +205,8 @@ func isTagID(b []byte) bool {
 }
 
 // readID3v2 reads the ID3v2 tags at off (several in a row, as
-// id3v2_read_internal does) into d and chaps, returning where they end.
-func readID3v2(b *blockFile, off int64, d *avDict, chaps *[]id3Chap) (int64, error) {
+// id3v2_read_internal does) into d and ex, returning where they end.
+func readID3v2(b *blockFile, off int64, d *avDict, ex *id3Extra) (int64, error) {
 	for {
 		h, ok := b.bytesAt(off, 10)
 		if !ok || !(h[0] == 'I' && h[1] == 'D' && h[2] == '3' && h[3] != 0xff && h[4] != 0xff &&
@@ -207,7 +215,7 @@ func readID3v2(b *blockFile, off int64, d *avDict, chaps *[]id3Chap) (int64, err
 		}
 		size := int64(syncsafeToSize(binary.BigEndian.Uint32(h[6:10])))
 		end := off + 10 + size
-		if err := parseID3v2(b, off+10, size, h[3], h[5], d, chaps); err != nil {
+		if err := parseID3v2(b, off+10, size, h[3], h[5], d, ex); err != nil {
 			return 0, err
 		}
 		if h[3] == 4 && h[5]&0x10 != 0 {
@@ -222,7 +230,7 @@ func readID3v2(b *blockFile, off int64, d *avDict, chaps *[]id3Chap) (int64, err
 	return off, nil
 }
 
-func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict, chaps *[]id3Chap) error {
+func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict, ex *id3Extra) error {
 	if size > 64<<20 {
 		return unsure("id3v2 tag over 64 MiB")
 	}
@@ -233,13 +241,13 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 	length := int(size)
 	var isv34 bool
 	var hdr int
-	comm := "COMM"
+	comm, apic := "COMM", "APIC"
 	switch version {
 	case 2:
 		if flags&0x40 != 0 {
 			return nil
 		}
-		hdr, comm = 6, "COM"
+		hdr, comm, apic = 6, "COM", "PIC"
 	case 3, 4:
 		isv34, hdr = true, 10
 	default:
@@ -322,7 +330,8 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 		tcomp, tencr, tunsync := tflags&0x0008 != 0, tflags&0x0004 != 0, tflags&0x0002 != 0
 		isText := tag[0] == 'T'
 		isChap := isv34 && tag == "CHAP"
-		known := isText || tag == "USLT" || tag == comm || isChap
+		isPic := tag == apic
+		known := isText || tag == "USLT" || tag == comm || isChap || isPic
 		switch {
 		case tencr:
 		case known:
@@ -362,7 +371,11 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 				readComment(fc, len(data), d)
 			case isChap:
 				if ch, ok := readChapter(fc, len(data)); ok {
-					*chaps = append(*chaps, ch)
+					ex.chaps = append(ex.chaps, ch)
+				}
+			case isPic:
+				if readAPIC(fc, len(data), isv34) {
+					ex.pictures++
 				}
 			}
 		case tag[0] == 0:
@@ -376,6 +389,52 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 		pb.pos = next
 	}
 	return nil
+}
+
+// readAPIC is id3v2.c read_apic up to whether it keeps the frame: a known
+// image type and some picture data after the description.
+func readAPIC(c *cursor, taglen int, isv34 bool) bool {
+	if taglen <= 4 || !isv34 && taglen <= 6 {
+		return false
+	}
+	enc := c.r8()
+	taglen--
+	var mime string
+	if isv34 {
+		// avio_get_str(pb, taglen, mimetype, 64): up to the NUL, which must come
+		// before the frame's last byte; the buffer keeps 63 bytes.
+		n := 0
+		var m []byte
+		for n < taglen {
+			ch := c.r8()
+			n++
+			if ch == 0 {
+				break
+			}
+			if len(m) < 63 {
+				m = append(m, ch)
+			}
+		}
+		if n >= taglen {
+			return false
+		}
+		taglen -= n
+		mime = string(m)
+	} else {
+		mime = cutNUL(string([]byte{c.r8(), c.r8(), c.r8()}))
+		taglen -= 3
+	}
+	switch strings.ToLower(mime) {
+	case "image/gif", "image/jpeg", "image/jpg", "image/png", "image/tiff", "image/bmp", "jpg", "png":
+	default:
+		return false
+	}
+	c.r8() // the picture type
+	taglen--
+	if _, ok := decodeStr(c, enc, &taglen); !ok {
+		return false
+	}
+	return taglen > 0 && len(c.b)-c.pos >= taglen
 }
 
 func readUSLT(c *cursor, taglen int, d *avDict) {
@@ -658,8 +717,8 @@ func otherContainer(b *blockFile, off int64) bool {
 
 func probeMP3(b *blockFile) (*probeResult, error) {
 	d := &avDict{}
-	var chaps []id3Chap
-	off, err := readID3v2(b, 0, d, &chaps)
+	var ex id3Extra
+	off, err := readID3v2(b, 0, d, &ex)
 	if err != nil {
 		return nil, err
 	}
@@ -793,10 +852,16 @@ func probeMP3(b *blockFile) (*probeResult, error) {
 		}
 		stDur := rescale(b.size-off, 8*14112000, int64(br))
 		durUS = tbToUS(stDur, 1, 14112000)
+		// estimate_timings_from_bit_rate gives every stream with no duration
+		// one by the bitrate, an attached picture's in its 1/90000, and the
+		// format's duration is the longest of them (update_stream_timings).
+		if ex.pictures > 0 {
+			durUS = max(durUS, tbToUS(rescale(b.size-off, 8*90000, int64(br)), 1, 90000))
+		}
 	}
 
 	var cl chapterList
-	for i, ch := range chaps {
+	for i, ch := range ex.chaps {
 		c := cl.add(int64(i), 1, 1000, int64(ch.start), int64(ch.end), true, ch.elementID)
 		if t, ok := ch.meta.get("title"); ok && c != nil {
 			c.title = t
