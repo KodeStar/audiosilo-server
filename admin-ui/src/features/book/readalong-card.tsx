@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookOpenText, CircleCheck, RotateCw, TriangleAlert } from 'lucide-react';
+import { BookOpenText, CircleCheck, RotateCw, TriangleAlert, Unplug } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { Button } from '@/components/ui/button';
@@ -8,14 +9,17 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { KIND_DETECT, KIND_READALONG } from '@/features/bridge/generate-model';
 import { JobActions } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
-import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
+import { useBookGenerateJob, useBridgeLink, useBridgeStatus } from '@/features/bridge/use-generate';
 import { formatPercent, formatRelative } from '@/lib/format';
 import { ReadalongDialog } from './readalong-dialog';
 import {
-  readalongAvailable,
+  READALONG_BRIDGE_VERSION,
+  readalongBridge,
   readalongCardShown,
+  readalongJobShown,
   readalongJobsKnown,
   readalongView,
+  type ReadalongView,
 } from './readalong-model';
 
 /**
@@ -27,15 +31,19 @@ import {
  * Make again) with its confirmation, per book only. While a generate or
  * chapter detection job holds the book's audio on the Bridge its status shows
  * where the offer would be (the server refuses a read-along until it has
- * finished). Renders nothing for a book with no ebook, or when there is
- * nothing to show (no map, no job, no Bridge that makes read-alongs).
+ * finished). With no Make to offer because of the Bridge (none, offline, or
+ * too old), a line says so where it matters (a stale map, a failed job, an old
+ * Bridge), linking Settings > Bridge. Renders nothing for a book with no ebook,
+ * or when there is nothing to show (no map, no job, no Bridge note).
  */
 export function ReadalongCard({ detail }: { detail: AdminBookDetail }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const b = detail.book;
   const server = useServerInfo().data;
-  const available = readalongAvailable(server);
+  // With no Bridge online, whether one is paired (offline) or not (none).
+  const status = useBridgeStatus(server?.capabilities.bridge === false && Boolean(b.ebook));
+  const bridge = readalongBridge(server, status?.paired);
   // When the job ends the book is fetched again (useBookGenerateJob: a kind that
   // writes the book's files), so its new map's state shows here.
   const { job, jobs } = useBookGenerateJob(
@@ -45,10 +53,10 @@ export function ReadalongCard({ detail }: { detail: AdminBookDetail }) {
     KIND_READALONG,
   );
   const [open, setOpen] = useState(false);
-  const view = readalongView(b, job, jobs, available);
+  const view = readalongView(b, job, jobs, bridge);
   const uiUrl = useBridgeLink(job?.state === 'needs_attention');
-  // A cancelled job says why only when the server or the Bridge did.
-  const showJob = job && (job.state !== 'cancelled' || job.error);
+  // The last job only when it says more than the map's line (S265-CARD).
+  const showJob = readalongJobShown(view.map, job);
   if (!open && !readalongCardShown(b, view, showJob ? job : undefined)) return null;
 
   return (
@@ -97,6 +105,7 @@ export function ReadalongCard({ detail }: { detail: AdminBookDetail }) {
         ) : showJob && job ? (
           <GenerateStatus job={job} uiUrl={uiUrl} />
         ) : null}
+        {view.bridgeNote ? <BridgeNote note={view.bridgeNote} /> : null}
         <JobActions job={job} cancelAria={t('book.readalong.cancelAria')}>
           {view.action ? (
             <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
@@ -115,8 +124,33 @@ export function ReadalongCard({ detail }: { detail: AdminBookDetail }) {
         onOpenChange={setOpen}
         book={{ library_id: b.library_id, path: b.path, title: b.title }}
         remake={view.map !== 'none'}
-        offline={!available}
+        bridge={bridge}
       />
     </Card>
+  );
+}
+
+/**
+ * Why the card offers no Make (ADMIN-03, S265-DIALOG): a read-along needs a
+ * Bridge, the paired one is offline, or it is a release too old to make one;
+ * each with a link to Settings > Bridge.
+ */
+function BridgeNote({ note }: { note: NonNullable<ReadalongView['bridgeNote']> }) {
+  const { t } = useTranslation();
+  return (
+    <p className="flex flex-wrap items-start gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
+      <Unplug className="mt-px size-[15px] shrink-0" aria-hidden="true" />
+      <span>
+        {t(`book.readalong.bridge.${note}`, { version: READALONG_BRIDGE_VERSION })}{' '}
+        <Link
+          to="/server/{-$section}"
+          params={{ section: undefined }}
+          search={{ topic: 'bridge' }}
+          className="font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          {note === 'none' ? t('book.readalong.bridge.setUp') : t('book.readalong.bridge.settings')}
+        </Link>
+      </span>
+    </p>
   );
 }

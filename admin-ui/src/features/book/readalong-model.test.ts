@@ -11,12 +11,15 @@ import {
   isBookKind,
   isFileKind,
   KNOWN_STAGES,
+  readalongFailure,
 } from '@/features/bridge/generate-model';
 import { describeEvent } from '@/lib/server-events';
 import { serverInfo } from '@/test/fixtures';
 import {
   blocksReadalong,
   readalongAvailable,
+  readalongBridge,
+  readalongJobShown,
   readalongBlocker,
   readalongCardShown,
   readalongDialogView,
@@ -42,6 +45,74 @@ const withBridge = (features: string[], online = true): ServerInfo => ({
   ...serverInfo,
   capabilities: { ...serverInfo.capabilities, bridge: online, readalong: true },
   bridge: online ? { version: '0.4.0', features } : undefined,
+});
+
+describe('readalongBridge', () => {
+  it('tells a Bridge that makes read-alongs from a too old one, an offline one and none', () => {
+    expect(readalongBridge(withBridge(['bridge', 'readalong']), undefined)).toBe('ready');
+    // Online without the readalong family: a release before it, not offline.
+    expect(readalongBridge(withBridge(['bridge', 'sidecars']), undefined)).toBe('too_old');
+    expect(readalongBridge(withBridge([], false), true)).toBe('offline');
+    expect(readalongBridge(withBridge([], false), false)).toBe('none');
+    // Before the Bridge status answers: no claim that one is paired.
+    expect(readalongBridge(withBridge([], false), undefined)).toBe('none');
+    expect(readalongBridge(undefined, undefined)).toBe('none');
+  });
+});
+
+describe('readalongJobShown (S265-CARD)', () => {
+  const done = (over: Partial<BridgeJob> = {}) =>
+    job({ state: 'done', result: { coverage: { text: 0.97 } }, ...over });
+
+  it('leaves out a done job over the ready map it made: the map line says it', () => {
+    expect(readalongJobShown('ready', done())).toBe(false);
+    // Unless it says more: the transcript was reused.
+    expect(readalongJobShown('ready', done({ result: { transcribed: false } }))).toBe(true);
+  });
+
+  it('never shows a done job over a stale map', () => {
+    expect(readalongJobShown('stale', done())).toBe(false);
+  });
+
+  it('shows an open, parked or failed job, and a cancel the server gave a reason for', () => {
+    for (const state of ['queued', 'running', 'needs_attention', 'failed'] as BridgeJobState[]) {
+      expect(readalongJobShown('ready', job({ state }))).toBe(true);
+    }
+    expect(readalongJobShown('none', job({ state: 'cancelled', cancel_requested: true }))).toBe(
+      false,
+    );
+    expect(
+      readalongJobShown(
+        'none',
+        job({
+          state: 'cancelled',
+          error: 'a generate job for the book replaced it; make the read-along again after',
+        }),
+      ),
+    ).toBe(true);
+    expect(readalongJobShown('none', undefined)).toBe(false);
+  });
+});
+
+describe('readalongFailure (S265-CARD)', () => {
+  it("turns the Bridge's no-match refusal into a sentence that says what to do", () => {
+    expect(readalongFailure("the ebook and the narration don't match: 0% lined up")).toEqual({
+      key: 'book.readalong.failed.noMatch',
+      percent: 0,
+    });
+    expect(readalongFailure("the ebook and the narration don't match: 31% lined up")).toEqual({
+      key: 'book.readalong.failed.noMatch',
+      percent: 0.31,
+    });
+    expect(en).toHaveProperty(['book.readalong.failed.noMatch']);
+  });
+
+  it('starts any other refusal with a capital', () => {
+    expect(readalongFailure('the ebook changed while aligning; run it again')).toEqual({
+      text: 'The ebook changed while aligning; run it again',
+    });
+    expect(readalongFailure('  ')).toBeUndefined();
+  });
 });
 
 describe('the read-along gate', () => {
@@ -74,7 +145,7 @@ describe('readalongView', () => {
       }),
       undefined,
       [],
-      true,
+      'ready',
     );
     expect(v).toEqual({
       map: 'ready',
@@ -90,7 +161,7 @@ describe('readalongView', () => {
         book({ readalong: { state: 'stale', reason } as AdminBook['readalong'] }),
         undefined,
         [],
-        true,
+        'ready',
       );
     expect(stale('ebook_changed')).toEqual({
       map: 'stale',
@@ -110,20 +181,49 @@ describe('readalongView', () => {
   });
 
   it('offers Make for a book with an ebook and no map', () => {
-    expect(readalongView(book(), undefined, [], true)).toEqual({ map: 'none', action: 'make' });
+    expect(readalongView(book(), undefined, [], 'ready')).toEqual({ map: 'none', action: 'make' });
   });
 
   it('offers nothing without a Bridge that makes read-alongs, or without an ebook', () => {
-    expect(readalongView(book(), undefined, [], false).action).toBeUndefined();
-    expect(readalongView({}, undefined, [], true).action).toBeUndefined();
+    expect(readalongView(book(), undefined, [], 'none').action).toBeUndefined();
+    expect(readalongView({}, undefined, [], 'ready').action).toBeUndefined();
+  });
+
+  it('says why there is no offer when the map needs making again (ADMIN-03, S265-DIALOG)', () => {
+    const stale = book({ readalong: { state: 'stale', reason: 'ebook_changed' } });
+    // No Bridge, an offline one, and an online one too old for read-alongs.
+    expect(readalongView(stale, undefined, [], 'none')).toEqual({
+      map: 'stale',
+      staleKey: 'book.readalong.stale.ebook_changed',
+      bridgeNote: 'none',
+    });
+    expect(readalongView(stale, undefined, [], 'offline').bridgeNote).toBe('offline');
+    expect(readalongView(stale, undefined, [], 'too_old').bridgeNote).toBe('too_old');
+    // A failed job needs making again too.
+    expect(readalongView(book(), job({ state: 'failed' }), [], 'none').bridgeNote).toBe('none');
+    // A ready map, or no map, without a Bridge: nothing to make again, no note.
+    const ready = book({ readalong: { state: 'ready', coverage: 0.9 } });
+    expect(readalongView(ready, undefined, [], 'none').bridgeNote).toBeUndefined();
+    expect(readalongView(book(), undefined, [], 'offline').bridgeNote).toBeUndefined();
+    // A Bridge too old to make one says so even with no map.
+    expect(readalongView(book(), undefined, [], 'too_old')).toEqual({
+      map: 'none',
+      bridgeNote: 'too_old',
+    });
+    // With an offer, no note; with an open job or a blocker, neither.
+    expect(readalongView(stale, undefined, [], 'ready').bridgeNote).toBeUndefined();
+    expect(readalongView(stale, job({ state: 'running' }), [], 'none').bridgeNote).toBeUndefined();
+    for (const k of ['none', 'offline', 'too_old', 'setUp', 'settings']) {
+      expect(en).toHaveProperty([`book.readalong.bridge.${k}`]);
+    }
   });
 
   it("offers nothing while the book's read-along job is open, parked too", () => {
     for (const state of ['queued', 'claimed', 'running', 'needs_attention'] as BridgeJobState[]) {
-      expect(readalongView(book(), job({ state }), [], true).action).toBeUndefined();
+      expect(readalongView(book(), job({ state }), [], 'ready').action).toBeUndefined();
     }
     for (const state of ['done', 'failed', 'cancelled'] as BridgeJobState[]) {
-      expect(readalongView(book(), job({ state }), [], true).action).toBe('make');
+      expect(readalongView(book(), job({ state }), [], 'ready').action).toBe('make');
     }
   });
 
@@ -131,17 +231,17 @@ describe('readalongView', () => {
     for (const kind of ['sidecars.generate', 'chapters.detect']) {
       for (const state of ['queued', 'running', 'needs_attention'] as BridgeJobState[]) {
         const holding = job({ kind, state });
-        const v = readalongView(book(), undefined, [holding], true);
+        const v = readalongView(book(), undefined, [holding], 'ready');
         expect(v.blocker).toBe(holding);
         expect(v.action).toBeUndefined();
       }
     }
     // Being cancelled, it ends without writing: Make is offered again.
     const stopping = job({ kind: 'sidecars.generate', state: 'running', cancel_requested: true });
-    expect(readalongView(book(), undefined, [stopping], true).action).toBe('make');
+    expect(readalongView(book(), undefined, [stopping], 'ready').action).toBe('make');
     // A share or a description holds nothing back.
     for (const kind of ['sidecars.contribute', 'sidecars.describe', 'meta.correct']) {
-      expect(readalongView(book(), undefined, [job({ kind })], true).action).toBe('make');
+      expect(readalongView(book(), undefined, [job({ kind })], 'ready').action).toBe('make');
     }
   });
 
@@ -246,5 +346,10 @@ describe('the read-along kind elsewhere', () => {
     });
     // A server that sends no coverage says nothing more.
     expect(describeEvent(ev({})).body).toBeUndefined();
+    // Made, not "ready": the player follows a read-along only from 3c-2 (S265-NOTIFY).
+    expect(en['events.bridge_job_finished.readalong']).toBe('Read-along made for {{name}}');
+    expect(en['events.bridge_job_finished.readalongCoverage']).toContain(
+      'once the player supports read-alongs',
+    );
   });
 });

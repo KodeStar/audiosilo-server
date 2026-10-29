@@ -157,6 +157,136 @@ describe('the Read-along card', () => {
     expect(screen.queryByRole('button', { name: /Make/ })).toBeNull();
   });
 
+  it('says a stale map needs a Bridge to make it again, linking Settings > Bridge (ADMIN-03)', async () => {
+    mockFetch(
+      routes(
+        { ebook: EBOOK, readalong: { state: 'stale', reason: 'ebook_changed' } },
+        { 'GET /server': { body: serverInfo } },
+      ),
+    );
+    renderApp(URL);
+    const card = await screen.findByRole('region', { name: 'Read-along' });
+    expect(await within(card).findByText(/Making a read-along needs a Bridge\./)).toBeVisible();
+    expect(within(card).getByRole('link', { name: 'Set up a Bridge' })).toHaveAttribute(
+      'href',
+      '/admin/server?topic=bridge',
+    );
+    expect(within(card).queryByRole('button', { name: /Make/ })).toBeNull();
+  });
+
+  it('tells an offline Bridge from none', async () => {
+    const offline: ServerInfo = {
+      ...serverInfo,
+      capabilities: { ...serverInfo.capabilities, bridge: false, readalong: true },
+    };
+    mockFetch(
+      routes(
+        { ebook: EBOOK, readalong: { state: 'stale', reason: 'audio_changed' } },
+        {
+          'GET /server': { body: offline },
+          'GET /admin/bridge': {
+            body: {
+              paired: true,
+              paired_by: null,
+              pairing: null,
+              online: false,
+              kinds: [],
+              features: [],
+              libraries: [],
+              workers: [],
+            },
+          },
+        },
+      ),
+    );
+    renderApp(URL);
+    const card = await screen.findByRole('region', { name: 'Read-along' });
+    expect(
+      await within(card).findByText(/The Bridge is offline: make the read-along once it's back\./),
+    ).toBeVisible();
+    expect(within(card).getByRole('link', { name: 'Bridge settings' })).toBeVisible();
+  });
+
+  it('asks to update a Bridge online without read-alongs, never calling it offline (S265-DIALOG)', async () => {
+    const old: ServerInfo = {
+      ...bridgeOn,
+      bridge: { version: '0.4.0', features: ['bridge', 'sidecars', 'chapters'] },
+    };
+    mockFetch(routes(undefined, { 'GET /server': { body: old } }));
+    renderApp(URL);
+    const card = await screen.findByRole('region', { name: 'Read-along' });
+    expect(
+      await within(card).findByText(
+        /This Bridge can't make read-alongs\. Update it to 0\.5\.0 or newer\./,
+      ),
+    ).toBeVisible();
+    expect(within(card).queryByText(/offline/)).toBeNull();
+    expect(within(card).queryByRole('button', { name: /Make/ })).toBeNull();
+  });
+
+  it('words the no-match refusal with what to do (S265-CARD)', async () => {
+    mockFetch(
+      routes(undefined, {
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                state: 'failed',
+                error: "the ebook and the narration don't match: 0% lined up",
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    const card = await screen.findByRole('region', { name: 'Read-along' });
+    expect(
+      await within(card).findByText(
+        /The ebook and the narration don't match: only 0% lined up\. Use the EPUB of the same edition/,
+      ),
+    ).toBeVisible();
+    expect(within(card).queryByText(/^the ebook/)).toBeNull();
+  });
+
+  it('shows a ready map in one line, without the job that made it (S265-CARD)', async () => {
+    mockFetch(
+      routes(
+        {
+          ebook: EBOOK,
+          readalong: { state: 'ready', coverage: 0.97, generated_at: '2026-11-02T10:30:00Z' },
+        },
+        {
+          'GET /admin/bridge/jobs': {
+            body: {
+              jobs: [
+                job({
+                  state: 'done',
+                  result: { coverage: { text: 0.97 }, transcribed: true },
+                  finished_at: '2026-11-02T10:30:00Z',
+                }),
+              ],
+            },
+          },
+        },
+      ),
+    );
+    renderApp(URL);
+    expect(await screen.findByText('Ready: lines up 97% of the ebook’s text')).toBeInTheDocument();
+    // Let the jobs answer arrive: its line still doesn't show.
+    await screen.findByRole('button', { name: 'Make again' });
+    expect(screen.queryByText(/of the text lined up/)).toBeNull();
+  });
+
+  it('labels the confirmation of a remake as its title does (S265-CARD)', async () => {
+    mockFetch(routes({ ebook: EBOOK, readalong: { state: 'stale', reason: 'ebook_changed' } }));
+    renderApp(URL);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Make again' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Make the read-along again' });
+    expect(await within(dialog).findByRole('button', { name: 'Make again' })).toBeVisible();
+    expect(within(dialog).queryByRole('button', { name: 'Make read-along' })).toBeNull();
+  });
+
   it('confirms with the estimate, then queues readalong.align for this book', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(
@@ -225,7 +355,18 @@ describe('the Read-along card', () => {
     mockFetch(
       routes(undefined, {
         'GET /admin/bridge/jobs': {
-          body: { jobs: [job({ progress: { stage: 'readalong_aligning', done: 3, total: 12 } })] },
+          body: {
+            jobs: [
+              job({
+                progress: {
+                  stage: 'readalong_aligning',
+                  message: 'Transcribing (1 of 2)',
+                  done: 3,
+                  total: 12,
+                },
+              }),
+            ],
+          },
         },
       }),
     );
@@ -234,6 +375,8 @@ describe('the Read-along card', () => {
     expect(
       await within(card).findByText('Lining up the ebook with the narration'),
     ).toBeInTheDocument();
+    // The transcription's last message isn't left under the aligning stage (S265-CARD).
+    expect(within(card).queryByText('Transcribing (1 of 2)')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Make read-along' })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Cancel making the read-along' }),

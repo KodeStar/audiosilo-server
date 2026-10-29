@@ -25,6 +25,8 @@ import {
   KIND_READALONG,
   parkHint,
   parkKey,
+  READALONG_ALIGNING,
+  readalongFailure,
   roundEta,
   stageLabel,
   type GenerateResult,
@@ -102,8 +104,15 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
   }
 
   if (job.state === 'failed') {
-    return job.error ? (
-      <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
+    // A read-along refusal in words that say what to do (S265-CARD); any
+    // other error as the Bridge wrote it.
+    const failure = job.kind === KIND_READALONG ? readalongFailure(job.error) : undefined;
+    const text =
+      failure && 'key' in failure
+        ? t(failure.key, { percent: formatPercent(failure.percent, lang) })
+        : (failure?.text ?? job.error);
+    return text ? (
+      <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{text}</p>
     ) : null;
   }
 
@@ -146,6 +155,9 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
 
   // Queued: nothing has started; say so rather than a stage.
   const label = p.stage ? stageLabel(p.stage) : undefined;
+  // A read-along lining up the text: the message the Bridge sent last is the
+  // transcription's ("Transcribing (1 of 2)"), so it isn't shown (S265-CARD).
+  const aligning = job.kind === KIND_READALONG && p.stage === READALONG_ALIGNING;
   const stage =
     job.state === 'queued'
       ? t('bridge.generate.waiting')
@@ -173,7 +185,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
         <span className="font-semibold text-foreground">{facts[0]}</span>
         {facts.length > 1 ? ` · ${facts.slice(1).join(' · ')}` : null}
       </p>
-      {p.message && p.message !== p.stage ? (
+      {p.message && p.message !== p.stage && !aligning ? (
         <p className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">{p.message}</p>
       ) : null}
       {p.total ? <ProgressBar fraction={(p.done ?? 0) / p.total} /> : null}

@@ -59,6 +59,8 @@ export const FEATURE_META = 'meta';
  * in its audio (speech recognition and alignment, no agent), and its feature.
  */
 export const KIND_READALONG = 'readalong.align';
+/** The read-along job's stage that lines up the ebook with the narration (after transcription). */
+export const READALONG_ALIGNING = 'readalong_aligning';
 export const FEATURE_READALONG = 'readalong';
 
 /**
@@ -974,4 +976,19 @@ export async function settleLimited<T, R>(
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
   return out;
+}
+
+/**
+ * A failed read-along job's error as a sentence for the card (S265-CARD): the
+ * Bridge's "the ebook and the narration don't match: N% lined up" becomes the
+ * key and percent of one that says what to do; anything else is shown as the
+ * Bridge wrote it, from a capital.
+ */
+export function readalongFailure(
+  error: string,
+): { key: string; percent: number } | { text: string } | undefined {
+  const m = /^the ebook and the narration don't match: (\d+)% lined up$/.exec(error.trim());
+  if (m) return { key: 'book.readalong.failed.noMatch', percent: Number(m[1]) / 100 };
+  const text = error.trim();
+  return text ? { text: text.charAt(0).toUpperCase() + text.slice(1) } : undefined;
 }
