@@ -629,3 +629,41 @@ func TestBridgeDetectJobWording(t *testing.T) {
 		t.Errorf("parked = %+v", m)
 	}
 }
+
+// A read-along job (readalong.align) is worded as the read-along: ready with
+// how much of the ebook lined up (rounded down, never claiming more), or
+// failed; its event carries the coverage only once done.
+func TestBridgeReadalongJobWording(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	cov := 0.996
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 1, Kind: "readalong.align", State: "done", Library: "Fiction", LibraryID: 1,
+		Path: "Nordon/Loyalists", Title: "Loyalists", Coverage: &cov})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 2, Kind: "readalong.align", State: "failed", Library: "Fiction", LibraryID: 1,
+		Path: "Nordon/Loyalists", Title: "Loyalists", Coverage: &cov, Error: "the ebook and the narration don't match: 31% lined up"})
+	done, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
+	if len(done) != 1 || done[0].Data["coverage"] != 0.996 {
+		t.Fatalf("finished events = %+v", done)
+	}
+	if m := compose(done[0], s.server()); m.Title != "Read-along ready: Loyalists (99% lined up)" ||
+		!strings.Contains(m.Text, "follow the narration") {
+		t.Errorf("finished = %+v", m)
+	}
+	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	if len(failed) != 1 || failed[0].Data["coverage"] != nil {
+		t.Fatalf("failed events = %+v", failed)
+	}
+	if m := compose(failed[0], s.server()); m.Title != "Read-along failed: Loyalists" {
+		t.Errorf("failed = %+v", m)
+	}
+	// Exactly a whole percentage stays that percentage; no coverage, no figure.
+	ev := catalog.ServerEvent{Kind: KindBridgeJobFinished, Data: map[string]any{"job_kind": "readalong.align",
+		"state": "done", "title": "Alice", "coverage": 0.29}}
+	if m := compose(ev, s.server()); m.Title != "Read-along ready: Alice (29% lined up)" {
+		t.Errorf("29%% = %q", m.Title)
+	}
+	delete(ev.Data, "coverage")
+	if m := compose(ev, s.server()); m.Title != "Read-along ready: Alice" {
+		t.Errorf("no coverage = %q", m.Title)
+	}
+}

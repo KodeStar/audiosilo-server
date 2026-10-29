@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // The admin catalog API (admin console Library and Book screens). Transport only:
@@ -236,23 +237,26 @@ func (a *API) handleAdminBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	a.writeBookDetail(w, r, lib.ID, p)
+	a.writeBookDetail(w, r, lib, p)
 }
 
-func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, libID int64, p string) {
+func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string) {
 	// Asked before the page is read: a check that ends in between is then in the
 	// page, rather than missing from a page that says none is running.
-	ref := catalog.Ref{LibraryID: libID, Path: catalog.CleanRelPath(p)}
+	ref := catalog.Ref{LibraryID: lib.ID, Path: catalog.CleanRelPath(p)}
 	checking := a.chapterChecks != nil && a.chapterChecks.Checking(ref)
-	d, err := a.cat.AdminBookDetail(r.Context(), libID, p)
+	d, err := a.cat.AdminBookDetail(r.Context(), lib.ID, p)
 	if err != nil {
-		a.writeBookError(w, err, "admin book detail failed", "could not load book", "library", libID, "path", p)
+		a.writeBookError(w, err, "admin book detail failed", "could not load book", "library", lib.ID, "path", p)
 		return
 	}
 	d.CommunityChecking = checking
 	d.CommunityCheckFailed = !checking && a.chapterChecks != nil && a.chapterChecks.Failed(ref)
 	b := d.Book
 	d.MatchQuery = meta.SearchPrefill(b.Title, b.Author, b.Series, b.Path, b.IsFolder)
+	if b.Ebook != nil {
+		d.Book.Readalong = a.readalongOf(r.Context(), lib, b.Path, b.IsFolder, b.Ebook.Path, adminAudioFiles(d))
+	}
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -272,7 +276,7 @@ func (a *API) handleCheckCommunityChapters(w http.ResponseWriter, r *http.Reques
 	}
 	// No book there: the check finds none and stops, and the page answers 404.
 	a.chapterChecks.Start(a.baseCtx, catalog.Ref{LibraryID: lib.ID, Path: p})
-	a.writeBookDetail(w, r, lib.ID, p)
+	a.writeBookDetail(w, r, lib, p)
 }
 
 // editRequest is the body of a book edit (PATCH) and, without chapters, of a bulk
@@ -369,7 +373,7 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "book.edit", lib.Name+": "+p, req.details())
-	a.writeBookDetail(w, r, lib.ID, p)
+	a.writeBookDetail(w, r, lib, p)
 }
 
 // handleAdminBulkEdit serves POST /admin/books/bulk: the same field edit applied
@@ -559,4 +563,14 @@ func (a *API) handleAdminDeleteCover(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "book.cover_remove", lib.Name+": "+p, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover removed", "path": p})
+}
+
+// adminAudioFiles is the book page's files as a read-along map names them
+// (catalog.BookAudioFiles over its Files: a single-file book's is its own).
+func adminAudioFiles(d *catalog.AdminBookDetail) []metadata.ReadalongFile {
+	files := make([]catalog.BookFile, len(d.Files))
+	for i, f := range d.Files {
+		files[i] = catalog.BookFile{RelPath: f.Path, Duration: f.Duration}
+	}
+	return catalog.BookAudioFiles(d.Book.Path, d.Book.IsFolder, d.Book.Duration, files)
 }

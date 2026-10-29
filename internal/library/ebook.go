@@ -227,7 +227,7 @@ func ebookFound(root, rel string, info fs.FileInfo) catalog.EbookReading {
 			}
 		}
 	}
-	return catalog.EbookReading{Path: rel, Sig: catalog.EbookSig(path.Base(rel), info)}
+	return catalog.EbookReading{Path: rel, Sig: catalog.EbookSig(path.Base(rel), info), Size: info.Size()}
 }
 
 // checkEbook finishes a candidate (r: its path and signature; Path "" for none)

@@ -1,8 +1,10 @@
 import type { ServerEvent, ServerEventKind } from '@/api/types';
 import {
+  coverageDown,
   KIND_DESCRIBE,
   KIND_DETECT,
   KIND_GENERATE,
+  KIND_READALONG,
   parkKey,
 } from '@/features/bridge/generate-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
@@ -136,11 +138,13 @@ const FINISHED_OWN = new Map<string, string>([
   [KIND_GENERATE, 'events.bridge_job_finished.generate'],
   [KIND_DESCRIBE, 'events.bridge_job_finished.describe'],
   [KIND_DETECT, 'events.bridge_job_finished.detect'],
+  [KIND_READALONG, 'events.bridge_job_finished.readalong'],
 ]);
 
 /**
  * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps, a
- * description, or chapters, ready for a book (FINISHED_OWN), another kind finished, or a job
+ * description, chapters, or a read-along (with how much of the text it lines
+ * up), ready for a book (FINISHED_OWN), another kind finished, or a job
  * that failed or is parked waiting for someone (its park code as a sentence,
  * else the Bridge's own detail). Each leads to Settings > Bridge, where its
  * jobs are listed.
@@ -167,8 +171,17 @@ function describeBridgeJob(
       jobKind === KIND_DETECT && source !== '' && source !== 'generated'
         ? { key: 'events.bridge_job_finished.detectUnused' }
         : undefined;
+    // A read-along's coverage, rounded down to a whole percent (a server that
+    // sends none says nothing more).
+    const coverage =
+      jobKind === KIND_READALONG && typeof d.coverage === 'number'
+        ? {
+            key: 'events.bridge_job_finished.readalongCoverage',
+            values: { percent: Math.round(coverageDown(d.coverage) * 100) },
+          }
+        : undefined;
     return own
-      ? { title: { key: own, values: { name } }, body: unused, tone: 'info', link }
+      ? { title: { key: own, values: { name } }, body: unused ?? coverage, tone: 'info', link }
       : {
           title: { key: 'events.bridge_job_finished.title', values: { name } },
           body: kindBody,

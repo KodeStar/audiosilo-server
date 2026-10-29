@@ -196,7 +196,7 @@ func (f *Files) Serve(w http.ResponseWriter, r *http.Request, name string, info 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if rep.gz != nil && r.Header.Get("Range") == "" && acceptsGzip(r.Header.Get("Accept-Encoding")) {
+	if rep.gz != nil && r.Header.Get("Range") == "" && AcceptsGzip(r.Header.Get("Accept-Encoding")) {
 		serveGzip(w, r, name, info.ModTime(), rep)
 		return
 	}
@@ -243,7 +243,7 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 			return err
 		}
 		sum.Write(data)
-		rep.gz = gzipped(data)
+		rep.gz = Gzipped(data)
 	} else if _, err := io.Copy(sum, content); err != nil {
 		return err
 	}
@@ -255,10 +255,10 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 	return nil
 }
 
-// gzipped compresses data at the default level (a few percent larger than the
+// Gzipped compresses data at the default level (a few percent larger than the
 // best, several times faster on the first request for a big bundle), or returns
 // nil when that doesn't make it smaller.
-func gzipped(data []byte) []byte {
+func Gzipped(data []byte) []byte {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(data); err != nil || zw.Close() != nil || buf.Len() >= len(data) {
@@ -330,9 +330,9 @@ func ETagListMatches(list, etag string) bool {
 	return false
 }
 
-// acceptsGzip reports whether an Accept-Encoding value allows gzip: listed (or
+// AcceptsGzip reports whether an Accept-Encoding value allows gzip: listed (or
 // x-gzip) with a non-zero q, or not listed while "*" is.
-func acceptsGzip(header string) bool {
+func AcceptsGzip(header string) bool {
 	gzipQ, starQ := -1.0, -1.0
 	for _, part := range strings.Split(header, ",") {
 		coding, params, _ := strings.Cut(part, ";")

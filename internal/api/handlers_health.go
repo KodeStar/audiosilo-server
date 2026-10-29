@@ -207,7 +207,7 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.rescanPath(w, lib, p); !ok {
 		return
 	}
-	a.writeBookDetail(w, r, lib.ID, p)
+	a.writeBookDetail(w, r, lib, p)
 }
 
 // rescanPath indexes what is at p now (IndexPath), on a context detached from the

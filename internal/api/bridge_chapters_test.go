@@ -156,7 +156,7 @@ func TestGeneratedChaptersOnTheWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
-	if want := `"attachments":{"characters":false,"recaps":false,"description":false,"chapters":true,"bridge":false}`; code != http.StatusOK || !strings.Contains(body, want) {
+	if want := `"attachments":{"characters":false,"recaps":false,"description":false,"chapters":true,"bridge":false,"readalong":false}`; code != http.StatusOK || !strings.Contains(body, want) {
 		t.Fatalf("attachments rescan = %d %s, want %s", code, body, want)
 	}
 	q := fmt.Sprintf("?path=%s", url.QueryEscape(mistbornBook))

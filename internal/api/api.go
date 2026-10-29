@@ -402,6 +402,7 @@ func (a *API) Handler() http.Handler {
 	// The reader (Bridge Phase 3b, capability ebooks): a book's ebook, header auth
 	// only (requireAuth: never ?token=, no URL token), and the reader's place in it.
 	mux.Handle("GET /api/v1/libraries/{id}/ebook", a.requireAuth(http.HandlerFunc(a.handleEbook)))
+	mux.Handle("GET /api/v1/libraries/{id}/readalong", a.requireAuth(http.HandlerFunc(a.handleReadalong)))
 	mux.Handle("GET /api/v1/libraries/{id}/reading-progress", a.requireAuth(http.HandlerFunc(a.handleGetReadingProgress)))
 	mux.Handle("PUT /api/v1/libraries/{id}/reading-progress", a.requireAuth(http.HandlerFunc(a.handlePutReadingProgress)))
 	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))

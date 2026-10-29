@@ -39,6 +39,11 @@ var errABSFileNotRegular = fmt.Errorf("%w: not a regular file", ErrABSFileInvali
 // utf8BOM is the byte order mark a Windows editor may put before the JSON.
 var utf8BOM = []byte("\xef\xbb\xbf")
 
+// ErrReplacedWhileOpening is ReadRegularFile's answer when the file was
+// replaced between its look and its open (a new version renamed into place, or
+// a link): reading again sees what is there now.
+var ErrReplacedWhileOpening = errors.New("replaced while being opened")
+
 // ABSFile is what an Audiobookshelf metadata.json says about a book, "" (nil)
 // for whatever it leaves out. Values are as the file has them, trimmed; the
 // catalog checks each against its field's rules.
@@ -119,33 +124,42 @@ func ReadABSFile(path string) (*ABSFile, error) {
 // later. The metadata files the scan reads beside the audio (ABS's metadata.json,
 // the Bridge's .audiosilo/ attachments) share it.
 func ReadRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
+	data, _, err := readRegularFileInfo(path, limit, notRegular, tooLarge)
+	return data, err
+}
+
+// readRegularFileInfo is ReadRegularFile with the opened file's info (its size
+// and modification time as read).
+func readRegularFileInfo(path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, notRegular
+		return nil, nil, notRegular
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
-	if opened, err := f.Stat(); err != nil {
-		return nil, err
-	} else if !os.SameFile(info, opened) {
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !os.SameFile(info, opened) {
 		// Replaced between the two looks (a new version renamed into place, or a
 		// link): the next read sees what is there then.
-		return nil, fmt.Errorf("%s: replaced while being opened", path)
+		return nil, nil, fmt.Errorf("%s: %w", path, ErrReplacedWhileOpening)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(data) > limit {
-		return nil, tooLarge
+		return nil, nil, tooLarge
 	}
-	return data, nil
+	return data, opened, nil
 }
 
 // ParseABSFile reads an ABS metadata.json. It is lenient about anything it

@@ -24,20 +24,24 @@ const AttachmentsDir = ".audiosilo"
 // recaps.json and description.json are audiosilo-meta's own sidecar formats
 // (model.Characters, model.Recaps, model.Description); chapters.json is the
 // chapters the Bridge found in the narration of a book with none of its own
-// (ChapterList, Phase 1d); bridge.json says what made them.
+// (ChapterList, Phase 1d); bridge.json says what made them; readalong.json is
+// the book's read-along map (Phase 3c: only its head is read, ReadalongHead).
 const (
 	AttachmentCharacters  = "characters.json"
 	AttachmentRecaps      = "recaps.json"
 	AttachmentDescription = "description.json"
 	AttachmentChapters    = "chapters.json"
 	AttachmentBridge      = "bridge.json"
+	AttachmentReadalong   = "readalong.json"
 )
 
 // AttachmentNames are the known attachment names, in the order a signature
 // lists them. A signature lists only the names a book has, and adding
-// description.json and chapters.json kept the others in their order, so a book
-// without them keeps the signature it had before the names were known.
-var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentChapters, AttachmentBridge}
+// description.json and chapters.json kept the others in their order, as did
+// appending readalong.json last, so a book without them keeps the signature it
+// had before the names were known.
+var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentChapters,
+	AttachmentBridge, AttachmentReadalong}
 
 // The bounds an attachment is checked against: the pipeline's real output is a
 // few hundred KB at most, so these only stop a file that isn't the pipeline's
@@ -91,16 +95,18 @@ type AttachmentFiles struct {
 	Description *model.Description
 	Chapters    *ChapterList
 	Provenance  *AttachmentProvenance
+	Readalong   *ReadalongHead
 }
 
 // Empty reports whether there is nothing to store.
 func (f AttachmentFiles) Empty() bool {
-	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Chapters == nil && f.Provenance == nil
+	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Chapters == nil &&
+		f.Provenance == nil && f.Readalong == nil
 }
 
 // Generated reports whether f holds generated content: characters, recaps or a
 // description (provenance alone is none, and so are chapters: they are the
-// book's chapters, not content /meta serves).
+// book's chapters, not content /meta serves; and so is a read-along map).
 func (f AttachmentFiles) Generated() bool {
 	return f.Characters != nil || f.Recaps != nil || f.Description != nil
 }
@@ -372,8 +378,14 @@ func cleanTime(v string) string {
 // maxProvenanceText or carries a control character: these are shown in the
 // console and logged, and a value is no reason to refuse the file.
 func cleanProvenance(v string) string {
+	return cleanText(v, maxProvenanceText)
+}
+
+// cleanText is v trimmed, or "" when it is longer than limit bytes, isn't
+// UTF-8 or carries a control character.
+func cleanText(v string, limit int) string {
 	v = strings.TrimSpace(v)
-	if len(v) > maxProvenanceText || !utf8.ValidString(v) {
+	if len(v) > limit || !utf8.ValidString(v) {
 		return ""
 	}
 	for _, r := range v {

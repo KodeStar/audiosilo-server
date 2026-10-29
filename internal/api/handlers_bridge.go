@@ -226,11 +226,15 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // bridgeFile is one of a book's files as the server indexed it, with the size
-// and modification time the server sees now, for the Bridge's mapping check.
+// and modification time the server sees now, for the Bridge's mapping check,
+// and its indexed length in seconds (ffprobe's; a single-file book's is the
+// book's), which a read-along map's whole-book times are built from (Phase 3c;
+// an older Bridge ignores it).
 type bridgeFile struct {
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-	ModTime int64  `json:"mod_time"`
+	Path     string  `json:"path"`
+	Size     int64   `json:"size"`
+	ModTime  int64   `json:"mod_time"`
+	Duration float64 `json:"duration"`
 }
 
 // handleBridgeBook serves GET /bridge/libraries/{id}/book?path=: one indexed
@@ -279,8 +283,9 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 
 // bridgeBook is a book's facts for a Bridge job (GET /bridge/libraries/{id}/book
 // with a path): the effective values, its credits split as the server reads
-// them (names.Split), its series position as stored ("" for none) and its
-// community work id when the metadata cache knows it ("" otherwise).
+// them (names.Split), its series position as stored ("" for none), its
+// community work id when the metadata cache knows it ("" otherwise) and its
+// ebook.
 type bridgeBook struct {
 	Title       string   `json:"title"`
 	Authors     []string `json:"authors"`
@@ -291,6 +296,10 @@ type bridgeBook struct {
 	ISBN        string   `json:"isbn"`
 	Duration    float64  `json:"duration"`
 	WorkID      string   `json:"work_id"`
+	// Ebook is the book's ebook as the server indexed it (Book.ebook: the
+	// reader's, the one a readalong.align job aligns), omitted when it has
+	// none (Phase 3c; an older Bridge ignores it).
+	Ebook *catalog.Ebook `json:"ebook,omitempty"`
 }
 
 // bridgeBookFacts is book's bridgeBook. The work id comes from the metadata
@@ -300,7 +309,7 @@ func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBoo
 	out := bridgeBook{
 		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
 		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
-		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration,
+		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration, Ebook: book.Ebook,
 	}
 	if a.metadataOn() {
 		out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
@@ -324,12 +333,12 @@ func statBookFiles(lib *catalog.Library, book *catalog.Book) ([]bridgeFile, bool
 	if len(indexed) == 0 {
 		// A single-file book (a loose file at the root, a folder of one book per
 		// file) has no book_files rows: the book is its own file.
-		indexed = []catalog.BookFile{{RelPath: book.RelPath, Size: book.Size}}
+		indexed = []catalog.BookFile{{RelPath: book.RelPath, Size: book.Size, Duration: book.Duration}}
 	}
 	files := make([]bridgeFile, 0, len(indexed))
 	present := true
 	for _, f := range indexed {
-		bf := bridgeFile{Path: f.RelPath, Size: f.Size}
+		bf := bridgeFile{Path: f.RelPath, Size: f.Size, Duration: f.Duration}
 		info, err := os.Stat(filepathOf(lib, f.RelPath))
 		if err == nil {
 			bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
@@ -508,6 +517,9 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
 		Code: job.ParkCode(), Error: job.Error, SharedNothing: job.SharedNothing()}
+	if c, ok := job.ReadalongCoverage(); ok {
+		ev.Coverage = &c
+	}
 	if job.LibraryID != nil {
 		ev.LibraryID = *job.LibraryID
 		if lib, err := a.cat.GetLibrary(ctx, ev.LibraryID); err == nil {
@@ -528,7 +540,7 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
 // finished, a kind the Bridge doesn't run, a library it can't write to, a
 // contribution it can't make, an open job of another kind that refuses it
-// (generate_open, detect_open, describe_open, contribute_open), a detect for a book whose
+// (generate_open, detect_open, describe_open, contribute_open, readalong_open), a detect for a book whose
 // chapter source an admin chose, else 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
@@ -561,6 +573,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	case errors.Is(err, bridge.ErrDescribeOpen):
 		writeErrorCode(w, http.StatusConflict, "describe_open",
 			"a description job is still open for this book; detect its chapters once it has finished")
+	case errors.Is(err, bridge.ErrReadalongOpen):
+		writeErrorCode(w, http.StatusConflict, "readalong_open",
+			"a read-along job is still open for this book; queue this once it has finished")
 	case errors.Is(err, bridge.ErrChaptersChosen):
 		writeErrorCode(w, http.StatusConflict, "chapters_chosen",
 			"an admin chose this book's chapter source, so chapters found in the narration would never be used; set it back to automatic first")
@@ -787,9 +802,10 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // needs a library the Bridge last reported mapped and writable (409 code
 // library_not_writable); a job is refused while an open job of another kind
 // refuses it (bridge.Enqueue: 409 code generate_open, detect_open,
-// describe_open or contribute_open), and a chapters.detect job for a book
-// whose chapter source an admin chose (409 code chapters_chosen: the list it
-// finds would never be used). A job that files to the community
+// describe_open, contribute_open or readalong_open), a chapters.detect job for
+// a book whose chapter source an admin chose (409 code chapters_chosen: the
+// list it finds would never be used), and a readalong.align job for a book the
+// index holds no ebook for (409 code no_ebook). A job that files to the community
 // (sidecars.contribute, meta.correct, sidecars.generate with contribute
 // "issue") is 404 code module_off while the contributions module is off, and
 // 409 code cannot_contribute unless the Bridge says it can; a meta.correct
@@ -840,6 +856,10 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			nj.Params = params
+		}
+		if nj.Kind == bridge.KindReadalong && book.Ebook == nil {
+			writeErrorCode(w, http.StatusConflict, "no_ebook", "this book has no ebook to align with its narration")
+			return
 		}
 		if nj.Kind == bridge.KindDetectChapters {
 			choice, err := a.cat.ChapterChoice(r.Context(), book.LibraryID, book.RelPath)

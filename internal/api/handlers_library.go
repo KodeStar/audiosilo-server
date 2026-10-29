@@ -496,7 +496,9 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleItem returns full book detail (metadata + files + chapters + description)
-// for a path, indexing it on demand if needed.
+// for a path, indexing it on demand if needed. A book with an ebook and a
+// read-along map carries readalong (readalongOf), only here among the player's
+// book reads.
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -520,6 +522,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	a.warmRemux(lib, book)
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
+	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
 }
 

@@ -128,7 +128,7 @@ internal/logring/     the admin console's log viewer: an slog handler teeing rec
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
-internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, and Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
+internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`, and Phase 3c's `readalong.align`), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
 internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format in feed/), poll/fetch/retention scheduler, bounded on-demand media waits and scoped one-ahead prefetch; catalog/podcasts.go and podcast_{fetch,retention}.go hold the generation index, identity-bound status, follows, durable policies and aggregate checks; library/podcast_media.go opens committed media
 internal/podcast/     (2c-3) follow.go: Follower, follow by URL for the single follow and OPML rows; opmlimport.go (rows, the five-new-per-upload wave); export.go (BuildExport); discovery/ (iTunes + Podcast Index search, the artwork proxy, caches/quotas/cooldown, the build-tagged test origin); opml/ (the bounded strict OPML parser and the export writer); quota/ (token buckets with a bounded key map, slots)
 internal/netguard/    the guarded dialer: PublicAddr, Control/Dialer check the address actually dialled (meta covers, podcast discovery)
@@ -276,7 +276,11 @@ Auto book/folder detection in CONVENTIONS.md). Bridge Phase 3b: `0056` adds `boo
 `ebook_sig` (the book's ebook and the signature of the file the rule names; derived, backfilled by the
 scan without a re-index) and `0057` `reading_progress` (a reader's place in a book's ebook: durable,
 path-keyed on the book's path, no FK to the index, `device_name` from the saving token, carried by
-`carryListeningState`; see Path-addressed API and Progress reconciliation in CONVENTIONS.md).
+`carryListeningState`; see Path-addressed API and Progress reconciliation in CONVENTIONS.md). Bridge
+Phase 3c: `0058` adds `book_attachments.readalong` (a read-along map's checked head), `books.ebook_size`
+(server#228, backfilled from the signature) and `books.ebook_sha256` / `ebook_hashed_sig` (the digest of
+the ebook of a book with a map, and the sig it was computed for; all derived; see Bridge attachments and
+A book's ebook in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -372,7 +376,7 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player

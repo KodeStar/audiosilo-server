@@ -19,7 +19,7 @@ import (
 // the narration and their provenance. They are not a metadata layer: nothing in
 // the effective row reads them but the chapters, a chapter source of their own
 // (applyChapterSource). The scan stores them checked in book_attachments
-// (migrations 0048, 0050, 0051), with the files' signature on the book row
+// (migrations 0048, 0050, 0051, 0058: a read-along map's head, readalong.go), with the files' signature on the book row
 // (attachments_sig) and the indexed_at they were read with
 // (attachments_indexed_at), and /meta serves the generated content beside the
 // community data. Derived from the files, so a move never carries them and a
@@ -110,9 +110,14 @@ func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.
 	if err != nil {
 		return false, err
 	}
+	readalong, err := encodeAttachment(files.Readalong)
+	if err != nil {
+		return false, err
+	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO book_attachments(book_id, characters, recaps, description, chapters, provenance, updated_at) VALUES(?,?,?,?,?,?,?)`,
-		id, chars, recaps, desc, chapters, prov, now)
+		`INSERT INTO book_attachments(book_id, characters, recaps, description, chapters, provenance, readalong, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?)`,
+		id, chars, recaps, desc, chapters, prov, readalong, now)
 	return chapters != was, err
 }
 
