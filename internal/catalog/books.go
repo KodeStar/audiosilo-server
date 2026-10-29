@@ -1183,10 +1183,10 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 // sort, and INDEXED BY idx_books_added walks every newer book outside them too
 // (another library's, a podcasts library's episodes, a listener's unshared
 // ones). So each scope is an arm limited on its own, the arms are merged and
-// limited, and only the rows kept are read whole. An arm walks as one scope
-// does, except a scope of exactly one path rule: it seeks the path and sorts
-// what it holds (the "+" hint), since a walk reads the whole library when the
-// path holds few or only old books. Two or more paths SQLite already plans as
+// limited, and only the rows kept are read whole. A scope, alone or an arm,
+// walks the index, except a scope of exactly one path rule: it seeks the path
+// and sorts what it holds (recentOrder's "+" hint), since a walk reads the
+// whole library when the path holds few or only old books. Two or more paths SQLite already plans as
 // a read of the library, which the walk never exceeds. The kind check is once
 // per arm, so a podcasts library's arm reads nothing.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
@@ -1196,16 +1196,13 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 		return `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books b` + dedupJoins + `
 		WHERE l.kind = 'books' AND ` + filter + `
-		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, append(args, fetch)
+		ORDER BY ` + recentOrder(scopes[0]) + ` LIMIT ?`, append(args, fetch)
 	}
 	arms := make([]string, len(scopes))
 	var args []any
 	for i, s := range scopes {
 		filter, fargs := scopesFilterSQL("b.library_id", "b.rel_path", []Scope{s})
-		order := "b.added_at DESC, b.id DESC"
-		if !s.AllowAll && len(s.Paths) == 1 {
-			order = "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
-		}
+		order := recentOrder(s)
 		arms[i] = `SELECT * FROM (SELECT b.id, b.added_at FROM books b
 			WHERE EXISTS (SELECT 1 FROM libraries WHERE id = ? AND kind = 'books') AND ` + filter + `
 			ORDER BY ` + order + ` LIMIT ?)`
@@ -1216,6 +1213,17 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 		FROM (` + strings.Join(arms, " UNION ") + ` ORDER BY added_at DESC, id DESC LIMIT ?) r
 		JOIN books b ON b.id = r.id` + dedupJoins + `
 		ORDER BY r.added_at DESC, r.id DESC`, append(args, fetch)
+}
+
+// recentOrder is a recent-shelf read's ORDER BY for scope s, one scope's alone
+// or an arm's (recentBooksQuery): newest first along idx_books_lib_added, except
+// for a scope of exactly one path rule, whose "+" hint keeps the index order out
+// so the read seeks the path and sorts what it holds (S260-RECENT).
+func recentOrder(s Scope) string {
+	if !s.AllowAll && len(s.Paths) == 1 {
+		return "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
+	}
+	return "b.added_at DESC, b.id DESC"
 }
 
 func sortValue(b *Book, col string) string {

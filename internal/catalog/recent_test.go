@@ -8,8 +8,9 @@ import (
 
 // TestRecentBooksPlan: RecentBooks' query reads each scope inside its own
 // library and stops at the limit: one scope walks idx_books_lib_added; with
-// more, each scope is an arm that walks it too, but for an arm of one path rule,
-// which seeks the path (sqlite_autoindex_books_1). Never the OR plan's read of
+// more, each scope is an arm that walks it too, but for a scope of one path
+// rule, alone (S260-RECENT) or an arm, which seeks the path
+// (sqlite_autoindex_books_1) and sorts what it holds. Never the OR plan's read of
 // every book in scope (idx_books_series_key), a walk of every library's books
 // (idx_books_added) or a scan of books.
 func TestRecentBooksPlan(t *testing.T) {
@@ -20,8 +21,10 @@ func TestRecentBooksPlan(t *testing.T) {
 		walks  int  // arms walking idx_books_lib_added
 		seek   bool // an arm seeking its one path
 	}{
-		"one scope":  {[]Scope{{LibraryID: 1, AllowAll: true}}, 1, false},
-		"two scopes": {[]Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 2, AllowAll: true}}, 2, false},
+		"one scope":            {[]Scope{{LibraryID: 1, AllowAll: true}}, 1, false},
+		"one scope, one path":  {[]Scope{{LibraryID: 1, Paths: []string{"A"}}}, 0, true},
+		"one scope, two paths": {[]Scope{{LibraryID: 1, Paths: []string{"A", "B/C"}}}, 1, false},
+		"two scopes":           {[]Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 2, AllowAll: true}}, 2, false},
 		"shared paths": {[]Scope{
 			{LibraryID: 1, AllowAll: true},
 			{LibraryID: 2, Paths: []string{"A"}},
@@ -47,7 +50,7 @@ func TestRecentBooksPlan(t *testing.T) {
 				t.Errorf("%s: plan scans the books: %q", name, line)
 			}
 		}
-		if len(tc.scopes) == 1 && strings.Contains(joined, "TEMP B-TREE") {
+		if len(tc.scopes) == 1 && !tc.seek && strings.Contains(joined, "TEMP B-TREE") {
 			t.Errorf("%s: one scope sorts:\n%s", name, joined)
 		}
 	}
@@ -103,4 +106,9 @@ func TestRecentBooksScopes(t *testing.T) {
 	// scopes too: the episodes still never show.
 	booksPods := []Scope{{LibraryID: libB.ID, AllowAll: true}, {LibraryID: pods.ID, AllowAll: true}}
 	wantPaths(t, "books + podcasts", recent(booksPods, 2), "shared/b5", "hidden/b4")
+	// One scope of one path rule (S260-RECENT: a seek, then a sort).
+	add(libB.ID, "shared/b10", 10)
+	alone := []Scope{{LibraryID: libB.ID, Paths: []string{"shared"}}}
+	wantPaths(t, "recent, one scope of one path", recent(alone, 10), "shared/b10", "shared/b5")
+	wantPaths(t, "recent, one scope of one path, limit 1", recent(alone, 1), "shared/b10")
 }
