@@ -14,6 +14,7 @@ import {
   generateJobsKnown,
   KIND_CONTRIBUTE,
   KIND_DETECT,
+  KIND_READALONG,
 } from './generate-model';
 import { BridgeSettingsLink, JobActions, JobSection } from './generate-parts';
 import { GenerateStatus } from './generate-status';
@@ -25,9 +26,10 @@ import { useBookGenerateJob, useBridgeStatus, useGenerateEstimate } from './use-
  * while one is open (its stage, ETA, cost; why it's parked, with a link into
  * the Bridge) or how the last one ended, and the action that opens the
  * confirmation. Offered only while an online Bridge has the sidecars feature
- * and metadata is on, and not while the book's chapters are being found (a
- * queued or working chapters.detect job, whose status shows instead: the server
- * refuses a generate job until it has finished). When the community already has
+ * and metadata is on, and not while the book's chapters are being found or
+ * its read-along is being made (a queued or working chapters.detect or
+ * readalong.align job, whose status shows instead: the server refuses a
+ * generate job until it has finished). When the community already has
  * both characters and recaps a line says so, with a link to the Characters and
  * recaps card, where the action would be (generateAction's `covered`). While
  * the online Bridge's setup checklist says a step generating needs is still to
@@ -63,6 +65,8 @@ export function GenerateSection({ book }: { book: AdminBook }) {
     ? undefined
     : generateBlocker(jobs, estimate.data?.open_job, contributions);
   const detect = blocker?.kind === KIND_DETECT ? blocker : undefined;
+  // A read-along being made: the same audio on the Bridge, so it waits too.
+  const aligning = blocker?.kind === KIND_READALONG ? blocker : undefined;
   const sharing = blocker?.kind === KIND_CONTRIBUTE;
   const idle = !jobOpen && !blocker;
   // The Bridge's status: its page for a parked job's link, its checklist for
@@ -89,7 +93,7 @@ export function GenerateSection({ book }: { book: AdminBook }) {
     <JobSection
       id="generate-title"
       title={t('bridge.generate.title')}
-      job={detect ?? (showJob ? job : undefined)}
+      job={detect ?? aligning ?? (showJob ? job : undefined)}
     >
       {generated && !jobOpen ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.localNote')}</p>
@@ -121,6 +125,13 @@ export function GenerateSection({ book }: { book: AdminBook }) {
         <>
           <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.afterDetect')}</p>
           <GenerateStatus job={detect} />
+        </>
+      ) : aligning ? (
+        <>
+          <p className="text-[12.5px] text-muted-foreground">
+            {t('bridge.generate.afterReadalong')}
+          </p>
+          <GenerateStatus job={aligning} />
         </>
       ) : showJob && job ? (
         <GenerateStatus job={job} uiUrl={uiUrl} />

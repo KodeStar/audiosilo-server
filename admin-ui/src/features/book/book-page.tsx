@@ -20,6 +20,7 @@ import { DetailsCard } from './details-card';
 import { DiskSection, FilesCard } from './files-card';
 import { HERO_GRID, PAGE_GRID } from './layout';
 import { MatchDialog } from './match-dialog';
+import { ReadalongCard } from './readalong-card';
 import { SaveBar, SaveDiffDialog } from './save-changes';
 
 /** A book, addressed by library + path: its metadata (edited in place), chapters, files and access. */
@@ -169,6 +170,7 @@ function BookView({ detail, matchOnOpen }: { detail: AdminBookDetail; matchOnOpe
           <div className="flex min-w-0 flex-col gap-5">
             <DetailsCard detail={detail} drafts={drafts} errors={errors} onCommit={commit} />
             <ChaptersCard detail={detail} />
+            <ReadalongCard detail={detail} />
             <FilesCard detail={detail} />
             <DiskSection detail={detail} />
           </div>

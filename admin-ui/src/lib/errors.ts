@@ -95,6 +95,11 @@ const BY_CODE: Record<string, string> = {
   module_off: 'errors.moduleOff',
   contribute_open: 'errors.contributeOpen',
   not_edited: 'errors.notEdited',
+  // Bridge Phase 3c: a generate or detect job while the book's read-along job
+  // is queued or working (both run over the same audio on the Bridge), and a
+  // read-along job for a book with no ebook.
+  readalong_open: 'errors.readalongOpen',
+  no_ebook: 'errors.noEbook',
 };
 
 /** A failure as one sentence for a toast or a field. */

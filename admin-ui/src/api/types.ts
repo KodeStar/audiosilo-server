@@ -33,6 +33,11 @@ export interface ServerInfo {
     podcast_discovery?: boolean;
     /** OPML subscription import/export; absent before Bridge Phase 2c-3. */
     podcast_opml?: boolean;
+    /**
+     * GET /libraries/{id}/readalong exists (a read-along map is served, and
+     * Book.readalong reported); absent before Bridge Phase 3c.
+     */
+    readalong?: boolean;
   };
   /**
    * The online Bridge's version and features, only while capabilities.bridge
@@ -1473,6 +1478,23 @@ export interface AdminBook {
    * Absent when it has none.
    */
   ebook?: AdminBookEbook;
+  /**
+   * The book's read-along map (catalog.Readalong, Bridge Phase 3c): on the book
+   * detail only, never a list row; absent when it has no ebook or no valid map.
+   */
+  readalong?: Readalong;
+}
+
+/**
+ * A book's read-along map (catalog.Readalong): `ready` with the share of the
+ * ebook's text it lines up (0 to 1) and when it was made, or `stale` with why
+ * (the ebook or the audio changed since it was made: make it again).
+ */
+export interface Readalong {
+  state: 'ready' | 'stale';
+  reason?: 'ebook_changed' | 'audio_changed';
+  coverage?: number;
+  generated_at?: string;
 }
 
 /** A book's ebook (catalog.Ebook). */
@@ -2666,6 +2688,25 @@ export interface BridgeEstimate {
    * sidecars.contribute job, never a share held while the contributions module is
    * off): its kind says which.
    */
+  open_job?: BridgeJob;
+}
+
+/**
+ * GET /admin/bridge/estimate?kind=readalong.align&library_id=&path=
+ * (api.readalongEstimate, handlers_bridge_estimate.go): the most transcription
+ * the job may take (less when the Bridge still has the book's transcript; never
+ * an agent), whether the Bridge sent its figures and can write the library, the
+ * book's ebook (null: the job is refused no_ebook), its read-along now, and the
+ * open job a new one would be (its open readalong.align job) or would wait for
+ * (an open sidecars.generate or chapters.detect job).
+ */
+export interface ReadalongEstimate {
+  kind: string;
+  asr_hours: number;
+  figures: boolean;
+  writable: boolean;
+  ebook: AdminBookEbook | null;
+  readalong: Readalong | null;
   open_job?: BridgeJob;
 }
 

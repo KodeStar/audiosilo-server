@@ -25,10 +25,11 @@ import {
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
 // description written from their notes (Phase 1c), the chapters found in the
 // narration (Phase 1d) and sharing them and corrections with the community
-// (Phase 2b): the rules the book page's Community card, its generate dialog,
-// the series batch, Health's Detect chapters and the Bridge page's job rows
-// follow for `sidecars.generate`, `sidecars.describe`, `chapters.detect`,
-// `sidecars.contribute` and `meta.correct`. Pure: no React, no i18n instance;
+// (Phase 2b), and the read-along map (Phase 3c): the rules the book page's
+// Community, Chapters and Read-along cards, its generate dialog, the series
+// batch, Health's Detect chapters and the Bridge page's job rows follow for
+// `sidecars.generate`, `sidecars.describe`, `chapters.detect`,
+// `sidecars.contribute`, `meta.correct` and `readalong.align`. Pure: no React, no i18n instance;
 // callers pass the keys these return to t().
 
 /** The job kind, and the feature (job family) the Bridge advertises for it. */
@@ -53,12 +54,27 @@ export const KIND_CONTRIBUTE = 'sidecars.contribute';
  */
 export const KIND_CORRECT = 'meta.correct';
 export const FEATURE_META = 'meta';
+/**
+ * Phase 3c's read-along map: where each sentence of the book's ebook is spoken
+ * in its audio (speech recognition and alignment, no agent), and its feature.
+ */
+export const KIND_READALONG = 'readalong.align';
+export const FEATURE_READALONG = 'readalong';
+
+/**
+ * A read-along's coverage (0 to 1) rounded down to a whole percent, as the
+ * server's notification words it: 0.996 reads 99%, never 100%.
+ */
+export function coverageDown(fraction: number): number {
+  if (!Number.isFinite(fraction)) return 0;
+  return Math.min(1, Math.max(0, Math.floor(fraction * 100 + 1e-9) / 100));
+}
 
 /**
  * The kinds the book page follows: generate, describe and share (the sidecars
- * family; the Community card's sections), corrections (its corrections part) and
+ * family; the Community card's sections), corrections (its corrections part),
  * chapter detection, whose end changes the book's chapters (the Chapters card
- * follows it).
+ * follows it), and the read-along map (the Read-along card).
  */
 const BOOK_KINDS: readonly string[] = [
   KIND_GENERATE,
@@ -66,14 +82,19 @@ const BOOK_KINDS: readonly string[] = [
   KIND_DETECT,
   KIND_CONTRIBUTE,
   KIND_CORRECT,
+  KIND_READALONG,
 ];
 
 /** The kinds that hold the book's generated files on the Bridge (a describe job waits for them). */
 const FILE_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
-/** Whether a kind writes the book's files (its end changes the book; a share or correction doesn't). */
+/**
+ * Whether a kind writes the book's files (its end changes the book; a share or
+ * correction doesn't): the generated files, or a read-along map, which a
+ * describe job doesn't wait for (the server queues one beside it).
+ */
 export function isFileKind(kind: string): boolean {
-  return FILE_KINDS.includes(kind);
+  return FILE_KINDS.includes(kind) || kind === KIND_READALONG;
 }
 
 /**
@@ -306,14 +327,16 @@ export function generatePollMs(
 }
 
 /** The kinds whose open job keeps a new generate job from being queued (blocksGenerate). */
-const GENERATE_BLOCKER_KINDS: readonly string[] = [KIND_DETECT, KIND_CONTRIBUTE];
+const GENERATE_BLOCKER_KINDS: readonly string[] = [KIND_DETECT, KIND_CONTRIBUTE, KIND_READALONG];
 
 /**
  * Whether a job keeps a new generate job from being queued for its book: a
- * chapter detection (the server's detect_open) or a share with the community
- * (contribute_open, Phase 2b) queued or working, not being cancelled. A parked
- * one gives way (the generate job cancels it: a detection's chapters it finds
- * itself, a share it offers again from the new run), as one being cancelled does,
+ * chapter detection (the server's detect_open), a share with the community
+ * (contribute_open, Phase 2b) or a read-along (readalong_open, Phase 3c)
+ * queued or working, not being cancelled. A parked one gives way (the generate
+ * job cancels it: a detection's chapters it finds itself, a share it offers
+ * again from the new run, a read-along is made again after), as one being
+ * cancelled does,
  * and so does a share queued while the contributions module is off
  * (`contributions`, its toggle: no claim hands that share out, so the server
  * cancels it for the generate job too).
@@ -370,7 +393,7 @@ export function describeOffered(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): boolean {
   if (!e?.can_describe || !e.writable) return false;
-  if (e.open_job && isFileKind(e.open_job.kind)) return false;
+  if (e.open_job && FILE_KINDS.includes(e.open_job.kind)) return false;
   const { local, community, community_unknown } = e.has;
   if (
     !(local.characters || local.recaps) ||
@@ -418,6 +441,7 @@ export const KNOWN_STAGES = [
   'writing',
   'rescanning',
   'describing',
+  'readalong_aligning',
 ] as const;
 
 /** "qa_sweep" -> "Qa sweep": a name this console has no label for, made readable. */
@@ -571,6 +595,10 @@ export interface GenerateResult {
   changes?: number;
   auto?: string[];
   maintainer?: string[];
+  /** A read-along job's share of the ebook's text it lined up (0 to 1). */
+  coverage?: number;
+  /** A read-along job transcribed the audio (false: it reused the Bridge's transcript). */
+  transcribed?: boolean;
 }
 
 /** A list of non-blank strings from an opaque result, else undefined. */
@@ -616,6 +644,12 @@ export function generateResult(result: unknown): GenerateResult | null {
   if (auto?.length) out.auto = auto;
   const maintainer = strings(r.maintainer);
   if (maintainer?.length) out.maintainer = maintainer;
+  const coverage =
+    r.coverage && typeof r.coverage === 'object'
+      ? amount((r.coverage as Record<string, unknown>).text)
+      : undefined;
+  if (coverage !== undefined && coverage <= 1) out.coverage = coverage;
+  if (typeof r.transcribed === 'boolean') out.transcribed = r.transcribed;
   const any =
     out.characters !== undefined ||
     out.recaps !== undefined ||
@@ -625,7 +659,9 @@ export function generateResult(result: unknown): GenerateResult | null {
     out.contributed.length > 0 ||
     out.covered !== undefined ||
     out.issue !== undefined ||
-    out.changes !== undefined;
+    out.changes !== undefined ||
+    out.coverage !== undefined ||
+    out.transcribed !== undefined;
   return any ? out : null;
 }
 

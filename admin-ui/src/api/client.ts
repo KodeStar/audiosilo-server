@@ -48,6 +48,7 @@ import type {
   MatchRunMode,
   MatchScope,
   ProgressEdit,
+  ReadalongEstimate,
   ScanRun,
   ScanRunPage,
   SessionCursor,
@@ -432,6 +433,15 @@ export const api = {
     request<BridgeEstimate>(
       'GET',
       `/admin/bridge/estimate${bookQuery({ library_id: libraryId, path, kind, brief: brief ? 1 : undefined })}`,
+    ),
+  /**
+   * What a read-along job would take for a book (readalong.align): 404 when the
+   * book isn't indexed, 409 kind_unavailable when the Bridge doesn't offer it.
+   */
+  readalongEstimate: (libraryId: number, path: string) =>
+    request<ReadalongEstimate>(
+      'GET',
+      `/admin/bridge/estimate${bookQuery({ library_id: libraryId, path, kind: 'readalong.align' })}`,
     ),
   /** Queued (cancelled at once) or running (asked to stop); 409 finished once it ended. */
   cancelBridgeJob: (id: number) => request<BridgeJob>('POST', `/admin/bridge/jobs/${id}/cancel`),

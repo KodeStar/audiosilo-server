@@ -14,6 +14,7 @@ import {
   isFileKind,
   KIND_DETECT,
   KIND_GENERATE,
+  KIND_READALONG,
   latestJobOf,
 } from './generate-model';
 
@@ -105,6 +106,22 @@ export function useGenerateEstimate(
     ...estimateQuery(libraryId, path, { brief }),
     enabled,
     refetchOnMount: brief ? true : 'always',
+  });
+}
+
+/**
+ * A book's read-along estimate (readalong.align: the most transcription, what
+ * the book has, whether a job is open or waited for), asked each time the
+ * confirmation opens. Its key sits under the book's estimates, so a job that
+ * ends refreshes it with them.
+ */
+export function useReadalongEstimate(libraryId: number, path: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...keys.bridgeEstimate(libraryId, path), 'readalong'] as const,
+    queryFn: () => api.readalongEstimate(libraryId, path),
+    enabled,
+    retry: false,
+    refetchOnMount: 'always',
   });
 }
 
@@ -202,11 +219,13 @@ export async function queueInOrder(
 /**
  * The refusals a generate run passes a book over for: its chapters are being
  * found (a queued or working chapters.detect job; the generate job is queued once
- * that has finished, reusing its transcription), or its files are being shared
+ * that has finished, reusing its transcription), its files are being shared
  * with the community (a queued or working sidecars.contribute job, Phase 2b; one
- * queued while the contributions module is off gives way to the run instead).
+ * queued while the contributions module is off gives way to the run instead),
+ * or its read-along is being made (a queued or working readalong.align job,
+ * Phase 3c: both run over the same audio on the Bridge).
  */
-export const GENERATE_SKIPS = ['detect_open', 'contribute_open'] as const;
+export const GENERATE_SKIPS = ['detect_open', 'contribute_open', 'readalong_open'] as const;
 
 /** How many books a skip note names before it counts the rest. */
 const NAMED = 5;
@@ -218,6 +237,7 @@ const SKIP_KEYS: Record<string, string> = {
   detect_open: 'bridge.queue.skip.detectOpen',
   describe_open: 'bridge.queue.skip.describeOpen',
   contribute_open: 'bridge.queue.skip.contributeOpen',
+  readalong_open: 'bridge.queue.skip.readalongOpen',
   chapters_chosen: 'bridge.queue.skip.chaptersChosen',
 };
 
@@ -263,6 +283,7 @@ export function requestTitle(titles: ReadonlyMap<string, string>, req: BridgeJob
 const KIND_UNAVAILABLE: Record<string, string> = {
   [KIND_GENERATE]: 'bridge.generate.kindUnavailable',
   [KIND_DETECT]: 'bridge.detect.kindUnavailable',
+  [KIND_READALONG]: 'bridge.readalong.kindUnavailable',
 };
 
 /**

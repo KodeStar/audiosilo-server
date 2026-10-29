@@ -3,9 +3,17 @@ import { useTranslation } from 'react-i18next';
 import { CircleCheck, TriangleAlert } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
 import { ProgressBar } from '@/components/progress-bar';
-import { formatDuration, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
+import {
+  formatDuration,
+  formatList,
+  formatNumber,
+  formatPercent,
+  formatRelative,
+  formatUsd,
+} from '@/lib/format';
 import {
   bridgeJobLink,
+  coverageDown,
   generateProgress,
   generateResult,
   KIND_CONTRIBUTE,
@@ -13,6 +21,7 @@ import {
   KIND_DESCRIBE,
   KIND_DETECT,
   KIND_GENERATE,
+  KIND_READALONG,
   parkHint,
   parkKey,
   roundEta,
@@ -24,7 +33,7 @@ import { isOpen } from './bridge-model';
 
 /**
  * Where a `sidecars.generate` (or `sidecars.describe`, `chapters.detect`,
- * `sidecars.contribute` or `meta.correct`) job stands, in a few lines: while it
+ * `sidecars.contribute`, `meta.correct` or `readalong.align`) job stands, in a few lines: while it
  * works, the stage, the count, the ETA and the cost so far (with a bar when
  * there is a count); parked, why and the hint, with a link into the Bridge's
  * own page; done, what it made (a generate job's description outcome too, the
@@ -221,6 +230,15 @@ function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult |
       ];
     case KIND_DESCRIBE:
       return [t('bridge.describe.done')];
+    case KIND_READALONG:
+      return [
+        r?.coverage !== undefined
+          ? t('bridge.readalong.done', {
+              percent: formatPercent(coverageDown(r.coverage), lang),
+            })
+          : t('bridge.readalong.donePlain'),
+        r?.transcribed === false ? t('bridge.readalong.reused') : undefined,
+      ].filter((s): s is string => Boolean(s));
     case KIND_DETECT:
       return [
         r?.chapters !== undefined
