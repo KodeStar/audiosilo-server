@@ -81,18 +81,16 @@ func ogmChapter(cl *chapterList, key, val string) bool {
 		return true
 	}
 	if asciiFold(key[kl-4:], "NAME") {
-		for _, c := range cl.c {
-			if c.id == int64(cnum) {
-				c.title = val
-				return true
-			}
+		if c := cl.find(int64(cnum)); c != nil {
+			c.title = val
+			return true
 		}
 	}
 	return false
 }
 
 // vorbisComment is ff_vorbis_comment into d (chapters into cl).
-func vorbisComment(buf []byte, d *avDict, cl *chapterList) {
+func vorbisComment(b *blockFile, buf []byte, d *avDict, cl *chapterList) {
 	if len(buf) < 8 {
 		return
 	}
@@ -106,6 +104,7 @@ func vorbisComment(buf []byte, d *avDict, cl *chapterList) {
 	n := binary.LittleEndian.Uint32(buf[p:])
 	p += 4
 	for len(buf)-p >= 4 && n > 0 {
+		b.tick() // in memory, but a repeated key's appends grow with the comments
 		s := int(int32(binary.LittleEndian.Uint32(buf[p:])))
 		p += 4
 		if len(buf)-p < s || s < 0 {
@@ -188,7 +187,7 @@ func probeFLAC(b *blockFile) (*probeResult, error) {
 			if !ok {
 				return nil, unsure("flac: comment past the end")
 			}
-			vorbisComment(vc, &d, &cl)
+			vorbisComment(b, vc, &d, &cl)
 			if _, ok := d.get("WAVEFORMATEXTENSIBLE_CHANNEL_MASK"); ok {
 				return nil, unsure("flac: channel mask comment")
 			}
@@ -529,18 +528,18 @@ func probeOgg(b *blockFile) (*probeResult, error) {
 			switch codec {
 			case "vorbis":
 				if len(headers) == 2 && len(p) > 8 && p[0] == 3 {
-					vorbisComment(p[7:len(p)-1], &d, &cl)
+					vorbisComment(b, p[7:len(p)-1], &d, &cl)
 				}
 			case "opus":
 				if len(headers) == 2 {
 					if len(p) < 8 || string(p[:8]) != "OpusTags" {
 						return nil, unsure("ogg: no OpusTags")
 					}
-					vorbisComment(p[8:], &d, &cl)
+					vorbisComment(b, p[8:], &d, &cl)
 				}
 			case "flac":
 				if len(p) > 0 && p[0]&0x7f == 4 {
-					vorbisComment(p[4:], &d, &cl)
+					vorbisComment(b, p[4:], &d, &cl)
 				}
 			}
 		}

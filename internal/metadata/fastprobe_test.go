@@ -3,6 +3,7 @@ package metadata
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fixture(name string) string { return filepath.Join(probeFixtures, name) }
@@ -170,12 +172,12 @@ func TestFastProbeReadFailureIsUnsure(t *testing.T) {
 	info, _ := f.Stat()
 	b := newBlockFile(f, info.Size())
 	b.ff = ff7
-	if _, reason := fastProbe(b, "mp3"); reason != "" {
+	if _, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); reason != "" {
 		t.Fatalf("the whole file: %s", reason)
 	}
 	b = newBlockFile(f, info.Size()*2)
 	b.ff = ff7
-	if p, reason := fastProbe(b, "mp3"); p != nil || !strings.HasPrefix(reason, "read: ") {
+	if p, reason := fastProbe(context.Background(), b, "mp3", maxProbeTime); p != nil || !strings.HasPrefix(reason, "read: ") {
 		t.Errorf("a file shorter than its size: %+v, %q, want a read failure", p, reason)
 	}
 }
@@ -444,5 +446,127 @@ func TestRescale(t *testing.T) {
 		if got := rescale(tc[0], tc[1], tc[2]); got != tc[3] {
 			t.Errorf("rescale(%d, %d, %d) = %d, want %d", tc[0], tc[1], tc[2], got, tc[3])
 		}
+	}
+}
+
+// freeBoxes is an MP4 of nothing but free boxes of every bytes, size long:
+// each box header the walk reads costs it a block, so a big one reads past the
+// probe's budget without ever finding a moov. delay slows every read.
+type freeBoxes struct {
+	every, size int64
+	delay       time.Duration
+}
+
+func (r freeBoxes) ReadAt(p []byte, off int64) (int, error) {
+	time.Sleep(r.delay)
+	clear(p)
+	for box := off / r.every * r.every; box < off+int64(len(p)); box += r.every {
+		var h [8]byte
+		binary.BigEndian.PutUint32(h[:4], uint32(r.every))
+		copy(h[4:], "free")
+		for i := range h {
+			if at := box + int64(i) - off; at >= 0 && at < int64(len(p)) {
+				p[at] = h[i]
+			}
+		}
+	}
+	return len(p), nil
+}
+
+// The in-process probe is bounded: a file that would read past its byte
+// budget, a reader too slow for its deadline, or the caller's ended context
+// stops it with a limit reason (Extract then asks ffprobe), never a hang.
+func TestFastProbeLimits(t *testing.T) {
+	t.Parallel()
+	const gib = 1 << 30
+	probeWith := func(ctx context.Context, r freeBoxes, timeout time.Duration) (*probeResult, string) {
+		b := newBlockFile(r, r.size)
+		b.ff = ff8
+		return fastProbe(ctx, b, "m4b", timeout)
+	}
+	// 2 GiB of 128 KiB boxes is 16384 headers, one 64 KiB block each: 1 GiB.
+	if p, reason := probeWith(context.Background(), freeBoxes{every: 128 << 10, size: 2 * gib}, time.Minute); p != nil || reason != "limit: probe read budget" {
+		t.Errorf("past the budget: %+v, %q", p, reason)
+	}
+	// The same shape well inside it is simply unsure (no moov).
+	if p, reason := probeWith(context.Background(), freeBoxes{every: 128 << 10, size: 16 << 20}, time.Minute); p != nil || reason != "mp4: no moov" {
+		t.Errorf("inside the budget: %+v, %q", p, reason)
+	}
+	// 10 ms a read and 1 MiB boxes: the 100 ms deadline trips after ~10 reads.
+	start := time.Now()
+	if p, reason := probeWith(context.Background(), freeBoxes{every: 1 << 20, size: 2 * gib, delay: 10 * time.Millisecond}, 100*time.Millisecond); p != nil || reason != "limit: probe deadline" {
+		t.Errorf("a slow reader: %+v, %q", p, reason)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("a slow reader took %v to give up", took)
+	}
+	// The timeout is capped at maxProbeTime, whatever ffprobe is given.
+	b := newBlockFile(freeBoxes{every: 1 << 20, size: gib}, gib)
+	b.arm(context.Background(), min(time.Hour, maxProbeTime), maxProbeBytes)
+	if left := time.Until(b.deadline); left > maxProbeTime {
+		t.Errorf("deadline %v away, want at most %v", left, maxProbeTime)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if p, reason := probeWith(ctx, freeBoxes{every: 1 << 20, size: gib}, time.Minute); p != nil || reason != "limit: context canceled" {
+		t.Errorf("an ended context: %+v, %q", p, reason)
+	}
+}
+
+// A loop that goes round without reading checks the deadline too, every 256
+// ticks; disarmed (outside fastProbe) a tick never trips.
+func TestBlockFileTick(t *testing.T) {
+	t.Parallel()
+	b := newBlockFile(bytes.NewReader(nil), 0)
+	for range 1000 {
+		b.tick()
+	}
+	b.arm(context.Background(), -time.Second, maxProbeBytes)
+	defer func() {
+		if r := recover(); r != probeLimit("limit: probe deadline") {
+			t.Errorf("recovered %v, want the deadline", r)
+		}
+	}()
+	for range 256 {
+		b.tick()
+	}
+	t.Error("256 ticks past the deadline never tripped it")
+}
+
+// A file past the probe's budget is read by ffprobe instead, with no error of
+// its own: the limit is the probe's, not the file's.
+func TestExtractFallsBackPastTheProbeBudget(t *testing.T) {
+	t.Parallel()
+	probe, log := fakeFFprobe(t, "8.1.3", false)
+	path := filepath.Join(t.TempDir(), "huge.m4b")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A sparse 256 MiB of 128 KiB free boxes: 2048 headers, 128 MiB of blocks.
+	const every, size = 128 << 10, 256 << 20
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	h := make([]byte, 8)
+	binary.BigEndian.PutUint32(h[:4], every)
+	copy(h[4:], "free")
+	for at := int64(0); at < size; at += every {
+		if _, err := f.WriteAt(h, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	md, err := Extract(path, probe)
+	if err != nil || md.ProbeErr != nil {
+		t.Fatalf("Extract: %v, %v", err, md.ProbeErr)
+	}
+	if md.Duration != 1 || md.Codec != "fake" {
+		t.Errorf("duration %v codec %q, want ffprobe's answer", md.Duration, md.Codec)
+	}
+	if n := runs(t, log); n != 1 {
+		t.Errorf("ffprobe read %d files, want the one past the budget", n)
 	}
 }

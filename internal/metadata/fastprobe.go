@@ -24,6 +24,7 @@ import (
 	"math/bits"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,12 +108,34 @@ type unsure string
 
 func (u unsure) Error() string { return string(u) }
 
+// The probe's own bounds, so a shape nobody found can't hold a scan's reader
+// (ffprobe's timeout covers only the fallback): a file's probe gets at most
+// maxProbeTime (or the caller's ffprobe timeout, or its context, whichever ends
+// first) and maxProbeBytes read from the file, far above what a real file needs
+// (a few hundred KiB; the real library's p95 is under 1 MiB). Either one ends
+// the probe, and the file goes to ffprobe.
+const (
+	maxProbeTime  = 5 * time.Second
+	maxProbeBytes = 64 << 20
+)
+
+// probeLimit is the panic a blockFile's tick raises once a bound is passed:
+// fastProbe recovers it, from wherever the reader was.
+type probeLimit string
+
 // fastProbe answers for the file's format as b.ff's ffprobe would, or says why
-// it can't ("" when it answered). A reader's panic, a read error and an answer
-// with no duration are all reasons.
-func fastProbe(b *blockFile, format string) (p *probeResult, reason string) {
+// it can't ("" when it answered), within the probe's bounds: timeout (capped at
+// maxProbeTime) and ctx, and maxProbeBytes. A bound passed, a reader's panic, a
+// read error and an answer with no duration are all reasons.
+func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string) {
+	b.arm(ctx, min(timeout, maxProbeTime), maxProbeBytes)
+	defer b.disarm()
 	defer func() {
 		if r := recover(); r != nil {
+			if l, ok := r.(probeLimit); ok {
+				p, reason = nil, string(l)
+				return
+			}
 			p, reason = nil, fmt.Sprintf("panic: %v", r)
 		}
 	}()
@@ -160,7 +183,7 @@ func probeFile(path string, ff ffRules) (*probeResult, string, error) {
 	}
 	b := newBlockFile(f, info.Size())
 	b.ff = ff
-	p, reason := fastProbe(b, fileFormat(path))
+	p, reason := fastProbe(context.Background(), b, fileFormat(path), maxProbeTime)
 	return p, reason, nil
 }
 
@@ -178,22 +201,67 @@ const (
 // blockFile reads the file in 64 KiB blocks it keeps, so dhowden, the narrator
 // walk and the probe read each block once. A failed read (anything but the end
 // of the file at its size) is kept in err: the probe is then unsure, and the
-// file goes to ffprobe, whose own error is the one recorded.
+// file goes to ffprobe, whose own error is the one recorded. While the probe
+// runs it is armed with the probe's bounds, checked by tick.
 type blockFile struct {
-	f      *os.File
+	f      io.ReaderAt
 	size   int64
 	blocks map[int64][]byte
 	err    error
 	ff     ffRules // the rules the probe reads it by
+
+	armed    bool
+	ctx      context.Context
+	deadline time.Time
+	budget   int64  // bytes the probe may still read from the file
+	ticks    uint32 // tick's calls, so the clock is read every 256th
 }
 
-func newBlockFile(f *os.File, size int64) *blockFile {
+func newBlockFile(f io.ReaderAt, size int64) *blockFile {
 	return &blockFile{f: f, size: size, blocks: map[int64][]byte{}}
 }
 
+// arm starts the probe's bounds: timeout from now, ctx, budget bytes.
+func (b *blockFile) arm(ctx context.Context, timeout time.Duration, budget int64) {
+	b.armed, b.ctx, b.deadline, b.budget, b.ticks = true, ctx, time.Now().Add(timeout), budget, 0
+}
+
+// disarm ends them (a later read, of tags say, is unbounded as before).
+func (b *blockFile) disarm() { b.armed, b.ctx = false, nil }
+
+// tick checks the probe's bounds: every read calls it, and so does a loop
+// that can go round without reading. Past one it panics with a probeLimit,
+// which fastProbe recovers. Cheap: the clock and ctx are looked at on every
+// 256th call (and on every read from the file, in raw).
+func (b *blockFile) tick() {
+	if !b.armed {
+		return
+	}
+	if b.ticks++; b.ticks&255 == 0 {
+		b.checkTime()
+	}
+}
+
+// checkTime is tick's look at the clock and ctx.
+func (b *blockFile) checkTime() {
+	if b.ctx.Err() != nil {
+		panic(probeLimit("limit: " + b.ctx.Err().Error()))
+	}
+	if time.Now().After(b.deadline) {
+		panic(probeLimit("limit: probe deadline"))
+	}
+}
+
 // raw reads p at off from the file, noting a failure (a short read ending
-// before the file's size included: it shrank since its stat).
+// before the file's size included: it shrank since its stat). While armed it
+// spends the byte budget and checks the clock.
 func (b *blockFile) raw(p []byte, off int64) (int, error) {
+	if b.armed {
+		if b.budget -= int64(len(p)); b.budget < 0 {
+			panic(probeLimit("limit: probe read budget"))
+		}
+		b.checkTime()
+	}
 	n, err := b.f.ReadAt(p, off)
 	if n < len(p) && off+int64(n) < b.size && b.err == nil {
 		if err == nil || errors.Is(err, io.EOF) {
@@ -224,6 +292,7 @@ func (b *blockFile) block(i int64) []byte {
 // ReadAt reads through the block cache; a large read (a picture) goes straight
 // to the file.
 func (b *blockFile) ReadAt(p []byte, off int64) (int, error) {
+	b.tick()
 	if off < 0 {
 		return 0, errors.New("negative offset")
 	}
@@ -488,8 +557,12 @@ type avChapter struct {
 
 type chapterList struct {
 	c         []*avChapter
+	byID      map[int64]*avChapter // each id's chapter (ids are unique in c)
 	monotonic bool
 }
+
+// find is the chapter with id; nil for none.
+func (l *chapterList) find(id int64) *avChapter { return l.byID[id] }
 
 // add is avpriv_new_chapter: nil (no chapter) when it ends before it starts.
 func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title string) *avChapter {
@@ -500,18 +573,17 @@ func (l *chapterList) add(id, num, den, start, end int64, hasEnd bool, title str
 	if len(l.c) == 0 {
 		l.monotonic = true
 	} else if !l.monotonic || l.c[len(l.c)-1].id >= id {
-		for _, c := range l.c {
-			if c.id == id {
-				ch = c
-			}
-		}
-		if ch == nil {
+		if ch = l.find(id); ch == nil {
 			l.monotonic = false
 		}
 	}
 	if ch == nil {
 		ch = &avChapter{}
 		l.c = append(l.c, ch)
+		if l.byID == nil {
+			l.byID = map[int64]*avChapter{}
+		}
+		l.byID[id] = ch
 	}
 	ch.title = title
 	ch.id, ch.num, ch.den, ch.start, ch.end, ch.hasEnd = id, num, den, start, end, hasEnd
@@ -533,13 +605,8 @@ func (l *chapterList) finish(durUS, startUS int64, hasStart bool) []Chapter {
 	}
 	// timetable: sorted by start (stable on equal, as qsort of distinct pointers
 	// compares only start: FFmpeg's ordering of equal starts is unspecified).
-	tt := make([]*avChapter, len(l.c))
-	copy(tt, l.c)
-	for i := 1; i < len(tt); i++ {
-		for j := i; j > 0 && cmpChapterStart(tt[j], tt[j-1]) < 0; j-- {
-			tt[j], tt[j-1] = tt[j-1], tt[j]
-		}
-	}
+	tt := slices.Clone(l.c)
+	slices.SortStableFunc(tt, cmpChapterStart)
 	for i, ch := range tt {
 		if ch.hasEnd {
 			continue

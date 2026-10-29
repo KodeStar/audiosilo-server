@@ -261,6 +261,7 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 		}
 	}
 	for length >= hdr {
+		b.tick() // frames are walked in memory, the tag read at once
 		var tflags uint16
 		var tag string
 		var tlen uint32

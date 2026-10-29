@@ -138,7 +138,7 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 	if ffprobePath != "" && !ffprobeForced(ffprobePath) {
 		ff = ffprobeRules(ctx, ffprobePath)
 	}
-	p, err := readFile(m, path, ff)
+	p, err := readFile(ctx, m, path, ff, timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
@@ -164,9 +164,10 @@ func fileFormat(path string) string {
 
 // readFile reads the tags of the file at path into m and, unless ff is ffNone,
 // the in-process probe's answer by ff's rules (nil when it is unsure: ffprobe
-// reads the file). The file is closed when it returns, before any ffprobe run.
-// An error: it could not be opened.
-func readFile(m *Metadata, path string, ff ffRules) (*probeResult, error) {
+// reads the file), bounded by ctx and timeout as ffprobe would be (fastProbe).
+// The file is closed when it returns, before any ffprobe run. An error: it
+// could not be opened.
+func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (*probeResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -197,7 +198,7 @@ func readFile(m *Metadata, path string, ff ffRules) (*probeResult, error) {
 		return nil, nil
 	}
 	b.ff = ff
-	p, _ := fastProbe(b, m.Format)
+	p, _ := fastProbe(ctx, b, m.Format, timeout)
 	return p, nil
 }
 
