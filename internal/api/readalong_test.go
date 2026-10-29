@@ -328,6 +328,60 @@ func TestReadalongHashesOnDemand(t *testing.T) {
 	}
 }
 
+// An EPUB replaced on disk since the last scan (the index's ebook_sig still the
+// old file's) is not answered with the stored digest: the file's signature now
+// differs from the one the digest was computed for, so it is hashed again and
+// recorded with the new signature. Denied: the old map is stale (409
+// ebook_changed, Book.readalong stale) before any scan. Allowed: a map made for
+// the new file is ready, still before a scan, and the stored digest is trusted
+// while the file on disk keeps the signature it was computed for (never hashed
+// on every ask).
+func TestReadalongEbookReplacedBeforeScan(t *testing.T) {
+	t.Parallel()
+	e := newReadalongEnv(t)
+	ctx := context.Background()
+	before, err := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook)
+	if err != nil || !before.DigestCurrent {
+		t.Fatalf("before = %+v, %v", before, err)
+	}
+	// Trusted while the file is unchanged: a stored digest that isn't the
+	// file's (the signature still matching) is what the answer compares.
+	if _, err := e.db.ExecContext(ctx, `UPDATE books SET ebook_sha256 = ? WHERE rel_path = ?`, strings.Repeat("0", 64), ebookBook); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stored digest with the file unchanged = %d, want it trusted (409)", resp.StatusCode)
+	}
+	if _, err := e.db.ExecContext(ctx, `UPDATE books SET ebook_sha256 = ? WHERE rel_path = ?`, before.EbookSHA256, ebookBook); err != nil {
+		t.Fatal(err)
+	}
+
+	edited := append(append([]byte{}, e.epub...), 0, 0)
+	if err := os.WriteFile(filepath.Join(e.root, filepath.FromSlash(ebookFile)), edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"reason":"ebook_changed"`) {
+		t.Errorf("old map, ebook replaced, no scan = %d %s; want 409 ebook_changed", resp.StatusCode, body)
+	}
+	if got := e.itemReadalong(t, ebookBook); got != `{"state":"stale","reason":"ebook_changed"}` {
+		t.Errorf("item, ebook replaced, no scan = %s", got)
+	}
+	after, err := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook)
+	if err != nil || after.EbookSHA256 != sha256Hex(edited) || after.HashedSig == before.HashedSig || after.DigestCurrent {
+		t.Errorf("after = %+v, %v; want the new file's digest kept under its own signature", after, err)
+	}
+	writeMap(t, e.root, mapPaths[ebookBook], readalongMapJSON(t, sha256Hex(edited), bookAudio(t, e.cat, e.lib.ID, ebookBook)))
+	if resp, _ := e.do(t, "GET", e.at("readalong", ebookBook), e.annTok, ""); resp.StatusCode != http.StatusOK {
+		t.Errorf("a map for the new ebook, no scan = %d, want 200", resp.StatusCode)
+	}
+	// The scan that records the new file finds its digest already current.
+	scanFixture(t, e.testEnv, e.lib)
+	if idx, _ := e.cat.BookReadalongAt(ctx, e.lib.ID, ebookBook); !idx.DigestCurrent || idx.EbookSHA256 != sha256Hex(edited) {
+		t.Errorf("after the scan = %+v", idx)
+	}
+}
+
 // The readalong capability is on.
 func TestReadalongCapability(t *testing.T) {
 	t.Parallel()

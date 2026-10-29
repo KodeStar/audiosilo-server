@@ -629,16 +629,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the file's size and mtime (the same for both encodings; 304 on a match). **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
-  a real `.audiosilo` folder that isn't ignored, a regular file never through a link) and checks
-  it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`, the
-  ebook's digest the index's when current, else hashed now and recorded); the indexed head never
+  a real `.audiosilo` folder that isn't ignored, a regular file never through a link, read once
+  more when the Bridge renamed a new map in as it was opened: `metadata.ErrReplacedWhileOpening`) and
+  checks it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`,
+  the ebook's digest the stored one only while the file on disk still has the signature it was
+  computed for, one stat: `library.EbookSigNow` against `ebook_hashed_sig`, else hashed now and
+  recorded with the new signature, so an EPUB replaced since the last scan is never answered with
+  the old file's digest and is hashed once, not on every ask); the indexed head never
   vouches for the bytes sent. A part's path, a podcast library, a book with no ebook, no map, or a
   map that fails its checks: 404 `no_readalong`; a map made from another ebook or other audio: 409
   `readalong_stale` with `reason` (`ebook_changed`, `audio_changed`); outside scope 403. The player's
   `Book.readalong` (`{state: ready, coverage, generated_at}` or `{state: stale, reason}`;
   `catalog.Readalong`) is on `GET /libraries/{id}/item` and the console's book detail only, never a
   list row, omitted with no ebook or no valid map (`api.readalongOf`, from the indexed head; a failure
-  is logged and reads as none). An ebook edit is seen once a scan records its new `ebook_sig`.
+  is logged and reads as none; its digest checked the same way, so an ebook edit shows before any scan).
 - **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
   (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`. `.mka` (Matroska audio, #161)
   has its chapters read by ffprobe; stored, it is `audio/x-matroska` (also sniffed from its EBML
@@ -857,9 +861,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ebook_hashed_sig`, so a digest whose sig isn't the row's is stale): the scan's post-pass
   (`Scanner.hashReadalongEbooks`, after the walk; `RefreshAttachments` for its one book) hashes the
   books `catalog.ReadalongEbooksDue` lists (a stored valid head, an ebook, a digest not current) through
-  `library.EbookDigest` (`OpenEbook`), and `SetEbookDigest` records it only while the row still names
-  that file (compare-and-set on `ebook_sig`). Hashing every ebook would read a library whole over a
-  network share.
+  `library.EbookDigest` (`OpenEbook`), and `SetEbookDigest` records it with the signature of the file
+  it hashed, only while the row still names that ebook (`ebook_path`): a request may record one for a
+  file newer than the last scan, which that scan then finds current. Hashing every ebook would read a
+  library whole over a network share.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
   found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's

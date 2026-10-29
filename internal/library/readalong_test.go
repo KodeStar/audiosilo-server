@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -210,5 +211,39 @@ func TestEbookDigest(t *testing.T) {
 	cancel()
 	if _, _, err := EbookDigest(done, root, "A/b.epub", true); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: err = %v, want context.Canceled", err)
+	}
+}
+
+// TestReadRetryingSwap: a map replaced while being opened (the Bridge renaming
+// a new one into place) is read once more; a second replacement in a row, or
+// any other failure, is the answer.
+func TestReadRetryingSwap(t *testing.T) {
+	t.Parallel()
+	swapped := fmt.Errorf("m: %w", metadata.ErrReplacedWhileOpening)
+	other := errors.New("permission denied")
+	for _, tc := range []struct {
+		name  string
+		errs  []error
+		want  error
+		calls int
+	}{
+		{"read", []error{nil}, nil, 1},
+		{"swapped once", []error{swapped, nil}, nil, 2},
+		{"swapped twice", []error{swapped, swapped}, metadata.ErrReplacedWhileOpening, 2},
+		{"other failure", []error{other}, other, 1},
+	} {
+		calls := 0
+		read := func(string) ([]byte, fs.FileInfo, error) {
+			err := tc.errs[calls]
+			calls++
+			if err != nil {
+				return nil, nil, err
+			}
+			return []byte("{}"), nil, nil
+		}
+		data, _, err := readRetryingSwap(read, "m")
+		if calls != tc.calls || !errors.Is(err, tc.want) || (tc.want == nil && string(data) != "{}") {
+			t.Errorf("%s: %d calls, %q, %v; want %d calls, %v", tc.name, calls, data, err, tc.calls, tc.want)
+		}
 	}
 }

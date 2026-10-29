@@ -39,6 +39,11 @@ var errABSFileNotRegular = fmt.Errorf("%w: not a regular file", ErrABSFileInvali
 // utf8BOM is the byte order mark a Windows editor may put before the JSON.
 var utf8BOM = []byte("\xef\xbb\xbf")
 
+// ErrReplacedWhileOpening is ReadRegularFile's answer when the file was
+// replaced between its look and its open (a new version renamed into place, or
+// a link): reading again sees what is there now.
+var ErrReplacedWhileOpening = errors.New("replaced while being opened")
+
 // ABSFile is what an Audiobookshelf metadata.json says about a book, "" (nil)
 // for whatever it leaves out. Values are as the file has them, trimmed; the
 // catalog checks each against its field's rules.
@@ -145,7 +150,7 @@ func readRegularFileInfo(path string, limit int, notRegular, tooLarge error) ([]
 	if !os.SameFile(info, opened) {
 		// Replaced between the two looks (a new version renamed into place, or a
 		// link): the next read sees what is there then.
-		return nil, nil, fmt.Errorf("%s: replaced while being opened", path)
+		return nil, nil, fmt.Errorf("%s: %w", path, ErrReplacedWhileOpening)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {

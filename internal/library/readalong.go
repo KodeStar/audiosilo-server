@@ -45,6 +45,20 @@ func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig s
 	return hex.EncodeToString(h.Sum(nil)), catalog.EbookSig(path.Base(rel), info), nil
 }
 
+// EbookSigNow is the signature (catalog.EbookSig) of the ebook at
+// library-relative rel as it is on disk now, by OpenEbook's rules (noLink as
+// there) without opening it: one stat. A request compares it with the stored
+// digest's (catalog.ReadalongIndexed.HashedSig), so an ebook replaced since the
+// last scan is hashed again, never answered with the old file's digest.
+// ErrNoEbook (or fs.ErrNotExist) when there is no such file now.
+func EbookSigNow(root, rel string, noLink bool) (string, error) {
+	_, info, err := lookEbook(root, rel, noLink)
+	if err != nil {
+		return "", err
+	}
+	return catalog.EbookSig(path.Base(rel), info), nil
+}
+
 // ctxReader is r that fails with ctx's error once ctx is done.
 type ctxReader struct {
 	ctx context.Context
@@ -80,15 +94,15 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 }
 
 // HashEbook hashes the ebook (ebookPath) of the book at bookPath now
-// (EbookDigest) and records the digest (only while the index still holds that
-// file: catalog.SetEbookDigest). A failure to record it is logged, never the
-// answer's.
+// (EbookDigest) and records the digest with the signature of the file it hashed
+// (only while the index still names that ebook: catalog.SetEbookDigest). A
+// failure to record it is logged, never the answer's.
 func (s *Scanner) HashEbook(ctx context.Context, lib catalog.Library, bookPath, ebookPath string, folder bool) (string, error) {
 	sha, sig, err := EbookDigest(ctx, lib.Root, ebookPath, folder)
 	if err != nil {
 		return "", err
 	}
-	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, sig, sha); err != nil {
+	if err := s.cat.SetEbookDigest(ctx, lib.ID, bookPath, ebookPath, sig, sha); err != nil {
 		s.log.Warn("record ebook digest failed", "library", lib.Name, "path", bookPath, "err", err)
 	}
 	return sha, nil
@@ -120,7 +134,7 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 	case err != nil:
 		return nil, nil, err
 	}
-	data, fi, err := metadata.ReadReadalongFile(filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
+	data, fi, err := readRetryingSwap(metadata.ReadReadalongFile, filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
 	switch {
 	case err == nil:
 		return data, fi, nil
@@ -128,4 +142,17 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
 	}
 	return nil, nil, err
+}
+
+// readRetryingSwap reads the file at p with read, once more when it was
+// replaced while being opened (metadata.ErrReplacedWhileOpening): the Bridge
+// renames a new map into place ("Make again"), and a request that met the
+// rename reads the new file rather than failing. A second replacement in a row
+// is the error.
+func readRetryingSwap(read func(string) ([]byte, fs.FileInfo, error), p string) ([]byte, fs.FileInfo, error) {
+	data, info, err := read(p)
+	if errors.Is(err, metadata.ErrReplacedWhileOpening) {
+		data, info, err = read(p)
+	}
+	return data, info, err
 }

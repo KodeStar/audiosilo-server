@@ -126,11 +126,18 @@ func fileETag(info fs.FileInfo) string {
 }
 
 // digestOf is the sha256 of the ebook (ebookPath) of the book at bookPath, idx
-// its index row (catalog.BookReadalongAt): the index's when it is current
-// (computed for the ebook the book has now), else hashed now and recorded for
-// the next ask (library.Scanner.HashEbook).
+// its index row (catalog.BookReadalongAt): the stored one while the file on
+// disk still has the signature it was computed for (one stat:
+// library.EbookSigNow; the index's ebook_sig is only as new as the last scan,
+// so an EPUB replaced since would otherwise answer with the old file's
+// digest), else hashed now and recorded with the new file's signature, so the
+// next ask doesn't hash it again (library.Scanner.HashEbook).
 func (a *API) digestOf(ctx context.Context, lib *catalog.Library, idx catalog.ReadalongIndexed, bookPath, ebookPath string, folder bool) (string, error) {
-	if idx.DigestCurrent {
+	sig, err := library.EbookSigNow(lib.Root, ebookPath, folder)
+	if err != nil {
+		return "", err
+	}
+	if idx.HashedSig != "" && idx.HashedSig == sig && idx.EbookSHA256 != "" {
 		return idx.EbookSHA256, nil
 	}
 	return a.scanner.HashEbook(ctx, *lib, bookPath, ebookPath, folder)
@@ -149,10 +156,9 @@ func (a *API) readalongOfBook(ctx context.Context, lib *catalog.Library, book *c
 // readalongOf is Book.readalong for a book with an ebook (its own path, whether
 // it is a folder book, its ebook's path, and its audio files as a map names
 // them: catalog.BookAudioFiles): nil when it has no valid map in the index. The
-// ebook's digest is the index's, hashed now when it isn't current (a map just
-// found: recorded once the index holds that ebook, so again on each ask until
-// a scan records an ebook changed since). A failure is logged and reads as no block: the book's
-// page must still answer.
+// ebook's digest is digestOf's (the stored one while the file on disk is the
+// one it was computed for, else hashed now and recorded). A failure is logged
+// and reads as no block: the book's page must still answer.
 func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath string, folder bool, ebookPath string, files []metadata.ReadalongFile) *catalog.Readalong {
 	idx, err := a.cat.BookReadalongAt(ctx, lib.ID, bookPath)
 	if err != nil {

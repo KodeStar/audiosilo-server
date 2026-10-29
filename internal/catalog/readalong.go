@@ -111,11 +111,15 @@ func BookAudioFiles(bookPath string, folder bool, duration float64, files []Book
 
 // ReadalongIndexed is what the index holds about a book's read-along map: its
 // checked head (nil for none or one that failed its checks), the ebook's
-// stored sha256, and whether that digest is current (computed for the ebook
-// the book has now: ebook_hashed_sig is its ebook_sig).
+// stored sha256, the signature (EbookSig) of the file it was computed for
+// (HashedSig, "" for none), and whether that digest is current for the ebook
+// the index records (ebook_hashed_sig is its ebook_sig). A request compares
+// HashedSig with the file on disk instead: the index's ebook_sig is only as new
+// as the last scan.
 type ReadalongIndexed struct {
 	Head          *metadata.ReadalongHead
 	EbookSHA256   string
+	HashedSig     string
 	DigestCurrent bool
 }
 
@@ -125,9 +129,10 @@ func (c *Catalog) BookReadalongAt(ctx context.Context, libraryID int64, bookPath
 	var raw string
 	var out ReadalongIndexed
 	err := c.db.QueryRowContext(ctx,
-		`SELECT COALESCE(a.readalong, ''), b.ebook_sha256, b.ebook_sig != '' AND b.ebook_hashed_sig = b.ebook_sig
+		`SELECT COALESCE(a.readalong, ''), b.ebook_sha256, b.ebook_hashed_sig,
+		        b.ebook_sig != '' AND b.ebook_hashed_sig = b.ebook_sig
 		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id
-		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, bookPath).Scan(&raw, &out.EbookSHA256, &out.DigestCurrent)
+		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, bookPath).Scan(&raw, &out.EbookSHA256, &out.HashedSig, &out.DigestCurrent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReadalongIndexed{}, ErrNotFound
 	}
@@ -167,13 +172,15 @@ func (c *Catalog) ReadalongEbooksDue(ctx context.Context, libraryID int64, bookP
 	}, q, args...)
 }
 
-// SetEbookDigest records the sha256 of the book at bookPath's ebook, computed
-// for the file whose signature (EbookSig) is sig, only while the row's ebook is
-// still that file (ebook_sig = sig): a digest of a file the index has moved on
-// from is never recorded as current.
-func (c *Catalog) SetEbookDigest(ctx context.Context, libraryID int64, bookPath, sig, sha256 string) error {
+// SetEbookDigest records the sha256 of the book at bookPath's ebook (ebookPath),
+// computed for the file whose signature (EbookSig) is sig, only while the row
+// still names that ebook (ebook_path = ebookPath). The digest is stored with
+// its signature, so it is current only for that file: for the index once a
+// scan records the same ebook_sig (a request may record one for a file on disk
+// newer than the last scan), for a request while the file on disk still has it.
+func (c *Catalog) SetEbookDigest(ctx context.Context, libraryID int64, bookPath, ebookPath, sig, sha256 string) error {
 	_, err := c.db.ExecContext(ctx,
-		`UPDATE books SET ebook_sha256 = ?, ebook_hashed_sig = ? WHERE library_id = ? AND rel_path = ? AND ebook_sig = ?`,
-		sha256, sig, libraryID, bookPath, sig)
+		`UPDATE books SET ebook_sha256 = ?, ebook_hashed_sig = ? WHERE library_id = ? AND rel_path = ? AND ebook_path = ?`,
+		sha256, sig, libraryID, bookPath, ebookPath)
 	return err
 }
