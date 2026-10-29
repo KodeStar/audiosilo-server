@@ -336,7 +336,7 @@ func TestCompressHeadMatchesGet(t *testing.T) {
 	lib, tok := compressLibrary(t, e, 40)
 	for _, p := range []string{
 		fmt.Sprintf("/api/v1/libraries/%d/books?limit=200", lib.ID), // list cache
-		"/api/v1/admin/authors",                                     // not cached
+		"/api/v1/admin/authors", // not cached
 	} {
 		for _, gz := range []bool{false, true} {
 			get, _ := e.raw(t, "GET", p, tok, gz, nil)
