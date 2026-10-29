@@ -1308,7 +1308,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
   while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
   **The player's community covers** (rail entries, "Previous books", the recording) come
-  through `GET /libraries/{id}/meta/cover?path=&url=&size=160|320|640` (`handleMetaCover`,
+  through `GET /libraries/{id}/meta/cover?path=&url=&size=96|160|320|640` (`handleMetaCover`,
   capability `meta_covers` = `metadataOn()`; media auth, so `?token=`): the web player's
   CSP takes images only from the server, which stays so (`TestHTMLCSPImagesStaySameOrigin`),
   and a listener's device never contacts a cover host. Not an open proxy: the path is

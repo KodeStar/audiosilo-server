@@ -1175,7 +1175,7 @@ export interface DuplicateGroup {
  */
 export interface DuplicatePage {
   groups: DuplicateGroup[];
-  total?: number;
+  total: number;
   next_cursor?: string;
 }
 

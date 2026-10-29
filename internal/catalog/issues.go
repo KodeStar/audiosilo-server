@@ -449,13 +449,6 @@ func betterCopy(a, b dupRow) bool {
 	return a.listeners > b.listeners
 }
 
-// DuplicateGroups returns the first maxDuplicateGroups groups of copies
-// (DuplicatePage without a cursor).
-func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored, across bool) ([]DuplicateGroup, error) {
-	page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: libraryID, Ignored: ignored, Across: across})
-	return page.Groups, err
-}
-
 // DuplicatePage returns a page of the groups of copies (duplicateSets) with each
 // copy's admin row: the open ones, or with q.Ignored only the ones every member
 // of which an admin ignored (a new copy brings a group back). q.Across also groups
@@ -486,16 +479,16 @@ func (c *Catalog) DuplicatePage(ctx context.Context, q DuplicateQuery) (Duplicat
 	page := DuplicatePage{Total: len(sets), Groups: []DuplicateGroup{}}
 	if q.Cursor != "" {
 		// The first group past the cursor, in duplicateSets' order.
-		start, _ := slices.BinarySearchFunc(sets, 0, func(s dupSet, _ int) int {
+		start := slices.IndexFunc(sets, func(s dupSet) bool {
 			keep := rows[s.members[0]]
 			if d := cmp.Compare(keep.libraryID, afterLib); d != 0 {
-				return d
+				return d > 0
 			}
-			if compareFold(keep.path, afterPath) <= 0 {
-				return -1
-			}
-			return 1
+			return compareFold(keep.path, afterPath) > 0
 		})
+		if start < 0 {
+			start = len(sets)
+		}
 		sets = sets[start:]
 	}
 	end, books := 0, 0

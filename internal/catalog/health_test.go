@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -160,6 +161,13 @@ func TestIssueCountsAndIgnores(t *testing.T) {
 	if err := c.IgnoreIssue(ctx, IssueNoCover, []Ref{{LibraryID: 999, Path: "x"}}, uid); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// DuplicateGroups is the tests' first page of groups (DuplicatePage without a
+// limit or cursor).
+func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored, across bool) ([]DuplicateGroup, error) {
+	page, err := c.DuplicatePage(ctx, DuplicateQuery{LibraryID: libraryID, Ignored: ignored, Across: across})
+	return page.Groups, err
 }
 
 func TestDuplicateGroups(t *testing.T) {

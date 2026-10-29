@@ -1,3 +1,4 @@
+import { refKey } from '@/lib/book-route';
 import type { BookRef } from './types';
 import type { ThumbSize } from './client';
 
@@ -57,12 +58,12 @@ export const MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 /** The cache key of a book's thumbnail at a size for its cover_version. */
 export function thumbKey(ref: BookRef, size: ThumbSize, version: string) {
-  return `${bookPrefix(ref.library_id, ref.path)}${size}\u0000${version}`;
+  return `${bookPrefix(ref)}${size}\0${version}`;
 }
 
 /** The start of every key of one book's thumbnails (paths never hold a NUL). */
-function bookPrefix(libraryId: number, path: string) {
-  return `${libraryId}\u0000${path}\u0000`;
+function bookPrefix(ref: BookRef) {
+  return `${refKey(ref)}\0`;
 }
 
 /**
@@ -138,7 +139,7 @@ export class ThumbCache {
   /** Forgets every thumbnail of one book (a new cover was set or removed). */
   async forget(libraryId: number, path: string): Promise<void> {
     const index = await this.load();
-    const prefix = bookPrefix(libraryId, path);
+    const prefix = bookPrefix({ library_id: libraryId, path });
     const keys = [...index.keys()].filter((k) => k.startsWith(prefix));
     if (keys.length) await this.remove(index, keys);
   }

@@ -101,7 +101,7 @@ function DuplicatePages({
   const shown = useMemo(() => {
     const seen = new Set<string>();
     return (pages ?? [])
-      .flatMap((p) => p.groups ?? [])
+      .flatMap((p) => p.groups)
       .filter((g) => {
         const key = refKey(g.books[0]);
         if (seen.has(key)) return false;
