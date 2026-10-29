@@ -983,3 +983,27 @@ func TestWalkReadsWhatAudioEntriesReads(t *testing.T) {
 		}
 	}
 }
+
+// PLAYER-08: a first scan counts a book split across disc folders as one book
+// added, not one per disc, and names it once.
+func TestSplitDiscsCountOnceAdded(t *testing.T) {
+	t.Parallel()
+	cat, ctx := newHealthCatalog(t)
+	root := t.TempDir()
+	audio := testAudio(t)
+	for _, p := range []string{"A/Book/CD1/01.m4b", "A/Book/CD2/01.m4b", "A/Book/CD3/01.m4b",
+		"A/Other/01.m4b", "B/Set/Disc 1/01.m4b", "B/Set/Disc 2/01.m4b"} {
+		writeFile(t, root, p, audio)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	res, err := NewScanner(cat, "", slog.Default()).Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bookPaths(t, cat, lib.ID); len(got) != 6 {
+		t.Fatalf("indexed %q, want the six disc and folder books", got)
+	}
+	if res.Added != 3 || len(res.AddedTitles) != 3 {
+		t.Fatalf("added = %d %q, want 3 (each disc set once, and the other book)", res.Added, res.AddedTitles)
+	}
+}

@@ -398,6 +398,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// writeBatchAge, the writer would wait on a read, or the scan ends or stops.
 	var batch []*bookRead
 	var batchSince time.Time
+	// The folders of books split across disc folders whose discs this scan has
+	// counted as added: the discs of one are one book added, not one each
+	// (PLAYER-08).
+	addedSplit := map[string]bool{}
 	// recordWrite counts a book written (err nil) or not, and logs its problem
 	// or the failure.
 	recordWrite := func(r *bookRead, err error) {
@@ -422,6 +426,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// books already indexed is a reshape logged as joined (carryJoinedState),
 			// and a disc split back out of a joined book one logged as split (below):
 			// none is new, nor announced as added.
+			if b.SplitParent != "" {
+				if addedSplit[b.SplitParent] {
+					return
+				}
+				addedSplit[b.SplitParent] = true
+			}
 			res.Added++
 			if len(res.AddedTitles) < maxAddedTitles {
 				res.AddedTitles = append(res.AddedTitles, b.Title)
