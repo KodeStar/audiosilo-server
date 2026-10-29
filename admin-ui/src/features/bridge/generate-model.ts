@@ -987,8 +987,8 @@ export async function settleLimited<T, R>(
 export function readalongFailure(
   error: string,
 ): { key: string; percent: number } | { text: string } | undefined {
-  const m = /^the ebook and the narration don't match: (\d+)% lined up$/.exec(error.trim());
-  if (m) return { key: 'book.readalong.failed.noMatch', percent: Number(m[1]) / 100 };
   const text = error.trim();
+  const m = /^the ebook and the narration don't match: (\d+)% lined up$/.exec(text);
+  if (m) return { key: 'book.readalong.failed.noMatch', percent: Number(m[1]) / 100 };
   return text ? { text: text.charAt(0).toUpperCase() + text.slice(1) } : undefined;
 }

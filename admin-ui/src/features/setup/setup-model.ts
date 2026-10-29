@@ -74,16 +74,12 @@ function needsFolder(id: SetupStepId): boolean {
  * Where the flow opens: the first step without a mark (the last step when all
  * have one, so Finish is a click away), or the step `requested` (`?step=`).
  * Either way, a step that needs the folder opens the folder step instead when
- * the folder is lost (folderLost).
+ * the folder is `lost` (folderLost).
  */
-export function resumeStep(
-  marks: SetupMarks,
-  facts: FolderFacts,
-  requested?: SetupStepId,
-): SetupStepId {
+export function resumeStep(marks: SetupMarks, lost: boolean, requested?: SetupStepId): SetupStepId {
   const first =
     requested ?? SETUP_STEPS.find((id) => !marks[id]) ?? SETUP_STEPS[SETUP_STEPS.length - 1];
-  if (needsFolder(first) && folderLost(marks, facts)) return 'folder';
+  if (needsFolder(first) && lost) return 'folder';
   return first;
 }
 

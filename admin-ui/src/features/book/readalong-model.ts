@@ -42,11 +42,6 @@ export function readalongBridge(
   return paired ? 'offline' : 'none';
 }
 
-/** Whether "Make read-along" can be offered: readalongBridge is `ready`. */
-export function readalongAvailable(server: ServerInfo | undefined): boolean {
-  return readalongBridge(server, undefined) === 'ready';
-}
-
 /**
  * Whether the page should follow the book's read-along jobs: a server that
  * knows the Bridge (on or off), for a book with an ebook (the job needs one).
@@ -184,7 +179,7 @@ export interface ReadalongDialogView {
 
 export function readalongDialogView(
   e: Pick<ReadalongEstimate, 'writable' | 'ebook'>,
-  bridge: ReadalongBridge = 'ready',
+  bridge: ReadalongBridge,
 ): ReadalongDialogView {
   return {
     notWritable: !e.writable,

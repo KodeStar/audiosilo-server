@@ -141,7 +141,7 @@ function Flow({
   // A library made on this visit clears the draft before the list has
   // refetched: the folder isn't lost then.
   const lost = createdId === null && folderLost(state.steps, facts);
-  const current = resumeStep(state.steps, facts, step);
+  const current = resumeStep(state.steps, lost, step);
   const next = nextStep(current, state, draft);
   const prev = previousStep(current);
 

@@ -1,5 +1,5 @@
 import { ApiError } from '@/api/client';
-import type { PreviewSample, SetupRequest, SetupState } from '@/api/types';
+import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
 import { settingsWith } from '@/test/fixtures';
 import {
   addressMismatch,
@@ -47,45 +47,47 @@ describe('folderLost', () => {
   });
 });
 
+// resumeStep as the page calls it: lost is folderLost of the same marks.
+const resume = (marks: SetupMarks, facts: typeof fresh, requested?: SetupStepId) =>
+  resumeStep(marks, folderLost(marks, facts), requested);
+
 describe('resumeStep', () => {
   it('opens a fresh server at the folder step', () => {
-    expect(resumeStep({}, fresh)).toBe('folder');
+    expect(resume({}, fresh)).toBe('folder');
   });
 
   it('picks up at the first step without a mark', () => {
-    expect(resumeStep({ folder: 'done' }, { ...fresh, hasDraft: true })).toBe('naming');
+    expect(resume({ folder: 'done' }, { ...fresh, hasDraft: true })).toBe('naming');
     expect(
-      resumeStep({ folder: 'done', naming: 'skipped', metadata: 'done', reach: 'done' }, fresh),
+      resume({ folder: 'done', naming: 'skipped', metadata: 'done', reach: 'done' }, fresh),
     ).toBe('abs');
   });
 
   it('asks for the folder again when its draft is gone and no library exists', () => {
-    expect(resumeStep({ folder: 'done' }, fresh)).toBe('folder');
-    expect(resumeStep({ folder: 'done', naming: 'done' }, fresh)).toBe('folder');
+    expect(resume({ folder: 'done' }, fresh)).toBe('folder');
+    expect(resume({ folder: 'done', naming: 'done' }, fresh)).toBe('folder');
   });
 
   it('goes on to naming when the server already has libraries (config-declared ones)', () => {
-    expect(resumeStep({ folder: 'done' }, { hasDraft: false, hasLibraries: true })).toBe('naming');
+    expect(resume({ folder: 'done' }, { hasDraft: false, hasLibraries: true })).toBe('naming');
     expect(
-      resumeStep({ folder: 'done', naming: 'done' }, { hasDraft: false, hasLibraries: true }),
+      resume({ folder: 'done', naming: 'done' }, { hasDraft: false, hasLibraries: true }),
     ).toBe('metadata');
   });
 
   it('asks for the folder again when deep-linked to a step that needs it', () => {
     // Browser B, sent to ?step=naming after browser A chose the folder.
-    expect(resumeStep({ folder: 'done' }, fresh, 'naming')).toBe('folder');
-    expect(resumeStep({ folder: 'done' }, fresh, 'metadata')).toBe('folder');
+    expect(resume({ folder: 'done' }, fresh, 'naming')).toBe('folder');
+    expect(resume({ folder: 'done' }, fresh, 'metadata')).toBe('folder');
     // Steps after the library is made don't need the folder.
-    expect(resumeStep({ folder: 'done' }, fresh, 'reach')).toBe('reach');
+    expect(resume({ folder: 'done' }, fresh, 'reach')).toBe('reach');
     // With the draft here, or a library, the link opens as asked.
-    expect(resumeStep({ folder: 'done' }, { ...fresh, hasDraft: true }, 'naming')).toBe('naming');
-    expect(resumeStep({ folder: 'done' }, { ...fresh, hasLibraries: true }, 'naming')).toBe(
-      'naming',
-    );
+    expect(resume({ folder: 'done' }, { ...fresh, hasDraft: true }, 'naming')).toBe('naming');
+    expect(resume({ folder: 'done' }, { ...fresh, hasLibraries: true }, 'naming')).toBe('naming');
   });
 
   it('a skipped folder never sends the admin back to it', () => {
-    expect(resumeStep({ folder: 'skipped' }, fresh)).toBe('naming');
+    expect(resume({ folder: 'skipped' }, fresh)).toBe('naming');
   });
 
   it('opens at the last step once every step has a mark', () => {
@@ -99,7 +101,7 @@ describe('resumeStep', () => {
       phone: 'done',
       bridge: 'skipped',
     } as const;
-    expect(resumeStep(all, fresh)).toBe('bridge');
+    expect(resume(all, fresh)).toBe('bridge');
   });
 });
 

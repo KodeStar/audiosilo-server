@@ -158,7 +158,10 @@ func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch stri
 // start tries again. Any other cached pair is returned as it is.
 func replaceMaster(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, ffmpeg, ffprobe string) (string, string) {
 	s, ok := specFor(goos, goarch)
-	if v, err := Version(ctx, ffprobe); err != nil || !strings.HasPrefix(v, "N-") || !ok || s.combinedURL == "" {
+	if !ok || s.combinedURL == "" {
+		return ffmpeg, ffprobe
+	}
+	if v, err := Version(ctx, ffprobe); err != nil || !strings.HasPrefix(v, "N-") {
 		return ffmpeg, ffprobe
 	}
 	log.Info("the cached ffmpeg/ffprobe is a master build - downloading the "+btbnBranch+" release build (one time)", "into", dir)

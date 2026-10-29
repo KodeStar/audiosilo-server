@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpenText, CircleCheck, RotateCw, TriangleAlert, Unplug } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
@@ -7,7 +6,7 @@ import type { AdminBookDetail } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { KIND_DETECT, KIND_READALONG } from '@/features/bridge/generate-model';
-import { JobActions } from '@/features/bridge/generate-parts';
+import { BridgeSettingsLink, JobActions } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink, useBridgeStatus } from '@/features/bridge/use-generate';
 import { formatPercent, formatRelative } from '@/lib/format';
@@ -142,14 +141,9 @@ function BridgeNote({ note }: { note: NonNullable<ReadalongView['bridgeNote']> }
       <Unplug className="mt-px size-[15px] shrink-0" aria-hidden="true" />
       <span>
         {t(`book.readalong.bridge.${note}`, { version: READALONG_BRIDGE_VERSION })}{' '}
-        <Link
-          to="/server/{-$section}"
-          params={{ section: undefined }}
-          search={{ topic: 'bridge' }}
-          className="font-medium text-foreground underline-offset-2 hover:underline"
-        >
+        <BridgeSettingsLink className="font-medium text-foreground underline-offset-2">
           {note === 'none' ? t('book.readalong.bridge.setUp') : t('book.readalong.bridge.settings')}
-        </Link>
+        </BridgeSettingsLink>
       </span>
     </p>
   );

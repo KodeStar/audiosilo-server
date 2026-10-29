@@ -331,7 +331,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 
 	coverBackfill := map[string]bool{}
-	artBackfill := map[string]catalog.ArtChange{}
+	// Unchanged books with a sidecar image, whose art version is read after the
+	// loop, walkWidth at a time (one stat each: a round trip on a network share).
+	var artChecks []artCheck
 	suspectBackfill := map[string]int{}
 	splitBackfill := map[string]string{}
 	releasedBackfill := map[string]string{}
@@ -563,9 +565,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// version moves the book's cover_version (never back to one it had
 				// for other art). A custom cover's identity is left alone.
 				if old.CoverPath != "" && !strings.HasPrefix(old.CoverArt, "c") {
-					if v := artVersion(lib.Root, &catalog.Book{CoverPath: old.CoverPath}); v != "" && v != old.CoverArt {
-						artBackfill[b.RelPath] = catalog.ArtChange{Was: old.CoverArt, Now: v}
-					}
+					artChecks = append(artChecks, artCheck{rel: b.RelPath, cover: old.CoverPath, was: old.CoverArt})
 				}
 				// Rows indexed before 0017 haven't been checked for holding several
 				// books; the same kind of tag read does it.
@@ -659,7 +659,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
 		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
 	}
-	if err := s.cat.SetArtVersions(ctx, lib.ID, artBackfill); err != nil {
+	if err := s.cat.SetArtVersions(ctx, lib.ID, artChanges(ctx, lib.Root, artChecks, s.walkWidth())); err != nil {
 		s.log.Warn("record cover art versions failed", "library", lib.Name, "err", err)
 	}
 	if err := s.cat.SetSuspectParts(ctx, lib.ID, suspectBackfill); err != nil {
@@ -933,19 +933,30 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	// Embedded art; UpsertBook adds a sibling cover (CoverPath) to the flag itself.
 	hasCover := md != nil && md.HasCover
 	b.HasCover = &hasCover
-	b.ArtVersion = artVersion(lib.Root, b)
+	b.ArtVersion = artVersion(lib.Root, b.ArtFiles())
 }
 
-// artVersion is the version of b's cover art file as the cover handler names it
-// (catalog.FileArtVersion): its sidecar image (CoverPath), else its first audio
-// file, where embedded art lives. "" when that file can't be read now.
-func artVersion(root string, b *catalog.Book) string {
-	kind, rel := catalog.ArtEmbedded, primaryPath(b)
-	if b.CoverPath != "" {
-		kind, rel = catalog.ArtSidecar, b.CoverPath
+// ArtFile is the file a book's own art (no custom cover) is read from, in the
+// order the cover handler serves it: its sidecar image (CoverPath) inside root,
+// else the audio file embedded art lives in. kind is catalog.ArtSidecar or
+// catalog.ArtEmbedded; ok is false when neither path is inside root.
+func ArtFile(root string, src catalog.CoverSource) (kind, abs string, ok bool) {
+	if src.CoverPath != "" {
+		if abs, err := SafeJoin(root, src.CoverPath); err == nil {
+			return catalog.ArtSidecar, abs, true
+		}
 	}
-	abs, err := SafeJoin(root, rel)
-	if err != nil {
+	if abs, err := SafeJoin(root, src.AudioPath); err == nil {
+		return catalog.ArtEmbedded, abs, true
+	}
+	return "", "", false
+}
+
+// artVersion is the version of src's art file (ArtFile) as the cover handler
+// names it (catalog.FileArtVersion). "" when that file can't be read now.
+func artVersion(root string, src catalog.CoverSource) string {
+	kind, abs, ok := ArtFile(root, src)
+	if !ok {
 		return ""
 	}
 	fi, err := os.Stat(abs)
@@ -953,6 +964,28 @@ func artVersion(root string, b *catalog.Book) string {
 		return ""
 	}
 	return catalog.FileArtVersion(kind, fi.Size(), fi.ModTime())
+}
+
+// artCheck is an unchanged book whose sidecar image may have been replaced in
+// place: its path, the image's, and the cover art identity stored.
+type artCheck struct {
+	rel, cover, was string
+	now             string
+}
+
+// artChanges reads the art version of each check's sidecar image, width at a
+// time, and returns those that moved, by book path.
+func artChanges(ctx context.Context, root string, checks []artCheck, width int) map[string]catalog.ArtChange {
+	pool.Each(ctx, min(width, len(checks)), checks, func() bool { return true }, func(c *artCheck) {
+		c.now = artVersion(root, catalog.CoverSource{CoverPath: c.cover})
+	})
+	out := map[string]catalog.ArtChange{}
+	for _, c := range checks {
+		if c.now != "" && c.now != c.was {
+			out[c.rel] = catalog.ArtChange{Was: c.was, Now: c.now}
+		}
+	}
+	return out
 }
 
 // chooseTitle prefers a meaningful embedded title, falling back to the

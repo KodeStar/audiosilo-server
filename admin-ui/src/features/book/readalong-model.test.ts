@@ -17,7 +17,6 @@ import { describeEvent } from '@/lib/server-events';
 import { serverInfo } from '@/test/fixtures';
 import {
   blocksReadalong,
-  readalongAvailable,
   readalongBridge,
   readalongJobShown,
   readalongBlocker,
@@ -116,14 +115,6 @@ describe('readalongFailure (S265-CARD)', () => {
 });
 
 describe('the read-along gate', () => {
-  it('offers Make only while an online Bridge offers the readalong feature', () => {
-    expect(readalongAvailable(withBridge(['bridge', 'sidecars', 'readalong']))).toBe(true);
-    expect(readalongAvailable(withBridge(['bridge', 'sidecars']))).toBe(false);
-    expect(readalongAvailable(withBridge([], false))).toBe(false);
-    expect(readalongAvailable(serverInfo)).toBe(false);
-    expect(readalongAvailable(undefined)).toBe(false);
-  });
-
   it("follows a book's read-along jobs on a server that knows the Bridge, for a book with an ebook", () => {
     expect(readalongJobsKnown(withBridge([], false), { ebook })).toBe(true);
     expect(readalongJobsKnown(withBridge(['readalong']), {})).toBe(false);
@@ -269,15 +260,15 @@ describe('readalongBlocker', () => {
 
 describe('the confirmation', () => {
   it('confirms only for a writable library and a book with an ebook', () => {
-    expect(readalongDialogView({ writable: true, ebook })).toEqual({
+    expect(readalongDialogView({ writable: true, ebook }, 'ready')).toEqual({
       notWritable: false,
       canConfirm: true,
     });
-    expect(readalongDialogView({ writable: false, ebook })).toEqual({
+    expect(readalongDialogView({ writable: false, ebook }, 'ready')).toEqual({
       notWritable: true,
       canConfirm: false,
     });
-    expect(readalongDialogView({ writable: true, ebook: null }).canConfirm).toBe(false);
+    expect(readalongDialogView({ writable: true, ebook: null }, 'ready').canConfirm).toBe(false);
   });
 });
 
