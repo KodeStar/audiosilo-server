@@ -134,8 +134,8 @@ scan:
   # Whether the database's readers map the file into memory (SQLite mmap_size,
   # 256 MiB, readers only), in any case:
   #   auto - only when the data folder is on Linux on an Unraid /mnt/user share
-  #          (shfs) or mergerfs, where reads are several times faster with it (the
-  #          default); never on another FUSE filesystem (sshfs, rclone, s3fs,
+  #          (shfs), where reads are several times faster with it (the
+  #          default); never on another FUSE filesystem (mergerfs, sshfs, rclone, s3fs,
   #          ntfs-3g) or a network share, where an I/O error under a mapping stops
   #          the server and a plain read fails one request
   #   on   - always (at that risk)

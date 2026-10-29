@@ -524,11 +524,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that commit, about one fsync), and a new one of those kinds must too; progress,
   heartbeats and other listening writes never do. The readers (never the writer) map the file
   (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`, any case) is
-  `on`, or `auto` (the default) and the database file is on Linux on shfs or mergerfs: statfs says
+  `on`, or `auto` (the default) and the database file is on Linux on Unraid's shfs: statfs says
   FUSE (`0x65735546`), then the `/proc/self/mountinfo` line for the file's device (stat's
-  `st_dev` against the `major:minor` field, no path matching) is `fuse.shfs` or `fuse.mergerfs`
+  `st_dev` against the `major:minor` field, no path matching) is `fuse.shfs`
   (`mappableFSTypes`); any failure, or no line for the device, says off. Measured
-  2-9x faster on Unraid `/mnt/user`, little on a local disk; never on other FUSE filesystems (sshfs,
+  2-9x faster on Unraid `/mnt/user`, little on a local disk; never on other FUSE filesystems (mergerfs: direct_io; sshfs,
   rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).

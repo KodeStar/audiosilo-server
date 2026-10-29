@@ -160,11 +160,11 @@ func TestFUSEMagic(t *testing.T) {
 }
 
 // TestOnMappableFUSEHere: the real detector says no for this test's temp folder
-// (no CI runner keeps it on shfs or mergerfs) and for a path that doesn't exist.
+// (no CI runner keeps it on shfs) and for a path that doesn't exist.
 func TestOnMappableFUSEHere(t *testing.T) {
 	t.Parallel()
 	if onMappableFUSE(t.TempDir()) {
-		t.Skip("the temp folder is on shfs or mergerfs here")
+		t.Skip("the temp folder is on shfs here")
 	}
 	if onMappableFUSE(filepath.Join(t.TempDir(), "missing", "audiosilo.db")) {
 		t.Fatal("a missing path read as FUSE")
@@ -187,8 +187,8 @@ const unraidMountinfo = `581 470 0:52 / / rw,relatime master:278 - overlay overl
 `
 
 // TestMountFSType: the mount is found by its device (the file's st_dev), the
-// whole field and not a prefix of it, and the auto mode maps on shfs and
-// mergerfs only; no line for the device, two lines for it that disagree, or a
+// whole field and not a prefix of it, and the auto mode maps on shfs only
+// (mergerfs neither); no line for the device, two lines for it that disagree, or a
 // line it can't read (the whole table is then untrusted) say no.
 func TestMountFSType(t *testing.T) {
 	t.Parallel()
@@ -198,7 +198,7 @@ func TestMountFSType(t *testing.T) {
 	}{
 		{"0:44", "fuse.shfs", true},
 		{"0:31", "btrfs", false},
-		{"0:60", "fuse.mergerfs", true},
+		{"0:60", "fuse.mergerfs", false},
 		{"0:61", "fuse.sshfs", false},
 		{"0:62", "tmpfs", false},
 		{"0:52", "overlay", false},

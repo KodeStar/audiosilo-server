@@ -13,7 +13,7 @@ import "strings"
 // pure-Go modernc, where pread returns SQLITE_IOERR: a risk on a network
 // filesystem (NFS, SMB/CIFS) and on a FUSE filesystem whose reads can fail
 // (sshfs, rclone, s3fs, ntfs-3g). So by default it is on only for a database on
-// shfs or mergerfs (a pooling layer over local disks, like shfs), found from the
+// Unraid's shfs (a pooling layer over local disks), found from the
 // mount's filesystem type, and only on the readers: the writer never maps. The
 // server never truncates the database in place (backups are VACUUM INTO, a
 // restore swaps the file before it opens), which rules out mmap's other SIGBUS,
@@ -21,7 +21,7 @@ import "strings"
 
 // Reader mmap modes (WithReaderMmap; config database.mmap).
 const (
-	MmapAuto = "auto" // on when the database is on shfs or mergerfs (the default)
+	MmapAuto = "auto" // on when the database is on Unraid's shfs (the default)
 	MmapOn   = "on"   // always
 	MmapOff  = "off"  // never
 )
@@ -63,7 +63,7 @@ func mmapMode(mode string) string {
 }
 
 // readerMmap is the reader pool's mmap_size for mode (as mmapMode reads it),
-// asking mappable (the database file is on shfs or mergerfs) only in auto mode.
+// asking mappable (the database file is on shfs) only in auto mode.
 func readerMmap(mode string, mappable func() bool) int64 {
 	switch mode {
 	case MmapOn:
@@ -78,9 +78,10 @@ func readerMmap(mode string, mappable func() bool) int64 {
 }
 
 // mappableFSTypes are the mountinfo filesystem types the auto mode maps on:
-// Unraid's shfs (measured) and mergerfs, the same kind of pooling layer over
-// local disks.
-var mappableFSTypes = map[string]bool{"fuse.shfs": true, "fuse.mergerfs": true}
+// Unraid's shfs, the one measured. Not mergerfs: with cache.files=off it runs
+// direct_io, where a mapping fails or (on some kernels) can show readers stale
+// pages after the writer's direct writes.
+var mappableFSTypes = map[string]bool{"fuse.shfs": true}
 
 // mountFSType is the filesystem type of the mount whose device (major:minor,
 // mountinfo's third field) is dev in a /proc/self/mountinfo: the kernel's own

@@ -200,8 +200,8 @@ type DatabaseConfig struct {
 	// Mmap is whether the database's readers map the file (store.WithReaderMmap),
 	// in any case: "auto" (or empty, the default) only when the database file (in
 	// the data folder; a symlink is followed) is on Linux on shfs (an Unraid
-	// /mnt/user share) or mergerfs, by its mount's type, where it is measured
-	// several times faster; never on another FUSE filesystem (sshfs, rclone,
+	// /mnt/user share), by its mount's type, where it is measured
+	// several times faster; never on another FUSE filesystem (mergerfs, sshfs, rclone,
 	// s3fs, ntfs-3g) or a network one, where an I/O error under a mapping
 	// crashes the server and a read would fail one request; "on" always; "off"
 	// never. Read once at start (database.mmap, AUDIOSILO_DB_MMAP).

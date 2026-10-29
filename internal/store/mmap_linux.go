@@ -7,7 +7,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// onMappableFUSE reports whether path is on shfs or mergerfs (mappableFSTypes):
+// onMappableFUSE reports whether path is on shfs (mappableFSTypes):
 // statfs says FUSE first (cheap, and no for every local disk), then the line in
 // /proc/self/mountinfo for the file's device (stat's st_dev, which a symlink is
 // followed for) names which FUSE filesystem it is. Inside a container both see
