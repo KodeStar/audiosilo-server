@@ -171,9 +171,9 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 	}
 }
 
-// TestCompressExclusions: the request half of the rule. Only a GET under
-// /api/v1/ is compressed; never a POST or other write (every credential is
-// minted by one), HEAD, a Range request, the media (stream, cover, ebook,
+// TestCompressExclusions: the request half of the rule. Only a GET (or its
+// HEAD) under /api/v1/ is compressed; never a POST or other write (every
+// credential is minted by one), a Range request, the media (stream, cover, ebook,
 // /meta/cover, a backup's download), /api/v1/auth/* (credentials) or the
 // Bridge's routes (the long-poll claim), however large the JSON.
 func TestCompressExclusions(t *testing.T) {
@@ -200,7 +200,12 @@ func TestCompressExclusions(t *testing.T) {
 		{"POST", "/api/v1/demo/session", nil, false},
 		{"POST", "/api/v1/admin/covers", nil, false},
 		{"PUT", "/api/v1/me/queue", nil, false},
-		{"HEAD", "/api/v1/libraries/1/books", nil, false},
+		{"HEAD", "/api/v1/libraries/1/books", nil, true},
+		{"HEAD", "/api/v1/libraries/1/stream", nil, false},
+		{"HEAD", "/api/v1/libraries/1/ebook", nil, false},
+		{"HEAD", "/api/v1/admin/backups/audiosilo-2026.db", nil, false},
+		{"HEAD", "/api/v1/auth/tokens", nil, false},
+		{"HEAD", bridgeClaimPath, nil, false},
 		{"GET", "/api/v1/libraries/1/books", map[string]string{"Range": "bytes=0-9"}, false},
 		{"GET", "/api/v1/libraries/1/stream", nil, false},
 		{"GET", "/api/v1/libraries/1/cover", nil, false},
@@ -317,6 +322,35 @@ func TestCompressThroughTheChain(t *testing.T) {
 			}
 			if gz.Header.Get("Content-Type") != "application/json; charset=utf-8" {
 				t.Fatalf("GET %s Content-Type %q", p, gz.Header.Get("Content-Type"))
+			}
+		}
+	}
+}
+
+// TestCompressHeadMatchesGet: a HEAD answers with the headers its GET would
+// (server#270): Vary: Accept-Encoding always, Content-Encoding: gzip for a
+// client taking it, the same Content-Type and Content-Length, and no body.
+func TestCompressHeadMatchesGet(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	lib, tok := compressLibrary(t, e, 40)
+	for _, p := range []string{
+		fmt.Sprintf("/api/v1/libraries/%d/books?limit=200", lib.ID), // list cache
+		"/api/v1/admin/authors",                                     // not cached
+	} {
+		for _, gz := range []bool{false, true} {
+			get, _ := e.raw(t, "GET", p, tok, gz, nil)
+			head, body := e.raw(t, "HEAD", p, tok, gz, nil)
+			if get.StatusCode != 200 || head.StatusCode != 200 || len(body) != 0 {
+				t.Fatalf("%s gzip=%v: GET %d, HEAD %d with %d body bytes", p, gz, get.StatusCode, head.StatusCode, len(body))
+			}
+			for _, h := range []string{"Vary", "Content-Encoding", "Content-Type", "Content-Length"} {
+				if g, hd := get.Header.Values(h), head.Header.Values(h); fmt.Sprint(g) != fmt.Sprint(hd) {
+					t.Errorf("%s gzip=%v %s: GET %q, HEAD %q", p, gz, h, g, hd)
+				}
+			}
+			if want := map[bool]string{false: "", true: "gzip"}[gz]; head.Header.Get("Content-Encoding") != want || !hasVaryAE(head.Header) {
+				t.Errorf("%s gzip=%v HEAD headers %v", p, gz, head.Header)
 			}
 		}
 	}

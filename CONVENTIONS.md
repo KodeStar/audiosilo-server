@@ -535,11 +535,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
-  timeout. A request is compressible only when it is a GET under `/api/v1/` without Range, outside
+  timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
+  `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
   the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/` and `/api/v1/bridge/`
   (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
-  (BREACH). A new GET that returns a credential, or a long poll / stream, joins
-  `compressExcluded`. The answer is gzipped (BestSpeed) when it is `application/json`, at least
+  (BREACH). A new GET that returns a credential joins `compressExcluded`. A new stream (media, a
+  download, a long poll, anything that flushes) goes in `isStreamingPath` when it must also leave
+  the request timeout, else in `compressExcluded`: `gzipWriter` has no Flush and holds the first
+  1 KiB back, so a streamed JSON answer must never reach it. Either way it adds a
+  `TestCompressExclusions` row (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is `application/json`, at least
   1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
   to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
   gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.

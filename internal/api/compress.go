@@ -20,8 +20,9 @@ import (
 //
 // What is compressed is decided twice, and both must say yes:
 //
-//   - The request (compressible): a GET under /api/v1/ that is none of the
-//     excluded classes. Every credential the API hands out (sign-in, pairing,
+//   - The request (compressible): a GET (or its HEAD, which must carry the
+//     GET's Vary and Content-Encoding: server#270) under /api/v1/ that is none
+//     of the excluded classes. Every credential the API hands out (sign-in, pairing,
 //     exchange, redeem, API keys, cast tokens, member sessions, auth codes,
 //     Bridge pairing, recovery codes, the setup wizard) is minted by a POST, and
 //     /api/v1/auth/ is excluded whole besides, so a compressed body never holds
@@ -56,7 +57,7 @@ var compressExcluded = []string{
 // compressible reports whether r may have its JSON answer gzipped (the request
 // half of the rule above), whatever the client accepts.
 func compressible(r *http.Request) bool {
-	if r.Method != http.MethodGet || r.Header.Get("Range") != "" {
+	if (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("Range") != "" {
 		return false
 	}
 	p := r.URL.Path
