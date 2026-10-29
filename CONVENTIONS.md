@@ -745,6 +745,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`library.shadowedMKA`, the one rule both use); a lone `.mka` is listed. An `.epub` is never
   audio: `/stream` refuses it (404) and `/fs` doesn't list it; a book's ebook is served only by
   `GET /libraries/{id}/ebook` (see Path-addressed API).
+- **In-process probe (server#261, `metadata/fastprobe*.go`)**: `metadata.ExtractTimeout` opens a
+  file once and reads its tags, the iTunes narrator and the probe through one 64 KiB block cache
+  (at most 4 MiB kept); the probe answers what ffprobe would (format duration as its `"%f"`
+  string, first audio stream's codec, chapters, the format tags `applyProbe` reads:
+  `probeTagKeys`) for MP3, M4B/M4A/MP4, FLAC, Ogg Vorbis/Opus/FLAC and MKA, as ports of FFmpeg's
+  demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
+  rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
+  gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
+  `-version` turns the probe off and ffprobe reads every file, as before). Anything a reader does
+  not model exactly is `unsure` and that one file goes to ffprobe, silently: VBR MP3 with no
+  Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
+  prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
+  with no duration, a read error, a reader's panic, no duration. A file neither reads keeps
+  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
+  nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
+  `probeTagKeys`. Tests: `testdata/probe` (~90 fixtures, < 3 MB, made by
+  `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
+  release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
+  no ffprobe (`probe_golden_test.go`); `probe_live_test.go` compares the installed ffprobe
+  (`AUDIOSILO_PROBE_DIRS` adds folders), and CI's `probe-drift` workflow runs it against the
+  image's ffprobe (and weekly), failing on drift or a release with no rules. Adding a release:
+  its rules where they differ, its golden, a `knownRules` entry. `cmd/probediff <dirs>` is the
+  dev diff/timing tool. A test whose ffprobe is a stand-in script on valid files calls
+  `metadata.ForceFFprobeForTests(path)` (`library`'s `stubProbe` does).
 - **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
   through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
   `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
@@ -2584,7 +2608,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
   reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
-- ffprobe is optional; code paths must degrade gracefully when it is absent
+- ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
+  are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`
   defaults to true). ffmpeg is likewise optional (transcoding off without it).
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
