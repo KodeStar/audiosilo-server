@@ -2792,7 +2792,7 @@
   "bridge.setup.hint.paired": "Kopple die Bridge mit diesem Server.",
   "bridge.setup.hint.libraries": "Ordne jede Bibliothek auf der Bridge zu, damit sie dort schreiben kann.",
   "bridge.setup.hint.asr": "Wähle lokale Spracherkennung oder verbinde einen Worker auf einem Mac.",
-  "bridge.setup.hint.agent": "Füge auf dem Tab Accounts der Bridge ein Claude-Abo-Token, einen Anthropic-API-Schlüssel oder einen OpenAI-API-Schlüssel hinzu.",
+  "bridge.setup.hint.agent": "Der Agent schreibt Figuren, Zusammenfassungen und Beschreibungen; Mitlesen, Kapitel und Podcasts brauchen ihn nicht. Füge auf dem Tab Accounts der Bridge ein Claude-Abo-Token, einen Anthropic-API-Schlüssel oder einen OpenAI-API-Schlüssel hinzu.",
   "bridge.setup.hint.budget": "Prüfe die monatliche Ausgabengrenze auf der Bridge.",
   "bridge.setup.hint.github": "Nur zum Teilen mit der Community nötig.",
   "bridge.setup.github": "GitHub-Konto",

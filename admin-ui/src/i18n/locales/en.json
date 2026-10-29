@@ -2792,7 +2792,7 @@
   "bridge.setup.hint.paired": "Pair the Bridge with this server.",
   "bridge.setup.hint.libraries": "Map each library on the Bridge so it can write there.",
   "bridge.setup.hint.asr": "Choose local speech recognition, or connect a worker on a Mac.",
-  "bridge.setup.hint.agent": "Add a Claude subscription token, an Anthropic API key or an OpenAI API key on the Bridge's Accounts tab.",
+  "bridge.setup.hint.agent": "The agent writes characters, recaps and descriptions; read-alongs, chapters and podcasts don't need it. Add a Claude subscription token, an Anthropic API key or an OpenAI API key on the Bridge's Accounts tab.",
   "bridge.setup.hint.budget": "Check the monthly spending cap on the Bridge.",
   "bridge.setup.hint.github": "Only needed to share with the community.",
   "bridge.setup.github": "GitHub account",

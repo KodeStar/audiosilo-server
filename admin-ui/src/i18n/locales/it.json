@@ -2950,7 +2950,7 @@
   "bridge.setup.hint.paired": "Abbina il Bridge a questo server.",
   "bridge.setup.hint.libraries": "Mappa ogni libreria sul Bridge perché possa scriverci.",
   "bridge.setup.hint.asr": "Scegli il riconoscimento vocale locale o collega un worker su un Mac.",
-  "bridge.setup.hint.agent": "Aggiungi un token dell'abbonamento Claude, una chiave API di Anthropic o una chiave API di OpenAI nella scheda Accounts del Bridge.",
+  "bridge.setup.hint.agent": "L'agente scrive personaggi, riassunti e descrizioni; letture sincronizzate, capitoli e podcast non ne hanno bisogno. Aggiungi un token dell'abbonamento Claude, una chiave API di Anthropic o una chiave API di OpenAI nella scheda Accounts del Bridge.",
   "bridge.setup.hint.budget": "Controlla il limite di spesa mensile sul Bridge.",
   "bridge.setup.hint.github": "Serve solo per condividere con la community.",
   "bridge.setup.github": "Account GitHub",
