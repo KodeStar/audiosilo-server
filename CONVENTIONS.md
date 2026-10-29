@@ -758,6 +758,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
+  a chapter track whose one edit needs keyframes or a DTS shift (stss/ctts; its samples are cut
+  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter),
   a crafted table past a bound (a chapter track over 65536 samples or with counts past its
   tables, MKV SimpleTags over 4096 or 8 deep, a compressed ID3 frame over 16 MiB), a read error,
   a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
@@ -768,7 +770,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
   ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
   nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
-  `probeTagKeys`. Tests: `testdata/probe` (~90 fixtures, < 3 MB, made by
+  `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
   `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
   release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
   no ffprobe (`probe_golden_test.go`); `probe_live_test.go` compares the installed ffprobe

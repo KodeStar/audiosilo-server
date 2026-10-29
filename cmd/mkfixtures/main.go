@@ -2,7 +2,7 @@
 // variants, M4B chapter variants, hand-built Matroska) that ffmpeg and lame
 // don't write, from the files scripts/gen-probe-fixtures.sh made in the same
 // folder (lame-vbr.mp3, lame-cbr-info.mp3, lame-cbr-noxing.mp3,
-// m4b-aac-chap.m4b); each is written as craft-<name>. The script runs it:
+// lame-cbr32-noxing.mp3, m4b-aac-chap.m4b); each is written as craft-<name>. The script runs it:
 //
 //	go run ./cmd/mkfixtures internal/metadata/testdata/probe
 package main
@@ -249,12 +249,51 @@ func mp3s() {
 		frame(3, "TXXX", append([]byte{1}, append(utf16bom("SERIES"), 0, 0)...), 0),
 	), cbrNoX, id3v1("V1 Behind Empty", "V1 Artist", "V1 Album", "2003", 101))
 	write("ape.mp3", cbrNoX, ape(map[string]string{"Title": "Ape Title", "Artist": "Ape Artist", "Album": "Ape Album"}), id3v1("V1 With Ape", "", "", "", 12))
+	// An attached picture (APIC, v2.2 PIC) on a CBR file with no Xing frame: its
+	// stream's duration by the bitrate, in 1/90000, rounds up past the audio's at
+	// 32 kbps over an odd byte count, and the format's duration is the longer
+	// (estimate_timings_from_bit_rate). A picture of a type FFmpeg doesn't know
+	// is no stream.
+	cbr32 := read("lame-cbr32-noxing.mp3")
+	if len(cbr32)%2 == 0 {
+		cbr32 = cbr32[:len(cbr32)-1]
+	}
+	pic := func(mime string) []byte {
+		d := append([]byte{0}, mime...)
+		d = append(d, 0, 3)
+		d = append(d, "Cover\x00"...)
+		return append(d, png1x1...)
+	}
+	write("apic-cbr.mp3", tag(3, 0, frame(3, "TIT2", text(0, "Pictured"), 0), frame(3, "APIC", pic("image/png"), 0)), cbr32)
+	write("apic-v22.mp3", tag(2, 0, frame(2, "PIC", append(append([]byte{0}, "PNG\x03\x00"...), png1x1...), 0)), cbr32)
+	write("apic-unknown-type.mp3", tag(3, 0, frame(3, "APIC", pic("image/x-unknown"), 0)), cbr32)
+	write("apic-none.mp3", tag(3, 0, frame(3, "TIT2", text(0, "No Picture"), 0)), cbr32)
 	write("concat.mp3", vbr, vbr)
 	write("truncated-vbr.mp3", vbr[:len(vbr)*6/10])
 	write("truncated-cbr.mp3", cbrNoX[:len(cbrNoX)*6/10+77])
 }
 
+// png1x1 is a one-pixel PNG.
+var png1x1 = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" +
+	"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+
 // ---- MP4
+
+// boxAt is where the n-th box of type typ starts its body (past the type).
+func boxAt(b []byte, typ string, nth int) int {
+	i := 0
+	for k := 0; ; k++ {
+		j := bytes.Index(b[i:], []byte(typ))
+		if j < 0 {
+			panic("no " + typ)
+		}
+		i += j
+		if k == nth {
+			return i + 4
+		}
+		i++
+	}
+}
 
 // patchType renames the n-th box of type from to type to (same size).
 func patchType(b []byte, from, to string, nth int) []byte {
@@ -322,6 +361,27 @@ func m4bs() {
 	binary.BigEndian.PutUint32(o[mi+4+16:], d-44100*2)
 	write("m4b-mdhd-short.m4b", o)
 	write("m4b-truncated.m4b", src[:len(src)*7/10])
+	// The chapter text track (the second trak: its elst, mdhd and stts are the
+	// second of each) cut short as some taggers write it, with a chpl beside it:
+	// mov_fix_index keeps its samples up to the first that reaches the edit's
+	// end, so a last sample at that end (zero length) is no chapter and the
+	// chpl's last chapter stays open to the end of the file. With an edit of
+	// length 0 (every sample at 0) only the first sample is kept.
+	chapTrack := func(editMS uint32, durs [3]uint32) []byte {
+		o := append([]byte(nil), src...)
+		binary.BigEndian.PutUint32(o[boxAt(o, "elst", 1)+8:], editMS)
+		binary.BigEndian.PutUint32(o[boxAt(o, "mdhd", 1)+16:], editMS)
+		st := boxAt(o, "stts", 1)
+		if binary.BigEndian.Uint32(o[st+4:]) != 3 {
+			panic("the chapter track's stts is not three entries")
+		}
+		for i, d := range durs {
+			binary.BigEndian.PutUint32(o[st+8+i*8+4:], d)
+		}
+		return o
+	}
+	write("m4b-chaptrack-trailing.m4b", chapTrack(4123, [3]uint32{2000, 2123, 0}))
+	write("m4b-chaptrack-zero-edit.m4b", chapTrack(0, [3]uint32{0, 0, 0}))
 }
 
 // ---- Matroska

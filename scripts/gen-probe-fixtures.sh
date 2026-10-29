@@ -26,7 +26,7 @@ D=5.3 # seconds of audio (the chapters below end there)
 
 # Sources: stereo 44.1 kHz (a tone under noise, so VBR encoders vary their frames), a
 # quieter one for the lossless encoders (smaller files), and mono 22.05 kHz (MPEG-2).
-"${FF[@]}" -f lavfi -i "sine=f=440:d=$D,aformat=channel_layouts=stereo" -f lavfi -i "anoisesrc=d=$D:a=0.05" \
+"${FF[@]}" -f lavfi -i "sine=f=440:d=$D,aformat=channel_layouts=stereo" -f lavfi -i "anoisesrc=d=$D:a=0.05:seed=261" \
   -filter_complex amix=inputs=2 -ar 44100 -c:a pcm_s16le "$TMP/src.wav"
 "${FF[@]}" -f lavfi -i "sine=f=440:d=$D,aformat=channel_layouts=stereo" -ar 22050 -c:a pcm_s16le "$TMP/src-lossless.wav"
 "${FF[@]}" -f lavfi -i "sine=f=300:d=4.1" -ar 22050 -ac 1 -c:a pcm_s16le "$TMP/src-mono22.wav"
@@ -110,6 +110,7 @@ lame --silent --resample 44.1 -V 7 "$S" "$OUT/lame-vbr.mp3"
 lame --silent --resample 44.1 -V 7 -t "$S" "$OUT/lame-vbr-noxing.mp3"
 lame --silent --resample 44.1 -b 48 "$S" "$OUT/lame-cbr-info.mp3"
 lame --silent --resample 44.1 -b 48 -t "$S" "$OUT/lame-cbr-noxing.mp3"
+lame --silent --resample 44.1 -b 32 -t "$S" "$OUT/lame-cbr32-noxing.mp3"
 lame --silent --resample 44.1 --abr 40 "$S" "$OUT/lame-abr.mp3"
 lame --silent --resample 44.1 -V 8 --tt "Lame Title" --ta "Lame Artist" --tl "Lame Album" --ty 2001 --tg Speech --add-id3v2 "$S" "$OUT/lame-tags.mp3"
 lame --silent --resample 44.1 -b 32 --tt "V1 Only Title" --ta "V1 Artist" --tl "V1 Album" --ty 1999 --id3v1-only "$S" "$OUT/lame-v1only.mp3"
