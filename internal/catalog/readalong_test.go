@@ -148,6 +148,11 @@ func TestReadalongIndex(t *testing.T) {
 	if got, _ := c.BookReadalongAt(ctx, lib.ID, "Mapped"); got.DigestCurrent || got.HashedSig != "11:1:b.epub" || got.EbookSHA256 != shaB {
 		t.Errorf("a digest of a newer file: %+v", got)
 	}
+	// Still due for the index, with the signature its digest is of, so the
+	// scan's hashing can tell the file on disk is already hashed.
+	if due, _ := c.ReadalongEbooksDue(ctx, lib.ID, "Mapped"); len(due) != 1 || due[0].HashedSig != "11:1:b.epub" {
+		t.Errorf("due after a newer file's digest = %+v", due)
+	}
 	if err := c.SetEbookDigest(ctx, lib.ID, "Mapped", "Mapped/b.epub", "10:1:b.epub", shaA); err != nil {
 		t.Fatal(err)
 	}

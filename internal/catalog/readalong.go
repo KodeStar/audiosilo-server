@@ -144,11 +144,13 @@ func (c *Catalog) BookReadalongAt(ctx context.Context, libraryID int64, bookPath
 }
 
 // EbookDue is a book whose ebook the scan should hash: it has a read-along
-// map, and no digest for the ebook it has now.
+// map, and no digest for the ebook it has now (HashedSig: the signature of the
+// file the stored digest was computed for, "" for none).
 type EbookDue struct {
 	BookPath  string
 	EbookPath string
 	IsFolder  bool
+	HashedSig string
 }
 
 // ReadalongEbooksDue lists the books of a library with a stored read-along map
@@ -158,7 +160,7 @@ type EbookDue struct {
 // library would read it whole over a network share. octet_length reads the
 // column's length from the record header, never its value.
 func (c *Catalog) ReadalongEbooksDue(ctx context.Context, libraryID int64, bookPath string) ([]EbookDue, error) {
-	q := `SELECT b.rel_path, b.ebook_path, b.is_folder
+	q := `SELECT b.rel_path, b.ebook_path, b.is_folder, b.ebook_hashed_sig
 	        FROM book_attachments a JOIN books b ON b.id = a.book_id
 	       WHERE b.library_id = ? AND octet_length(a.readalong) > 0 AND b.ebook_path != ''
 	         AND b.ebook_hashed_sig != b.ebook_sig`
@@ -168,7 +170,7 @@ func (c *Catalog) ReadalongEbooksDue(ctx context.Context, libraryID int64, bookP
 		args = append(args, bookPath)
 	}
 	return queryRows(ctx, c.db, func(rows *sql.Rows, d *EbookDue) error {
-		return rows.Scan(&d.BookPath, &d.EbookPath, &d.IsFolder)
+		return rows.Scan(&d.BookPath, &d.EbookPath, &d.IsFolder, &d.HashedSig)
 	}, q, args...)
 }
 

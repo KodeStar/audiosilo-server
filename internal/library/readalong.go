@@ -30,7 +30,7 @@ var ErrNoReadalong = errors.New("library: no read-along map")
 // EbookDigest is the sha256 (lowercase hex) of the ebook at library-relative
 // rel, opened by OpenEbook's rules (noLink as there: a folder book's is never a
 // link), and the signature (catalog.EbookSig) of the very file it hashed, so the
-// digest is recorded only for the file the index holds. It stops with ctx (a
+// digest is recorded with the file it is current for. It stops with ctx (a
 // request's deadline, a cancelled scan), even part way through a slow share.
 func EbookDigest(ctx context.Context, root, rel string, noLink bool) (sha, sig string, err error) {
 	f, info, err := OpenEbook(root, rel, noLink)
@@ -78,7 +78,8 @@ func (c ctxReader) Read(p []byte) (int, error) {
 
 // hashReadalongEbooks hashes the ebooks of the library's books that have a
 // read-along map and no current digest (catalog.ReadalongEbooksDue; only the
-// book at bookPath when it isn't ""), recording each (HashEbook). One that
+// book at bookPath when it isn't ""), recording each (EbookDigestNow: hashed
+// only when the file on disk isn't the one its stored digest is of). One that
 // can't be read now is logged and left for the next look (the scan, the
 // Bridge's rescan, or GET /readalong on demand). It stops with ctx.
 func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, bookPath string) {
@@ -91,7 +92,11 @@ func (s *Scanner) hashReadalongEbooks(ctx context.Context, lib catalog.Library, 
 		if ctx.Err() != nil {
 			return
 		}
-		if _, err := s.HashEbook(ctx, lib, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
+		// EbookDigestNow hashes only when the stored digest isn't the file's on
+		// disk: a request may have recorded one for a file newer than the index
+		// (an attachments rescan before the next scan records its ebook_sig).
+		idx := catalog.ReadalongIndexed{HashedSig: d.HashedSig}
+		if _, err := s.EbookDigestNow(ctx, lib, idx, d.BookPath, d.EbookPath, d.IsFolder); err != nil {
 			s.log.Warn("hash ebook failed", "library", lib.Name, "path", d.EbookPath, "err", err)
 		}
 	}

@@ -151,7 +151,10 @@ func (a *API) readalongOf(ctx context.Context, lib *catalog.Library, bookPath st
 	}
 	sha, err := a.scanner.EbookDigestNow(ctx, *lib, idx, bookPath, ebookPath, folder)
 	if err != nil {
-		a.log.Warn("hash ebook failed", "library", lib.ID, "path", ebookPath, "err", err)
+		// An ebook gone since the last scan is no read-along, not a failure.
+		if !errors.Is(err, library.ErrNoEbook) && !errors.Is(err, fs.ErrNotExist) {
+			a.log.Warn("hash ebook failed", "library", lib.ID, "path", ebookPath, "err", err)
+		}
 		return nil
 	}
 	return catalog.ReadalongState(idx.Head, sha, files)
