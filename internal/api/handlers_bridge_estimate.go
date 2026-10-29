@@ -83,8 +83,8 @@ type earlierBook struct {
 }
 
 // handleAdminBridgeEstimate serves GET /admin/bridge/estimate?library_id=&path=
-// &kind=sidecars.generate (kind may be left out): the estimate for queueing that
-// job on an indexed book. 400 without a library or a path, or for a kind with
+// &kind=sidecars.generate (kind may be left out) or kind=readalong.align
+// (readalongEstimate): the estimate for queueing that job on an indexed book. 400 without a library or a path, or for a kind with
 // no estimate; 404 for an unknown library or book; 409 kind_unavailable when the
 // paired Bridge doesn't run the kind.
 //
@@ -99,7 +99,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	if kind == "" {
 		kind = bridge.KindSidecars
 	}
-	if kind != bridge.KindSidecars {
+	if kind != bridge.KindSidecars && kind != bridge.KindReadalong {
 		writeError(w, http.StatusBadRequest, "no estimate for that kind")
 		return
 	}
@@ -122,6 +122,10 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	if h == nil || !h.Offers(kind) {
 		a.writeBridgeError(w, bridge.ErrKindUnavailable, "bridge estimate failed")
+		return
+	}
+	if kind == bridge.KindReadalong {
+		a.writeReadalongEstimate(w, r, lib, book, h)
 		return
 	}
 
@@ -216,4 +220,45 @@ func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, st b
 	}
 	slices.Reverse(out)
 	return out, nil
+}
+
+// readalongEstimate is GET /admin/bridge/estimate?kind=readalong.align's
+// answer: the most transcription the job may take (asr_hours: the book's whole
+// audio at the Bridge's figure, estimates.sidecars.asr_seconds_per_audio_hour;
+// less when the Bridge still has the book's transcript, and never an agent),
+// whether the Bridge sent figures, whether it can write the library, the
+// book's ebook (null for none: the job would be refused no_ebook), its
+// read-along now (Book.readalong, null for none) and any open job that a new
+// one would be (the book's open read-along job) or would wait for (an open
+// generate or detect job: bridge.Service.Blocker).
+type readalongEstimate struct {
+	Kind      string             `json:"kind"`
+	ASRHours  float64            `json:"asr_hours"`
+	Figures   bool               `json:"figures"`
+	Writable  bool               `json:"writable"`
+	Ebook     *catalog.Ebook     `json:"ebook"`
+	Readalong *catalog.Readalong `json:"readalong"`
+	OpenJob   *bridge.Job        `json:"open_job,omitempty"`
+}
+
+// writeReadalongEstimate answers the read-along estimate for book (h the
+// Bridge's last heartbeat, which offers the kind).
+func (a *API) writeReadalongEstimate(w http.ResponseWriter, r *http.Request, lib *catalog.Library, book *catalog.Book, h *bridge.Heartbeat) {
+	ctx := r.Context()
+	cost := h.EstimateSidecars(book.Duration, false)
+	out := readalongEstimate{Kind: bridge.KindReadalong, ASRHours: cost.ASRHours, Figures: cost.Figures,
+		Writable: h.Writable(lib.ID), Ebook: book.Ebook}
+	if book.Ebook != nil {
+		out.Readalong = a.readalongOf(ctx, lib, book.RelPath, book.IsFolder, book.Ebook.Path,
+			catalog.BookAudioFiles(book.RelPath, book.IsFolder, book.Duration, book.Files))
+	}
+	var err error
+	if out.OpenJob, err = a.bridge.OpenJob(ctx, bridge.KindReadalong, lib.ID, book.RelPath); err == nil && out.OpenJob == nil {
+		out.OpenJob, err = a.bridge.Blocker(ctx, bridge.KindReadalong, lib.ID, book.RelPath)
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // The admin catalog API (admin console Library and Book screens). Transport only:
@@ -253,6 +254,11 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, libID int6
 	d.CommunityCheckFailed = !checking && a.chapterChecks != nil && a.chapterChecks.Failed(ref)
 	b := d.Book
 	d.MatchQuery = meta.SearchPrefill(b.Title, b.Author, b.Series, b.Path, b.IsFolder)
+	if b.Ebook != nil {
+		if lib, err := a.cat.GetLibrary(r.Context(), libID); err == nil {
+			d.Book.Readalong = a.readalongOf(r.Context(), lib, b.Path, b.IsFolder, b.Ebook.Path, adminAudioFiles(d))
+		}
+	}
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -559,4 +565,14 @@ func (a *API) handleAdminDeleteCover(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "book.cover_remove", lib.Name+": "+p, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover removed", "path": p})
+}
+
+// adminAudioFiles is the book page's files as a read-along map names them
+// (catalog.BookAudioFiles over its Files: a single-file book's is its own).
+func adminAudioFiles(d *catalog.AdminBookDetail) []metadata.ReadalongFile {
+	files := make([]catalog.BookFile, len(d.Files))
+	for i, f := range d.Files {
+		files[i] = catalog.BookFile{RelPath: f.Path, Duration: f.Duration}
+	}
+	return catalog.BookAudioFiles(d.Book.Path, d.Book.IsFolder, d.Book.Duration, files)
 }

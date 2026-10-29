@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -408,6 +409,10 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		if str("job_kind") == bridge.KindDetectChapters && str("chapters_source") != catalog.ChaptersFromGenerated {
 			m.Text = "The chapters were saved, but the book uses other chapters. Choose its chapter source on the book page."
 		}
+		// A read-along says how much of the ebook lined up with the narration.
+		if c, ok := ev.Data["coverage"].(float64); ok && str("job_kind") == bridge.KindReadalong {
+			m.Title += fmt.Sprintf(" (%d%% lined up)", int(math.Floor(c*100+1e-9)))
+		}
 		// A contribute job whose every dimension the community already had
 		// filed nothing, so nothing went for review.
 		if none, _ := ev.Data["shared_nothing"].(bool); none && str("job_kind") == bridge.KindContribute {
@@ -447,6 +452,8 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 		"What this server generated for the book went to the community for review. The book page links it."},
 	bridge.KindCorrect: {"Corrections", "Corrections sent",
 		"The book's corrections went to the community for review. The book page links them."},
+	bridge.KindReadalong: {"Read-along", "Read-along ready",
+		"Listeners with the book's ebook can follow the narration in it."},
 	bridge.KindVerify: {label: "Bridge check"},
 }
 
@@ -691,6 +698,10 @@ type BridgeJob struct {
 	// community already had all it was asked to share
 	// (bridge.Job.SharedNothing), so its message says so.
 	SharedNothing bool
+	// Coverage is a finished readalong.align job's text coverage (0 to 1,
+	// bridge.Job.ReadalongCoverage), nil when not known, so its message says
+	// how much lined up.
+	Coverage *float64
 }
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
@@ -711,6 +722,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	}
 	if j.Kind == bridge.KindContribute && j.State == bridge.StateDone && j.SharedNothing {
 		data["shared_nothing"] = true
+	}
+	if j.Kind == bridge.KindReadalong && j.State == bridge.StateDone && j.Coverage != nil {
+		data["coverage"] = *j.Coverage
 	}
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed

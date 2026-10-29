@@ -60,7 +60,7 @@ func TestBridgeRescanAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
-	want := fmt.Sprintf(`{"path":%q,"attachments":{"characters":true,"recaps":false,"description":false,"chapters":false,"bridge":true}}`, mistbornBook) + "\n"
+	want := fmt.Sprintf(`{"path":%q,"attachments":{"characters":true,"recaps":false,"description":false,"chapters":false,"bridge":true,"readalong":false}}`, mistbornBook) + "\n"
 	if code != http.StatusOK || body != want {
 		t.Fatalf("attachments rescan = %d %s, want %s", code, body, want)
 	}
@@ -76,7 +76,7 @@ func TestBridgeRescanAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body = b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
-	if want := `"attachments":{"characters":true,"recaps":false,"description":true,"chapters":false,"bridge":true}`; code != http.StatusOK || !strings.Contains(body, want) {
+	if want := `"attachments":{"characters":true,"recaps":false,"description":true,"chapters":false,"bridge":true,"readalong":false}`; code != http.StatusOK || !strings.Contains(body, want) {
 		t.Fatalf("attachments rescan with a description = %d %s, want %s", code, body, want)
 	}
 	for _, p := range []string{"Nobody/Here", mistbornBook + "/.audiosilo", "../etc"} {

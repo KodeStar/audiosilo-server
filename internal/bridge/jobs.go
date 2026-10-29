@@ -89,6 +89,12 @@ const KindContribute = "sidecars.contribute"
 // family is the meta feature.
 const KindCorrect = "meta.correct"
 
+// KindReadalong is Phase 3c's read-along: the Bridge aligns a book's ebook
+// with its narration (reusing the transcript it kept, else transcribing; no
+// agent) and writes the map into the book's .audiosilo/ folder as
+// readalong.json. Its family is the readalong feature.
+const KindReadalong = "readalong.align"
+
 // ModuleContributions is the managed module (its id: internal/modules/builtin)
 // a job that files to the community needs (kindSpec.module, ModuleFor): its
 // routes and jobs answer 404 module_off while it is off.
@@ -156,7 +162,12 @@ func (s kindSpec) paramsCap() int { return cmp.Or(s.maxParams, defaultParamsByte
 // which files what the last generate run made, waits for an open generate job
 // (ErrGenerateOpen); a generate job waits for a queued or working contribute job
 // (ErrContributeOpen: it would replace what is being filed) and cancels a parked
-// one, or a queued one held while the contributions module is off.
+// one, or a queued one held while the contributions module is off. A
+// read-along job and a generate or detect job, which all transcribe the same
+// audio on the Bridge (one engine book per audio source), never overlap: a
+// read-along job waits for an open generate or detect job (ErrGenerateOpen,
+// ErrDetectOpen), a detect job for an open read-along job (ErrReadalongOpen),
+// and a generate job for a queued or working one, cancelling a parked one.
 var kinds = map[string]kindSpec{
 	KindPodcastFetch:     {needsLibrary: true, book: bookEpisode, writes: true, params: fetchParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindPodcastRetain:    {needsLibrary: true, book: bookShow, writes: true, params: retainParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
@@ -164,11 +175,13 @@ var kinds = map[string]kindSpec{
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
-		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen},
+		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
+			KindReadalong: ErrReadalongOpen},
 		cancelsOpen: map[string]string{
 			KindDescribe:       "a generate job for the book replaced it",
 			KindDetectChapters: "a generate job for the book replaced it; it finds the chapters itself",
 			KindContribute:     "a generate job for the book replaced what it was sharing",
+			KindReadalong:      "a generate job for the book replaced it; make the read-along again after",
 		}},
 	KindContribute: {libraryKind: libraryBooks, needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
@@ -177,7 +190,10 @@ var kinds = map[string]kindSpec{
 	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
 	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: noParams,
-		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen}},
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen,
+			KindReadalong: ErrReadalongOpen}},
+	KindReadalong: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: noParams,
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
 }
 
 // claimedStatesSQL are the open states of a job a claim handed to the Bridge
@@ -309,7 +325,7 @@ func ModuleFor(kind string, params json.RawMessage) string {
 }
 
 // noParams checks the params of a kind that takes none (sidecars.describe,
-// chapters.detect): only an empty object (or none) passes, any field is
+// chapters.detect, readalong.align): only an empty object (or none) passes, any field is
 // refused, and it is stored as {}.
 func noParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p struct{}
@@ -521,6 +537,12 @@ var ErrDetectOpen = errors.New("a chapter detection job is open for the book")
 // generate job instead, which can file its own results.
 var ErrContributeOpen = errors.New("a contribute job is open for the book")
 
+// ErrReadalongOpen is a sidecars.generate job for a book with a queued or
+// working readalong.align job (a parked one is cancelled by it instead), or a
+// chapters.detect job for a book with any open one: both transcribe the
+// book's audio on the Bridge, which runs one engine book per audio source.
+var ErrReadalongOpen = errors.New("a read-along job is open for the book")
+
 // ErrDescribeOpen is a chapters.detect job for a book with a sidecars.describe
 // job still open: both rewrite the book's bridge.json on the Bridge, so the
 // second is refused (a 409 describe_open).
@@ -592,7 +614,7 @@ func checkNew(j *NewJob) error {
 // community only when it says the Bridge can (ErrCannotContribute), and any
 // job only while no open job of another kind refuses it (kindSpec's
 // refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen,
-// ErrContributeOpen); the open job of its own kind is still returned either way.
+// ErrContributeOpen, ErrReadalongOpen); the open job of its own kind is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
