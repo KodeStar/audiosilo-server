@@ -1,10 +1,6 @@
 package store
 
-import (
-	"errors"
-	"strconv"
-	"strings"
-)
+import "strings"
 
 // The reader pool's memory-mapped I/O (PERF-SPIKE S6). SQLite's mmap_size lets a
 // reader take its pages straight from the page cache instead of a pread system
@@ -49,7 +45,7 @@ func isFUSEMagic(fsType int64) bool { return fsType == fuseSuperMagic }
 // MmapOff, in any case. Anything else is MmapAuto. An in-memory database has no
 // reader pool and never maps.
 func WithReaderMmap(mode string) Option {
-	return func(c *openConfig) { c.mmap = mode }
+	return func(c *openConfig) { c.mmap = mmapMode(mode) }
 }
 
 // withMmapDetector replaces onMappableFUSE (tests: the path can't be made on CI).
@@ -65,10 +61,10 @@ func mmapMode(mode string) string {
 	return MmapAuto
 }
 
-// readerMmap is the reader pool's mmap_size for mode, asking mappable (the
-// database file is on shfs or mergerfs) only in auto mode.
+// readerMmap is the reader pool's mmap_size for mode (as mmapMode reads it),
+// asking mappable (the database file is on shfs or mergerfs) only in auto mode.
 func readerMmap(mode string, mappable func() bool) int64 {
-	switch mmapMode(mode) {
+	switch mode {
 	case MmapOn:
 		return readerMmapSize
 	case MmapOff:
@@ -85,14 +81,16 @@ func readerMmap(mode string, mappable func() bool) int64 {
 // local disks.
 var mappableFSTypes = map[string]bool{"fuse.shfs": true, "fuse.mergerfs": true}
 
-// mountFSType is the filesystem type of the mount holding path (absolute, with
-// symlinks resolved) in a /proc/self/mountinfo: the one whose mount point is the
-// longest prefix of path on a segment boundary, the last such line when several
-// mounts share the point (the one on top). ok is false for a line it can't read
-// (the whole table is then untrusted) or no mount holding path.
-func mountFSType(mountinfo, path string) (fsType string, ok bool) {
-	best := -1
-	for _, line := range strings.Split(mountinfo, "\n") {
+// mountFSType is the filesystem type of the mount whose device (major:minor,
+// mountinfo's third field) is dev in a /proc/self/mountinfo: the kernel's own
+// identity for the mounted filesystem, the st_dev of every file on it, so a
+// symlinked path, a bind mount, a stacked mount or an escaped mount point needs
+// no path matching. Every line of one device names one type. ok is false for a
+// line it can't read (the whole table is then untrusted), no line for dev, or
+// two lines for dev that disagree.
+func mountFSType(mountinfo, dev string) (fsType string, ok bool) {
+	for line := range strings.Lines(mountinfo) {
+		line = strings.TrimSuffix(line, "\n")
 		if line == "" {
 			continue
 		}
@@ -102,53 +100,16 @@ func mountFSType(mountinfo, path string) (fsType string, ok bool) {
 		if !found || len(fields) < 6 || len(tail) < 1 {
 			return "", false
 		}
-		point, err := unescapeMount(fields[4])
-		if err != nil || !strings.HasPrefix(point, "/") {
+		if fields[2] != dev {
+			continue
+		}
+		if fsType != "" && fsType != tail[0] {
 			return "", false
 		}
-		if !withinMount(path, point) || len(point) < best {
-			continue
-		}
-		best, fsType = len(point), tail[0]
+		fsType = tail[0]
 	}
-	return fsType, best >= 0
+	return fsType, fsType != ""
 }
-
-// withinMount reports whether path is point or under it.
-func withinMount(path, point string) bool {
-	if point == "/" {
-		return strings.HasPrefix(path, "/")
-	}
-	rest, ok := strings.CutPrefix(path, point)
-	return ok && (rest == "" || rest[0] == '/')
-}
-
-// unescapeMount undoes mountinfo's octal escapes in a mount point (\040 for a
-// space, \011 tab, \012 newline, \134 backslash).
-func unescapeMount(s string) (string, error) {
-	if !strings.Contains(s, "\\") {
-		return s, nil
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' {
-			b.WriteByte(s[i])
-			continue
-		}
-		if i+4 > len(s) {
-			return "", errBadMountinfo
-		}
-		n, err := strconv.ParseUint(s[i+1:i+4], 8, 8)
-		if err != nil {
-			return "", errBadMountinfo
-		}
-		b.WriteByte(byte(n))
-		i += 3
-	}
-	return b.String(), nil
-}
-
-var errBadMountinfo = errors.New("store: unreadable mountinfo")
 
 // dsnFile is the database file a DSN names: the path without a "file:" scheme
 // or query string.

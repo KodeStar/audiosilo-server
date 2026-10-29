@@ -172,64 +172,59 @@ func TestOnMappableFUSEHere(t *testing.T) {
 }
 
 // unraidMountinfo is an Unraid container's /proc/self/mountinfo, cut down: the
-// overlay root, the data folder bound from /mnt/user (shfs), a library from
-// /mnt/cache (btrfs), a mergerfs pool, an sshfs mount, a tmpfs and a mount point
-// with a space in it (escaped \040).
+// overlay root, the data folder bound from /mnt/user (shfs, device 0:44, bound
+// twice, once at a mount point with a space in it), a library from /mnt/cache
+// (btrfs), a mergerfs pool with two optional fields, an sshfs mount in it and a
+// tmpfs.
 const unraidMountinfo = `581 470 0:52 / / rw,relatime master:278 - overlay overlay rw,lowerdir=/var/lib/docker/l
 582 581 0:55 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
 590 581 0:44 /appdata/audiosilo /config rw,noatime - fuse.shfs shfs rw,user_id=0,group_id=0,allow_other
 591 581 0:31 /appdata/audiosilo-cache /cache rw,noatime - btrfs /dev/nvme0n1p1 rw,ssd,space_cache=v2
-592 581 0:60 / /pool rw,relatime shared:12 - fuse.mergerfs pool rw,user_id=0,group_id=0
+592 581 0:60 / /pool rw,relatime shared:12 master:3 - fuse.mergerfs pool rw,user_id=0,group_id=0
 593 592 0:61 / /pool/remote rw,relatime - fuse.sshfs me@host:/srv rw,user_id=0,group_id=0
 594 581 0:62 / /scratch rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k
 595 581 0:44 /appdata/my\040data /my\040data rw,noatime - fuse.shfs shfs rw
 `
 
-// TestMountFSType: the mount holding a path is the longest mount point that is a
-// segment-boundary prefix of it, the later of two at one point (the one on top),
-// and the auto mode maps on shfs and mergerfs only; a line it can't read makes
-// the whole table untrusted (no).
+// TestMountFSType: the mount is found by its device (the file's st_dev), the
+// whole field and not a prefix of it, and the auto mode maps on shfs and
+// mergerfs only; no line for the device, two lines for it that disagree, or a
+// line it can't read (the whole table is then untrusted) say no.
 func TestMountFSType(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		path, want string
-		mappable   bool
+		dev, want string
+		mappable  bool
 	}{
-		{"/config/audiosilo.db", "fuse.shfs", true},
-		{"/config", "fuse.shfs", true},
-		{"/configs/audiosilo.db", "overlay", false}, // not under /config
-		{"/cache/audiosilo.db", "btrfs", false},
-		{"/pool/data/audiosilo.db", "fuse.mergerfs", true},
-		{"/pool/remote/audiosilo.db", "fuse.sshfs", false}, // nested in the mergerfs pool
-		{"/scratch/audiosilo.db", "tmpfs", false},
-		{"/data/audiosilo.db", "overlay", false},
-		{"/my data/audiosilo.db", "fuse.shfs", true},
+		{"0:44", "fuse.shfs", true},
+		{"0:31", "btrfs", false},
+		{"0:60", "fuse.mergerfs", true},
+		{"0:61", "fuse.sshfs", false},
+		{"0:62", "tmpfs", false},
+		{"0:52", "overlay", false},
 	} {
-		got, ok := mountFSType(unraidMountinfo, c.path)
+		got, ok := mountFSType(unraidMountinfo, c.dev)
 		if !ok || got != c.want || mappableFSTypes[got] != c.mappable {
-			t.Errorf("%s: %q %v, want %q (mappable %v)", c.path, got, ok, c.want, c.mappable)
+			t.Errorf("%s: %q %v, want %q (mappable %v)", c.dev, got, ok, c.want, c.mappable)
 		}
-	}
-	// Two mounts at one point: the later is on top.
-	stacked := unraidMountinfo + "596 590 0:70 / /config rw - fuse.sshfs me@host:/x rw\n"
-	if got, ok := mountFSType(stacked, "/config/audiosilo.db"); !ok || got != "fuse.sshfs" {
-		t.Fatalf("stacked mount: %q %v", got, ok)
 	}
 
 	for name, bad := range map[string]string{
+		"no line for it":     unraidMountinfo,
 		"no separator":       "590 581 0:44 / /config rw,noatime fuse.shfs shfs rw\n",
-		"too few fields":     "590 581 / /config - fuse.shfs shfs rw\n",
+		"too few fields":     "590 581 0:44 / /config - fuse.shfs shfs rw\n",
 		"no type":            "590 581 0:44 / /config rw - \n",
-		"bad escape":         "590 581 0:44 / /my\\04 rw - fuse.shfs shfs rw\n",
-		"relative point":     "590 581 0:44 / config rw - fuse.shfs shfs rw\n",
 		"garbage":            "not a mountinfo at all\n",
 		"one bad line among": unraidMountinfo + "garbage line\n",
+		"types disagree":     unraidMountinfo + "596 581 0:44 / /other rw - fuse.sshfs me@host:/x rw\n",
+		"empty":              "",
 	} {
-		if got, ok := mountFSType(bad, "/config/audiosilo.db"); ok || mappableFSTypes[got] {
+		dev := "0:44"
+		if name == "no line for it" {
+			dev = "0:4" // a prefix of 0:44 and 0:4x, not a device in the table
+		}
+		if got, ok := mountFSType(bad, dev); ok || mappableFSTypes[got] {
 			t.Errorf("%s: %q %v, want no", name, got, ok)
 		}
-	}
-	if _, ok := mountFSType("", "/config/audiosilo.db"); ok {
-		t.Fatal("an empty mountinfo held the path")
 	}
 }

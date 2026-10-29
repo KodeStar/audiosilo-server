@@ -152,7 +152,7 @@ func isMemoryDSN(dsn string) bool {
 // Open opens (creating if needed) the SQLite database at dsn and applies any
 // pending migrations. Pass ":memory:" for tests.
 func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
-	cfg := openConfig{log: slog.Default(), mappable: onMappableFUSE}
+	cfg := openConfig{log: slog.Default(), mmap: MmapAuto, mappable: onMappableFUSE}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -209,12 +209,11 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 }
 
 // logReaderMmap says at start whether the readers map the database (mode as
-// configured, asked what readerMmap chose, got what SQLite reports for one
+// WithReaderMmap read it, asked what readerMmap chose, got what SQLite reports for one
 // reader connection: the limit it took, 0 where the build or platform can't
 // map). It is the limit, not a mapping made: a reader whose mmap() fails later
 // (a FUSE mount that refuses shared mappings) falls back to reads unlogged.
 func (db *DB) logReaderMmap(ctx context.Context, mode string, asked int64) {
-	mode = mmapMode(mode)
 	var got int64
 	if err := db.reader.QueryRowContext(ctx, "PRAGMA mmap_size").Scan(&got); err != nil {
 		db.log.Warn("database readers: mmap_size unreadable", "mode", mode, "err", err)
