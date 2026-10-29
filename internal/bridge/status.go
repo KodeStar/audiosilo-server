@@ -347,7 +347,16 @@ func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) err
 		return err
 	}
 	now := s.now()
-	res, err := s.db.ExecContext(ctx,
+	// A heartbeat while the Bridge is online is user state (server#258): an
+	// idle paired Bridge beats twice a minute, and only a new status (which the
+	// rule for bridge_status catches by value) or coming back online is news
+	// to anything. LastHeartbeat may be up to heartbeatTTL old, which only ever
+	// makes it older than the stored one, never online when that isn't.
+	exec := s.db.ExecContext
+	if prev, err := s.LastHeartbeat(ctx); err == nil && prev.Online(now) {
+		exec = s.db.ExecUserState
+	}
+	res, err := exec(ctx,
 		`UPDATE bridge_status SET heartbeat_at = ?, status = ?
 		  WHERE id = 1 AND paired_at IS NOT NULL AND `+auth.BridgeTokenLiveSQL, at(now), string(body), token)
 	if err != nil {

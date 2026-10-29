@@ -35,7 +35,7 @@ func (c *Catalog) Queue(ctx context.Context, userID int64, scopes []Scope) ([]Li
 // ErrQueueFull (an ErrListFull); one full only because of hidden entries loses
 // the oldest of them instead.
 func (c *Catalog) AddToQueue(ctx context.Context, userID int64, ref Ref, position *int, scopes []Scope) error {
-	return c.db.WithTx(ctx, "AddToQueue", func(tx *sql.Tx) error {
+	return c.withUserStateTx(ctx, "AddToQueue", func(tx *sql.Tx) error {
 		_, err := upNext.add(ctx, tx, userID, ref, position, scopes, c.stamp())
 		return err
 	})
@@ -56,7 +56,7 @@ func (c *Catalog) SetQueue(ctx context.Context, userID int64, refs []Ref, scopes
 	if err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "SetQueue", func(tx *sql.Tx) error {
+	return c.withUserStateTx(ctx, "SetQueue", func(tx *sql.Tx) error {
 		_, err := upNext.replace(ctx, tx, userID, listed, keep, c.stamp())
 		return err
 	})
@@ -66,7 +66,7 @@ func (c *Catalog) SetQueue(ctx context.Context, userID int64, refs []Ref, scopes
 // access check: it only removes the user's own row, so a revoked path can still
 // be cleaned up.
 func (c *Catalog) RemoveFromQueue(ctx context.Context, userID int64, ref Ref) error {
-	return c.db.WithTx(ctx, "RemoveFromQueue", func(tx *sql.Tx) error {
+	return c.withUserStateTx(ctx, "RemoveFromQueue", func(tx *sql.Tx) error {
 		_, err := upNext.drop(ctx, tx, userID, ref)
 		return err
 	})

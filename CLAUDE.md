@@ -312,6 +312,7 @@ keep this index in step (one line per topic).
   - SQLite
   - Pagination
   - List cache (`api/listcache.go`)
+  - Content generation (`store/userstate.go`: user-state writes, the per-cache audit)
   - Path safety
   - Path-addressed API
   - Recognized audio

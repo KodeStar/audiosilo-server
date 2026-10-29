@@ -2,8 +2,8 @@ package store
 
 import "sync"
 
-// GenMap is a map whose entries all belong to one write generation
-// (DB.Generation): a value computed from reads begun after the generation was g
+// GenMap is a map whose entries all belong to one content generation
+// (DB.ContentGeneration): a value computed from reads begun after the generation was g
 // is current while it is still g, so Get answers only at the generation the
 // entries were put at, Put drops a value read at an older generation than the
 // map's, and a newer one empties the map first. The caller takes the
@@ -42,6 +42,15 @@ func (m *GenMap[K, V]) Put(gen uint64, k K, v V) {
 		m.gen, m.rows = gen, map[K]V{}
 	}
 	m.rows[k] = v
+}
+
+// Delete drops k's value, whatever generation it was put at: for a value the
+// caller made stale with a write that leaves the generation alone (a user-state
+// write).
+func (m *GenMap[K, V]) Delete(k K) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.rows, k)
 }
 
 // Len is how many entries the map holds.

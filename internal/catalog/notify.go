@@ -172,7 +172,7 @@ func (c *Catalog) RecordServerEvent(ctx context.Context, kind string, data map[s
 		return ServerEvent{}, err
 	}
 	at := formatSessionTime(c.now())
-	res, err := c.db.ExecContext(ctx,
+	res, err := c.execUserState(ctx,
 		`INSERT INTO server_events(at, kind, data, dedup_key) VALUES(?,?,?,?)`, at, kind, string(b), dedupKey)
 	if err != nil {
 		return ServerEvent{}, err

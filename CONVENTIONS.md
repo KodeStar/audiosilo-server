@@ -508,10 +508,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **SQLite** runs with a single write connection (writers serialize) plus a
   read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
   the READER (`query_only`): any statement that writes, including `INSERT ...
-  RETURNING`, must use `ExecContext` or a `WithTx` transaction (there is no other
-  way to the writer: `store.DB.Generation`, which the list cache, the token cache
-  and the library cache key on, moves after each of those finishes, so a write
-  that bypassed them would leave a revoked token honoured). An in-memory DB has
+  RETURNING`, must use `ExecContext` or a `WithTx` transaction, or their user-state
+  forms `ExecUserState` / `WithUserStateTx` (there is no other way to the writer:
+  `store.DB.ContentGeneration`, which the list cache, the token cache and the library
+  cache key on, moves after each of those finishes, so a write that bypassed them
+  would leave a revoked token honoured; see Content generation). An in-memory DB has
   reader == writer and would hide a misroute, which is why the test stores are
   temp files. Commits are `synchronous=NORMAL` (a power cut can roll back the last
   few); a write that ends a credential (sign-out, device or API key revoke, password
@@ -525,16 +526,50 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`/libraries/{id}/authors`, `/narrators`, `/series`) keep their encoded answer
   (8 MiB LRU counting each answer's buffer and entry, 1 MiB an answer) keyed on the path,
   raw query string and the caller's scopes (spelled with `%q`/`%#v`: JSON would
-  merge paths whose bytes aren't UTF-8), under the write generation read before
-  the request's first read; any write moves the generation and empties it. Only
+  merge paths whose bytes aren't UTF-8), under the content generation read before
+  the request's first read; any content write moves the generation and empties it
+  (listening does not: see Content generation). Only
   answers that are a pure function of the database, the query and the scopes may
-  use it (no per-listener field on a list book); a handler that adds one must
-  leave the cache. The admin console's `GET /admin/books` first pages and
+  use it (no per-listener field on a list book, and nothing a user-state rule lets
+  through); a handler that adds one must leave the cache. The admin console's `GET /admin/books` first pages and
   `/admin/books/facets` use it too (keyed like a list, no scopes: an admin sees
   every book), and so does the Health summary `GET /admin/issues` (server#245),
   whose key also takes `cachedList`'s extra inputs: the kinds it counts and the
   offline libraries (a filesystem probe made before the lookup, so a root going
   away needs no write to show).
+- **Content generation** (`store/userstate.go`, server#258): `store.DB.ContentGeneration`
+  moves after every write (`ExecContext`, `WithTx`, `WithDurableTx`/`ExecDurable`, failed and
+  rolled-back ones too) except a user-state one, `ExecUserState` / `WithUserStateTx` (catalog's
+  `execUserState` / `withUserStateTx`), which moves it only when it changed something outside
+  `userStateTables`. Default to both: a write is content unless it goes through the user-state
+  path. The check is SQLite's pre-update hook on the writer's connection for the write's
+  duration, so triggers and foreign-key actions count: per table, a rule says whether new and
+  removed rows are user state (`progress`'s are not: Health ranks duplicate copies by how many
+  people have progress on them) and, for `tokens` (`last_seen`, `last_ip`, `client_*`),
+  `bridge_status` (`heartbeat_at`) and `bridge_jobs` (`lease_until`, `updated_at`), which
+  columns an UPDATE may change by value. Anything else on a listed table moves the generation;
+  a table the list doesn't name is a misfiling (logged; a panic in a test binary). Durability
+  (`WithDurableTx`) is orthogonal. The user-state writes: `SaveProgress` (an update of the row),
+  `RecordHeartbeat` (listening sessions), bookmarks and notes (add, edit, delete), `AddHistory`,
+  `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
+  `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the token touch in
+  `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
+  its new last-seen and address), the Bridge's heartbeat while it is online
+  (`bridge.SaveHeartbeat`; a new status or a return after the online window moves the
+  generation) and its job reports (`bridge.UpdateHeld`; only a lease renewal stays user
+  state). Kept as content on purpose: collections, grants, shares, users, libraries, books,
+  scans, matches, covers, favourites, goals, household sharing, the pairing touch, retention
+  and prunes (rare, or read by what is cached). There is no global "every write" counter:
+  nothing reads one. Each consumer, audited against the tables its answer reads:
+  the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
+  library's authors/narrators/series: `books` and its side tables, `libraries`; scopes computed
+  per request from shares, grants and members' `collection_shares`, into the key) and the
+  admin's `/admin/books` first page and facets read no user state; Health `/admin/issues` reads `progress` row counts (the duplicate ranking), hence
+  `progress`'s row rule, and its offline libraries' listener counts are computed per request
+  into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
+  reads `tokens` and `users` (owner join), and the touch is the only user-state change to
+  either, dropped from the cache by the touching request. A new cache whose answer reads a
+  user-state table needs a key of its own, or that table out of the list.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
@@ -1785,8 +1820,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
   and leases it for 2 min (`attempts` + 1). A claim with nothing to write (no lapsed lease, no lost
   private follow request, nothing `nextQueued` would hand out: `Service.claimDue`, on the reader pool)
-  answers without the writer, so an idle paired Bridge's polls leave the write generation alone (its
-  heartbeat still moves it, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  answers without the writer, so an idle paired Bridge's polls leave the content generation alone (as
+  do its unchanged heartbeats and lease-only job reports: see Content generation, server#258). `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
   error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
   library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
   to stop.

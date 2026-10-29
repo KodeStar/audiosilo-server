@@ -99,7 +99,7 @@ type NoteEdit struct {
 // The read, the checks and the write are one writer transaction.
 func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit BookmarkEdit, scopes []Scope) (*Bookmark, error) {
 	var b Bookmark
-	err := c.db.WithTx(ctx, "EditBookmark", func(tx *sql.Tx) error {
+	err := c.withUserStateTx(ctx, "EditBookmark", func(tx *sql.Tx) error {
 		if err := ownRow(scanBookmark(tx.QueryRowContext(ctx,
 			`SELECT `+bookmarkColumns+` FROM bookmarks WHERE id = ? AND user_id = ?`, id, userID), &b),
 			scopes, &b.Ref); err != nil {
@@ -132,7 +132,7 @@ func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit Bookm
 // transaction, as EditBookmark.
 func (c *Catalog) EditNote(ctx context.Context, userID, id int64, edit NoteEdit, scopes []Scope) (*Note, error) {
 	var n Note
-	err := c.db.WithTx(ctx, "EditNote", func(tx *sql.Tx) error {
+	err := c.withUserStateTx(ctx, "EditNote", func(tx *sql.Tx) error {
 		if err := ownRow(scanNote(tx.QueryRowContext(ctx,
 			`SELECT `+noteColumns+` FROM notes WHERE id = ? AND user_id = ?`, id, userID), &n),
 			scopes, &n.Ref); err != nil {

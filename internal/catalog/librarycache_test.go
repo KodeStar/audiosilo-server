@@ -28,7 +28,7 @@ func TestGetLibraryCachedUntilAWrite(t *testing.T) {
 	// caller changes the library it was given, and none sees another's change.
 	for i := range 3 {
 		if i > 0 {
-			gen, _ := c.Generation()
+			gen, _ := c.ContentGeneration()
 			if _, ok := c.libs.Get(gen, lib.ID); !ok {
 				t.Fatalf("read %d: the library isn't cached", i)
 			}

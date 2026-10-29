@@ -37,7 +37,7 @@ const (
 // handleAdminListBooks serves GET /admin/books: a keyset page of books across
 // every library, filtered, searched and sorted (see bookFilterFromQuery).
 func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	q := r.URL.Query()
 	f, msg := bookFilterFromQuery(q)
 	if msg != "" {
@@ -72,7 +72,7 @@ func (a *API) handleAdminListBooks(w http.ResponseWriter, r *http.Request) {
 // handleAdminBookFacets serves GET /admin/books/facets: the facet counts for the
 // same filter parameters as the list.
 func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	f, msg := bookFilterFromQuery(r.URL.Query())
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)

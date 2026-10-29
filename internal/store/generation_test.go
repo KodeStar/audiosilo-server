@@ -10,9 +10,10 @@ import (
 	"modernc.org/sqlite"
 )
 
-// TestGenerationMovesAfterEveryWrite: every write path moves the generation once
-// it has finished (a failed or rolled-back one too), never before its commit;
-// reads never do (api's list cache relies on both).
+// TestGenerationMovesAfterEveryWrite: every default write path moves the content
+// generation once it has finished (a failed or rolled-back one too), never
+// before its commit; reads never do (api's list cache relies on both). The
+// user-state writes are userstate_test.go's.
 func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -26,9 +27,9 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	}
 	moved := func(name string, f func()) {
 		t.Helper()
-		before := db.Generation()
+		before := db.ContentGeneration()
 		f()
-		if after := db.Generation(); after <= before {
+		if after := db.ContentGeneration(); after <= before {
 			t.Errorf("%s: generation %d -> %d, want it moved", name, before, after)
 		}
 	}
@@ -65,7 +66,7 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	}
 	if err := conn.Raw(func(dc any) error {
 		dc.(sqlite.HookRegisterer).RegisterCommitHook(func() int32 {
-			atCommit = append(atCommit, db.Generation())
+			atCommit = append(atCommit, db.ContentGeneration())
 			return 0
 		})
 		return nil
@@ -90,12 +91,12 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 			})
 		}},
 	} {
-		before := db.Generation()
+		before := db.ContentGeneration()
 		atCommit = nil
 		if err := w.write(); err != nil {
 			t.Fatal(err)
 		}
-		if after := db.Generation(); len(atCommit) != 1 || atCommit[0] != before || after == before {
+		if after := db.ContentGeneration(); len(atCommit) != 1 || atCommit[0] != before || after == before {
 			t.Errorf("%s: generation %d at the COMMIT (%v), %d after; want %d, then moved", w.name, before, atCommit, after, before)
 		}
 	}
@@ -105,7 +106,7 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	}
 
 	// Reads leave it where it is.
-	g := db.Generation()
+	g := db.ContentGeneration()
 	for range 3 {
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t`).Scan(&n); err != nil {
 			t.Fatal(err)
@@ -114,7 +115,7 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 	if err := db.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if db.Generation() != g {
-		t.Fatalf("reads moved the generation: %d -> %d", g, db.Generation())
+	if db.ContentGeneration() != g {
+		t.Fatalf("reads moved the generation: %d -> %d", g, db.ContentGeneration())
 	}
 }

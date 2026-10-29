@@ -20,8 +20,10 @@ import (
 // request (the books' rows, their file counts, FTS ranking, JSON). The admin
 // console's book pages and Health summary are kept the same way (server#245).
 //
-// It is exact because it is keyed on the database's write generation
-// (store.DB.Generation, which moves after every write has finished) as well as
+// It is exact because it is keyed on the database's content generation
+// (store.DB.ContentGeneration, which moves after every write has finished but
+// a user-state one: a progress save, a listening session, a token's last-seen
+// touch, history, bookmarks, ratings, the queue) as well as
 // on everything the answer is computed from: the path, the raw query string
 // and the caller's scopes (their access, as the catalog computed it for this
 // request). The answers are pure functions of those and the database: no
@@ -29,9 +31,11 @@ import (
 // client gate and private shows. The generation is read before anything else
 // the request reads, so an answer is stored under a generation no newer than
 // the data it was built from; a write that commits later moves the generation
-// on and the entry is never served again. Every write moves it (a progress
-// save, a token's last-seen touch), so the cache only ever saves work between
-// writes; it never decides what is current.
+// on and the entry is never served again. A user-state write leaves it, and
+// none of these answers reads what such a write changes (store's
+// userStateTables, checked as each one runs; CONVENTIONS.md, Content
+// generation), so listening keeps them warm. The cache only ever saves work
+// between content writes; it never decides what is current.
 const (
 	listCacheBytes    = 8 << 20 // the whole cache
 	listCacheMaxEntry = 1 << 20 // one answer (a 200-book page is ~80 KB)
@@ -125,7 +129,7 @@ func listCacheKey(r *http.Request, scopes []catalog.Scope, extra ...any) [sha256
 }
 
 // cachedList is the list cache's lookup for one of the handlers it serves: gen
-// is the generation read before the request's first read (a.cat.Generation),
+// is the generation read before the request's first read (a.cat.ContentGeneration),
 // and extra is what the answer is computed from besides the database and r
 // (listCacheKey). It answers from the cache and returns nil, or returns a
 // write func that encodes v exactly as writeJSON does, keeps it when

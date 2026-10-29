@@ -29,3 +29,19 @@ func TestGenMapGenerations(t *testing.T) {
 		t.Fatalf("map holds %d values, bound 4", m.Len())
 	}
 }
+
+// Delete drops one key at whatever generation, leaving the others.
+func TestGenMapDelete(t *testing.T) {
+	t.Parallel()
+	var m GenMap[string, int]
+	m.Put(4, "a", 1)
+	m.Put(4, "b", 2)
+	m.Delete("a")
+	m.Delete("missing")
+	if _, ok := m.Get(4, "a"); ok {
+		t.Fatal("a deleted key still answers")
+	}
+	if v, ok := m.Get(4, "b"); !ok || v != 2 {
+		t.Fatalf("the other key = %d, %v", v, ok)
+	}
+}

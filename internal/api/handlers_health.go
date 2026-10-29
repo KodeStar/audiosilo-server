@@ -35,14 +35,17 @@ type offlineLibrary struct {
 // nothing to match against).
 //
 // Counting is a pass over the whole library (about 100 ms at 5,000 books), so
-// the answer is kept in the list cache (listcache.go) under the write
+// the answer is kept in the list cache (listcache.go) under the content
 // generation, keyed on what it is computed from besides the database: the
 // kinds and the offline libraries (a filesystem probe, cached for a few
-// seconds in library.RootsAvailable, so made before the lookup).
-// It is exact: any write (a fix, an ignore, a scan) moves the generation, and
-// the next request counts again (server#245).
+// seconds in library.RootsAvailable, so made before the lookup, listeners
+// included). It is exact: any content write (a fix, an ignore, a scan) moves
+// the generation, and the next request counts again (server#245). The one
+// user state it reads is how many people have progress on each duplicate copy
+// (its ranking), so a progress row added or removed is a content write too;
+// a save to an existing row is not (store's userStateTables).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
-	gen, cacheable := a.cat.Generation() // before any read (listcache.go)
+	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
 		return k == catalog.IssueUnmatched && !a.metadataOn()
 	})

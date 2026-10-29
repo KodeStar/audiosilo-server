@@ -134,7 +134,7 @@ func (c *Catalog) SaveReadingProgress(ctx context.Context, userID int64, in Read
 		DeviceID: in.DeviceID, DeviceName: in.DeviceName, UpdatedAt: in.UpdatedAt}
 	var kept *ReadingProgress
 	var other *OtherPlace
-	err := c.db.WithTx(ctx, "SaveReadingProgress", func(tx *sql.Tx) error {
+	err := c.withUserStateTx(ctx, "SaveReadingProgress", func(tx *sql.Tx) error {
 		stored, err := getReading(ctx, tx, userID, in.Ref)
 		if err != nil {
 			return err

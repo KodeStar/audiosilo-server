@@ -430,7 +430,12 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	// The app is written only when this request named one, decided in SQL rather
 	// than from the value read above: a request without the header racing one with
 	// it (covers loading beside an API call) must not write back the stale app.
-	_, _ = s.db.ExecContext(ctx,
+	// The touch is user state: it leaves the content generation, and so every
+	// cache keyed on it, where it was (store.DB.ExecUserState), and drops the
+	// token's own cached row, whose last_seen, address and app it changed, so
+	// the next request reads them again (needsTouch).
+	defer s.tokens.Delete(hashSecret(secret))
+	_, _ = s.db.ExecUserState(ctx,
 		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
 		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
 		        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
@@ -513,7 +518,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	)
 	// The generation is taken before the read, so a write that lands after it
 	// leaves what is cached here unused.
-	gen := s.db.Generation()
+	gen := s.db.ContentGeneration()
 	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
 		if s.pastExpiry(c.expires) {
 			return nil, tokenRow{}, ErrInvalidToken
