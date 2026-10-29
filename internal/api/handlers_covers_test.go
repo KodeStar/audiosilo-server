@@ -162,9 +162,12 @@ func TestAdminCovers(t *testing.T) {
 	if other[0].Data != "" {
 		t.Fatal("an unknown library returned art")
 	}
-	// The default size is 320.
+	// The default size is 320; a table row's 96 is one of the sizes.
 	if w, _ := thumbSize(t, postCovers(t, e, adminTok, coversBody(libID, 0, "Sidecar"))[0].Data); w != 320 {
 		t.Fatalf("default thumb width = %d, want 320", w)
+	}
+	if w, h := thumbSize(t, postCovers(t, e, adminTok, coversBody(libID, 96, "Sidecar"))[0].Data); w != 96 || h != 96 {
+		t.Fatalf("small thumb = %dx%d, want 96x96", w, h)
 	}
 }
 

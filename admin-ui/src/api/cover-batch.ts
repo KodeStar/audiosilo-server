@@ -1,6 +1,7 @@
 import { refKey } from '@/lib/book-route';
 import { createBatcher, type Batched } from './batcher';
 import { COMMUNITY_COVERS_LIMIT, api, type ThumbSize } from './client';
+import { thumbCache, thumbKey } from './thumb-cache';
 import type { BookRef } from './types';
 
 // Cover thumbnails are requested one per <BookCover> but fetched in batches
@@ -19,13 +20,28 @@ const bySize = new Map<ThumbSize, Batched<BookRef, string | null>>();
 /**
  * A book's cover thumbnail as a data: URL, or null when it has no art. An
  * aborted `signal` (the cover scrolled away before the batch went out) drops
- * this request, and a book nobody waits for any more isn't sent.
+ * this request, and a book nobody waits for any more isn't sent. With the
+ * row's cover `version` the thumbnail comes from, and goes into, the
+ * thumbnail cache (thumb-cache.ts), so a reload doesn't fetch it again; a
+ * book without art isn't kept (its art may only be unreadable for now).
  */
-export function loadThumb(
+export async function loadThumb(
   ref: BookRef,
   size: ThumbSize,
   signal?: AbortSignal,
+  version?: string,
 ): Promise<string | null> {
+  const key = version ? thumbKey(ref, size, version) : undefined;
+  if (key) {
+    const hit = await thumbCache().get(key);
+    if (hit) return hit;
+  }
+  const data = await batched(size)(ref, signal);
+  if (key && data) void thumbCache().put(key, data);
+  return data;
+}
+
+function batched(size: ThumbSize) {
   let load = bySize.get(size);
   if (!load) {
     load = createBatcher({
@@ -35,7 +51,7 @@ export function loadThumb(
     });
     bySize.set(size, load);
   }
-  return load(ref, signal);
+  return load;
 }
 
 async function sendCovers(refs: BookRef[], size: ThumbSize) {

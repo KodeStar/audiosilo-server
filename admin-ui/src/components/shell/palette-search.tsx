@@ -72,7 +72,8 @@ export function usePaletteSearch(
         path={b.path}
         title={b.title}
         author={b.author}
-        size={160}
+        size={96}
+        version={b.cover_version}
         className="w-9 shrink-0"
       />
     ),

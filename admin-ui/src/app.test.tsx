@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { thumbCache, thumbKey } from '@/api/thumb-cache';
 import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
@@ -104,8 +105,10 @@ describe('sign-in gate', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Your session ended');
   });
 
-  it('signs out', async () => {
+  it('signs out, and leaves no cover thumbnails behind', async () => {
     setToken('stored');
+    const kept = thumbKey({ library_id: 1, path: 'Dune' }, 320, 'v1');
+    await thumbCache().put(kept, 'data:image/jpeg;base64,x');
     const calls = mockFetch({ ...signedInRoutes(), 'POST /auth/logout': { status: 204 } });
     renderApp();
     const user = userEvent.setup();
@@ -114,6 +117,7 @@ describe('sign-in gate', () => {
     expect(await screen.findByLabelText('Username')).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/auth/logout')).toBe(true);
     expect(getToken()).toBeNull();
+    await waitFor(async () => expect(await thumbCache().get(kept)).toBeUndefined());
   });
 });
 

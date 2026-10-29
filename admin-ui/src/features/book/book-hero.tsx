@@ -78,7 +78,7 @@ export function BookHero({
   const server = useServerInfo();
   const caps = server.data?.capabilities;
   const library = useLibraries().data?.find((l) => l.id === b.library_id);
-  const tint = useHeroTint(b.library_id, b.path, b.title, b.author);
+  const tint = useHeroTint(b.library_id, b.path, b.title, b.author, b.cover_version);
   const style = tint
     ? ({ '--tint1': tint.tint1, '--tint2': tint.tint2, '--glow': tint.glow } as React.CSSProperties)
     : undefined;
@@ -106,6 +106,7 @@ export function BookHero({
           title={b.title}
           author={b.author}
           size={160}
+          version={b.cover_version}
         />
       </div>
       <div className={HERO_GRID}>
@@ -116,6 +117,7 @@ export function BookHero({
             title={b.title}
             author={b.author}
             size={640}
+            version={b.cover_version}
           />
         </div>
         <div className="flex min-w-0 flex-col">

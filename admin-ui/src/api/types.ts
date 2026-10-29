@@ -1459,6 +1459,8 @@ export interface AdminBook {
   custom_cover: boolean;
   /** Colours read from the cover art. Absent until the server has read the current art's colour. */
   cover_color?: CoverColor;
+  /** Changes when the cover art does (catalog.CoverVersion): the thumbnail cache's key. */
+  cover_version?: string;
   chapter_count: number;
   file_count: number;
   asin: string;

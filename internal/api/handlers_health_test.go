@@ -144,7 +144,8 @@ func TestDuplicatesPaged(t *testing.T) {
 	type page struct {
 		Groups []struct {
 			Books []struct {
-				Path string `json:"path"`
+				Path         string `json:"path"`
+				CoverVersion string `json:"cover_version"`
 			} `json:"books"`
 		} `json:"groups"`
 		Total      int    `json:"total"`
@@ -170,6 +171,9 @@ func TestDuplicatesPaged(t *testing.T) {
 			t.Fatalf("total = %d, want 5", p.Total)
 		}
 		for _, g := range p.Groups {
+			if g.Books[0].CoverVersion == "" {
+				t.Fatalf("copy %s has no cover_version", g.Books[0].Path)
+			}
 			kept = append(kept, g.Books[0].Path)
 		}
 		if p.NextCursor == "" {

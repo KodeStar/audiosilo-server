@@ -314,8 +314,8 @@ export interface LogQuery {
 /** What GET .../book/match searches by ({} = the book's own facts). */
 export type MatchBy = { q?: string; asin?: string; isbn?: string };
 
-/** The cover thumbnail sizes POST /admin/covers renders (handlers_covers.go). */
-export type ThumbSize = 160 | 320 | 640;
+/** The cover thumbnail sizes POST /admin/covers renders (handlers_covers.go); 96 for table rows. */
+export type ThumbSize = 96 | 160 | 320 | 640;
 
 /** The server's cap on one POST /admin/meta/covers (handlers_community_covers.go). */
 export const COMMUNITY_COVERS_LIMIT = 12;

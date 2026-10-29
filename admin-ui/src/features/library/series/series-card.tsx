@@ -260,6 +260,7 @@ function Shelf({
                   title={b.title}
                   author={b.author}
                   size={160}
+                  version={b.cover_version}
                 />
               </div>
             ))}

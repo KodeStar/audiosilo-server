@@ -68,11 +68,15 @@ type AdminBook struct {
 	CustomCover    bool    `json:"custom_cover"`
 	// CoverColor is the cover's colour (Book.CoverColor), for the Series shelf's
 	// spines; absent until the server has read the current art's colour.
-	CoverColor   *CoverColor `json:"cover_color,omitempty"`
-	ChapterCount int         `json:"chapter_count"`
-	FileCount    int         `json:"file_count"`
-	ASIN         string      `json:"asin"`
-	ISBN         string      `json:"isbn"`
+	CoverColor *CoverColor `json:"cover_color,omitempty"`
+	// CoverVersion is the player's Book.CoverVersion (a short hash of
+	// books.cover_art): it changes when the cover art does, so the console keeps
+	// thumbnails keyed by it.
+	CoverVersion string `json:"cover_version,omitempty"`
+	ChapterCount int    `json:"chapter_count"`
+	FileCount    int    `json:"file_count"`
+	ASIN         string `json:"asin"`
+	ISBN         string `json:"isbn"`
 	// Matched is the matched= filter's rule (an ASIN or ISBN), so the console never
 	// restates it.
 	Matched bool `json:"matched"`
@@ -256,8 +260,8 @@ func creditFilter(prefix, field, value string) (string, []any) {
 // finish, called after the scan, derives what the row carries beyond its
 // columns: Authors and Narrators from Author and Narrator, SeriesList from the
 // series columns and Genres and Tags from theirs (never nil, so the wire carries
-// [] for none), CoverColor, when the stored colour is for the current art, and
-// Ebook from the stored ebook columns.
+// [] for none), CoverColor, when the stored colour is for the current art,
+// CoverVersion from the art, and Ebook from the stored ebook columns.
 func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 	var art, color, genres, tags, ebookPath string
 	var ebookSize int64
@@ -274,6 +278,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
 			b.SeriesList = SeriesList(SeriesRef{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}, b.moreSeries)
 			b.CoverColor, _ = storedCoverColor(art, color)
+			b.CoverVersion = CoverVersion(art)
 			b.Ebook = ebookOf(ebookPath, ebookSize)
 		}
 }

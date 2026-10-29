@@ -46,9 +46,13 @@ const (
 	maxConcurrentThumbnails = 4
 )
 
-// thumbSizes are the sizes a client may ask for; a fixed set keeps the cache
-// from holding one copy per arbitrary size.
-var thumbSizes = []int{160, defaultThumbSize, 640}
+// thumbSizes are the sizes a client may ask for, smallest first; a fixed set
+// keeps the cache from holding one copy per arbitrary size. 96 is for a table
+// row's 36-48px cover.
+var thumbSizes = []int{96, colorThumbSize, defaultThumbSize, 640}
+
+// colorThumbSize is the thumbnail colorCover makes when none is cached.
+const colorThumbSize = 160
 
 // coverThumb is one entry of the response, in request order. Data is a data: URL,
 // or "" when the book has no cover art (or no book is indexed at the path).
@@ -261,7 +265,7 @@ func (a *API) colorRecord(libraryID int64, path string, src catalog.CoverSource,
 
 // colorCover is the background colour pass's Colorer (covercolors): the colour of
 // a due book's cover, read like a thumbnail's. A thumbnail of the art already in
-// the cache is used as it is; otherwise one of the smallest size is made and not
+// the cache is used as it is; otherwise a colorThumbSize one is made and not
 // cached, so a pass over a library never pushes out the thumbnails people are
 // looking at. A book with no art, or none that decodes, gets a record of that (a
 // zero Color); one whose art files aren't there is covercolors.ErrArtMissing, not
@@ -282,7 +286,7 @@ func (a *API) colorCover(ctx context.Context, lib *catalog.Library, due catalog.
 	}
 	if !cached {
 		var err error
-		if jpg, err = a.makeThumbnail(ctx, lib, due.Path, art, thumbSizes[0]); err != nil {
+		if jpg, err = a.makeThumbnail(ctx, lib, due.Path, art, colorThumbSize); err != nil {
 			return none, err
 		}
 	}

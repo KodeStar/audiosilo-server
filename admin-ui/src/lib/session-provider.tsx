@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
+import { clearThumbCache } from '@/api/thumb-cache';
 import { clearToken, getToken, setToken } from '@/api/token';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
@@ -15,6 +16,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     (reason: SignedOutReason) => {
       clearToken();
       qc.clear();
+      // The covers this admin saw stay with them, not with whoever signs in next.
+      void clearThumbCache();
       setState({ status: 'signed-out', reason });
     },
     [qc],

@@ -1327,10 +1327,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the pixel bound). It stays under the request timeout (`isStreamingPath` matches
   only `/libraries/{id}/cover|stream|ebook` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
-  covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
+  covers: `{books:[{library_id,path}], size: 96|160|320|640}` (<= 60; 96 for a table row) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
-  one `catalog.CoverSources` query per library for the whole batch.
+  one `catalog.CoverSources` query per library for the whole batch. Admin book rows carry
+  `cover_version`, and the console keeps the thumbnails it got in a bounded IndexedDB cache
+  keyed by library, path, version and size (`admin-ui/src/api/thumb-cache.ts`), cleared on sign-out.
   One request per page of covers instead of one per cover, no token in any URL,
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
@@ -1339,7 +1341,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   batch base64-encodes it), and
   `coverReads` bounds the art being read or waiting to be decoded and `thumbSem` the
   decodes, both across requests. The player gets
-  the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
+  the same thumbnails from `GET /libraries/{id}/cover?size=96|160|320|640` (capability
   `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
   304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
   `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set

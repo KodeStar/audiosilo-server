@@ -304,6 +304,7 @@ function CopyColumn({
             author={b.author}
             size={160}
             load={seen}
+            version={b.cover_version}
           />
         </Link>
         <div className="flex flex-col items-start gap-1.5">

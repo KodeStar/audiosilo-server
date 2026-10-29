@@ -57,9 +57,14 @@ to share conventions with TanStack Query and Table.
 Covers come from `POST /api/v1/admin/covers`: `useCover(libraryId, path, size)` queues each
 cover and `src/api/cover-batch.ts` sends everything asked for in the same moment as one request
 of up to 60 thumbnails (data: URLs, the CSP allows no blob:), so a grid of hundreds of covers is a
-handful of requests (160px for rows, 320px for tiles, 640px for the book hero, whose blurred
-backdrop and tint use the 160px one). A thumbnail nobody shows any more by the time its batch goes
-out isn't asked for, and unused ones leave the cache after five minutes. A match candidate's cover is
+handful of requests (96px for table rows, 160px for list rows, 320px for tiles, 640px for the book
+hero, whose blurred backdrop and tint use the 160px one). A thumbnail nobody shows any more by the
+time its batch goes out isn't asked for, and unused ones leave the in-memory cache after five
+minutes. A cover passed its row's `cover_version` is also kept across reloads in
+`src/api/thumb-cache.ts`: IndexedDB (memory where that fails), keyed by book, size and version
+(new art is a new key), at most 5,000 thumbnails or ~50 MB with the least recently used out first,
+each asked for again after a week, all cleared on sign-out. Long lists (Health > Duplicates) ask
+for a cover only once it nears the viewport (`BookCover load`, `src/lib/use-in-view.ts`). A match candidate's cover is
 an image on another host, so the server fetches it too: `useCommunityCover(url)` batches them into
 `POST /api/v1/admin/meta/covers` the same way (`loadCommunityCover`, up to 12). A book without art gets a generated cover (`src/components/generated-cover.tsx`, React SVG, palette from
 `src/lib/cover-model.ts`). Book pages are addressed by identity, `/admin/library/book?library=&path=`
