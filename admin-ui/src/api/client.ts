@@ -538,6 +538,12 @@ export const api = {
       `/admin/users/${id}${bookQuery({ keep_members: keepMembers.join(',') })}`,
     ),
   clearRecovery: (id: number) => request<void>('DELETE', `/admin/users/${id}/recovery`),
+  /**
+   * Signs a person out of every phone, tablet and browser (their sessions; API keys and
+   * calendar links stay), keeping the console's own when it is the admin's account.
+   */
+  signOutEverywhere: (id: number) =>
+    request<{ signed_out: number }>('POST', `/admin/users/${id}/sign-out`),
   invites: () => request<{ invites: Invite[] }>('GET', '/admin/invites'),
   /** Mints an invite; `max_uses` 0 = unlimited, `ttl_days` 0 = never expires. */
   createInvite: (userId: number, opts: { max_uses: number; ttl_days: number }) =>

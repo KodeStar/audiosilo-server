@@ -372,6 +372,61 @@ describe('a person', () => {
     expect(within(keys).queryByText("Sam's iPhone")).not.toBeInTheDocument();
   });
 
+  it('signs them out everywhere after saying what keeps working (server#281)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: { devices: [device(), device({ id: 3, kind: 'api', name: 'Home Assistant' })] },
+        },
+        'POST /admin/users/2/sign-out': { body: { signed_out: 1 } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Sign out everywhere' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign sam out everywhere?' });
+    expect(
+      within(dialog).getByText(/API keys and calendar links keep working/),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+    expect(await screen.findByText('Signed sam out of 1 device')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/users/2/sign-out')).toBe(
+      true,
+    );
+  });
+
+  it("offers no sign out everywhere when the console's own session is the only one", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device({ id: 9, user_id: 1, username: 'admin', name: 'Console', current: true }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/people/user/1?tab=devices');
+    expect(await screen.findByText('Console')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign out everywhere' })).not.toBeInTheDocument();
+  });
+
+  it('says a password change signs them out, and a first password does not', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ user: { ...sam, has_password: true } }) },
+      }),
+    );
+    renderApp('/people/user/2?tab=sign-in');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Change password' }));
+    const dialog = await screen.findByRole('dialog', { name: "Change sam's password" });
+    expect(
+      within(dialog).getByText(/Their phones, tablets and browsers are signed out/),
+    ).toBeInTheDocument();
+  });
+
   it('404s an unknown person', async () => {
     mockFetch(
       routes({ 'GET /admin/users/99': { status: 404, body: { error: 'user not found' } } }),

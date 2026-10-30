@@ -7,6 +7,7 @@ import {
   KeyRound,
   LibraryBig,
   LifeBuoy,
+  LogOut,
   Plus,
   QrCode,
   Share2,
@@ -15,7 +16,13 @@ import {
   UserX,
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
+import {
+  invalidateDevices,
+  invalidatePeople,
+  useDevices,
+  useLibraries,
+  useUser,
+} from '@/api/hooks';
 import type { AdminUser, User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
@@ -187,6 +194,48 @@ function UserView({ detail }: { detail: UserDetail }) {
   );
 }
 
+/**
+ * Signs a person out of every device (server#281): their sessions end, and with
+ * them anything they are casting; API keys and calendar links stay. Offered while
+ * they have a session the console isn't using.
+ */
+function SignOutEverywhere({ user, self }: { user: AdminUser; self: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div>
+        <Button size="sm" variant="destructive-outline" onClick={() => setOpen(true)}>
+          <LogOut aria-hidden="true" />
+          {t('user.devices.signOutAll')}
+        </Button>
+      </div>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        icon={LogOut}
+        title={t('user.devices.signOutAllTitle', { name: user.username })}
+        description={
+          self
+            ? t('user.devices.signOutAllSelfBody')
+            : t('user.devices.signOutAllBody', { name: user.username })
+        }
+        confirmLabel={t('user.devices.signOutAll')}
+        onConfirm={async () => {
+          const { signed_out } = await api.signOutEverywhere(user.id);
+          invalidateDevices(qc);
+          invalidatePeople(qc);
+          toast.add({
+            title: t('user.devices.signedOutAll', { count: signed_out, name: user.username }),
+            type: 'success',
+          });
+        }}
+      />
+    </>
+  );
+}
+
 /** A person's devices; onPair is undefined for a kid, whose owner pairs them from the player. */
 function DevicesTab({
   user,
@@ -198,6 +247,7 @@ function DevicesTab({
   onPair?: () => void;
 }) {
   const { t } = useTranslation();
+  const self = useCurrentUser().id === user.id;
   if (devices.isError) {
     return (
       <QueryError
@@ -215,7 +265,10 @@ function DevicesTab({
   return (
     <div className="flex flex-col gap-5">
       {sessions.length ? (
-        <DeviceList devices={sessions} showPerson={false} />
+        <div className="flex flex-col gap-3">
+          <DeviceList devices={sessions} showPerson={false} />
+          {sessions.some((d) => !d.current) ? <SignOutEverywhere user={user} self={self} /> : null}
+        </div>
       ) : (
         <EmptyState
           icon={Smartphone}
