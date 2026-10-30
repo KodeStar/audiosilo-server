@@ -711,4 +711,27 @@ func TestServerCancelReasonOutlivesReports(t *testing.T) {
 	if j := stop(first.ID, first.Attempts); j.Error != "supervisor: stopped" {
 		t.Fatalf("admin-then-server cancel ended with %q, want the Bridge's error", j.Error)
 	}
+
+	// The server asked, but the job failed or finished first: the Bridge's
+	// error (or none), never the cancel reason, on a job that wasn't cancelled.
+	for _, end := range []struct {
+		path, state string
+		err         *string
+		want        string
+	}{
+		{"Author/Failed", StateFailed, ptr("agent: out of credit"), "agent: out of credit"},
+		{"Author/Done", StateDone, nil, ""},
+	} {
+		if _, _, err := q.describe("", ptr(end.path)); err != nil {
+			t.Fatal(err)
+		}
+		w := q.work(t, KindDescribe, "")
+		if _, _, err := q.sidecars("", ptr(end.path)); err != nil {
+			t.Fatal(err)
+		}
+		j, err := q.UpdateHeld(ctx, w.ID, Update{Attempt: w.Attempts, State: ptr(end.state), Error: end.err})
+		if err != nil || j.State != end.state || j.Error != end.want {
+			t.Fatalf("%s after the server's cancel = %+v, %v; want error %q", end.state, j, err, end.want)
+		}
+	}
 }

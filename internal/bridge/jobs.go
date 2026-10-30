@@ -1381,8 +1381,17 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			result = string(u.Result)
 		}
 		// The server's reason for a cancel it asked for (cancelOpenTx) stays
-		// through the Bridge's reports, which always send their own error.
-		if u.Error != nil && !(cur.CancelRequested && IsCancelReason(cur.Error)) {
+		// through the Bridge's reports, which always send their own error, while
+		// the job works and when it ends cancelled. A job that finishes, fails or
+		// parks anyway carries the Bridge's own error (or none), never the reason.
+		serverCancel := cur.CancelRequested && IsCancelReason(cur.Error)
+		switch {
+		case serverCancel && (state == StateDone || state == StateFailed || state == StateNeedsAttention):
+			errText = ""
+			if u.Error != nil {
+				errText = *u.Error
+			}
+		case u.Error != nil && !serverCancel:
 			errText = *u.Error
 		}
 		if _, err := tx.ExecContext(ctx,
