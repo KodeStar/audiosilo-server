@@ -124,6 +124,8 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"ebooks":             true,                 // the reader: Book.ebook, GET /libraries/{id}/ebook, GET/PUT /libraries/{id}/reading-progress
 		"readalong":          true,                 // read-along: Book.readalong on /item, GET /libraries/{id}/readalong
 		"upcoming":           a.upcomingOn(),       // upcoming releases in the caller's series (GET /me/upcoming): metadata on AND upcoming.enabled
+		"upcoming_calendar":  a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
+		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
 	}
 }
 

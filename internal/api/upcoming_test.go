@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -34,7 +35,7 @@ func folded(name string) string { return cmp.Or(match.SeriesKey(name), name) }
 
 func newUpcomingEnv(t *testing.T) *upcomingEnv {
 	t.Helper()
-	e := newTestEnv(t)
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test" }) // the calendar's UIDs
 	ctx := context.Background()
 	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
 	if err != nil {
@@ -276,15 +277,17 @@ func TestUpcomingOffAndCapability(t *testing.T) {
 	t.Parallel()
 	u := newUpcomingEnv(t)
 	tok, _ := u.auth.IssueToken(context.Background(), u.adminID, auth.KindSession, "t", 0)
+	// upcoming_calendar and upcoming_covers (Track U3) follow upcoming exactly,
+	// false (never absent) while it is off.
 	capability := func() string {
 		_, si := u.do(t, "GET", "/api/v1/server", "", "")
 		switch {
-		case strings.Contains(si, `"upcoming":true`):
+		case strings.Contains(si, `"upcoming":true`) && strings.Contains(si, `"upcoming_calendar":true`) && strings.Contains(si, `"upcoming_covers":true`):
 			return "on"
-		case strings.Contains(si, `"upcoming":false`):
+		case strings.Contains(si, `"upcoming":false`) && strings.Contains(si, `"upcoming_calendar":false`) && strings.Contains(si, `"upcoming_covers":false`):
 			return "off"
 		}
-		return "absent"
+		return "absent or mixed: " + si
 	}
 	if c := capability(); c != "on" {
 		t.Fatalf("capability with metadata on = %s", c)

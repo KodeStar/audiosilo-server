@@ -28,8 +28,9 @@ import (
 //     /api/v1/auth/ is excluded whole besides, so a compressed body never holds
 //     one (BREACH needs a secret and attacker-chosen text in one compressed
 //     body). Excluded too: the media (cover, stream, ebook, a backup's download,
-//     /meta/cover: isStreamingPath and isLibraryMedia's neighbours) and the
-//     Bridge's routes, whose claim is a long poll and whose job parameters can
+//     /meta/cover: isStreamingPath and isLibraryMedia's neighbours), everything
+//     below /me/upcoming/ (the calendar feed, read with its token in the URL,
+//     and the Upcoming covers) and the Bridge's routes, whose claim is a long poll and whose job parameters can
 //     carry a private feed URL. A new GET that returns a credential must be
 //     added to compressExcluded.
 //   - The response (gzipWriter): Content-Type application/json, no
@@ -52,6 +53,7 @@ const (
 var compressExcluded = []string{
 	"/api/v1/auth/",
 	"/api/v1/bridge/",
+	"/api/v1/me/upcoming/", // the calendar feed (a feed token in its URL) and the Upcoming covers
 }
 
 // compressible reports whether r may have its JSON answer gzipped (the request

@@ -489,6 +489,14 @@ func (a *API) Handler() http.Handler {
 	// Phase 8: listening in the house (household) and casting (cast).
 	// Upcoming releases (Track U1): never a kid's.
 	mux.Handle("GET /api/v1/me/upcoming", a.requireAuth(notKid(http.HandlerFunc(a.handleMyUpcoming))))
+	// Track U3: the calendar feed (upcoming_calendar) and the covers
+	// (upcoming_covers). The feed takes ONLY a feed token (requireFeedAuth), and
+	// no other route takes one.
+	mux.Handle("GET /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleUpcomingCalendarStatus))))
+	mux.Handle("POST /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleMintUpcomingCalendar))))
+	mux.Handle("DELETE /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleDeleteUpcomingCalendar))))
+	mux.Handle("GET /api/v1/me/upcoming/releases.ics", a.requireFeedAuth(notKid(http.HandlerFunc(a.handleUpcomingCalendarFeed))))
+	mux.Handle("GET /api/v1/me/upcoming/cover", a.requireMediaAuth(notKid(http.HandlerFunc(a.handleUpcomingCover))))
 	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
 	mux.Handle("PUT /api/v1/me/household", a.requireAuth(notKid(http.HandlerFunc(a.handlePutHousehold))))
 	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))

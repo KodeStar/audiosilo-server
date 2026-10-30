@@ -501,8 +501,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
   show's next episode oldest first in the episode order (`catalog.NextPodcastEpisode`: in scope, in
   the feed or kept on disk, never by file name), else `none`.
-- **Upcoming releases (Track U1, capability `upcoming`, `internal/upcoming`, `catalog/upcoming.go`,
-  `api/handlers_upcoming.go`, `0059`)**: a background job works out, for the series a server's books
+- **Upcoming releases (Track U1 and U3, capabilities `upcoming`, `upcoming_calendar`, `upcoming_covers`,
+  `internal/upcoming`, `catalog/upcoming.go`, `api/handlers_upcoming.go`, `api/handlers_upcoming_calendar.go`,
+  `auth/feed.go`, `0059`, `0060`)**: a background job works out, for the series a server's books
   libraries hold, the community's preorders, recent releases and missing volumes, and `GET /me/upcoming`
   (requireAuth, notKid) reads what it stored for one caller. **Layout**: `upcoming/classify.go` is the pure
   `Classify` (slots by the console's `railEntries` rule; a book with a known work holds that work's span,
@@ -545,7 +546,53 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
   90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
   `metadata_off`, then 404 `upcoming_off`. `MetaSeriesWork.release_date` (additive, omitted when unknown)
-  feeds the console's dated gaps on the Series cards.
+  feeds the console's dated gaps on the Series cards. **The calendar feed (U3, security-critical)**: `GET
+  /me/upcoming/calendar` -> `{"active", "created_at"?}` (requireAuth, notKid; an API key may read it; the
+  link itself is never answered again); `POST` -> `201 {"path": "/api/v1/me/upcoming/releases.ics?token=<secret>",
+  "created_at"}` (`Cache-Control: no-store`; a path, not a URL: the player prefixes the address it reaches
+  the server at, since the server knows no reliable public one); `DELETE` -> 204, idempotent. Mint and
+  delete are session only (`denyAPIKey`, plain 403: a key never mints a credential). The mint's refusals in
+  order: 401, 403 `kid_account` (notKid, and `refuseKid` inside the write), 403 for an API key, 403
+  `demo_account`, 404 `metadata_off`, 404 `upcoming_off`; the status read has the same order without the
+  two credential refusals; DELETE has no 404s (ending a link only takes access away). The secret is a
+  `tokens` row of kind `feed` (`auth.KindFeed`, `IssueFeedToken`: `generateToken`, SHA-256 hash only, no
+  expiry, device name "Calendar feed"). **One per user**: a mint deletes the earlier row in the same
+  durable transaction, and `0060`'s partial unique index `tokens(user_id) WHERE kind='feed' AND revoked=0`
+  refuses a second live row whatever writes it. A feed row is DELETED, never flagged revoked, when it ends:
+  a reset, Turn off (`RevokeFeedToken`), the switch to a kid (`clearKidCredentials`, both the owner's
+  member edit and the admin's assign); the account's deletion cascades; a disabled account's is refused by
+  `lookupToken`. A password change revokes no token of any kind on this server, so it leaves the feed too.
+  It is never touched (`resolve`, like a bridge token: a calendar's polls are not the person's activity,
+  and no last_ip is kept), never a device (the device lists take session and API-key kinds only) and is
+  held in the token cache like a session (every end above is a content write). **Acceptance**: `GET
+  /me/upcoming/releases.ics` is the ONLY route listing `KindFeed` (`requireFeedAuth` = `mediaAuth` with
+  `feedKinds`: `?token=` or the header, the media rate limit per credential) and it lists no other kind:
+  a session, API key, cast, bridge or pairing token is 401 there, and a feed token is 401 on every other
+  route (the route-table test `TestFeedTokenRefusedOnEveryOtherRoute`). Behind it, notKid (403 for a
+  leftover token of a person now a kid), then the two 404s. **The calendar** (`upcoming/ics.go`, `ICS`,
+  pure, golden-tested): the token owner's `/me/upcoming` list (`myUpcoming`, the JSON route's scopes and
+  rules read at the request, so a share taken away is felt at once), RFC 5545 with CRLF, lines folded at 75
+  octets never inside a UTF-8 sequence, TEXT escaped (`\\ \; \, \n`, other control characters
+  dropped), a URI with a control character or space left out. VCALENDAR: VERSION 2.0, PRODID
+  `-//AudioSilo//Upcoming releases//EN`, CALSCALE GREGORIAN, METHOD PUBLISH, `X-WR-CALNAME` "AudioSilo:
+  upcoming releases" (+ " (<name>)" when the server has one), `REFRESH-INTERVAL;VALUE=DURATION:PT12H`,
+  `X-PUBLISHED-TTL:PT12H`. One VEVENT per `preorder` or `released` item with a `YYYY-MM-DD` date (a
+  missing volume, a year or month date, no date or a bad one: none): all-day `DTSTART;VALUE=DATE` and
+  `DTEND` the next day, `UID:<work_id>@<server_id>` (`config.ServerID`, `audiosilo` when unset; a slipped
+  date moves the event), `DTSTAMP` the list's `generated_at` (else now, UTC), `SUMMARY` "Title (Series
+  position)", `DESCRIPTION` "By authors", "First release: <date>" and the `web_url`, `URL` the `web_url`,
+  `TRANSP:TRANSPARENT`. A server that never ran the job answers a valid empty calendar. Headers:
+  `text/calendar; charset=utf-8`, `Content-Disposition: inline; filename="releases.ics"`, `Cache-Control:
+  private, max-age=3600`; never compressed (`compressExcluded` holds `/api/v1/me/upcoming/`). **The Upcoming
+  cover** (`GET /me/upcoming/cover?work=&size=`, requireMediaAuth: session or API key, header or `?token=`,
+  never a cast or feed token; notKid; then the two 404s): 400 without `work` or with a size outside
+  `thumbSizes`; it serves only the `cover_url` the caller's own list (`myUpcoming`, DB only, no meta
+  traffic) hands out for that work right now: a work not in it (another person's series, one the caller
+  holds, none) or in it without a cover is 404 `not_found`, before any fetch. Then `/meta/cover`'s tail
+  (`serveCommunityCover`: the ETag + `coverCache`, `communityThumbnail`'s guarded fetch, single flight and
+  thumbnail cache, 502 `cover_unavailable`, 404 `no cover`). **Flags**: `upcoming_calendar` and
+  `upcoming_covers` are exactly `upcoming` (false, never absent, while off); kids and demo accounts are
+  refused by the routes, not the flags.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -582,7 +629,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
   `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
-  the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/` and `/api/v1/bridge/`
+  the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/`, `/api/v1/bridge/` and `/api/v1/me/upcoming/` (the calendar feed, its token in the URL, and the Upcoming covers)
   (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
   (BREACH). A new GET that returns a credential joins `compressExcluded`. A new stream (media, a
   download, a long poll, anything that flushes) goes in `isStreamingPath` when it must also leave

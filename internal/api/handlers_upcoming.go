@@ -26,24 +26,46 @@ func (a *API) upcomingOn() bool { return a.metadataOn() && a.config().Upcoming.E
 // metadata_off while metadata is off, 404 upcoming_off while the job is
 // switched off.
 func (a *API) handleMyUpcoming(w http.ResponseWriter, r *http.Request) {
-	if a.metadataOff(w) {
+	if a.upcomingOff(w) {
 		return
+	}
+	ans, ok := a.myUpcoming(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, ans)
+}
+
+// upcomingOff answers 404 metadata_off while metadata is off, else 404
+// upcoming_off while the job is switched off, and reports whether it did: the
+// gate of every upcoming route after its auth, kid and credential checks.
+func (a *API) upcomingOff(w http.ResponseWriter) bool {
+	if a.metadataOff(w) {
+		return true
 	}
 	if !a.upcomingOn() {
 		writeErrorCode(w, http.StatusNotFound, codeUpcomingOff, "upcoming releases are turned off")
-		return
+		return true
 	}
+	return false
+}
+
+// myUpcoming is the request's caller's GET /me/upcoming answer (their scopes,
+// read at this request). On a failure it has written the 500 and ok is false.
+// The JSON route, the calendar feed and the cover route read the list through
+// it, so the three share one access rule.
+func (a *API) myUpcoming(w http.ResponseWriter, r *http.Request) (upcoming.Answer, bool) {
 	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
 	if err != nil {
 		a.writeCatalogError(w, err, "upcoming: scopes", "could not list upcoming releases")
-		return
+		return upcoming.Answer{}, false
 	}
 	ans, err := upcoming.List(r.Context(), a.cat, scopes, a.meta.WorkURL, a.config().Upcoming.Window(), time.Now())
 	if err != nil {
 		a.writeCatalogError(w, err, "upcoming: list", "could not list upcoming releases")
-		return
+		return upcoming.Answer{}, false
 	}
-	writeJSON(w, http.StatusOK, ans)
+	return ans, true
 }
 
 // announceReleases is the job's book_released: one event naming the first few

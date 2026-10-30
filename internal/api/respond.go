@@ -96,6 +96,7 @@ const (
 	codeBookNotFound       = "book_not_found"
 	codeMetadataOff        = "metadata_off"
 	codeUpcomingOff        = "upcoming_off" // GET /me/upcoming while upcoming.enabled is off (metadata on)
+	codeNotFound           = "not_found"    // GET /me/upcoming/cover for a work the caller's list doesn't hand a cover out for
 	codeModuleOff          = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage   = "unsupported_image"
 	codeCoverUnavailable   = "cover_unavailable"
