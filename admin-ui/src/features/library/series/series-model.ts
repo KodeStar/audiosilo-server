@@ -445,6 +445,21 @@ export function spineHeight(seconds: number, key: string): number {
   return Math.round(72 + 26 * Math.min(1, Math.max(0, t)));
 }
 
+/**
+ * Whether a missing entry's spine, `heightPct` of the shelf, has room for its
+ * whole release label `label` ("Preorder · 24 Nov 2026") in the line it runs in
+ * beside the title; when not, the spine shows the date alone (its colour still
+ * says preorder or new; the spine's own label says it all). The sizes are
+ * globals.css's: the shelf (232 px, 200 on a phone), the spine's padding and
+ * number, and the date's mono characters (0.625em of 10 px, 9 on a phone).
+ */
+export function spineFitsLabel(heightPct: number, label: string, phone: boolean): boolean {
+  const shelf = phone ? 200 : 232;
+  const chrome = 22 + 14 + 26;
+  const char = 0.625 * (phone ? 9 : 10);
+  return (heightPct / 100) * shelf - chrome >= [...label].length * char;
+}
+
 /** A spine's colours: its body, its two bands and its type. */
 export interface SpineColors {
   body: string;

@@ -23,6 +23,7 @@ import {
   releaseState,
   seriesStatus,
   spineColors,
+  spineFitsLabel,
   spineHeight,
   spineRow,
   type Placed,
@@ -195,6 +196,7 @@ function Shelf({
   const now = new Date();
   // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
   const wide = useMediaQuery('(min-width: 1024px)');
+  const phone = useMediaQuery('(max-width: 720px)');
   const spines = spineRow(placed, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
@@ -207,6 +209,14 @@ function Shelf({
             const date = formatReleaseDate(sp.entry.release_date, lang);
             const state = date ? releaseState(sp.entry.release_date, now) : undefined;
             const values = { index, title: sp.entry.title, date };
+            const height = spineHeight(0, sp.entry.title);
+            const stateWord = state
+              ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
+              : '';
+            // The date runs in a line of its own beside the title; the state word
+            // leads it only where the whole line fits (else the date alone, its
+            // colour still saying which, the spine's label all of it).
+            const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
             const label =
               state === 'preorder'
                 ? t('series.gapPreorder', values)
@@ -223,20 +233,20 @@ function Shelf({
                   role="img"
                   aria-label={label}
                   title={label}
-                  style={{ height: `${spineHeight(0, sp.entry.title)}%` }}
+                  style={{ height: `${height}%` }}
                 >
                   <span className="spine-idx">{index}</span>
-                  <span className="spine-title">{sp.entry.title}</span>
                   {date ? (
-                    <span className="spine-date" data-state={state}>
-                      {state === 'preorder'
-                        ? `${t('series.preorder')} · `
-                        : state === 'new'
-                          ? `${t('series.newRelease')} · `
-                          : null}
-                      {date}
+                    <span className="spine-lines">
+                      <span className="spine-title">{sp.entry.title}</span>
+                      <span className="spine-date" data-state={state}>
+                        {showState ? <span className="spine-state">{stateWord}</span> : null}
+                        {date}
+                      </span>
                     </span>
-                  ) : null}
+                  ) : (
+                    sp.entry.title
+                  )}
                 </span>
               </li>
             );
