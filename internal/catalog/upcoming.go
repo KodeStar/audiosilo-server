@@ -14,8 +14,8 @@ import (
 // through the user-state path: no content cache reads any of them.
 
 // UpcomingBook is one owned book in one of its series, as the job reads the
-// library: its handle, the series (key and spelling), its position there (a
-// range's end, 0 for none) and its identifiers.
+// library: its handle, the series (key and spelling; both "" for a book in no
+// series), its position there (a range's end, 0 for none) and its identifiers.
 type UpcomingBook struct {
 	Ref
 	SeriesKey   string
@@ -26,13 +26,15 @@ type UpcomingBook struct {
 }
 
 // UpcomingBooks lists every book of a books library that is in a series, once
-// per series it is in (its main one and each of its more_series), in library
-// sort order then path. Podcast libraries are never read.
+// per series it is in (its main one and each of its more_series), and once with
+// no series every book in none that has an identifier (a copy of a work holds
+// it wherever it is filed), in library sort order then path. Podcast libraries
+// are never read.
 func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT b.library_id, b.rel_path, b.series, b.series_index,
 		       b.series_index_end, b.more_series, b.asin, b.isbn
 		  FROM books b JOIN libraries l ON l.id = b.library_id
-		 WHERE l.kind = 'books' AND (b.series <> '' OR b.more_series <> '[]')
+		 WHERE l.kind = 'books' AND (b.series <> '' OR b.more_series <> '[]' OR b.asin <> '' OR b.isbn <> '')
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path`)
 	if err != nil {
 		return nil, err
@@ -46,6 +48,7 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 		if err := rows.Scan(&ref.LibraryID, &ref.Path, &series, &idx, &end, &more, &asin, &isbn); err != nil {
 			return nil, err
 		}
+		n := len(out)
 		for _, s := range SeriesList(SeriesRef{Name: series, Position: idx, PositionEnd: end}, more) {
 			key := seriesKey(s.Name)
 			if strings.TrimSpace(s.Name) == "" || key == "" {
@@ -53,6 +56,9 @@ func (c *Catalog) UpcomingBooks(ctx context.Context) ([]UpcomingBook, error) {
 			}
 			out = append(out, UpcomingBook{Ref: ref, SeriesKey: key, SeriesName: s.Name,
 				Position: s.Position, PositionEnd: s.PositionEnd, ASIN: asin, ISBN: isbn})
+		}
+		if len(out) == n && (asin != "" || isbn != "") {
+			out = append(out, UpcomingBook{Ref: ref, ASIN: asin, ISBN: isbn})
 		}
 	}
 	return out, rows.Err()
@@ -86,8 +92,11 @@ func (c *Catalog) UpcomingOwnedAll(ctx context.Context) (map[Ref]UpcomingOwned, 
 }
 
 // SaveUpcomingOwned stores resolutions (each replacing the book's) and drops
-// those of books no longer indexed.
-func (c *Catalog) SaveUpcomingOwned(ctx context.Context, owned []UpcomingOwned) error {
+// those of drop (books gone from the index, or whose identifiers went).
+func (c *Catalog) SaveUpcomingOwned(ctx context.Context, owned []UpcomingOwned, drop []Ref) error {
+	if len(owned) == 0 && len(drop) == 0 {
+		return nil
+	}
 	return c.db.WithUserStateTx(ctx, "SaveUpcomingOwned", func(tx *sql.Tx) error {
 		for _, o := range owned {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO upcoming_owned(library_id, path, id_key, work_id, checked_at)
@@ -98,9 +107,13 @@ func (c *Catalog) SaveUpcomingOwned(ctx context.Context, owned []UpcomingOwned) 
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM upcoming_owned WHERE NOT EXISTS
-			(SELECT 1 FROM books b WHERE b.library_id = upcoming_owned.library_id AND b.rel_path = upcoming_owned.path)`)
-		return err
+		for _, ref := range drop {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM upcoming_owned WHERE library_id = ? AND path = ?`,
+				ref.LibraryID, ref.Path); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -219,45 +232,25 @@ type MetaSeriesRecord struct {
 
 // MetaSeriesAll returns every stored community series, by id.
 func (c *Catalog) MetaSeriesAll(ctx context.Context) (map[string]MetaSeriesRecord, error) {
-	out := map[string]MetaSeriesRecord{}
-	if err := c.readMetaSeries(ctx, out, "", nil); err != nil {
+	rows, err := c.db.QueryContext(ctx, `SELECT series_id, name, members, fetched_at, state = 'gone', COALESCE(gone_at, '')
+		  FROM meta_series`)
+	if err != nil {
 		return nil, err
 	}
-	return out, nil
-}
-
-// metaSeriesOf returns the stored community series of ids, by id.
-func (c *Catalog) metaSeriesOf(ctx context.Context, ids []string) (map[string]MetaSeriesRecord, error) {
-	out := map[string]MetaSeriesRecord{}
-	for chunk := range slices.Chunk(ids, 500) {
-		if err := c.readMetaSeries(ctx, out, ` WHERE series_id IN (`+placeholders(len(chunk))+`)`, anyOf(chunk)); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-// readMetaSeries adds the meta_series rows where (a WHERE clause, "" for all)
-// selects to out.
-func (c *Catalog) readMetaSeries(ctx context.Context, out map[string]MetaSeriesRecord, where string, args []any) error {
-	rows, err := c.db.QueryContext(ctx, `SELECT series_id, name, members, fetched_at, state = 'gone', COALESCE(gone_at, '')
-		  FROM meta_series`+where, args...)
-	if err != nil {
-		return err
-	}
 	defer rows.Close()
+	out := map[string]MetaSeriesRecord{}
 	for rows.Next() {
 		var r MetaSeriesRecord
 		var members string
 		if err := rows.Scan(&r.ID, &r.Name, &members, &r.FetchedAt, &r.Gone, &r.GoneAt); err != nil {
-			return err
+			return nil, err
 		}
 		if json.Unmarshal([]byte(members), &r.Members) != nil {
 			r.Members = nil // unreadable: refetched as a series with no members
 		}
 		out[r.ID] = r
 	}
-	return rows.Err()
+	return out, rows.Err()
 }
 
 // SaveMetaSeries stores a series as fetched (ok again if it was gone).
@@ -315,7 +308,8 @@ const (
 	UpcomingMissing  = "missing"
 )
 
-// UpcomingItem is one work a local series lacks, as of the last run.
+// UpcomingItem is one work a local series lacks, as of the last run: the work
+// as its series lists it (title, authors, cover) and where it sits there.
 type UpcomingItem struct {
 	LibraryID   int64
 	SeriesKey   string
@@ -324,35 +318,49 @@ type UpcomingItem struct {
 	Kind        string
 	ReleaseDate string
 	Position    string
+	Title       string
+	Authors     []MetaSeriesPerson
+	CoverURL    string
 	FirstSeenAt string
 }
 
 // ReplaceUpcomingItems makes items a local series' items: a work it had keeps
 // its first_seen_at and announced_at, a new one is first seen at at, and the
-// series' other items go. With silent (the series' first classification, a
-// baseline) every released item is marked announced without being announced.
-// The series is marked classified.
-func (c *Catalog) ReplaceUpcomingItems(ctx context.Context, libraryID int64, key string, items []UpcomingItem, silent bool, at string) error {
+// series' other items go. A released item of a work in baseline (one no series
+// it was classified against before lists: a baseline, not news) is marked
+// announced without being announced. The community series of read (those the
+// items were worked out from) are marked classified.
+func (c *Catalog) ReplaceUpcomingItems(ctx context.Context, libraryID int64, key string, items []UpcomingItem,
+	baseline map[string]bool, read []string, at string) error {
 	return c.db.WithUserStateTx(ctx, "ReplaceUpcomingItems", func(tx *sql.Tx) error {
 		works := make([]string, 0, len(items))
 		for _, it := range items {
 			works = append(works, it.WorkID)
 			var announced any
-			if silent && it.Kind == UpcomingReleased {
+			if baseline[it.WorkID] && it.Kind == UpcomingReleased {
 				announced = at
 			}
+			authors := []byte("[]")
+			if len(it.Authors) > 0 {
+				var err error
+				if authors, err = json.Marshal(it.Authors); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO upcoming_items(library_id, series_key, work_id, series_id,
-				  kind, release_date, position, first_seen_at, announced_at)
-				VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+				  kind, release_date, position, title, authors, cover_url, first_seen_at, announced_at)
+				VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(library_id, series_key, work_id) DO UPDATE SET series_id = excluded.series_id,
 				  kind = excluded.kind, release_date = excluded.release_date, position = excluded.position,
+				  title = excluded.title, authors = excluded.authors, cover_url = excluded.cover_url,
 				  announced_at = COALESCE(upcoming_items.announced_at, excluded.announced_at)`,
-				libraryID, key, it.WorkID, it.SeriesID, it.Kind, it.ReleaseDate, it.Position, at, announced); err != nil {
+				libraryID, key, it.WorkID, it.SeriesID, it.Kind, it.ReleaseDate, it.Position, it.Title,
+				string(authors), it.CoverURL, at, announced); err != nil {
 				return err
 			}
 		}
-		// The items no longer found (every item, when none is); the ids go in
-		// as one JSON array.
+		// The items no longer found (every item, when none is), and the series
+		// read; the ids go in as JSON arrays.
 		found, err := json.Marshal(works)
 		if err != nil {
 			return err
@@ -361,53 +369,74 @@ func (c *Catalog) ReplaceUpcomingItems(ctx context.Context, libraryID int64, key
 			AND work_id NOT IN (SELECT value FROM json_each(?))`, libraryID, key, string(found)); err != nil {
 			return err
 		}
+		ids, err := json.Marshal(append([]string{}, read...))
+		if err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE upcoming_series SET classified_at = COALESCE(classified_at, ?)
-			WHERE library_id = ? AND series_key = ?`, at, libraryID, key)
+			WHERE library_id = ? AND series_key = ? AND series_id IN (SELECT value FROM json_each(?))`,
+			at, libraryID, key, string(ids))
 		return err
 	})
 }
 
 // UnannouncedReleases are the released items book_released hasn't told the
-// admin about, in library sort order then series and position. A work some
-// other row of has been announced is included with Announced set (marked
-// without a second announcement).
-func (c *Catalog) UnannouncedReleases(ctx context.Context) ([]UpcomingItem, map[string]bool, error) {
+// admin about, with their community series' names, in library sort order then
+// series and position. already holds the works announced before (through
+// another series, or before the item left and came back): marked without a
+// second announcement.
+func (c *Catalog) UnannouncedReleases(ctx context.Context) (items []UpcomingEntry, already map[string]bool, err error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT i.library_id, i.series_key, i.work_id, i.series_id, i.kind,
-		       i.release_date, i.position, i.first_seen_at,
-		       EXISTS (SELECT 1 FROM upcoming_items o WHERE o.work_id = i.work_id AND o.announced_at IS NOT NULL)
+		       i.release_date, i.position, i.title, i.first_seen_at, COALESCE(s.name, ''),
+		       EXISTS (SELECT 1 FROM upcoming_announced a WHERE a.work_id = i.work_id)
 		  FROM upcoming_items i JOIN libraries l ON l.id = i.library_id
+		  LEFT JOIN meta_series s ON s.series_id = i.series_id
 		 WHERE i.kind = 'released' AND i.announced_at IS NULL
-		 ORDER BY l.sort_order, l.name, l.id, i.series_key, i.position, i.work_id`)
+		 ORDER BY l.sort_order, l.name, l.id, i.series_key, CAST(i.position AS REAL), i.position, i.work_id`)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
-	var out []UpcomingItem
-	already := map[string]bool{}
+	already = map[string]bool{}
 	for rows.Next() {
-		var it UpcomingItem
+		var e UpcomingEntry
 		var done bool
-		if err := rows.Scan(&it.LibraryID, &it.SeriesKey, &it.WorkID, &it.SeriesID, &it.Kind,
-			&it.ReleaseDate, &it.Position, &it.FirstSeenAt, &done); err != nil {
+		if err := rows.Scan(&e.LibraryID, &e.SeriesKey, &e.WorkID, &e.SeriesID, &e.Kind, &e.ReleaseDate,
+			&e.Position, &e.Title, &e.FirstSeenAt, &e.SeriesName, &done); err != nil {
 			return nil, nil, err
 		}
 		if done {
-			already[it.WorkID] = true
+			already[e.WorkID] = true
 		}
-		out = append(out, it)
+		items = append(items, e)
 	}
-	return out, already, rows.Err()
+	return items, already, rows.Err()
 }
 
-// MarkUpcomingAnnounced marks every released item of these works announced.
-func (c *Catalog) MarkUpcomingAnnounced(ctx context.Context, workIDs []string, at string) error {
-	if len(workIDs) == 0 {
-		return nil
+// MarkUpcomingAnnounced marks every released item of the works handled dealt
+// with, records those of announced (book_released named them) as announced, and
+// forgets the announcements made before forgetBefore.
+func (c *Catalog) MarkUpcomingAnnounced(ctx context.Context, handled, announced []string, at, forgetBefore string) error {
+	// The works go in as one JSON array.
+	works, err := json.Marshal(append([]string{}, handled...))
+	if err != nil {
+		return err
 	}
-	_, err := c.db.ExecUserState(ctx, `UPDATE upcoming_items SET announced_at = ?
-		WHERE announced_at IS NULL AND kind = 'released' AND work_id IN (`+placeholders(len(workIDs))+`)`,
-		append([]any{at}, anyOf(workIDs)...)...)
-	return err
+	return c.db.WithUserStateTx(ctx, "MarkUpcomingAnnounced", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE upcoming_items SET announced_at = ?
+			WHERE announced_at IS NULL AND kind = 'released' AND work_id IN (SELECT value FROM json_each(?))`,
+			at, string(works)); err != nil {
+			return err
+		}
+		for _, id := range announced {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO upcoming_announced(work_id, announced_at) VALUES(?, ?)
+				ON CONFLICT(work_id) DO UPDATE SET announced_at = excluded.announced_at`, id, at); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM upcoming_announced WHERE announced_at < ?`, forgetBefore)
+		return err
+	})
 }
 
 // UpcomingOwnedWorks reports which of workIDs an indexed book of a books
@@ -452,12 +481,12 @@ func (c *Catalog) collectWorkIDs(ctx context.Context, out map[string]bool, q str
 	return rows.Err()
 }
 
-// UpcomingEntry is an item as GET /me/upcoming reads it: the item, its local
-// series' spelling, and the community series it came from.
+// UpcomingEntry is an item as it is read back: the item, its local series'
+// spelling and the name of the community series it came from.
 type UpcomingEntry struct {
 	UpcomingItem
-	LocalName string
-	Series    MetaSeriesRecord
+	LocalName  string
+	SeriesName string
 }
 
 // UpcomingFor lists the items of the local series the caller holds a book of
@@ -471,11 +500,12 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 	args := slices.Concat(fargs, fargs)
 	rows, err := c.db.QueryContext(ctx, `SELECT i.library_id, i.series_key, i.work_id, i.series_id, i.kind,
-		       i.release_date, i.position, i.first_seen_at, s.name
+		       i.release_date, i.position, i.title, i.authors, i.cover_url, i.first_seen_at, s.name, ms.name
 		  FROM upcoming_items i
 		  JOIN libraries l ON l.id = i.library_id AND l.kind = 'books'
 		  JOIN upcoming_series s ON s.library_id = i.library_id AND s.series_key = i.series_key
 		   AND s.series_id = i.series_id
+		  JOIN meta_series ms ON ms.series_id = i.series_id
 		 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = i.library_id AND b.series_key = i.series_key
 		                 AND `+frag+`)
 		    OR EXISTS (SELECT 1 FROM book_more_series m JOIN books b ON b.id = m.book_id
@@ -486,40 +516,19 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 	}
 	defer rows.Close()
 	var out []UpcomingEntry
-	var ids []string
-	seen := map[string]bool{}
 	for rows.Next() {
 		var e UpcomingEntry
+		var authors string
 		if err := rows.Scan(&e.LibraryID, &e.SeriesKey, &e.WorkID, &e.SeriesID, &e.Kind, &e.ReleaseDate,
-			&e.Position, &e.FirstSeenAt, &e.LocalName); err != nil {
+			&e.Position, &e.Title, &authors, &e.CoverURL, &e.FirstSeenAt, &e.LocalName, &e.SeriesName); err != nil {
 			return nil, err
 		}
-		if !seen[e.SeriesID] {
-			seen[e.SeriesID] = true
-			ids = append(ids, e.SeriesID)
+		if json.Unmarshal([]byte(authors), &e.Authors) != nil {
+			e.Authors = nil // unreadable: no authors rather than no item
 		}
 		out = append(out, e)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	series, err := c.metaSeriesOf(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	kept := out[:0]
-	for _, e := range out {
-		s, ok := series[e.SeriesID]
-		if !ok {
-			continue
-		}
-		e.Series = s
-		kept = append(kept, e)
-	}
-	return kept, nil
+	return out, rows.Err()
 }
 
 // upcomingRunKey is the job's run status row in server_state.

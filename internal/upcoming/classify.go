@@ -24,7 +24,8 @@ import (
 // Holding follows meta.PlaceLocal: a book whose community work is known holds
 // that work's entry (a range: every entry inside it) and nothing else, whatever
 // its own number says; a book whose work isn't known holds the entry at its own
-// position (a range at that range, a single entry the range starts on). Entries
+// position (a range at that range, a single entry the range starts on). A range
+// (a box set) is held too when every volume inside it is, one book each. Entries
 // are the console's railEntries: one per position, the first member there, and
 // a range entry ("1-3", an omnibus) only on a rail that numbers none of the
 // books inside it. Only whole-number positions (and such ranges) can be missing,
@@ -156,8 +157,28 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	for _, h := range held {
 		top = max(top, h.end)
 	}
-	isHeld := func(sp span) bool {
+	holdsSpan := func(sp span) bool {
 		return slices.ContainsFunc(held, func(h span) bool { return h.holds(sp) })
+	}
+	isHeld := func(sp span) bool {
+		if holdsSpan(sp) {
+			return true
+		}
+		if samePos(sp.start, sp.end) {
+			return false
+		}
+		// A range: held when each whole volume inside it is (a range spans at
+		// most metadata.MaxSeriesSpan, so this stays short).
+		first := math.Ceil(sp.start - 1e-6)
+		if first > sp.end+1e-6 {
+			return false
+		}
+		for n := first; atOrBefore(n, sp.end); n++ {
+			if !holdsSpan(span{n, n}) {
+				return false
+			}
+		}
+		return true
 	}
 	isSlot := map[int]span{}
 	for _, e := range slots {
@@ -217,6 +238,9 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 			Kind:        kind,
 			ReleaseDate: m.ReleaseDate,
 			Position:    m.Position,
+			Title:       m.Title,
+			Authors:     m.Authors,
+			CoverURL:    m.CoverURL,
 		})
 	}
 	return out

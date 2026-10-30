@@ -544,7 +544,10 @@ function upcomingRunText(t: TFunction, s: UpcomingStatus | undefined, lang: stri
   return t('settings.metadata.upcomingLast', {
     when,
     count: s.items,
-    series: formatNumber(s.series, lang),
+    series: t('settings.metadata.upcomingSeries', {
+      count: s.series,
+      formatted: formatNumber(s.series, lang),
+    }),
     formatted: formatNumber(s.items, lang),
   });
 }

@@ -82,10 +82,16 @@ func (u *upcomingEnv) series(t *testing.T, libID int64, name, id string, members
 	if err := u.cat.SaveMetaSeries(ctx, catalog.MetaSeriesRecord{ID: id, Name: name, Members: members, FetchedAt: at}); err != nil {
 		t.Fatal(err)
 	}
+	// Each item carries its work as the series lists it, as the job stores it.
 	for i := range items {
 		items[i].SeriesID = id
+		for _, m := range members {
+			if m.WorkID == items[i].WorkID {
+				items[i].Title, items[i].Authors, items[i].CoverURL = m.Title, m.Authors, m.CoverURL
+			}
+		}
 	}
-	if err := u.cat.ReplaceUpcomingItems(ctx, libID, folded(name), items, false, at); err != nil {
+	if err := u.cat.ReplaceUpcomingItems(ctx, libID, folded(name), items, nil, []string{id}, at); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -183,7 +189,7 @@ func TestUpcomingOwnCopyElsewhere(t *testing.T) {
 	}
 	u.book(t, other.ID, "Loose/Caliban", "", 0)
 	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: "Loose/Caliban"},
-		IDKey: "a:B0", WorkID: "e2", CheckedAt: "2026-10-20T04:00:00.000Z"}}); err != nil {
+		IDKey: "a:B0", WorkID: "e2", CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The same series held in the other library too: e3 is listed once.

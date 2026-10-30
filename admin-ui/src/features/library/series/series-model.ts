@@ -208,15 +208,15 @@ function releaseParts(date: string): [number, number, number] | undefined {
   return [y, mo, d];
 }
 
-/** `now`'s local calendar date as YYYY-MM-DD. */
+/** `now`'s UTC calendar date as YYYY-MM-DD: the day the server's upcoming job counts by. */
 function today(now: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+  return `${now.getUTCFullYear()}-${p(now.getUTCMonth() + 1)}-${p(now.getUTCDate())}`;
 }
 
 /**
  * What a missing entry's release date makes it, as the server's upcoming job
- * reads one (compared at the date's own precision): 'preorder' when it is still
+ * reads one (compared at the date's own precision, on the UTC day): 'preorder' when it is still
  * ahead ("2026-11" from any day of October; "2026" is not, all this year),
  * 'new' when it came out within `windowDays` of today, counted from the first
  * day of its month or year, else undefined (older, undated or unreadable).

@@ -99,26 +99,21 @@ func List(ctx context.Context, cat *catalog.Catalog, scopes []catalog.Scope, wor
 		if held[e.WorkID] || seen[e.WorkID] {
 			continue
 		}
-		i := slices.IndexFunc(e.Series.Members, func(m catalog.MetaSeriesMember) bool { return m.WorkID == e.WorkID })
-		if i < 0 {
-			continue
-		}
 		seen[e.WorkID] = true
-		m := e.Series.Members[i]
 		kind := e.Kind
 		if kind == catalog.UpcomingPreorder && !releaseIsFuture(e.ReleaseDate, now) {
 			kind = catalog.UpcomingReleased
 		}
-		authors := make([]meta.MetaPersonRef, 0, len(m.Authors))
-		for _, a := range m.Authors {
+		authors := make([]meta.MetaPersonRef, 0, len(e.Authors))
+		for _, a := range e.Authors {
 			authors = append(authors, meta.MetaPersonRef(a))
 		}
 		ans.Items = append(ans.Items, Item{
 			Kind:        kind,
 			ReleaseDate: e.ReleaseDate,
 			FirstSeenAt: e.FirstSeenAt,
-			Work:        ItemWork{ID: m.WorkID, Title: m.Title, Authors: authors, CoverURL: m.CoverURL, WebURL: workURL(m.WorkID)},
-			Series:      ItemSeries{ID: e.Series.ID, Name: e.Series.Name, Position: e.Position},
+			Work:        ItemWork{ID: e.WorkID, Title: e.Title, Authors: authors, CoverURL: e.CoverURL, WebURL: workURL(e.WorkID)},
+			Series:      ItemSeries{ID: e.SeriesID, Name: e.SeriesName, Position: e.Position},
 			Local:       ItemLocal{LibraryID: e.LibraryID, Series: e.LocalName},
 		})
 	}

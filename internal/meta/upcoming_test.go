@@ -119,8 +119,10 @@ func TestWatchFeed(t *testing.T) {
 	if q := got.Load().(string); q != "s=the-expanse%2Cmars&window=90" {
 		t.Fatalf("query = %q", q)
 	}
+	// An item whose work has no usable date is dated by its addition to the
+	// catalogue: no release date of its own.
 	if len(items) != 2 || items[0] != (FeedItem{WorkID: "a", State: "preorder", Date: "2026-11-12", Title: "S #2: A"}) ||
-		items[1].WorkID != "b" || items[1].Date != "2026-10-02" {
+		items[1] != (FeedItem{WorkID: "b", Title: "S #3: B", Undated: true}) {
 		t.Fatalf("items = %+v", items)
 	}
 	// Ids metaserve would refuse are never sent.

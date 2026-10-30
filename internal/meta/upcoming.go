@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -124,14 +125,23 @@ const MaxFeedSeries = 50
 const MaxFeedItems = 200
 
 // FeedItem is one watch feed item: the work it is about, its state
-// ("preorder" or "released", from the item's id), its date (YYYY-MM-DD, "" for
-// none) and its title ("<series> #<position>: <title>").
+// ("preorder" or "released", from the item's id), its release date
+// (YYYY-MM-DD; "" for none, and for a work whose date is unknown: Undated) and
+// its title ("<series> #<position>: <title>").
 type FeedItem struct {
 	WorkID string
 	State  string
 	Date   string
 	Title  string
+	// Undated: the work states no usable release date, and the feed lists it
+	// for its addition to the catalogue (dated by that, not by a release).
+	Undated bool
 }
+
+// feedUndated is the tag metaserve's watch feed gives an item whose work
+// states no usable release date (its date_published is then the work's
+// added_at).
+const feedUndated = "date unknown"
 
 // ErrInvalidSlug is WatchFeed's answer for a series id metaserve would refuse.
 var ErrInvalidSlug = errors.New("meta: not a series slug")
@@ -175,11 +185,12 @@ func (s *Service) WatchFeed(ctx context.Context, series []string, window int) ([
 		if work == "" {
 			continue
 		}
+		undated := slices.Contains(it.Tags, feedUndated)
 		date := ""
-		if len(it.DatePublished) >= 10 {
+		if len(it.DatePublished) >= 10 && !undated {
 			date = it.DatePublished[:10]
 		}
-		out = append(out, FeedItem{WorkID: work, State: state, Date: date, Title: it.Title})
+		out = append(out, FeedItem{WorkID: work, State: state, Date: date, Title: it.Title, Undated: undated})
 	}
 	return out, nil
 }

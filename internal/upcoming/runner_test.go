@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,22 +21,31 @@ import (
 type fakeMeta struct {
 	mu        sync.Mutex
 	works     map[string]string // asin -> work id
+	cached    map[string]string // asin -> the cache's answer ("" a cached "no match")
 	workRefs  map[string][]meta.SeriesRef
+	workErr   map[string]error
 	series    map[string]*meta.SeriesRecord
 	seriesErr map[string]error
 	feedErr   error
 	feedItems func(ids []string) []meta.FeedItem
+	// seriesHook runs before each series read (set before a run starts).
+	seriesHook func(ctx context.Context, id string) error
 
 	seriesReads []string
 	feeds       [][]string
 }
 
 func newFakeMeta() *fakeMeta {
-	return &fakeMeta{works: map[string]string{}, workRefs: map[string][]meta.SeriesRef{},
-		series: map[string]*meta.SeriesRecord{}, seriesErr: map[string]error{}}
+	return &fakeMeta{works: map[string]string{}, cached: map[string]string{}, workRefs: map[string][]meta.SeriesRef{},
+		workErr: map[string]error{}, series: map[string]*meta.SeriesRecord{}, seriesErr: map[string]error{}}
 }
 
-func (f *fakeMeta) CachedWorkID(context.Context, string, string) (string, bool) { return "", false }
+func (f *fakeMeta) CachedWorkID(_ context.Context, asin, _ string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.cached[asin]
+	return id, ok
+}
 
 func (f *fakeMeta) WorkIDs(_ context.Context, books []meta.BookIDs) []meta.WorkID {
 	f.mu.Lock()
@@ -50,6 +60,9 @@ func (f *fakeMeta) WorkIDs(_ context.Context, books []meta.BookIDs) []meta.WorkI
 func (f *fakeMeta) WorkSeries(_ context.Context, id string) ([]meta.SeriesRef, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.workErr[id]; err != nil {
+		return nil, err
+	}
 	refs, ok := f.workRefs[id]
 	if !ok {
 		return nil, meta.ErrNotFound
@@ -57,7 +70,12 @@ func (f *fakeMeta) WorkSeries(_ context.Context, id string) ([]meta.SeriesRef, e
 	return refs, nil
 }
 
-func (f *fakeMeta) Series(_ context.Context, id string) (*meta.SeriesRecord, error) {
+func (f *fakeMeta) Series(ctx context.Context, id string) (*meta.SeriesRecord, error) {
+	if f.seriesHook != nil {
+		if err := f.seriesHook(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seriesReads = append(f.seriesReads, id)
@@ -105,13 +123,14 @@ func (f *fakeMeta) setDate(series, work, date string) {
 }
 
 // fixture is a catalog with one library, a fake service and a runner on a
-// clock the test moves.
+// clock the test moves, switched on until off is set.
 type fixture struct {
 	cat       *catalog.Catalog
 	lib       *catalog.Library
 	md        *fakeMeta
 	r         *Runner
 	clock     time.Time
+	off       atomic.Bool
 	announced [][]Release
 }
 
@@ -125,11 +144,56 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f.lib = lib
 	f.r = New(f.cat, f.md, Options{
+		On:       func() bool { return !f.off.Load() },
 		Now:      func() time.Time { return f.clock },
 		Window:   func() int { return 90 },
 		Announce: func(_ context.Context, rel []Release) { f.announced = append(f.announced, rel) },
 	})
 	return f
+}
+
+// library adds a books library.
+func (f *fixture) library(t *testing.T, name string) *catalog.Library {
+	t.Helper()
+	lib, err := f.cat.CreateLibrary(context.Background(), catalog.Library{Name: name, Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lib
+}
+
+// loose indexes a book filed under no series at path with asin, which the
+// service knows as work.
+func (f *fixture) loose(t *testing.T, lib *catalog.Library, path, asin, work string) {
+	t.Helper()
+	if _, err := f.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: path,
+		Author: "A", ASIN: asin, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	f.md.works[asin] = work
+}
+
+// holds reports whether the server holds a copy of work anywhere.
+func (f *fixture) holds(t *testing.T, work string) bool {
+	t.Helper()
+	held, err := f.cat.UpcomingOwnedWorks(context.Background(), nil, true, []string{work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held[work]
+}
+
+// announcedIDs is every announcement's work ids, one string per call.
+func (f *fixture) announcedIDs() []string {
+	var out []string
+	for _, rel := range f.announced {
+		var ids []string
+		for _, r := range rel {
+			ids = append(ids, r.WorkID)
+		}
+		out = append(out, strings.Join(ids, ","))
+	}
+	return out
 }
 
 // book indexes a book of series at pos with asin, which the service knows as
@@ -264,18 +328,28 @@ func TestRunnerHeldElsewhereNotAnnounced(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Book 2 arrives in another library, filed under no series.
-	if _, err := f.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: other.ID, RelPath: "loose/two",
-		Title: "two", Author: "A", Series: "Loose", ASIN: "A2", AddedAt: "2020-01-01"}); err != nil {
-		t.Fatal(err)
-	}
-	f.md.works["A2"] = "e2"
-	f.md.workRefs["e2"] = nil
+	f.loose(t, other, "loose/two", "A2", "e2")
 	f.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
 	if err := f.run(t); err != nil {
 		t.Fatal(err)
 	}
+	if !f.holds(t, "e2") {
+		t.Fatal("a copy in no series must still hold its work")
+	}
 	if len(f.announced) != 0 {
 		t.Fatalf("a release the server holds a copy of must not be announced, got %+v", f.announced)
+	}
+	// Its identifier cleared, it holds nothing any more.
+	if _, err := f.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: other.ID, RelPath: "loose/two",
+		Title: "loose/two", Author: "A", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(25 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if f.holds(t, "e2") {
+		t.Fatal("a book whose identifier went must hold no work")
 	}
 }
 
@@ -430,7 +504,8 @@ func TestMarkNews(t *testing.T) {
 	t.Parallel()
 	stored := map[string]catalog.MetaSeriesRecord{
 		"a": {ID: "a", Name: "Alpha", Members: []catalog.MetaSeriesMember{{WorkID: "a1", ReleaseDate: "2026-11"}}},
-		"b": {ID: "b", Name: "Beta", Members: []catalog.MetaSeriesMember{{WorkID: "b1", ReleaseDate: "2026-11-02"}}},
+		"b": {ID: "b", Name: "Beta", Members: []catalog.MetaSeriesMember{{WorkID: "b1", ReleaseDate: "2026-11-02"},
+			{WorkID: "c1"}}},
 	}
 	for _, tc := range []struct {
 		item meta.FeedItem
@@ -442,6 +517,8 @@ func TestMarkNews(t *testing.T) {
 		{meta.FeedItem{WorkID: "new", Title: "Gamma #2: New"}, []string{"a", "b"}},  // named after neither: both
 		{meta.FeedItem{WorkID: "new", Title: "Alphabet: Soup"}, []string{"a", "b"}}, // a name's prefix is not the name
 		{meta.FeedItem{WorkID: "new", Title: "Alpha: A Novella"}, []string{"a"}},    // "<series>: <title>" for an unnumbered one
+		{meta.FeedItem{WorkID: "c1", Undated: true}, nil},                           // undated, and stored undated: no news
+		{meta.FeedItem{WorkID: "b1", Undated: true}, []string{"b"}},                 // its date went
 	} {
 		out := map[string]bool{}
 		markNews([]string{"a", "b"}, []meta.FeedItem{tc.item}, stored, out)
@@ -514,5 +591,317 @@ func TestRunnerScheduleFirstRun(t *testing.T) {
 	}
 	if !strings.HasSuffix(stamp(now), "Z") {
 		t.Fatal("stamps are UTC")
+	}
+}
+
+// A local spelling with an article or a trailing "Series" the community's
+// lacks still finds the series.
+func TestRunnerSeriesNamedLooselyLocally(t *testing.T) {
+	t.Parallel()
+	for _, local := range []string{"The Expanse", "Expanse Series"} {
+		f := newFixture(t)
+		f.expanse("2011", "2012")
+		f.md.series["expanse"].Name = "Expanse"
+		f.md.workRefs["e1"] = []meta.SeriesRef{{ID: "expanse", Name: "Expanse"}}
+		f.book(t, f.lib, local, 1, "A1", "e1")
+		if err := f.run(t); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+			t.Fatalf("%s: items = %v", local, got)
+		}
+	}
+}
+
+// A re-resolution that fails to read a work and matches nothing keeps the
+// series it had (and its items) for the next run, never "none found".
+func TestRunnerSeriesReadFailureKeepsSeries(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012", "2013")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.book(t, f.lib, "The Expanse", 3, "A3", "e3")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(31 * 24 * time.Hour)
+	f.md.workErr["e1"] = errors.New("upstream 500")
+	f.md.workRefs["e3"] = []meta.SeriesRef{{ID: "other", Name: "Space Operas"}}
+	if err := f.run(t); err == nil {
+		t.Fatal("a failed read must fail the run")
+	}
+	rows, _ := f.cat.UpcomingSeriesAll(context.Background())
+	if len(rows) != 1 || rows[0].SeriesID != "expanse" {
+		t.Fatalf("series = %+v", rows)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+		t.Fatalf("items = %v", got)
+	}
+}
+
+// A cached "no match" (the persistent cache keeps one however old) is never
+// taken for an answer: the book is looked up.
+func TestRunnerCachedNoMatchIsLookedUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.md.cached["A1"] = ""
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+		t.Fatalf("items = %v", got)
+	}
+}
+
+// A book's work is looked up again after a month, not from the cache: a merge
+// upstream moves the book to the surviving work, and the series it was missing
+// from holds it again.
+func TestRunnerWorksLookedUpAgain(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012", "2013")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.book(t, f.lib, "The Expanse", 2, "A2", "e2-old") // merged into e2 upstream, later
+	f.book(t, f.lib, "The Expanse", 3, "A3", "e3")
+	f.md.cached["A2"] = "e2-old"
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+		t.Fatalf("items = %v", got)
+	}
+	f.md.works["A2"] = "e2" // the merge
+	f.clock = f.clock.Add(24 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+		t.Fatalf("a day on, the answer stands: items = %v", got)
+	}
+	f.clock = f.clock.Add(30 * 24 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); len(got) != 0 {
+		t.Fatalf("a month on, the book holds the merged work: items = %v", got)
+	}
+}
+
+// A series resolved to none is asked again as soon as a book of it gets a new
+// work (its ASIN corrected), not a month later.
+func TestRunnerSeriesResolvedAgainOnANewWork(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.md.workRefs["x1"] = []meta.SeriesRef{{ID: "other", Name: "Space Operas"}}
+	f.book(t, f.lib, "The Expanse", 1, "A1", "x1") // a wrong ASIN
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := f.cat.UpcomingSeriesAll(context.Background()); len(rows) != 1 || rows[0].SeriesID != "" {
+		t.Fatalf("series = %+v", rows)
+	}
+	if _, err := f.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: f.lib.ID, RelPath: "The Expanse/1",
+		Title: "The Expanse/1", Author: "A", Series: "The Expanse", SeriesIndex: 1, ASIN: "A1B", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	f.md.works["A1B"] = "e1"
+	f.clock = f.clock.Add(24 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing"}) {
+		t.Fatalf("items = %v", got)
+	}
+}
+
+// A community series read for the first time is a baseline on its own: a
+// release the series watched before finds that same run is still announced.
+func TestRunnerNewSeriesDoesNotSilenceARelease(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2026-11-12")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	// A month on, the series is resolved again and finds a second community
+	// series named like it, with a release from before the server watched it.
+	f.md.series["expanse-2"] = &meta.SeriesRecord{ID: "expanse-2", Name: "The Expanse", Members: []meta.SeriesMember{
+		{WorkID: "e1", Position: "1", Title: "Expanse 1", ReleaseDate: "2011"},
+		{WorkID: "x2", Position: "2", Title: "Old News", ReleaseDate: "2026-11-01"},
+	}}
+	f.md.workRefs["e1"] = []meta.SeriesRef{{ID: "expanse", Name: "The Expanse"}, {ID: "expanse-2", Name: "The Expanse"}}
+	f.clock = time.Date(2026, 11, 30, 9, 0, 0, 0, time.UTC)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2"}) {
+		t.Fatalf("announced = %v, want e2 alone", got)
+	}
+}
+
+// A community series whose read failed is not classified with its siblings: its
+// releases from before the server watched it stay a baseline once it is read.
+func TestRunnerUnreadSeriesStaysUnclassified(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2012")
+	f.md.series["expanse-2"] = &meta.SeriesRecord{ID: "expanse-2", Name: "The Expanse", Members: []meta.SeriesMember{
+		{WorkID: "x2", Position: "2", Title: "Old News", ReleaseDate: "2026-10-20"},
+	}}
+	f.md.workRefs["e1"] = []meta.SeriesRef{{ID: "expanse", Name: "The Expanse"}, {ID: "expanse-2", Name: "The Expanse"}}
+	f.md.seriesErr["expanse-2"] = errors.New("upstream 500")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err == nil {
+		t.Fatal("a failed read must fail the run")
+	}
+	delete(f.md.seriesErr, "expanse-2")
+	f.clock = f.clock.Add(time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=missing", "x2=released"}) {
+		t.Fatalf("items = %v", got)
+	}
+	if len(f.announced) != 0 {
+		t.Fatalf("a series' first read is a baseline, got %v", f.announcedIDs())
+	}
+}
+
+// A baseline in one library's new series never silences a release another
+// library's series found the same run.
+func TestRunnerBaselineElsewhereDoesNotSilence(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2026-11-12")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	kids := f.library(t, "Kids")
+	f.book(t, kids, "The Expanse", 1, "K1", "e1")
+	f.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2"}) {
+		t.Fatalf("announced = %v, want e2", got)
+	}
+}
+
+// An announced release whose item leaves (a copy arrives) and comes back (the
+// copy goes) is not announced again.
+func TestRunnerReleaseAnnouncedOnceAcrossACopy(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expanse("2011", "2026-11-12")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.book(t, f.lib, "The Expanse", 2, "A2", "e2")
+	f.clock = f.clock.Add(25 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); len(got) != 0 {
+		t.Fatalf("items with the copy = %v", got)
+	}
+	if err := f.cat.DeleteBookAt(context.Background(), f.lib.ID, "The Expanse/2"); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(25 * time.Hour)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.items(t); !slices.Equal(got, []string{"e2=released"}) {
+		t.Fatalf("items after the copy went = %v", got)
+	}
+	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2"}) {
+		t.Fatalf("announced = %v, want e2 once", got)
+	}
+}
+
+// Releases are announced in series order, by number: 2 before 10.
+func TestRunnerAnnouncesInSeriesOrder(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	dates := []string{"2011"}
+	for i := 2; i <= 10; i++ {
+		d := "2012"
+		if i == 2 || i == 10 {
+			d = "2026-11-12"
+		}
+		dates = append(dates, d)
+	}
+	f.expanse(dates...)
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2,e10"}) {
+		t.Fatalf("announced = %v", got)
+	}
+}
+
+// Switched off during a run, the job stops at once: no further read, no
+// announcement, no status, and no retry (a cancellation, not a failure).
+func TestRunnerSwitchedOffMidRun(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.r.offCheck = 5 * time.Millisecond
+	f.expanse("2011", "2026-11-12")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	st0, _ := f.cat.UpcomingRunState(context.Background())
+	// Two weeks on the series is due; it is switched off while being read.
+	f.md.seriesHook = func(ctx context.Context, _ string) error {
+		f.off.Store(true)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+			return errors.New("the run was not stopped")
+		}
+	}
+	f.clock = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	err := f.run(t)
+	if !errors.Is(err, errSwitchedOff) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("run = %v, want switched off", err)
+	}
+	if len(f.announced) != 0 {
+		t.Fatalf("announced = %v", f.announcedIDs())
+	}
+	if st, _ := f.cat.UpcomingRunState(context.Background()); st != st0 {
+		t.Fatalf("a stopped run records nothing: %+v, was %+v", st, st0)
+	}
+	if next := f.r.after(context.Background(), err); next.Sub(f.clock) < interval-jitter {
+		t.Fatalf("a stopped run is no failure to retry: next in %v", next.Sub(f.clock))
+	}
+	// Off, a run makes no call at all.
+	if err := f.run(t); !errors.Is(err, errSwitchedOff) {
+		t.Fatalf("run while off = %v", err)
+	}
+	// Back on, the release is found and announced.
+	f.md.seriesHook = nil
+	f.off.Store(false)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2"}) {
+		t.Fatalf("announced = %v", got)
 	}
 }

@@ -105,6 +105,24 @@ func TestClassifyRanges(t *testing.T) {
 	check(t, Classify([]Series{only}, []OwnedBook{{WorkID: "w4"}}, now, 90), "omnibus=missing")
 }
 
+// A box set of volumes the series holds one by one is held: neither a release
+// nor a preorder to tell anyone about, however new.
+func TestClassifyBoxSetOfHeldVolumes(t *testing.T) {
+	t.Parallel()
+	s := Series{ID: "s", Members: []catalog.MetaSeriesMember{
+		member("1", "2010"), member("2", "2011"), member("3", "2012"), member("4", "2013"),
+		{WorkID: "box", Position: "1-3", Title: "Books 1-3", ReleaseDate: "2026-10-15"},
+		{WorkID: "box2", Position: "2-4", Title: "Books 2-4", ReleaseDate: "2027-01"},
+	}}
+	// Held by work, and by position (books whose work isn't known).
+	check(t, Classify([]Series{s}, []OwnedBook{{WorkID: "w1"}, {WorkID: "w2"}, {WorkID: "w3"}}, now, 90),
+		"w4=missing", "box2=preorder")
+	check(t, Classify([]Series{s}, []OwnedBook{{Position: 1}, {Position: 2}, {Position: 3}, {Position: 4}}, now, 90))
+	// One volume inside it not held: the box set is still news.
+	check(t, Classify([]Series{s}, []OwnedBook{{WorkID: "w1"}, {WorkID: "w3"}}, now, 90),
+		"w2=missing", "w4=missing", "box=released", "box2=preorder")
+}
+
 func TestClassifyFractionalPositions(t *testing.T) {
 	t.Parallel()
 	s := Series{ID: "s", Members: []catalog.MetaSeriesMember{

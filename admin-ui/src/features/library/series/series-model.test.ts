@@ -664,8 +664,8 @@ describe('dated entries', () => {
     expect('release_date' in railEntries(r)[1]).toBe(false);
   });
 
-  // 30 October 2026, mid-afternoon local time.
-  const now = new Date(2026, 9, 30, 15, 0);
+  // 30 October 2026, mid-afternoon UTC.
+  const now = new Date(Date.UTC(2026, 9, 30, 15, 0));
 
   it('reads a date at its own precision, as the server does', () => {
     for (const [date, want] of [
@@ -686,6 +686,24 @@ describe('dated entries', () => {
       expect(releaseState(date, now), String(date)).toBe(want);
     }
     expect(releaseState('2026-08-01', now, 30)).toBeUndefined();
+  });
+
+  it('counts days in UTC, as the server does, in any time zone', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['Pacific/Kiritimati', 'UTC', 'Pacific/Pago_Pago']) {
+        process.env.TZ = tz; // Node reads a new TZ at once
+        // Late on 30 October UTC the 31st is still ahead; just after midnight
+        // UTC it is out, whatever the date where the viewer is.
+        expect(releaseState('2026-10-31', new Date(Date.UTC(2026, 9, 30, 23, 30))), tz).toBe(
+          'preorder',
+        );
+        expect(releaseState('2026-10-31', new Date(Date.UTC(2026, 9, 31, 0, 30))), tz).toBe('new');
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
   });
 
   it('words a date at its own precision, never moved by the time zone', () => {
