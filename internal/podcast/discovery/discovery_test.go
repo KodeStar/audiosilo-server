@@ -936,53 +936,53 @@ func TestArtworkQuotas(t *testing.T) {
 }
 
 // A queued miss whose slot doesn't come free within the fetch budget is busy,
-// not remembered as a failure: asked again, it is fetched. Four fetches hang
-// to the budget and four more queue ahead of it, so its wait runs out first.
+// not remembered as a failure; asked again, it waits for a slot that frees
+// while it queues and is fetched. The test holds the slots itself and frees one
+// only once the miss is queued, so no fetch's timing decides the outcome.
 func TestArtworkQueueTimesOut(t *testing.T) {
 	f := newFake(t)
 	c := &clock{t: time.Unix(1700000000, 0)}
-	names := []string{}
-	for i := range 2*maxImageSlots + 1 {
-		names = append(names, fmt.Sprintf("%d.png", i))
-	}
-	last := names[2*maxImageSlots]
-	s, ids := artService(t, f, c, names...)
-	s.budget = 200 * time.Millisecond
+	s, ids := artService(t, f, c, "a.png")
 	img := pngBytes(t, 10, 10)
-	hang := atomic.Bool{}
-	hang.Store(true)
 	f.setRoute(func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasPrefix(r.URL.Path, "/art/") {
 			return false
 		}
-		if hang.Load() {
-			<-r.Context().Done() // to the fetch budget
-			return true
-		}
 		_, _ = w.Write(img)
 		return true
 	})
-	ctx := context.Background()
-	inFlight := func() int {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return len(s.arts)
-	}
-	var wg sync.WaitGroup
-	for i, n := range names[:2*maxImageSlots] {
-		wg.Add(1)
-		go func() { defer wg.Done(); _, _ = s.Artwork(ctx, fmt.Sprintf("u%d", i), ids[n]) }()
-		if i == maxImageSlots-1 {
-			waitFor(t, func() bool { return len(s.imageSlots) == maxImageSlots })
+	held := maxImageSlots
+	for range held {
+		if !s.imageSlots.TryAcquire() {
+			t.Fatal("a slot was taken")
 		}
 	}
-	waitFor(t, func() bool { return inFlight() == 2*maxImageSlots })
-	if _, e := s.Artwork(ctx, "q", ids[last]); e == nil || e.Code != "discovery_busy" {
-		t.Fatalf("queued past the budget = %+v", e)
+	defer func() {
+		for range held {
+			s.imageSlots.Release()
+		}
+	}()
+	ctx := context.Background()
+
+	// No slot frees: the wait runs out, busy.
+	s.budget = 50 * time.Millisecond
+	if _, e := s.Artwork(ctx, "q", ids["a.png"]); e == nil || e.Code != "discovery_busy" {
+		t.Fatalf("queued past the budget = %+v, want discovery_busy", e)
 	}
-	wg.Wait()
-	hang.Store(false)
-	if _, e := s.Artwork(ctx, "q", ids[last]); e != nil {
+
+	// Asked again, a slot frees while it queues: fetched. The budget is long
+	// enough that only the freed slot can end the wait.
+	s.budget = time.Minute
+	done := make(chan *Error, 1)
+	go func() { _, e := s.Artwork(ctx, "q", ids["a.png"]); done <- e }()
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.arts) == 1
+	})
+	s.imageSlots.Release()
+	held--
+	if e := <-done; e != nil {
 		t.Fatalf("asked again = %+v", e)
 	}
 }
