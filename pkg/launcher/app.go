@@ -276,6 +276,8 @@ func Run(ctx context.Context, opts Options) error {
 	defer a.StopModules()
 	a.StartCoverColors(ctx)
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
+	// Upcoming releases: after SetRuntime, as its announcements go to ntf.
+	a.StartUpcoming(ctx)
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)

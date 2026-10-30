@@ -68,6 +68,13 @@ var userStateTables = map[string]tableRule{
 	"reading_progress":   {rows: true},
 	"server_events":      {rows: true},
 	"meta_cache":         {rows: true},
+	// Upcoming releases (internal/upcoming, migration 0059): derived from the
+	// books and the community metadata, read only by GET /me/upcoming and the
+	// job itself, never by a content cache. The daily run rewrites them.
+	"upcoming_owned":  {rows: true},
+	"upcoming_series": {rows: true},
+	"meta_series":     {rows: true},
+	"upcoming_items":  {rows: true},
 	// A token's touch (auth.Service.resolve): the token cache holds the row,
 	// and drops the touched one itself. Any other change (a revoke, a new
 	// token) moves the generation.

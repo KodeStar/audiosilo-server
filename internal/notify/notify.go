@@ -48,13 +48,14 @@ const (
 	KindBackupFailed       = "backup_failed"
 	KindBridgeJobFinished  = "bridge_job_finished"
 	KindBridgeJobFailed    = "bridge_job_failed"
+	KindBookReleased       = "book_released"
 )
 
 // Kinds lists the event kinds, in the order the console shows them.
 var Kinds = []string{
 	KindBookAdded, KindScanFailed, KindLibraryUnavailable, KindNewDevice,
 	KindInviteRedeemed, KindUpdateAvailable, KindBackupFailed,
-	KindBridgeJobFinished, KindBridgeJobFailed,
+	KindBridgeJobFinished, KindBridgeJobFailed, KindBookReleased,
 }
 
 // kindTest is the "Send test" message's kind (sent, never recorded).
@@ -369,6 +370,23 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 			lines = append(lines, fmt.Sprintf("and %d more", more))
 		}
 		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library"), []string{"books"}
+	case KindBookReleased:
+		n := num("count")
+		m.Title = "1 new release in your series"
+		if n != 1 {
+			m.Title = fmt.Sprintf("%d new releases in your series", n)
+		}
+		titles, _ := ev.Data["titles"].([]any)
+		var lines []string
+		for _, t := range titles {
+			if s, ok := t.(string); ok {
+				lines = append(lines, s)
+			}
+		}
+		if more := n - len(lines); more > 0 && len(lines) > 0 {
+			lines = append(lines, fmt.Sprintf("and %d more", more))
+		}
+		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library/series"), []string{"new"}
 	case KindScanFailed:
 		m.Title = "Scanning " + str("library") + " failed"
 		m.Text = "See the scan's log in Health > Jobs."
@@ -641,6 +659,20 @@ func (s *Service) ScanFinished(ctx context.Context, r library.RunReport) {
 			"library": lib, "library_id": r.Library.ID,
 		}})
 	}
+}
+
+// BooksReleased reports new releases in the series the server holds that it
+// doesn't hold (internal/upcoming): one event per run, naming the first few as
+// "Title (Series #position)". dedup is the run's work ids, so a run repeated
+// over the same releases says it once.
+func (s *Service) BooksReleased(ctx context.Context, count int, titles []string, dedup string) {
+	if s == nil || count == 0 {
+		return
+	}
+	if titles == nil {
+		titles = []string{}
+	}
+	s.Emit(ctx, Event{Kind: KindBookReleased, Data: map[string]any{"count": count, "titles": titles}, Dedup: dedup})
 }
 
 // SignedIn reports a new session: a password sign-in or a device set up by

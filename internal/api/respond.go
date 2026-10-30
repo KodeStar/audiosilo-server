@@ -95,7 +95,8 @@ const (
 	codeInvalidOverride    = "invalid_override" // + "field": the field it names
 	codeBookNotFound       = "book_not_found"
 	codeMetadataOff        = "metadata_off"
-	codeModuleOff          = "module_off" // a managed module's route while the module is off (modules.go)
+	codeUpcomingOff        = "upcoming_off" // GET /me/upcoming while upcoming.enabled is off (metadata on)
+	codeModuleOff          = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage   = "unsupported_image"
 	codeCoverUnavailable   = "cover_unavailable"
 	codeTooLarge           = "too_large"

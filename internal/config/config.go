@@ -403,6 +403,32 @@ func (m MetadataConfig) ValidBaseURL() bool {
 	return u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
 }
 
+// UpcomingConfig configures upcoming releases (Track U): a daily job reads the
+// community metadata for the series the server holds and lists, per listener,
+// the preorders, recent releases and missing volumes in them (GET /me/upcoming,
+// capability `upcoming`), and tells the admin of a new release (book_released).
+// It makes no call while metadata is off; on by default when metadata is on.
+type UpcomingConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// WindowDays is how far back a release still counts as recent (1-365; the
+	// community feed's own default, 90, when unset).
+	WindowDays int `yaml:"window_days"`
+}
+
+// DefaultUpcomingWindowDays is the recent-release window when none is set.
+const DefaultUpcomingWindowDays = 90
+
+// MaxUpcomingWindowDays is the longest window the community feed takes.
+const MaxUpcomingWindowDays = 365
+
+// Window is WindowDays, or DefaultUpcomingWindowDays when unset.
+func (u UpcomingConfig) Window() int {
+	if u.WindowDays <= 0 {
+		return DefaultUpcomingWindowDays
+	}
+	return u.WindowDays
+}
+
 // Config is the full server configuration.
 type Config struct {
 	// DataDir is where the database, config and generated certs live. It is not
@@ -435,6 +461,7 @@ type Config struct {
 	Libraries      []Library       `yaml:"libraries"`
 	Demo           DemoConfig      `yaml:"demo"`      // public demo mode (throwaway accounts)
 	Metadata       MetadataConfig  `yaml:"metadata"`  // community metadata lookup (Phase 1.5)
+	Upcoming       UpcomingConfig  `yaml:"upcoming"`  // upcoming releases in the series the server holds (Track U)
 	Backups        BackupConfig    `yaml:"backups"`   // database backups (internal/backup)
 	Activity       ActivityConfig  `yaml:"activity"`  // listening history retention
 	Household      HouseholdConfig `yaml:"household"` // household members
@@ -496,6 +523,7 @@ func Default(dataDir string) *Config {
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
 		Household:      HouseholdConfig{MembersEnabled: true, MaxMembers: DefaultMaxMembers},
 		Podcasts:       PodcastsConfig{Discovery: PodcastDiscoveryConfig{Enabled: true}},
+		Upcoming:       UpcomingConfig{Enabled: true, WindowDays: DefaultUpcomingWindowDays},
 	}
 }
 
@@ -755,6 +783,10 @@ func (c *Config) Validate() error {
 	if r := c.Metadata.PreferredRegion(); r != "" && !slices.Contains(Regions, r) {
 		return fieldErr("metadata.region", fmt.Errorf("metadata.region must be one of %s, got %q",
 			strings.Join(Regions, ", "), c.Metadata.Region))
+	}
+	if w := c.Upcoming.WindowDays; w < 0 || w > MaxUpcomingWindowDays {
+		return fieldErr("upcoming.window_days", fmt.Errorf("upcoming.window_days must be from 1 to %d, got %d",
+			MaxUpcomingWindowDays, w))
 	}
 	if mode := c.Metadata.ModeName(); !slices.Contains(MetadataModes, mode) {
 		return fieldErr("metadata.mode", fmt.Errorf("metadata.mode must be one of %s, got %q",

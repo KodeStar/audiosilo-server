@@ -275,6 +275,11 @@ type upstreamWorkCard struct {
 	Title    string              `json:"title"`
 	Authors  []upstreamPersonRef `json:"authors"`
 	CoverURL *string             `json:"cover_url"`
+	// ReleaseDate is the earliest release date across the work's recordings
+	// (YYYY, YYYY-MM or YYYY-MM-DD, the precision stated), omitted when none
+	// states one; AddedAt when the catalogue learned of the work.
+	ReleaseDate string  `json:"release_date,omitempty"`
+	AddedAt     *string `json:"added_at"`
 }
 
 type upstreamLookup struct {

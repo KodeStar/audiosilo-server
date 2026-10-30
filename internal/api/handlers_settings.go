@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -49,6 +50,9 @@ func (a *API) settingsEnvelope() map[string]any {
 	saved := a.config().saved
 	sections := saved.Settings()
 	sections["metadata"]["available"] = a.meta != nil
+	if st := a.upcomingStatus(context.Background()); st != nil {
+		sections["metadata"]["upcoming_status"] = st
+	}
 	sections["players"]["web_player"] = a.playerSource
 	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers
 	sections["household"]["max_members_default"] = config.DefaultMaxMembers
@@ -119,6 +123,12 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// it is off, so wake it now for a check that came due meanwhile.
 	if a.mirror != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
 		a.mirror.Wake()
+	}
+	// Upcoming releases switched on (or metadata back on): run soon when no
+	// run has succeeded for a day.
+	if a.upcoming != nil && next.Metadata.Enabled && next.Upcoming.Enabled &&
+		(!cur.Metadata.Enabled || !cur.Upcoming.Enabled) {
+		a.upcoming.Wake()
 	}
 	if changes := config.ChangedSettings(cur, next); len(changes) > 0 {
 		a.audit(r, "settings.update", "", map[string]any{"changes": changes})

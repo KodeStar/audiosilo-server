@@ -123,6 +123,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
 		"ebooks":             true,                 // the reader: Book.ebook, GET /libraries/{id}/ebook, GET/PUT /libraries/{id}/reading-progress
 		"readalong":          true,                 // read-along: Book.readalong on /item, GET /libraries/{id}/readalong
+		"upcoming":           a.upcomingOn(),       // upcoming releases in the caller's series (GET /me/upcoming): metadata on AND upcoming.enabled
 	}
 }
 

@@ -199,6 +199,10 @@ type MetaSeriesWork struct {
 	Authors  []MetaPersonRef `json:"authors"`
 	CoverURL string          `json:"cover_url,omitempty"`
 	WebURL   string          `json:"web_url"`
+	// ReleaseDate is the work's first release (the earliest across its
+	// recordings and marketplaces), at the precision the community states it
+	// (YYYY, YYYY-MM or YYYY-MM-DD); omitted when unknown. Additive (Track U).
+	ReleaseDate string `json:"release_date,omitempty"`
 	// Local is the book the CALLER can open that is this work (PlaceLocal). It
 	// is set per request on a copy of the rails, never on an envelope the cache
 	// holds.
@@ -870,12 +874,13 @@ func (s *Service) railWorks(sd *upstreamSeriesDetail) []MetaSeriesWork {
 			continue
 		}
 		works = append(works, MetaSeriesWork{
-			ID:       entry.Work.ID,
-			Title:    entry.Work.Title,
-			Position: entry.Position,
-			Authors:  toPersonRefs(entry.Work.Authors),
-			CoverURL: deref(entry.Work.CoverURL),
-			WebURL:   s.workURL(entry.Work.ID),
+			ID:          entry.Work.ID,
+			Title:       entry.Work.Title,
+			Position:    entry.Position,
+			Authors:     toPersonRefs(entry.Work.Authors),
+			CoverURL:    deref(entry.Work.CoverURL),
+			WebURL:      s.workURL(entry.Work.ID),
+			ReleaseDate: entry.Work.ReleaseDate,
 		})
 	}
 	return works

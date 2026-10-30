@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -665,5 +666,35 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 	delete(ev.Data, "coverage")
 	if m := compose(ev, s.server()); m.Title != "Read-along made: Alice" {
 		t.Errorf("no coverage = %q", m.Title)
+	}
+}
+
+func TestBooksReleased(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	if !slices.Contains(Kinds, KindBookReleased) {
+		t.Fatal("book_released must be a kind a destination can subscribe to")
+	}
+	titles := []string{"Leviathan Falls (The Expanse #9)", "Memory's Legion (The Expanse #9.5)"}
+	s.BooksReleased(ctx, 7, titles, "released:abc")
+	s.BooksReleased(ctx, 7, titles, "released:abc") // the same run's releases: said once
+	s.BooksReleased(ctx, 0, nil, "released:none")   // nothing new: no event
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != KindBookReleased {
+		t.Fatalf("events = %+v", events)
+	}
+	m := compose(events[0], s.server())
+	if m.Title != "7 new releases in your series" ||
+		m.Text != "Leviathan Falls (The Expanse #9)\nMemory's Legion (The Expanse #9.5)\nand 5 more" ||
+		m.Link != "https://books.example.com/admin/library/series" {
+		t.Fatalf("message = %+v", m)
+	}
+	one := events[0]
+	one.Data = map[string]any{"count": float64(1), "titles": []any{"Leviathan Falls (The Expanse #9)"}}
+	if m := compose(one, s.server()); m.Title != "1 new release in your series" || m.Text != "Leviathan Falls (The Expanse #9)" {
+		t.Fatalf("one release = %+v", m)
 	}
 }
