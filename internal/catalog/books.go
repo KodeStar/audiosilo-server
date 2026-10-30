@@ -189,7 +189,10 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 			return 0, err
 		}
 	}
-	if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
+	// The art's identity from the scan's reading of the art file: the same art
+	// keeps its identity and colour through a re-index, and art replaced in place
+	// gets a new one.
+	if err := writeCoverArt(ctx, tx, b.LibraryID, b.RelPath, b.ArtVersion, false); err != nil {
 		return 0, err
 	}
 
@@ -324,8 +327,11 @@ type Signature struct {
 	Codec       string
 	ContentHash string
 	CoverPath   string
-	HasCover    *bool // nil = never checked (indexed before migration 0016)
-	IsFolder    bool
+	// CoverArt is books.cover_art as stored, so a scan that finds the audio
+	// unchanged still records a sidecar image replaced in place (SetArtVersions).
+	CoverArt string
+	HasCover *bool // nil = never checked (indexed before migration 0016)
+	IsFolder bool
 	// SuspectUnchecked: a folder book whose parts haven't been checked for holding
 	// several books (indexed before migration 0017; see books.suspect_parts).
 	SuspectUnchecked bool
@@ -418,7 +424,7 @@ func fileOrderKey(joined string) uint64 {
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
+		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
@@ -437,7 +443,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var stored sql.NullInt64
 		var files sql.NullString
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
-			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
+			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &files, &sig.EbookSig, &sig.IndexedAt); err != nil {
@@ -494,6 +500,45 @@ func (c *Catalog) SetHasCover(ctx context.Context, libraryID int64, flags map[st
 		}
 		return nil
 	})
+}
+
+// ArtChange is a scan's reading of a book's cover art file (FileArtVersion)
+// that differs from the identity the book held when the scan read it (Was).
+type ArtChange struct{ Was, Now string }
+
+// SetArtVersions records, by path, the art file versions a scan read for books
+// it found otherwise unchanged (a sidecar image replaced in place), in one
+// transaction. Each is compare-and-set on the identity the scan saw, so a custom
+// cover set or a re-index since keeps what it wrote; a colour read for the old
+// art no longer holds (it is tagged with the old cover_version), so a book it
+// moves is a change the listeners hear (OnBookChange: the colour pass reads the
+// new art's).
+func (c *Catalog) SetArtVersions(ctx context.Context, libraryID int64, arts map[string]ArtChange) error {
+	if len(arts) == 0 {
+		return nil
+	}
+	moved := false
+	if err := c.db.WithTx(ctx, "SetArtVersions", func(tx *sql.Tx) error {
+		moved = false
+		for relPath, a := range arts {
+			res, err := tx.ExecContext(ctx,
+				`UPDATE books SET cover_art = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
+				a.Now, libraryID, relPath, a.Was)
+			if err != nil {
+				return err
+			}
+			if n, err := res.RowsAffected(); err == nil && n > 0 {
+				moved = true
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if moved {
+		c.changed()
+	}
+	return nil
 }
 
 // SetSuspectParts records, by path, how many separate books a folder book's parts
@@ -1152,29 +1197,28 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 // sort, and INDEXED BY idx_books_added walks every newer book outside them too
 // (another library's, a podcasts library's episodes, a listener's unshared
 // ones). So each scope is an arm limited on its own, the arms are merged and
-// limited, and only the rows kept are read whole. An arm walks as one scope
-// does, except a scope of exactly one path rule: it seeks the path and sorts
-// what it holds (the "+" hint), since a walk reads the whole library when the
-// path holds few or only old books. Two or more paths SQLite already plans as
+// limited, and only the rows kept are read whole. A scope, alone or an arm,
+// walks the index, except a scope of exactly one path rule: it seeks the path
+// and sorts what it holds (recentOrder's "+" hint), since a walk reads the
+// whole library when the path holds few or only old books; alone it is still
+// an arm, so the sort holds ids, not every row under the path read whole (each
+// with its book_files count). Two or more paths SQLite already plans as
 // a read of the library, which the walk never exceeds. The kind check is once
 // per arm, so a podcasts library's arm reads nothing.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 	fetch := dedupFetch(limit)
-	if len(scopes) == 1 {
+	if len(scopes) == 1 && !seeksPath(scopes[0]) {
 		filter, args := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 		return `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books b` + dedupJoins + `
 		WHERE l.kind = 'books' AND ` + filter + `
-		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, append(args, fetch)
+		ORDER BY ` + recentOrder(scopes[0]) + ` LIMIT ?`, append(args, fetch)
 	}
 	arms := make([]string, len(scopes))
 	var args []any
 	for i, s := range scopes {
 		filter, fargs := scopesFilterSQL("b.library_id", "b.rel_path", []Scope{s})
-		order := "b.added_at DESC, b.id DESC"
-		if !s.AllowAll && len(s.Paths) == 1 {
-			order = "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
-		}
+		order := recentOrder(s)
 		arms[i] = `SELECT * FROM (SELECT b.id, b.added_at FROM books b
 			WHERE EXISTS (SELECT 1 FROM libraries WHERE id = ? AND kind = 'books') AND ` + filter + `
 			ORDER BY ` + order + ` LIMIT ?)`
@@ -1186,6 +1230,21 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 		JOIN books b ON b.id = r.id` + dedupJoins + `
 		ORDER BY r.added_at DESC, r.id DESC`, append(args, fetch)
 }
+
+// recentOrder is a recent-shelf read's ORDER BY for scope s, one scope's alone
+// or an arm's (recentBooksQuery): newest first along idx_books_lib_added, except
+// for a scope of exactly one path rule, whose "+" hint keeps the index order out
+// so the read seeks the path and sorts what it holds (S260-RECENT).
+func recentOrder(s Scope) string {
+	if seeksPath(s) {
+		return "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
+	}
+	return "b.added_at DESC, b.id DESC"
+}
+
+// seeksPath reports whether a recent-shelf read of scope s seeks its path
+// rather than walking idx_books_lib_added: a scope of exactly one path rule.
+func seeksPath(s Scope) bool { return !s.AllowAll && len(s.Paths) == 1 }
 
 func sortValue(b *Book, col string) string {
 	switch col {

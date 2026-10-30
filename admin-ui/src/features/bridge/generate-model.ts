@@ -59,6 +59,8 @@ export const FEATURE_META = 'meta';
  * in its audio (speech recognition and alignment, no agent), and its feature.
  */
 export const KIND_READALONG = 'readalong.align';
+/** The read-along job's stage that lines up the ebook with the narration (after transcription). */
+export const READALONG_ALIGNING = 'readalong_aligning';
 export const FEATURE_READALONG = 'readalong';
 
 /**
@@ -524,6 +526,50 @@ export function parkHint(
   return hint ?? (error || undefined);
 }
 
+/**
+ * The reasons the server writes on a job it cancels itself, in plain words
+ * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved and
+ * CancelReplacedRequest, also on a working job it asked to stop, kept through
+ * the Bridge's reports): shown as they are. Any other error on a cancelled job
+ * is the park's or the Bridge's own text (a supervisor's, say), never shown
+ * (BRIDGE-02).
+ */
+const SERVER_CANCEL_REASONS: readonly string[] = [
+  'a generate job for the book replaced it',
+  'a generate job for the book replaced it; it finds the chapters itself',
+  'a generate job for the book replaced what it was sharing',
+  'a generate job for the book replaced it; make the read-along again after',
+  'the book moved onto another job of this kind',
+  'a newer request replaced it',
+];
+
+/** Whether a job's error is one of the server's own cancel reasons (SERVER_CANCEL_REASONS). */
+export function isServerCancelReason(error: string): boolean {
+  return SERVER_CANCEL_REASONS.includes(error);
+}
+
+/** How a cancelled job reads: who cancelled it, the server's reason, and the park it was cancelled from. */
+export interface CancelledView {
+  /** An admin asked (cancel_requested), not the server for a reason of its own. */
+  byAdmin: boolean;
+  /** The server's own reason, when it cancelled the job itself. */
+  reason?: string;
+  /** The park the job was waiting in, with the Bridge's plain hint (never the raw error). */
+  park?: { code: string; hint?: string };
+}
+
+export function cancelledView(
+  job: Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>,
+): CancelledView {
+  if (isServerCancelReason(job.error)) return { byAdmin: false, reason: job.error };
+  const park = generateProgress(job.progress).park;
+  const hint = park ? parkHint(park.code, park.hint, '') : undefined;
+  return {
+    byAdmin: job.cancel_requested,
+    ...(park ? { park: { code: park.code, ...(hint ? { hint } : {}) } } : {}),
+  };
+}
+
 /** A parked job's page on the Bridge (`<ui_url>#/jobs/<id>`), only for an http(s) ui_url. */
 export function bridgeJobLink(uiUrl: string | undefined, jobId: number): string | undefined {
   return bridgeTabLink(uiUrl, `jobs/${jobId}`);
@@ -938,4 +984,19 @@ export async function settleLimited<T, R>(
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
   return out;
+}
+
+/**
+ * A failed read-along job's error as a sentence for the card (S265-CARD): the
+ * Bridge's "the ebook and the narration don't match: N% lined up" becomes the
+ * key and percent of one that says what to do; anything else is shown as the
+ * Bridge wrote it, from a capital.
+ */
+export function readalongFailure(
+  error: string,
+): { key: string; percent: number } | { text: string } | undefined {
+  const text = error.trim();
+  const m = /^the ebook and the narration don't match: (\d+)% lined up$/.exec(text);
+  if (m) return { key: 'book.readalong.failed.noMatch', percent: Number(m[1]) / 100 };
+  return text ? { text: text.charAt(0).toUpperCase() + text.slice(1) } : undefined;
 }

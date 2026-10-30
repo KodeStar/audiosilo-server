@@ -49,6 +49,22 @@ func (r EbookReading) ebookSize() int64 {
 	return r.Size
 }
 
+// Ebook is the wire Ebook of r once recorded: nil for no readable ebook.
+func (r EbookReading) Ebook() *Ebook { return ebookOf(r.Path, r.ebookSize()) }
+
+// EbookStateAt is the ebook state of the indexed book at bookPath (its
+// ebook_sig and indexed_at): what a reading of its ebook taken now is recorded
+// over (SetEbooks with Was). ErrNotFound when no book is indexed there.
+func (c *Catalog) EbookStateAt(ctx context.Context, libraryID int64, bookPath string) (EbookState, error) {
+	var st EbookState
+	err := c.db.QueryRowContext(ctx, `SELECT ebook_sig, indexed_at FROM books WHERE library_id = ? AND rel_path = ?`,
+		libraryID, bookPath).Scan(&st.Sig, &st.IndexedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return st, ErrNotFound
+	}
+	return st, err
+}
+
 // EbookState is a book row as a scan read it (Signature.EbookSig and IndexedAt)
 // before taking an EbookReading: SetEbooks records the reading only while the row
 // still holds it (compare and set), so a reading an index of the book recorded

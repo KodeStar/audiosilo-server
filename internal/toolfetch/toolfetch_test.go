@@ -4,15 +4,40 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// Linux and Windows fetch BtbN's newest build of the pinned release branch
+// (n8.1, whose -version the in-process probe knows), never master.
+func TestSpecForBtbNAssets(t *testing.T) {
+	t.Parallel()
+	const base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+	for platform, want := range map[string]spec{
+		"linux/amd64":   {combinedURL: base + "ffmpeg-n8.1-latest-linux64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
+		"linux/arm64":   {combinedURL: base + "ffmpeg-n8.1-latest-linuxarm64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
+		"windows/amd64": {combinedURL: base + "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip", combinedKind: "zip"},
+		"windows/arm64": {combinedURL: base + "ffmpeg-n8.1-latest-winarm64-lgpl-8.1.zip", combinedKind: "zip"},
+	} {
+		goos, goarch, _ := strings.Cut(platform, "/")
+		if got, ok := specFor(goos, goarch); !ok || got != want {
+			t.Errorf("specFor(%s) = %+v, want %+v", platform, got, want)
+		}
+		if got, _ := specFor(goos, goarch); strings.Contains(got.combinedURL, "master") {
+			t.Errorf("specFor(%s) fetches master: %s", platform, got.combinedURL)
+		}
+	}
+}
 
 func TestSpecFor(t *testing.T) {
 	t.Parallel()
@@ -58,9 +83,7 @@ func TestEnsureUsesCache(t *testing.T) {
 	// Stubs that pass Ensure's `-version` self-check: one that fails it is
 	// discarded and re-downloaded, so the test would fetch a real build.
 	for _, tool := range []string{"ffmpeg", "ffprobe"} {
-		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeScript(t, filepath.Join(dir, binName(tool)), "#!/bin/sh\nexit 0\n")
 	}
 	fm, fp := Ensure(context.Background(), dir, discard())
 	if fm != filepath.Join(dir, binName("ffmpeg")) || fp != filepath.Join(dir, binName("ffprobe")) {
@@ -127,5 +150,161 @@ func TestParseVersion(t *testing.T) {
 		if got := parseVersion(in); got != want {
 			t.Errorf("parseVersion(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// writeStubs writes ffmpeg and ffprobe stubs into dir whose -version names
+// version.
+func writeStubs(t *testing.T, dir, version string) {
+	t.Helper()
+	for _, tool := range []string{"ffmpeg", "ffprobe"} {
+		writeScript(t, filepath.Join(dir, binName(tool)), "#!/bin/sh\necho '"+tool+" version "+version+" Copyright (c) 2007-2026'\n")
+	}
+}
+
+// writeScript writes an executable script at path holding syscall.ForkLock,
+// so no exec another parallel test forks meanwhile inherits the file still open
+// for writing; this test's own exec of it would otherwise fail with ETXTBSY
+// ("text file busy", golang/go#22315) on Linux.
+func writeScript(t *testing.T, path, body string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A cached master build (an older server's download, which turns the
+// in-process probe off) is replaced by the pinned branch's on Linux and
+// Windows without blocking start-up: the master build serves this run, the
+// release build is fetched in the background and swapped in at the next start.
+// A failed fetch keeps the master build and isn't retried within 24 h; a
+// release build or another platform's source is left as it is (server#269).
+func TestEnsureReplacesCachedMaster(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts")
+	}
+	const (
+		master  = "N-121510-g6e6a2b6f2c-20251028"
+		release = "n8.1.3-25-g611cec792a-20261029"
+	)
+	for _, tc := range []struct {
+		name, platform, cached string
+		dlErr                  error
+		wantDownloads          int
+		wantNext               string // ffprobe's version at the next start
+	}{
+		{"master on linux", "linux/amd64", master, nil, 1, release},
+		{"master on windows", "windows/arm64", master, nil, 1, release},
+		{"master, download fails", "linux/amd64", master, errors.New("offline"), 1, master},
+		{"release build", "linux/amd64", release, nil, 0, release},
+		{"distribution build", "linux/amd64", "7.1.1-3ubuntu1", nil, 0, "7.1.1-3ubuntu1"},
+		{"macOS master", "darwin/arm64", master, nil, 0, master},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeStubs(t, dir, tc.cached)
+			downloads := 0
+			dl := func(_ context.Context, s spec, into string) error {
+				downloads++
+				if !strings.Contains(s.combinedURL, "ffmpeg-n8.1-latest-") {
+					t.Errorf("downloaded %q", s.combinedURL)
+				}
+				if into != filepath.Join(dir, stagedDir) {
+					t.Errorf("downloaded into %q, want the staging dir", into)
+				}
+				if tc.dlErr != nil {
+					return tc.dlErr
+				}
+				writeStubs(t, into, release)
+				return nil
+			}
+			var pending []func()
+			later := func(f func()) { pending = append(pending, f) }
+			goos, goarch, _ := strings.Cut(tc.platform, "/")
+			start := func(wantVersion string) {
+				t.Helper()
+				fm, fp := ensure(context.Background(), dir, discard(), goos, goarch, dl, later)
+				if fm == "" || fp == "" {
+					t.Fatalf("ensure = %q, %q, want both", fm, fp)
+				}
+				if v, err := Version(context.Background(), fp); err != nil || v != wantVersion {
+					t.Fatalf("ffprobe version %q %v, want %q", v, err, wantVersion)
+				}
+			}
+
+			// This start: the cached build, and no download before ensure returns.
+			start(tc.cached)
+			if downloads != 0 {
+				t.Fatalf("%d downloads before ensure returned, want 0 (start-up never waits)", downloads)
+			}
+			for _, f := range pending {
+				f()
+			}
+			pending = nil
+			if downloads != tc.wantDownloads {
+				t.Fatalf("%d background downloads, want %d", downloads, tc.wantDownloads)
+			}
+
+			// The next start swaps in the release build, or keeps the cached one.
+			start(tc.wantNext)
+			if _, err := os.Stat(filepath.Join(dir, stagedDir)); !os.IsNotExist(err) {
+				t.Fatalf("staging dir still there after the next start: %v", err)
+			}
+			if tc.dlErr == nil {
+				if len(pending) != 0 {
+					t.Fatalf("another fetch after the swap")
+				}
+				return
+			}
+			// A failed fetch backs off: no retry within 24 h...
+			if len(pending) != 0 {
+				t.Fatalf("a retry within the back-off")
+			}
+			// ...and retries once the marker is older.
+			old := time.Now().Add(-25 * time.Hour)
+			if err := os.Chtimes(filepath.Join(dir, failedMarker), old, old); err != nil {
+				t.Fatal(err)
+			}
+			start(master)
+			if len(pending) != 1 {
+				t.Fatalf("%d fetches after the back-off, want 1", len(pending))
+			}
+		})
+	}
+}
+
+// A shutdown mid-fetch leaves no back-off marker, so the next start tries
+// again; a staged build that fails its self-check is dropped, not swapped in.
+func TestReleaseFetchCancelAndBadStage(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts")
+	}
+	dir := t.TempDir()
+	writeStubs(t, dir, "N-1-g0")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s, _ := specFor("linux", "amd64")
+	fetchRelease(ctx, dir, filepath.Join(dir, failedMarker), discard(), s, func(ctx context.Context, _ spec, _ string) error { return ctx.Err() })
+	if _, err := os.Stat(filepath.Join(dir, failedMarker)); !os.IsNotExist(err) {
+		t.Fatalf("marker after a cancelled fetch: %v", err)
+	}
+
+	next := filepath.Join(dir, stagedDir)
+	if err := os.MkdirAll(next, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, filepath.Join(next, binName("ffmpeg")), "#!/bin/sh\nexit 0\n")
+	writeScript(t, filepath.Join(next, binName("ffprobe")), "#!/bin/sh\nexit 1\n")
+	promoteStaged(context.Background(), dir, discard())
+	if v, err := Version(context.Background(), filepath.Join(dir, binName("ffprobe"))); err != nil || v != "N-1-g0" {
+		t.Fatalf("ffprobe after a bad stage %q %v, want the cached one", v, err)
+	}
+	if _, err := os.Stat(next); !os.IsNotExist(err) {
+		t.Fatalf("bad stage kept: %v", err)
 	}
 }

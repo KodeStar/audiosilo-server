@@ -23,8 +23,8 @@ import {
   serverScheduled,
   stateLook,
 } from './bridge-model';
-import { isBookKind } from './generate-model';
-import { GenerateStatus } from './generate-status';
+import { isBookKind, isServerCancelReason } from './generate-model';
+import { CancelledStatus, GenerateStatus } from './generate-status';
 import { useBridgeJobs } from './use-bridge';
 
 /**
@@ -246,6 +246,10 @@ function JobRow({
       </div>
       {generate ? (
         <GenerateStatus job={job} uiUrl={uiUrl} />
+      ) : job.state === 'cancelled' ||
+        // A working job the server asked to stop: its reason, not an error.
+        (job.cancel_requested && isServerCancelReason(job.error)) ? (
+        <CancelledStatus job={job} />
       ) : job.error ? (
         <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
       ) : null}

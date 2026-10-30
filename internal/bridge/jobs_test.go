@@ -639,3 +639,99 @@ func TestWaitClaimWakesOnRequeue(t *testing.T) {
 		t.Fatal("the waiting claim never woke for the requeued job")
 	}
 }
+
+// A cancel the server asks for itself (a generate job replacing a working
+// describe job) records its reason at once and keeps it through the Bridge's
+// reports, which send their own error; an admin's cancel keeps no reason, so
+// the Bridge's error stands and the console says an admin cancelled it
+// (BRIDGE-02). An admin who asked first stays the one who cancelled it.
+func TestServerCancelReasonOutlivesReports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatLibrary(t, true, true, KindVerify, KindSidecars, KindDescribe)
+	reason := kinds[KindSidecars].cancelsOpen[KindDescribe]
+	if !IsCancelReason(reason) || !IsCancelReason(CancelMoved) || !IsCancelReason(CancelReplacedRequest) || IsCancelReason("supervisor: stopped") || IsCancelReason("") {
+		t.Fatal("IsCancelReason disagrees with the server's reasons")
+	}
+	stop := func(id int64, attempt int) *Job {
+		t.Helper()
+		// A keepalive, then the stop, each with the Bridge's own error.
+		if _, err := q.UpdateHeld(ctx, id, Update{Attempt: attempt, State: ptr(StateRunning), Error: ptr("")}); err != nil {
+			t.Fatal(err)
+		}
+		j, err := q.UpdateHeld(ctx, id, Update{Attempt: attempt, State: ptr(StateCancelled), Error: ptr("supervisor: stopped")})
+		if err != nil || j.State != StateCancelled {
+			t.Fatalf("stop = %+v, %v", j, err)
+		}
+		return j
+	}
+
+	// The server's cancel.
+	book := ptr("Author/Book")
+	if _, _, err := q.describe("", book); err != nil {
+		t.Fatal(err)
+	}
+	desc := q.work(t, KindDescribe, "")
+	if _, created, err := q.sidecars("", book); err != nil || !created {
+		t.Fatalf("generate = %v, %v", created, err)
+	}
+	if j, _ := q.Job(ctx, desc.ID); !j.CancelRequested || j.Error != reason || j.State != StateRunning {
+		t.Fatalf("asked to stop = %+v, want the reason recorded on the working job", j)
+	}
+	if j := stop(desc.ID, desc.Attempts); j.Error != reason {
+		t.Fatalf("server cancel ended with %q, want %q", j.Error, reason)
+	}
+
+	// An admin's cancel: the Bridge's error stands.
+	other := ptr("Author/Other")
+	if _, _, err := q.describe("", other); err != nil {
+		t.Fatal(err)
+	}
+	admin := q.work(t, KindDescribe, "")
+	if _, err := q.Cancel(ctx, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if j := stop(admin.ID, admin.Attempts); j.Error != "supervisor: stopped" || !j.CancelRequested {
+		t.Fatalf("admin cancel ended with %+v", j)
+	}
+
+	// An admin first, then a generate job: still the admin's cancel.
+	third := ptr("Author/Third")
+	if _, _, err := q.describe("", third); err != nil {
+		t.Fatal(err)
+	}
+	first := q.work(t, KindDescribe, "")
+	if _, err := q.Cancel(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.sidecars("", third); err != nil {
+		t.Fatal(err)
+	}
+	if j := stop(first.ID, first.Attempts); j.Error != "supervisor: stopped" {
+		t.Fatalf("admin-then-server cancel ended with %q, want the Bridge's error", j.Error)
+	}
+
+	// The server asked, but the job failed or finished first: the Bridge's
+	// error (or none), never the cancel reason, on a job that wasn't cancelled.
+	for _, end := range []struct {
+		path, state string
+		err         *string
+		want        string
+	}{
+		{"Author/Failed", StateFailed, ptr("agent: out of credit"), "agent: out of credit"},
+		{"Author/Done", StateDone, nil, ""},
+	} {
+		if _, _, err := q.describe("", ptr(end.path)); err != nil {
+			t.Fatal(err)
+		}
+		w := q.work(t, KindDescribe, "")
+		if _, _, err := q.sidecars("", ptr(end.path)); err != nil {
+			t.Fatal(err)
+		}
+		j, err := q.UpdateHeld(ctx, w.ID, Update{Attempt: w.Attempts, State: ptr(end.state), Error: end.err})
+		if err != nil || j.State != end.state || j.Error != end.want {
+			t.Fatalf("%s after the server's cancel = %+v, %v; want error %q", end.state, j, err, end.want)
+		}
+	}
+}

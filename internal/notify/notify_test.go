@@ -645,8 +645,8 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 	if len(done) != 1 || done[0].Data["coverage"] != 0.996 {
 		t.Fatalf("finished events = %+v", done)
 	}
-	if m := compose(done[0], s.server()); m.Title != "Read-along ready: Loyalists (99% lined up)" ||
-		!strings.Contains(m.Text, "follow the narration") {
+	if m := compose(done[0], s.server()); m.Title != "Read-along made: Loyalists (99% lined up)" ||
+		!strings.Contains(m.Text, "once the player supports read-alongs") {
 		t.Errorf("finished = %+v", m)
 	}
 	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
@@ -659,11 +659,11 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 	// Exactly a whole percentage stays that percentage; no coverage, no figure.
 	ev := catalog.ServerEvent{Kind: KindBridgeJobFinished, Data: map[string]any{"job_kind": "readalong.align",
 		"state": "done", "title": "Alice", "coverage": 0.29}}
-	if m := compose(ev, s.server()); m.Title != "Read-along ready: Alice (29% lined up)" {
+	if m := compose(ev, s.server()); m.Title != "Read-along made: Alice (29% lined up)" {
 		t.Errorf("29%% = %q", m.Title)
 	}
 	delete(ev.Data, "coverage")
-	if m := compose(ev, s.server()); m.Title != "Read-along ready: Alice" {
+	if m := compose(ev, s.server()); m.Title != "Read-along made: Alice" {
 		t.Errorf("no coverage = %q", m.Title)
 	}
 }

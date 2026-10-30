@@ -192,7 +192,11 @@ describe('bridgeCompose', () => {
     expect(c).toContain('- /path/to/books:/mnt/books:rw');
     expect(c).toContain('- /path/to/kids:/mnt/kids:rw');
     expect(c.match(/:\/mnt\/books:rw/g)).toHaveLength(1);
+    expect(c).toContain('# Each library folder, at the same path the server uses:');
+    // No library yet: an example volume, said to be one.
     expect(bridgeCompose([])).toContain('- /path/to/audiobooks:/audiobooks:rw');
+    expect(bridgeCompose([])).toContain('no library yet');
+    expect(bridgeCompose([])).not.toContain('Each library folder');
     expect(c).toContain('image: ghcr.io/kodestar/audiosilo-bridge:latest');
     expect(c).toContain(`AUDIOSILO_BRIDGE_SERVER_URL: ${COMPOSE_SERVER_URL}`);
   });

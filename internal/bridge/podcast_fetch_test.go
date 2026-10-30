@@ -53,12 +53,12 @@ func TestPodcastFetchQueueContractAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	old, err := q.Job(ctx, job.ID)
-	if err != nil || !old.CancelRequested {
+	if err != nil || !old.CancelRequested || old.Error != CancelReplacedRequest {
 		t.Fatalf("cancel intent: %+v %v", old, err)
 	}
 	state := StateCancelled
-	if _, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: claimed.Attempts, State: &state}); err != nil {
-		t.Fatal(err)
+	if old, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: claimed.Attempts, State: &state, Error: ptr("stopped")}); err != nil || old.Error != CancelReplacedRequest {
+		t.Fatalf("cancelled = %+v, %v; want the server's reason kept", old, err)
 	}
 	next, created, err := q.Enqueue(ctx, NewJob{Kind: KindPodcastFetch, LibraryID: &q.lib, Path: &p, Params: replacement})
 	if err != nil || !created || next.ID == job.ID {

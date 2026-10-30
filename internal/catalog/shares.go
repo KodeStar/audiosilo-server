@@ -712,9 +712,11 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*S
 	return existing, nil
 }
 
-// DeleteShare removes a share (paths + grants cascade).
+// DeleteShare removes a share (paths + grants cascade). Like every write that
+// takes access away (RemoveSharePath, RevokeShare), it commits durably
+// (store.DB.ExecDurable): a power cut right after must not bring the access back.
 func (c *Catalog) DeleteShare(ctx context.Context, id int64) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM shares WHERE id = ?`, id)
+	_, err := c.db.ExecDurable(ctx, "DeleteShare", `DELETE FROM shares WHERE id = ?`, id)
 	return err
 }
 
@@ -743,9 +745,9 @@ func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []Path
 	})
 }
 
-// RemoveSharePath removes a path rule from a share.
+// RemoveSharePath removes a path rule from a share, durably (DeleteShare).
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
-	_, err := c.db.ExecContext(ctx,
+	_, err := c.db.ExecDurable(ctx, "RemoveSharePath",
 		`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
 		shareID, rule.LibraryID, CleanRelPath(rule.Path))
 	return err
@@ -777,9 +779,9 @@ func (c *Catalog) GrantShare(ctx context.Context, userID, shareID int64) error {
 	return err
 }
 
-// RevokeShare removes a user's grant of a share.
+// RevokeShare removes a user's grant of a share, durably (DeleteShare).
 func (c *Catalog) RevokeShare(ctx context.Context, userID, shareID int64) error {
-	_, err := c.db.ExecContext(ctx,
+	_, err := c.db.ExecDurable(ctx, "RevokeShare",
 		`DELETE FROM user_share_access WHERE user_id = ? AND share_id = ?`, userID, shareID)
 	return err
 }

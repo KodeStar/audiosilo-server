@@ -13,6 +13,7 @@ import {
 } from '@/lib/format';
 import {
   bridgeJobLink,
+  cancelledView,
   coverageDown,
   generateProgress,
   generateResult,
@@ -24,6 +25,8 @@ import {
   KIND_READALONG,
   parkHint,
   parkKey,
+  READALONG_ALIGNING,
+  readalongFailure,
   roundEta,
   stageLabel,
   type GenerateResult,
@@ -101,18 +104,19 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
   }
 
   if (job.state === 'failed') {
-    return job.error ? (
-      <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
+    // A read-along refusal in words that say what to do (S265-CARD); any
+    // other error as the Bridge wrote it.
+    const failure = job.kind === KIND_READALONG ? readalongFailure(job.error) : undefined;
+    const text =
+      failure && 'key' in failure
+        ? t(failure.key, { percent: formatPercent(failure.percent, lang) })
+        : (failure?.text ?? job.error);
+    return text ? (
+      <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{text}</p>
     ) : null;
   }
 
-  // Cancelled: why, when the server or the Bridge said (a book moved onto
-  // another job of its kind, say); an admin's own cancel says nothing more.
-  if (job.state === 'cancelled') {
-    return job.error ? (
-      <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{job.error}</p>
-    ) : null;
-  }
+  if (job.state === 'cancelled') return <CancelledStatus job={job} />;
 
   if (job.state === 'needs_attention') {
     const link = bridgeJobLink(uiUrl, job.id);
@@ -151,6 +155,9 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
 
   // Queued: nothing has started; say so rather than a stage.
   const label = p.stage ? stageLabel(p.stage) : undefined;
+  // A read-along lining up the text: the message the Bridge sent last is the
+  // transcription's ("Transcribing (1 of 2)"), so it isn't shown (S265-CARD).
+  const aligning = job.kind === KIND_READALONG && p.stage === READALONG_ALIGNING;
   const stage =
     job.state === 'queued'
       ? t('bridge.generate.waiting')
@@ -178,7 +185,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
         <span className="font-semibold text-foreground">{facts[0]}</span>
         {facts.length > 1 ? ` · ${facts.slice(1).join(' · ')}` : null}
       </p>
-      {p.message && p.message !== p.stage ? (
+      {p.message && p.message !== p.stage && !aligning ? (
         <p className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">{p.message}</p>
       ) : null}
       {p.total ? <ProgressBar fraction={(p.done ?? 0) / p.total} /> : null}
@@ -259,4 +266,34 @@ function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult |
         r?.description ? t('bridge.generate.descriptionMade') : undefined,
       ].filter((s): s is string => Boolean(s));
   }
+}
+
+/**
+ * A cancelled job (any kind): the server's reason when it cancelled the job
+ * itself (a book moved onto another job of its kind, say); an admin's cancel
+ * says so and any other reads a plain "Cancelled", each with the park it was
+ * waiting in, in the words the parked row used. The job's raw error (a
+ * supervisor's text) is never shown (BRIDGE-02).
+ */
+export function CancelledStatus({ job }: { job: BridgeJob }) {
+  const { t } = useTranslation();
+  const v = cancelledView(job);
+  if (v.reason) {
+    return (
+      <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{v.reason}</p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5 text-[12.5px] text-muted-foreground">
+      <p>{t(v.byAdmin ? 'bridge.jobs.cancelledByAdmin' : 'bridge.jobs.cancelledOther')}</p>
+      {v.park ? (
+        <p className="[overflow-wrap:anywhere]">
+          {t('bridge.jobs.cancelledPark', {
+            reason: t(parkKey(v.park.code), { code: v.park.code }),
+          })}
+        </p>
+      ) : null}
+      {v.park?.hint ? <p className="[overflow-wrap:anywhere]">{v.park.hint}</p> : null}
+    </div>
+  );
 }

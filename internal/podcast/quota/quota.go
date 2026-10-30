@@ -5,6 +5,7 @@
 package quota
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
@@ -63,15 +64,31 @@ func (l *Limiter) Take(key string) Decision {
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	}
-	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = math.Min(b.tokens+elapsed*l.rate, l.burst)
-	}
-	b.last = now
+	l.refill(b, now)
 	if b.tokens >= 1-eps {
 		b.tokens--
 		return Decision{OK: true}
 	}
 	return Decision{RetryAfter: retryAfter(b.tokens, l.rate)}
+}
+
+// Refund gives back a token Take spent from key's bucket for a request that
+// never ran (it waited for a slot and gave up), up to the burst.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.buckets[key]; b != nil {
+		l.refill(b, l.now())
+		b.tokens = math.Min(b.tokens+1, l.burst)
+	}
+}
+
+// refill adds b's tokens since it was last read, up to the burst.
+func (l *Limiter) refill(b *bucket, now time.Time) {
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens = math.Min(b.tokens+elapsed*l.rate, l.burst)
+	}
+	b.last = now
 }
 
 // eps absorbs float residue in refills (5 + 1 seconds of 1/6 token each).
@@ -92,8 +109,8 @@ func (l *Limiter) sweep(now time.Time) {
 	}
 }
 
-// Slots is a counting semaphore that never waits: TryAcquire takes a slot or
-// reports that all are busy.
+// Slots is a counting semaphore: TryAcquire takes a slot or reports that all
+// are busy, Acquire waits for one.
 type Slots chan struct{}
 
 // NewSlots returns n slots.
@@ -109,5 +126,18 @@ func (s Slots) TryAcquire() bool {
 	}
 }
 
-// Release returns a slot TryAcquire took.
+// Acquire waits for a slot until ctx ends, and reports whether it took one.
+func (s Slots) Acquire(ctx context.Context) bool {
+	if s.TryAcquire() {
+		return true
+	}
+	select {
+	case s <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// Release returns a slot TryAcquire or Acquire took.
 func (s Slots) Release() { <-s }

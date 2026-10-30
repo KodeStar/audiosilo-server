@@ -257,9 +257,12 @@ func (w *userStateWatch) change(d sqlite.SQLitePreUpdateData) {
 }
 
 // watchedChanged reports whether an UPDATE changes any of the watched columns'
-// values (or the values can't be read).
+// values (or the values can't be read), reading the row only up to the last
+// watched column (watched is in the table's order, never empty), so a freed
+// column after every watched one (bridge_status.status, up to 64 KiB a
+// heartbeat) is never copied.
 func watchedChanged(d *sqlite.SQLitePreUpdateData, watched []int) bool {
-	n := d.Count()
+	n := min(d.Count(), watched[len(watched)-1]+1)
 	// Old and New store each value in the slice they are handed (they assign
 	// through &dest[i]), so the slices themselves end up holding the row.
 	before, after := make([]any, n), make([]any, n)

@@ -95,7 +95,14 @@ export function JobActions({
 }
 
 /** A link to Settings > Bridge, where the Bridge's mappings and setup are seen. */
-export function BridgeSettingsLink({ className }: { className?: string }) {
+export function BridgeSettingsLink({
+  className,
+  children,
+}: {
+  className?: string;
+  /** The label, when not the default "Open Bridge settings". */
+  children?: ReactNode;
+}) {
   const { t } = useTranslation();
   return (
     <Link
@@ -104,7 +111,7 @@ export function BridgeSettingsLink({ className }: { className?: string }) {
       search={{ topic: 'bridge' }}
       className={cn('font-semibold text-brand-ink hover:underline', className)}
     >
-      {t('bridge.generate.openSettings')}
+      {children ?? t('bridge.generate.openSettings')}
     </Link>
   );
 }

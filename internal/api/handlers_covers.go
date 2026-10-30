@@ -442,36 +442,35 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 			return cv.Data, nil
 		}}
 	}
-	if src.CoverPath != "" {
-		if abs, err := library.SafeJoin(lib.Root, src.CoverPath); err == nil {
-			return fileArt("s", abs, func() ([]byte, error) {
-				f, err := os.Open(abs)
-				if err != nil {
-					return nil, err
-				}
-				defer f.Close()
-				return media.ReadLimited(f, maxSidecarBytes)
-			})
-		}
+	kind, abs, ok := library.ArtFile(lib.Root, src)
+	if !ok {
+		return nil
 	}
-	if abs, err := library.SafeJoin(lib.Root, src.AudioPath); err == nil {
-		return fileArt("e", abs, func() ([]byte, error) {
-			data, _, ok := media.EmbeddedCover(abs)
-			if !ok {
-				// No art, or a file that couldn't be read: EmbeddedCover can't
-				// tell them apart. One that won't even open (a mount in trouble,
-				// out of file descriptors) is a failure worth retrying, not "no
-				// art" cached for this version.
-				f, err := os.Open(abs)
-				if err != nil {
-					return nil, err
-				}
-				_ = f.Close()
+	if kind == catalog.ArtSidecar {
+		return fileArt(kind, abs, func() ([]byte, error) {
+			f, err := os.Open(abs)
+			if err != nil {
+				return nil, err
 			}
-			return data, nil
+			defer f.Close()
+			return media.ReadLimited(f, maxSidecarBytes)
 		})
 	}
-	return nil
+	return fileArt(kind, abs, func() ([]byte, error) {
+		data, _, ok := media.EmbeddedCover(abs)
+		if !ok {
+			// No art, or a file that couldn't be read: EmbeddedCover can't
+			// tell them apart. One that won't even open (a mount in trouble,
+			// out of file descriptors) is a failure worth retrying, not "no
+			// art" cached for this version.
+			f, err := os.Open(abs)
+			if err != nil {
+				return nil, err
+			}
+			_ = f.Close()
+		}
+		return data, nil
+	})
 }
 
 // fileArt is art read from a file, versioned by its size and modification time. A
@@ -485,5 +484,5 @@ func fileArt(kind, abs string, load func() ([]byte, error)) *artSource {
 		}
 		return nil
 	}
-	return &artSource{version: fmt.Sprintf("%s%d-%d", kind, fi.Size(), fi.ModTime().UnixNano()), load: load}
+	return &artSource{version: catalog.FileArtVersion(kind, fi.Size(), fi.ModTime()), load: load}
 }

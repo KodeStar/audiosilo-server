@@ -198,10 +198,18 @@ func TestMetaMirrorRoutes(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &st); err != nil || resp.StatusCode != http.StatusAccepted || st.State == "" {
 		t.Fatalf("check = %d %s", resp.StatusCode, body)
 	}
-	// Woken: the next check is due now (or, the runner already on it, not set).
-	if n := st.NextCheckAt; !n.IsZero() && (n.Before(before) || n.After(time.Now())) {
-		t.Fatalf("the check's answer must reflect the wake, next_check_at = %v", st.NextCheckAt)
+	// Woken: the next check is due now, or the runner is already on it (not
+	// set), or it has already run it (checked since the request, the next one a
+	// day away): the runner can take the wake before the handler reads the
+	// status (server#252's flake).
+	if n := st.NextCheckAt; !n.IsZero() && (n.Before(before) || n.After(time.Now())) && st.CheckedAt.Before(before) {
+		t.Fatalf("the check's answer must reflect the wake, next_check_at = %v, checked_at = %v", st.NextCheckAt, st.CheckedAt)
 	}
+	// The wake reached the runner: the check runs and the next is scheduled.
+	mirrortest.Eventually(t, "the woken check", 5*time.Second, func() bool {
+		s := e.mirror.Status()
+		return !s.CheckedAt.Before(before) && !s.NextCheckAt.IsZero()
+	})
 
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/v1/admin/meta/mirror"},

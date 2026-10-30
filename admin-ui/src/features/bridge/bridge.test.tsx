@@ -351,6 +351,7 @@ describe('bridge page', () => {
     ).toBeInTheDocument();
     // One volume per library, at the server's own path.
     expect(screen.getByText(/\/path\/to\/fiction:\/books\/fiction:rw/)).toBeInTheDocument();
+    expect(screen.queryByText(/:\/audiobooks:rw/)).toBeNull();
     const docs = screen.getByRole('link', { name: /Running a Bridge/ });
     expect(docs).toHaveAttribute(
       'href',
@@ -362,6 +363,27 @@ describe('bridge page', () => {
     );
     expect(screen.getByText(/connect it with a pairing code/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect a Bridge' })).toBeInTheDocument();
+  });
+
+  it('gives each of two libraries its volume line (ADMIN-07)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge': {
+          body: notPaired({
+            libraries: [
+              { id: 1, name: 'Fiction', root: '/books/fiction', mapping: null },
+              { id: 2, name: 'Kids', root: '/mnt/kids', mapping: null },
+            ],
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const snippet = await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    expect(snippet.textContent?.match(/^ {6}- \/path\/to\/.*:rw$/gm)).toEqual([
+      '      - /path/to/fiction:/books/fiction:rw',
+      '      - /path/to/kids:/mnt/kids:rw',
+    ]);
   });
 
   it("gives a loopback server address as the compose snippet's, saying why (ADMIN-10)", async () => {

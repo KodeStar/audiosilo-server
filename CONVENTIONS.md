@@ -519,7 +519,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   temp files. Commits are `synchronous=NORMAL` (a power cut can roll back the last
   few); a write that ends a credential (sign-out, device or API key revoke, password
   set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
-  replaced or used, a pairing token used, Bridge pair code issued, pair/unpair)
+  replaced or used, a pairing token used, Bridge pair code issued, pair/unpair), a write
+  that takes share access away (a grant revoked, a path rule removed, a share deleted:
+  `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`; S260-REVOKE)
   or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; progress,
   heartbeats and other listening writes never do. The readers (never the writer) map the file
@@ -533,11 +535,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
-  timeout. A request is compressible only when it is a GET under `/api/v1/` without Range, outside
+  timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
+  `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
   the media (`isStreamingPath`, `/meta/cover`), `/api/v1/auth/` and `/api/v1/bridge/`
   (`compressExcluded`); every credential is minted by a POST, so no compressed body holds one
-  (BREACH). A new GET that returns a credential, or a long poll / stream, joins
-  `compressExcluded`. The answer is gzipped (BestSpeed) when it is `application/json`, at least
+  (BREACH). A new GET that returns a credential joins `compressExcluded`. A new stream (media, a
+  download, a long poll, anything that flushes) goes in `isStreamingPath` when it must also leave
+  the request timeout, else in `compressExcluded`: `gzipWriter` has no Flush and holds the first
+  1 KiB back, so a streamed JSON answer must never reach it. Either way it adds a
+  `TestCompressExclusions` row (GET and HEAD) proving it is answered identity. The answer is gzipped (BestSpeed) when it is `application/json`, at least
   1 KiB, has no Content-Encoding or ETag of its own and the client takes gzip; every JSON answer
   to a compressible request carries `Vary: Accept-Encoding`. The list cache stores each answer's
   gzip beside it and sends that on a hit (`writeCachedJSON`), so a hit compresses nothing.
@@ -571,7 +577,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`), which columns an UPDATE may change by value. Anything else on a listed table
+  `progress`), which columns an UPDATE may change by value (the hook reads a row only up to
+  the rule's last watched column, `watchedChanged`, so a freed column after them, the
+  heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
   makes more writes content. Durability (`WithDurableTx`) is orthogonal. The user-state
@@ -772,8 +780,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   demuxers. **Parity is the contract**: values equal the configured ffprobe's, by its release's
   rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
   gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
-  `-version` turns the probe off and ffprobe reads every file, as before). Anything a reader does
-  not model exactly is `unsure` and that one file goes to ffprobe, silently: VBR MP3 with no
+  `-version` turns the probe off and ffprobe reads every file, as before; the start-up log says
+  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master, and
+  replaces a master build an older server cached without holding up the start: the cached build serves
+  that run, the release build is fetched in the background into `<data>/tools/next` and swapped in at
+  the next start, a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269). Anything a reader does
+  not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
+  `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
@@ -957,7 +970,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   book after the upgrade, as 0056 starts them at '') is recorded by `SetEbooks` with the scan's other
   backfills, with **no re-index** (`TestScanBackfillsEbookWithoutReindex`), and only over the row as
   the scan read it (`EbookReading.Was`: its `ebook_sig` and `indexed_at`, so an on-demand index since,
-  newer than the walk, stays; `TestSetEbooksCompareAndSet`). A file that can't be read right now (a
+  newer than the walk, stays; `TestSetEbooksCompareAndSet`). A book's page (`GET /item`) stats the
+  recorded ebook too (`library.Scanner.RefreshEbook`, one stat and one row read): a file replaced in
+  place (another signature) is checked by the same rule (`checkEbook`) and recorded the same way
+  (compare-and-set), so `ebook.size` follows it before the next scan (BRIDGE-16,
+  `TestItemEbookReplacedInPlace`); one that isn't a readable epub at that moment (a copy still being
+  written) answers no ebook and isn't recorded, so the next request reads it again; a new, renamed or
+  removed file still waits for the scan. A file that can't be read right now (a
   folder that won't list, a permission, a flaky mount: `EbookReading.Unread`) keeps what is stored, in
   a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
@@ -1402,8 +1421,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
   304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
   `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
-  from index data whenever a book is indexed (custom stamp, else mtime, size and
-  sidecar path; `SetCover`, `DeleteCover`, moves and joins recompute it). Every
+  whenever a book is indexed: its custom cover's stamp, else the art file's own version
+  (`catalog.FileArtVersion`: sidecar or first audio file, size and mtime, the scan's
+  `Book.ArtVersion`), so a re-index of unchanged art keeps the version and its colour,
+  and art replaced in place gets a new one; a scan that finds the audio unchanged still
+  records a replaced sidecar (`SetArtVersions`, compare-and-set). `SetCover`, `DeleteCover`,
+  moves and joins recompute it, keeping a file version the row holds; a row with none
+  takes the index form (mtime, size, sidecar path) plus the removed custom cover's
+  identity, so a version is never reused for other art (ADMIN-01). Every
   thumbnail (a cache hit too, a 304 revalidation included) records on a book what
   it lacks for the art it read: `cover_color` (`media.CoverPalette` on the scaled image:
   dominant bucket = `bg`, the most vibrant bucket nudged in HSL lightness to WCAG 4.5:1
@@ -1508,7 +1533,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
   lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
   recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
-  recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
+  recording, and the console then calls no copy the one to keep) > `same_files` (only when every
+  copy holds the same audio: a group identical audio joins in part takes the next reason, ADMIN-04) > `same_id` >
   `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
   groups, or with `?ignored=true` only the ignored ones; `catalog.DuplicatePage`: `?limit=` groups
@@ -2052,7 +2078,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers `{kind, asr_hours, figures, writable, ebook: {path,size}|null, readalong: Book.readalong|null,
   open_job?}` (`asr_hours` the whole audio at the Bridge's `asr_seconds_per_audio_hour`, the most it
   may take: less when the Bridge kept the book's transcript; `open_job` the book's open read-along job,
-  else the generate or detect job it would wait for). Notifications word it "Read-along ready: <book>
+  else the generate or detect job it would wait for). Notifications word it "Read-along made: <book>
   (N% lined up)" (the result's `coverage.text` rounded down; the event's `coverage`) and "Read-along
   failed: <book>". The console's book page shows a **Read-along** card for a book with an ebook
   (`features/book/readalong-*`: the map's state, coverage and stale reason, Make / Make again with a
@@ -2285,7 +2311,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fetches dial through `internal/netguard` (the dialled address checked: providers public :443, artwork
   public any port; no proxy, no cookies, providers no redirects, artwork <= 3 without a downgrade), within
   bounded bodies, per-user and per-provider token buckets (`internal/podcast/quota`), two provider and
-  image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches; turning the module off
+  four image slots, a 15 s failure cooldown, coalesced misses and bounded TTL caches. The artwork's
+  admission is its own, sized by a results page (BRIDGE-03): a miss past the image slots queues for one
+  (up to 40 waiting, each at most the fetch budget, then 503 `discovery_busy`), and its per-user and
+  server-wide buckets let two pages through (burst 40, 120 a minute), so a page's artwork asked for at
+  once is all served and search's own budgets are untouched; turning the module off
   (`syncModules`) or shutdown calls `Reset`, so nothing publishes afterwards. Artwork is only a URL a
   result registered (`sha256` id), re-encoded to a <= 320 px JPEG (`media.ThumbnailJPEG`). Build tag
   `podcastdiscoverytest` alone honours `AUDIOSILO_TEST_PODCAST_DISCOVERY_ORIGIN=http://127.0.0.1:<port>`
@@ -2513,7 +2543,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
   when every part still has two words, so "Alexandre Dumas, pere" stays whole).
   Advertised by the additive `export` capability.
-- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
+- **Library admin**: a new library (`catalog.CreateLibrary`, every route that adds one) takes the
+  next `sort_order` (max + 1), so it lands last in the display order, never in its name's place
+  among libraries left at 0 (ADMIN-12). `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
   change. A library the config declares (config.yaml, or an embedding app's
   `launcher.Options.Libraries`; upserted by name at every start) keeps its name and folder: changing

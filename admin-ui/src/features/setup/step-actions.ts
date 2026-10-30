@@ -30,6 +30,8 @@ export interface StepProps {
   last: boolean;
   /** The library the flow created, to follow its scan. */
   onCreated: (id: number) => void;
+  /** The folder step is marked done, but its folder was chosen in another browser (folderLost). */
+  folderLost?: boolean;
 }
 
 /** Thrown by a step that has already shown why it can't go on (no toast follows). */

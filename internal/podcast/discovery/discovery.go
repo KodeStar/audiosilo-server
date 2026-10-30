@@ -59,10 +59,17 @@ const (
 	maxImageSlots     = 4
 	maxImageRedirects = 3
 	artFailureTTL     = time.Minute
-	userArtPerMin     = 120
-	userArtBurst      = 20
-	imageMissPerMin   = 60
-	imageMissBurst    = 4
+	// The artwork's admission is its own, sized by a results page
+	// (DefaultLimit), so a page's images, all asked for at once, are each
+	// served (BRIDGE-03): the misses past the four slots queue for one, up to
+	// two pages of them, and the buckets let two pages through (a second
+	// search right after the first). Search's budgets are unaffected.
+	artPage         = DefaultLimit
+	maxArtQueue     = 2 * artPage
+	userArtPerMin   = 120
+	userArtBurst    = 2 * artPage
+	imageMissPerMin = 120
+	imageMissBurst  = 2 * artPage
 	// ThumbnailSize is the artwork's longer side, re-encoded as JPEG.
 	ThumbnailSize = 320
 )

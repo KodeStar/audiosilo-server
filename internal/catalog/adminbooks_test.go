@@ -130,8 +130,8 @@ func TestListAdminBooksRowShape(t *testing.T) {
 }
 
 // An admin row's cover_version moves with the art: a custom cover gives it a new
-// one, removing it brings the file art's back (the console's thumbnail cache is
-// keyed by it).
+// one, removing it another (never one it had before: the console's thumbnail
+// cache is keyed by it, and the file art may have been replaced meanwhile).
 func TestAdminBookCoverVersion(t *testing.T) {
 	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)
@@ -154,8 +154,8 @@ func TestAdminBookCoverVersion(t *testing.T) {
 	if err := c.DeleteCover(ctx, libA, "Herbert/Dune"); err != nil {
 		t.Fatal(err)
 	}
-	if v := version(); v != file {
-		t.Fatalf("after delete cover_version = %q, want the file art's %q", v, file)
+	if v := version(); v == "" || v == file || v == custom {
+		t.Fatalf("after delete cover_version = %q, want one other than %q and %q", v, file, custom)
 	}
 }
 

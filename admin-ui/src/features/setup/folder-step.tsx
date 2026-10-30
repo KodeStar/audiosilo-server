@@ -12,7 +12,7 @@ import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { isAbsolutePath } from '@/lib/paths';
-import { defaultLibraryName, folderErrorKey } from './setup-model';
+import { defaultLibraryName, folderErrorKey, hasBookLibrary } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, previewQuery, type StepProps } from './step-actions';
 
@@ -22,7 +22,16 @@ import { StepStop, previewQuery, type StepProps } from './step-actions';
  * in words that catch the Docker host-path mistake. The library is created
  * later, after its naming and region (decision 5); here it becomes the draft.
  */
-export function FolderStep({ env, libraries, draft, setDraft, leave, back, last }: StepProps) {
+export function FolderStep({
+  env,
+  libraries,
+  draft,
+  setDraft,
+  leave,
+  back,
+  last,
+  folderLost,
+}: StepProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -73,8 +82,10 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
 
   const onContinue = async () => {
     if (!typed) {
-      // Nothing new to add: fine when the server already has a library.
-      if (libraries.length === 0) {
+      // Nothing new to add: fine when the server already has a books library
+      // (folderSatisfied's rule; a podcasts library holds no books, so the step
+      // would come back as lost).
+      if (!hasBookLibrary(libraries)) {
         setInputError(t('setup.folder.requiredOrSkip'));
         throw new StepStop();
       }
@@ -110,6 +121,11 @@ export function FolderStep({ env, libraries, draft, setDraft, leave, back, last 
   return (
     <>
       <div className="flex flex-col gap-5">
+        {folderLost ? (
+          <Notice tone="info" icon={FolderOpen} role="status" title={t('setup.folder.lost')}>
+            {t('setup.folder.lostBody')}
+          </Notice>
+        ) : null}
         <Field
           htmlFor="setup-folder"
           label={t('setup.folder.label')}

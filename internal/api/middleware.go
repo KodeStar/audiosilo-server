@@ -326,28 +326,48 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // rateLimit already charged to its address (authRoutes) is only authenticated.
 func (a *API) requireAuth(next http.Handler) http.Handler {
 	return authHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		perToken := !addressCharged(r)
-		ip := clientIP(r)
-		if perToken && !a.ipLimiter.Ready(ip) {
-			rateLimited(w, a.ipLimiter.Wait(ip))
-			return
+		limiter := a.tokenLimiter
+		if addressCharged(r) {
+			limiter = nil // rateLimit charged the address: only authenticate
 		}
-		ctx, failure, _ := a.authenticate(r, false, sessionOrAPI)
-		if failure != "" {
-			if perToken {
-				a.ipLimiter.Charge(ip)
-			}
-			writeError(w, http.StatusUnauthorized, failure)
-			return
+		if ctx, ok := a.authLimited(w, r, limiter, false, sessionOrAPI, nil); ok {
+			next.ServeHTTP(w, r.WithContext(ctx))
 		}
-		if perToken {
-			if wait, ok := a.allowCredential(ctx, a.tokenLimiter, ip); !ok {
-				rateLimited(w, wait)
-				return
-			}
-		}
-		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
+}
+
+// authLimited is requireAuth's and mediaAuth's one sequence (server#252):
+// refuse while the address's bucket is empty (Ready), authenticate one of
+// kinds (queryToken: ?token= too, media GETs only), charge the address for a
+// failure, then spend from the credential's bucket in l (allowCredential). With
+// l nil the request was already charged to its address (rateLimit's
+// authRoutes) and is only authenticated. authed, when set, runs once the
+// request has authenticated and before its credential spends, so a header it
+// sets is on a 429 too. ok false means the answer (401 or 429) is written.
+func (a *API) authLimited(w http.ResponseWriter, r *http.Request, l *rateLimiter, queryToken bool, kinds []string, authed func(context.Context)) (ctx context.Context, ok bool) {
+	ip := clientIP(r)
+	if l != nil && !a.ipLimiter.Ready(ip) {
+		rateLimited(w, a.ipLimiter.Wait(ip))
+		return nil, false
+	}
+	ctx, failure, _ := a.authenticate(r, queryToken, kinds)
+	if failure != "" {
+		if l != nil {
+			a.ipLimiter.Charge(ip)
+		}
+		writeError(w, http.StatusUnauthorized, failure)
+		return nil, false
+	}
+	if authed != nil {
+		authed(ctx)
+	}
+	if l != nil {
+		if wait, allowed := a.allowCredential(ctx, l, ip); !allowed {
+			rateLimited(w, wait)
+			return nil, false
+		}
+	}
+	return ctx, true
 }
 
 // allowCredential spends an authenticated request (ctx) from its credential's
@@ -422,39 +442,32 @@ func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
 // given.
 func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		if !a.ipLimiter.Ready(ip) {
-			rateLimited(w, a.ipLimiter.Wait(ip))
-			return
+		if ctx, ok := a.authLimited(w, r, a.mediaLimiter, true, kinds, func(ctx context.Context) { a.mediaCrossOrigin(ctx, w) }); ok {
+			next.ServeHTTP(w, r.WithContext(ctx))
 		}
-		ctx, failure, _ := a.authenticate(r, true, kinds)
-		if failure != "" {
-			a.ipLimiter.Charge(ip)
-			writeError(w, http.StatusUnauthorized, failure)
-			return
-		}
-		cred := credentialFrom(ctx)
-		if cred.Kind == auth.KindCast || a.config().corsOn() {
-			// secureHeaders' same-site resource policy makes the browser block
-			// a no-cors <img>/<audio> load from another site, and two kinds of
-			// caller are one. A cast receiver is a web app on gstatic.com; a
-			// player the operator serves on another site lists its origin in
-			// cors_origins (server#188). No-cors requests carry no Origin to
-			// check against that list, so the answer opts out for any caller
-			// once one is configured. That is safe because the policy guards
-			// against another site loading a resource with the browser's
-			// ambient credentials, and media has none: authenticate takes the
-			// token only from ?token= or Authorization (bearerToken; no cookie
-			// is ever read), so a page that can load the answer already holds
-			// the credential that fetches it anywhere.
-			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
-		}
-		if wait, ok := a.allowCredential(ctx, a.mediaLimiter, ip); !ok {
-			rateLimited(w, wait)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(ctx))
 	})}
+}
+
+// mediaCrossOrigin opens an authenticated media answer (ctx) to a cross-site
+// no-cors load when its caller is a cast receiver or the server lists CORS
+// origins.
+func (a *API) mediaCrossOrigin(ctx context.Context, w http.ResponseWriter) {
+	cred := credentialFrom(ctx)
+	if cred.Kind == auth.KindCast || a.config().corsOn() {
+		// secureHeaders' same-site resource policy makes the browser block
+		// a no-cors <img>/<audio> load from another site, and two kinds of
+		// caller are one. A cast receiver is a web app on gstatic.com; a
+		// player the operator serves on another site lists its origin in
+		// cors_origins (server#188). No-cors requests carry no Origin to
+		// check against that list, so the answer opts out for any caller
+		// once one is configured. That is safe because the policy guards
+		// against another site loading a resource with the browser's
+		// ambient credentials, and media has none: authenticate takes the
+		// token only from ?token= or Authorization (bearerToken; no cookie
+		// is ever read), so a page that can load the answer already holds
+		// the credential that fetches it anywhere.
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+	}
 }
 
 // mediaHandler marks a route wrapped in mediaAuth (requireMediaAuth or

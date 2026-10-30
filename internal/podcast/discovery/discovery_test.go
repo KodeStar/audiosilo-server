@@ -816,13 +816,66 @@ func TestArtwork(t *testing.T) {
 	}
 }
 
-// The artwork budgets: 120/minute burst 20 per user, hits included; 60/minute
-// burst 4 server-wide misses; four image fetches at once.
+// The artwork's own admission (BRIDGE-03): a results page's artwork, asked
+// for all at once right after the search, is each served, the misses past the
+// four image slots queueing for one (never more than four fetches at once),
+// and it spends nothing of search's budget.
+func TestArtworkPageAdmitted(t *testing.T) {
+	f := newFake(t)
+	c := &clock{t: time.Unix(1700000000, 0)}
+	names := []string{}
+	for i := range artPage {
+		names = append(names, fmt.Sprintf("%d.png", i))
+	}
+	s, ids := artService(t, f, c, names...) // the search: one of u's 3 search tokens
+	img := pngBytes(t, 10, 10)
+	var now, most atomic.Int32
+	f.setRoute(func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasPrefix(r.URL.Path, "/art/") {
+			return false
+		}
+		n := now.Add(1)
+		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		time.Sleep(20 * time.Millisecond)
+		now.Add(-1)
+		_, _ = w.Write(img)
+		return true
+	})
+	ctx := context.Background()
+	errs := make(chan *Error, artPage)
+	for _, n := range names {
+		go func() { _, e := s.Artwork(ctx, "u", ids[n]); errs <- e }()
+	}
+	for range artPage {
+		if e := <-errs; e != nil {
+			t.Fatalf("a page's artwork refused: %+v", e)
+		}
+	}
+	if m := most.Load(); m < 1 || m > maxImageSlots {
+		t.Fatalf("%d image fetches at once, want 1..%d", m, maxImageSlots)
+	}
+	// Search's per-user budget is its own and unchanged: two more searches
+	// (the same one, from the cache), then 429 with Retry-After.
+	for i := range 2 {
+		if _, e := s.Search(ctx, "u", query(t, "q=art&limit=50")); e != nil {
+			t.Fatalf("search %d after the artwork: %+v", i, e)
+		}
+	}
+	if _, e := s.Search(ctx, "u", query(t, "q=art&limit=50")); e == nil || e.Code != "discovery_rate_limited" || e.RetryAfter == 0 {
+		t.Fatalf("search past its burst = %+v", e)
+	}
+}
+
+// The artwork budgets: 120/minute burst 40 (two pages) per user, hits
+// included, then 429 discovery_rate_limited with Retry-After; 120/minute burst
+// 40 server-wide misses, then 429 provider_rate_limited; four fetches at once
+// and 40 more queued, then 503 discovery_busy.
 func TestArtworkQuotas(t *testing.T) {
 	f := newFake(t)
 	c := &clock{t: time.Unix(1700000000, 0)}
 	names := []string{}
-	for i := range 6 {
+	for i := range 46 {
 		names = append(names, fmt.Sprintf("%d.png", i))
 	}
 	s, ids := artService(t, f, c, names...)
@@ -842,33 +895,125 @@ func TestArtworkQuotas(t *testing.T) {
 	if _, e := s.Artwork(ctx, "u", ids["0.png"]); e != nil {
 		t.Fatal(e)
 	}
-	for i := 1; i < 20; i++ {
+	for i := 1; i < userArtBurst; i++ {
 		if _, e := s.Artwork(ctx, "u", ids["0.png"]); e != nil {
 			t.Fatalf("hit %d: %v", i, e)
 		}
 	}
-	if _, e := s.Artwork(ctx, "u", ids["0.png"]); e == nil || e.Code != "discovery_rate_limited" || e.RetryAfter != 1 {
+	if _, e := s.Artwork(ctx, "u", ids["0.png"]); e == nil || e.Code != "discovery_rate_limited" || e.Status != 429 || e.RetryAfter != 1 {
 		t.Fatalf("user = %+v", e)
 	}
-	// Server-wide: three more misses in flight fill the bucket's burst of 4.
+	// Server-wide: 39 more misses (each its own user), held upstream, fill the
+	// bucket's burst of 40: 4 fetching, 35 queued.
 	var wg sync.WaitGroup
-	for _, n := range []string{"1.png", "2.png", "3.png"} {
-		wg.Add(1)
-		go func() { defer wg.Done(); _, _ = s.Artwork(ctx, "v"+n, ids[n]) }()
+	start := func(from, to int) {
+		for i := from; i < to; i++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); _, _ = s.Artwork(ctx, fmt.Sprintf("v%d", i), ids[names[i]]) }()
+		}
 	}
-	waitFor(t, func() bool { return f.count("/art/3.png")+f.count("/art/2.png")+f.count("/art/1.png") == 3 })
-	if _, e := s.Artwork(ctx, "w", ids["4.png"]); e == nil || e.Code != "provider_rate_limited" || e.RetryAfter != 1 {
+	inFlight := func() int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.arts)
+	}
+	start(1, imageMissBurst)
+	waitFor(t, func() bool { return inFlight() == imageMissBurst-1 })
+	if _, e := s.Artwork(ctx, "w", ids[names[imageMissBurst]]); e == nil || e.Code != "provider_rate_limited" || e.RetryAfter != 1 {
 		t.Fatalf("global = %+v", e)
 	}
+	// Five more tokens (2.5 s at 2 a second) fill the queue: 4 fetching, 40
+	// queued; one more is busy.
+	c.Add(2500 * time.Millisecond)
+	start(imageMissBurst, maxImageSlots+maxArtQueue+1)
+	waitFor(t, func() bool { return inFlight() == maxImageSlots+maxArtQueue })
 	c.Add(time.Second)
-	go func() { _, _ = s.Artwork(ctx, "x", ids["4.png"]) }()
-	waitFor(t, func() bool { return f.count("/art/4.png") == 1 })
-	c.Add(time.Second)
-	if _, e := s.Artwork(ctx, "y", ids["5.png"]); e == nil || e.Code != "discovery_busy" || e.RetryAfter != 1 {
+	if _, e := s.Artwork(ctx, "y", ids[names[45]]); e == nil || e.Code != "discovery_busy" || e.Status != 503 || e.RetryAfter != 1 {
 		t.Fatalf("slots = %+v", e)
 	}
 	close(release)
 	wg.Wait()
+}
+
+// A queued miss whose slot doesn't come free within the fetch budget is busy,
+// not remembered as a failure; asked again, it waits for a slot that frees
+// while it queues and is fetched. The test holds the slots itself and frees one
+// only once the miss is queued, so no fetch's timing decides the outcome.
+func TestArtworkQueueTimesOut(t *testing.T) {
+	f := newFake(t)
+	c := &clock{t: time.Unix(1700000000, 0)}
+	s, ids := artService(t, f, c, "a.png")
+	img := pngBytes(t, 10, 10)
+	f.setRoute(func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasPrefix(r.URL.Path, "/art/") {
+			return false
+		}
+		_, _ = w.Write(img)
+		return true
+	})
+	held := maxImageSlots
+	for range held {
+		if !s.imageSlots.TryAcquire() {
+			t.Fatal("a slot was taken")
+		}
+	}
+	defer func() {
+		for range held {
+			s.imageSlots.Release()
+		}
+	}()
+	ctx := context.Background()
+
+	// No slot frees: the wait runs out, busy.
+	s.budget = 50 * time.Millisecond
+	if _, e := s.Artwork(ctx, "q", ids["a.png"]); e == nil || e.Code != "discovery_busy" {
+		t.Fatalf("queued past the budget = %+v, want discovery_busy", e)
+	}
+
+	// Asked again, a slot frees while it queues: fetched. The budget is long
+	// enough that only the freed slot can end the wait.
+	s.budget = time.Minute
+	done := make(chan *Error, 1)
+	go func() { _, e := s.Artwork(ctx, "q", ids["a.png"]); done <- e }()
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.arts) == 1
+	})
+	s.imageSlots.Release()
+	held--
+	if e := <-done; e != nil {
+		t.Fatalf("asked again = %+v", e)
+	}
+}
+
+// A miss that never got an image slot made no request to an image host, so the
+// server-wide image-miss token its admission took goes back.
+func TestArtworkQueueTimeoutRefundsToken(t *testing.T) {
+	f := newFake(t)
+	c := &clock{t: time.Unix(1700000000, 0)}
+	s, ids := artService(t, f, c, "a.png")
+	s.budget = 50 * time.Millisecond
+	for range maxImageSlots {
+		if !s.imageSlots.TryAcquire() {
+			t.Fatal("a slot was taken")
+		}
+	}
+	defer func() {
+		for range maxImageSlots {
+			s.imageSlots.Release()
+		}
+	}()
+	if _, e := s.Artwork(context.Background(), "u", ids["a.png"]); e == nil || e.Code != "discovery_busy" {
+		t.Fatalf("with every slot held = %+v, want discovery_busy", e)
+	}
+	left := 0
+	for s.imageMiss.Take("").OK {
+		left++
+	}
+	if left != imageMissBurst {
+		t.Fatalf("%d image-miss tokens left, want all %d", left, imageMissBurst)
+	}
 }
 
 // Feed and artwork URL rules: public only, the test origin's exact address

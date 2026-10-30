@@ -262,7 +262,8 @@ func listCovers(t *testing.T, e *testEnv, tok string, libID int64) map[string]st
 
 // TestCoverColorAndVersion: every book carries a cover_version from its first
 // list response, before any thumbnail; a custom upload moves it at once and a
-// removal reverts it to the file art's; a thumbnail (GET ?size= or the console's
+// removal to one of its own (never an earlier one, which other art may have had);
+// a thumbnail (GET ?size= or the console's
 // batch) records the colour, which stops showing once the version moves on.
 func TestCoverColorAndVersion(t *testing.T) {
 	t.Parallel()
@@ -341,8 +342,8 @@ func TestCoverColorAndVersion(t *testing.T) {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", resp.StatusCode, body)
 	}
-	if cc, version := itemCover(t, e, adminTok, libID, "Bare"); cc != nil || version != fileVersion {
-		t.Fatalf("after delete: color %+v version %q, want no colour and the file art's %q", cc, version, fileVersion)
+	if cc, version := itemCover(t, e, adminTok, libID, "Bare"); cc != nil || version == "" || version == fileVersion || version == uploaded {
+		t.Fatalf("after delete: color %+v version %q, want no colour and a version other than %q and %q", cc, version, fileVersion, uploaded)
 	}
 }
 

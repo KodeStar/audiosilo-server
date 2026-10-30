@@ -48,22 +48,38 @@ export function hasBookLibrary(libraries: readonly Pick<Library, 'kind'>[]): boo
   return libraries.some(isBookLibrary);
 }
 
+/** What this browser holds for the folder step: its draft, and whether a books library exists. */
+export interface FolderFacts {
+  hasDraft: boolean;
+  hasLibraries: boolean;
+}
+
+/**
+ * The folder step marked done, yet nothing came of it here: the folder chosen
+ * lives only in the draft of the browser that chose it (server#183 keeps it on
+ * the server, later), so in another browser, or after the draft was cleared,
+ * there's no draft and no library. The step is then not done in this browser
+ * and asked again, rather than naming nothing.
+ */
+export function folderLost(marks: SetupMarks, { hasDraft, hasLibraries }: FolderFacts): boolean {
+  return marks.folder === 'done' && !hasDraft && !folderSatisfied(hasLibraries);
+}
+
+/** The steps that turn the draft into a library: they need the folder chosen. */
+function needsFolder(id: SetupStepId): boolean {
+  return id === 'naming' || id === 'metadata';
+}
+
 /**
  * Where the flow opens: the first step without a mark (the last step when all
- * have one, so Finish is a click away). A folder chosen on another visit lives
- * only in that browser's draft, so when that draft is gone and the folder step
- * isn't satisfied (no library yet), the folder step is asked again rather than
- * naming nothing.
+ * have one, so Finish is a click away), or the step `requested` (`?step=`).
+ * Either way, a step that needs the folder opens the folder step instead when
+ * the folder is `lost` (folderLost).
  */
-export function resumeStep(
-  marks: SetupMarks,
-  { hasDraft, hasLibraries }: { hasDraft: boolean; hasLibraries: boolean },
-): SetupStepId {
-  const first = SETUP_STEPS.find((id) => !marks[id]) ?? SETUP_STEPS[SETUP_STEPS.length - 1];
-  const beforeCreate = first === 'naming' || first === 'metadata';
-  if (beforeCreate && marks.folder === 'done' && !hasDraft && !folderSatisfied(hasLibraries)) {
-    return 'folder';
-  }
+export function resumeStep(marks: SetupMarks, lost: boolean, requested?: SetupStepId): SetupStepId {
+  const first =
+    requested ?? SETUP_STEPS.find((id) => !marks[id]) ?? SETUP_STEPS[SETUP_STEPS.length - 1];
+  if (needsFolder(first) && lost) return 'folder';
   return first;
 }
 

@@ -600,3 +600,50 @@ func TestReaderDocumentFraming(t *testing.T) {
 		t.Fatalf("player = %d %v", resp.StatusCode, resp.Header)
 	}
 }
+
+// BRIDGE-16: an EPUB replaced in place shows its new size on /item at once, no
+// scan in between, and the row follows (the list too); one replaced by a file
+// that is no readable epub is no ebook, by the scan's rule.
+func TestItemEbookReplacedInPlace(t *testing.T) {
+	t.Parallel()
+	e := newEbookEnv(t)
+	full := filepath.Join(e.root, filepath.FromSlash(ebookFile))
+	bigger := append(slices.Clone(e.epub), make([]byte, 100)...) // the zip reads from its end: still readable
+	later := time.Now().Add(time.Hour)
+	replace := func(body []byte) {
+		t.Helper()
+		if err := os.WriteFile(full, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		later = later.Add(time.Minute)
+		if err := os.Chtimes(full, later, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replace(bigger)
+	if eb, _ := e.itemEbook(t, ebookBook); eb == nil || eb.Path != ebookFile || eb.Size != int64(len(bigger)) {
+		t.Fatalf("after replacing: ebook = %+v, want {%s %d}", eb, ebookFile, len(bigger))
+	}
+	b, err := e.cat.GetBookByPath(context.Background(), e.lib.ID, ebookBook)
+	if err != nil || b.Ebook == nil || b.Ebook.Size != int64(len(bigger)) {
+		t.Fatalf("stored = %+v %v, want size %d", b, err, len(bigger))
+	}
+	// An unchanged file is read once and left as it is.
+	if eb, _ := e.itemEbook(t, ebookBook); eb == nil || eb.Size != int64(len(bigger)) {
+		t.Fatalf("again: ebook = %+v", eb)
+	}
+	replace([]byte("PK not a zip"))
+	if eb, present := e.itemEbook(t, ebookBook); present {
+		t.Fatalf("replaced by no epub: ebook = %+v, want no key", eb)
+	}
+	// Not recorded as none: it may be a copy still being written, which the next
+	// request reads again once it is whole (a recorded none would wait for a scan).
+	if b, err := e.cat.GetBookByPath(context.Background(), e.lib.ID, ebookBook); err != nil || b.Ebook == nil {
+		t.Fatalf("stored after no epub = %+v %v, want the ebook kept", b, err)
+	}
+	whole := append(slices.Clone(e.epub), make([]byte, 200)...)
+	replace(whole)
+	if eb, _ := e.itemEbook(t, ebookBook); eb == nil || eb.Path != ebookFile || eb.Size != int64(len(whole)) {
+		t.Fatalf("once the copy is whole: ebook = %+v, want {%s %d}", eb, ebookFile, len(whole))
+	}
+}

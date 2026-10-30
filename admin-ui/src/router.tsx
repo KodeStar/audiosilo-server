@@ -8,6 +8,7 @@ import { PageSkeleton } from '@/components/page';
 import { DESTINATIONS } from '@/components/shell/destinations';
 import { validateLibrarySearch, type LibrarySearch } from '@/features/library/library-search';
 import { NotFound } from '@/features/not-found';
+import { RouteError } from '@/features/route-error';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage, preloadSection } from '@/features/section-page';
@@ -141,6 +142,9 @@ export function createAppRouter(
     routeTree,
     basepath: '/admin',
     defaultPreload: 'intent',
+    // A page that fails (a chunk gone after an upgrade, a render error) shows
+    // the console's own error page inside the shell, not TanStack's (UPG-01).
+    defaultErrorComponent: RouteError,
     scrollRestoration: true,
     ...opts,
   });

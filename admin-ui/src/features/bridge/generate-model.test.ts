@@ -58,6 +58,7 @@ import {
   stageLabel,
   titleCase,
   type BatchCheck,
+  cancelledView,
 } from './generate-model';
 import { skipNotes } from './use-generate';
 
@@ -1175,5 +1176,52 @@ describe('a share job and Generate (Phase 2b)', () => {
       open_job: job('queued', { kind: KIND_CONTRIBUTE }),
     });
     expect(shareOffered(contributing(true), e, undefined)).toEqual([]);
+  });
+});
+
+describe('cancelledView (BRIDGE-02)', () => {
+  const cancelled = (
+    over: Partial<Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>>,
+  ) => ({
+    error: '',
+    cancel_requested: true,
+    progress: {},
+    ...over,
+  });
+
+  it("gives the server's own reason as it is", () => {
+    expect(
+      cancelledView(cancelled({ error: 'the book moved onto another job of this kind' })),
+    ).toEqual({ byAdmin: false, reason: 'the book moved onto another job of this kind' });
+  });
+
+  it("names an admin's cancel and the park, never the raw error", () => {
+    const v = cancelledView(
+      cancelled({
+        error: 'supervisor: parked book requires a bounded recovery plan',
+        progress: { park: { code: 'chapters_not_detected', hint: 'ignored: own wording' } },
+      }),
+    );
+    expect(v).toEqual({ byAdmin: true, park: { code: 'chapters_not_detected' } });
+    expect(
+      cancelledView(
+        cancelled({ progress: { park: { code: 'budget_exceeded', hint: 'Raise it.' } } }),
+      ),
+    ).toEqual({ byAdmin: true, park: { code: 'budget_exceeded', hint: 'Raise it.' } });
+  });
+
+  it("names the server's reason for a working job it stopped, not an admin", () => {
+    for (const error of [
+      'a generate job for the book replaced it; make the read-along again after',
+      'a newer request replaced it',
+    ]) {
+      expect(cancelledView(cancelled({ error }))).toEqual({ byAdmin: false, reason: error });
+    }
+  });
+
+  it('says nothing of an admin when none asked', () => {
+    expect(cancelledView(cancelled({ cancel_requested: false, error: 'raw' }))).toEqual({
+      byAdmin: false,
+    });
   });
 });

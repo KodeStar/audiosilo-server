@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { BookOpenText } from 'lucide-react';
+import { BookOpenText, Unplug } from 'lucide-react';
 import { ApiError } from '@/api/client';
 import type { ReadalongEstimate } from '@/api/types';
 import { FactList } from '@/components/fact-list';
+import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
@@ -19,7 +20,11 @@ import {
 import { formatHours, formatRelative } from '@/lib/format';
 import { relBaseName } from '@/lib/paths';
 import { toast } from '@/lib/toast';
-import { readalongDialogView } from './readalong-model';
+import {
+  READALONG_BRIDGE_VERSION,
+  readalongDialogView,
+  type ReadalongBridge,
+} from './readalong-model';
 
 /**
  * Make (or Make again) a book's read-along (Bridge Phase 3c): the confirmation
@@ -29,23 +34,25 @@ import { readalongDialogView } from './readalong-model';
  * Bridge's figures predict ("less if the Bridge still has this book's
  * transcript"), that no agent is used, and that a poor match (another edition
  * or another book) stops the job with nothing saved. Nothing can be queued while
- * the Bridge can't write to the library or the book has no ebook. The Bridge
- * going offline while it is open (`offline`) doesn't close it: it says so, and
- * what is queued waits for the Bridge. It stays open while the job is queued.
+ * the Bridge can't write to the library, the book has no ebook, or the Bridge
+ * is a release too old to make read-alongs (it says which to update to). The
+ * Bridge going offline while it is open doesn't close it: it says so, and what
+ * is queued waits for the Bridge. It stays open while the job is queued.
  */
 export function ReadalongDialog({
   open,
   onOpenChange,
   book,
   remake,
-  offline,
+  bridge,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   book: { library_id: number; path: string; title: string };
   /** The book has a map (ready or stale): Make again. */
   remake: boolean;
-  offline: boolean;
+  /** Where the Bridge stands now (it can change while the dialog is open). */
+  bridge: ReadalongBridge;
 }) {
   const { t } = useTranslation();
   // A run in flight, read synchronously (a close can come before the re-render that shows busy).
@@ -65,7 +72,8 @@ export function ReadalongDialog({
         {open ? (
           <ReadalongForm
             book={book}
-            offline={offline}
+            remake={remake}
+            bridge={bridge}
             running={running}
             onDone={() => onOpenChange(false)}
           />
@@ -77,12 +85,14 @@ export function ReadalongDialog({
 
 function ReadalongForm({
   book,
-  offline,
+  remake,
+  bridge,
   running,
   onDone,
 }: {
   book: { library_id: number; path: string; title: string };
-  offline: boolean;
+  remake: boolean;
+  bridge: ReadalongBridge;
   running: React.RefObject<boolean>;
   onDone: () => void;
 }) {
@@ -93,7 +103,7 @@ function ReadalongForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const e = estimate.data;
-  const view = e ? readalongDialogView(e) : undefined;
+  const view = e ? readalongDialogView(e, bridge) : undefined;
   const canConfirm = view?.canConfirm ?? false;
 
   const submit = async (ev: React.FormEvent) => {
@@ -143,14 +153,15 @@ function ReadalongForm({
         ) : !e || !view ? (
           <div className="skel h-40 rounded-lg" role="status" aria-label={t('common.loading')} />
         ) : (
-          <EstimateBody estimate={e} offline={offline} lang={lang} notWritable={view.notWritable} />
+          <EstimateBody estimate={e} bridge={bridge} lang={lang} notWritable={view.notWritable} />
         )}
         <FormError>{error}</FormError>
       </DialogBody>
       <DialogFormFooter
         busy={busy}
         disabled={!canConfirm}
-        submitLabel={t('book.readalong.submit')}
+        // The button says what the title says: Make, or Make again (S265-CARD).
+        submitLabel={remake ? t('book.readalong.remake') : t('book.readalong.submit')}
       />
     </form>
   );
@@ -159,12 +170,12 @@ function ReadalongForm({
 /** The estimate's facts, and what warns or stops. */
 function EstimateBody({
   estimate: e,
-  offline,
+  bridge,
   lang,
   notWritable,
 }: {
   estimate: ReadalongEstimate;
-  offline: boolean;
+  bridge: ReadalongBridge;
   lang: string;
   notWritable: boolean;
 }) {
@@ -173,7 +184,14 @@ function EstimateBody({
   return (
     <>
       {notWritable ? <NotWritableNotice /> : null}
-      {offline ? <OfflineNotice /> : null}
+      {/* An online Bridge too old to make read-alongs isn't offline (S265-DIALOG). */}
+      {bridge === 'too_old' ? (
+        <Notice tone="warn" icon={Unplug} title={t('book.readalong.tooOldTitle')}>
+          {t('book.readalong.bridge.too_old', { version: READALONG_BRIDGE_VERSION })}
+        </Notice>
+      ) : bridge !== 'ready' ? (
+        <OfflineNotice />
+      ) : null}
       {!e.ebook ? (
         <p className="text-destructive" role="alert">
           {t('errors.noEbook')}

@@ -9,7 +9,8 @@ import { ExternalTextLink } from './generate-parts';
  * Where to get a Bridge: the compose snippet for the server's compose file (one
  * volume per library, at the server's own paths), Copy, and the User Guide's
  * Running a Bridge for the agent container and the rest. The first-run flow's
- * Bridge step and Settings > Bridge (no Bridge paired) both show it.
+ * Bridge step and Settings > Bridge (no Bridge paired) both show it, whole:
+ * the volumes, the lines made for this server, come last (ADMIN-07).
  */
 export function BridgeCompose({ roots }: { roots: readonly string[] }) {
   const { t } = useTranslation();
@@ -17,7 +18,7 @@ export function BridgeCompose({ roots }: { roots: readonly string[] }) {
   return (
     <div className="flex flex-col gap-2">
       <span className="text-[13px] text-muted-foreground">{t('setup.bridge.composeIntro')}</span>
-      <pre className="max-h-[320px] overflow-auto rounded-lg bg-muted px-3 py-2.5 font-mono text-[12px] leading-5">
+      <pre className="overflow-x-auto rounded-lg bg-muted px-3 py-2.5 font-mono text-[12px] leading-5">
         {compose}
       </pre>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

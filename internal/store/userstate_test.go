@@ -100,6 +100,11 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	still("unchanged heartbeat", exec(`UPDATE bridge_status SET heartbeat_at = 'now', status = '{}' WHERE id = 1`))
 	still("new heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'later', status = '{"version":"2"}' WHERE id = 1`))
 	moved("pairing change", exec(`UPDATE bridge_status SET heartbeat_at = 'later', paired_at = 'now' WHERE id = 1`))
+	// S263-HOOK: a heartbeat with a 64 KiB status classifies the same, the
+	// hook reading only up to the last watched column (TestUserStateRuleWidth).
+	big := `{"pad":"` + strings.Repeat("x", 64<<10) + `"}`
+	still("large heartbeat status", exec(`UPDATE bridge_status SET heartbeat_at = 'big', status = ? WHERE id = 1`, big))
+	moved("pairing change with a large status", exec(`UPDATE bridge_status SET status = ?, paired_by = NULL, paired_at = 'again' WHERE id = 1`, big+" "))
 	still("lease renewal", exec(`UPDATE bridge_jobs SET lease_until = 'soon', updated_at = 'now', state = 'running', progress = COALESCE(NULL, progress) WHERE id = 1`))
 	still("progress report", exec(`UPDATE bridge_jobs SET lease_until = 'later', progress = '{"step":2}' WHERE id = 1`))
 	moved("job error", exec(`UPDATE bridge_jobs SET progress = '{"step":3}', error = 'oops' WHERE id = 1`))
@@ -259,6 +264,25 @@ func TestUserStateRulesMatchTheSchema(t *testing.T) {
 		if got := db.userState[table]; rule.free != nil && len(got.watched) == 0 {
 			t.Errorf("%s: no watched columns", table)
 		}
+	}
+}
+
+// TestUserStateRuleWidth (S263-HOOK): the hook reads a row only up to its rule's
+// last watched column (watchedChanged), and bridge_status.status, the
+// heartbeat's up to 64 KiB, comes after it, so it is never read.
+func TestUserStateRuleWidth(t *testing.T) {
+	t.Parallel()
+	db, _ := openUserState(t)
+	cols, err := tableColumns(context.Background(), db.writer, "bridge_status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	watched := db.userState["bridge_status"].watched
+	if len(watched) == 0 {
+		t.Fatal("bridge_status: no watched column")
+	}
+	if i, last := slices.Index(cols, "status"), watched[len(watched)-1]; i <= last {
+		t.Errorf("bridge_status: status (column %d) is read (the last watched is column %d)", i, last)
 	}
 }
 

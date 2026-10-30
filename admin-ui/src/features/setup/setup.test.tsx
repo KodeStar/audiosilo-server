@@ -348,14 +348,74 @@ describe('folder, naming and metadata', () => {
     expect(puts(calls)).toEqual([{ steps: { folder: 'skipped' } }]);
   });
 
+  it('asks for the books folder on Continue when the server has only a podcasts library', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/libraries': {
+            body: { libraries: libraries([{ name: 'Podcasts', kind: 'podcasts' }]).slice(0, 1) },
+          },
+        },
+      ),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Where are your books?' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    expect(
+      await screen.findByText(
+        'Type the folder that holds your books, or skip this step to add a library later.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText('Choose the folder again')).toBeNull();
+    expect(puts(calls)).toEqual([]);
+  });
+
   it('Continue past naming with nothing left to name keeps it done', async () => {
     const calls = mockFetch(
-      flowRoutes({ steps: { folder: 'done', naming: 'done', metadata: 'done' } }),
+      flowRoutes({ steps: { folder: 'skipped', naming: 'done', metadata: 'done' } }),
     );
     renderApp('/setup?step=naming');
     expect(await screen.findByText('No folder to name yet')).toBeVisible();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { naming: 'done' } }]));
+  });
+});
+
+describe('a folder chosen in another browser (ADMIN-02)', () => {
+  it('reopens the folder step as not done, even from a link to naming, and still creates the library', async () => {
+    // Browser A chose the folder and left; this browser has no draft and the server no library.
+    let created: AdminLibrary[] = [];
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done' } },
+        {
+          'GET /admin/libraries': () => ({ body: { libraries: created } }),
+          'POST /admin/libraries': (req) => {
+            const body = req.body as { name: string; root: string };
+            created = libraries([{ ...body, id: 7 }]).slice(0, 1);
+            return { status: 201, body: created[0] };
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=naming');
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(screen.getByText('Choose the folder again')).toBeVisible();
+    const steps = screen.getByRole('navigation', { name: 'Setup steps' });
+    expect(within(steps).queryByText(', done')).toBeNull();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Books folder'), '/audiobooks');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'How are your books named?' })).toBeVisible();
+    expect(screen.queryByText('Choose the folder again')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Community metadata' });
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    const post = calls.find((c) => c.path === '/admin/libraries' && c.method === 'POST');
+    expect(post?.body).toMatchObject({ kind: 'books', root: '/audiobooks' });
   });
 });
 
@@ -488,7 +548,8 @@ describe('the end of the flow', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     // Reached by a jump: every step without a mark goes down as skipped,
-    // the folder too, since no library was made.
+    // the folder too, since no library was made. Finish counts the Bridge
+    // step as done, so the card doesn't ask for it at once (ADMIN-05).
     expect(puts(calls)).toEqual([
       {
         steps: {
@@ -499,14 +560,46 @@ describe('the end of the flow', () => {
           abs: 'skipped',
           backups: 'skipped',
           phone: 'skipped',
-          bridge: 'skipped',
+          bridge: 'done',
         },
         finished: true,
       },
     ]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
-    expect(within(card).getByRole('link', { name: /Add a Bridge/ })).toBeVisible();
+    expect(within(card).queryByRole('link', { name: /Add a Bridge/ })).toBeNull();
+  });
+
+  it('Skip and finish on the Bridge step still leaves it to do later', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done', metadata: 'done' } },
+        { 'GET /admin/bridge': { body: bridgeUnpaired } },
+      ),
+    );
+    const { router } = renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Skip and finish' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(puts(calls)[0]).toMatchObject({ steps: { bridge: 'skipped' }, finished: true });
+  });
+
+  it("gives the compose snippet a volume for each library's root (ADMIN-07)", async () => {
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done', metadata: 'done' } },
+        {
+          'GET /admin/bridge': { body: bridgeUnpaired },
+          'GET /admin/libraries': { body: { libraries: libraries().slice(0, 2) } },
+        },
+      ),
+    );
+    renderApp('/setup?step=bridge');
+    const snippet = await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    expect(snippet.textContent?.match(/^ {6}- \/path\/to\/.*:rw$/gm)).toEqual([
+      '      - /path/to/fiction:/mnt/tank/fiction:rw',
+      '      - /path/to/kids:/mnt/nas/kids:rw',
+    ]);
   });
 
   it('Finish keeps the marks already made and skips only the unmarked steps', async () => {
@@ -522,7 +615,7 @@ describe('the end of the flow', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(puts(calls)).toEqual([
       {
-        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'skipped' },
+        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'done' },
         finished: true,
       },
     ]);

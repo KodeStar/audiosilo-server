@@ -498,7 +498,8 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 // handleItem returns full book detail (metadata + files + chapters + description)
 // for a path, indexing it on demand if needed. A book with an ebook and a
 // read-along map carries readalong (readalongOf), only here among the player's
-// book reads.
+// book reads; its ebook is read again when the file changed since the index
+// read it (library.Scanner.RefreshEbook).
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -522,6 +523,9 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	a.warmRemux(lib, book)
 	dp := a.directPlayable(book)
 	book.DirectPlayable = &dp
+	// An EPUB replaced in place since the index read it: its size (and the
+	// row) follow it now, not at the next scan.
+	a.scanner.RefreshEbook(r.Context(), *lib, book)
 	book.Readalong = a.readalongOfBook(r.Context(), lib, book)
 	writeJSON(w, http.StatusOK, book)
 }
@@ -920,16 +924,15 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	art := book.ArtFiles()
-	if art.CoverPath != "" {
-		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
-			serveSidecarCover(w, r, abs)
-			return
-		}
-	}
-	abs, err := library.SafeJoin(lib.Root, art.AudioPath)
-	if err != nil {
+	// The file the book's own art is in, by the one rule the thumbnails and the
+	// scan's cover_version read too (library.ArtFile).
+	kind, abs, ok := library.ArtFile(lib.Root, book.ArtFiles())
+	if !ok {
 		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	if kind == catalog.ArtSidecar {
+		serveSidecarCover(w, r, abs)
 		return
 	}
 	data, mime, ok := media.EmbeddedCover(abs)
