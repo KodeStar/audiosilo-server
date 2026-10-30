@@ -693,7 +693,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   writes: `SaveProgress` (an update of the row), `RecordHeartbeat` (listening sessions),
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
-  `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the upcoming releases job's tables
+  `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
+  `PutMetaCache`, the upcoming releases job's tables
   (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
@@ -1666,7 +1667,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
   puts the `auth.Credential` (token id, kind, device id, device name, app; a cast token's book) in the context (`credentialFrom`; every
   context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
-  header (and `Range`, and exposes Retry-After and the OPML counts: see Podcasts). **Sessions are derived from progress saves**, not from the client-posted
+  header (and `Range`, and exposes Retry-After and the OPML counts: see Podcasts). **Sessions are derived from progress saves**
+  (and, since Track W1, from Sync v2's listen spans at their corrected device times: `recordSpan`, see Listening sync), not from the client-posted
   `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
   `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
   session on that book when the save comes within `SessionGap` (10 min), or later when the position
@@ -2695,7 +2697,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
   ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
   REST and WebSocket writes converge. **Sync v2's rule** (`catalog.ResolvePlace`, pure, table-tested;
-  reading progress uses it since Bridge Phase 3b, listening progress will in Track W1): a save carries
+  reading progress uses it since Bridge Phase 3b, listening sync since Track W1, see Listening sync): a save carries
   `base_version`, the stored version its device last saw (0 none seen; absent, never diverges). It
   is **diverged** when a row is stored, the base is sent and differs from its version, and another
   device (`device_id`) wrote the row, or the base is 0 whatever the device (a device id outlives
@@ -2709,6 +2711,41 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   purpose works. The server bumps `version` on every applied write; `updated_at` is stored as
   fixed-width UTC milliseconds (a far-future one replaced by server time) so a move's merge compares
   it as text; `device_name` is the saving token's.
+- **Listening sync** (Sync v2, Track W1, capability `listening_sync`, `catalog/listening_sync.go`,
+  `api/handlers_listening_sync.go`, migration `0061`): `POST /me/listening/sync` (`requireAuth`: session or API
+  key; kids and demo accounts too) takes `{device_id (1-200 bytes), sent_at | clock_offset (exactly one),
+  events[0-500]}` and answers `{server_time, results[] (one per event, request order), progress[]}`. Envelope
+  400s: `invalid request` (JSON, an unknown top-level field, a body over 1 MiB), `device_id is required` / `is
+  too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`.
+  A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type
+  or an unknown field in one is that event's `rejected` `invalid`. The handler resolves each distinct
+  `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
+  cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
+  offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
+  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate`), the clock (shift = now - sent_at, or
+  clock_offset, added to every time; a corrected time past now pulled back with its span), `too_old` (older than
+  90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
+  is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
+  corrected-time order: an id already stored for the user is `duplicate`; a listen runs `ResolvePlace`
+  (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on
+  that version) and the **backstop**: a `resume`/`continue` span ending more than 60 s before an unfinished
+  row is `not_applied` `resume_behind` (with the span's place as `other_place`), unless it diverged from a
+  place its device had seen (base > 0, another device's row since): that is real listening elsewhere, so
+  `ResolvePlace` keeps the further place and the span's is offered and persisted. A diverged place not kept
+  is stored on the row (`other_*`, `other_version` = the row's version then) unless it is the kept row's
+  device or within 30 s; it is cleared by a non-diverged apply whose base is at or after `other_version`, an
+  edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
+  `updated_at` (the corrected end), version + 1, never the finish. finish/unfinish apply only when newer than
+  `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
+  `finished_at` kept when already finished), unfinish clears it and keeps the position; both bump the version.
+  Every stored listen counts, whatever its place did: `recordSpan` (the token's session, extended within
+  `SessionGap` or by `continuousPlayback`, never before its start; `listenedBetween`'s clip of the span;
+  `transcoded` only for a span ending within `livePlaying`) and history (extends the newest row on the book
+  that ended 0-60 s before the span's start, 2 s overlap allowed, and within 5 s of its start; else a row).
+  Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
+  `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
+  event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at`, clears no offer. Progress reads
+  carry `device_name` and `other_place` (omitempty).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and

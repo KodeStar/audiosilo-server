@@ -286,7 +286,11 @@ A book's ebook in CONVENTIONS.md). Track U1: `0059` adds the upcoming releases j
 `upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items` and `upcoming_announced` (derived,
 path-keyed, no FK to `books`, cascaded with the library, user-state writes; see Upcoming releases in
 CONVENTIONS.md). Track U3: `0060` adds the partial unique index `tokens(user_id) WHERE kind='feed' AND
-revoked=0` (one calendar feed token per user; see Upcoming releases in CONVENTIONS.md).
+revoked=0` (one calendar feed token per user; see Upcoming releases in CONVENTIONS.md). Track W1: `0061` adds
+`listening_events` (Sync v2's event log: durable, path-keyed on the progress key, no FK to the index, unique
+`(user_id, event_id)`, carried by `carryListeningState`, pruned at 120 days) and the progress columns `device_name`,
+`finish_changed_at` and the persisted offer `other_position` / `other_device_id` / `other_device_name` / `other_at` /
+`other_version` (see Listening sync in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -346,6 +350,7 @@ keep this index in step (one line per topic).
   - User/account admin
   - Admin stats
   - Progress reconciliation
+  - Listening sync (Sync v2, Track W1, `catalog/listening_sync.go`: events, the backstop, other_place, file remap, `put` events)
   - Chapters are normalized
   - Community chapters (incl. Generated chapters, Bridge Phase 1d)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
@@ -386,7 +391,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
