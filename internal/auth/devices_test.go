@@ -243,7 +243,7 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	if !known(ann, key) {
 		t.Fatal("setup: the browser should be known again")
 	}
-	if err := s.SetPassword(ctx, ann.ID, "another-long-password"); err != nil {
+	if err := s.SetPassword(ctx, ann.ID, "another-long-password", 0); err != nil {
 		t.Fatal(err)
 	}
 	if known(ann, key) {

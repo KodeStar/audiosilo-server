@@ -255,8 +255,11 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			"managed_by needs member_kind and member_access, and they come only with it")
 		return
 	}
+	// A reset of a password the person had ends their sessions, all but the
+	// admin's own when it is their own account (auth.UpdateUser).
 	change := auth.UserChanges{
 		Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
+		KeepToken: credentialFrom(r.Context()).ID,
 	}
 	if assign {
 		change.Household = &auth.HouseholdChange{Owner: owner}
@@ -562,6 +565,31 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "user.recovery_clear", a.userName(r, id), nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSignOutEverywhere signs a person out of every phone, tablet and browser
+// (the console's "Sign out everywhere"): it ends all their sessions, and the cast
+// tokens minted from them, keeping the admin's own when it is their own account.
+// API keys, the calendar feed token and Bridge tokens stay (each is revoked on
+// its own). Answers {"signed_out": n}, the sessions it ended.
+func (a *API) handleSignOutEverywhere(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	n, err := a.auth.SignOutEverywhere(r.Context(), id, credentialFrom(r.Context()).ID)
+	if errors.Is(err, auth.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		a.log.Warn("sign out everywhere failed", "err", err, "user", id)
+		writeError(w, http.StatusInternalServerError, "could not sign the person out")
+		return
+	}
+	a.audit(r, "user.sign_out_everywhere", a.userName(r, id), map[string]any{"signed_out": n})
+	writeJSON(w, http.StatusOK, map[string]int64{"signed_out": n})
 }
 
 // adminLibrary is a library as the admin console lists it: the stored fields

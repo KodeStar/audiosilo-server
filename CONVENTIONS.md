@@ -128,6 +128,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
+- **Password ends sessions (server#281)**: replacing or clearing a password the account had
+  (`auth.UpdateUser`: the self-service `POST /auth/password` and the admin's `PATCH /admin/users/{id}`
+  alike; a first password ends nothing) revokes every `session` token of that person but
+  `UserChanges.KeepToken`, the caller's own (so changing your own password, or an admin resetting
+  their own, keeps the device it was done on), in the same durable transaction (`endSessions`). The
+  admin's **Sign out everywhere** (`POST /admin/users/{id}/sign-out`, `auth.SignOutEverywhere`,
+  answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
+  change, and forgets the person's browsers. Only sessions end: API keys, the calendar `feed` token
+  and Bridge tokens are listed and revoked on their own, a pairing token is a single use; a cast
+  token needs no write (its parent is checked on every request, `castGrant`). The write moves the
+  content generation, so the token cache refuses an ended token on the very next request, media
+  `?token=` included. A shipped app takes its existing 401 path (signed out, pair again).
 - **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
   tokens for headless integrations, owner-scoped mint/list/revoke via
   `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
@@ -566,8 +578,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a kid (`clearKidCredentials`, both the owner's member edit and the admin's assign), a move into another
   household when it was made on another owner's device (`leaveOwners`, with the sign-in made there; made
   independent, it stays, as that sign-in does); the account's deletion cascades; a disabled account's is
-  refused by `lookupToken`. A password change revokes no token of any kind on this server, so it leaves
-  the feed too. It is never touched (`resolve`, like a bridge token: a calendar's polls are not the
+  refused by `lookupToken`. A password change or reset, and the admin's sign-out everywhere, end
+  sessions only (server#281, Password ends sessions below), so the feed stays. It is never touched (`resolve`, like a bridge token: a calendar's polls are not the
   person's activity, and no last_ip is kept), never a device (the device lists take session and API-key
   kinds only) and is held in the token cache like a session (every end above is a content write). **Acceptance**: `GET
   /me/upcoming/releases.ics` is the ONLY route listing `KindFeed` (`requireFeedAuth` = `mediaAuth` with

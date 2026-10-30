@@ -1355,7 +1355,7 @@ func TestMembers_AdminPasswordOnKid(t *testing.T) {
 	}
 	// The self-service route never reaches it (403 kid_account), and the
 	// service refuses it under that too.
-	if err := m.auth.SetPassword(ctx, evie.ID, "kid-password-1"); !errors.Is(err, auth.ErrKidNoPassword) {
+	if err := m.auth.SetPassword(ctx, evie.ID, "kid-password-1", 0); !errors.Is(err, auth.ErrKidNoPassword) {
 		t.Errorf("SetPassword on a kid = %v, want ErrKidNoPassword", err)
 	}
 	noPassword(evie.ID, "SetPassword")

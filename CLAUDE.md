@@ -314,6 +314,7 @@ keep this index in step (one line per topic).
   - Home and away addresses (`addresses` capability)
   - Home HTTP (`tls.home_http`, security-relevant)
   - Invite vs recovery (`auth_codes.kind`)
+  - Password ends sessions (server#281: change, reset, Sign out everywhere; sessions only)
   - Personal API keys (`tokens.kind='api'`)
   - Web player at `/web`
   - Admin console (`admin-ui/` + `internal/web/adminui`)

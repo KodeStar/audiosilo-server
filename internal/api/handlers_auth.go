@@ -384,6 +384,8 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // the current one, so a stolen session token can't plant a persistent credential.
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
+// Changing an existing password ends the user's other sessions (their cast tokens
+// with them), keeping the caller's; API keys and the calendar feed token stay.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -410,7 +412,9 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password); err != nil {
+	// A change (not a first password) signs the person out of their other
+	// sessions; this one stays (auth.UpdateUser).
+	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password, credentialFrom(r.Context()).ID); err != nil {
 		// notKid refused a kid before this; a request that passed it just
 		// before the owner's switch to kid committed is refused in the write
 		// (ErrKidNoPassword, the admin PATCH's 400) and answers as notKid does.

@@ -554,6 +554,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
+	mux.Handle("POST /api/v1/admin/users/{id}/sign-out", a.requireAdmin(http.HandlerFunc(a.handleSignOutEverywhere)))
 	mux.Handle("GET /api/v1/admin/invites", a.requireAdmin(http.HandlerFunc(a.handleListInvites)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))

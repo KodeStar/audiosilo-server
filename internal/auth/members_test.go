@@ -219,7 +219,7 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 	s, ctx := newTestService(t)
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
-	if err := s.SetPassword(ctx, ellis.ID, "ellis-password"); err != nil {
+	if err := s.SetPassword(ctx, ellis.ID, "ellis-password", 0); err != nil {
 		t.Fatal(err)
 	}
 	session, _ := s.IssueToken(ctx, ellis.ID, KindSession, "Ellis's phone", 0)

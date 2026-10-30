@@ -89,7 +89,11 @@ func TestCredentialEndsAreDurable(t *testing.T) {
 		},
 		"password change": func() func() error {
 			u := user()
-			return func() error { return s.SetPassword(ctx, u.ID, "another-password") }
+			return func() error { return s.SetPassword(ctx, u.ID, "another-password", 0) }
+		},
+		"sign out everywhere": func() func() error {
+			u := user()
+			return func() error { _, err := s.SignOutEverywhere(ctx, u.ID, 0); return err }
 		},
 		"account disabled": func() func() error {
 			u := user()

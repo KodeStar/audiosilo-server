@@ -184,15 +184,15 @@ func TestPasswordLengthBoundary(t *testing.T) {
 	}
 
 	// SetPassword: 7 chars is rejected.
-	if err := s.SetPassword(ctx, u.ID, "1234567"); !errors.Is(err, ErrPasswordTooShort) {
+	if err := s.SetPassword(ctx, u.ID, "1234567", 0); !errors.Is(err, ErrPasswordTooShort) {
 		t.Fatalf("SetPassword with 7-char password: err = %v, want ErrPasswordTooShort", err)
 	}
 	// SetPassword: exactly 8 chars is accepted.
-	if err := s.SetPassword(ctx, u.ID, "abcdefgh"); err != nil {
+	if err := s.SetPassword(ctx, u.ID, "abcdefgh", 0); err != nil {
 		t.Fatalf("SetPassword with 8-char password: %v", err)
 	}
 	// SetPassword: clearing to empty is allowed for a non-admin.
-	if err := s.SetPassword(ctx, u.ID, ""); err != nil {
+	if err := s.SetPassword(ctx, u.ID, "", 0); err != nil {
 		t.Fatalf("SetPassword with empty password (non-admin): %v", err)
 	}
 }
@@ -300,7 +300,7 @@ func TestSetRoleGuards(t *testing.T) {
 	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != ErrAdminNeedsPassword {
 		t.Fatalf("expected ErrAdminNeedsPassword, got %v", err)
 	}
-	if err := s.SetPassword(ctx, kid.ID, "kid-password"); err != nil {
+	if err := s.SetPassword(ctx, kid.ID, "kid-password", 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != nil {
@@ -324,7 +324,7 @@ func TestClearingAdminPasswordRefused(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
-	if err := s.SetPassword(ctx, admin.ID, ""); err != ErrAdminNeedsPassword {
+	if err := s.SetPassword(ctx, admin.ID, "", 0); err != ErrAdminNeedsPassword {
 		t.Fatalf("expected ErrAdminNeedsPassword clearing admin password, got %v", err)
 	}
 }
