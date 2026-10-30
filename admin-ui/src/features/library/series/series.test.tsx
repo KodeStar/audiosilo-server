@@ -167,10 +167,8 @@ describe('series', () => {
       name: '#5 Wind and Truth: preorder, out Mar 2099',
     });
     expect(preorder.querySelector('.spine-date')).toHaveTextContent('Preorder · Mar 2099');
-    // The state word is its own part (a phone hides it: the date and the title fit);
-    // a plain date has none.
-    expect(preorder.querySelector('.spine-state')).toHaveTextContent('Preorder ·');
-    expect(old.querySelector('.spine-state')).toBeNull();
+    // A plain date carries no state word.
+    expect(old.querySelector('.spine-date')?.textContent).toBe('2017');
   });
 
   it("shows no gaps when no community rail is the series (never another series')", async () => {

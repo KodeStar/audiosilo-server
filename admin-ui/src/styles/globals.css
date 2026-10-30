@@ -894,6 +894,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* spineFitsLabel (series-model.ts) mirrors this size, the shelf's height and
+     the spine's padding, border and number: change them together. */
   .spine-date {
     font-family: var(--font-mono);
     font-size: 10px;

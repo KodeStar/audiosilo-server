@@ -10,6 +10,7 @@ import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SeriesGenerateDialog } from '@/features/bridge/series-generate-dialog';
+import { useIsPhone } from '@/features/library/books/use-layout';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -196,7 +197,7 @@ function Shelf({
   const now = new Date();
   // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
   const wide = useMediaQuery('(min-width: 1024px)');
-  const phone = useMediaQuery('(max-width: 720px)');
+  const phone = useIsPhone();
   const spines = spineRow(placed, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
@@ -240,7 +241,7 @@ function Shelf({
                     <span className="spine-lines">
                       <span className="spine-title">{sp.entry.title}</span>
                       <span className="spine-date" data-state={state}>
-                        {showState ? <span className="spine-state">{stateWord}</span> : null}
+                        {showState ? stateWord : null}
                         {date}
                       </span>
                     </span>
