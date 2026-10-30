@@ -153,12 +153,9 @@ func (a *API) handleUpcomingCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "work is required")
 		return
 	}
-	size := defaultThumbSize
-	if q.Has("size") {
-		var ok bool
-		if size, ok = thumbSizeParam(w, q.Get("size")); !ok {
-			return
-		}
+	size, ok := optThumbSize(w, q)
+	if !ok {
+		return
 	}
 	ans, ok := a.myUpcoming(w, r)
 	if !ok {

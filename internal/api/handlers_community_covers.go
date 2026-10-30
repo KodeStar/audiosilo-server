@@ -375,12 +375,9 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	size := defaultThumbSize
-	if q.Has("size") {
-		var ok bool
-		if size, ok = thumbSizeParam(w, q.Get("size")); !ok {
-			return
-		}
+	size, ok := optThumbSize(w, q)
+	if !ok {
+		return
 	}
 	// The envelope /meta sent for this book, from the same lookup and cache: what
 	// it hands out is all this route may fetch.

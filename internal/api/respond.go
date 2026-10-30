@@ -96,7 +96,7 @@ const (
 	codeBookNotFound       = "book_not_found"
 	codeMetadataOff        = "metadata_off"
 	codeUpcomingOff        = "upcoming_off" // GET /me/upcoming while upcoming.enabled is off (metadata on)
-	codeNotFound           = "not_found"    // GET /me/upcoming/cover for a work the caller's list doesn't hand a cover out for
+	codeNotFound           = "not_found"    // no such resource (the router's fallback, GET /me/upcoming/cover)
 	codeModuleOff          = "module_off"   // a managed module's route while the module is off (modules.go)
 	codeUnsupportedImage   = "unsupported_image"
 	codeCoverUnavailable   = "cover_unavailable"
@@ -350,6 +350,6 @@ func apiNoRoute(mux *http.ServeMux) http.Handler {
 			writeErrorCode(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 			return
 		}
-		writeErrorCode(w, http.StatusNotFound, "not_found", "not found")
+		writeErrorCode(w, http.StatusNotFound, codeNotFound, "not found")
 	})
 }

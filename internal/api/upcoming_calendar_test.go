@@ -1,12 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"image"
-	"image/jpeg"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,13 +45,36 @@ func newCalendarEnv(t *testing.T) *upcomingEnv {
 	return u
 }
 
-func (u *upcomingEnv) session(t *testing.T, userID int64) string {
+// expanseReader is a listener signed in on one device whose one share is the
+// library's "Expanse" folder; it returns their id, session and the share's id.
+func expanseReader(t *testing.T, u *upcomingEnv) (id int64, tok string, shareID int64) {
 	t.Helper()
-	tok, err := u.auth.IssueToken(context.Background(), userID, auth.KindSession, "phone", 0)
+	ctx := context.Background()
+	id, tok = newUserWithSession(t, u.testEnv, "reader", false)
+	share, err := u.cat.CreateShare(ctx, catalog.Share{Name: "Expanse only", Paths: []catalog.PathRule{{LibraryID: u.lib.ID, Path: "Expanse"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return tok
+	if err := u.cat.GrantShare(ctx, id, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	return id, tok, share.ID
+}
+
+// holdCopy gives the admin a copy of workID (identified by idKey) at path in a
+// second library, so their Upcoming list drops it.
+func holdCopy(t *testing.T, u *upcomingEnv, path, idKey, workID string) {
+	t.Helper()
+	ctx := context.Background()
+	other, err := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.book(t, other.ID, path, "", 0)
+	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: path},
+		IDKey: idKey, WorkID: workID, CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // mintFeed POSTs /me/upcoming/calendar as tok, wanting 201, and returns the
@@ -73,21 +92,12 @@ func mintFeed(t *testing.T, e *testEnv, tok string) (path, secret string) {
 		Path      string `json:"path"`
 		CreatedAt string `json:"created_at"`
 	}
-	if err := json.Unmarshal([]byte(body), &link); err != nil {
-		t.Fatal(err)
-	}
+	decodeInto(t, body, &link)
 	p, err := url.Parse(link.Path)
 	if err != nil || p.Path != feedPath || p.Query().Get("token") == "" || link.CreatedAt == "" || p.Host != "" {
 		t.Fatalf("mint answer = %s", body)
 	}
 	return link.Path, p.Query().Get("token")
-}
-
-// getFeed GETs the calendar at path (its ?token= in it) with header as the
-// Authorization bearer ("" for none).
-func getFeed(t *testing.T, e *testEnv, path, header string) (*http.Response, string) {
-	t.Helper()
-	return e.do(t, "GET", path, header, "")
 }
 
 func feedURL(secret string) string { return feedPath + "?token=" + url.QueryEscape(secret) }
@@ -102,9 +112,7 @@ func calendarStatus(t *testing.T, e *testEnv, tok string) (active bool, created 
 		Active    bool   `json:"active"`
 		CreatedAt string `json:"created_at"`
 	}
-	if err := json.Unmarshal([]byte(body), &st); err != nil {
-		t.Fatal(err)
-	}
+	decodeInto(t, body, &st)
 	if !st.Active && strings.Contains(body, "created_at") {
 		t.Fatalf("no link, yet a created_at: %s", body)
 	}
@@ -114,7 +122,7 @@ func calendarStatus(t *testing.T, e *testEnv, tok string) (active bool, created 
 func TestUpcomingCalendarWire(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
-	tok := u.session(t, u.adminID)
+	tok := adminSession(t, u.testEnv)
 
 	if active, _ := calendarStatus(t, u.testEnv, tok); active {
 		t.Fatal("a link before any mint")
@@ -134,7 +142,7 @@ func TestUpcomingCalendarWire(t *testing.T) {
 	}
 
 	// Allowed: the feed by ?token= (the minted path as it is) and by header.
-	resp, body := getFeed(t, u.testEnv, path, "")
+	resp, body := u.do(t, "GET", path, "", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("feed = %d %s", resp.StatusCode, body)
 	}
@@ -160,19 +168,19 @@ func TestUpcomingCalendarWire(t *testing.T) {
 			t.Errorf("feed holds %s:\n%s", left, body)
 		}
 	}
-	if resp, body := getFeed(t, u.testEnv, feedPath, secret); resp.StatusCode != http.StatusOK || !strings.Contains(body, "UID:e4@srv-test") {
+	if resp, body := u.do(t, "GET", feedPath, secret, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, "UID:e4@srv-test") {
 		t.Fatalf("feed by header = %d %s", resp.StatusCode, body)
 	}
 
 	// Reset: the old link dies, the new one works, one row.
 	_, second := mintFeed(t, u.testEnv, tok)
-	if resp, _ := getFeed(t, u.testEnv, feedURL(secret), ""); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := u.do(t, "GET", feedURL(secret), "", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the old link after a reset = %d, want 401", resp.StatusCode)
 	}
-	if resp, _ := getFeed(t, u.testEnv, feedPath, secret); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := u.do(t, "GET", feedPath, secret, ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the old link by header after a reset = %d, want 401", resp.StatusCode)
 	}
-	if resp, _ := getFeed(t, u.testEnv, feedURL(second), ""); resp.StatusCode != http.StatusOK {
+	if resp, _ := u.do(t, "GET", feedURL(second), "", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("the new link = %d", resp.StatusCode)
 	}
 	var rows int
@@ -186,7 +194,7 @@ func TestUpcomingCalendarWire(t *testing.T) {
 			t.Fatalf("turn off = %d %s", resp.StatusCode, body)
 		}
 	}
-	if resp, _ := getFeed(t, u.testEnv, feedURL(second), ""); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := u.do(t, "GET", feedURL(second), "", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the link after turning off = %d, want 401", resp.StatusCode)
 	}
 	if active, _ := calendarStatus(t, u.testEnv, tok); active {
@@ -201,50 +209,32 @@ func TestUpcomingFeedScoped(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
 	ctx := context.Background()
-	reader, _ := u.auth.CreateUser(ctx, "reader", "reader-password", auth.RoleUser)
-	share, err := u.cat.CreateShare(ctx, catalog.Share{Name: "Expanse only"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := u.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: u.lib.ID, Path: "Expanse"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := u.cat.GrantShare(ctx, reader.ID, share.ID); err != nil {
-		t.Fatal(err)
-	}
-	_, readerFeed := mintFeed(t, u.testEnv, u.session(t, reader.ID))
-	_, adminFeed := mintFeed(t, u.testEnv, u.session(t, u.adminID))
+	readerID, readerTok, shareID := expanseReader(t, u)
+	_, readerFeed := mintFeed(t, u.testEnv, readerTok)
+	_, adminFeed := mintFeed(t, u.testEnv, adminSession(t, u.testEnv))
 
-	_, body := getFeed(t, u.testEnv, feedURL(readerFeed), "")
+	_, body := u.do(t, "GET", feedURL(readerFeed), "", "")
 	if !strings.Contains(body, "UID:e4@") || strings.Contains(body, "UID:o3@") || strings.Contains(body, "Secret Three") {
 		t.Fatalf("the reader's feed must hold the Expanse only:\n%s", body)
 	}
-	if _, body := getFeed(t, u.testEnv, feedURL(adminFeed), ""); !strings.Contains(body, "UID:o3@") {
+	if _, body := u.do(t, "GET", feedURL(adminFeed), "", ""); !strings.Contains(body, "UID:o3@") {
 		t.Fatalf("the admin's feed must hold o3:\n%s", body)
 	}
 
 	// The admin gets a copy of e4 in another library: dropped from their feed only.
-	other, err := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.book(t, other.ID, "Loose/Cibola", "", 0)
-	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: "Loose/Cibola"},
-		IDKey: "a:B4", WorkID: "e4", CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, body := getFeed(t, u.testEnv, feedURL(adminFeed), ""); strings.Contains(body, "UID:e4@") {
+	holdCopy(t, u, "Loose/Cibola", "a:B4", "e4")
+	if _, body := u.do(t, "GET", feedURL(adminFeed), "", ""); strings.Contains(body, "UID:e4@") {
 		t.Fatalf("a work the owner holds must be dropped:\n%s", body)
 	}
-	if _, body := getFeed(t, u.testEnv, feedURL(readerFeed), ""); !strings.Contains(body, "UID:e4@") {
+	if _, body := u.do(t, "GET", feedURL(readerFeed), "", ""); !strings.Contains(body, "UID:e4@") {
 		t.Fatalf("a copy the reader can't see must not drop it:\n%s", body)
 	}
 
 	// A share taken away is felt at the next request.
-	if err := u.cat.RevokeShare(ctx, reader.ID, share.ID); err != nil {
+	if err := u.cat.RevokeShare(ctx, readerID, shareID); err != nil {
 		t.Fatal(err)
 	}
-	if _, body := getFeed(t, u.testEnv, feedURL(readerFeed), ""); strings.Contains(body, "BEGIN:VEVENT") {
+	if _, body := u.do(t, "GET", feedURL(readerFeed), "", ""); strings.Contains(body, "BEGIN:VEVENT") {
 		t.Fatalf("no access, no events:\n%s", body)
 	}
 }
@@ -254,7 +244,7 @@ func TestUpcomingFeedPendingIsEmpty(t *testing.T) {
 	t.Parallel()
 	m := newMemberEnv(t)
 	_, secret := mintFeed(t, m.testEnv, m.adamTok)
-	resp, body := getFeed(t, m.testEnv, feedURL(secret), "")
+	resp, body := m.do(t, "GET", feedURL(secret), "", "")
 	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, "BEGIN:VCALENDAR\r\n") || !strings.HasSuffix(body, "END:VCALENDAR\r\n") ||
 		strings.Contains(body, "VEVENT") {
 		t.Fatalf("pending feed = %d %q", resp.StatusCode, body)
@@ -266,7 +256,7 @@ func TestUpcomingFeedPendingIsEmpty(t *testing.T) {
 func otherKindTokens(t *testing.T, u *upcomingEnv) map[string]string {
 	t.Helper()
 	ctx := context.Background()
-	sess := u.session(t, u.adminID)
+	sess := adminSession(t, u.testEnv)
 	_, key := u.mintAPIKey(t, sess, "script")
 	_, cred, err := u.auth.ResolveRequest(ctx, sess, auth.Presence{}, auth.KindSession)
 	if err != nil {
@@ -297,15 +287,15 @@ func TestUpcomingFeedRefusesOtherKinds(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
 	for name, tok := range otherKindTokens(t, u) {
-		if resp, _ := getFeed(t, u.testEnv, feedURL(tok), ""); resp.StatusCode != http.StatusUnauthorized {
+		if resp, _ := u.do(t, "GET", feedURL(tok), "", ""); resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("feed with a %s as ?token= = %d, want 401", name, resp.StatusCode)
 		}
-		if resp, _ := getFeed(t, u.testEnv, feedPath, tok); resp.StatusCode != http.StatusUnauthorized {
+		if resp, _ := u.do(t, "GET", feedPath, tok, ""); resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("feed with a %s as the header = %d, want 401", name, resp.StatusCode)
 		}
 	}
 	for name, path := range map[string]string{"none": feedPath, "bogus": feedURL("not-a-token"), "empty": feedPath + "?token="} {
-		if resp, _ := getFeed(t, u.testEnv, path, ""); resp.StatusCode != http.StatusUnauthorized {
+		if resp, _ := u.do(t, "GET", path, "", ""); resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("feed with %s = %d, want 401", name, resp.StatusCode)
 		}
 	}
@@ -319,7 +309,7 @@ func TestUpcomingFeedRefusesOtherKinds(t *testing.T) {
 func TestFeedTokenRefusedOnEveryOtherRoute(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
-	_, secret := mintFeed(t, u.testEnv, u.session(t, u.adminID))
+	_, secret := mintFeed(t, u.testEnv, adminSession(t, u.testEnv))
 	src, err := os.ReadFile("api.go")
 	if err != nil {
 		t.Fatal(err)
@@ -378,12 +368,8 @@ func TestUpcomingCalendarRefusals(t *testing.T) {
 			t.Errorf("%s as a kid = %d %s, want 403 kid_account", method, r.StatusCode, b)
 		}
 	}
-	for _, p := range []string{upCoverPath + "?work=e3", upCoverPath + "?work=e3&token=" + url.QueryEscape(kidTok)} {
-		tok := kidTok
-		if strings.Contains(p, "token=") {
-			tok = ""
-		}
-		if r, b := m.do(t, "GET", p, tok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+	for _, c := range []struct{ path, tok string }{{upCoverPath + "?work=e3", kidTok}, {upCoverPath + "?work=e3&token=" + url.QueryEscape(kidTok), ""}} {
+		if r, b := m.do(t, "GET", c.path, c.tok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
 			t.Errorf("cover as a kid = %d %s, want 403 kid_account", r.StatusCode, b)
 		}
 	}
@@ -439,7 +425,7 @@ func TestUpcomingCalendarRefusals(t *testing.T) {
 	if r, _ := m.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"enabled":true}}`); r.StatusCode != http.StatusOK {
 		t.Fatal("metadata back on")
 	}
-	if r, _ := getFeed(t, m.testEnv, feedURL(adamFeed), ""); r.StatusCode != http.StatusUnauthorized {
+	if r, _ := m.do(t, "GET", feedURL(adamFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a link turned off while the feature was off = %d, want 401", r.StatusCode)
 	}
 }
@@ -453,13 +439,13 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	ctx := context.Background()
 	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
 	_, ellisFeed := mintFeed(t, m.testEnv, ellisTok)
-	if r, _ := getFeed(t, m.testEnv, feedURL(ellisFeed), ""); r.StatusCode != http.StatusOK {
+	if r, _ := m.do(t, "GET", feedURL(ellisFeed), "", ""); r.StatusCode != http.StatusOK {
 		t.Fatalf("the grown-up's feed = %d", r.StatusCode)
 	}
 	if s := m.status(t, "PATCH", memberURL(ellis.ID, ""), m.adamTok, `{"kind":"kid"}`); s != http.StatusOK {
 		t.Fatalf("switch to a kid = %d", s)
 	}
-	if r, _ := getFeed(t, m.testEnv, feedURL(ellisFeed), ""); r.StatusCode != http.StatusUnauthorized {
+	if r, _ := m.do(t, "GET", feedURL(ellisFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the feed after the kid switch = %d, want 401", r.StatusCode)
 	}
 	if r, b := m.do(t, "POST", calendarPath, ellisTok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
@@ -473,7 +459,7 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	if _, err := m.db.ExecContext(ctx, `UPDATE users SET managed_by = ?, member_kind = 'kid', member_access = 'all' WHERE id = ?`, m.adam, bea); err != nil {
 		t.Fatal(err)
 	}
-	if r, b := getFeed(t, m.testEnv, feedURL(beaFeed), ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+	if r, b := m.do(t, "GET", feedURL(beaFeed), "", ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
 		t.Fatalf("a kid's leftover feed token = %d %s, want 403 kid_account", r.StatusCode, b)
 	}
 
@@ -483,33 +469,22 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	if s := m.status(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(cal, 10), m.adminTok, `{"disabled":true}`); s != http.StatusOK {
 		t.Fatalf("disable = %d", s)
 	}
-	if r, _ := getFeed(t, m.testEnv, feedURL(calFeed), ""); r.StatusCode != http.StatusUnauthorized {
+	if r, _ := m.do(t, "GET", feedURL(calFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a disabled account's feed = %d, want 401", r.StatusCode)
 	}
 	if s := m.status(t, "DELETE", "/api/v1/admin/users/"+strconv.FormatInt(cal, 10), m.adminTok, ""); s != http.StatusOK && s != http.StatusNoContent {
 		t.Fatalf("delete = %d", s)
 	}
-	if r, _ := getFeed(t, m.testEnv, feedURL(calFeed), ""); r.StatusCode != http.StatusUnauthorized {
+	if r, _ := m.do(t, "GET", feedURL(calFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a deleted account's feed = %d, want 401", r.StatusCode)
 	}
-}
-
-// tinyJPEG is a small decodable cover.
-func tinyJPEG(t *testing.T) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 40, 60)), nil); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
 }
 
 // The Upcoming cover: only a cover the caller's own list hands out right now.
 func TestUpcomingCover(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
-	ctx := context.Background()
-	img := tinyJPEG(t)
+	img := coverJPEG(t)
 	var fetches atomic.Int32
 	u.api.fetchCover = func(_ context.Context, raw string, _ int64) ([]byte, error) {
 		fetches.Add(1)
@@ -518,7 +493,7 @@ func TestUpcomingCover(t *testing.T) {
 		}
 		return img, nil
 	}
-	admin := u.session(t, u.adminID)
+	admin := adminSession(t, u.testEnv)
 	_, key := u.mintAPIKey(t, admin, "script")
 	cover := func(work, extra string) string { return upCoverPath + "?work=" + url.QueryEscape(work) + extra }
 
@@ -541,12 +516,7 @@ func TestUpcomingCover(t *testing.T) {
 	// Denied: a listed work without a cover, a work not in the list at all, a
 	// work the community lists but this person's series don't (o3, for a
 	// reader with the Expanse only), and a work the caller holds.
-	reader, _ := u.auth.CreateUser(ctx, "reader", "reader-password", auth.RoleUser)
-	share, _ := u.cat.CreateShare(ctx, catalog.Share{Name: "Expanse only", Paths: []catalog.PathRule{{LibraryID: u.lib.ID, Path: "Expanse"}}})
-	if err := u.cat.GrantShare(ctx, reader.ID, share.ID); err != nil {
-		t.Fatal(err)
-	}
-	readerTok := u.session(t, reader.ID)
+	_, readerTok, _ := expanseReader(t, u)
 	if r, _ := u.do(t, "GET", cover("o3", ""), admin, ""); r.StatusCode != http.StatusOK {
 		t.Fatalf("the admin's o3 = %d", r.StatusCode)
 	}
@@ -563,12 +533,7 @@ func TestUpcomingCover(t *testing.T) {
 		t.Error("a refused cover was fetched")
 	}
 	// Held: a copy of e3 elsewhere drops it from the admin's list, and its cover.
-	other, _ := u.cat.CreateLibrary(ctx, catalog.Library{Name: "Other", Root: t.TempDir()})
-	u.book(t, other.ID, "Loose/Abaddon", "", 0)
-	if err := u.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{{Ref: catalog.Ref{LibraryID: other.ID, Path: "Loose/Abaddon"},
-		IDKey: "a:B3", WorkID: "e3", CheckedAt: "2026-10-20T04:00:00.000Z"}}, nil); err != nil {
-		t.Fatal(err)
-	}
+	holdCopy(t, u, "Loose/Abaddon", "a:B3", "e3")
 	if r, _ := u.do(t, "GET", cover("e3", ""), admin, ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("a held work's cover = %d, want 404", r.StatusCode)
 	}

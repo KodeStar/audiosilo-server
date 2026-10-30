@@ -46,6 +46,13 @@ const (
 	KindFeed = "feed"
 )
 
+// neverTouched reports whether a token of kind is never touched by resolve: it
+// is no device of its owner's, and its calls are not the owner's activity, which
+// is the newest last_seen of their tokens (userColumns, the inactive accounts).
+// A bridge token's heartbeat every 30 s says when the Bridge was last heard; a
+// feed token's polls are a calendar app's.
+func neverTouched(kind string) bool { return kind == KindBridge || kind == KindFeed }
+
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
 // and lifetime); a recovery code is a durable, reusable credential the user holds
 // to re-authenticate themselves after signing out or losing a device - so
@@ -425,13 +432,7 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
-	// A bridge token is never touched: it is no device of its admin's, and its
-	// calls (a heartbeat every 30 s) are not the admin's activity, which is the
-	// newest last_seen of their tokens (userColumns, the inactive accounts). The
-	// heartbeat says when the Bridge was last heard.
-	// A feed token is never touched either: a calendar app's polls are no
-	// activity of its owner's, nor a device of theirs.
-	if row.kind == KindBridge || row.kind == KindFeed || !s.needsTouch(row, p) {
+	if neverTouched(row.kind) || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather

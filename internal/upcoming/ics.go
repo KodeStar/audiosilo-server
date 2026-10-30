@@ -87,10 +87,7 @@ func ICS(ans Answer, c Calendar) []byte {
 
 // icsDay is a day-precision release date (YYYY-MM-DD); false for any other.
 func icsDay(date string) (time.Time, bool) {
-	if len(date) != len("2006-01-02") {
-		return time.Time{}, false
-	}
-	t, err := time.Parse("2006-01-02", date)
+	t, err := time.Parse(time.DateOnly, date)
 	return t, err == nil
 }
 
@@ -111,17 +108,14 @@ func eventSummary(it Item) string {
 // eventDescription is the authors, the first release date and the work's
 // community page, one to a line.
 func eventDescription(it Item) string {
-	var lines []string
-	if len(it.Work.Authors) > 0 {
-		names := make([]string, 0, len(it.Work.Authors))
-		for _, a := range it.Work.Authors {
-			if a.Name != "" {
-				names = append(names, a.Name)
-			}
+	var lines, names []string
+	for _, a := range it.Work.Authors {
+		if a.Name != "" {
+			names = append(names, a.Name)
 		}
-		if len(names) > 0 {
-			lines = append(lines, "By "+strings.Join(names, ", "))
-		}
+	}
+	if len(names) > 0 {
+		lines = append(lines, "By "+strings.Join(names, ", "))
 	}
 	lines = append(lines, "First release: "+it.ReleaseDate)
 	if it.Work.WebURL != "" {
