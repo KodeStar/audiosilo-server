@@ -702,7 +702,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if err := checkPodcastTarget(ctx, tx, j); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, now, id)
+			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET error=CASE WHEN cancel_requested=1 THEN error ELSE ? END, cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, CancelReplacedRequest, now, id)
 			if err != nil {
 				return err
 			}
@@ -1381,7 +1381,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		if u.Result != nil {
 			result = string(u.Result)
 		}
-		if u.Error != nil {
+		// The server's reason for a cancel it asked for (cancelOpenTx) stays
+		// through the Bridge's reports, which always send their own error.
+		if u.Error != nil && !(cur.CancelRequested && IsCancelReason(cur.Error)) {
 			errText = *u.Error
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -1559,6 +1561,33 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	return job, err
 }
 
+// The reasons the server records as a job's error when it cancels the job
+// itself, not an admin (the console words a cancel by them, BRIDGE-02, and
+// keeps a copy of these strings: admin-ui generate-model.ts).
+const (
+	// CancelMoved: MoveJobs, the book moved onto another open job of its kind.
+	CancelMoved = "the book moved onto another job of this kind"
+	// CancelReplacedRequest: a podcast request for a newer identity of the
+	// same work replaced the open one (Enqueue).
+	CancelReplacedRequest = "a newer request replaced it"
+)
+
+// IsCancelReason reports whether text is one of the server's own cancel
+// reasons: the kinds' cancelsOpen, CancelMoved or CancelReplacedRequest.
+func IsCancelReason(text string) bool {
+	if text == CancelMoved || text == CancelReplacedRequest {
+		return true
+	}
+	for _, spec := range kinds {
+		for _, reason := range spec.cancelsOpen {
+			if text == reason {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel
 // does: at once when it is queued or parked, else by asking the Bridge
 // (cancel_requested). reason is its error. No open job is no change.
@@ -1569,9 +1598,13 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 		  WHERE dedupe_key = ?1 AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
 		return err
 	}
+	// A working job ends at the Bridge's next report; its reason is recorded
+	// now and kept through those reports (UpdateHeld), unless an admin asked
+	// first.
 	_, err := tx.ExecContext(ctx,
-		`UPDATE bridge_jobs SET cancel_requested = 1, updated_at = ?2
-		  WHERE dedupe_key = ?1 AND state IN `+claimedStatesSQL, key, now)
+		`UPDATE bridge_jobs SET error = CASE WHEN cancel_requested = 1 THEN error ELSE ?3 END,
+		        cancel_requested = 1, updated_at = ?2
+		  WHERE dedupe_key = ?1 AND state IN `+claimedStatesSQL, key, now, reason)
 	return err
 }
 
@@ -1587,7 +1620,7 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 func MoveJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	ts := at(now)
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE bridge_jobs SET state = 'cancelled', error = 'the book moved onto another job of this kind',
+		`UPDATE bridge_jobs SET state = 'cancelled', error = '`+CancelMoved+`',
 		        lease_until = NULL, finished_at = ?4, updated_at = ?4
 		  WHERE library_id = ?1 AND rel_path = ?2 AND state IN `+OpenStatesSQL+`
 		    AND EXISTS (SELECT 1 FROM bridge_jobs n

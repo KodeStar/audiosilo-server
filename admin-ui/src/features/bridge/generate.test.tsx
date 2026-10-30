@@ -698,6 +698,74 @@ describe('the Bridge page', () => {
     expect(rows[2]).not.toHaveTextContent('It was waiting');
   });
 
+  it('says an admin cancelled a job only when one did (BRIDGE-02)', async () => {
+    const reason = 'a generate job for the book replaced it';
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            paired_by: null,
+            pairing: null,
+            online: true,
+            kinds: [],
+            features: [],
+            libraries: [],
+            workers: [],
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              // The server stopped a working job: its reason, kept through the Bridge's reports.
+              job({
+                id: 21,
+                kind: 'bridge.verify',
+                path: null,
+                state: 'cancelled',
+                cancel_requested: true,
+                error: reason,
+              }),
+              // The Bridge ended a parked job itself: a plain "Cancelled" and the park.
+              job({
+                id: 22,
+                kind: 'bridge.verify',
+                path: null,
+                state: 'cancelled',
+                cancel_requested: false,
+                error: 'supervisor: gave up',
+                progress: { park: { code: 'supervisor_escalated', hint: 'Check the transcript.' } },
+              }),
+              // Still working, asked to stop by the server: the reason, not an error.
+              job({
+                id: 23,
+                kind: 'bridge.verify',
+                path: null,
+                state: 'running',
+                cancel_requested: true,
+                error: reason,
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    const rows = within(jobs).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.textContent).not.toContain('Cancelled by an admin.');
+      expect(row.textContent).not.toContain('supervisor:');
+    }
+    expect(within(rows[0]).getByText(reason)).toBeInTheDocument();
+    expect(within(rows[1]).getByText('Cancelled.')).toBeInTheDocument();
+    expect(rows[1]).toHaveTextContent(
+      'It was waiting for attention: The Bridge stopped the job for a person to look at.',
+    );
+    expect(within(rows[2]).getByText(reason)).not.toHaveClass('text-destructive');
+  });
+
   it('words a chapter detection job: its stage, what it found, and why it stopped', async () => {
     mockFetch(
       signedInRoutes({

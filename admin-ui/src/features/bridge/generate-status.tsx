@@ -271,8 +271,9 @@ function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult |
 /**
  * A cancelled job (any kind): the server's reason when it cancelled the job
  * itself (a book moved onto another job of its kind, say); an admin's cancel
- * says so, with the park it was waiting in, in the words the parked row used.
- * The job's raw error (a supervisor's text) is never shown (BRIDGE-02).
+ * says so and any other reads a plain "Cancelled", each with the park it was
+ * waiting in, in the words the parked row used. The job's raw error (a
+ * supervisor's text) is never shown (BRIDGE-02).
  */
 export function CancelledStatus({ job }: { job: BridgeJob }) {
   const { t } = useTranslation();
@@ -282,10 +283,9 @@ export function CancelledStatus({ job }: { job: BridgeJob }) {
       <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{v.reason}</p>
     );
   }
-  if (!v.byAdmin && !v.park) return null;
   return (
     <div className="flex flex-col gap-0.5 text-[12.5px] text-muted-foreground">
-      {v.byAdmin ? <p>{t('bridge.jobs.cancelledByAdmin')}</p> : null}
+      <p>{t(v.byAdmin ? 'bridge.jobs.cancelledByAdmin' : 'bridge.jobs.cancelledOther')}</p>
       {v.park ? (
         <p className="[overflow-wrap:anywhere]">
           {t('bridge.jobs.cancelledPark', {

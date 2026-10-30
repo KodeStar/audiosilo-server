@@ -528,9 +528,11 @@ export function parkHint(
 
 /**
  * The reasons the server writes on a job it cancels itself, in plain words
- * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, and MoveJobs): shown as
- * they are. Any other error on a cancelled job is the park's or the Bridge's
- * own text (a supervisor's, say), never shown (BRIDGE-02).
+ * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved and
+ * CancelReplacedRequest, also on a working job it asked to stop, kept through
+ * the Bridge's reports): shown as they are. Any other error on a cancelled job
+ * is the park's or the Bridge's own text (a supervisor's, say), never shown
+ * (BRIDGE-02).
  */
 const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced it',
@@ -538,7 +540,13 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced what it was sharing',
   'a generate job for the book replaced it; make the read-along again after',
   'the book moved onto another job of this kind',
+  'a newer request replaced it',
 ];
+
+/** Whether a job's error is one of the server's own cancel reasons (SERVER_CANCEL_REASONS). */
+export function isServerCancelReason(error: string): boolean {
+  return SERVER_CANCEL_REASONS.includes(error);
+}
 
 /** How a cancelled job reads: who cancelled it, the server's reason, and the park it was cancelled from. */
 export interface CancelledView {
@@ -553,7 +561,7 @@ export interface CancelledView {
 export function cancelledView(
   job: Pick<BridgeJob, 'error' | 'cancel_requested' | 'progress'>,
 ): CancelledView {
-  if (SERVER_CANCEL_REASONS.includes(job.error)) return { byAdmin: false, reason: job.error };
+  if (isServerCancelReason(job.error)) return { byAdmin: false, reason: job.error };
   const park = generateProgress(job.progress).park;
   const hint = park ? parkHint(park.code, park.hint, '') : undefined;
   return {

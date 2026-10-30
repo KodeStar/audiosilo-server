@@ -1210,6 +1210,15 @@ describe('cancelledView (BRIDGE-02)', () => {
     ).toEqual({ byAdmin: true, park: { code: 'budget_exceeded', hint: 'Raise it.' } });
   });
 
+  it("names the server's reason for a working job it stopped, not an admin", () => {
+    for (const error of [
+      'a generate job for the book replaced it; make the read-along again after',
+      'a newer request replaced it',
+    ]) {
+      expect(cancelledView(cancelled({ error }))).toEqual({ byAdmin: false, reason: error });
+    }
+  });
+
   it('says nothing of an admin when none asked', () => {
     expect(cancelledView(cancelled({ cancel_requested: false, error: 'raw' }))).toEqual({
       byAdmin: false,
