@@ -14,7 +14,8 @@ import (
 
 // icsAnswer is a list holding one item of every shape the calendar meets: the
 // two kinds it shows with a day-precision date, and the ones it leaves out (a
-// missing volume, a month or year date, no date, a date that isn't one).
+// missing volume, a month or year date, no date, a date that isn't one, a day
+// whose next day has a five-digit year).
 func icsAnswer() Answer {
 	work := func(id, title string) ItemWork {
 		return ItemWork{ID: id, Title: title, WebURL: "https://meta.audiosilo.app/work?id=" + id}
@@ -33,6 +34,7 @@ func icsAnswer() Answer {
 		{Kind: catalog.UpcomingPreorder, ReleaseDate: "2097", Work: work("e6", "Year only"), Series: series},
 		{Kind: catalog.UpcomingReleased, Work: work("e7", "Undated"), Series: series},
 		{Kind: catalog.UpcomingReleased, ReleaseDate: "2026-13-45", Work: work("e8", "Not a date"), Series: series},
+		{Kind: catalog.UpcomingPreorder, ReleaseDate: "9999-12-31", Work: work("e9", "The last day"), Series: series},
 		{Kind: catalog.UpcomingMissing, ReleaseDate: "2012-05-01", Work: work("e2", "Caliban's War"), Series: series},
 	}}
 }
@@ -48,7 +50,7 @@ func TestICSGolden(t *testing.T) {
 		t.Fatalf("calendar differs from the golden:\n%s", got)
 	}
 	checkICSLines(t, got)
-	for _, left := range []string{"e5@", "e6@", "e7@", "e8@", "e2@"} {
+	for _, left := range []string{"e5@", "e6@", "e7@", "e8@", "e9@", "e2@"} {
 		if bytes.Contains(got, []byte("UID:"+left)) {
 			t.Errorf("%s must be left out", left)
 		}
@@ -88,7 +90,7 @@ func TestICSEmptyPending(t *testing.T) {
 	t.Parallel()
 	got := string(ICS(Answer{Status: StatusPending, Items: []Item{}}, Calendar{Now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}))
 	want := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//AudioSilo//Upcoming releases//EN\r\nCALSCALE:GREGORIAN\r\n" +
-		"METHOD:PUBLISH\r\nX-WR-CALNAME:AudioSilo: upcoming releases\r\nREFRESH-INTERVAL;VALUE=DURATION:PT12H\r\n" +
+		"X-WR-CALNAME:AudioSilo: upcoming releases\r\nREFRESH-INTERVAL;VALUE=DURATION:PT12H\r\n" +
 		"X-PUBLISHED-TTL:PT12H\r\nEND:VCALENDAR\r\n"
 	if got != want {
 		t.Fatalf("empty calendar = %q", got)
@@ -145,6 +147,8 @@ func TestICSText(t *testing.T) {
 		"a;b,c":      `a\;b\,c`,
 		"one\ntwo":   `one\ntwo`,
 		"one\r\ntwo": `one\ntwo`,
+		"one\rtwo":   `one\ntwo`,
+		"keep\ufffd": "keep\ufffd",
 		"bell\x07":   "bell",
 		"tab\there":  "tab\there",
 		"café 日本":    "café 日本",

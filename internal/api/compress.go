@@ -22,17 +22,19 @@ import (
 //
 //   - The request (compressible): a GET (or its HEAD, which must carry the
 //     GET's Vary and Content-Encoding: server#270) under /api/v1/ that is none
-//     of the excluded classes. Every credential the API hands out (sign-in, pairing,
-//     exchange, redeem, API keys, cast tokens, member sessions, auth codes,
-//     Bridge pairing, recovery codes, the setup wizard) is minted by a POST, and
-//     /api/v1/auth/ is excluded whole besides, so a compressed body never holds
-//     one (BREACH needs a secret and attacker-chosen text in one compressed
-//     body). Excluded too: the media (cover, stream, ebook, a backup's download,
-//     /meta/cover: isStreamingPath and isLibraryMedia's neighbours), everything
-//     below /me/upcoming/ (the calendar feed, read with its token in the URL,
-//     and the Upcoming covers) and the Bridge's routes, whose claim is a long poll and whose job parameters can
-//     carry a private feed URL. A new GET that returns a credential must be
-//     added to compressExcluded.
+//     of the excluded classes. Every credential the API hands out (sign-in,
+//     pairing, exchange, redeem, API keys, cast tokens, member sessions, auth
+//     codes, Bridge pairing, recovery codes, the setup wizard, the calendar feed
+//     link) is minted by a POST, and /api/v1/auth/ is excluded whole besides, so
+//     a compressed body never holds one (BREACH needs a secret and
+//     attacker-chosen text in one compressed body). Excluded too: the media
+//     (cover, stream, ebook, a backup's download, /meta/cover: isStreamingPath
+//     and isLibraryMedia's neighbours, and below /me/upcoming/ the Upcoming
+//     covers and the calendar feed, which take their credential in the URL as
+//     the media do and answer no JSON worth compressing) and the Bridge's
+//     routes, whose claim is a long poll and whose job parameters can carry a
+//     private feed URL. A new GET that returns a credential must be added to
+//     compressExcluded.
 //   - The response (gzipWriter): Content-Type application/json, no
 //     Content-Encoding or ETag of the handler's own (a handler that sets a
 //     validator compresses its own representation, as /readalong does), a status
@@ -49,11 +51,12 @@ const (
 )
 
 // compressExcluded is the GET path prefixes under /api/v1/ never compressed
-// (see the rule above): the credential routes and the Bridge's.
+// (see the rule above): the credential routes, the Bridge's, and the calendar
+// feed's and Upcoming covers' (GET /me/upcoming itself is compressed).
 var compressExcluded = []string{
 	"/api/v1/auth/",
 	"/api/v1/bridge/",
-	"/api/v1/me/upcoming/", // the calendar feed (a feed token in its URL) and the Upcoming covers
+	"/api/v1/me/upcoming/",
 }
 
 // compressible reports whether r may have its JSON answer gzipped (the request

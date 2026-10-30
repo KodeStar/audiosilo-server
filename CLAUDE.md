@@ -416,7 +416,9 @@ See `internal/api/api.go` for the full route table. Public: `/server`,
 `/auth/redeem`, `/auth/exchange`, `/auth/login`, the well-known association files,
 and the static UI (`/`, `/connect`, `/admin`, `/web/...`), and the Bridge's pairing exchange
 (`POST /bridge/pair`). Everything else needs a session bearer token (or an API key), except the
-Bridge's own routes (`/bridge/*`), which take only a bridge token; `/admin/*` additionally requires
+Bridge's own routes (`/bridge/*`), which take only a bridge token, and the calendar feed
+(`GET /me/upcoming/releases.ics`), which takes only its owner's calendar feed token (as `?token=`
+or the header; see Upcoming releases in CONVENTIONS.md); `/admin/*` additionally requires
 the admin role. The
 metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus

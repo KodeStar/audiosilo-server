@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/url"
-	"os"
-	"regexp"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -152,11 +154,23 @@ func TestUpcomingCalendarWire(t *testing.T) {
 			t.Errorf("%s = %q, want %q", h, got, want)
 		}
 	}
-	if resp.Header.Get("Content-Encoding") != "" {
-		t.Error("the feed must not be compressed")
+	if r, raw := u.raw(t, "GET", path, "", true, nil); r.Header.Get("Content-Encoding") != "" || string(raw) != body {
+		t.Errorf("the feed to a client taking gzip = %q, %d bytes; want it as it is", r.Header.Get("Content-Encoding"), len(raw))
+	}
+	// Revalidated by its ETag, a digest of the calendar.
+	etag := resp.Header.Get("ETag")
+	if !strings.HasPrefix(etag, `"ics-`) {
+		t.Fatalf("feed ETag = %q", etag)
+	}
+	if r, _ := u.doHeaders(t, "GET", path, "", "", map[string]string{"If-None-Match": etag}); r.StatusCode != http.StatusNotModified ||
+		r.Header.Get("Cache-Control") != upcomingCalendarCache {
+		t.Fatalf("feed revalidated = %d %v, want 304", r.StatusCode, r.Header)
+	}
+	if r, _ := u.doHeaders(t, "GET", path, "", "", map[string]string{"If-None-Match": `"ics-0"`}); r.StatusCode != http.StatusOK {
+		t.Fatalf("feed with a stale ETag = %d, want 200", r.StatusCode)
 	}
 	for _, want := range []string{"BEGIN:VCALENDAR\r\n", "UID:e4@srv-test\r\n", "UID:e3@srv-test\r\n", "UID:o3@srv-test\r\n",
-		"DTSTART;VALUE=DATE:20991112\r\n", "SUMMARY:Cibola Burn (The Expanse 4)\r\n", "URL:https://meta.audiosilo.app/work?id=e4\r\n",
+		"DTSTART;VALUE=DATE:20991112\r\n", "SUMMARY:Cibola Burn (The Expanse #4)\r\n", "URL:https://meta.audiosilo.app/work?id=e4\r\n",
 		"END:VCALENDAR\r\n"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("feed lacks %q:\n%s", want, body)
@@ -239,7 +253,8 @@ func TestUpcomingFeedScoped(t *testing.T) {
 	}
 }
 
-// A server that has never run the job: a valid, empty calendar.
+// A server that has never run the job: an empty calendar (no component, which
+// RFC 5545 asks for one of; calendar apps read it as empty).
 func TestUpcomingFeedPendingIsEmpty(t *testing.T) {
 	t.Parallel()
 	m := newMemberEnv(t)
@@ -302,54 +317,81 @@ func TestUpcomingFeedRefusesOtherKinds(t *testing.T) {
 }
 
 // Security-critical: a feed token is refused on every other authenticated
-// route, as the header and as ?token= (the media routes, the Upcoming cover,
-// /meta/cover and the Bridge's routes included). Routes opt in to the kinds
-// they take, so this holds by construction; the test reads the route table so a
-// new route can't quietly break it.
+// route of the table, as the header and as ?token= (the media routes, the
+// Upcoming cover, /meta/cover and the Bridge's routes included), and the feed
+// route takes it alone (requireFeedAuth). TestFeedKindNamedOnce covers the
+// routes the table doesn't list.
 func TestFeedTokenRefusedOnEveryOtherRoute(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
 	_, secret := mintFeed(t, u.testEnv, adminSession(t, u.testEnv))
-	src, err := os.ReadFile("api.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := regexp.MustCompile(`mux\.Handle\("(GET|POST|PUT|PATCH|DELETE) (/api/v1/[^"]*)",\s*a\.(require\w+)\(`)
-	matches := route.FindAllStringSubmatch(string(src), -1)
-	if len(matches) < 150 {
-		t.Fatalf("found only %d authenticated routes: the pattern no longer matches api.go", len(matches))
-	}
-	ids := regexp.MustCompile(`\{[a-z_]+\}`)
-	checked, feeds := 0, 0
-	for _, m := range matches {
-		method, path, wrapper := m[1], m[2], m[3]
-		if path == feedPath {
-			if wrapper != "requireFeedAuth" {
-				t.Errorf("the feed route is wrapped in %s", wrapper)
+	var others []authedRoute
+	feeds := 0
+	for _, r := range authedRoutes(t) {
+		switch {
+		case r.path == feedPath:
+			if r.wrapper != "requireFeedAuth" {
+				t.Errorf("the feed route is wrapped in %s", r.wrapper)
 			}
 			feeds++
-			continue
+		case r.wrapper == "requireFeedAuth":
+			t.Errorf("%s %s takes a feed token", r.method, r.path)
+		default:
+			others = append(others, r)
 		}
-		if wrapper == "requireFeedAuth" {
-			t.Errorf("%s %s takes a feed token", method, path)
-		}
-		p := ids.ReplaceAllString(path, strconv.FormatInt(u.lib.ID, 10)) + "?path=Expanse%2F1&work=e3&url=x&size=160"
-		if resp, body := u.do(t, method, p, secret, `{}`); resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("%s %s (%s) with the feed token: %d %s, want 401", method, path, wrapper, resp.StatusCode, body)
-		}
-		if resp, _ := u.do(t, method, p+"&token="+url.QueryEscape(secret), "", `{}`); resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("%s %s (%s) with ?token=feed: %d, want 401", method, path, wrapper, resp.StatusCode)
-		}
-		checked++
 	}
 	if feeds != 1 {
 		t.Fatalf("found the feed route %d times", feeds)
 	}
-	t.Logf("checked %d routes", checked)
+	refusedOnRoutes(t, u.testEnv, "feed", secret, others, strconv.FormatInt(u.lib.ID, 10), "path=Expanse%2F1&work=e3&url=x&size=160")
 }
 
-// The mint's refusals in order: 401, 403 kid_account, 403 for an API key,
-// 403 demo_account, then 404 metadata_off / upcoming_off. The status read and
+// Security-critical, wherever a route is registered (api.go's table, a
+// module's routes, the podcast transfer routes, a built pattern): the package
+// names the feed kind once (feedKinds), uses feedKinds only in requireFeedAuth,
+// and wraps one route in requireFeedAuth, so no route but the feed takes a
+// feed token.
+func TestFeedKindNamedOnce(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var kind, kinds, wraps []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				if x, ok := n.X.(*ast.Ident); ok && x.Name == "auth" && n.Sel.Name == "KindFeed" {
+					kind = append(kind, fset.Position(n.Pos()).String())
+				}
+				if n.Sel.Name == "requireFeedAuth" {
+					wraps = append(wraps, fset.Position(n.Pos()).String())
+				}
+			case *ast.Ident:
+				if n.Name == "feedKinds" {
+					kinds = append(kinds, fset.Position(n.Pos()).String())
+				}
+			}
+			return true
+		})
+	}
+	if len(kind) != 1 || len(kinds) != 2 || len(wraps) != 1 {
+		t.Fatalf("auth.KindFeed at %v (want feedKinds alone), feedKinds at %v (want its declaration and "+
+			"requireFeedAuth), requireFeedAuth wrapping %v (want the feed route alone)", kind, kinds, wraps)
+	}
+}
+
+// The mint's refusals in order: 401, 403 kid_account, 403 demo_account, 403
+// for an API key, then 404 metadata_off / upcoming_off. The status read and
 // Turn off are refused for a kid; Turn off is refused for an API key but works
 // with the feature off.
 func TestUpcomingCalendarRefusals(t *testing.T) {
@@ -364,12 +406,12 @@ func TestUpcomingCalendarRefusals(t *testing.T) {
 	}
 	_, kidTok := m.kid(t, m.adamTok, "Evie")
 	for _, method := range []string{"GET", "POST", "DELETE"} {
-		if r, b := m.do(t, method, calendarPath, kidTok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+		if r, b := m.do(t, method, calendarPath, kidTok, ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "kid_account" {
 			t.Errorf("%s as a kid = %d %s, want 403 kid_account", method, r.StatusCode, b)
 		}
 	}
 	for _, c := range []struct{ path, tok string }{{upCoverPath + "?work=e3", kidTok}, {upCoverPath + "?work=e3&token=" + url.QueryEscape(kidTok), ""}} {
-		if r, b := m.do(t, "GET", c.path, c.tok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+		if r, b := m.do(t, "GET", c.path, c.tok, ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "kid_account" {
 			t.Errorf("cover as a kid = %d %s, want 403 kid_account", r.StatusCode, b)
 		}
 	}
@@ -386,7 +428,7 @@ func TestUpcomingCalendarRefusals(t *testing.T) {
 	}
 
 	_, demoTok := newUserWithSession(t, m.testEnv, "demo_viewer", true)
-	if r, b := m.do(t, "POST", calendarPath, demoTok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"demo_account"`) {
+	if r, b := m.do(t, "POST", calendarPath, demoTok, ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "demo_account" {
 		t.Errorf("mint as a demo = %d %s, want 403 demo_account", r.StatusCode, b)
 	}
 	if active, _ := calendarStatus(t, m.testEnv, demoTok); active {
@@ -407,14 +449,14 @@ func TestUpcomingCalendarRefusals(t *testing.T) {
 			{"GET", calendarPath, m.adamTok}, {"POST", calendarPath, m.adamTok},
 			{"GET", feedURL(adamFeed), ""}, {"GET", upCoverPath + "?work=e3", m.adamTok},
 		} {
-			if r, b := m.do(t, req.method, req.path, req.tok, ""); r.StatusCode != http.StatusNotFound || !strings.Contains(b, `"`+step.code+`"`) {
+			if r, b := m.do(t, req.method, req.path, req.tok, ""); r.StatusCode != http.StatusNotFound || codeOf(b) != step.code {
 				t.Errorf("%s %s while off = %d %s, want 404 %s", req.method, req.path, r.StatusCode, b, step.code)
 			}
 		}
 		if r, _ := m.do(t, "POST", calendarPath, key, ""); r.StatusCode != http.StatusForbidden {
 			t.Errorf("API key mint while off = %d, want 403 first", r.StatusCode)
 		}
-		if r, b := m.do(t, "POST", calendarPath, demoTok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"demo_account"`) {
+		if r, b := m.do(t, "POST", calendarPath, demoTok, ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "demo_account" {
 			t.Errorf("demo mint while off = %d %s, want 403 demo_account first", r.StatusCode, b)
 		}
 	}
@@ -448,7 +490,7 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	if r, _ := m.do(t, "GET", feedURL(ellisFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the feed after the kid switch = %d, want 401", r.StatusCode)
 	}
-	if r, b := m.do(t, "POST", calendarPath, ellisTok, ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+	if r, b := m.do(t, "POST", calendarPath, ellisTok, ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "kid_account" {
 		t.Fatalf("the kid's mint = %d %s", r.StatusCode, b)
 	}
 
@@ -459,20 +501,27 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	if _, err := m.db.ExecContext(ctx, `UPDATE users SET managed_by = ?, member_kind = 'kid', member_access = 'all' WHERE id = ?`, m.adam, bea); err != nil {
 		t.Fatal(err)
 	}
-	if r, b := m.do(t, "GET", feedURL(beaFeed), "", ""); r.StatusCode != http.StatusForbidden || !strings.Contains(b, `"kid_account"`) {
+	if r, b := m.do(t, "GET", feedURL(beaFeed), "", ""); r.StatusCode != http.StatusForbidden || codeOf(b) != "kid_account" {
 		t.Fatalf("a kid's leftover feed token = %d %s, want 403 kid_account", r.StatusCode, b)
 	}
 
-	// Disabled, then deleted.
+	// Disabled (refused, and back once enabled), then deleted.
 	cal, calTok := newUserWithSession(t, m.testEnv, "cal", false)
 	_, calFeed := mintFeed(t, m.testEnv, calTok)
-	if s := m.status(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(cal, 10), m.adminTok, `{"disabled":true}`); s != http.StatusOK {
+	calURL := "/api/v1/admin/users/" + strconv.FormatInt(cal, 10)
+	if s := m.status(t, "PATCH", calURL, m.adminTok, `{"disabled":true}`); s != http.StatusOK {
 		t.Fatalf("disable = %d", s)
 	}
 	if r, _ := m.do(t, "GET", feedURL(calFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a disabled account's feed = %d, want 401", r.StatusCode)
 	}
-	if s := m.status(t, "DELETE", "/api/v1/admin/users/"+strconv.FormatInt(cal, 10), m.adminTok, ""); s != http.StatusOK && s != http.StatusNoContent {
+	if s := m.status(t, "PATCH", calURL, m.adminTok, `{"disabled":false}`); s != http.StatusOK {
+		t.Fatalf("enable = %d", s)
+	}
+	if r, _ := m.do(t, "GET", feedURL(calFeed), "", ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("the feed once enabled again = %d, want 200", r.StatusCode)
+	}
+	if s := m.status(t, "DELETE", calURL, m.adminTok, ""); s != http.StatusOK && s != http.StatusNoContent {
 		t.Fatalf("delete = %d", s)
 	}
 	if r, _ := m.do(t, "GET", feedURL(calFeed), "", ""); r.StatusCode != http.StatusUnauthorized {
@@ -525,7 +574,7 @@ func TestUpcomingCover(t *testing.T) {
 	}
 	before := fetches.Load()
 	for _, d := range []struct{ work, tok string }{{"e4", admin}, {"nope", admin}, {"o3", readerTok}, {"o1", admin}} {
-		if r, b := u.do(t, "GET", cover(d.work, ""), d.tok, ""); r.StatusCode != http.StatusNotFound || !strings.Contains(b, `"not_found"`) {
+		if r, b := u.do(t, "GET", cover(d.work, ""), d.tok, ""); r.StatusCode != http.StatusNotFound || codeOf(b) != "not_found" {
 			t.Errorf("cover %s = %d %s, want 404 not_found", d.work, r.StatusCode, b)
 		}
 	}
@@ -562,7 +611,7 @@ func TestUpcomingCover(t *testing.T) {
 	u.series(t, u.lib.ID, "Other Series", "other", []catalog.MetaSeriesMember{
 		{WorkID: "o4", Position: "4", Title: "Four", ReleaseDate: "2099-06-06", CoverURL: "https://c/broken.jpg"},
 	}, []catalog.UpcomingItem{{WorkID: "o4", Kind: catalog.UpcomingPreorder, ReleaseDate: "2099-06-06", Position: "4"}})
-	if r, b := u.do(t, "GET", cover("o4", ""), admin, ""); r.StatusCode != http.StatusBadGateway || !strings.Contains(b, `"cover_unavailable"`) {
+	if r, b := u.do(t, "GET", cover("o4", ""), admin, ""); r.StatusCode != http.StatusBadGateway || codeOf(b) != "cover_unavailable" {
 		t.Errorf("a broken cover = %d %s, want 502 cover_unavailable", r.StatusCode, b)
 	}
 }

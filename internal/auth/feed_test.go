@@ -1,11 +1,26 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+// mustFeed mints user's feed token from session (0: none) and checks it
+// resolves, which also caches it: what an end has to beat.
+func mustFeed(t *testing.T, s *Service, ctx context.Context, user, session int64) string {
+	t.Helper()
+	feed, _, err := s.IssueFeedToken(ctx, user, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, feed, Presence{}, KindFeed); err != nil {
+		t.Fatalf("a new feed token = %v", err)
+	}
+	return feed
+}
 
 // Security-critical: a feed token resolves only where a route lists its kind
 // (only the calendar feed does), and no other kind resolves as one.
@@ -13,7 +28,7 @@ func TestFeedTokenOnlyOnTheFeed(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
-	feed, created, err := s.IssueFeedToken(ctx, sam.ID)
+	feed, created, err := s.IssueFeedToken(ctx, sam.ID, 0)
 	if err != nil || feed == "" || created == "" {
 		t.Fatalf("mint = %q %q %v", feed, created, err)
 	}
@@ -56,22 +71,19 @@ func TestFeedTokenLifecycle(t *testing.T) {
 	if st, err := s.FeedTokenStatus(ctx, sam.ID); err != nil || st.Active || st.CreatedAt != "" {
 		t.Fatalf("status before = %+v %v", st, err)
 	}
-	first, created, err := s.IssueFeedToken(ctx, sam.ID)
+	first, created, err := s.IssueFeedToken(ctx, sam.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FeedTokenStatus(ctx, sam.ID); err != nil || !st.Active || st.CreatedAt != created {
 		t.Fatalf("status after = %+v %v (created %s)", st, err, created)
 	}
-	bobFeed, _, err := s.IssueFeedToken(ctx, bob.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bobFeed := mustFeed(t, s, ctx, bob.ID, 0)
 	// Resolve once so a cached row would be the thing a reset has to beat.
 	if _, _, err := s.ResolveRequest(ctx, first, Presence{}, KindFeed); err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := s.IssueFeedToken(ctx, sam.ID)
+	second, _, err := s.IssueFeedToken(ctx, sam.ID, 0)
 	if err != nil || second == first {
 		t.Fatalf("re-mint = %q %v", second, err)
 	}
@@ -137,13 +149,7 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 	s, ctx := newTestService(t)
 	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
-	feed, _, err := s.IssueFeedToken(ctx, ellis.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.ResolveRequest(ctx, feed, Presence{}, KindFeed); err != nil {
-		t.Fatal(err)
-	}
+	feed := mustFeed(t, s, ctx, ellis.ID, 0)
 	kid := MemberKid
 	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &kid}); err != nil {
 		t.Fatal(err)
@@ -151,13 +157,13 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 	if _, _, err := s.ResolveRequest(ctx, feed, Presence{}, KindFeed); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("a kid's old feed token = %v, want ErrInvalidToken", err)
 	}
-	if _, _, err := s.IssueFeedToken(ctx, ellis.ID); !errors.Is(err, ErrKidAccount) {
+	if _, _, err := s.IssueFeedToken(ctx, ellis.ID, 0); !errors.Is(err, ErrKidAccount) {
 		t.Fatalf("a kid's mint = %v, want ErrKidAccount", err)
 	}
 
 	// The admin's switch to a kid (UpdateUser) too.
 	bea := mustUser(t, s, ctx, "bea", "bea-password", RoleUser)
-	beaFeed, _, _ := s.IssueFeedToken(ctx, bea.ID)
+	beaFeed := mustFeed(t, s, ctx, bea.ID, 0)
 	if err := s.UpdateUser(ctx, bea.ID, UserChanges{Password: new(string), Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberAll}}); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +173,7 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 
 	// Disabled: refused while disabled.
 	cal := mustUser(t, s, ctx, "cal", "cal-password", RoleUser)
-	calFeed, _, _ := s.IssueFeedToken(ctx, cal.ID)
+	calFeed := mustFeed(t, s, ctx, cal.ID, 0)
 	yes := true
 	if err := s.UpdateUser(ctx, cal.ID, UserChanges{Disabled: &yes}); err != nil {
 		t.Fatal(err)
@@ -182,5 +188,76 @@ func TestFeedTokenEndedWithTheAccount(t *testing.T) {
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ?`, cal.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("a deleted account's tokens = %d %v", n, err)
+	}
+}
+
+// Joining another household ends the calendar link made on the old owner's
+// device with the sign-in it was made from (leaveOwners), and only that one: a
+// link made from the person's own device survives a move, and made independent
+// the person keeps a link made on the old owner's device, as the sign-in made
+// there stays.
+func TestFeedTokenMadeOnAnotherOwnersDevice(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	session := func(secret string) int64 {
+		t.Helper()
+		_, cred, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cred.ID
+	}
+	live := func(feed string) bool {
+		_, _, err := s.ResolveRequest(ctx, feed, Presence{}, KindFeed)
+		return err == nil
+	}
+	moveTo := func(user, owner int64) {
+		t.Helper()
+		change := &HouseholdChange{}
+		if owner > 0 {
+			change = &HouseholdChange{Owner: owner, Kind: MemberGrownup, Access: MemberAll}
+		}
+		if err := s.UpdateUser(ctx, user, UserChanges{Household: change}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	phone, _ := s.IssueToken(ctx, adam.ID, KindSession, "phone", 0)
+	onAdamsPhone := func(name string) (Member, int64) {
+		t.Helper()
+		m, secret, _, err := s.CreateMember(ctx, adam.ID, NewMember{Name: name, Kind: MemberGrownup, Access: MemberAll,
+			SignInHere: true, DeviceName: "phone", OnToken: session(phone)}, testPolicy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m, session(secret)
+	}
+
+	// Denied: made on adam's phone, the link ends with the move to bob's.
+	ellis, ellisOnPhone := onAdamsPhone("Ellis")
+	feed := mustFeed(t, s, ctx, ellis.ID, ellisOnPhone)
+	moveTo(ellis.ID, bob.ID)
+	if live(feed) {
+		t.Fatal("a link made on the old owner's phone survived the move")
+	}
+	if st, err := s.FeedTokenStatus(ctx, ellis.ID); err != nil || st.Active {
+		t.Fatalf("status after the move = %+v %v", st, err)
+	}
+
+	// Allowed: a link made from her own device survives a move back.
+	own, _ := s.IssueToken(ctx, ellis.ID, KindSession, "own phone", 0)
+	ownFeed := mustFeed(t, s, ctx, ellis.ID, session(own))
+	moveTo(ellis.ID, adam.ID)
+	if !live(ownFeed) {
+		t.Fatal("a link made on her own device ended with the move")
+	}
+
+	// Allowed: made independent, a link made on the old owner's phone stays.
+	gus, gusOnPhone := onAdamsPhone("Gus")
+	gusFeed := mustFeed(t, s, ctx, gus.ID, gusOnPhone)
+	moveTo(gus.ID, 0)
+	if !live(gusFeed) {
+		t.Fatal("made independent, the link made on the old owner's phone ended")
 	}
 }

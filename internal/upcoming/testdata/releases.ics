@@ -2,7 +2,6 @@ BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//AudioSilo//Upcoming releases//EN
 CALSCALE:GREGORIAN
-METHOD:PUBLISH
 X-WR-CALNAME:AudioSilo: upcoming releases (Den\, upstairs)
 REFRESH-INTERVAL;VALUE=DURATION:PT12H
 X-PUBLISHED-TTL:PT12H
@@ -11,7 +10,7 @@ UID:e4@srv-1
 DTSTAMP:20261020T040000Z
 DTSTART;VALUE=DATE:20991112
 DTEND;VALUE=DATE:20991113
-SUMMARY:Cibola Burn\; or\, Back\\slash (The Expanse 4)
+SUMMARY:Cibola Burn\; or\, Back\\slash (The Expanse #4)
 DESCRIPTION:By James S. A. Corey\, Ty Franck\nFirst release: 2099-11-12\nht
  tps://meta.audiosilo.app/work?id=e4
 URL:https://meta.audiosilo.app/work?id=e4
@@ -23,7 +22,7 @@ DTSTAMP:20261020T040000Z
 DTSTART;VALUE=DATE:20261001
 DTEND;VALUE=DATE:20261002
 SUMMARY:Abaddon’s Gate: a very long title that runs past the fold with na
- ïve façades\, 日本語のタイトル and more (The Expanse 3)
+ ïve façades\, 日本語のタイトル and more (The Expanse #3)
 DESCRIPTION:First release: 2026-10-01\nhttps://meta.audiosilo.app/work?id=e
  3
 URL:https://meta.audiosilo.app/work?id=e3

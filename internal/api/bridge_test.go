@@ -453,15 +453,16 @@ func TestBridgeAdminRoutesAreAdminOnly(t *testing.T) {
 	}
 }
 
-// Security-critical: a bridge token is refused on every other authenticated
-// route. Routes opt in to the kinds they take, so this holds by construction;
-// the test reads the route table so a new route can't quietly break it.
-func TestBridgeTokenRefusedOnEveryOtherRoute(t *testing.T) {
-	t.Parallel()
-	b := newBridgeEnv(t)
-	// Two requests per route: more than one address's burst.
-	b.api.ipLimiter = newRateLimiter(100000, 100000)
-	b.api.mediaLimiter = newRateLimiter(100000, 100000)
+// authedRoute is a route of api.go's table and the require* wrapper that
+// authenticates it.
+type authedRoute struct{ method, path, wrapper string }
+
+// authedRoutes reads api.go's route table: every route registered there with a
+// literal pattern and an a.require* wrapper. Routes registered elsewhere (a
+// module's, the podcast transfer routes) or with a built pattern are not in
+// it, so a kind's test pairs it with a source check of where the kind is named.
+func authedRoutes(t *testing.T) []authedRoute {
+	t.Helper()
 	src, err := os.ReadFile("api.go")
 	if err != nil {
 		t.Fatal(err)
@@ -471,26 +472,47 @@ func TestBridgeTokenRefusedOnEveryOtherRoute(t *testing.T) {
 	if len(matches) < 150 {
 		t.Fatalf("found only %d authenticated routes: the pattern no longer matches api.go", len(matches))
 	}
-	ids := regexp.MustCompile(`\{[a-z_]+\}`)
-	checked := 0
+	out := make([]authedRoute, 0, len(matches))
 	for _, m := range matches {
-		method, path, wrapper := m[1], m[2], m[3]
-		if wrapper == "requireBridge" {
-			continue
-		}
-		p := ids.ReplaceAllString(path, "1") + "?path=" + url.QueryEscape(mistbornBook)
-		resp, body := b.do(t, method, p, b.bridgeTok, `{}`)
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("%s %s (%s) with the bridge token: %d %s, want 401", method, path, wrapper, resp.StatusCode, body)
-		}
-		// The same request with the token as ?token= (media routes read it there).
-		resp, _ = b.do(t, method, p+"&token="+url.QueryEscape(b.bridgeTok), "", `{}`)
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("%s %s (%s) with ?token=bridge: %d, want 401", method, path, wrapper, resp.StatusCode)
-		}
-		checked++
+		out = append(out, authedRoute{method: m[1], path: m[2], wrapper: m[3]})
 	}
-	t.Logf("checked %d routes", checked)
+	return out
+}
+
+// refusedOnRoutes checks that secret, a token of kind, is a 401 on each of
+// routes, as the header and as ?token= (media routes read it there), each
+// path id set to id and query added to the request.
+func refusedOnRoutes(t *testing.T, e *testEnv, kind, secret string, routes []authedRoute, id, query string) {
+	t.Helper()
+	ids := regexp.MustCompile(`\{[a-z_]+\}`)
+	for _, r := range routes {
+		p := ids.ReplaceAllString(r.path, id) + "?" + query
+		if resp, body := e.do(t, r.method, p, secret, `{}`); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s (%s) with the %s token: %d %s, want 401", r.method, r.path, r.wrapper, kind, resp.StatusCode, body)
+		}
+		if resp, _ := e.do(t, r.method, p+"&token="+url.QueryEscape(secret), "", `{}`); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s (%s) with ?token=%s: %d, want 401", r.method, r.path, r.wrapper, kind, resp.StatusCode)
+		}
+	}
+	t.Logf("checked %d routes", len(routes))
+}
+
+// Security-critical: a bridge token is refused on every other authenticated
+// route. Routes opt in to the kinds they take, so this holds by construction;
+// the test reads the route table so a new route can't quietly break it.
+func TestBridgeTokenRefusedOnEveryOtherRoute(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	// Two requests per route: more than one address's burst.
+	b.api.ipLimiter = newRateLimiter(100000, 100000)
+	b.api.mediaLimiter = newRateLimiter(100000, 100000)
+	var others []authedRoute
+	for _, r := range authedRoutes(t) {
+		if r.wrapper != "requireBridge" {
+			others = append(others, r)
+		}
+	}
+	refusedOnRoutes(t, b.testEnv, "bridge", b.bridgeTok, others, "1", "path="+url.QueryEscape(mistbornBook))
 }
 
 func TestBridgeExchangeIsRateLimited(t *testing.T) {

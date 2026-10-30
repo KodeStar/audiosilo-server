@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/url"
 	"time"
@@ -37,7 +39,8 @@ func (a *API) requireFeedAuth(next http.Handler) http.Handler {
 }
 
 // upcomingCalendarCache is the feed's Cache-Control: a calendar app polls it,
-// and the answer is one person's.
+// and the answer is one person's (revalidated by its ETag, a digest of the
+// body).
 const upcomingCalendarCache = "private, max-age=3600"
 
 // handleUpcomingCalendarStatus answers GET /me/upcoming/calendar (requireAuth,
@@ -48,8 +51,7 @@ func (a *API) handleUpcomingCalendarStatus(w http.ResponseWriter, r *http.Reques
 	}
 	st, err := a.auth.FeedTokenStatus(r.Context(), userFrom(r.Context()).ID)
 	if err != nil {
-		a.log.Warn("read calendar feed status failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not read the calendar link")
+		a.writeUpcomingError(w, r, err, "read calendar feed status failed", "could not read the calendar link")
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -65,23 +67,17 @@ type upcomingCalendarLink struct {
 }
 
 // handleMintUpcomingCalendar answers POST /me/upcoming/calendar (requireAuth,
-// notKid): a new feed token, the caller's earlier one ended in the same
-// transaction. Refused for an API key (a key never mints a credential:
-// denyAPIKey) and a demo account (403 demo_account), then 404 metadata_off /
+// notKid, notDemo: 403 demo_account): a new feed token, the caller's earlier
+// one ended in the same transaction, made from the request's session (the
+// device it was made on is recorded: auth.IssueFeedToken). Refused for an API
+// key (a key never mints a credential: denyAPIKey), then 404 metadata_off /
 // upcoming_off. The answer holds a secret: no-store.
 func (a *API) handleMintUpcomingCalendar(w http.ResponseWriter, r *http.Request) {
-	if denyAPIKey(w, r) {
+	if denyAPIKey(w, r) || a.upcomingOff(w) {
 		return
 	}
 	u := userFrom(r.Context())
-	if u.IsDemo {
-		writeErrorCode(w, http.StatusForbidden, codeDemoAccount, "not available for demo accounts")
-		return
-	}
-	if a.upcomingOff(w) {
-		return
-	}
-	secret, created, err := a.auth.IssueFeedToken(r.Context(), u.ID)
+	secret, created, err := a.auth.IssueFeedToken(r.Context(), u.ID, credentialFrom(r.Context()).ID)
 	if writeKidRefusal(w, err) {
 		return
 	}
@@ -90,8 +86,7 @@ func (a *API) handleMintUpcomingCalendar(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "could not make a calendar link")
 		return
 	}
-	noStore(w)
-	writeJSON(w, http.StatusCreated, upcomingCalendarLink{
+	writeNoStore(w, http.StatusCreated, upcomingCalendarLink{
 		Path:      upcomingFeedPath + "?" + url.Values{"token": {secret}}.Encode(),
 		CreatedAt: created,
 	})
@@ -116,7 +111,8 @@ func (a *API) handleDeleteUpcomingCalendar(w http.ResponseWriter, r *http.Reques
 
 // handleUpcomingCalendarFeed answers GET /me/upcoming/releases.ics
 // (requireFeedAuth, notKid): the token's owner's /me/upcoming list, read with
-// their scopes at this request, as an iCalendar document (upcoming.ICS).
+// their scopes at this request, as an iCalendar document (upcoming.ICS), with
+// an ETag of its digest (304 for a poll that already has it).
 func (a *API) handleUpcomingCalendarFeed(w http.ResponseWriter, r *http.Request) {
 	if a.upcomingOff(w) {
 		return
@@ -127,18 +123,17 @@ func (a *API) handleUpcomingCalendarFeed(w http.ResponseWriter, r *http.Request)
 	}
 	cfg := a.config()
 	body := upcoming.ICS(ans, upcoming.Calendar{ServerID: cfg.ServerID, ServerName: cfg.Name, Now: time.Now()})
-	h := w.Header()
-	h.Set("Content-Type", "text/calendar; charset=utf-8")
-	h.Set("Content-Disposition", `inline; filename="releases.ics"`)
-	h.Set("Cache-Control", upcomingCalendarCache)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	sum := sha256.Sum256(body)
+	w.Header().Set("Content-Disposition", `inline; filename="releases.ics"`)
+	conditional{etag: `"ics-` + hex.EncodeToString(sum[:8]) + `"`, cacheControl: upcomingCalendarCache}.
+		serve(w, r, "text/calendar; charset=utf-8", body)
 }
 
 // handleUpcomingCover answers GET /me/upcoming/cover?work=&size=
 // (requireMediaAuth, notKid; capability upcoming_covers): a JPEG thumbnail of
 // the cover the caller's own /me/upcoming list hands out for that work right
-// now, so the player shows it from its own server. It is not an image proxy:
+// now (upcoming.CoverFor: the list's rule, read for the one work), so the
+// player shows it from its own server. It is not an image proxy:
 // a work the list doesn't carry (another person's series, one the caller holds,
 // none at all) or carries without a cover is 404 not_found. 400 without work or
 // with a size outside thumbSizes (unset is defaultThumbSize); the rest is
@@ -157,16 +152,14 @@ func (a *API) handleUpcomingCover(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ans, ok := a.myUpcoming(w, r)
+	scopes, ok := a.upcomingScopes(w, r)
 	if !ok {
 		return
 	}
-	rawURL := ""
-	for _, it := range ans.Items {
-		if it.Work.ID == work {
-			rawURL = it.Work.CoverURL
-			break
-		}
+	rawURL, err := upcoming.CoverFor(r.Context(), a.cat, scopes, work)
+	if err != nil {
+		a.writeUpcomingError(w, r, err, "upcoming: cover", "could not load the cover")
+		return
 	}
 	if rawURL == "" {
 		writeErrorCode(w, http.StatusNotFound, codeNotFound, "no such cover")

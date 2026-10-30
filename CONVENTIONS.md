@@ -541,9 +541,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   makes an announcement once per work across series and across an item leaving and coming back (a copy
   added then removed); a work the server holds a copy of anywhere is marked without a word. The mark is
   written even when the run is being stopped (`context.WithoutCancel`). **`book_released`** is one event
-  per run (`api.announceReleases`: up to 5 titles as "Title (Series #position)", the count of all, dedupe
-  key a digest of the run's work ids). Config `upcoming.enabled` (live, `AUDIOSILO_UPCOMING_ENABLED`,
-  console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
+  per run (`api.announceReleases`: up to 5 titles as "Title (Series #position)", `upcoming.Release.Label`,
+  the count of all, dedupe key a digest of the run's work ids). Config `upcoming.enabled` (live,
+  `AUDIOSILO_UPCOMING_ENABLED`, console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
   90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
   `metadata_off`, then 404 `upcoming_off`. `MetaSeriesWork.release_date` (additive, omitted when unknown)
   feeds the console's dated gaps on the Series cards. **The calendar feed (U3, security-critical)**: `GET
@@ -552,43 +552,56 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "created_at"}` (`Cache-Control: no-store`; a path, not a URL: the player prefixes the address it reaches
   the server at, since the server knows no reliable public one); `DELETE` -> 204, idempotent. Mint and
   delete are session only (`denyAPIKey`, plain 403: a key never mints a credential). The mint's refusals in
-  order: 401, 403 `kid_account` (notKid, and `refuseKid` inside the write), 403 for an API key, 403
-  `demo_account`, 404 `metadata_off`, 404 `upcoming_off`; the status read has the same order without the
-  two credential refusals; DELETE has no 404s (ending a link only takes access away). The secret is a
-  `tokens` row of kind `feed` (`auth.KindFeed`, `IssueFeedToken`: `generateToken`, SHA-256 hash only, no
-  expiry, device name "Calendar feed"). **One per user**: a mint deletes the earlier row in the same
-  durable transaction, and `0060`'s partial unique index `tokens(user_id) WHERE kind='feed' AND revoked=0`
-  refuses a second live row whatever writes it. A feed row is DELETED, never flagged revoked, when it ends:
-  a reset, Turn off (`RevokeFeedToken`), the switch to a kid (`clearKidCredentials`, both the owner's
-  member edit and the admin's assign); the account's deletion cascades; a disabled account's is refused by
-  `lookupToken`. A password change revokes no token of any kind on this server, so it leaves the feed too.
-  It is never touched (`resolve`, like a bridge token: a calendar's polls are not the person's activity,
-  and no last_ip is kept), never a device (the device lists take session and API-key kinds only) and is
-  held in the token cache like a session (every end above is a content write). **Acceptance**: `GET
+  order: 401, 403 `kid_account` (notKid, and `refuseKid` inside the write), 403 `demo_account` (notDemo),
+  403 for an API key, 404 `metadata_off`, 404 `upcoming_off`; the status read has the same order without
+  the two credential refusals; DELETE has no 404s (ending a link only takes access away). The secret is a
+  `tokens` row of kind `feed` (`auth.KindFeed`, `IssueFeedToken(user, session)`: `generateToken`, SHA-256
+  hash only, no expiry, device name "Calendar feed", and the `created_on_token_id` of the session that
+  made it: a member signed in on their owner's device makes a link "on" that device). **One per user**: a
+  mint deletes the earlier row in the same durable transaction, and `0060`'s partial unique index
+  `tokens(user_id) WHERE kind='feed' AND revoked=0` refuses a second live row whatever writes it. A feed
+  row is DELETED, never flagged revoked, when it ends: a reset, Turn off (`RevokeFeedToken`), the switch to
+  a kid (`clearKidCredentials`, both the owner's member edit and the admin's assign), a move into another
+  household when it was made on another owner's device (`leaveOwners`, with the sign-in made there; made
+  independent, it stays, as that sign-in does); the account's deletion cascades; a disabled account's is
+  refused by `lookupToken`. A password change revokes no token of any kind on this server, so it leaves
+  the feed too. It is never touched (`resolve`, like a bridge token: a calendar's polls are not the
+  person's activity, and no last_ip is kept), never a device (the device lists take session and API-key
+  kinds only) and is held in the token cache like a session (every end above is a content write). **Acceptance**: `GET
   /me/upcoming/releases.ics` is the ONLY route listing `KindFeed` (`requireFeedAuth` = `mediaAuth` with
   `feedKinds`: `?token=` or the header, the media rate limit per credential) and it lists no other kind:
   a session, API key, cast, bridge or pairing token is 401 there, and a feed token is 401 on every other
-  route (the route-table test `TestFeedTokenRefusedOnEveryOtherRoute`). Behind it, notKid (403 for a
-  leftover token of a person now a kid), then the two 404s. **The calendar** (`upcoming/ics.go`, `ICS`,
-  pure, golden-tested): the token owner's `/me/upcoming` list (`myUpcoming`, the JSON route's scopes and
-  rules read at the request, so a share taken away is felt at once), RFC 5545 with CRLF, lines folded at 75
-  octets never inside a UTF-8 sequence, TEXT escaped (`\\ \; \, \n`, other control characters
-  dropped), a URI with a control character or space left out. VCALENDAR: VERSION 2.0, PRODID
-  `-//AudioSilo//Upcoming releases//EN`, CALSCALE GREGORIAN, METHOD PUBLISH, `X-WR-CALNAME` "AudioSilo:
-  upcoming releases" (+ " (<name>)" when the server has one), `REFRESH-INTERVAL;VALUE=DURATION:PT12H`,
-  `X-PUBLISHED-TTL:PT12H`. One VEVENT per `preorder` or `released` item with a `YYYY-MM-DD` date (a
-  missing volume, a year or month date, no date or a bad one: none): all-day `DTSTART;VALUE=DATE` and
-  `DTEND` the next day, `UID:<work_id>@<server_id>` (`config.ServerID`, `audiosilo` when unset; a slipped
-  date moves the event), `DTSTAMP` the list's `generated_at` (else now, UTC), `SUMMARY` "Title (Series
-  position)", `DESCRIPTION` "By authors", "First release: <date>" and the `web_url`, `URL` the `web_url`,
-  `TRANSP:TRANSPARENT`. A server that never ran the job answers a valid empty calendar. Headers:
-  `text/calendar; charset=utf-8`, `Content-Disposition: inline; filename="releases.ics"`, `Cache-Control:
-  private, max-age=3600`; never compressed (`compressExcluded` holds `/api/v1/me/upcoming/`). **The Upcoming
-  cover** (`GET /me/upcoming/cover?work=&size=`, requireMediaAuth: session or API key, header or `?token=`,
-  never a cast or feed token; notKid; then the two 404s): 400 without `work` or with a size outside
-  `thumbSizes`; it serves only the `cover_url` the caller's own list (`myUpcoming`, DB only, no meta
-  traffic) hands out for that work right now: a work not in it (another person's series, one the caller
-  holds, none) or in it without a cover is 404 `not_found`, before any fetch. Then `/meta/cover`'s tail
+  route (the route-table test `TestFeedTokenRefusedOnEveryOtherRoute`, and `TestFeedKindNamedOnce` for
+  routes outside api.go's table: the package names `auth.KindFeed` only in `feedKinds`, uses `feedKinds`
+  only in `requireFeedAuth` and wraps one route in it). Behind it, notKid (403 for a leftover token of a
+  person now a kid), then the two 404s. **The calendar** (`upcoming/ics.go`, `ICS`, pure, golden-tested):
+  the token owner's `/me/upcoming` list (`myUpcoming`, the JSON route's scopes and rules read at the
+  request, so a share taken away is felt at once), RFC 5545 with CRLF, lines folded at 75 octets never
+  inside a UTF-8 sequence, TEXT escaped (`\\ \; \, \n`; CRLF, CR and LF are each a line break; other
+  control characters and invalid UTF-8 dropped), a URI with a control character or space left out.
+  VCALENDAR: VERSION 2.0, PRODID `-//AudioSilo//Upcoming releases//EN`, CALSCALE GREGORIAN, no METHOD (a
+  subscription needs none; with one, RFC 5545 asks the Content-Type for a matching `method` and iTIP's
+  PUBLISH an ORGANIZER), `X-WR-CALNAME` "AudioSilo: upcoming releases" (+ " (<name>)" when the server has
+  one), `REFRESH-INTERVAL;VALUE=DURATION:PT12H`, `X-PUBLISHED-TTL:PT12H`. One VEVENT per `preorder` or
+  `released` item with a `YYYY-MM-DD` date, read as `parseReleaseDate` reads it, whose next day is still a
+  four-digit year (a missing volume, a year or month date, no date or a bad one: none): all-day
+  `DTSTART;VALUE=DATE` and `DTEND` the next day, `UID:<work_id>@<server_id>` (`config.ServerID`,
+  `audiosilo` when unset; a slipped date moves the event), `DTSTAMP` the list's `generated_at` (else now,
+  UTC), `SUMMARY` "Title (Series #position)" (`Release.Label`, the bell's), `DESCRIPTION` "By authors",
+  "First release: <date>" and the `web_url`, `URL` the `web_url`, `TRANSP:TRANSPARENT`. A server that
+  never ran the job, or a list with no such item, answers a calendar with no component (RFC 5545 asks for
+  one; calendar apps read it as empty). Headers: `text/calendar; charset=utf-8`, `Content-Disposition:
+  inline; filename="releases.ics"`, `Cache-Control: private, max-age=3600`, `ETag` `"ics-<the first 16
+  hex of the body's SHA-256>"` (a poll that has it gets a 304; `conditional`); never compressed
+  (`compressExcluded` holds `/api/v1/me/upcoming/`). The upcoming reads take the caller's scopes without
+  podcast libraries (`upcomingScopes`: the tables join books libraries only), and a read the client gave
+  up on is answered without a log line (`writeUpcomingError`). **The Upcoming cover** (`GET
+  /me/upcoming/cover?work=&size=`, requireMediaAuth: session or API key, header or `?token=`, never a cast
+  or feed token; notKid; then the two 404s): 400 without `work` or with a size outside `thumbSizes`; it
+  serves only the `cover_url` the caller's own list hands out for that work right now (`upcoming.CoverFor`:
+  `List`'s rule, the first library's entry unless a copy is in scope, read for the one work through
+  `catalog.UpcomingWork`; DB only, no meta traffic): a work not in it (another person's series, one the
+  caller holds, none) or in it without a cover is 404 `not_found`, before any fetch. Then `/meta/cover`'s tail
   (`serveCommunityCover`: the ETag + `coverCache`, `communityThumbnail`'s guarded fetch, single flight and
   thumbnail cache, 502 `cover_unavailable`, 404 `no cover`). **Flags**: `upcoming_calendar` and
   `upcoming_covers` are exactly `upcoming` (false, never absent, while off); kids and demo accounts are
@@ -1538,8 +1551,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `RateLimitConfig.Effective`: a rate or burst left at 0 is the current default and is
   never saved, so a changed default reaches existing installs), read off the
   handler `mux.Handler` picks: static files (`web.IsStatic`) are not counted; media
-  routes (`mediaAuth`, behind `requireBookMediaAuth` for cover/stream and
-  `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) and the
+  routes (`mediaAuth`, behind `requireBookMediaAuth` for cover/stream,
+  `requireMediaAuth` for `/meta/cover` and the Upcoming cover, and `requireFeedAuth`
+  for the calendar feed, whose `mediaHandler` marks them) and the
   authenticated API routes outside `/api/v1/auth/` (`requireAuth`, whose
   `authHandler` marks them; `tokenKeyed`, server#246) limit themselves: refused
   while the address's general bucket is empty (`Ready`, checked in rateLimit too, so
@@ -1851,17 +1865,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   of the caller's own collections shared with the member (`catalog.SetMemberCollections`, run inside
   `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`
   and copies the caller's device name. **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
-  recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`, from one route wrapper
+  recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares` and every `/me/upcoming` route (the
+  list, the calendar link, the calendar feed, the Upcoming cover), from one route wrapper
   (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use), and the writes
   refuse a kid themselves inside their transaction (`auth.refuseKid` in `IssueAPIToken`,
-  `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`, `SetCollectionShares`;
+  `GenerateRecoveryCode`, `IssueOwnPairingToken`, `IssueFeedToken`; `catalog.SetHouseholdSharing`, `SetCollectionShares`;
   `SetPassword`'s `ErrKidNoPassword`, which `/auth/password` answers as 403 `kid_account`), so a request
   that passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
   `kid_account`); the admin can't mint or rotate a kid's invite either (`POST /admin/users/{id}/authcode`,
   `POST /admin/authcodes/{id}/rotate` answer 409 `kid_account`: `auth.refuseKid` in `CreateInvite` and
   `RotateAuthCode`, the latter so a used-up invite kept as history can't be revived into a kid's account),
   since only the owner sets up a kid's devices; switching a grown-up to a kid (or the admin assigning a kid) clears the password,
-  API keys, pairing tokens,
+  API keys, pairing tokens, the calendar feed token,
   recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between
   the kid and anyone but their owner (both ways, so no sharer is left with a kid in a list the server
   refuses back) and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
@@ -1887,8 +1902,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   other members with them (400 `invalid_keep_members`). Joining another owner's household signs the
   person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
   on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
-  access to the old owner's phone, and open unlinked pairing tokens); leaving one ("Make independent",
-  or kept by `keep_members`) takes the open pairing tokens only; their own devices stay signed in. Audit `member.create|update|delete|session|pair|device_revoke`
+  access to the old owner's phone, the calendar feed link made on one (deleted; `IssueFeedToken`
+  records the device of the session that made it), and open unlinked pairing tokens); leaving one ("Make
+  independent", or kept by `keep_members`) takes the open pairing tokens only; their own devices stay
+  signed in. Audit `member.create|update|delete|session|pair|device_revoke`
   (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).
 - **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
   security-critical)**: a Chromecast receiver plays from URLs the player hands it, so the player

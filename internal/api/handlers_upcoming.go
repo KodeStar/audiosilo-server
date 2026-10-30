@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 )
 
@@ -50,26 +51,50 @@ func (a *API) upcomingOff(w http.ResponseWriter) bool {
 	return false
 }
 
-// myUpcoming is the request's caller's GET /me/upcoming answer (their scopes,
-// read at this request). On a failure it has written the 500 and ok is false.
-// The JSON route, the calendar feed and the cover route read the list through
-// it, so the three share one access rule.
+// myUpcoming is the request's caller's GET /me/upcoming answer (upcomingScopes,
+// read at this request). On a failure it has written the error and ok is
+// false. The JSON route and the calendar feed read the list through it, and
+// the cover route reads one work by the same rule (upcoming.CoverFor).
 func (a *API) myUpcoming(w http.ResponseWriter, r *http.Request) (upcoming.Answer, bool) {
-	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(r.Context()))
-	if err != nil {
-		a.writeCatalogError(w, err, "upcoming: scopes", "could not list upcoming releases")
+	scopes, ok := a.upcomingScopes(w, r)
+	if !ok {
 		return upcoming.Answer{}, false
 	}
 	ans, err := upcoming.List(r.Context(), a.cat, scopes, a.meta.WorkURL, a.config().Upcoming.Window(), time.Now())
 	if err != nil {
-		a.writeCatalogError(w, err, "upcoming: list", "could not list upcoming releases")
+		a.writeUpcomingError(w, r, err, "upcoming: list", "could not list upcoming releases")
 		return upcoming.Answer{}, false
 	}
 	return ans, true
 }
 
+// upcomingScopes is the request's caller's scopes for an upcoming read, read
+// at this request. Podcasts stays off whatever the credential: the upcoming
+// tables join books libraries only, so a podcast scope matches nothing (and
+// costs a read per podcast library). On a failure it has written the error and
+// ok is false.
+func (a *API) upcomingScopes(w http.ResponseWriter, r *http.Request) ([]catalog.Scope, bool) {
+	scopes, err := a.cat.CallerScopes(r.Context(), callerForUser(userFrom(r.Context())))
+	if err != nil {
+		a.writeUpcomingError(w, r, err, "upcoming: scopes", "could not list upcoming releases")
+		return nil, false
+	}
+	return scopes, true
+}
+
+// writeUpcomingError answers a failed upcoming read as writeCatalogError does,
+// except a request that gave up (the player left the page, a calendar app
+// stopped waiting): no failure, so no log line.
+func (a *API) writeUpcomingError(w http.ResponseWriter, r *http.Request, err error, op, msg string) {
+	if errors.Is(r.Context().Err(), context.Canceled) {
+		writeError(w, http.StatusInternalServerError, msg)
+		return
+	}
+	a.writeCatalogError(w, err, op, msg)
+}
+
 // announceReleases is the job's book_released: one event naming the first few
-// releases as "Title (Series #position)".
+// releases as "Title (Series #position)" (Release.Label).
 func (a *API) announceReleases(ctx context.Context, releases []upcoming.Release) {
 	if a.rt.Notify == nil || len(releases) == 0 {
 		return
@@ -78,20 +103,9 @@ func (a *API) announceReleases(ctx context.Context, releases []upcoming.Release)
 	ids := make([]string, 0, len(releases))
 	for i, rel := range releases {
 		ids = append(ids, rel.WorkID)
-		if i >= maxReleaseTitles {
-			continue
+		if i < maxReleaseTitles {
+			titles = append(titles, rel.Label())
 		}
-		t := rel.Title
-		if t == "" {
-			t = rel.WorkID
-		}
-		switch {
-		case rel.Series != "" && rel.Position != "":
-			t = fmt.Sprintf("%s (%s #%s)", t, rel.Series, rel.Position)
-		case rel.Series != "":
-			t = fmt.Sprintf("%s (%s)", t, rel.Series)
-		}
-		titles = append(titles, t)
 	}
 	slices.Sort(ids)
 	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))

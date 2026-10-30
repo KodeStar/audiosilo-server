@@ -26,12 +26,14 @@ import (
 // Rules kept here:
 //   - one level: an owner is never a member, and a member never has members;
 //   - a member never gets the admin role (UpdateUser);
-//   - a kid holds no password, API key, pairing token, recovery code, invite or
-//     house sharing, and shares collections only with their owner: becoming one
-//     clears them (clearKidCredentials, its existing sign-ins stay), and the
-//     writes that would make one refuse a kid (refuseKid, UpdateUser);
+//   - a kid holds no password, API key, pairing token, calendar feed token,
+//     recovery code, invite or house sharing, and shares collections only with
+//     their owner: becoming one clears them (clearKidCredentials, its existing
+//     sign-ins stay), and the writes that would make one refuse a kid
+//     (refuseKid, UpdateUser);
 //   - leaving an owner's household, or joining another's, signs the person out
-//     of what another owner set up for them (leaveOwners);
+//     of what another owner set up for them, a calendar feed link made on
+//     another owner's device included (leaveOwners);
 //   - the owner's routes answer ErrNotMember for anyone who isn't their member,
 //     so another person's member is indistinguishable from no such account.
 
@@ -657,15 +659,23 @@ func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) 
 // out of what another owner set up for them: the open pairing codes minted for
 // their own device (unlinked pairing tokens) and, joining newOwner's household,
 // the sessions and API keys made on anyone else's devices (created_on_token_id),
-// which would otherwise carry newOwner's access to that person's phone. Their own
-// devices stay signed in, and so, made independent, do the devices their old
-// owner signed them in on (the account then reaches only its own grants).
+// which would otherwise carry newOwner's access to that person's phone, and the
+// calendar feed link made on one (IssueFeedToken records the device; deleted,
+// as a feed row always is). Their own devices stay signed in, and so, made
+// independent, do the devices their old owner signed them in on (the account
+// then reaches only its own grants).
 func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
+	const madeElsewhere = `(SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2`
+	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
 	  WHERE user_id = ?1 AND revoked = 0
 	    AND ((kind = '`+KindPairing+`' AND auth_code_id IS NULL)
-	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`')
-	             AND (SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2))`, id, newOwner)
+	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`') AND `+madeElsewhere+`))`, id, newOwner); err != nil {
+		return err
+	}
+	if newOwner == 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, deleteFeedTokensSQL+` AND `+madeElsewhere, id, newOwner)
 	return err
 }
 

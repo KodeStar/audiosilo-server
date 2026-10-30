@@ -2,6 +2,7 @@ package upcoming
 
 import (
 	"bytes"
+	"cmp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,6 +16,8 @@ import (
 // back-catalogue first release, often years past), and so is a date known only
 // to the year or month (no honest all-day event). Each event's UID is the work's
 // id at the server's, so a date that slips moves the event instead of adding one.
+// With no such event the calendar has no component at all: RFC 5545 asks for
+// one, and calendar apps read it as an empty calendar.
 
 // Calendar is what the feed says about itself besides the items.
 type Calendar struct {
@@ -47,7 +50,6 @@ func ICS(ans Answer, c Calendar) []byte {
 	w.line("VERSION:2.0")
 	w.line("PRODID:" + icsProdID)
 	w.line("CALSCALE:GREGORIAN")
-	w.line("METHOD:PUBLISH")
 	w.line("X-WR-CALNAME:" + icsText(name))
 	w.line("REFRESH-INTERVAL;VALUE=DURATION:" + icsRefresh)
 	w.line("X-PUBLISHED-TTL:" + icsRefresh)
@@ -56,10 +58,7 @@ func ICS(ans Answer, c Calendar) []byte {
 		stamp = t
 	}
 	dtstamp := stamp.UTC().Format("20060102T150405Z")
-	server := c.ServerID
-	if server == "" {
-		server = "audiosilo"
-	}
+	server := cmp.Or(c.ServerID, "audiosilo")
 	for _, it := range ans.Items {
 		if it.Kind != catalog.UpcomingPreorder && it.Kind != catalog.UpcomingReleased {
 			continue
@@ -73,7 +72,8 @@ func ICS(ans Answer, c Calendar) []byte {
 		w.line("DTSTAMP:" + dtstamp)
 		w.line("DTSTART;VALUE=DATE:" + day.Format("20060102"))
 		w.line("DTEND;VALUE=DATE:" + day.AddDate(0, 0, 1).Format("20060102"))
-		w.line("SUMMARY:" + icsText(eventSummary(it)))
+		rel := Release{WorkID: it.Work.ID, Title: it.Work.Title, Series: it.Series.Name, Position: it.Series.Position}
+		w.line("SUMMARY:" + icsText(rel.Label()))
 		w.line("DESCRIPTION:" + icsText(eventDescription(it)))
 		if u := icsURI(it.Work.WebURL); u != "" {
 			w.line("URL:" + u)
@@ -85,24 +85,12 @@ func ICS(ans Answer, c Calendar) []byte {
 	return w.buf.Bytes()
 }
 
-// icsDay is a day-precision release date (YYYY-MM-DD); false for any other.
+// icsDay is a day-precision release date (YYYY-MM-DD, read as
+// parseReleaseDate reads it) whose next day, the event's end, is still a
+// four-digit year (RFC 5545 date-fullyear); false for any other.
 func icsDay(date string) (time.Time, bool) {
-	t, err := time.Parse(time.DateOnly, date)
-	return t, err == nil
-}
-
-// eventSummary is "Title (Series position)", the series part only as far as it
-// is known.
-func eventSummary(it Item) string {
-	title := it.Work.Title
-	if title == "" {
-		title = it.Work.ID
-	}
-	series := strings.TrimSpace(strings.TrimSpace(it.Series.Name) + " " + strings.TrimSpace(it.Series.Position))
-	if series == "" {
-		return title
-	}
-	return title + " (" + series + ")"
+	t, ok := parseReleaseDate(date)
+	return t, ok && len(date) == len(time.DateOnly) && t.AddDate(0, 0, 1).Year() <= 9999
 }
 
 // eventDescription is the authors, the first release date and the work's
@@ -124,12 +112,16 @@ func eventDescription(it Item) string {
 	return strings.Join(lines, "\n")
 }
 
+// icsBreaks makes every line break (CRLF, a lone CR or LF) one LF.
+var icsBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
 // icsText escapes a TEXT value (RFC 5545 3.3.11): backslash, semicolon and
-// comma escaped, a line break as \n, and any other control character dropped.
+// comma escaped, a line break as \n, any other control character and any
+// invalid UTF-8 dropped.
 func icsText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
-	for _, r := range strings.ReplaceAll(s, "\r\n", "\n") {
+	for _, r := range icsBreaks.Replace(strings.ToValidUTF8(s, "")) {
 		switch {
 		case r == '\\' || r == ';' || r == ',':
 			b.WriteByte('\\')
@@ -138,8 +130,8 @@ func icsText(s string) string {
 			b.WriteString(`\n`)
 		case r == '\t':
 			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || r == utf8.RuneError:
-			// a control character (or invalid UTF-8) has no place in TEXT
+		case r < 0x20 || r == 0x7f:
+			// a control character has no place in TEXT
 		default:
 			b.WriteRune(r)
 		}

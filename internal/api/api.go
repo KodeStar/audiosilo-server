@@ -493,7 +493,7 @@ func (a *API) Handler() http.Handler {
 	// (upcoming_covers). The feed takes ONLY a feed token (requireFeedAuth), and
 	// no other route takes one.
 	mux.Handle("GET /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleUpcomingCalendarStatus))))
-	mux.Handle("POST /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleMintUpcomingCalendar))))
+	mux.Handle("POST /api/v1/me/upcoming/calendar", a.requireAuth(notKid(notDemo(http.HandlerFunc(a.handleMintUpcomingCalendar)))))
 	mux.Handle("DELETE /api/v1/me/upcoming/calendar", a.requireAuth(notKid(http.HandlerFunc(a.handleDeleteUpcomingCalendar))))
 	mux.Handle("GET /api/v1/me/upcoming/releases.ics", a.requireFeedAuth(notKid(http.HandlerFunc(a.handleUpcomingCalendarFeed))))
 	mux.Handle("GET /api/v1/me/upcoming/cover", a.requireMediaAuth(notKid(http.HandlerFunc(a.handleUpcomingCover))))

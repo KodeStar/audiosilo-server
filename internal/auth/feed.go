@@ -16,9 +16,11 @@ import (
 //   - one per user: a mint deletes the user's earlier feed token in the same
 //     transaction (and 0060's partial unique index keeps two live rows out);
 //   - no expiry, ended by a new mint ("Reset link"), DELETE /me/upcoming/calendar
-//     ("Turn off"), the person becoming a kid (clearKidCredentials) or the
-//     account's deletion (the FK cascade); a disabled account's is refused by
-//     lookupToken like every token;
+//     ("Turn off"), the person becoming a kid (clearKidCredentials), a move into
+//     another household when the link was made on another owner's device
+//     (leaveOwners, as it ends the sign-in made there) or the account's deletion
+//     (the FK cascade); a disabled account's is refused by lookupToken like
+//     every token;
 //   - stored as its SHA-256 hash only, shown once;
 //   - never a device and never touched (resolve): a calendar's polls are not the
 //     person's activity.
@@ -39,12 +41,16 @@ type FeedStatus struct {
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
-// IssueFeedToken mints userID's calendar feed token, deleting any earlier one in
-// the same transaction, and returns the secret (shown once) with its creation
-// time. A kid's is refused inside the write (ErrKidAccount, refuseKid), so a
-// request that passed the route's check just before the switch to a kid
-// committed still mints nothing; a demo account is refused by the route.
-func (s *Service) IssueFeedToken(ctx context.Context, userID int64) (secret, createdAt string, err error) {
+// IssueFeedToken mints userID's calendar feed token from their session (the
+// token id the request authenticated with), deleting any earlier one in the
+// same transaction, and returns the secret (shown once) with its creation time.
+// The row records the device the session was made on (its created_on_token_id:
+// a member's sign-in on their owner's device), so leaveOwners ends a link made
+// there as it ends that sign-in. A kid's is refused inside the write
+// (ErrKidAccount, refuseKid), so a request that passed the route's check just
+// before the switch to a kid committed still mints nothing; a demo account is
+// refused by the route.
+func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (secret, createdAt string, err error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", "", err
@@ -56,7 +62,12 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID int64) (secret, cre
 		if _, err := tx.ExecContext(ctx, deleteFeedTokensSQL, userID); err != nil {
 			return err
 		}
-		if _, err := s.insertToken(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, ""); err != nil {
+		var on sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT created_on_token_id FROM tokens WHERE id = ? AND user_id = ?`,
+			session, userID).Scan(&on); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT created_at FROM tokens WHERE token_hash = ?`, hash).Scan(&createdAt)
@@ -73,13 +84,13 @@ func (s *Service) RevokeFeedToken(ctx context.Context, userID int64) error {
 	return err
 }
 
-// FeedTokenStatus reports whether userID has a live calendar feed token. The
+// FeedTokenStatus reports whether userID has a live calendar feed token (at most
+// one: 0060's index, whose predicate the query repeats to read through it). The
 // secret itself is never returned again.
 func (s *Service) FeedTokenStatus(ctx context.Context, userID int64) (FeedStatus, error) {
 	var createdAt string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT created_at FROM tokens WHERE user_id = ? AND kind = '`+KindFeed+`' AND revoked = 0
-		  ORDER BY id DESC LIMIT 1`, userID).Scan(&createdAt)
+		`SELECT created_at FROM tokens WHERE user_id = ? AND kind = '`+KindFeed+`' AND revoked = 0`, userID).Scan(&createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return FeedStatus{}, nil
 	}

@@ -280,14 +280,24 @@ func TestUpcomingOffAndCapability(t *testing.T) {
 	// upcoming_calendar and upcoming_covers (Track U3) follow upcoming exactly,
 	// false (never absent) while it is off.
 	capability := func() string {
-		_, si := u.do(t, "GET", "/api/v1/server", "", "")
+		caps := serverCapabilities(t, u.testEnv)
+		var flags []bool
+		var seen []string
+		for _, name := range []string{"upcoming", "upcoming_calendar", "upcoming_covers"} {
+			on, ok := caps[name]
+			if !ok {
+				return name + " absent"
+			}
+			flags = append(flags, on)
+			seen = append(seen, name+"="+strconv.FormatBool(on))
+		}
 		switch {
-		case strings.Contains(si, `"upcoming":true`) && strings.Contains(si, `"upcoming_calendar":true`) && strings.Contains(si, `"upcoming_covers":true`):
+		case !slices.Contains(flags, false):
 			return "on"
-		case strings.Contains(si, `"upcoming":false`) && strings.Contains(si, `"upcoming_calendar":false`) && strings.Contains(si, `"upcoming_covers":false`):
+		case !slices.Contains(flags, true):
 			return "off"
 		}
-		return "absent or mixed: " + si
+		return "mixed: " + strings.Join(seen, " ")
 	}
 	if c := capability(); c != "on" {
 		t.Fatalf("capability with metadata on = %s", c)

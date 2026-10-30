@@ -62,6 +62,20 @@ type Release struct {
 	Position string
 }
 
+// Label is how the bell and the calendar name a release: "Title (Series
+// #position)", the series part as far as it is known, the work id for a work
+// without a title.
+func (r Release) Label() string {
+	t := cmp.Or(r.Title, r.WorkID)
+	switch {
+	case r.Series != "" && r.Position != "":
+		return t + " (" + r.Series + " #" + r.Position + ")"
+	case r.Series != "":
+		return t + " (" + r.Series + ")"
+	}
+	return t
+}
+
 // Options configure a Runner.
 type Options struct {
 	// On reports whether the job may run now: metadata on AND upcoming.enabled.
