@@ -174,8 +174,30 @@ describe('Bridge job events', () => {
     expect(d.tone).toBe('bad');
   });
 
+  it('words a release in a series the library holds', () => {
+    const d = describeEvent(
+      ev('book_released', {
+        count: 4,
+        titles: ["Tiamat's Wrath (The Expanse #8)", 'Artemis (Mars #2)', 'A', 'B'],
+      }),
+    );
+    expect(d.title).toEqual({ key: 'events.book_released.title', values: { count: 4 } });
+    expect(d.body).toEqual({
+      key: 'events.book_released.bodyMore',
+      values: { titles: "Tiamat's Wrath (The Expanse #8), Artemis (Mars #2), A", count: 1 },
+    });
+    expect(d.link).toEqual({ destination: 'library', section: 'series' });
+    const one = describeEvent(ev('book_released', { count: 1, titles: ['Next (Mars #3)'] }));
+    expect(one.body).toEqual({
+      key: 'events.book_released.body',
+      values: { titles: 'Next (Mars #3)' },
+    });
+    expect(describeEvent(ev('book_released', { count: 2 })).body).toBeUndefined();
+    expect(EVENT_KINDS.at(-1)).toBe('book_released');
+  });
+
   it('lists both kinds, in the server order', () => {
-    expect(EVENT_KINDS.slice(-2)).toEqual(['bridge_job_finished', 'bridge_job_failed']);
+    expect(EVENT_KINDS.slice(-3, -1)).toEqual(['bridge_job_finished', 'bridge_job_failed']);
   });
 });
 

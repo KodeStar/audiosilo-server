@@ -5,16 +5,19 @@ import { seriesKey } from '@/lib/series-key';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
+  formatReleaseDate,
   formatSpan,
   filterSeries,
   metaCandidate,
   pickRail,
   placeBooks,
   railEntries,
+  releaseState,
   sameTitle,
   spanIn,
   seriesStatus,
   spineColors,
+  spineFitsLabel,
   spineHeight,
   spineRow,
 } from './series-model';
@@ -27,7 +30,7 @@ const work = (position: string, title: string) => ({
   web_url: '',
 });
 
-const rail = (name: string, works: ReturnType<typeof work>[]): MetaSeries => ({
+const rail = (name: string, works: MetaSeries['works']): MetaSeries => ({
   id: name,
   name,
   position: '1',
@@ -649,5 +652,85 @@ describe('ranges (an omnibus, "1-3")', () => {
     ).toBe('1-3, 4-6');
     expect(formatPositions([{ position: 1, end: 3 }, { position: 4 }])).toBe('1-3, 4');
     expect(formatSpan({ position: 2.5, end: 4 }, (n) => String(n).replace('.', ','))).toBe('2,5-4');
+  });
+});
+
+describe('dated entries', () => {
+  it("carries a work's release date onto its rail entry", () => {
+    const r = rail('X', [{ ...work('1', 'One'), release_date: '2026-11-12' }, work('2', 'Two')]);
+    expect(railEntries(r)).toEqual([
+      { position: 1, title: 'One', release_date: '2026-11-12' },
+      { position: 2, title: 'Two' },
+    ]);
+    expect('release_date' in railEntries(r)[1]).toBe(false);
+  });
+
+  // 30 October 2026, mid-afternoon UTC.
+  const now = new Date(Date.UTC(2026, 9, 30, 15, 0));
+
+  it('reads a date at its own precision, as the server does', () => {
+    for (const [date, want] of [
+      ['2026-10-31', 'preorder'], // tomorrow
+      ['2026-10-30', 'new'], // today: out
+      ['2026-08-01', 'new'], // within 90 days
+      ['2026-07-31', undefined], // just before them
+      ['2026-11', 'preorder'], // next month
+      ['2026-10', 'new'], // this month, from its first day
+      ['2027', 'preorder'], // next year
+      ['2026', undefined], // this year, from 1 January: older than 90 days
+      ['2026-13', undefined], // no such month
+      ['2026-02-30', undefined], // no such day
+      ['soon', undefined],
+      ['', undefined],
+      [undefined, undefined],
+    ] as const) {
+      expect(releaseState(date, now), String(date)).toBe(want);
+    }
+    expect(releaseState('2026-08-01', now, 30)).toBeUndefined();
+  });
+
+  it('counts days in UTC, as the server does, in any time zone', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['Pacific/Kiritimati', 'UTC', 'Pacific/Pago_Pago']) {
+        process.env.TZ = tz; // Node reads a new TZ at once
+        // Late on 30 October UTC the 31st is still ahead; just after midnight
+        // UTC it is out, whatever the date where the viewer is.
+        expect(releaseState('2026-10-31', new Date(Date.UTC(2026, 9, 30, 23, 30))), tz).toBe(
+          'preorder',
+        );
+        expect(releaseState('2026-10-31', new Date(Date.UTC(2026, 9, 31, 0, 30))), tz).toBe('new');
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+  });
+
+  it('words a date at its own precision, never moved by the time zone', () => {
+    expect(formatReleaseDate('2026-11-12', 'en-GB')).toBe('12 Nov 2026');
+    expect(formatReleaseDate('2026-11', 'en-GB')).toBe('Nov 2026');
+    expect(formatReleaseDate('2027', 'en-GB')).toBe('2027');
+    expect(formatReleaseDate('2026-01-01', 'en-GB')).toBe('1 Jan 2026');
+    expect(formatReleaseDate('2026-13', 'en-GB')).toBe('');
+    expect(formatReleaseDate(undefined, 'en-GB')).toBe('');
+  });
+});
+
+describe('spineFitsLabel', () => {
+  it('keeps the state word only where its whole line fits the spine', () => {
+    const day = 'Preorder · Nov 24, 2026'; // 23 characters
+    // A wide shelf (232 px): 23 x 6.25 px needs 144 px of the spine's 65 px less.
+    expect(spineFitsLabel(95, day, false)).toBe(true); // 220 - 65 = 155
+    expect(spineFitsLabel(80, day, false)).toBe(false); // 186 - 65 = 121
+    // The dashed border counts: German's 25 characters (156 px) don't fit 95%'s 155.
+    expect(spineFitsLabel(95, 'Vorbestellung · Nov. 2026', false)).toBe(false);
+    // A phone's shelf (200 px, 9 px type): a day's 129 px of 125 at 95%.
+    expect(spineFitsLabel(95, day, true)).toBe(false);
+    expect(spineFitsLabel(95, 'Preorder · Mar 2099', true)).toBe(true);
+    expect(spineFitsLabel(80, 'New · Sep 18, 2026', true)).toBe(false);
+    expect(spineFitsLabel(90, 'New · Sep 18, 2026', true)).toBe(true);
+    // Every missing entry's spine (80-95%) holds a month or a recent date on a wide shelf.
+    expect(spineFitsLabel(80, 'Preorder · Mar 2099', false)).toBe(true);
   });
 });

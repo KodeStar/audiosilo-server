@@ -7,6 +7,7 @@ import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
 import { seriesKey } from '@/lib/series-key';
 import { renderApp } from '@/test/render-app';
+import { formatReleaseDate } from './series-model';
 import { signedInRoutes } from '@/test/routes';
 
 const work = (position: string, title: string) => ({
@@ -126,6 +127,48 @@ describe('series', () => {
     expect(
       within(murderbot).getByText("Match a book of this series to see what's missing"),
     ).toBeInTheDocument();
+  });
+
+  it('dates a missing entry, and says which are preorders and new releases', async () => {
+    const recent = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
+    const dated: BookMeta = {
+      ...wayOfKingsMeta,
+      series: wayOfKingsMeta.series!.map((r) =>
+        r.id !== 'stormlight'
+          ? r
+          : {
+              ...r,
+              works: r.works.map((w) =>
+                w.title === 'Oathbringer'
+                  ? { ...w, release_date: '2017' }
+                  : w.title === 'Rhythm of War'
+                    ? { ...w, release_date: recent }
+                    : w.title === 'Wind and Truth'
+                      ? { ...w, release_date: '2099-03' }
+                      : w,
+              ),
+            },
+      ),
+    };
+    mockFetch(routes({ 'GET /libraries/1/meta': { body: dated } }));
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    const old = await within(card).findByRole('img', {
+      name: '#3 Oathbringer (2017): not in your library',
+    });
+    expect(old).toHaveTextContent('2017');
+    const date = formatReleaseDate(recent, 'en');
+    const fresh = within(card).getByRole('img', {
+      name: `#4 Rhythm of War: new (${date}), not in your library`,
+    });
+    expect(fresh.querySelector('.spine-date')).toHaveTextContent(`New · ${date}`);
+    expect(fresh.querySelector('.spine-date')).toHaveAttribute('data-state', 'new');
+    const preorder = within(card).getByRole('img', {
+      name: '#5 Wind and Truth: preorder, out Mar 2099',
+    });
+    expect(preorder.querySelector('.spine-date')).toHaveTextContent('Preorder · Mar 2099');
+    // A plain date carries no state word.
+    expect(old.querySelector('.spine-date')?.textContent).toBe('2017');
   });
 
   it("shows no gaps when no community rail is the series (never another series')", async () => {

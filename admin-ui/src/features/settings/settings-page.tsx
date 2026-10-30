@@ -1,4 +1,5 @@
 import { Link, useSearch } from '@tanstack/react-router';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
@@ -19,7 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
-import type { AdminSettings } from '@/api/types';
+import type { AdminSettings, UpcomingStatus } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
@@ -29,7 +30,7 @@ import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatDate, formatNumber } from '@/lib/format';
+import { formatDate, formatNumber, formatRelative } from '@/lib/format';
 import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
@@ -414,6 +415,7 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
             />
           </SettingRow>
           {m.enabled && m.available ? <MetadataStatusRow /> : null}
+          {m.upcoming !== undefined && m.available ? <UpcomingRow settings={settings} /> : null}
         </div>
         {!m.available ? (
           <Notice
@@ -471,6 +473,83 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
       <ClearMatchesZone />
     </>
   );
+}
+
+/**
+ * The daily upcoming-releases check (absent from an older server): its switch,
+ * which works only while the lookup is on, and how its last run went.
+ */
+function UpcomingRow({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const m = settings.metadata;
+  return (
+    <SettingRow
+      title={t('settings.metadata.upcoming')}
+      badges={<SettingBadges settings={settings} id="metadata.upcoming" />}
+      htmlFor="upcoming-switch"
+      description={
+        <>
+          {t('settings.metadata.upcomingBody')}
+          {m.enabled && m.upcoming ? <UpcomingRunText status={m.upcoming_status} /> : null}
+        </>
+      }
+      descriptionId="upcoming-switch-desc"
+    >
+      <InstantSwitch
+        id="upcoming-switch"
+        checked={m.enabled && Boolean(m.upcoming)}
+        disabled={!m.enabled || Boolean(lockOf(settings, 'metadata.upcoming'))}
+        describedBy="upcoming-switch-desc"
+        patch={(on) => ({ metadata: { upcoming: on } })}
+        failedTitle={t('settings.metadata.upcomingFailed')}
+        onSaved={(on) =>
+          toast.add({
+            title: on ? t('settings.metadata.upcomingOn') : t('settings.metadata.upcomingOff'),
+            type: 'success',
+          })
+        }
+      />
+    </SettingRow>
+  );
+}
+
+/** The check's last run in words: not yet, failed, or when and what it found. */
+function UpcomingRunText({ status }: { status?: UpcomingStatus }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const text = upcomingRunText(t, status, lang);
+  return (
+    <span className="mt-1 block" data-testid="upcoming-run">
+      {status?.last_error && !isLastRunOK(status) ? (
+        <StatusText tone="bad" colored>
+          {text}
+        </StatusText>
+      ) : (
+        text
+      )}
+    </span>
+  );
+}
+
+/** The last run succeeded (a failure after it is still news). */
+const isLastRunOK = (s: UpcomingStatus) =>
+  Boolean(s.last_success_at) && s.last_success_at === s.last_run_at;
+
+function upcomingRunText(t: TFunction, s: UpcomingStatus | undefined, lang: string): string {
+  if (!s?.last_run_at) return t('settings.metadata.upcomingNever');
+  const when = formatRelative(s.last_run_at, lang);
+  if (!isLastRunOK(s)) {
+    return t('settings.metadata.upcomingLastFailed', { when, error: s.last_error ?? '' });
+  }
+  return t('settings.metadata.upcomingLast', {
+    when,
+    count: s.items,
+    series: t('settings.metadata.upcomingSeries', {
+      count: s.series,
+      formatted: formatNumber(s.series, lang),
+    }),
+    formatted: formatNumber(s.items, lang),
+  });
 }
 
 /**

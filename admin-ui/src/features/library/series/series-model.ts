@@ -8,7 +8,7 @@ import type {
 import { parseSeriesRange } from '@/features/book/field-rules';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
-import { formatSeriesPosition } from '@/lib/format';
+import { formatDay, formatSeriesPosition } from '@/lib/format';
 import { hashString } from '@/lib/monogram';
 import { sameSeries, seriesKey } from '@/lib/series-key';
 
@@ -35,6 +35,8 @@ export interface Span {
 /** One numbered entry of a community series rail. */
 export interface RailEntry extends Span {
   title: string;
+  /** The work's first release, YYYY[-MM[-DD]] (absent when unknown or from an older server). */
+  release_date?: string;
 }
 
 /** What a rail says about a local series. */
@@ -187,9 +189,70 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
   for (const { w, s } of spans) {
     if (!s || out.some((e) => samePosition(e.position, s.position))) continue;
     if (s.end !== undefined && singles.some((p) => holds(s, { position: p }))) continue;
-    out.push({ ...s, title: w.title });
+    out.push({ ...s, title: w.title, ...(w.release_date ? { release_date: w.release_date } : {}) });
   }
   return out.sort((a, b) => a.position - b.position);
+}
+
+/** How long after its release a missing entry is still new (the server's upcoming.window_days default). */
+export const NEW_RELEASE_DAYS = 90;
+
+/** A release date's parts: year, month and day, the last two 0 when the date stops before them. */
+function releaseParts(date: string): [number, number, number] | undefined {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(date);
+  if (!m) return undefined;
+  const [y, mo, d] = [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+  if (m[2] !== undefined && (mo < 1 || mo > 12)) return undefined;
+  if (m[3] !== undefined && (d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate()))
+    return undefined;
+  return [y, mo, d];
+}
+
+/** `now`'s UTC calendar date as YYYY-MM-DD: the day the server's upcoming job counts by. */
+function today(now: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getUTCFullYear()}-${p(now.getUTCMonth() + 1)}-${p(now.getUTCDate())}`;
+}
+
+/**
+ * What a missing entry's release date makes it, as the server's upcoming job
+ * reads one (compared at the date's own precision, on the UTC day): 'preorder' when it is still
+ * ahead ("2026-11" from any day of October; "2026" is not, all this year),
+ * 'new' when it came out within `windowDays` of today, counted from the first
+ * day of its month or year, else undefined (older, undated or unreadable).
+ */
+export function releaseState(
+  date: string | undefined,
+  now: Date,
+  windowDays = NEW_RELEASE_DAYS,
+): 'preorder' | 'new' | undefined {
+  const parts = date ? releaseParts(date) : undefined;
+  if (!date || !parts) return undefined;
+  const day = today(now);
+  if (date > day.slice(0, date.length)) return 'preorder';
+  const [y, mo, d] = parts;
+  const start = Date.UTC(y, Math.max(mo, 1) - 1, Math.max(d, 1));
+  const [ty, tm, td] = day.split('-').map(Number);
+  const from = Date.UTC(ty, tm - 1, td) - windowDays * 86_400_000;
+  return start >= from ? 'new' : undefined;
+}
+
+/**
+ * A release date in words at its own precision: "12 Nov 2026", "Nov 2026" or
+ * "2026"; '' for one that isn't a date. The calendar date as written, never
+ * moved by the viewer's time zone.
+ */
+export function formatReleaseDate(date: string | undefined, lang: string): string {
+  const parts = date ? releaseParts(date) : undefined;
+  if (!parts) return '';
+  const [y, mo, d] = parts;
+  if (!mo) return String(y);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return formatDay(`${y}-${p(mo)}-${p(d || 1)}`, lang, {
+    ...(d ? { day: 'numeric' } : {}),
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 /**
@@ -380,6 +443,23 @@ export function spineHeight(seconds: number, key: string): number {
   if (!(seconds > 0)) return 80 + (hashString(key) % 16);
   const t = Math.log(seconds / 3600 / SHORT_HOURS) / Math.log(LONG_HOURS / SHORT_HOURS);
   return Math.round(72 + 26 * Math.min(1, Math.max(0, t)));
+}
+
+/**
+ * Whether a missing entry's spine, `heightPct` of the shelf, has room for its
+ * whole release label `label` ("Preorder · 24 Nov 2026") in the line it runs in
+ * beside the title; when not, the spine shows the date alone (its colour still
+ * says preorder or new; the spine's own label says it all). The sizes are
+ * globals.css's: the shelf (232 px, 200 on a phone), the spine's padding,
+ * dashed border and number (a 15.75 px line and its 10 px margin), and the
+ * date's mono characters (JetBrains Mono's 0.6em of 10 px, 9 on a phone, plus
+ * the 0.02em letter-spacing it inherits from the spine's 12.5 px, 11.5 on a phone).
+ */
+export function spineFitsLabel(heightPct: number, label: string, phone: boolean): boolean {
+  const shelf = phone ? 200 : 232;
+  const chrome = 22 + 14 + 2 * 1.5 + 26;
+  const char = 0.6 * (phone ? 9 : 10) + 0.02 * (phone ? 11.5 : 12.5);
+  return (heightPct / 100) * shelf - chrome >= [...label].length * char;
 }
 
 /** A spine's colours: its body, its two bands and its type. */

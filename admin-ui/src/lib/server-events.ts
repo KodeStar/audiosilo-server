@@ -25,6 +25,7 @@ export const EVENT_KINDS: readonly ServerEventKind[] = [
   'backup_failed',
   'bridge_job_finished',
   'bridge_job_failed',
+  'book_released',
 ];
 
 export type EventTone = 'info' | 'warn' | 'bad';
@@ -51,28 +52,42 @@ const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 /** How many added titles the bell lists before "and N more". */
 const TITLES_SHOWN = 3;
 
+/** A book list event's body: the first titles, then "and N more" when `count` is more. */
+function titlesBody(
+  d: ServerEvent['data'],
+  prefix: 'events.book_added' | 'events.book_released',
+): EventText['body'] {
+  const count = num(d.count);
+  const titles = (Array.isArray(d.titles) ? d.titles : []).map(str).filter(Boolean);
+  const shown = titles.slice(0, TITLES_SHOWN);
+  if (!shown.length) return undefined;
+  const more = count - shown.length;
+  return more > 0
+    ? { key: `${prefix}.bodyMore`, values: { titles: shown.join(', '), count: more } }
+    : { key: `${prefix}.body`, values: { titles: shown.join(', ') } };
+}
+
 export function describeEvent(ev: ServerEvent): EventText {
   const d = ev.data;
   switch (ev.kind) {
-    case 'book_added': {
-      const count = num(d.count);
-      const titles = (Array.isArray(d.titles) ? d.titles : []).map(str).filter(Boolean);
-      const shown = titles.slice(0, TITLES_SHOWN);
-      const more = count - shown.length;
+    case 'book_added':
       return {
-        title: { key: 'events.book_added.title', values: { count, library: str(d.library) } },
-        body: shown.length
-          ? more > 0
-            ? {
-                key: 'events.book_added.bodyMore',
-                values: { titles: shown.join(', '), count: more },
-              }
-            : { key: 'events.book_added.body', values: { titles: shown.join(', ') } }
-          : undefined,
+        title: {
+          key: 'events.book_added.title',
+          values: { count: num(d.count), library: str(d.library) },
+        },
+        body: titlesBody(d, 'events.book_added'),
         tone: 'info',
         link: { destination: 'library' },
       };
-    }
+    case 'book_released':
+      // notify.BooksReleased: the titles come "Title (Series #n)", at most five.
+      return {
+        title: { key: 'events.book_released.title', values: { count: num(d.count) } },
+        body: titlesBody(d, 'events.book_released'),
+        tone: 'info',
+        link: { destination: 'library', section: 'series' },
+      };
     case 'scan_failed':
       return {
         title: { key: 'events.scan_failed.title', values: { library: str(d.library) } },

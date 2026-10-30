@@ -27,6 +27,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
 	"github.com/kodestar/audiosilo-server/internal/podcast/discovery"
+	"github.com/kodestar/audiosilo-server/internal/upcoming"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -73,6 +74,9 @@ type API struct {
 	// chapterChecks fits community chapter lists onto books in the background
 	// (StartChapterChecks) and on request; nil with meta.
 	chapterChecks *chaptercheck.Runner
+	// upcoming is the upcoming releases job (Track U1), nil without a
+	// metadata service (StartUpcoming).
+	upcoming *upcoming.Runner
 	// coverColors reads books' cover colours in the background
 	// (StartCoverColors), so a book has one before anyone looks at its cover.
 	coverColors *covercolors.Runner
@@ -251,6 +255,15 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// Every book indexed or edited (a scan, a match applied, an ASIN typed) may
 		// be due a chapter check now: wake the background pass.
 		cat.OnBookChange(a.chapterChecks.Kick)
+		// Upcoming releases: daily, and a light pass once a burst of new or
+		// edited books settles (new works, new series).
+		a.upcoming = upcoming.New(cat, metaSvc, upcoming.Options{
+			On:       a.upcomingOn,
+			Window:   func() int { return a.config().Upcoming.Window() },
+			Announce: a.announceReleases,
+			Log:      log,
+		})
+		cat.OnBookChange(a.upcoming.Kick)
 	}
 	// And a cover colour (a new book, a new cover).
 	a.coverColors = covercolors.New(cat, a.colorCover, log)
@@ -305,6 +318,14 @@ func (a *API) SetBaseContext(ctx context.Context) {
 func (a *API) StartChapterChecks(ctx context.Context) {
 	if a.chapterChecks != nil {
 		go a.chapterChecks.Run(ctx)
+	}
+}
+
+// StartUpcoming starts the upcoming releases job (upcoming.Runner.Run) for
+// ctx's lifetime; nothing without metadata.
+func (a *API) StartUpcoming(ctx context.Context) {
+	if a.upcoming != nil {
+		go a.upcoming.Run(ctx)
 	}
 }
 
@@ -466,6 +487,8 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/me/notes", a.requireAuth(http.HandlerFunc(a.handleListMyNotes)))
 
 	// Phase 8: listening in the house (household) and casting (cast).
+	// Upcoming releases (Track U1): never a kid's.
+	mux.Handle("GET /api/v1/me/upcoming", a.requireAuth(notKid(http.HandlerFunc(a.handleMyUpcoming))))
 	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
 	mux.Handle("PUT /api/v1/me/household", a.requireAuth(notKid(http.HandlerFunc(a.handlePutHousehold))))
 	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))

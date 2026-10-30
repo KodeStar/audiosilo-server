@@ -10,17 +10,21 @@ import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SeriesGenerateDialog } from '@/features/bridge/series-generate-dialog';
+import { useIsPhone } from '@/features/library/books/use-layout';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
 import {
   formatPositions,
+  formatReleaseDate,
   formatSpan,
   metaCandidate,
   pickRail,
   placeBooks,
+  releaseState,
   seriesStatus,
   spineColors,
+  spineFitsLabel,
   spineHeight,
   spineRow,
   type Placed,
@@ -187,10 +191,13 @@ function Shelf({
   /** The card has come into view: its fan of covers may load. */
   fan: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const navigate = useNavigate();
+  const now = new Date();
   // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
   const wide = useMediaQuery('(min-width: 1024px)');
+  const phone = useIsPhone();
   const spines = spineRow(placed, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
@@ -199,7 +206,26 @@ function Shelf({
         {spines.map((sp) => {
           if (sp.kind === 'gap') {
             const index = formatSpan(sp.entry, fmt);
-            const label = t('series.gap', { index, title: sp.entry.title });
+            // A dated entry says when: a preorder, a new release, or just its date.
+            const date = formatReleaseDate(sp.entry.release_date, lang);
+            const state = date ? releaseState(sp.entry.release_date, now) : undefined;
+            const values = { index, title: sp.entry.title, date };
+            const height = spineHeight(0, sp.entry.title);
+            const stateWord = state
+              ? `${t(state === 'preorder' ? 'series.preorder' : 'series.newRelease')} · `
+              : '';
+            // The date runs in a line of its own beside the title; the state word
+            // leads it only where the whole line fits (else the date alone, its
+            // colour still saying which, the spine's label all of it).
+            const showState = Boolean(stateWord) && spineFitsLabel(height, stateWord + date, phone);
+            const label =
+              state === 'preorder'
+                ? t('series.gapPreorder', values)
+                : state === 'new'
+                  ? t('series.gapNew', values)
+                  : date
+                    ? t('series.gapDated', values)
+                    : t('series.gap', values);
             return (
               <li key={`gap-${sp.entry.position}`} className="flex h-full items-end">
                 <span
@@ -208,10 +234,20 @@ function Shelf({
                   role="img"
                   aria-label={label}
                   title={label}
-                  style={{ height: `${spineHeight(0, sp.entry.title)}%` }}
+                  style={{ height: `${height}%` }}
                 >
                   <span className="spine-idx">{index}</span>
-                  {sp.entry.title}
+                  {date ? (
+                    <span className="spine-lines">
+                      <span className="spine-title">{sp.entry.title}</span>
+                      <span className="spine-date" data-state={state}>
+                        {showState ? stateWord : null}
+                        {date}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="spine-title">{sp.entry.title}</span>
+                  )}
                 </span>
               </li>
             );

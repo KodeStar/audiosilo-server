@@ -880,6 +880,34 @@
     font-size: 10.5px;
     opacity: 0.75;
   }
+  /* A dated missing entry: its title and its release date in two lines side
+     by side, each the spine's full height (spineFitsLabel leaves the state word
+     out where the date's line won't hold it), cut short with an ellipsis. */
+  .spine-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-inline-size: 0;
+  }
+  .spine-title,
+  .spine-date {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* spineFitsLabel (series-model.ts) mirrors this size, the shelf's height and
+     the spine's padding, border, number, font size and letter-spacing: change
+     them together. */
+  .spine-date {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .spine-date[data-state='preorder'] {
+    color: var(--brand-ink);
+  }
+  .spine-date[data-state='new'] {
+    color: var(--success);
+  }
 
   /* Invite card: always deep ink (in both themes) with pink and plum glows, so
      it reads as something to hand over, not a settings panel. */
@@ -1016,6 +1044,9 @@
   .spine {
     width: 34px;
     font-size: 11.5px;
+  }
+  .spine-date {
+    font-size: 9px;
   }
 }
 @keyframes float-bar-in-phone {

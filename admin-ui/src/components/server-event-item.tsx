@@ -4,6 +4,7 @@ import {
   Archive,
   Bell,
   BookPlus,
+  CalendarCheck,
   CircleAlert,
   MailCheck,
   MonitorSmartphone,
@@ -32,6 +33,7 @@ const ICONS: Record<ServerEventKind, LucideIcon> = {
   backup_failed: Archive,
   bridge_job_finished: Waypoints,
   bridge_job_failed: CircleAlert,
+  book_released: CalendarCheck,
 };
 
 const TONE: Record<EventTone, string> = {

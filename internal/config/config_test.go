@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,6 +93,11 @@ func TestValidate(t *testing.T) {
 			c.Libraries = []Library{{Name: "A", Root: "/a"}, {Name: "A", Root: "/b"}}
 		}, true},
 		{"library missing root", func(c *Config) { c.Libraries = []Library{{Name: "A"}} }, true},
+		{"upcoming window 0", func(c *Config) { c.Upcoming.WindowDays = 0 }, true},
+		{"upcoming window negative", func(c *Config) { c.Upcoming.WindowDays = -1 }, true},
+		{"upcoming window 1", func(c *Config) { c.Upcoming.WindowDays = 1 }, false},
+		{"upcoming window 365", func(c *Config) { c.Upcoming.WindowDays = MaxUpcomingWindowDays }, false},
+		{"upcoming window 366", func(c *Config) { c.Upcoming.WindowDays = MaxUpcomingWindowDays + 1 }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -217,5 +223,38 @@ func TestSplitList(t *testing.T) {
 	got := splitList(" a , ,b,c ")
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
 		t.Fatalf("splitList dropped/kept the wrong items: %v", got)
+	}
+}
+
+// upcoming.window_days is checked at load: a section that leaves it out keeps
+// the default, an explicit 0 (or anything outside 1-365) refuses to start.
+func TestLoadUpcomingWindow(t *testing.T) {
+	for _, tc := range []struct {
+		yaml    string
+		want    int
+		wantErr bool
+	}{
+		{"upcoming:\n  enabled: false\n", DefaultUpcomingWindowDays, false},
+		{"upcoming:\n  window_days: 30\n", 30, false},
+		{"upcoming:\n  window_days: 0\n", 0, true},
+		{"upcoming:\n  window_days: 400\n", 0, true},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(Path(dir), []byte(tc.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, _, err := Load(dir)
+		if tc.wantErr {
+			if err == nil || !strings.Contains(err.Error(), "upcoming.window_days must be from 1 to 365") {
+				t.Fatalf("%q: err = %v, want the window refused", tc.yaml, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%q: %v", tc.yaml, err)
+		}
+		if cfg.Upcoming.WindowDays != tc.want || cfg.Upcoming.Window() != tc.want {
+			t.Fatalf("%q: window = %d", tc.yaml, cfg.Upcoming.WindowDays)
+		}
 	}
 }

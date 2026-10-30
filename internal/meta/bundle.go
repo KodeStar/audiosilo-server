@@ -27,7 +27,7 @@ const maxPrevious = 5
 // an alternate ordering: a chronological order's earlier books are the
 // reading-order spoiler the main view exists to avoid): every entry whose
 // numeric position is below the current work's position on that rail. A range
-// (an omnibus, "1-3": parseSpan) is previous only when it ends before the
+// (an omnibus, "1-3": ParseSpan) is previous only when it ends before the
 // current work starts (one holding the current book would spoil it), and a
 // current range counts from its start. "Nearest" is the numeric distance from an
 // entry's start up to the current position, ties kept in rail order and then
@@ -48,12 +48,12 @@ func previousWorkIDs(env *Enrichment) []string {
 	}
 	var cands []candidate
 	for _, rail := range env.Series {
-		at, _, ok := parseSpan(rail.Position)
+		at, _, ok := ParseSpan(rail.Position)
 		if !ok {
 			continue
 		}
 		for _, w := range rail.Works {
-			p, end, ok := parseSpan(w.Position)
+			p, end, ok := ParseSpan(w.Position)
 			if !ok || end >= at || w.ID == "" || w.ID == current {
 				continue
 			}

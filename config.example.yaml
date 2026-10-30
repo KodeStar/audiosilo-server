@@ -210,3 +210,15 @@ metadata:
   #            deletes the copy at the next start.
   # [AUDIOSILO_METADATA_MODE]
   mode: remote
+
+# Upcoming releases: once a day the server reads the community metadata for the
+# series it holds and works out, for each listener, the preorders, recent
+# releases and missing volumes in the series they have (the player's Upcoming
+# list), and tells the admin about a new release in one (the book_released
+# notification). It makes no call while metadata is off; in mirror mode the
+# local copy answers. The first run records what is there without announcing it.
+upcoming:
+  enabled: true                          # Settings > Metadata [AUDIOSILO_UPCOMING_ENABLED]
+  # How many days back a release still counts as new (1-365; applies after a
+  # restart). [AUDIOSILO_UPCOMING_WINDOW_DAYS]
+  window_days: 90

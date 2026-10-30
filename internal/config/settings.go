@@ -87,6 +87,13 @@ var fields = []field{
 	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},
 
+	// Upcoming releases: the switch is in Settings > Metadata (the job asks the
+	// metadata service), applied without a restart; the window is config only.
+	{key: "upcoming.enabled", env: "AUDIOSILO_UPCOMING_ENABLED", setting: "metadata.upcoming",
+		ptr: func(c *Config) any { return &c.Upcoming.Enabled }},
+	{key: "upcoming.window_days", env: "AUDIOSILO_UPCOMING_WINDOW_DAYS", restart: true,
+		ptr: func(c *Config) any { return &c.Upcoming.WindowDays }},
+
 	{key: "demo.enabled", env: "AUDIOSILO_DEMO_ENABLED", setting: "demo.enabled", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.Enabled }},
 	{key: "demo.library", env: "AUDIOSILO_DEMO_LIBRARY", setting: "demo.library",
