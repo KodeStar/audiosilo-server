@@ -62,10 +62,7 @@ func (k samKinds) check(t *testing.T, c *castEnv, phoneLive, laptopLive bool) {
 			t.Errorf("%s = %d, want %d", what, got, want)
 		}
 	}
-	me := func(tok string) int {
-		resp, _ := c.do(t, "GET", "/api/v1/me", tok, "")
-		return resp.StatusCode
-	}
+	me := func(tok string) int { return c.status(t, "GET", "/api/v1/me", tok, "") }
 	stream := func(tok string) int { return c.media(t, c.lib, "stream", cradlePart, tok, "").StatusCode }
 	for _, s := range []struct {
 		name       string

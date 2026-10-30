@@ -199,18 +199,22 @@ function UserView({ detail }: { detail: UserDetail }) {
  * them anything they are casting; API keys and calendar links stay. Offered while
  * they have a session the console isn't using.
  */
-function SignOutEverywhere({ user, self }: { user: AdminUser; self: boolean }) {
+function SignOutEverywhere({ user }: { user: AdminUser }) {
   const { t } = useTranslation();
+  const self = useCurrentUser().id === user.id;
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   return (
     <>
-      <div>
-        <Button size="sm" variant="destructive-outline" onClick={() => setOpen(true)}>
-          <LogOut aria-hidden="true" />
-          {t('user.devices.signOutAll')}
-        </Button>
-      </div>
+      <Button
+        size="sm"
+        variant="destructive-outline"
+        className="self-start"
+        onClick={() => setOpen(true)}
+      >
+        <LogOut aria-hidden="true" />
+        {t('user.devices.signOutAll')}
+      </Button>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
@@ -225,7 +229,6 @@ function SignOutEverywhere({ user, self }: { user: AdminUser; self: boolean }) {
         onConfirm={async () => {
           const { signed_out } = await api.signOutEverywhere(user.id);
           invalidateDevices(qc);
-          invalidatePeople(qc);
           toast.add({
             title: t('user.devices.signedOutAll', { count: signed_out, name: user.username }),
             type: 'success',
@@ -247,7 +250,6 @@ function DevicesTab({
   onPair?: () => void;
 }) {
   const { t } = useTranslation();
-  const self = useCurrentUser().id === user.id;
   if (devices.isError) {
     return (
       <QueryError
@@ -267,7 +269,7 @@ function DevicesTab({
       {sessions.length ? (
         <div className="flex flex-col gap-3">
           <DeviceList devices={sessions} showPerson={false} />
-          {sessions.some((d) => !d.current) ? <SignOutEverywhere user={user} self={self} /> : null}
+          {sessions.some((d) => !d.current) ? <SignOutEverywhere user={user} /> : null}
         </div>
       ) : (
         <EmptyState

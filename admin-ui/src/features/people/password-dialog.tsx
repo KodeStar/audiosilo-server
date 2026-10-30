@@ -59,15 +59,15 @@ export function PasswordDialog({
               ? t('user.password.changeTitle', { name: user.username })
               : t('user.password.setTitle', { name: user.username })
         }
-        description={
+        description={t(
           promote
-            ? t('user.password.promoteDescription')
+            ? 'user.password.promoteDescription'
             : !user.has_password
-              ? t('user.password.description')
+              ? 'user.password.description'
               : self
-                ? t('user.password.changeDescriptionSelf')
-                : t('user.password.changeDescription')
-        }
+                ? 'user.password.changeDescriptionSelf'
+                : 'user.password.changeDescription',
+        )}
       >
         {open ? (
           <PasswordForm user={user} promote={promote} onDone={() => onOpenChange(false)} />

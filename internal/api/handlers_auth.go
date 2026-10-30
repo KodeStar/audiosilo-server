@@ -412,8 +412,6 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// A change (not a first password) signs the person out of their other
-	// sessions; this one stays (auth.UpdateUser).
 	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password, credentialFrom(r.Context()).ID); err != nil {
 		// notKid refused a kid before this; a request that passed it just
 		// before the owner's switch to kid committed is refused in the write
