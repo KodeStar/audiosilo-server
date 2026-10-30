@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 )
 
 // The calendar feed token (Track U3, capability upcoming_calendar). A listener
@@ -35,7 +36,8 @@ const FeedTokenName = "Calendar feed"
 // parameter): a mint's first step, Turn off, and the switch to a kid.
 const deleteFeedTokensSQL = `DELETE FROM tokens WHERE user_id = ?1 AND kind = '` + KindFeed + `'`
 
-// FeedStatus is whether a user has a live feed token, and since when (RFC3339).
+// FeedStatus is whether a user has a live feed token, and since when (RFC3339
+// UTC with milliseconds, millisUTC: the mint's created_at exactly).
 type FeedStatus struct {
 	Active    bool   `json:"active"`
 	CreatedAt string `json:"created_at,omitempty"`
@@ -59,6 +61,21 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
+		// created_at is the player's check that its copy of the link is the
+		// current one, so it is milliseconds (millisUTC, as generated_at on
+		// /me/upcoming) and always after the link it replaces, even two resets
+		// within one millisecond (the stamps are fixed-width UTC: lexical order
+		// is time order).
+		now := s.now().UTC()
+		var prev sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tokens WHERE user_id = ? AND kind = '`+KindFeed+`'`,
+			userID).Scan(&prev); err != nil {
+			return err
+		}
+		if p, err := time.Parse(millisUTC, prev.String); err == nil && !now.After(p) {
+			now = p.Add(time.Millisecond)
+		}
+		createdAt = now.Format(millisUTC)
 		if _, err := tx.ExecContext(ctx, deleteFeedTokensSQL, userID); err != nil {
 			return err
 		}
@@ -70,7 +87,8 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 		if _, err := s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT created_at FROM tokens WHERE token_hash = ?`, hash).Scan(&createdAt)
+		_, err := tx.ExecContext(ctx, `UPDATE tokens SET created_at = ? WHERE token_hash = ?`, createdAt, hash)
+		return err
 	})
 	if err != nil {
 		return "", "", err

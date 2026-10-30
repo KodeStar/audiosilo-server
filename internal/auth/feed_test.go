@@ -261,3 +261,28 @@ func TestFeedTokenMadeOnAnotherOwnersDevice(t *testing.T) {
 		t.Fatal("made independent, the link made on the old owner's phone ended")
 	}
 }
+
+// created_at is milliseconds (millisUTC), the status answers the mint's value
+// exactly, and two resets within one millisecond (a frozen clock) still differ
+// and keep their order: the player compares it to tell a stale link copy.
+func TestFeedTokenCreatedAtDistinct(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	*now = time.Date(2026, 10, 30, 12, 0, 0, 123_000_000, time.UTC)
+	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
+	_, first, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	if err != nil || first != "2026-10-30T12:00:00.123Z" {
+		t.Fatalf("first created_at = %q %v", first, err)
+	}
+	_, second, err := s.IssueFeedToken(ctx, sam.ID, 0)
+	if err != nil || second != "2026-10-30T12:00:00.124Z" {
+		t.Fatalf("a reset in the same millisecond = %q %v, want the next millisecond", second, err)
+	}
+	if st, err := s.FeedTokenStatus(ctx, sam.ID); err != nil || st.CreatedAt != second {
+		t.Fatalf("status created_at = %q %v, want %q", st.CreatedAt, err, second)
+	}
+	*now = now.Add(time.Second)
+	if _, third, _ := s.IssueFeedToken(ctx, sam.ID, 0); third != "2026-10-30T12:00:01.123Z" {
+		t.Fatalf("a later reset = %q", third)
+	}
+}
