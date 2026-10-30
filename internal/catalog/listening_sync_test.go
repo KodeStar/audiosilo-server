@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -110,31 +112,27 @@ func (f *syncFixture) progress(t *testing.T) *Progress {
 	return p
 }
 
-var syncSeq int
+var syncSeq atomic.Int64
+
+// nextSyncID is a fresh event id (the tests run in parallel).
+func nextSyncID(prefix string) string { return prefix + strconv.FormatInt(syncSeq.Add(1), 10) }
 
 // listen is a span on the fixture's book from from to to, ending at the
 // fixture's clock minus ago and lasting its played length at 1x.
 func (f *syncFixture) listen(start string, from, to float64, ago time.Duration, base *int64) SyncEvent {
-	syncSeq++
 	ended := f.clock.Add(-ago)
 	started := ended.Add(-time.Duration((to - from) * float64(time.Second)))
 	if to < from {
 		started = ended.Add(-15 * time.Second)
 	}
-	return SyncEvent{ID: "ev-" + itoa(syncSeq), Kind: EventListen, LibraryID: f.book.LibraryID, Path: f.book.Path,
+	return SyncEvent{ID: nextSyncID("ev-"), Kind: EventListen, LibraryID: f.book.LibraryID, Path: f.book.Path,
 		FromPos: from, ToPos: to, Duration: syncBookLen, PlaybackSpeed: 1, Start: start,
 		StartedAt: started.Format(time.RFC3339Nano), EndedAt: ended.Format(time.RFC3339Nano), BaseVersion: base}
 }
 
 func (f *syncFixture) finishEvent(kind string, ago time.Duration) SyncEvent {
-	syncSeq++
-	return SyncEvent{ID: "ev-" + itoa(syncSeq), Kind: kind, LibraryID: f.book.LibraryID, Path: f.book.Path,
+	return SyncEvent{ID: nextSyncID("ev-"), Kind: kind, LibraryID: f.book.LibraryID, Path: f.book.Path,
 		At: f.clock.Add(-ago).Format(time.RFC3339Nano)}
-}
-
-func itoa(n int) string {
-	b, _ := json.Marshal(n)
-	return string(b)
 }
 
 func wantResult(t *testing.T, got SyncResult, status, reason string) {
@@ -547,13 +545,13 @@ func TestSyncEventChecks(t *testing.T) {
 		"negative base":  func(e *SyncEvent) { e.BaseVersion = base(-1) },
 	}
 	for name, mutate := range cases {
-		ev := good
-		syncSeq++
-		ev.ID = "case-" + itoa(syncSeq)
-		mutate(&ev)
-		a := f.sync(t, f.batch(t, "phone", ev))
-		wantResult(t, a.Results[0], statusRejected, SyncInvalid)
-		_ = name
+		t.Run(name, func(t *testing.T) {
+			ev := good
+			ev.ID = nextSyncID("case-")
+			mutate(&ev)
+			a := f.sync(t, f.batch(t, "phone", ev))
+			wantResult(t, a.Results[0], statusRejected, SyncInvalid)
+		})
 	}
 	unknown := good
 	unknown.Kind = "skip"
@@ -562,14 +560,12 @@ func TestSyncEventChecks(t *testing.T) {
 	finish.At = "soon"
 	wantResult(t, f.syncOne(t, "phone", finish), statusRejected, SyncInvalid)
 	// Undecodable events (DecodeSyncEvents) and an empty batch.
-	evs, ok := DecodeSyncEvents([]json.RawMessage{
+	evs := DecodeSyncEvents([]json.RawMessage{
 		json.RawMessage(`{"id":"x1","kind":"listen","surprise":1}`),
 		json.RawMessage(`{"id":"x2","from_pos":"far"}`),
 		json.RawMessage(`[]`),
 	})
-	b := f.batch(t, "phone", append(evs, good)...)
-	b.Decoded = append(ok, true)
-	a := f.sync(t, b)
+	a := f.sync(t, f.batch(t, "phone", append(evs, good)...))
 	wantResult(t, a.Results[0], statusRejected, SyncInvalid)
 	wantResult(t, a.Results[1], statusRejected, SyncInvalid)
 	wantResult(t, a.Results[2], statusRejected, SyncInvalid)

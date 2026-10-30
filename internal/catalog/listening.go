@@ -61,6 +61,11 @@ type ListeningOtherPlace struct {
 	UpdatedAt  string  `json:"updated_at"`
 }
 
+// clearOtherPlace is the SET list that drops a row's offered place
+// (other_place, Sync v2).
+const clearOtherPlace = `other_position=NULL, other_device_id=NULL, other_device_name=NULL, other_at=NULL,
+	other_version=NULL`
+
 // progressColumns are the columns of a Progress, in scanProgress's order.
 const progressColumns = `library_id, rel_path, position, duration, finished, playback_speed, version, device_id,
 	updated_at, COALESCE(started_at, ''), COALESCE(finished_at, ''), device_name,
@@ -189,11 +194,11 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 		if err != nil {
 			return err
 		}
-		ev := putEvent(in, tokenID, at, formatSessionTime(now))
+		ev := putEvent(userID, in, tokenID, at, formatSessionTime(now))
 		if existing != nil && !IsNewer(in, *existing) {
 			out = existing // incoming update is stale; keep stored value
 			ev.status, ev.reason = statusNotApplied, reasonOlder
-			return insertPutEvent(ctx, tx, userID, ev)
+			return insertEvent(ctx, tx, ev)
 		}
 		if in.Version == 0 {
 			in.Version = 1
@@ -203,11 +208,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 		}
 		// RETURNING reads the dates the row ended up with (a kept start, a kept or
 		// new finish) and the offered place it keeps, so the echo carries the stored ones.
-		var (
-			otherPos                     sql.NullFloat64
-			otherDev, otherName, otherAt sql.NullString
-		)
-		if err := tx.QueryRowContext(ctx,
+		if err := scanProgress(tx.QueryRowContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
 			     finish_changed_at)
@@ -222,20 +223,14 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 			                      ELSE ?11 END,
 			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
 			                            ELSE progress.finish_changed_at END
-			 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, ''),
-			           other_position, other_device_id, other_device_name, other_at`,
+			 RETURNING `+progressColumns,
 			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
-			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp, in.DeviceName, at).
-			Scan(&in.StartedAt, &in.FinishedAt, &otherPos, &otherDev, &otherName, &otherAt); err != nil {
+			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp, in.DeviceName, at), &in); err != nil {
 			return err
-		}
-		if otherPos.Valid {
-			in.OtherPlace = &ListeningOtherPlace{Position: otherPos.Float64, DeviceID: otherDev.String,
-				DeviceName: otherName.String, UpdatedAt: otherAt.String}
 		}
 		out = &in
 		ev.status = statusApplied
-		return insertPutEvent(ctx, tx, userID, ev)
+		return insertEvent(ctx, tx, ev)
 	})
 	if err != nil {
 		return nil, err
@@ -568,8 +563,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			     device_id=excluded.device_id, updated_at=excluded.updated_at,
 			     started_at=excluded.started_at, finished_at=excluded.finished_at,
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
-			     other_position=NULL, other_device_id=NULL, other_device_name=NULL, other_at=NULL,
-			     other_version=NULL`,
+			     `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
 			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged); err != nil {
 			return err

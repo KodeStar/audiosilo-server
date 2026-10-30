@@ -115,28 +115,30 @@ type SyncEvent struct {
 	Start         string   `json:"start"`
 	At            string   `json:"at"`
 	BaseVersion   *int64   `json:"base_version"`
+	// undecodable: DecodeSyncEvents could not read the event (its result is
+	// "invalid"); never on the wire.
+	undecodable bool
 }
 
 // DecodeSyncEvents reads a batch's events one by one, strictly (unknown fields
 // refused), so a malformed event is that event's "invalid" and never fails the
-// batch. The returned bool slice says which decoded; an undecodable event keeps
-// the id it can be read with (if any), for its result.
-func DecodeSyncEvents(raw []json.RawMessage) ([]SyncEvent, []bool) {
-	out, ok := make([]SyncEvent, len(raw)), make([]bool, len(raw))
+// batch. An undecodable event keeps the id it can be read with (if any), for
+// its result.
+func DecodeSyncEvents(raw []json.RawMessage) []SyncEvent {
+	out := make([]SyncEvent, len(raw))
 	for i, r := range raw {
 		dec := json.NewDecoder(bytes.NewReader(r))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&out[i]); err == nil {
-			ok[i] = true
 			continue
 		}
 		var id struct {
 			ID string `json:"id"`
 		}
 		_ = json.Unmarshal(r, &id)
-		out[i] = SyncEvent{ID: id.ID}
+		out[i] = SyncEvent{ID: id.ID, undecodable: true}
 	}
-	return out, ok
+	return out
 }
 
 // SyncFile is one audio file of an indexed book on its whole-book timeline.
@@ -158,33 +160,26 @@ type SyncBook struct {
 // offsets, the cumulative book_files durations by seq as GET .../chapters
 // lists them), nil when no book is indexed there.
 func (c *Catalog) SyncBookAt(ctx context.Context, libraryID int64, path string) (*SyncBook, error) {
-	var (
-		id int64
-		b  = SyncBook{Path: path}
-	)
-	err := c.db.QueryRowContext(ctx, `SELECT id, duration FROM books WHERE library_id = ? AND rel_path = ?`,
-		libraryID, path).Scan(&id, &b.Duration)
+	var book Book
+	err := c.db.QueryRowContext(ctx,
+		`SELECT id, rel_path, is_folder, size, duration FROM books WHERE library_id = ? AND rel_path = ?`,
+		libraryID, path).Scan(&book.ID, &book.RelPath, &book.IsFolder, &book.Size, &book.Duration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	files, err := queryRows(ctx, c.db, func(rows *sql.Rows, f *SyncFile) error {
-		return rows.Scan(&f.Path, &f.Duration)
-	}, `SELECT rel_path, duration FROM book_files WHERE book_id = ? ORDER BY seq`, id)
+	files, err := playFiles(ctx, c.db, &book)
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
-		files = []SyncFile{{Path: path, Duration: b.Duration}}
-	}
+	b := SyncBook{Path: path, Duration: book.Duration, Files: make([]SyncFile, len(files))}
 	offset := 0.0
-	for i := range files {
-		files[i].Offset = offset
-		offset += files[i].Duration
+	for i, f := range files {
+		b.Files[i] = SyncFile{Path: f.RelPath, Offset: offset, Duration: f.Duration}
+		offset += f.Duration
 	}
-	b.Files = files
 	return &b, nil
 }
 
@@ -219,9 +214,7 @@ type SyncBatch struct {
 	SentAt      *time.Time
 	ClockOffset *float64
 	Events      []SyncEvent
-	// Decoded says which events decoded (DecodeSyncEvents); nil = all.
-	Decoded []bool
-	Targets map[Ref]SyncTarget
+	Targets     map[Ref]SyncTarget
 }
 
 // SyncResult is one event's answer.
@@ -253,6 +246,15 @@ type syncPrepared struct {
 	speed          float64
 }
 
+// length is the span's book length: the device's, else the indexed book's
+// (0 unknown).
+func (p syncPrepared) length() float64 {
+	if p.ev.Duration <= 0 && p.target.Book != nil {
+		return p.target.Book.Duration
+	}
+	return p.ev.Duration
+}
+
 // SyncListening applies one batch in ONE writer transaction (normal
 // durability, like SaveProgress): the checks first (a rejected event is never
 // stored), then each event in corrected-time order (ties by request index),
@@ -271,16 +273,26 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	results := make([]SyncResult, len(b.Events))
 	seen := map[string]bool{}
 	var prepared []syncPrepared
+	// touched: the books every non-rejected event names, in request order (no
+	// event is rejected once it is prepared: the transaction never rejects).
+	var touched []Ref
+	touchedSet := map[Ref]bool{}
+	touch := func(ev SyncEvent) {
+		if t, ok := b.Targets[Ref{LibraryID: ev.LibraryID, Path: ev.Path}]; ok && t.Reason == "" && !touchedSet[t.Key] {
+			touchedSet[t.Key] = true
+			touched = append(touched, t.Key)
+		}
+	}
 	for i, ev := range b.Events {
 		results[i].ID = ev.ID
-		decoded := b.Decoded == nil || b.Decoded[i]
 		reject := func(reason string) { results[i].Status, results[i].Reason = statusRejected, reason }
-		if !decoded || !syncEventID.MatchString(ev.ID) {
+		if ev.undecodable || !syncEventID.MatchString(ev.ID) {
 			reject(SyncInvalid)
 			continue
 		}
 		if seen[ev.ID] {
 			results[i].Status = statusDuplicate
+			touch(ev)
 			continue
 		}
 		seen[ev.ID] = true
@@ -323,6 +335,7 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 			p.to = remapEnd(target.Book, ev.ToPos, ev.ToFile, ev.ToFilePos)
 		}
 		prepared = append(prepared, p)
+		touch(ev)
 	}
 	sort.SliceStable(prepared, func(i, j int) bool {
 		if !prepared[i].ended.Equal(prepared[j].ended) {
@@ -330,10 +343,12 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 		}
 		return prepared[i].index < prepared[j].index
 	})
-	var touched []Ref
-	touchedSet := map[Ref]bool{}
 	err := c.db.WithUserStateTx(ctx, "SyncListening", func(tx *sql.Tx) error {
 		s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}}
+		var err error
+		if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
+			return err
+		}
 		for _, p := range prepared {
 			res, err := s.apply(ctx, p)
 			if err != nil {
@@ -346,20 +361,6 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	})
 	if err != nil {
 		return nil, err
-	}
-	// The books every non-rejected event touched, in request order.
-	for i, ev := range b.Events {
-		if results[i].Status == statusRejected {
-			continue
-		}
-		target, ok := b.Targets[Ref{LibraryID: ev.LibraryID, Path: ev.Path}]
-		if !ok || target.Reason != "" {
-			continue
-		}
-		if key := target.Key; !touchedSet[key] {
-			touchedSet[key] = true
-			touched = append(touched, key)
-		}
 	}
 	answer := &SyncAnswer{ServerTime: formatSessionTime(now), Results: results, Progress: []Progress{}}
 	for _, key := range touched {
@@ -448,6 +449,32 @@ type syncRun struct {
 	shift float64
 	// written is the version each book's row had after this batch wrote it.
 	written map[Ref]int64
+	// stored is the batch's event ids already in the log (a replay: duplicate).
+	stored map[string]bool
+}
+
+// storedEventIDs is which of the prepared events' ids the user's log already
+// holds, read in one statement (a batch is at most MaxSyncEvents ids).
+func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(prepared) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(prepared)+1)
+	args = append(args, userID)
+	for _, p := range prepared {
+		args = append(args, p.ev.ID)
+	}
+	ids, err := queryRows(ctx, tx, func(rows *sql.Rows, id *string) error { return rows.Scan(id) },
+		`SELECT event_id FROM listening_events WHERE user_id = ? AND event_id IN (`+placeholders(len(prepared))+`)`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
 }
 
 // syncRow is the stored progress row as a sync reads it.
@@ -483,13 +510,7 @@ func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 // apply runs one prepared event: the dedupe, then its kind's rule, then its
 // row in the log.
 func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error) {
-	var dup bool
-	if err := s.tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM listening_events WHERE user_id = ? AND event_id = ?)`,
-		s.b.UserID, p.ev.ID).Scan(&dup); err != nil {
-		return SyncResult{}, err
-	}
-	if dup {
+	if s.stored[p.ev.ID] {
 		return SyncResult{Status: statusDuplicate}, nil
 	}
 	var (
@@ -504,17 +525,13 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 	if err != nil {
 		return res, err
 	}
-	duration := p.ev.Duration
-	_, err = s.tx.ExecContext(ctx,
-		`INSERT INTO listening_events(user_id, event_id, library_id, rel_path, kind, device_id, token_id,
-		     from_pos, to_pos, speed, duration, started_at, ended_at, clock_shift, start, base_version,
-		     status, reason, received_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT(user_id, event_id) DO NOTHING`,
-		s.b.UserID, p.ev.ID, p.target.Key.LibraryID, p.target.Key.Path, p.ev.Kind, s.b.DeviceID, s.b.TokenID,
-		p.from, p.to, p.speed, duration, formatSessionTime(p.started), formatSessionTime(p.ended), s.shift,
-		p.ev.Start, p.ev.BaseVersion, res.Status, res.Reason, formatSessionTime(s.now))
-	return res, err
+	return res, insertEvent(ctx, s.tx, eventRow{
+		userID: s.b.UserID, id: p.ev.ID, kind: p.ev.Kind, ref: p.target.Key, deviceID: s.b.DeviceID,
+		tokenID: s.b.TokenID, from: p.from, to: p.to, speed: p.speed, duration: p.ev.Duration,
+		started: formatSessionTime(p.started), ended: formatSessionTime(p.ended), shift: s.shift,
+		start: p.ev.Start, base: p.ev.BaseVersion, status: res.Status, reason: res.Reason,
+		received: formatSessionTime(s.now),
+	})
 }
 
 // listen resolves a span's place against the stored row, then records its
@@ -531,10 +548,7 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return res, err
 	}
-	if err := s.recordListening(ctx, p); err != nil {
-		return res, err
-	}
-	return res, nil
+	return res, s.recordListening(ctx, p)
 }
 
 // resolveListen is a span's place: ResolvePlace, with the backstop, and the
@@ -606,10 +620,6 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 // none; never the finish state. clear also drops the offered place.
 func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool) error {
 	key := p.target.Key
-	duration := p.ev.Duration
-	if duration <= 0 && p.target.Book != nil {
-		duration = p.target.Book.Duration
-	}
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 		     version, device_id, device_name, updated_at, started_at)
@@ -625,7 +635,7 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		     other_device_name=CASE WHEN ?12 THEN NULL ELSE progress.other_device_name END,
 		     other_at=CASE WHEN ?12 THEN NULL ELSE progress.other_at END,
 		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END`,
-		s.b.UserID, key.LibraryID, key.Path, p.to, duration, p.speed, version, s.b.DeviceID, s.b.DeviceName,
+		s.b.UserID, key.LibraryID, key.Path, p.to, p.length(), p.speed, version, s.b.DeviceID, s.b.DeviceName,
 		formatSessionTime(p.ended), p.started.UTC().Format(time.RFC3339), clear); err != nil {
 		return err
 	}
@@ -738,12 +748,8 @@ func (s *syncRun) recordListening(ctx context.Context, p syncPrepared) error {
 // (a seek ahead, or a span longer than its wall time, is not listening). Only a
 // span ending within livePlaying of now can be marked transcoded.
 func (s *syncRun) recordSpan(ctx context.Context, p syncPrepared, listened float64) error {
-	duration := p.ev.Duration
-	if duration <= 0 && p.target.Book != nil {
-		duration = p.target.Book.Duration
-	}
 	hb := Heartbeat{UserID: s.b.UserID, Ref: p.target.Key, TokenID: s.b.TokenID, DeviceName: s.b.DeviceName,
-		Client: s.b.Client, Position: p.to, Duration: duration, Speed: p.speed,
+		Client: s.b.Client, Position: p.to, Duration: p.length(), Speed: p.speed,
 		Transcoded: p.target.Transcoding && s.now.Sub(p.ended) <= livePlaying}
 	open, err := latestSession(ctx, s.tx, hb, p.started.Add(-resumeWindow))
 	if err != nil {
@@ -797,36 +803,45 @@ func (s *syncRun) recordHistory(ctx context.Context, p syncPrepared) error {
 	return err
 }
 
-// putSyncEvent is a legacy PUT .../progress as a listening event
-// (SaveProgressFrom).
-type putSyncEvent struct {
-	id, deviceID       string
-	ref                Ref
-	tokenID            int64
-	position, duration float64
-	speed              float64
-	at, received       string
-	status, reason     string
+// eventRow is one listening_events row: a sync event after its checks, or a
+// legacy PUT's (putEvent).
+type eventRow struct {
+	userID                    int64
+	id, kind                  string
+	ref                       Ref
+	deviceID                  string
+	tokenID                   int64
+	from, to, speed, duration float64
+	started, ended            string
+	shift                     float64
+	start                     string
+	base                      *int64
+	status, reason, received  string
 }
 
-// putEvent is in's event, at at (its updated_at, fixed width), received now.
-func putEvent(in Progress, tokenID int64, at, received string) putSyncEvent {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return putSyncEvent{id: "put-" + hex.EncodeToString(b[:]), deviceID: in.DeviceID, ref: in.Ref, tokenID: tokenID,
-		position: in.Position, duration: in.Duration, speed: in.PlaybackSpeed, at: at, received: received}
-}
-
-// insertPutEvent logs a PUT's event in tx.
-func insertPutEvent(ctx context.Context, tx *sql.Tx, userID int64, ev putSyncEvent) error {
+// insertEvent logs r in tx (an id already stored is left as it is).
+func insertEvent(ctx context.Context, tx *sql.Tx, r eventRow) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO listening_events(user_id, event_id, library_id, rel_path, kind, device_id, token_id,
-		     from_pos, to_pos, speed, duration, started_at, ended_at, status, reason, received_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		     from_pos, to_pos, speed, duration, started_at, ended_at, clock_shift, start, base_version,
+		     status, reason, received_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(user_id, event_id) DO NOTHING`,
-		userID, ev.id, ev.ref.LibraryID, ev.ref.Path, eventPut, ev.deviceID, ev.tokenID,
-		ev.position, ev.position, ev.speed, ev.duration, ev.at, ev.at, ev.status, ev.reason, ev.received)
+		r.userID, r.id, r.ref.LibraryID, r.ref.Path, r.kind, r.deviceID, r.tokenID,
+		r.from, r.to, r.speed, r.duration, r.started, r.ended, r.shift, r.start, r.base,
+		r.status, r.reason, r.received)
 	return err
+}
+
+// putEvent is a legacy PUT .../progress of in by userID's token tokenID as a
+// listening event (SaveProgressFrom): a zero-length span at in's place, at at
+// (its updated_at, fixed width), received now; the caller sets its status.
+func putEvent(userID int64, in Progress, tokenID int64, at, received string) eventRow {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return eventRow{userID: userID, id: "put-" + hex.EncodeToString(b[:]), kind: eventPut, ref: in.Ref,
+		deviceID: in.DeviceID, tokenID: tokenID, from: in.Position, to: in.Position, speed: in.PlaybackSpeed,
+		duration: in.Duration, started: at, ended: at, received: received}
 }
 
 // PruneListeningEvents deletes the stored events that ended before cutoff, a

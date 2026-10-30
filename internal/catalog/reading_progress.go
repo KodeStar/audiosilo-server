@@ -55,8 +55,10 @@ type ReadingSave struct {
 
 // Limits of a save's fields (CheckReadingSave).
 const (
-	maxCFIBytes      = 2048
-	maxDeviceIDBytes = 200
+	maxCFIBytes = 2048
+	// MaxDeviceIDBytes is the longest device id a save (reading, or a listening
+	// sync batch's) may carry.
+	MaxDeviceIDBytes = 200
 )
 
 // CheckReadingSave checks a save's fields before anything is read: a CFI that
@@ -77,7 +79,7 @@ func CheckReadingSave(in ReadingSave) error {
 		return errors.New("progression must be from 0 to 1")
 	case in.DeviceID == "":
 		return errors.New("device_id is required")
-	case len(in.DeviceID) > maxDeviceIDBytes:
+	case len(in.DeviceID) > MaxDeviceIDBytes:
 		return errors.New("device_id is too long")
 	case in.BaseVersion != nil && *in.BaseVersion < 0:
 		return errors.New("base_version must not be negative")

@@ -230,8 +230,7 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     finished_at=excluded.finished_at,
 			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN excluded.updated_at
 			                            ELSE progress.finish_changed_at END,
-			     other_position=NULL, other_device_id=NULL, other_device_name=NULL, other_at=NULL,
-			     other_version=NULL`,
+			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
 			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished)
 		return err

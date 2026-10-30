@@ -25,9 +25,13 @@ type listeningSyncRequest struct {
 	Events      []json.RawMessage `json:"events"`
 }
 
-// maxSyncDeviceID is the longest device id a batch may carry (as a reading
-// save's).
-const maxSyncDeviceID = 200
+// syncPathReasons are the scope check's answers that reject an event rather
+// than the batch.
+var syncPathReasons = map[int]string{
+	http.StatusBadRequest: catalog.SyncInvalid,
+	http.StatusForbidden:  catalog.SyncNoAccess,
+	http.StatusNotFound:   catalog.SyncNotFound,
+}
 
 // handleListeningSync applies one batch of listening events: 400 for a bad
 // envelope (JSON, an unknown field or a body over 1 MiB; no device id or one
@@ -43,7 +47,7 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	case in.DeviceID == "":
 		writeError(w, http.StatusBadRequest, "device_id is required")
 		return
-	case len(in.DeviceID) > maxSyncDeviceID:
+	case len(in.DeviceID) > catalog.MaxDeviceIDBytes:
 		writeError(w, http.StatusBadRequest, "device_id is too long")
 		return
 	}
@@ -65,7 +69,7 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
 		return
 	}
-	events, decoded := catalog.DecodeSyncEvents(in.Events)
+	events := catalog.DecodeSyncEvents(in.Events)
 	scopes, ok := a.callerScopes(w, r, "could not sync listening")
 	if !ok {
 		return
@@ -78,7 +82,7 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	answer, err := a.cat.SyncListening(r.Context(), catalog.SyncBatch{
 		UserID: u.ID, DeviceID: in.DeviceID, TokenID: cred.DeviceID, DeviceName: cred.DeviceName,
 		Client: catalog.Client(cred.Client), SentAt: sentAt, ClockOffset: in.ClockOffset,
-		Events: events, Decoded: decoded, Targets: targets,
+		Events: events, Targets: targets,
 	})
 	if err != nil {
 		a.writeCatalogError(w, err, "listening sync failed", "could not sync listening", "user", u.ID)
@@ -99,24 +103,18 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catal
 	cred := credentialFrom(ctx)
 	now := time.Now()
 	targets := map[catalog.Ref]catalog.SyncTarget{}
+	books := map[catalog.Ref]*catalog.SyncBook{} // by key: several sent paths may key one book
 	for _, ev := range events {
 		sent := catalog.Ref{LibraryID: ev.LibraryID, Path: ev.Path}
 		if _, done := targets[sent]; done || ev.LibraryID <= 0 || ev.Path == "" {
 			continue
 		}
 		lib, rel, scope, status, msg := a.scopedPathIn(r, scopes, ev.LibraryID, ev.Path)
-		switch status {
-		case 0:
-		case http.StatusBadRequest:
-			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncInvalid}
+		if reason, ok := syncPathReasons[status]; ok {
+			targets[sent] = catalog.SyncTarget{Reason: reason}
 			continue
-		case http.StatusForbidden:
-			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncNoAccess}
-			continue
-		case http.StatusNotFound:
-			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncNotFound}
-			continue
-		default:
+		}
+		if status != 0 {
 			writeError(w, status, msg)
 			return nil, false
 		}
@@ -126,14 +124,18 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catal
 				"library", lib.ID, "path", rel)
 			return nil, false
 		}
-		book, err := a.cat.SyncBookAt(ctx, lib.ID, key)
-		if err != nil {
-			a.writeCatalogError(w, err, "read book for sync failed", "could not sync listening",
-				"library", lib.ID, "path", key)
-			return nil, false
+		ref := catalog.Ref{LibraryID: lib.ID, Path: key}
+		book, done := books[ref]
+		if !done {
+			if book, err = a.cat.SyncBookAt(ctx, lib.ID, key); err != nil {
+				a.writeCatalogError(w, err, "read book for sync failed", "could not sync listening",
+					"library", lib.ID, "path", key)
+				return nil, false
+			}
+			books[ref] = book
 		}
 		targets[sent] = catalog.SyncTarget{
-			Key:         catalog.Ref{LibraryID: lib.ID, Path: key},
+			Key:         ref,
 			Exact:       book != nil && rel == key,
 			Book:        book,
 			Transcoding: a.streams.Transcoding(cred.DeviceID, lib.ID, key, now),

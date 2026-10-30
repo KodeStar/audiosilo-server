@@ -126,8 +126,9 @@ func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 		if err != nil {
 			return err
 		}
+		var wall time.Duration
 		if open != nil {
-			wall := hb.At.Sub(parseSessionTime(open.lastAt))
+			wall = hb.At.Sub(parseSessionTime(open.lastAt))
 			if wall > SessionGap && !continuousPlayback(wall, hb.Position-open.endPos, hb.Speed) {
 				open = nil // too long ago: this save starts a new session
 			}
@@ -135,7 +136,7 @@ func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 		if open == nil {
 			return insertSession(ctx, tx, hb, at, at, hb.Position, hb.Position, 0)
 		}
-		add := listenedBetween(hb.At.Sub(parseSessionTime(open.lastAt)), hb.Position-open.endPos, hb.Speed)
+		add := listenedBetween(wall, hb.Position-open.endPos, hb.Speed)
 		return extendSession(ctx, tx, open.id, hb, at, hb.Position, add)
 	})
 }
