@@ -4,12 +4,10 @@ import (
 	"cmp"
 	"math"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
 // What a local series lacks, worked out from the community series it is (pure:
@@ -51,7 +49,9 @@ type Series struct {
 // for a single position).
 type span struct{ start, end float64 }
 
-func samePos(a, b float64) bool    { return math.Abs(a-b) < 1e-6 }
+// samePos is the rails' position tolerance (meta.SamePosition).
+var samePos = meta.SamePosition
+
 func atOrBefore(a, b float64) bool { return a < b || samePos(a, b) }
 
 // holds reports whether a book placed at p holds entry e.
@@ -61,19 +61,11 @@ func (p span) holds(e span) bool { return atOrBefore(p.start, e.start) && atOrBe
 // starting on one.
 func (s span) whole() bool { return samePos(s.start, math.Round(s.start)) && s.start > 0 }
 
-// parseSpan reads a member's position: a number, or a range ("1-3").
+// parseSpan reads a member's position as the rails do (meta.ParseSpan): a
+// number, or a range ("1-3").
 func parseSpan(pos string) (span, bool) {
-	pos = strings.TrimSpace(pos)
-	if pos == "" {
-		return span{}, false
-	}
-	if f, err := strconv.ParseFloat(pos, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
-		return span{f, f}, true
-	}
-	if a, b, ok := metadata.ParseSeriesRange(pos); ok {
-		return span{a, b}, true
-	}
-	return span{}, false
+	a, b, ok := meta.ParseSpan(pos)
+	return span{a, b}, ok
 }
 
 // entry is one numbered slot of a series.
@@ -140,11 +132,11 @@ func classifyOne(s Series, owned []OwnedBook, ownedWorks map[string]bool, now ti
 	slots := entries(members)
 	// Each work's span on this series (its first numbered one).
 	workSpan := map[string]span{}
-	for i, m := range members {
+	for _, m := range members {
 		if _, ok := workSpan[m.WorkID]; ok {
 			continue
 		}
-		if sp, ok := parseSpan(members[i].Position); ok {
+		if sp, ok := parseSpan(m.Position); ok {
 			workSpan[m.WorkID] = sp
 		}
 	}

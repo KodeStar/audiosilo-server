@@ -308,21 +308,20 @@ func (r *Runner) run(ctx context.Context, full bool, now time.Time) error {
 		return err
 	}
 	locals := groupSeries(books)
-	failed := 0
-	if n, err := r.resolveSeries(ctx, locals, works, now); err != nil {
+	failed, err := r.resolveSeries(ctx, locals, works, now)
+	if err != nil {
 		return err
-	} else {
-		failed += n
 	}
 	n, err := r.fetchSeries(ctx, full, now)
 	if err != nil {
 		return err
 	}
 	failed += n
-	if err := r.classify(ctx, locals, works, now); err != nil {
+	stored, err := r.classify(ctx, locals, works, now)
+	if err != nil {
 		return err
 	}
-	if err := r.announce(ctx, now); err != nil {
+	if err := r.announce(ctx, stored, now); err != nil {
 		return err
 	}
 	if failed > 0 {
@@ -344,6 +343,29 @@ func groupSeries(books []catalog.UpcomingBook) []*localSeries {
 			out = append(out, s)
 		}
 		s.books = append(s.books, b)
+	}
+	return out
+}
+
+// byLocal groups the resolved rows by local series.
+func byLocal(rows []catalog.UpcomingSeries) map[seriesKey][]catalog.UpcomingSeries {
+	out := map[seriesKey][]catalog.UpcomingSeries{}
+	for _, row := range rows {
+		k := seriesKey{row.LibraryID, row.SeriesKey}
+		out[k] = append(out[k], row)
+	}
+	return out
+}
+
+// distinct is the non-empty keys of xs, each once, in order.
+func distinct[T any](xs []T, key func(T) string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range xs {
+		if k := key(x); k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
 	return out
 }
@@ -419,11 +441,7 @@ func (r *Runner) resolveSeries(ctx context.Context, locals []*localSeries, works
 	if err != nil {
 		return 0, fmt.Errorf("reading the series: %w", err)
 	}
-	have := map[seriesKey][]catalog.UpcomingSeries{}
-	for _, row := range rows {
-		k := seriesKey{row.LibraryID, row.SeriesKey}
-		have[k] = append(have[k], row)
-	}
+	have := byLocal(rows)
 	live := map[seriesKey]bool{}
 	failed := 0
 	for _, l := range locals {
@@ -537,12 +555,7 @@ func (r *Runner) fetchSeries(ctx context.Context, full bool, now time.Time) (int
 	if err != nil {
 		return 0, fmt.Errorf("reading the community series: %w", err)
 	}
-	var ids []string
-	for _, row := range rows {
-		if row.SeriesID != "" {
-			ids = appendNew(ids, row.SeriesID)
-		}
-	}
+	ids := distinct(rows, func(row catalog.UpcomingSeries) string { return row.SeriesID })
 	slices.Sort(ids)
 	var news map[string]bool
 	if full {
@@ -601,7 +614,7 @@ func (r *Runner) fetchSeries(ctx context.Context, full bool, now time.Time) (int
 	var drop []string
 	for id, rec := range stored {
 		goneAt, _ := parseStamp(rec.GoneAt)
-		if !slices.Contains(ids, id) || (rec.Gone && now.Sub(goneAt) >= goneGrace) {
+		if _, named := slices.BinarySearch(ids, id); !named || (rec.Gone && now.Sub(goneAt) >= goneGrace) {
 			drop = append(drop, id)
 		}
 	}
@@ -710,28 +723,25 @@ func datePrefix(v string) string {
 	return t.Format(time.DateOnly)
 }
 
-// classify works out every local series' items from what is stored.
-func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string, now time.Time) error {
+// classify works out every local series' items from what is stored, and
+// returns the community series it read.
+func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[catalog.Ref]string, now time.Time) (map[string]catalog.MetaSeriesRecord, error) {
 	rows, err := r.cat.UpcomingSeriesAll(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stored, err := r.cat.MetaSeriesAll(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	by := map[seriesKey][]catalog.UpcomingSeries{}
-	for _, row := range rows {
-		k := seriesKey{row.LibraryID, row.SeriesKey}
-		by[k] = append(by[k], row)
-	}
+	by := byLocal(rows)
 	window := r.opt.Window()
 	for _, l := range locals {
 		var series []Series
 		classified := true
 		for _, row := range by[seriesKey{l.libraryID, l.key}] {
 			classified = classified && row.Classified
-			if rec, ok := stored[row.SeriesID]; ok && row.SeriesID != "" && len(rec.Members) > 0 {
+			if rec, ok := stored[row.SeriesID]; ok && len(rec.Members) > 0 {
 				series = append(series, Series{ID: rec.ID, Members: rec.Members})
 			}
 		}
@@ -744,29 +754,23 @@ func (r *Runner) classify(ctx context.Context, locals []*localSeries, works map[
 		}
 		items := Classify(series, owned, now, window)
 		if err := r.cat.ReplaceUpcomingItems(ctx, l.libraryID, l.key, items, !classified, stamp(now)); err != nil {
-			return fmt.Errorf("saving a series' items: %w", err)
+			return nil, fmt.Errorf("saving a series' items: %w", err)
 		}
 	}
-	return nil
+	return stored, nil
 }
 
 // announce tells the admin about the releases no earlier run has: one call for
 // all of them, each work once. A work the server holds a copy of somewhere, or
 // one announced before through another series, is marked without a word.
-func (r *Runner) announce(ctx context.Context, now time.Time) error {
+// stored is the community series classify read.
+func (r *Runner) announce(ctx context.Context, stored map[string]catalog.MetaSeriesRecord, now time.Time) error {
 	items, already, err := r.cat.UnannouncedReleases(ctx)
 	if err != nil || len(items) == 0 {
 		return err
 	}
-	var ids []string
-	for _, it := range items {
-		ids = appendNew(ids, it.WorkID)
-	}
+	ids := distinct(items, func(it catalog.UpcomingItem) string { return it.WorkID })
 	held, err := r.cat.UpcomingOwnedWorks(ctx, nil, true, ids)
-	if err != nil {
-		return err
-	}
-	stored, err := r.cat.MetaSeriesAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -842,7 +846,7 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 }
 
 // stamp is the catalog's fixed-width UTC millisecond time.
-func stamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
+var stamp = catalog.FormatStamp
 
 func parseStamp(s string) (time.Time, bool) {
 	t, err := time.Parse(time.RFC3339Nano, s)

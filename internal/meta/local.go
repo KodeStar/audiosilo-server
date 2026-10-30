@@ -79,14 +79,14 @@ func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested Met
 	return PlaceLocal(env.Series, current, requested, cands)
 }
 
-// samePosition reports whether a series index and a rail position name the same
+// SamePosition reports whether a series index and a rail position name the same
 // place (the console's samePosition tolerance, so 2.5 matches "2.5").
-func samePosition(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+func SamePosition(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
-// parseSpan reads a rail position as the positions it holds: a number ("3", 3 to
+// ParseSpan reads a rail position as the positions it holds: a number ("3", 3 to
 // 3) or a range ("1-3", an omnibus of books 1 to 3: metadata.ParseSeriesRange,
 // the rule the series_index field stores one by). ok is false for anything else.
-func parseSpan(s string) (start, end float64, ok bool) {
+func ParseSpan(s string) (start, end float64, ok bool) {
 	if p, ok := parsePosition(s); ok {
 		return p, p, true
 	}
@@ -213,7 +213,7 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 			return l, true
 		}
 	}
-	start, end, ok := parseSpan(w.Position)
+	start, end, ok := ParseSpan(w.Position)
 	if !ok {
 		return MetaLocal{}, false
 	}
@@ -222,10 +222,10 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 	var omnibus MetaLocal
 	found := false
 	for _, b := range byIndex {
-		if !samePosition(b.SeriesIndex, start) {
+		if !SamePosition(b.SeriesIndex, start) {
 			continue
 		}
-		if samePosition(b.last(), end) {
+		if SamePosition(b.last(), end) {
 			return b.MetaLocal, true
 		}
 		if start == end && !found && b.SeriesIndexEnd > b.SeriesIndex {
@@ -256,8 +256,8 @@ func nextEntry(rail MetaSeries, currentWork string, skip func(MetaSeriesWork) bo
 	next = -1
 	var best, bestEnd float64
 	for i, w := range rail.Works {
-		p, end, numbered := parseSpan(w.Position)
-		if !numbered || p <= at || samePosition(p, at) || w.ID == currentWork {
+		p, end, numbered := ParseSpan(w.Position)
+		if !numbered || p <= at || SamePosition(p, at) || w.ID == currentWork {
 			continue
 		}
 		better := next < 0 || p < best || (p == best && end == p && bestEnd > best)
@@ -272,10 +272,10 @@ func nextEntry(rail MetaSeries, currentWork string, skip func(MetaSeriesWork) bo
 // (a range's end: an omnibus of 1-3 is at 3): the rail's Position, else its own
 // entry's. ok is false when neither is a number or a range.
 func currentPosition(rail MetaSeries, currentWork string) (at float64, ok bool) {
-	_, at, ok = parseSpan(rail.Position)
+	_, at, ok = ParseSpan(rail.Position)
 	for i := 0; !ok && i < len(rail.Works); i++ {
 		if rail.Works[i].ID == currentWork {
-			_, at, ok = parseSpan(rail.Works[i].Position)
+			_, at, ok = ParseSpan(rail.Works[i].Position)
 		}
 	}
 	return at, ok
@@ -362,7 +362,7 @@ func railStepsBack(rails []MetaSeries, earlier []int, currentWork, nextWork stri
 			continue
 		}
 		for _, w := range rails[j].Works {
-			if p, _, numbered := parseSpan(w.Position); w.ID == nextWork && numbered && (p < at || samePosition(p, at)) {
+			if p, _, numbered := ParseSpan(w.Position); w.ID == nextWork && numbered && (p < at || SamePosition(p, at)) {
 				return true
 			}
 		}

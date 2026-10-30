@@ -359,34 +359,11 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindBookAdded:
 		n := num("count")
 		m.Title = plural(n, "1 new book in %s", "%d new books in %s", str("library"))
-		titles, _ := ev.Data["titles"].([]any)
-		var lines []string
-		for _, t := range titles {
-			if s, ok := t.(string); ok {
-				lines = append(lines, s)
-			}
-		}
-		if more := n - len(lines); more > 0 && len(lines) > 0 {
-			lines = append(lines, fmt.Sprintf("and %d more", more))
-		}
-		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library"), []string{"books"}
+		m.Text, m.Link, m.Tags = titleLines(ev, n), link("/library"), []string{"books"}
 	case KindBookReleased:
 		n := num("count")
-		m.Title = "1 new release in your series"
-		if n != 1 {
-			m.Title = fmt.Sprintf("%d new releases in your series", n)
-		}
-		titles, _ := ev.Data["titles"].([]any)
-		var lines []string
-		for _, t := range titles {
-			if s, ok := t.(string); ok {
-				lines = append(lines, s)
-			}
-		}
-		if more := n - len(lines); more > 0 && len(lines) > 0 {
-			lines = append(lines, fmt.Sprintf("and %d more", more))
-		}
-		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library/series"), []string{"new"}
+		m.Title = plural(n, "1 new release in %s", "%d new releases in %s", "your series")
+		m.Text, m.Link, m.Tags = titleLines(ev, n), link("/library/series"), []string{"new"}
 	case KindScanFailed:
 		m.Title = "Scanning " + str("library") + " failed"
 		m.Text = "See the scan's log in Health > Jobs."
@@ -529,6 +506,22 @@ func backupReason(code string) string {
 		return "The server can't write to its backups folder."
 	}
 	return "See Server > Logs for the cause."
+}
+
+// titleLines is an event's "titles" one a line, then "and N more" when count
+// is more than it names.
+func titleLines(ev catalog.ServerEvent, count int) string {
+	titles, _ := ev.Data["titles"].([]any)
+	var lines []string
+	for _, t := range titles {
+		if s, ok := t.(string); ok {
+			lines = append(lines, s)
+		}
+	}
+	if more := count - len(lines); more > 0 && len(lines) > 0 {
+		lines = append(lines, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func plural(n int, one, many, name string) string {

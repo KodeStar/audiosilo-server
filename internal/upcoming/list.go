@@ -89,10 +89,7 @@ func List(ctx context.Context, cat *catalog.Catalog, scopes []catalog.Scope, wor
 	if err != nil || len(entries) == 0 {
 		return ans, err
 	}
-	var ids []string
-	for _, e := range entries {
-		ids = appendNew(ids, e.WorkID)
-	}
+	ids := distinct(entries, func(e catalog.UpcomingEntry) string { return e.WorkID })
 	held, err := cat.UpcomingOwnedWorks(ctx, scopes, false, ids)
 	if err != nil {
 		return ans, err

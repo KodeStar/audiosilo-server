@@ -476,11 +476,6 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
 }
 
 /**
- * How lookups are going: the service's health, or in mirror mode the local
- * copy's state with a link to its details (Health > System), followed while the
- * copy is busy as Health > System follows it.
- */
-/**
  * The daily upcoming-releases check (absent from an older server): its switch,
  * which works only while the lookup is on, and how its last run went.
  */
@@ -554,6 +549,11 @@ function upcomingRunText(t: TFunction, s: UpcomingStatus | undefined, lang: stri
   });
 }
 
+/**
+ * How lookups are going: the service's health, or in mirror mode the local
+ * copy's state with a link to its details (Health > System), followed while the
+ * copy is busy as Health > System follows it.
+ */
 function MetadataStatusRow() {
   const { t, i18n } = useTranslation();
   const system = useSystem();

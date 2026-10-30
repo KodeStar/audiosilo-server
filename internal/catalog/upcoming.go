@@ -219,25 +219,45 @@ type MetaSeriesRecord struct {
 
 // MetaSeriesAll returns every stored community series, by id.
 func (c *Catalog) MetaSeriesAll(ctx context.Context) (map[string]MetaSeriesRecord, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT series_id, name, members, fetched_at, state = 'gone', COALESCE(gone_at, '')
-		  FROM meta_series`)
-	if err != nil {
+	out := map[string]MetaSeriesRecord{}
+	if err := c.readMetaSeries(ctx, out, "", nil); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return out, nil
+}
+
+// metaSeriesOf returns the stored community series of ids, by id.
+func (c *Catalog) metaSeriesOf(ctx context.Context, ids []string) (map[string]MetaSeriesRecord, error) {
 	out := map[string]MetaSeriesRecord{}
+	for chunk := range slices.Chunk(ids, 500) {
+		if err := c.readMetaSeries(ctx, out, ` WHERE series_id IN (`+placeholders(len(chunk))+`)`, anyOf(chunk)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// readMetaSeries adds the meta_series rows where (a WHERE clause, "" for all)
+// selects to out.
+func (c *Catalog) readMetaSeries(ctx context.Context, out map[string]MetaSeriesRecord, where string, args []any) error {
+	rows, err := c.db.QueryContext(ctx, `SELECT series_id, name, members, fetched_at, state = 'gone', COALESCE(gone_at, '')
+		  FROM meta_series`+where, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var r MetaSeriesRecord
 		var members string
 		if err := rows.Scan(&r.ID, &r.Name, &members, &r.FetchedAt, &r.Gone, &r.GoneAt); err != nil {
-			return nil, err
+			return err
 		}
 		if json.Unmarshal([]byte(members), &r.Members) != nil {
 			r.Members = nil // unreadable: refetched as a series with no members
 		}
 		out[r.ID] = r
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // SaveMetaSeries stores a series as fetched (ok again if it was gone).
@@ -305,7 +325,6 @@ type UpcomingItem struct {
 	ReleaseDate string
 	Position    string
 	FirstSeenAt string
-	AnnouncedAt string
 }
 
 // ReplaceUpcomingItems makes items a local series' items: a work it had keeps
@@ -452,7 +471,7 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 	args := slices.Concat(fargs, fargs)
 	rows, err := c.db.QueryContext(ctx, `SELECT i.library_id, i.series_key, i.work_id, i.series_id, i.kind,
-		       i.release_date, i.position, i.first_seen_at, COALESCE(i.announced_at, ''), s.name
+		       i.release_date, i.position, i.first_seen_at, s.name
 		  FROM upcoming_items i
 		  JOIN libraries l ON l.id = i.library_id AND l.kind = 'books'
 		  JOIN upcoming_series s ON s.library_id = i.library_id AND s.series_key = i.series_key
@@ -467,14 +486,18 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 	}
 	defer rows.Close()
 	var out []UpcomingEntry
-	ids := map[string]bool{}
+	var ids []string
+	seen := map[string]bool{}
 	for rows.Next() {
 		var e UpcomingEntry
 		if err := rows.Scan(&e.LibraryID, &e.SeriesKey, &e.WorkID, &e.SeriesID, &e.Kind, &e.ReleaseDate,
-			&e.Position, &e.FirstSeenAt, &e.AnnouncedAt, &e.LocalName); err != nil {
+			&e.Position, &e.FirstSeenAt, &e.LocalName); err != nil {
 			return nil, err
 		}
-		ids[e.SeriesID] = true
+		if !seen[e.SeriesID] {
+			seen[e.SeriesID] = true
+			ids = append(ids, e.SeriesID)
+		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -483,7 +506,7 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 	if len(out) == 0 {
 		return nil, nil
 	}
-	series, err := c.MetaSeriesAll(ctx)
+	series, err := c.metaSeriesOf(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,7 @@ import type {
 import { parseSeriesRange } from '@/features/book/field-rules';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
-import { formatSeriesPosition } from '@/lib/format';
+import { formatDay, formatSeriesPosition } from '@/lib/format';
 import { hashString } from '@/lib/monogram';
 import { sameSeries, seriesKey } from '@/lib/series-key';
 
@@ -247,13 +247,12 @@ export function formatReleaseDate(date: string | undefined, lang: string): strin
   if (!parts) return '';
   const [y, mo, d] = parts;
   if (!mo) return String(y);
-  const at = Date.UTC(y, mo - 1, d || 1);
-  return new Intl.DateTimeFormat(lang, {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return formatDay(`${y}-${p(mo)}-${p(d || 1)}`, lang, {
     ...(d ? { day: 'numeric' } : {}),
     month: 'short',
     year: 'numeric',
-    timeZone: 'UTC',
-  }).format(at);
+  });
 }
 
 /**
