@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -176,24 +177,29 @@ func writeScript(t *testing.T, path, body string) {
 
 // A cached master build (an older server's download, which turns the
 // in-process probe off) is replaced by the pinned branch's on Linux and
-// Windows, once; a failed download keeps it; a release build or another
-// platform's source is left as it is (server#269).
+// Windows without blocking start-up: the master build serves this run, the
+// release build is fetched in the background and swapped in at the next start.
+// A failed fetch keeps the master build and isn't retried within 24 h; a
+// release build or another platform's source is left as it is (server#269).
 func TestEnsureReplacesCachedMaster(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("the cached stubs are shell scripts")
 	}
-	const master = "N-121510-g6e6a2b6f2c-20251028"
+	const (
+		master  = "N-121510-g6e6a2b6f2c-20251028"
+		release = "n8.1.3-25-g611cec792a-20261029"
+	)
 	for _, tc := range []struct {
 		name, platform, cached string
 		dlErr                  error
 		wantDownloads          int
-		wantVersion            string
+		wantNext               string // ffprobe's version at the next start
 	}{
-		{"master on linux", "linux/amd64", master, nil, 1, "n8.1.3-25-g611cec792a-20261029"},
-		{"master on windows", "windows/arm64", master, nil, 1, "n8.1.3-25-g611cec792a-20261029"},
+		{"master on linux", "linux/amd64", master, nil, 1, release},
+		{"master on windows", "windows/arm64", master, nil, 1, release},
 		{"master, download fails", "linux/amd64", master, errors.New("offline"), 1, master},
-		{"release build", "linux/amd64", "n8.1.3-25-g611cec792a-20261029", nil, 0, "n8.1.3-25-g611cec792a-20261029"},
+		{"release build", "linux/amd64", release, nil, 0, release},
 		{"distribution build", "linux/amd64", "7.1.1-3ubuntu1", nil, 0, "7.1.1-3ubuntu1"},
 		{"macOS master", "darwin/arm64", master, nil, 0, master},
 	} {
@@ -207,20 +213,98 @@ func TestEnsureReplacesCachedMaster(t *testing.T) {
 				if !strings.Contains(s.combinedURL, "ffmpeg-n8.1-latest-") {
 					t.Errorf("downloaded %q", s.combinedURL)
 				}
+				if into != filepath.Join(dir, stagedDir) {
+					t.Errorf("downloaded into %q, want the staging dir", into)
+				}
 				if tc.dlErr != nil {
 					return tc.dlErr
 				}
-				writeStubs(t, into, "n8.1.3-25-g611cec792a-20261029")
+				writeStubs(t, into, release)
 				return nil
 			}
+			var pending []func()
+			later := func(f func()) { pending = append(pending, f) }
 			goos, goarch, _ := strings.Cut(tc.platform, "/")
-			fm, fp := ensure(context.Background(), dir, discard(), goos, goarch, dl)
-			if fm == "" || fp == "" || downloads != tc.wantDownloads {
-				t.Fatalf("ensure = %q, %q after %d downloads, want both after %d", fm, fp, downloads, tc.wantDownloads)
+			start := func(wantVersion string) {
+				t.Helper()
+				fm, fp := ensure(context.Background(), dir, discard(), goos, goarch, dl, later)
+				if fm == "" || fp == "" {
+					t.Fatalf("ensure = %q, %q, want both", fm, fp)
+				}
+				if v, err := Version(context.Background(), fp); err != nil || v != wantVersion {
+					t.Fatalf("ffprobe version %q %v, want %q", v, err, wantVersion)
+				}
 			}
-			if v, err := Version(context.Background(), fp); err != nil || v != tc.wantVersion {
-				t.Fatalf("ffprobe version %q %v, want %q", v, err, tc.wantVersion)
+
+			// This start: the cached build, and no download before ensure returns.
+			start(tc.cached)
+			if downloads != 0 {
+				t.Fatalf("%d downloads before ensure returned, want 0 (start-up never waits)", downloads)
+			}
+			for _, f := range pending {
+				f()
+			}
+			pending = nil
+			if downloads != tc.wantDownloads {
+				t.Fatalf("%d background downloads, want %d", downloads, tc.wantDownloads)
+			}
+
+			// The next start swaps in the release build, or keeps the cached one.
+			start(tc.wantNext)
+			if _, err := os.Stat(filepath.Join(dir, stagedDir)); !os.IsNotExist(err) {
+				t.Fatalf("staging dir still there after the next start: %v", err)
+			}
+			if tc.dlErr == nil {
+				if len(pending) != 0 {
+					t.Fatalf("another fetch after the swap")
+				}
+				return
+			}
+			// A failed fetch backs off: no retry within 24 h...
+			if len(pending) != 0 {
+				t.Fatalf("a retry within the back-off")
+			}
+			// ...and retries once the marker is older.
+			old := time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339)
+			if err := os.WriteFile(filepath.Join(dir, failedMarker), []byte(old), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			start(master)
+			if len(pending) != 1 {
+				t.Fatalf("%d fetches after the back-off, want 1", len(pending))
 			}
 		})
+	}
+}
+
+// A shutdown mid-fetch leaves no back-off marker, so the next start tries
+// again; a staged build that fails its self-check is dropped, not swapped in.
+func TestReleaseFetchCancelAndBadStage(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts")
+	}
+	dir := t.TempDir()
+	writeStubs(t, dir, "N-1-g0")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s, _ := specFor("linux", "amd64")
+	fetchRelease(ctx, dir, discard(), s, func(ctx context.Context, _ spec, _ string) error { return ctx.Err() })
+	if _, err := os.Stat(filepath.Join(dir, failedMarker)); !os.IsNotExist(err) {
+		t.Fatalf("marker after a cancelled fetch: %v", err)
+	}
+
+	next := filepath.Join(dir, stagedDir)
+	if err := os.MkdirAll(next, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, filepath.Join(next, binName("ffmpeg")), "#!/bin/sh\nexit 0\n")
+	writeScript(t, filepath.Join(next, binName("ffprobe")), "#!/bin/sh\nexit 1\n")
+	promoteStaged(context.Background(), dir, discard())
+	if v, err := Version(context.Background(), filepath.Join(dir, binName("ffprobe"))); err != nil || v != "N-1-g0" {
+		t.Fatalf("ffprobe after a bad stage %q %v, want the cached one", v, err)
+	}
+	if _, err := os.Stat(next); !os.IsNotExist(err) {
+		t.Fatalf("bad stage kept: %v", err)
 	}
 }

@@ -109,13 +109,17 @@ func cachedOne(dir, tool string) string {
 // Ensure returns usable ffmpeg/ffprobe paths under dir, downloading a static build
 // for the current platform if they aren't cached yet. Either result is "" when the
 // tool couldn't be made available (offline, unsupported platform, or a failed
-// integrity check) - the caller degrades gracefully and retries next start.
+// integrity check) - the caller degrades gracefully and retries next start. A
+// cached BtbN master build is kept for this run while the release build is
+// fetched in the background for the next start (replaceMaster).
 func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe string) {
-	return ensure(ctx, dir, log, runtime.GOOS, runtime.GOARCH, download)
+	return ensure(ctx, dir, log, runtime.GOOS, runtime.GOARCH, download, func(f func()) { go f() })
 }
 
-// ensure is Ensure for platform goos/goarch, downloading with dl.
-func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error) (ffmpeg, ffprobe string) {
+// ensure is Ensure for platform goos/goarch, downloading with dl; bg runs the
+// background release fetch.
+func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, bg func(func())) (ffmpeg, ffprobe string) {
+	promoteStaged(ctx, dir, log)
 	// Verify the cached copies rather than trusting a bare stat - a download killed
 	// mid-write (before writeExec became atomic, or a disk/FS fault) can leave a
 	// non-runnable binary that a stat happily reports as present. verified discards a
@@ -124,7 +128,8 @@ func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch stri
 		ffmpeg = verified(ctx, ffmpeg, log)
 		ffprobe = verified(ctx, ffprobe, log)
 		if ffmpeg != "" && ffprobe != "" {
-			return replaceMaster(ctx, dir, log, goos, goarch, dl, ffmpeg, ffprobe)
+			replaceMaster(ctx, dir, log, goos, goarch, dl, bg, ffprobe)
+			return ffmpeg, ffprobe
 		}
 	}
 	s, ok := specFor(goos, goarch)
@@ -152,26 +157,92 @@ func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch stri
 	return ffmpeg, ffprobe
 }
 
-// replaceMaster swaps a cached BtbN master build (an older server's download,
-// whose "N-..." version the in-process probe doesn't know) for the pinned
-// branch's, once: the old pair stays when the download fails, and the next
-// start tries again. Any other cached pair is returned as it is.
-func replaceMaster(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, ffmpeg, ffprobe string) (string, string) {
+const (
+	// stagedDir (under the tools dir) holds a release build fetched in the
+	// background, swapped in at the next start (promoteStaged).
+	stagedDir = "next"
+	// failedMarker records when the last background release fetch failed
+	// (RFC 3339), so a host that can't download doesn't retry every start.
+	failedMarker = ".release-fetch-failed"
+	// releaseRetry is how long a failed background fetch waits before the next.
+	releaseRetry = 24 * time.Hour
+)
+
+// replaceMaster starts the swap of a cached BtbN master build (an older
+// server's download, whose "N-..." version the in-process probe doesn't know)
+// for the pinned branch's. It never blocks start-up: the cached pair serves this
+// run, the release build is fetched in the background into <dir>/next and
+// swapped in at the next start. A failed fetch is retried no sooner than
+// releaseRetry later. Any other cached pair is left as it is.
+func replaceMaster(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, bg func(func()), ffprobe string) {
 	s, ok := specFor(goos, goarch)
 	if !ok || s.combinedURL == "" {
-		return ffmpeg, ffprobe
+		return
 	}
 	if v, err := Version(ctx, ffprobe); err != nil || !strings.HasPrefix(v, "N-") {
-		return ffmpeg, ffprobe
+		return
 	}
-	log.Info("the cached ffmpeg/ffprobe is a master build - downloading the "+btbnBranch+" release build (one time)", "into", dir)
-	if err := dl(ctx, s, dir); err != nil {
-		log.Warn("ffmpeg release download failed; keeping the cached build (will retry next start)", "err", err)
-		return ffmpeg, ffprobe
+	marker := filepath.Join(dir, failedMarker)
+	if b, err := os.ReadFile(marker); err == nil {
+		if at, perr := time.Parse(time.RFC3339, strings.TrimSpace(string(b))); perr == nil && time.Since(at) < releaseRetry {
+			log.Info("the cached ffmpeg/ffprobe is a master build; the "+btbnBranch+" release download failed recently, keeping it",
+				"retry_after", at.Add(releaseRetry).Format(time.RFC3339))
+			return
+		}
 	}
-	// A tool that fails its self-check is removed: the next start downloads it.
-	newMpeg, newProbe := Cached(dir)
-	return verified(ctx, newMpeg, log), verified(ctx, newProbe, log)
+	log.Info("the cached ffmpeg/ffprobe is a master build; fetching the "+btbnBranch+" release build in the background for the next start", "into", dir)
+	bg(func() { fetchRelease(ctx, dir, log, s, dl) })
+}
+
+// fetchRelease downloads the release build into <dir>/next and checks it. A
+// failure (not a shutdown) writes the back-off marker; a success clears it.
+func fetchRelease(ctx context.Context, dir string, log *slog.Logger, s spec, dl func(context.Context, spec, string) error) {
+	next := filepath.Join(dir, stagedDir)
+	marker := filepath.Join(dir, failedMarker)
+	fail := func(err error) {
+		_ = os.RemoveAll(next)
+		if ctx.Err() != nil {
+			return // shut down mid-fetch: try again next start, no back-off
+		}
+		log.Warn("ffmpeg release download failed; keeping the cached build (retrying in 24 h)", "err", err)
+		_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+	}
+	_ = os.RemoveAll(next)
+	if err := os.MkdirAll(next, 0o750); err != nil {
+		fail(err)
+		return
+	}
+	if err := dl(ctx, s, next); err != nil {
+		fail(err)
+		return
+	}
+	if fm, fp := Cached(next); verified(ctx, fm, log) == "" || verified(ctx, fp, log) == "" {
+		fail(fmt.Errorf("the downloaded release build failed its self-check"))
+		return
+	}
+	_ = os.Remove(marker)
+	log.Info("ffmpeg/ffprobe " + btbnBranch + " release build downloaded; it is used from the next start")
+}
+
+// promoteStaged moves a checked release build from <dir>/next into dir (the
+// background fetch of an earlier run). An incomplete or failing one is removed.
+func promoteStaged(ctx context.Context, dir string, log *slog.Logger) {
+	next := filepath.Join(dir, stagedDir)
+	if _, err := os.Stat(next); err != nil {
+		return
+	}
+	defer func() { _ = os.RemoveAll(next) }()
+	fm, fp := Cached(next)
+	if verified(ctx, fm, log) == "" || verified(ctx, fp, log) == "" {
+		return
+	}
+	for _, p := range []string{fm, fp} {
+		if err := os.Rename(p, filepath.Join(dir, filepath.Base(p))); err != nil {
+			log.Warn("could not swap in the ffmpeg release build; keeping the cached one", "err", err)
+			return
+		}
+	}
+	log.Info("swapped in the ffmpeg/ffprobe "+btbnBranch+" release build", "dir", dir)
 }
 
 // verified returns path if `<path> -version` runs, else "" (and removes the file).
