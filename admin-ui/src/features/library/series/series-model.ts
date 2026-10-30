@@ -450,13 +450,15 @@ export function spineHeight(seconds: number, key: string): number {
  * whole release label `label` ("Preorder · 24 Nov 2026") in the line it runs in
  * beside the title; when not, the spine shows the date alone (its colour still
  * says preorder or new; the spine's own label says it all). The sizes are
- * globals.css's: the shelf (232 px, 200 on a phone), the spine's padding and
- * number, and the date's mono characters (0.625em of 10 px, 9 on a phone).
+ * globals.css's: the shelf (232 px, 200 on a phone), the spine's padding,
+ * dashed border and number (a 15.75 px line and its 10 px margin), and the
+ * date's mono characters (JetBrains Mono's 0.6em of 10 px, 9 on a phone, plus
+ * the 0.02em letter-spacing it inherits from the spine's 12.5 px, 11.5 on a phone).
  */
 export function spineFitsLabel(heightPct: number, label: string, phone: boolean): boolean {
   const shelf = phone ? 200 : 232;
-  const chrome = 22 + 14 + 26;
-  const char = 0.625 * (phone ? 9 : 10);
+  const chrome = 22 + 14 + 2 * 1.5 + 26;
+  const char = 0.6 * (phone ? 9 : 10) + 0.02 * (phone ? 11.5 : 12.5);
   return (heightPct / 100) * shelf - chrome >= [...label].length * char;
 }
 

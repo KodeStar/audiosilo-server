@@ -246,7 +246,7 @@ function Shelf({
                       </span>
                     </span>
                   ) : (
-                    sp.entry.title
+                    <span className="spine-title">{sp.entry.title}</span>
                   )}
                 </span>
               </li>
