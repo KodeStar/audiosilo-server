@@ -433,6 +433,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/me/progress", a.requireAuth(http.HandlerFunc(a.handleListProgress)))
 	mux.Handle("GET /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handleGetProgress)))
 	mux.Handle("PUT /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handlePutProgress)))
+	mux.Handle("POST /api/v1/me/listening/sync", a.requireAuth(http.HandlerFunc(a.handleListeningSync)))
 	mux.Handle("GET /api/v1/libraries/{id}/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListBookmarks)))
 	mux.Handle("POST /api/v1/libraries/{id}/bookmarks", a.requireAuth(http.HandlerFunc(a.handleAddBookmark)))
 	mux.Handle("DELETE /api/v1/bookmarks/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteBookmark)))

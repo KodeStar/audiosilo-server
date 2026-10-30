@@ -40,15 +40,48 @@ type Progress struct {
 	UpdatedAt     string  `json:"updated_at"`
 	StartedAt     string  `json:"started_at,omitempty"`
 	FinishedAt    string  `json:"finished_at,omitempty"`
+	// DeviceName is the name of the device that saved the row as the server
+	// knows it (the saving token's, never a request body's; "" unknown).
+	DeviceName string `json:"device_name,omitempty"`
+	// OtherPlace is the place a diverged listening event did not keep (Sync v2,
+	// SyncListening), kept on the row until a device that saw it carries on, an
+	// edit, or a move clears it; nil for none. Both fields are additive: an old
+	// player ignores them, and a PUT that echoes them back is not refused (the
+	// server sets both itself).
+	OtherPlace *ListeningOtherPlace `json:"other_place,omitempty"`
+}
+
+// ListeningOtherPlace is the listening twin of reading's OtherPlace: a place in
+// a book (whole-book seconds) that a diverged event did not keep, offered as
+// "On {device} you were at ...". Persisted on the progress row (other_* columns).
+type ListeningOtherPlace struct {
+	Position   float64 `json:"position"`
+	DeviceID   string  `json:"device_id"`
+	DeviceName string  `json:"device_name"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 // progressColumns are the columns of a Progress, in scanProgress's order.
 const progressColumns = `library_id, rel_path, position, duration, finished, playback_speed, version, device_id,
-	updated_at, COALESCE(started_at, ''), COALESCE(finished_at, '')`
+	updated_at, COALESCE(started_at, ''), COALESCE(finished_at, ''), device_name,
+	other_position, other_device_id, other_device_name, other_at`
 
 func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
-	return row.Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
-		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.StartedAt, &p.FinishedAt)
+	var (
+		otherPos                     sql.NullFloat64
+		otherDev, otherName, otherAt sql.NullString
+	)
+	if err := row.Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
+		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.StartedAt, &p.FinishedAt, &p.DeviceName,
+		&otherPos, &otherDev, &otherName, &otherAt); err != nil {
+		return err
+	}
+	p.OtherPlace = nil
+	if otherPos.Valid {
+		p.OtherPlace = &ListeningOtherPlace{Position: otherPos.Float64, DeviceID: otherDev.String,
+			DeviceName: otherName.String, UpdatedAt: otherAt.String}
+	}
+	return nil
 }
 
 // Bookmark is a saved position with an optional note and label (a machine key
@@ -114,8 +147,21 @@ func getProgress(ctx context.Context, q querier, userID int64, ref Ref) (*Progre
 // bound; the write's RETURNING sets the echo's, a stale save echoes the stored row).
 // The comparison and the write are one writer transaction, so a write that lands
 // between them (another device's save, an EditProgress) can't be overwritten by
-// an older save that read the row before it.
+// an older save that read the row before it. SaveProgress is SaveProgressFrom
+// with no token known.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
+	return c.SaveProgressFrom(ctx, userID, 0, in)
+}
+
+// SaveProgressFrom is SaveProgress for a save made by token tokenID (the legacy
+// PUT .../progress): in.DeviceName is that token's name, stored on an applied
+// row (the caller sets it; a body's is never trusted), and in.OtherPlace is
+// ignored. Sync v2 (Track W1) records the save as a "put" listening event in
+// the same transaction (id put-<16 hex>, base not sent, at its updated_at,
+// status applied or not_applied "older"), sets finish_changed_at when finished
+// changes and clears no offered place: otherwise unchanged, so a shipped player
+// behaves exactly as before (last-write-wins, finished included).
+func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, in Progress) (*Progress, error) {
 	// Distrust an unparseable or far-future client timestamp (see
 	// plausibleUpdatedAt) and substitute server time.
 	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {
@@ -124,14 +170,18 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
+	in.OtherPlace = nil
 	// started_at is stamped by the first save and kept; finished_at is stamped
 	// when finished turns on and cleared when it turns off (a restart). Both take
 	// the save's own time (already checked by plausibleUpdatedAt), so a finish
 	// replayed from an offline queue is dated when it happened, normalized to
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
-	stamp := c.now().UTC().Format(time.RFC3339)
+	now := c.now()
+	stamp := now.UTC().Format(time.RFC3339)
+	at := formatSessionTime(now) // the event's time, and finish_changed_at's
 	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
 		stamp = t.UTC().Format(time.RFC3339)
+		at = formatSessionTime(t)
 	}
 	var out *Progress
 	err := c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
@@ -139,9 +189,11 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 		if err != nil {
 			return err
 		}
+		ev := putEvent(in, tokenID, at, formatSessionTime(now))
 		if existing != nil && !IsNewer(in, *existing) {
 			out = existing // incoming update is stale; keep stored value
-			return nil
+			ev.status, ev.reason = statusNotApplied, reasonOlder
+			return insertPutEvent(ctx, tx, userID, ev)
 		}
 		if in.Version == 0 {
 			in.Version = 1
@@ -150,26 +202,40 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 			}
 		}
 		// RETURNING reads the dates the row ended up with (a kept start, a kept or
-		// new finish), so the echo carries the stored ones.
+		// new finish) and the offered place it keeps, so the echo carries the stored ones.
+		var (
+			otherPos                     sql.NullFloat64
+			otherDev, otherName, otherAt sql.NullString
+		)
 		if err := tx.QueryRowContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-			     playback_speed, version, device_id, updated_at, started_at, finished_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
+			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
+			     finish_changed_at)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,CASE WHEN ?6 THEN ?11 END,?12,CASE WHEN ?6 THEN ?13 END)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, duration=excluded.duration,
 			     finished=excluded.finished, playback_speed=excluded.playback_speed,
 			     version=excluded.version, device_id=excluded.device_id,
-			     updated_at=excluded.updated_at,
+			     updated_at=excluded.updated_at, device_name=excluded.device_name,
 			     finished_at=CASE WHEN NOT excluded.finished THEN NULL
 			                      WHEN progress.finished THEN progress.finished_at
-			                      ELSE ?11 END
-			 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, '')`,
+			                      ELSE ?11 END,
+			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
+			                            ELSE progress.finish_changed_at END
+			 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, ''),
+			           other_position, other_device_id, other_device_name, other_at`,
 			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
-			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp).Scan(&in.StartedAt, &in.FinishedAt); err != nil {
+			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp, in.DeviceName, at).
+			Scan(&in.StartedAt, &in.FinishedAt, &otherPos, &otherDev, &otherName, &otherAt); err != nil {
 			return err
 		}
+		if otherPos.Valid {
+			in.OtherPlace = &ListeningOtherPlace{Position: otherPos.Float64, DeviceID: otherDev.String,
+				DeviceName: otherName.String, UpdatedAt: otherAt.String}
+		}
 		out = &in
-		return nil
+		ev.status = statusApplied
+		return insertPutEvent(ctx, tx, userID, ev)
 	})
 	if err != nil {
 		return nil, err
@@ -351,6 +417,9 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		        finished = finished AND ?6
 		  WHERE library_id = ?4 AND rel_path = ?5`,
 		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		// Sync v2's event log (0061): its places land on into's timeline.
+		`UPDATE listening_events SET rel_path = ?1, from_pos = from_pos + ?2, to_pos = to_pos + ?2
+		  WHERE library_id = ?4 AND rel_path = ?5`,
 		// What an import changed on the path (catalog/imports.go), so an undo still
 		// finds the row; an import that also changed into keeps that entry.
 		`UPDATE OR IGNORE import_progress_prior SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
@@ -413,21 +482,36 @@ func carryFavourites(ctx context.Context, tx *sql.Tx, libraryID int64, from, int
 	return err
 }
 
-// listenerProgress is one listener's progress row on a path.
+// listenerProgress is one listener's progress row on a path, with its device
+// name (in the Progress, so it follows the merge's winner) and the time of its
+// last finish-state change.
 type listenerProgress struct {
 	user int64
 	UserProgress
+	finishChangedAt sql.NullString
 }
 
 // progressOn reads every listener's progress on one path.
 func progressOn(ctx context.Context, tx *sql.Tx, libraryID int64, relPath string) ([]listenerProgress, error) {
 	return queryRows(ctx, tx, func(rows *sql.Rows, r *listenerProgress) error {
-		var err error
-		r.UserProgress, err = scanUserProgress(rows, &r.user)
+		var (
+			err        error
+			deviceName string
+		)
+		r.UserProgress, err = scanUserProgress(rows, &r.user, &deviceName, &r.finishChangedAt)
+		r.DeviceName = deviceName
 		return err
-	}, `SELECT `+userProgressColumns+`, p.user_id FROM progress p
+	}, `SELECT `+userProgressColumns+`, p.user_id, p.device_name, p.finish_changed_at FROM progress p
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
 	     WHERE p.library_id = ? AND p.rel_path = ?`, libraryID, relPath)
+}
+
+// newerFinishChange is the later of two finish_changed_at values (NULL none).
+func newerFinishChange(a, b sql.NullString) sql.NullString {
+	if !a.Valid || (b.Valid && parseSessionTime(b.String).After(parseSessionTime(a.String))) {
+		return b
+	}
+	return a
 }
 
 // carryProgress moves every listener's progress on part.Path to into, placed on
@@ -442,12 +526,13 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 	if err != nil {
 		return err
 	}
-	existing := make(map[int64]UserProgress, len(have))
+	existing := make(map[int64]listenerProgress, len(have))
 	for _, r := range have {
-		existing[r.user] = r.UserProgress
+		existing[r.user] = r
 	}
 	for _, r := range from {
 		p := r.UserProgress
+		finishChanged := r.finishChangedAt
 		p.Position, p.Finished = part.at(p.Position, p.Finished)
 		if total <= 0 {
 			p.Duration = part.end(p.Position, p.Duration)
@@ -456,7 +541,8 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			p.FinishedAt = nil
 		}
 		if cur, ok := existing[r.user]; ok {
-			p = merge(cur, p)
+			p = merge(cur.UserProgress, p)
+			finishChanged = newerFinishChange(cur.finishChangedAt, finishChanged)
 		}
 		if total > 0 {
 			p.Duration = total
@@ -468,17 +554,24 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			}
 			p.FinishedAt = &at
 		}
+		// The device name follows the merge's winner and the newer finish-state
+		// change is kept; an offered place (other_place) is dropped: it was a place
+		// on the old path's timeline.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-			     playback_speed, version, device_id, updated_at, started_at, finished_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
+			     finish_changed_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 			     playback_speed=excluded.playback_speed, version=excluded.version,
 			     device_id=excluded.device_id, updated_at=excluded.updated_at,
-			     started_at=excluded.started_at, finished_at=excluded.finished_at`,
+			     started_at=excluded.started_at, finished_at=excluded.finished_at,
+			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
+			     other_position=NULL, other_device_id=NULL, other_device_name=NULL, other_at=NULL,
+			     other_version=NULL`,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt); err != nil {
+			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged); err != nil {
 			return err
 		}
 	}

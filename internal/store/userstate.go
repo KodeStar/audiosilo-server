@@ -58,7 +58,11 @@ var userStateTables = map[string]tableRule{
 	// each copy: catalog.duplicateSets), so its key (user_id, library_id,
 	// rel_path) is watched.
 	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
-		"updated_at", "started_at", "finished_at"}},
+		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
+		"other_device_id", "other_device_name", "other_at", "other_version"}},
+	// Sync v2's event log (catalog.SyncListening, migration 0061): read only by
+	// the sync itself, never by a content cache.
+	"listening_events":   {rows: true},
 	"listening_sessions": {rows: true},
 	"listening_history":  {rows: true},
 	"bookmarks":          {rows: true},

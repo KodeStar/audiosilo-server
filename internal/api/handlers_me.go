@@ -93,8 +93,11 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Ref = catalog.Ref{LibraryID: lib.ID, Path: key}
-	u := userFrom(r.Context())
-	saved, err := a.cat.SaveProgress(r.Context(), u.ID, in)
+	u, cred := userFrom(r.Context()), credentialFrom(r.Context())
+	// The device's name is the token's, never the body's (an echoed row may
+	// carry one), and the save is logged as a Sync v2 "put" event.
+	in.DeviceName = cred.DeviceName
+	saved, err := a.cat.SaveProgressFrom(r.Context(), u.ID, cred.DeviceID, in)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save progress")
 		return

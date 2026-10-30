@@ -18,7 +18,10 @@ import (
 // stops and are dropped while the player is offline, so they can't say who is
 // listening right now, and they carry no device. A progress save carries the
 // token (so the device and app), works for every client already shipped, and
-// arrives while playback runs. See RecordHeartbeat.
+// arrives while playback runs. See RecordHeartbeat. A Sync v2 player (Track W1)
+// posts listen spans instead, folded into the same sessions at their corrected
+// device times (recordSpan, listening_sync.go), so offline listening counts when
+// it happened.
 
 const (
 	// SessionGap is how long a token may go without a progress save on a book
@@ -111,69 +114,100 @@ func listenedBetween(wall time.Duration, advanced, speed float64) float64 {
 // has recorded no listening yet (a single save, such as a "mark finished" or a
 // sync from another app) is not shown anywhere (listenedSQL). Recording is
 // best-effort bookkeeping beside the progress itself; callers log a failure and
-// still answer the save.
+// still answer the save. Sync v2's spans take recordSpan instead (the same
+// session rows, the span's own times).
 func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 	if hb.Speed <= 0 {
 		hb.Speed = 1
 	}
 	at := formatSessionTime(hb.At)
 	return c.db.WithUserStateTx(ctx, "RecordHeartbeat", func(tx *sql.Tx) error {
-		var (
-			id     int64
-			lastAt string
-			endPos float64
-		)
-		// A session started before the person turned listening in the house on
-		// (household_sharing.updated_at) never continues: the first save after the
-		// switch starts a new one, so no session holds listening from both sides of
-		// it and HouseListening can tell them apart by started_at (the same bound,
-		// so a session started in the switch's millisecond continues and shows).
-		err := tx.QueryRowContext(ctx,
-			`SELECT id, last_at, end_pos FROM listening_sessions
-			  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
-			    AND started_at >= COALESCE((SELECT updated_at FROM household_sharing
-			                                 WHERE user_id = ?1 AND share_listening = 1), '')
-			  ORDER BY id DESC LIMIT 1`,
-			hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path,
-			formatSessionTime(hb.At.Add(-resumeWindow))).Scan(&id, &lastAt, &endPos)
-		if err == nil {
-			wall := hb.At.Sub(parseSessionTime(lastAt))
-			if wall > SessionGap && !continuousPlayback(wall, hb.Position-endPos, hb.Speed) {
-				err = sql.ErrNoRows // too long ago: this save starts a new session
-			}
-		}
-		if errors.Is(err, sql.ErrNoRows) {
-			var codec string
-			if err := tx.QueryRowContext(ctx,
-				`SELECT codec FROM books WHERE library_id = ? AND rel_path = ?`,
-				hb.Ref.LibraryID, hb.Ref.Path).Scan(&codec); err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO listening_sessions(user_id, library_id, rel_path, token_id, device_name,
-				     client_app, client_version, client_platform, started_at, last_at, start_pos, end_pos,
-				     duration, speed, codec, transcoded, finished)
-				 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				hb.UserID, hb.Ref.LibraryID, hb.Ref.Path, hb.TokenID, hb.DeviceName,
-				hb.Client.App, hb.Client.Version, hb.Client.Platform, at, at, hb.Position, hb.Position,
-				hb.Duration, hb.Speed, codec, hb.Transcoded, hb.Finished)
-			return err
-		}
+		open, err := latestSession(ctx, tx, hb, hb.At.Add(-resumeWindow))
 		if err != nil {
 			return err
 		}
-		add := listenedBetween(hb.At.Sub(parseSessionTime(lastAt)), hb.Position-endPos, hb.Speed)
-		// hb.Client is already the token's newest app (a save without the header
-		// carries the stored one), so it is written as is.
-		_, err = tx.ExecContext(ctx,
-			`UPDATE listening_sessions SET last_at = ?, end_pos = ?, duration = ?, speed = ?,
-			        listened = listened + ?, finished = MAX(finished, ?), transcoded = MAX(transcoded, ?),
-			        client_app = ?, client_version = ?, client_platform = ?
-			  WHERE id = ?`,
-			at, hb.Position, hb.Duration, hb.Speed, add, hb.Finished, hb.Transcoded,
-			hb.Client.App, hb.Client.Version, hb.Client.Platform, id)
-		return err
+		if open != nil {
+			wall := hb.At.Sub(parseSessionTime(open.lastAt))
+			if wall > SessionGap && !continuousPlayback(wall, hb.Position-open.endPos, hb.Speed) {
+				open = nil // too long ago: this save starts a new session
+			}
+		}
+		if open == nil {
+			return insertSession(ctx, tx, hb, at, at, hb.Position, hb.Position, 0)
+		}
+		add := listenedBetween(hb.At.Sub(parseSessionTime(open.lastAt)), hb.Position-open.endPos, hb.Speed)
+		return extendSession(ctx, tx, open.id, hb, at, hb.Position, add)
 	})
+}
+
+// openSession is the token's newest session on a book (latestSession).
+type openSession struct {
+	id                int64
+	startedAt, lastAt string
+	endPos            float64
+}
+
+// latestSession is the session hb's token last recorded on hb's book whose last
+// save is at or after since, or nil. A session started before the person turned
+// listening in the house on (household_sharing.updated_at) never continues: the
+// first save after the switch starts a new one, so no session holds listening
+// from both sides of it and HouseListening can tell them apart by started_at
+// (the same bound, so a session started in the switch's millisecond continues
+// and shows).
+func latestSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, since time.Time) (*openSession, error) {
+	var s openSession
+	err := tx.QueryRowContext(ctx,
+		`SELECT id, started_at, last_at, end_pos FROM listening_sessions
+		  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
+		    AND started_at >= COALESCE((SELECT updated_at FROM household_sharing
+		                                 WHERE user_id = ?1 AND share_listening = 1), '')
+		  ORDER BY id DESC LIMIT 1`,
+		hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path, formatSessionTime(since)).
+		Scan(&s.id, &s.startedAt, &s.lastAt, &s.endPos)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// insertSession opens a session for hb's token on its book, from startedAt at
+// startPos to lastAt at endPos, with listened seconds already counted.
+func insertSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, startedAt, lastAt string, startPos, endPos, listened float64) error {
+	var codec string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT codec FROM books WHERE library_id = ? AND rel_path = ?`,
+		hb.Ref.LibraryID, hb.Ref.Path).Scan(&codec); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO listening_sessions(user_id, library_id, rel_path, token_id, device_name,
+		     client_app, client_version, client_platform, started_at, last_at, start_pos, end_pos,
+		     duration, speed, codec, transcoded, finished, listened)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		hb.UserID, hb.Ref.LibraryID, hb.Ref.Path, hb.TokenID, hb.DeviceName,
+		hb.Client.App, hb.Client.Version, hb.Client.Platform, startedAt, lastAt, startPos, endPos,
+		hb.Duration, hb.Speed, codec, hb.Transcoded, hb.Finished, listened)
+	return err
+}
+
+// extendSession carries session id on to lastAt (its last save never moves
+// back: a span replayed out of order keeps the later end) at endPos (taken only
+// when lastAt is not before the session's own), adding listened seconds. hb's
+// client is already the token's newest app (a save without the header carries
+// the stored one), so it is written as is.
+func extendSession(ctx context.Context, tx *sql.Tx, id int64, hb Heartbeat, lastAt string, endPos, add float64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE listening_sessions SET last_at = MAX(last_at, ?1),
+		        end_pos = CASE WHEN ?1 >= last_at THEN ?2 ELSE end_pos END, duration = ?3, speed = ?4,
+		        listened = listened + ?5, finished = MAX(finished, ?6), transcoded = MAX(transcoded, ?7),
+		        client_app = ?8, client_version = ?9, client_platform = ?10
+		  WHERE id = ?11`,
+		lastAt, endPos, hb.Duration, hb.Speed, add, hb.Finished, hb.Transcoded,
+		hb.Client.App, hb.Client.Version, hb.Client.Platform, id)
+	return err
 }
 
 // Session states, from the age of the newest save.

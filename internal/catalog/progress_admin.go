@@ -217,14 +217,21 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		// own stamps (formatSessionTime): devices stamp their saves in milliseconds,
 		// and a whole-second stamp would let a save made up to a second BEFORE the
 		// edit win last-write-wins against it.
+		// An edit is also a finish-state change when it flips finished (Sync v2's
+		// finish and unfinish events older than it are then "older"), and it
+		// clears the offered place (other_place): the listener chose the place.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-			     playback_speed, version, device_id, updated_at, started_at, finished_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,CASE WHEN ?6 THEN ?10 END)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, finished=excluded.finished, version=excluded.version,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
-			     finished_at=excluded.finished_at`,
+			     finished_at=excluded.finished_at,
+			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN excluded.updated_at
+			                            ELSE progress.finish_changed_at END,
+			     other_position=NULL, other_device_id=NULL, other_device_name=NULL, other_at=NULL,
+			     other_version=NULL`,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
 			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished)
 		return err
