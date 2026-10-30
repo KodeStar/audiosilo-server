@@ -118,6 +118,7 @@ internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
+internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); see Upcoming releases in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
@@ -134,7 +135,7 @@ internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format i
 internal/podcast/     (2c-3) follow.go: Follower, follow by URL for the single follow and OPML rows; opmlimport.go (rows, the five-new-per-upload wave); export.go (BuildExport); discovery/ (iTunes + Podcast Index search, the artwork proxy, caches/quotas/cooldown, the build-tagged test origin); opml/ (the bounded strict OPML parser and the export writer); quota/ (token buckets with a bounded key map, slots)
 internal/netguard/    the guarded dialer: PublicAddr, Control/Dialer check the address actually dialled (meta covers, podcast discovery)
 internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions: no routes of its own, its actions are Bridge jobs gated by `bridge.ModuleFor`)
-internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed`)
+internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed` and the upcoming job's `book_released`)
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), home HTTP on the self-signed port, graceful shutdown
 internal/web/         baked-in connect/setup pages (vanilla HTML/CSS/JS, no build step), mounts the
@@ -281,7 +282,10 @@ path-keyed on the book's path, no FK to the index, `device_name` from the saving
 Phase 3c: `0058` adds `book_attachments.readalong` (a read-along map's checked head), `books.ebook_size`
 (server#228, backfilled from the signature) and `books.ebook_sha256` / `ebook_hashed_sig` (the digest of
 the ebook of a book with a map, and the sig it was computed for; all derived; see Bridge attachments and
-A book's ebook in CONVENTIONS.md).
+A book's ebook in CONVENTIONS.md). Track U1: `0059` adds the upcoming releases job's tables
+`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items` and `upcoming_announced` (derived,
+path-keyed, no FK to `books`, cascaded with the library, user-state writes; see Upcoming releases in
+CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -313,6 +317,7 @@ keep this index in step (one line per topic).
   - Web player at `/web`
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
+  - Upcoming releases (Track U1, `internal/upcoming`: the job, silent baseline, `upcoming_announced`, `book_released`)
   - Native deep-link association
   - SQLite (incl. the readers' mmap on shfs, `database.mmap`)
   - Pagination
@@ -379,7 +384,7 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
@@ -399,7 +404,8 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
 `metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
 `meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) and `meta_covers`
-(`GET /libraries/{id}/meta/cover`) track `metadata`.
+(`GET /libraries/{id}/meta/cover`) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
+AND the live `upcoming.enabled` (see Upcoming releases in CONVENTIONS.md).
 
 ## API surface
 

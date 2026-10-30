@@ -2018,7 +2018,7 @@
   "settings.metadata.upcomingFailed": "No se pudo cambiar la búsqueda de lanzamientos",
   "settings.metadata.upcomingOn": "La búsqueda de lanzamientos está activada",
   "settings.metadata.upcomingOff": "La búsqueda de lanzamientos está desactivada",
-  "settings.metadata.upcomingNever": "Aún no se ha ejecutado: la primera revisión se hace una hora después de arrancar el servidor.",
+  "settings.metadata.upcomingNever": "Aún no se ha ejecutado: la primera revisión se hace en cuanto se activa esto, o una hora después de arrancar el servidor.",
   "settings.metadata.upcomingLastFailed": "La última revisión falló {{when}}: {{error}}",
   "settings.metadata.upcomingSeries_one": "{{formatted}} serie",
   "settings.metadata.upcomingSeries_other": "{{formatted}} series",

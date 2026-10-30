@@ -33,6 +33,7 @@ type fakeMeta struct {
 
 	seriesReads []string
 	feeds       [][]string
+	workCalls   []time.Time // when each WorkIDs call came
 }
 
 func newFakeMeta() *fakeMeta {
@@ -50,6 +51,7 @@ func (f *fakeMeta) CachedWorkID(_ context.Context, asin, _ string) (string, bool
 func (f *fakeMeta) WorkIDs(_ context.Context, books []meta.BookIDs) []meta.WorkID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.workCalls = append(f.workCalls, time.Now())
 	out := make([]meta.WorkID, len(books))
 	for i, b := range books {
 		out[i] = meta.WorkID{ID: f.works[b.ASIN]}
@@ -102,6 +104,20 @@ func (f *fakeMeta) WatchFeed(_ context.Context, ids []string, _ int) ([]meta.Fee
 		return f.feedItems(ids), nil
 	}
 	return nil, nil
+}
+
+// lookups is when each WorkIDs call came.
+func (f *fakeMeta) lookups() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.workCalls)
+}
+
+// feedCount is how many watch feed requests came (one per full run with a series).
+func (f *fakeMeta) feedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.feeds)
 }
 
 func (f *fakeMeta) reads() []string {
@@ -903,5 +919,103 @@ func TestRunnerSwitchedOffMidRun(t *testing.T) {
 	}
 	if got := f.announcedIDs(); !slices.Equal(got, []string{"e2"}) {
 		t.Fatalf("announced = %v", got)
+	}
+}
+
+// runSchedule starts the runner's schedule on a fixture whose clock is the
+// real time (the schedule waits in real time); it stops with the test.
+func runSchedule(t *testing.T, f *fixture) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		f.r.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
+// eventually waits up to five seconds for cond.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A burst of kicks (a scan adding books) makes one light run, once the kicks
+// have been quiet for the settle time; it leaves the run status alone.
+func TestRunnerKicksSettle(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now() // set before the schedule starts: the runner and the catalog read it
+	f.r.settle = 150 * time.Millisecond
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	runSchedule(t, f)
+	var last time.Time
+	for range 5 {
+		f.r.Kick()
+		last = time.Now()
+		time.Sleep(25 * time.Millisecond)
+	}
+	eventually(t, "the kicked run", func() bool { return len(f.md.lookups()) > 0 })
+	calls := f.md.lookups()
+	if gap := calls[0].Sub(last); gap < f.r.settle/2 {
+		t.Fatalf("the run came %v after the last kick, before the kicks settled (%v)", gap, f.r.settle)
+	}
+	time.Sleep(3 * f.r.settle)
+	if n := len(f.md.lookups()); n != 1 {
+		t.Fatalf("a burst of kicks made %d runs, want 1", n)
+	}
+	if f.md.feedCount() != 0 {
+		t.Fatal("a light run asks no watch feed")
+	}
+	if st, _ := f.cat.UpcomingRunState(context.Background()); st.LastRunAt != "" || st.LastSuccessAt != "" {
+		t.Fatalf("a light run records no status: %+v", st)
+	}
+}
+
+// Switching the job on wakes the schedule: with no success in the last day, a
+// full run comes at once (not an hour after the start); woken again after it,
+// or while off, nothing runs.
+func TestRunnerWakeOnSwitchOn(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.off.Store(true)
+	runSchedule(t, f)
+	f.r.Wake() // still off: nothing to run
+	time.Sleep(100 * time.Millisecond)
+	if len(f.md.lookups()) != 0 || f.md.feedCount() != 0 {
+		t.Fatal("a woken job that is off makes no call")
+	}
+	f.off.Store(false)
+	f.r.Wake()
+	eventually(t, "the run on switch-on", func() bool {
+		st, _ := f.cat.UpcomingRunState(context.Background())
+		return st.LastSuccessAt != ""
+	})
+	if n := f.md.feedCount(); n != 1 {
+		t.Fatalf("the run on switch-on is a full one: %d feed requests", n)
+	}
+	// Woken again within the day: the last success stands, no run.
+	f.r.Wake()
+	time.Sleep(150 * time.Millisecond)
+	if n := f.md.feedCount(); n != 1 {
+		t.Fatalf("a wake after a recent success ran again: %d feed requests", n)
+	}
+	st, _ := f.cat.UpcomingRunState(context.Background())
+	if next, ok := parseStamp(st.NextRunAt); !ok || next.Sub(f.clock) < interval-jitter {
+		t.Fatalf("after the run, the next is a day on: %+v", st)
 	}
 }

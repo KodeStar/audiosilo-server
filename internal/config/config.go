@@ -784,7 +784,7 @@ func (c *Config) Validate() error {
 		return fieldErr("metadata.region", fmt.Errorf("metadata.region must be one of %s, got %q",
 			strings.Join(Regions, ", "), c.Metadata.Region))
 	}
-	if w := c.Upcoming.WindowDays; w < 0 || w > MaxUpcomingWindowDays {
+	if w := c.Upcoming.WindowDays; w < 1 || w > MaxUpcomingWindowDays {
 		return fieldErr("upcoming.window_days", fmt.Errorf("upcoming.window_days must be from 1 to %d, got %d",
 			MaxUpcomingWindowDays, w))
 	}

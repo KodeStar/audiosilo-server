@@ -1881,7 +1881,7 @@
   "settings.metadata.upcomingFailed": "Couldn't change the upcoming releases check",
   "settings.metadata.upcomingOn": "Upcoming releases check is on",
   "settings.metadata.upcomingOff": "Upcoming releases check is off",
-  "settings.metadata.upcomingNever": "Not run yet: the first check runs about an hour after the server starts.",
+  "settings.metadata.upcomingNever": "Not run yet: the first check runs as soon as this is switched on, or about an hour after the server starts.",
   "settings.metadata.upcomingLastFailed": "Last check failed {{when}}: {{error}}",
   "settings.metadata.upcomingSeries_one": "{{formatted}} series",
   "settings.metadata.upcomingSeries_other": "{{formatted}} series",

@@ -357,6 +357,27 @@ describe('settings', () => {
     );
   });
 
+  it('says a check that has not run yet runs once switched on, or after the start', async () => {
+    const base = settingsWith();
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            metadata: {
+              ...base.metadata,
+              upcoming: true,
+              upcoming_status: { series: 0, items: 0 },
+            },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    expect(await screen.findByTestId('upcoming-run')).toHaveTextContent(
+      'Not run yet: the first check runs as soon as this is switched on, or about an hour after the server starts.',
+    );
+  });
+
   it('holds the upcoming releases check off while the lookup is off', async () => {
     const base = settingsWith();
     mockFetch(

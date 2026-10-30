@@ -2018,7 +2018,7 @@
   "settings.metadata.upcomingFailed": "Impossible de modifier la recherche de parutions",
   "settings.metadata.upcomingOn": "La recherche de parutions est activée",
   "settings.metadata.upcomingOff": "La recherche de parutions est désactivée",
-  "settings.metadata.upcomingNever": "Pas encore lancée : la première vérification a lieu environ une heure après le démarrage du serveur.",
+  "settings.metadata.upcomingNever": "Pas encore lancée : la première vérification a lieu dès que ceci est activé, ou environ une heure après le démarrage du serveur.",
   "settings.metadata.upcomingLastFailed": "Dernière vérification échouée {{when}} : {{error}}",
   "settings.metadata.upcomingSeries_one": "{{formatted}} série",
   "settings.metadata.upcomingSeries_other": "{{formatted}} séries",

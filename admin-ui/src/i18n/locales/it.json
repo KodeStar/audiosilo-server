@@ -2018,7 +2018,7 @@
   "settings.metadata.upcomingFailed": "Impossibile modificare la ricerca delle uscite",
   "settings.metadata.upcomingOn": "La ricerca delle uscite è attiva",
   "settings.metadata.upcomingOff": "La ricerca delle uscite è disattivata",
-  "settings.metadata.upcomingNever": "Non ancora eseguita: il primo controllo parte circa un'ora dopo l'avvio del server.",
+  "settings.metadata.upcomingNever": "Non ancora eseguita: il primo controllo parte appena viene attivato, o circa un'ora dopo l'avvio del server.",
   "settings.metadata.upcomingLastFailed": "Ultimo controllo non riuscito {{when}}: {{error}}",
   "settings.metadata.upcomingSeries_one": "{{formatted}} serie",
   "settings.metadata.upcomingSeries_other": "{{formatted}} serie",

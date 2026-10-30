@@ -501,6 +501,51 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
   show's next episode oldest first in the episode order (`catalog.NextPodcastEpisode`: in scope, in
   the feed or kept on disk, never by file name), else `none`.
+- **Upcoming releases (Track U1, capability `upcoming`, `internal/upcoming`, `catalog/upcoming.go`,
+  `api/handlers_upcoming.go`, `0059`)**: a background job works out, for the series a server's books
+  libraries hold, the community's preorders, recent releases and missing volumes, and `GET /me/upcoming`
+  (requireAuth, notKid) reads what it stored for one caller. **Layout**: `upcoming/classify.go` is the pure
+  `Classify` (slots by the console's `railEntries` rule; a book with a known work holds that work's span,
+  else its own position or range; kinds in order preorder (future at the date's own precision,
+  `releaseIsFuture`), released (within `upcoming.window_days`, counted from the date's first day), missing
+  (a whole-number interior gap below the highest held, plus the first whole non-preorder slot after it;
+  never a fractional position); a work in two series is the first's); `runner.go` is the job; `list.go` the
+  answer (`List`: a work the caller holds a visible copy of anywhere is dropped, one row per work, a
+  preorder whose date has passed reads as released; preorders soonest first, releases newest first, then
+  missing by series name and position; `status` `ok`, `pending` before any success, `stale` after 48 h
+  without one). **The job**: the first run an hour after the start (or the last success plus a day), then
+  daily with +-1 h jitter, a failed run again hourly three times; `Kick` (wired to `OnBookChange`) makes a
+  light run once kicks have been quiet 30 s (at most 10 min: books resolved, series never read are read,
+  no feed, no status); `Wake` (PATCH /admin/settings switching the job or metadata on) runs at once when
+  no run has succeeded within the day. A full run: (1) each book with an ASIN/ISBN gets its work id (the
+  meta cache, else `WorkIDs` in batches of 100; answers rechecked monthly, at most 500 a run); (2) each
+  local series (library, `match.SeriesKey`) gets its community series from its works' series named like it
+  (primaries first; then give or take an article or "Series"), monthly or when it gains a book or a work;
+  (3) metaserve's watch feed, 50 series a request (split when full), says which series have news; (4)
+  `series/{id}` is read when new, with news, or a week old (2 at a time; a 404 marks it gone, dropped after
+  a week); (5) classify; (6) announce. It makes no call while `upcomingOn()` is false (metadata on AND
+  `upcoming.enabled`, live), and a run in flight stops within a second when switched off (`whileOn`,
+  `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
+  local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
+  path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
+  content cache reads them): `upcoming_owned` (book -> work id and the identifiers it was resolved by),
+  `upcoming_series` (local series -> community series ids, `''` for none found, `classified_at`),
+  `meta_series` (a community series' members as last read, `ok`/`gone`), `upcoming_items` (one row per
+  work a local series lacks, its kind, title, authors and cover, `first_seen_at`, `announced_at`) and
+  `upcoming_announced` (server-wide, the works `book_released` named, kept 400 days); the run's status is
+  `server_state('upcoming')` (`metadata.upcoming_status` in the settings envelope, read only).
+  **Silent baseline**: a released item is announced only when a community series the local series was
+  classified against BEFORE lists its work; anything a series' first classification finds (a new server,
+  a new library, a series newly resolved) is marked dealt with, never announced. **`upcoming_announced`**
+  makes an announcement once per work across series and across an item leaving and coming back (a copy
+  added then removed); a work the server holds a copy of anywhere is marked without a word. The mark is
+  written even when the run is being stopped (`context.WithoutCancel`). **`book_released`** is one event
+  per run (`api.announceReleases`: up to 5 titles as "Title (Series #position)", the count of all, dedupe
+  key a digest of the run's work ids). Config `upcoming.enabled` (live, `AUDIOSILO_UPCOMING_ENABLED`,
+  console Settings > Metadata, setting id `metadata.upcoming`) and `upcoming.window_days` (1-365, default
+  90, restart, `AUDIOSILO_UPCOMING_WINDOW_DAYS`; 0 or anything outside refuses to load). The route is 404
+  `metadata_off`, then 404 `upcoming_off`. `MetaSeriesWork.release_date` (additive, omitted when unknown)
+  feeds the console's dated gaps on the Series cards.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -586,7 +631,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   writes: `SaveProgress` (an update of the row), `RecordHeartbeat` (listening sessions),
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
-  `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the token touch in
+  `SaveReadingProgress`, `RecordServerEvent`, `PutMetaCache`, the upcoming releases job's tables
+  (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
+  read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
   its new last-seen and address; a lookup that read the row before the touch never caches it
   after: `store.GenMap.PutMarked`), the Bridge's heartbeat (`bridge.SaveHeartbeat`, whatever
@@ -2472,7 +2519,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   bell but never sent out: `internalData`), `library_unavailable`
   only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
   via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
-  `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
+  the upcoming releases job (`book_released`, once a run finds releases not announced before: see Upcoming
+  releases), `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
   a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited` and
   `agent_unavailable` whatever their `retry_at`, and counts a park whose code changes in place as news;
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,

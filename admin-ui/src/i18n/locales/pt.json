@@ -2018,7 +2018,7 @@
   "settings.metadata.upcomingFailed": "Não foi possível alterar a procura de lançamentos",
   "settings.metadata.upcomingOn": "A procura de lançamentos está ativada",
   "settings.metadata.upcomingOff": "A procura de lançamentos está desativada",
-  "settings.metadata.upcomingNever": "Ainda não correu: a primeira verificação corre cerca de uma hora depois de o servidor arrancar.",
+  "settings.metadata.upcomingNever": "Ainda não correu: a primeira verificação corre assim que isto é ativado, ou cerca de uma hora depois de o servidor arrancar.",
   "settings.metadata.upcomingLastFailed": "A última verificação falhou {{when}}: {{error}}",
   "settings.metadata.upcomingSeries_one": "{{formatted}} série",
   "settings.metadata.upcomingSeries_other": "{{formatted}} séries",
