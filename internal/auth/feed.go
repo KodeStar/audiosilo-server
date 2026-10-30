@@ -62,14 +62,16 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 			return err
 		}
 		// created_at (millisUTC) tells the player its link copy is stale, so it
-		// is bumped past the replaced link's stamp on a same-millisecond reset.
+		// is bumped past the replaced link's stamp on a same-millisecond reset
+		// (read as RFC3339Nano, so a whole-second stamp from before the
+		// milliseconds still counts).
 		now := s.now().UTC()
 		var prev sql.NullString
 		if err := tx.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tokens WHERE user_id = ? AND kind = '`+KindFeed+`'`,
 			userID).Scan(&prev); err != nil {
 			return err
 		}
-		if p, err := time.Parse(millisUTC, prev.String); err == nil && !now.After(p) {
+		if p, err := time.Parse(time.RFC3339Nano, prev.String); err == nil && !now.After(p) {
 			now = p.Add(time.Millisecond)
 		}
 		createdAt = now.Format(millisUTC)

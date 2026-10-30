@@ -286,3 +286,21 @@ func TestFeedTokenCreatedAtDistinct(t *testing.T) {
 		t.Fatalf("a later reset = %q", third)
 	}
 }
+
+// A live link stamped before the milliseconds (whole-second RFC3339) still
+// pushes a same-instant reset to the next millisecond.
+func TestFeedTokenCreatedAtAfterWholeSecondStamp(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	*now = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	sam := mustUser(t, s, ctx, "sam", "sam-password", RoleUser)
+	if _, _, err := s.IssueFeedToken(ctx, sam.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE tokens SET created_at = '2026-10-30T12:00:00Z' WHERE kind = ?`, KindFeed); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := s.IssueFeedToken(ctx, sam.ID, 0); err != nil || got != "2026-10-30T12:00:00.001Z" {
+		t.Fatalf("a reset after a whole-second stamp = %q %v", got, err)
+	}
+}

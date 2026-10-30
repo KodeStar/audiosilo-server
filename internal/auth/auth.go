@@ -1322,7 +1322,8 @@ func (s *Service) CountDemoUsers(ctx context.Context) (int, error) {
 // activity (or, lacking any, their creation time) is older than cutoff. Their
 // child rows (progress, bookmarks, notes, history, tokens, share grants) cascade
 // via ON DELETE CASCADE. Returns the number of accounts deleted. Timestamps are
-// stored as RFC3339 UTC, so the lexical comparison is chronological.
+// stored as RFC3339 UTC, so the lexical comparison is chronological (a feed
+// token's millisUTC created_at would not be, but a demo account never has one).
 func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int64, error) {
 	cut := cutoff.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,

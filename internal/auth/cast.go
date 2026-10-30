@@ -43,8 +43,8 @@ const (
 )
 
 // millisUTC is the wire format of the times auth hands the player (a cast
-// token's expiry, a member's created_at): UTC with milliseconds, fixed width (as
-// catalog's session times).
+// token's expiry, a member's created_at, a feed token's created_at): UTC with
+// milliseconds, fixed width (as catalog's session times).
 const millisUTC = "2006-01-02T15:04:05.000Z"
 
 // castGrant is what a cast token allows (cast_grants): the book it was minted
