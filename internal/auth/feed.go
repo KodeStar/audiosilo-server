@@ -61,11 +61,8 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
-		// created_at is the player's check that its copy of the link is the
-		// current one, so it is milliseconds (millisUTC, as generated_at on
-		// /me/upcoming) and always after the link it replaces, even two resets
-		// within one millisecond (the stamps are fixed-width UTC: lexical order
-		// is time order).
+		// created_at (millisUTC) tells the player its link copy is stale, so it
+		// is bumped past the replaced link's stamp on a same-millisecond reset.
 		now := s.now().UTC()
 		var prev sql.NullString
 		if err := tx.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tokens WHERE user_id = ? AND kind = '`+KindFeed+`'`,
@@ -84,10 +81,7 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 			session, userID).Scan(&on); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if _, err := s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `UPDATE tokens SET created_at = ? WHERE token_hash = ?`, createdAt, hash)
+		_, err := s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on, createdAt)
 		return err
 	})
 	if err != nil {

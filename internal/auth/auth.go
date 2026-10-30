@@ -365,18 +365,18 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 // and authCodeID are nil for "no expiry" / "unlinked"; signInKey is the hashed
 // browser key of a password sign-in ("" otherwise).
 func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
-	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil)
+	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil, s.ts())
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
-// member's sign-in was made on (nil: none) - the single place the column list
-// lives.
+// member's sign-in was made on (nil: none), and createdAt (s.ts(), RFC3339 UTC,
+// except a feed token's millisUTC) - the single place the column list lives.
 func (s *Service) insertTokenOn(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string,
-	expires, authCodeID any, signInKey string, createdOn any) (sql.Result, error) {
+	expires, authCodeID any, signInKey string, createdOn any, createdAt string) (sql.Result, error) {
 	return ex.ExecContext(ctx,
 		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key,
 		                    created_on_token_id)
-		 VALUES(?,?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey, createdOn)
+		 VALUES(?,?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, createdAt, expires, authCodeID, signInKey, createdOn)
 }
 
 // ResolveToken validates a presented token secret of exactly the given kind and

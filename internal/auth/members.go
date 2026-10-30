@@ -446,7 +446,7 @@ func (s *Service) memberSessionTx(ctx context.Context, ex sqlExecer, member int6
 	if onToken > 0 {
 		on = onToken
 	}
-	if _, err := s.insertTokenOn(ctx, ex, member, hash, KindSession, deviceName, nil, nil, "", on); err != nil {
+	if _, err := s.insertTokenOn(ctx, ex, member, hash, KindSession, deviceName, nil, nil, "", on, s.ts()); err != nil {
 		return "", err
 	}
 	return secret, nil

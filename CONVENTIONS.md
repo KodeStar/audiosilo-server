@@ -552,8 +552,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "created_at"}` (`Cache-Control: no-store`; a path, not a URL: the player prefixes the address it reaches
   the server at, since the server knows no reliable public one; `created_at` is fixed-width UTC milliseconds,
   `2006-01-02T15:04:05.000Z` like `generated_at`, stored so on the row and always later than the link it
-  replaced, even two resets in one millisecond, so a device can tell its copy is stale); `DELETE` -> 204, idempotent. Mint and
-  delete are session only (`denyAPIKey`, plain 403: a key never mints a credential). The mint's refusals in
+  replaced, even two resets in one millisecond, so a device can tell its copy is stale); `DELETE` -> 204,
+  idempotent. Mint and delete are session only (`denyAPIKey`, plain 403: a key never mints a credential). The mint's refusals in
   order: 401, 403 `kid_account` (notKid, and `refuseKid` inside the write), 403 `demo_account` (notDemo),
   403 for an API key, 404 `metadata_off`, 404 `upcoming_off`; the status read has the same order without
   the two credential refusals; DELETE has no 404s (ending a link only takes access away). The secret is a
