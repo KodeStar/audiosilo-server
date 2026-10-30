@@ -702,8 +702,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			if err := checkPodcastTarget(ctx, tx, j); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `UPDATE bridge_jobs SET error=CASE WHEN cancel_requested=1 THEN error ELSE ? END, cancel_requested=1, state=CASE WHEN state IN ('queued','needs_attention') THEN 'cancelled' ELSE state END,finished_at=CASE WHEN state IN ('queued','needs_attention') THEN ? ELSE finished_at END WHERE id=?`, CancelReplacedRequest, now, id)
-			if err != nil {
+			if err := cancelOpenTx(ctx, tx, key, now, CancelReplacedRequest); err != nil {
 				return err
 			}
 			if job.State != StateQueued && job.State != StateNeedsAttention {
@@ -1620,13 +1619,13 @@ func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) erro
 func MoveJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	ts := at(now)
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE bridge_jobs SET state = 'cancelled', error = '`+CancelMoved+`',
+		`UPDATE bridge_jobs SET state = 'cancelled', error = ?5,
 		        lease_until = NULL, finished_at = ?4, updated_at = ?4
 		  WHERE library_id = ?1 AND rel_path = ?2 AND state IN `+OpenStatesSQL+`
 		    AND EXISTS (SELECT 1 FROM bridge_jobs n
 		                 WHERE n.library_id = ?1 AND n.rel_path = ?3 AND n.kind = bridge_jobs.kind
 		                   AND n.state IN `+OpenStatesSQL+`)`,
-		libraryID, oldPath, newPath, ts); err != nil {
+		libraryID, oldPath, newPath, ts, CancelMoved); err != nil {
 		return err
 	}
 	all, err := jobKinds(ctx, tx, libraryID, oldPath)

@@ -246,11 +246,10 @@ function JobRow({
       </div>
       {generate ? (
         <GenerateStatus job={job} uiUrl={uiUrl} />
-      ) : job.state === 'cancelled' ? (
-        <CancelledStatus job={job} />
-      ) : job.cancel_requested && isServerCancelReason(job.error) ? (
+      ) : job.state === 'cancelled' ||
         // A working job the server asked to stop: its reason, not an error.
-        <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{job.error}</p>
+        (job.cancel_requested && isServerCancelReason(job.error)) ? (
+        <CancelledStatus job={job} />
       ) : job.error ? (
         <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
       ) : null}

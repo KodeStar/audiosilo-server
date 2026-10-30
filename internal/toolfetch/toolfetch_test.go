@@ -265,8 +265,8 @@ func TestEnsureReplacesCachedMaster(t *testing.T) {
 				t.Fatalf("a retry within the back-off")
 			}
 			// ...and retries once the marker is older.
-			old := time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339)
-			if err := os.WriteFile(filepath.Join(dir, failedMarker), []byte(old), 0o600); err != nil {
+			old := time.Now().Add(-25 * time.Hour)
+			if err := os.Chtimes(filepath.Join(dir, failedMarker), old, old); err != nil {
 				t.Fatal(err)
 			}
 			start(master)
@@ -289,7 +289,7 @@ func TestReleaseFetchCancelAndBadStage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s, _ := specFor("linux", "amd64")
-	fetchRelease(ctx, dir, discard(), s, func(ctx context.Context, _ spec, _ string) error { return ctx.Err() })
+	fetchRelease(ctx, dir, filepath.Join(dir, failedMarker), discard(), s, func(ctx context.Context, _ spec, _ string) error { return ctx.Err() })
 	if _, err := os.Stat(filepath.Join(dir, failedMarker)); !os.IsNotExist(err) {
 		t.Fatalf("marker after a cancelled fetch: %v", err)
 	}

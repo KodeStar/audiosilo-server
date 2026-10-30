@@ -161,8 +161,9 @@ const (
 	// stagedDir (under the tools dir) holds a release build fetched in the
 	// background, swapped in at the next start (promoteStaged).
 	stagedDir = "next"
-	// failedMarker records when the last background release fetch failed
-	// (RFC 3339), so a host that can't download doesn't retry every start.
+	// failedMarker's modification time records when the last background
+	// release fetch failed, so a host that can't download doesn't retry every
+	// start.
 	failedMarker = ".release-fetch-failed"
 	// releaseRetry is how long a failed background fetch waits before the next.
 	releaseRetry = 24 * time.Hour
@@ -183,29 +184,28 @@ func replaceMaster(ctx context.Context, dir string, log *slog.Logger, goos, goar
 		return
 	}
 	marker := filepath.Join(dir, failedMarker)
-	if b, err := os.ReadFile(marker); err == nil {
-		if at, perr := time.Parse(time.RFC3339, strings.TrimSpace(string(b))); perr == nil && time.Since(at) < releaseRetry {
-			log.Info("the cached ffmpeg/ffprobe is a master build; the "+btbnBranch+" release download failed recently, keeping it",
-				"retry_after", at.Add(releaseRetry).Format(time.RFC3339))
-			return
-		}
+	if fi, err := os.Stat(marker); err == nil && time.Since(fi.ModTime()) < releaseRetry {
+		log.Info("the cached ffmpeg/ffprobe is a master build; the "+btbnBranch+" release download failed recently, keeping it",
+			"retry_after", fi.ModTime().Add(releaseRetry).UTC().Format(time.RFC3339))
+		return
 	}
 	log.Info("the cached ffmpeg/ffprobe is a master build; fetching the "+btbnBranch+" release build in the background for the next start", "into", dir)
-	bg(func() { fetchRelease(ctx, dir, log, s, dl) })
+	bg(func() { fetchRelease(ctx, dir, marker, log, s, dl) })
 }
 
 // fetchRelease downloads the release build into <dir>/next and checks it. A
 // failure (not a shutdown) writes the back-off marker; a success clears it.
-func fetchRelease(ctx context.Context, dir string, log *slog.Logger, s spec, dl func(context.Context, spec, string) error) {
+func fetchRelease(ctx context.Context, dir, marker string, log *slog.Logger, s spec, dl func(context.Context, spec, string) error) {
 	next := filepath.Join(dir, stagedDir)
-	marker := filepath.Join(dir, failedMarker)
 	fail := func(err error) {
 		_ = os.RemoveAll(next)
 		if ctx.Err() != nil {
 			return // shut down mid-fetch: try again next start, no back-off
 		}
-		log.Warn("ffmpeg release download failed; keeping the cached build (retrying in 24 h)", "err", err)
-		_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+		log.Warn("ffmpeg release download failed; keeping the cached build", "err", err, "retry_in", releaseRetry)
+		_ = os.WriteFile(marker, nil, 0o600)
+		now := time.Now()
+		_ = os.Chtimes(marker, now, now) // an existing marker's time, too
 	}
 	_ = os.RemoveAll(next)
 	if err := os.MkdirAll(next, 0o750); err != nil {
@@ -216,7 +216,7 @@ func fetchRelease(ctx context.Context, dir string, log *slog.Logger, s spec, dl 
 		fail(err)
 		return
 	}
-	if fm, fp := Cached(next); verified(ctx, fm, log) == "" || verified(ctx, fp, log) == "" {
+	if _, _, ok := verifiedPair(ctx, next, log); !ok {
 		fail(fmt.Errorf("the downloaded release build failed its self-check"))
 		return
 	}
@@ -232,8 +232,8 @@ func promoteStaged(ctx context.Context, dir string, log *slog.Logger) {
 		return
 	}
 	defer func() { _ = os.RemoveAll(next) }()
-	fm, fp := Cached(next)
-	if verified(ctx, fm, log) == "" || verified(ctx, fp, log) == "" {
+	fm, fp, ok := verifiedPair(ctx, next, log)
+	if !ok {
 		return
 	}
 	for _, p := range []string{fm, fp} {
@@ -243,6 +243,14 @@ func promoteStaged(ctx context.Context, dir string, log *slog.Logger) {
 		}
 	}
 	log.Info("swapped in the ffmpeg/ffprobe "+btbnBranch+" release build", "dir", dir)
+}
+
+// verifiedPair returns dir's ffmpeg and ffprobe when both are there and pass
+// their self-check (verified removes a failing one).
+func verifiedPair(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe string, ok bool) {
+	ffmpeg, ffprobe = Cached(dir)
+	ffmpeg, ffprobe = verified(ctx, ffmpeg, log), verified(ctx, ffprobe, log)
+	return ffmpeg, ffprobe, ffmpeg != "" && ffprobe != ""
 }
 
 // verified returns path if `<path> -version` runs, else "" (and removes the file).
