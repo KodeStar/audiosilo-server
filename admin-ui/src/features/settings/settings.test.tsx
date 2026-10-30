@@ -295,10 +295,81 @@ describe('settings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Look up community metadata' });
     expect(toggle).toBeChecked();
     expect(await screen.findByText('Responding · 84 ms')).toBeInTheDocument();
+    // An older server sends no upcoming switch: none is shown.
+    expect(screen.queryByRole('switch', { name: 'Check for upcoming releases' })).toBeNull();
     await userEvent.setup().click(toggle);
     expect(await screen.findByText('Community metadata is off')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ metadata: { enabled: false } });
     expect(toggle).not.toBeChecked();
+  });
+
+  it('switches the upcoming releases check, and says how its last run went', async () => {
+    const base = settingsWith();
+    const on = settingsWith({
+      metadata: {
+        ...base.metadata,
+        upcoming: true,
+        upcoming_status: {
+          last_run_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          last_success_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          series: 12,
+          items: 5,
+        },
+      },
+    });
+    const calls = mockFetch(
+      routes({ 'GET /admin/settings': { body: on }, 'PATCH /admin/settings': patchEcho(on) }),
+    );
+    renderApp('/server?topic=metadata');
+    const toggle = await screen.findByRole('switch', { name: 'Check for upcoming releases' });
+    expect(toggle).toBeChecked();
+    expect(screen.getByTestId('upcoming-run')).toHaveTextContent(
+      'Last checked 2 hr. ago: 12 series, 5 books coming or missing',
+    );
+    await userEvent.setup().click(toggle);
+    expect(await screen.findByText('Upcoming releases check is off')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      metadata: { upcoming: false },
+    });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByTestId('upcoming-run')).not.toBeInTheDocument();
+  });
+
+  it('says when the upcoming releases check has not run or failed', async () => {
+    const base = settingsWith();
+    const failed = settingsWith({
+      metadata: {
+        ...base.metadata,
+        upcoming: true,
+        upcoming_status: {
+          last_run_at: new Date(Date.now() - 60_000).toISOString(),
+          last_success_at: new Date(Date.now() - 86_400_000).toISOString(),
+          last_error: 'metadata service unreachable',
+          series: 3,
+          items: 1,
+        },
+      },
+    });
+    mockFetch(routes({ 'GET /admin/settings': { body: failed } }));
+    renderApp('/server?topic=metadata');
+    expect(await screen.findByTestId('upcoming-run')).toHaveTextContent(
+      /^Last check failed .+: metadata service unreachable$/,
+    );
+  });
+
+  it('holds the upcoming releases check off while the lookup is off', async () => {
+    const base = settingsWith();
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({ metadata: { ...base.metadata, enabled: false, upcoming: true } }),
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    const toggle = await screen.findByRole('switch', { name: 'Check for upcoming releases' });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('sets the preferred Audible marketplace', async () => {

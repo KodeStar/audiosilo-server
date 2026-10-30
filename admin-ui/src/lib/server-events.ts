@@ -25,6 +25,7 @@ export const EVENT_KINDS: readonly ServerEventKind[] = [
   'backup_failed',
   'bridge_job_finished',
   'bridge_job_failed',
+  'book_released',
 ];
 
 export type EventTone = 'info' | 'warn' | 'bad';
@@ -71,6 +72,26 @@ export function describeEvent(ev: ServerEvent): EventText {
           : undefined,
         tone: 'info',
         link: { destination: 'library' },
+      };
+    }
+    case 'book_released': {
+      // notify.BooksReleased: the titles come "Title (Series #n)", at most five.
+      const count = num(d.count);
+      const titles = (Array.isArray(d.titles) ? d.titles : []).map(str).filter(Boolean);
+      const shown = titles.slice(0, TITLES_SHOWN);
+      const more = count - shown.length;
+      return {
+        title: { key: 'events.book_released.title', values: { count } },
+        body: shown.length
+          ? more > 0
+            ? {
+                key: 'events.book_released.bodyMore',
+                values: { titles: shown.join(', '), count: more },
+              }
+            : { key: 'events.book_released.body', values: { titles: shown.join(', ') } }
+          : undefined,
+        tone: 'info',
+        link: { destination: 'library', section: 'series' },
       };
     }
     case 'scan_failed':

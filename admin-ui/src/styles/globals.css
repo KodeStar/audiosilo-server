@@ -880,6 +880,26 @@
     font-size: 10.5px;
     opacity: 0.75;
   }
+  /* A missing entry's title gives way to its release date, which always shows. */
+  .spine-title {
+    min-block-size: 0;
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .spine-date {
+    flex-shrink: 0;
+    margin-top: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .spine-date[data-state='preorder'] {
+    color: var(--brand-ink);
+  }
+  .spine-date[data-state='new'] {
+    color: var(--success);
+  }
 
   /* Invite card: always deep ink (in both themes) with pink and plum glows, so
      it reads as something to hand over, not a settings panel. */

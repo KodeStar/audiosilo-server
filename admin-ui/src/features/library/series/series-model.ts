@@ -35,6 +35,8 @@ export interface Span {
 /** One numbered entry of a community series rail. */
 export interface RailEntry extends Span {
   title: string;
+  /** The work's first release, YYYY[-MM[-DD]] (absent when unknown or from an older server). */
+  release_date?: string;
 }
 
 /** What a rail says about a local series. */
@@ -187,9 +189,71 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
   for (const { w, s } of spans) {
     if (!s || out.some((e) => samePosition(e.position, s.position))) continue;
     if (s.end !== undefined && singles.some((p) => holds(s, { position: p }))) continue;
-    out.push({ ...s, title: w.title });
+    out.push({ ...s, title: w.title, ...(w.release_date ? { release_date: w.release_date } : {}) });
   }
   return out.sort((a, b) => a.position - b.position);
+}
+
+/** How long after its release a missing entry is still new (the server's upcoming.window_days default). */
+export const NEW_RELEASE_DAYS = 90;
+
+/** A release date's parts: year, month and day, the last two 0 when the date stops before them. */
+function releaseParts(date: string): [number, number, number] | undefined {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(date);
+  if (!m) return undefined;
+  const [y, mo, d] = [Number(m[1]), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+  if (m[2] !== undefined && (mo < 1 || mo > 12)) return undefined;
+  if (m[3] !== undefined && (d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate()))
+    return undefined;
+  return [y, mo, d];
+}
+
+/** `now`'s local calendar date as YYYY-MM-DD. */
+function today(now: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/**
+ * What a missing entry's release date makes it, as the server's upcoming job
+ * reads one (compared at the date's own precision): 'preorder' when it is still
+ * ahead ("2026-11" from any day of October; "2026" is not, all this year),
+ * 'new' when it came out within `windowDays` of today, counted from the first
+ * day of its month or year, else undefined (older, undated or unreadable).
+ */
+export function releaseState(
+  date: string | undefined,
+  now: Date,
+  windowDays = NEW_RELEASE_DAYS,
+): 'preorder' | 'new' | undefined {
+  const parts = date ? releaseParts(date) : undefined;
+  if (!date || !parts) return undefined;
+  const day = today(now);
+  if (date > day.slice(0, date.length)) return 'preorder';
+  const [y, mo, d] = parts;
+  const start = Date.UTC(y, Math.max(mo, 1) - 1, Math.max(d, 1));
+  const [ty, tm, td] = day.split('-').map(Number);
+  const from = Date.UTC(ty, tm - 1, td) - windowDays * 86_400_000;
+  return start >= from ? 'new' : undefined;
+}
+
+/**
+ * A release date in words at its own precision: "12 Nov 2026", "Nov 2026" or
+ * "2026"; '' for one that isn't a date. The calendar date as written, never
+ * moved by the viewer's time zone.
+ */
+export function formatReleaseDate(date: string | undefined, lang: string): string {
+  const parts = date ? releaseParts(date) : undefined;
+  if (!parts) return '';
+  const [y, mo, d] = parts;
+  if (!mo) return String(y);
+  const at = Date.UTC(y, mo - 1, d || 1);
+  return new Intl.DateTimeFormat(lang, {
+    ...(d ? { day: 'numeric' } : {}),
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(at);
 }
 
 /**

@@ -15,10 +15,12 @@ import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
 import {
   formatPositions,
+  formatReleaseDate,
   formatSpan,
   metaCandidate,
   pickRail,
   placeBooks,
+  releaseState,
   seriesStatus,
   spineColors,
   spineHeight,
@@ -187,8 +189,10 @@ function Shelf({
   /** The card has come into view: its fan of covers may load. */
   fan: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const navigate = useNavigate();
+  const now = new Date();
   // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
   const wide = useMediaQuery('(min-width: 1024px)');
   const spines = spineRow(placed, status?.missing ?? []);
@@ -199,7 +203,18 @@ function Shelf({
         {spines.map((sp) => {
           if (sp.kind === 'gap') {
             const index = formatSpan(sp.entry, fmt);
-            const label = t('series.gap', { index, title: sp.entry.title });
+            // A dated entry says when: a preorder, a new release, or just its date.
+            const date = formatReleaseDate(sp.entry.release_date, lang);
+            const state = date ? releaseState(sp.entry.release_date, now) : undefined;
+            const values = { index, title: sp.entry.title, date };
+            const label =
+              state === 'preorder'
+                ? t('series.gapPreorder', values)
+                : state === 'new'
+                  ? t('series.gapNew', values)
+                  : date
+                    ? t('series.gapDated', values)
+                    : t('series.gap', values);
             return (
               <li key={`gap-${sp.entry.position}`} className="flex h-full items-end">
                 <span
@@ -211,7 +226,17 @@ function Shelf({
                   style={{ height: `${spineHeight(0, sp.entry.title)}%` }}
                 >
                   <span className="spine-idx">{index}</span>
-                  {sp.entry.title}
+                  <span className="spine-title">{sp.entry.title}</span>
+                  {date ? (
+                    <span className="spine-date" data-state={state}>
+                      {state === 'preorder'
+                        ? `${t('series.preorder')} · `
+                        : state === 'new'
+                          ? `${t('series.newRelease')} · `
+                          : null}
+                      {date}
+                    </span>
+                  ) : null}
                 </span>
               </li>
             );

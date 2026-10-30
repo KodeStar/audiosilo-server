@@ -559,6 +559,10 @@ export interface AdminSettings {
     mode: MetadataMode;
     /** The service exists (base_url was valid when the server started), so the switch can turn on. */
     available: boolean;
+    /** The daily upcoming-releases check (config upcoming.enabled; absent from an older server). */
+    upcoming?: boolean;
+    /** The check's last run (read-only; absent from an older server or without the service). */
+    upcoming_status?: UpcomingStatus;
   };
   demo: {
     enabled: boolean;
@@ -808,6 +812,16 @@ export interface BackupsEnvelope {
   restore: { pending: PendingRestore | null; last: RestoreResult | null };
 }
 
+/** upcoming.Status: the daily upcoming-releases check's last run. */
+export interface UpcomingStatus {
+  last_run_at?: string;
+  last_success_at?: string;
+  last_error?: string;
+  next_run_at?: string;
+  series: number;
+  items: number;
+}
+
 /** Event kinds a destination can be sent (notify.Kinds, in the server's order). */
 export type ServerEventKind =
   | 'book_added'
@@ -818,7 +832,8 @@ export type ServerEventKind =
   | 'update_available'
   | 'backup_failed'
   | 'bridge_job_finished'
-  | 'bridge_job_failed';
+  | 'bridge_job_failed'
+  | 'book_released';
 
 export type NotifyTargetKind = 'webhook' | 'ntfy' | 'discord';
 
@@ -2068,6 +2083,8 @@ export interface MetaSeriesWork {
   authors: MetaPersonRef[];
   cover_url?: string;
   web_url: string;
+  /** The work's first release, YYYY[-MM[-DD]] (absent when unknown, and from an older server). */
+  release_date?: string;
 }
 
 /** meta.MetaSeriesOrdering: an alternate reading order of a rail's family. */
