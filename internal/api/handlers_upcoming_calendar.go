@@ -19,7 +19,7 @@ import (
 //	POST   /me/upcoming/calendar      201 {"path", "created_at"}: a new link, the old one ended
 //	DELETE /me/upcoming/calendar      204: no link (idempotent)
 //	GET    /me/upcoming/releases.ics  the calendar, for a feed token only
-//	GET    /me/upcoming/cover?work=&size=  a cover the caller's own list hands out
+//	GET    /me/upcoming/cover?work=&size=[&v=]  a cover the caller's own list hands out
 
 // upcomingFeedPath is the calendar feed's route; a mint answers it with the
 // new secret as its ?token=.
@@ -129,7 +129,7 @@ func (a *API) handleUpcomingCalendarFeed(w http.ResponseWriter, r *http.Request)
 		serve(w, r, "text/calendar; charset=utf-8", body)
 }
 
-// handleUpcomingCover answers GET /me/upcoming/cover?work=&size=
+// handleUpcomingCover answers GET /me/upcoming/cover?work=&size= (a player may add &v=, a cache-buster this handler ignores)
 // (requireMediaAuth, notKid; capability upcoming_covers): a JPEG thumbnail of
 // the cover the caller's own /me/upcoming list hands out for that work right
 // now (upcoming.CoverFor: the list's rule, read for the one work), so the
