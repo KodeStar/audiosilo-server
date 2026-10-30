@@ -636,4 +636,14 @@ func TestItemEbookReplacedInPlace(t *testing.T) {
 	if eb, present := e.itemEbook(t, ebookBook); present {
 		t.Fatalf("replaced by no epub: ebook = %+v, want no key", eb)
 	}
+	// Not recorded as none: it may be a copy still being written, which the next
+	// request reads again once it is whole (a recorded none would wait for a scan).
+	if b, err := e.cat.GetBookByPath(context.Background(), e.lib.ID, ebookBook); err != nil || b.Ebook == nil {
+		t.Fatalf("stored after no epub = %+v %v, want the ebook kept", b, err)
+	}
+	whole := append(slices.Clone(e.epub), make([]byte, 200)...)
+	replace(whole)
+	if eb, _ := e.itemEbook(t, ebookBook); eb == nil || eb.Path != ebookFile || eb.Size != int64(len(whole)) {
+		t.Fatalf("once the copy is whole: ebook = %+v, want {%s %d}", eb, ebookFile, len(whole))
+	}
 }

@@ -12,7 +12,7 @@ import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { isAbsolutePath } from '@/lib/paths';
-import { defaultLibraryName, folderErrorKey } from './setup-model';
+import { defaultLibraryName, folderErrorKey, hasBookLibrary } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, previewQuery, type StepProps } from './step-actions';
 
@@ -82,8 +82,10 @@ export function FolderStep({
 
   const onContinue = async () => {
     if (!typed) {
-      // Nothing new to add: fine when the server already has a library.
-      if (libraries.length === 0) {
+      // Nothing new to add: fine when the server already has a books library
+      // (folderSatisfied's rule; a podcasts library holds no books, so the step
+      // would come back as lost).
+      if (!hasBookLibrary(libraries)) {
         setInputError(t('setup.folder.requiredOrSkip'));
         throw new StepStop();
       }

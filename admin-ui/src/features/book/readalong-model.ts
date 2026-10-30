@@ -25,20 +25,24 @@ export const READALONG_BRIDGE_VERSION = '0.5.0';
  * Where the Bridge stands for making a read-along: `ready` (online, offering
  * the readalong family: it aligns with speech recognition, no agent and no
  * community metadata), `too_old` (online, an older release without it),
- * `offline` (paired, its heartbeat late) or `none` (no Bridge paired, or not
- * known yet). `paired` is the Bridge status's (GET /admin/bridge), read only
- * while no Bridge is online.
+ * `offline` (paired, its heartbeat late), `none` (no Bridge paired) or
+ * `unknown` (none online, and whether one is paired not known: the server or
+ * the Bridge status not loaded yet, or failed), which claims neither.
+ * `paired` is the Bridge status's (GET /admin/bridge), read only while no
+ * Bridge is online.
  */
-export type ReadalongBridge = 'ready' | 'too_old' | 'offline' | 'none';
+export type ReadalongBridge = 'ready' | 'too_old' | 'offline' | 'none' | 'unknown';
 
 export function readalongBridge(
   server: ServerInfo | undefined,
   paired: boolean | undefined,
 ): ReadalongBridge {
-  if (server?.capabilities.bridge) {
+  if (!server) return 'unknown';
+  if (server.capabilities.bridge) {
     if (!server.bridge) return 'offline';
     return server.bridge.features.includes(FEATURE_READALONG) ? 'ready' : 'too_old';
   }
+  if (server.capabilities.bridge === false && paired === undefined) return 'unknown';
   return paired ? 'offline' : 'none';
 }
 
@@ -92,9 +96,10 @@ export interface ReadalongView {
   /**
    * No offer because of the Bridge (ADMIN-03, S265-DIALOG): what the card says
    * instead, with a link to Settings > Bridge. Only where it helps: a stale map
-   * or a failed job (it needs making again), or a Bridge too old to make one.
+   * or a failed job (it needs making again), or a Bridge too old to make one;
+   * never while it isn't known whether one is paired.
    */
-  bridgeNote?: Exclude<ReadalongBridge, 'ready'>;
+  bridgeNote?: Exclude<ReadalongBridge, 'ready' | 'unknown'>;
 }
 
 /** The stale reasons with a sentence of their own (the rest read as the generic one). */
@@ -125,7 +130,10 @@ export function readalongView(
   if (!book.ebook || blocker || (job && isOpen(job.state))) return view;
   if (bridge === 'ready') {
     view.action = r ? 'remake' : 'make';
-  } else if (bridge === 'too_old' || r?.state === 'stale' || job?.state === 'failed') {
+  } else if (
+    bridge !== 'unknown' &&
+    (bridge === 'too_old' || r?.state === 'stale' || job?.state === 'failed')
+  ) {
     view.bridgeNote = bridge;
   }
   return view;

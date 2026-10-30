@@ -53,9 +53,9 @@ describe('readalongBridge', () => {
     expect(readalongBridge(withBridge(['bridge', 'sidecars']), undefined)).toBe('too_old');
     expect(readalongBridge(withBridge([], false), true)).toBe('offline');
     expect(readalongBridge(withBridge([], false), false)).toBe('none');
-    // Before the Bridge status answers: no claim that one is paired.
-    expect(readalongBridge(withBridge([], false), undefined)).toBe('none');
-    expect(readalongBridge(undefined, undefined)).toBe('none');
+    // Before the Bridge status answers (or when it failed): neither paired nor not.
+    expect(readalongBridge(withBridge([], false), undefined)).toBe('unknown');
+    expect(readalongBridge(undefined, undefined)).toBe('unknown');
   });
 });
 

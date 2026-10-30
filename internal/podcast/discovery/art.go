@@ -94,7 +94,9 @@ func (s *Service) startArtLocked(id, raw string) (*flight, *Error) {
 // raw within the budget. Its errors: errBusy when no slot came free in time,
 // errArtUnavailable for a fetch that failed or timed out (remembered for
 // artFailureTTL), or ErrModuleOff when ctx ended (every waiter left, or
-// Reset), which is neither cached nor remembered.
+// Reset), which is neither cached nor remembered. A miss that never fetched
+// gives back the image-miss token its admission took: only a request to an
+// image host spends one.
 func (s *Service) queuedImage(ctx context.Context, raw string) ([]byte, *Error) {
 	queue, stop := context.WithTimeout(ctx, s.budget)
 	ok := s.imageSlots.Acquire(queue)
@@ -104,8 +106,10 @@ func (s *Service) queuedImage(ctx context.Context, raw string) ([]byte, *Error) 
 		if ok {
 			s.imageSlots.Release()
 		}
+		s.imageMiss.Refund("")
 		return nil, ErrModuleOff
 	case !ok:
+		s.imageMiss.Refund("")
 		return nil, errBusy
 	}
 	fetch, cancel := context.WithTimeout(ctx, s.budget)

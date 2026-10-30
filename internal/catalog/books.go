@@ -510,21 +510,35 @@ type ArtChange struct{ Was, Now string }
 // it found otherwise unchanged (a sidecar image replaced in place), in one
 // transaction. Each is compare-and-set on the identity the scan saw, so a custom
 // cover set or a re-index since keeps what it wrote; a colour read for the old
-// art no longer holds (it is tagged with the old cover_version).
+// art no longer holds (it is tagged with the old cover_version), so a book it
+// moves is a change the listeners hear (OnBookChange: the colour pass reads the
+// new art's).
 func (c *Catalog) SetArtVersions(ctx context.Context, libraryID int64, arts map[string]ArtChange) error {
 	if len(arts) == 0 {
 		return nil
 	}
-	return c.db.WithTx(ctx, "SetArtVersions", func(tx *sql.Tx) error {
+	moved := false
+	if err := c.db.WithTx(ctx, "SetArtVersions", func(tx *sql.Tx) error {
+		moved = false
 		for relPath, a := range arts {
-			if _, err := tx.ExecContext(ctx,
+			res, err := tx.ExecContext(ctx,
 				`UPDATE books SET cover_art = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
-				a.Now, libraryID, relPath, a.Was); err != nil {
+				a.Now, libraryID, relPath, a.Was)
+			if err != nil {
 				return err
+			}
+			if n, err := res.RowsAffected(); err == nil && n > 0 {
+				moved = true
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if moved {
+		c.changed()
+	}
+	return nil
 }
 
 // SetSuspectParts records, by path, how many separate books a folder book's parts
@@ -1186,12 +1200,14 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 // limited, and only the rows kept are read whole. A scope, alone or an arm,
 // walks the index, except a scope of exactly one path rule: it seeks the path
 // and sorts what it holds (recentOrder's "+" hint), since a walk reads the
-// whole library when the path holds few or only old books. Two or more paths SQLite already plans as
+// whole library when the path holds few or only old books; alone it is still
+// an arm, so the sort holds ids, not every row under the path read whole (each
+// with its book_files count). Two or more paths SQLite already plans as
 // a read of the library, which the walk never exceeds. The kind check is once
 // per arm, so a podcasts library's arm reads nothing.
 func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 	fetch := dedupFetch(limit)
-	if len(scopes) == 1 {
+	if len(scopes) == 1 && !seeksPath(scopes[0]) {
 		filter, args := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 		return `SELECT ` + prefixCols("b.") + dedupCols + `
 		FROM books b` + dedupJoins + `
@@ -1220,11 +1236,15 @@ func recentBooksQuery(scopes []Scope, limit int) (string, []any) {
 // for a scope of exactly one path rule, whose "+" hint keeps the index order out
 // so the read seeks the path and sorts what it holds (S260-RECENT).
 func recentOrder(s Scope) string {
-	if !s.AllowAll && len(s.Paths) == 1 {
+	if seeksPath(s) {
 		return "+b.added_at DESC, +b.id DESC" // no index order: seek, then sort
 	}
 	return "b.added_at DESC, b.id DESC"
 }
+
+// seeksPath reports whether a recent-shelf read of scope s seeks its path
+// rather than walking idx_books_lib_added: a scope of exactly one path rule.
+func seeksPath(s Scope) bool { return !s.AllowAll && len(s.Paths) == 1 }
 
 func sortValue(b *Book, col string) string {
 	switch col {

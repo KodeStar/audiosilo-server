@@ -924,16 +924,15 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	art := book.ArtFiles()
-	if art.CoverPath != "" {
-		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
-			serveSidecarCover(w, r, abs)
-			return
-		}
-	}
-	abs, err := library.SafeJoin(lib.Root, art.AudioPath)
-	if err != nil {
+	// The file the book's own art is in, by the one rule the thumbnails and the
+	// scan's cover_version read too (library.ArtFile).
+	kind, abs, ok := library.ArtFile(lib.Root, book.ArtFiles())
+	if !ok {
 		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	if kind == catalog.ArtSidecar {
+		serveSidecarCover(w, r, abs)
 		return
 	}
 	data, mime, ok := media.EmbeddedCover(abs)

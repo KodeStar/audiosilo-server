@@ -936,8 +936,8 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 	b.ArtVersion = artVersion(lib.Root, b.ArtFiles())
 }
 
-// ArtFile is the file a book's own art (no custom cover) is read from, in the
-// order the cover handler serves it: its sidecar image (CoverPath) inside root,
+// ArtFile is the file a book's own art (no custom cover) is read from, the one
+// rule the cover handler serves and versions it by: its sidecar image (CoverPath) inside root,
 // else the audio file embedded art lives in. kind is catalog.ArtSidecar or
 // catalog.ArtEmbedded; ok is false when neither path is inside root.
 func ArtFile(root string, src catalog.CoverSource) (kind, abs string, ok bool) {

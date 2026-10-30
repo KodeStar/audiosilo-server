@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -81,9 +82,7 @@ func TestEnsureUsesCache(t *testing.T) {
 	// Stubs that pass Ensure's `-version` self-check: one that fails it is
 	// discarded and re-downloaded, so the test would fetch a real build.
 	for _, tool := range []string{"ffmpeg", "ffprobe"} {
-		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeScript(t, filepath.Join(dir, binName(tool)), "#!/bin/sh\nexit 0\n")
 	}
 	fm, fp := Ensure(context.Background(), dir, discard())
 	if fm != filepath.Join(dir, binName("ffmpeg")) || fp != filepath.Join(dir, binName("ffprobe")) {
@@ -158,10 +157,20 @@ func TestParseVersion(t *testing.T) {
 func writeStubs(t *testing.T, dir, version string) {
 	t.Helper()
 	for _, tool := range []string{"ffmpeg", "ffprobe"} {
-		script := "#!/bin/sh\necho '" + tool + " version " + version + " Copyright (c) 2007-2026'\n"
-		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeScript(t, filepath.Join(dir, binName(tool)), "#!/bin/sh\necho '"+tool+" version "+version+" Copyright (c) 2007-2026'\n")
+	}
+}
+
+// writeScript writes an executable script at path holding syscall.ForkLock,
+// so no exec another parallel test forks meanwhile inherits the file still open
+// for writing; this test's own exec of it would otherwise fail with ETXTBSY
+// ("text file busy", golang/go#22315) on Linux.
+func writeScript(t *testing.T, path, body string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 

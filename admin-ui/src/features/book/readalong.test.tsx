@@ -207,6 +207,27 @@ describe('the Read-along card', () => {
     expect(within(card).getByRole('link', { name: 'Bridge settings' })).toBeVisible();
   });
 
+  it('says nothing about the Bridge until its status answers', async () => {
+    const offline: ServerInfo = {
+      ...serverInfo,
+      capabilities: { ...serverInfo.capabilities, bridge: false, readalong: true },
+    };
+    mockFetch(
+      routes(
+        { ebook: EBOOK, readalong: { state: 'stale', reason: 'audio_changed' } },
+        {
+          'GET /server': { body: offline },
+          'GET /admin/bridge': () => new Promise<never>(() => {}), // still loading
+        },
+      ),
+    );
+    renderApp(URL);
+    const card = await screen.findByRole('region', { name: 'Read-along' });
+    expect(within(card).queryByText(/Making a read-along needs a Bridge/)).toBeNull();
+    expect(within(card).queryByText(/The Bridge is offline/)).toBeNull();
+    expect(within(card).queryByRole('link', { name: 'Set up a Bridge' })).toBeNull();
+  });
+
   it('asks to update a Bridge online without read-alongs, never calling it offline (S265-DIALOG)', async () => {
     const old: ServerInfo = {
       ...bridgeOn,

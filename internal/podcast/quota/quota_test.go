@@ -37,6 +37,34 @@ func TestTakeRefillAndRetryAfter(t *testing.T) {
 	}
 }
 
+// Refund gives a spent token back, never past the burst, and leaves a key it
+// holds no bucket for alone.
+func TestRefund(t *testing.T) {
+	c := &clock{t: time.Unix(1000, 0)}
+	l := New(10, 2, 0, 10*time.Minute, c.now)
+	l.Take("u")
+	l.Take("u")
+	l.Refund("u")
+	if d := l.Take("u"); !d.OK {
+		t.Fatalf("after a refund = %+v", d)
+	}
+	l.Refund("u")
+	l.Refund("u")
+	l.Refund("u") // past the burst: still two
+	for i := range 2 {
+		if d := l.Take("u"); !d.OK {
+			t.Fatalf("token %d after refunds = %+v", i, d)
+		}
+	}
+	if d := l.Take("u"); d.OK {
+		t.Fatal("a refund went past the burst")
+	}
+	l.Refund("nobody")
+	if d := l.Take("nobody"); !d.OK {
+		t.Fatalf("a new key = %+v", d)
+	}
+}
+
 // A full map refuses a new key (busy) while every bucket is active, and admits
 // it once an idle one can go; an active bucket is never evicted.
 func TestMapBound(t *testing.T) {

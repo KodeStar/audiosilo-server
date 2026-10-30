@@ -75,29 +75,33 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 // (FileArtVersion: its kind, size and mtime, what a thumbnail of it is cached
 // under), which the scan reads when it indexes the book and a thumbnail records
 // (RecordCoverColors). A refresh that has no reading of the file (a custom cover
-// set, removed or moved, a join) keeps a file version the row holds; a row with
-// none (the custom cover just removed, a row indexed before the scan read the
-// file) takes "f" and the index's mtime, size and sidecar path, plus the custom
-// cover's identity it replaces, so the form never repeats an identity the row
-// had for other art. Migration 0023 backfilled the "f" form alone.
+// set, removed or moved, a join) keeps the identity the row holds, unless it is
+// a custom cover's: a file version, or an "f" form, whose " c..." suffix a later
+// refresh must not drop (back to the identity the row had before the custom
+// cover, for what may since be other art). A row with neither (the custom cover
+// just removed, a row indexed without a reading of the file) takes "f" and the
+// index's mtime, size and sidecar path, plus the custom cover's identity it
+// replaces, so the form never repeats an identity the row had for other art.
+// Migration 0023 backfilled the "f" form alone.
 const coverArtSQL = `COALESCE(
 	(SELECT 'c' || cv.updated_at FROM book_covers cv
 	  WHERE cv.library_id = books.library_id AND cv.path = books.rel_path),
 	NULLIF(?1, ''),
-	CASE WHEN ?2 AND books.cover_art GLOB '[se][0-9]*' THEN books.cover_art END,
+	CASE WHEN ?2 AND books.cover_art <> '' AND books.cover_art NOT GLOB 'c*' THEN books.cover_art END,
 	'f' || books.mtime || ' ' || books.size || ' ' || books.cover_path ||
 	  CASE WHEN books.cover_art GLOB 'c*' THEN ' ' || books.cover_art ELSE '' END)`
 
 // refreshCoverArt recomputes books.cover_art for the book at path (if one is
 // indexed there), after anything coverArtSQL reads has changed but not the art
-// file: a file version the row holds stays.
+// file: an identity the row holds stays, unless it is a custom cover's.
 func refreshCoverArt(ctx context.Context, tx *sql.Tx, libraryID int64, path string) error {
 	return writeCoverArt(ctx, tx, libraryID, path, "", true)
 }
 
 // writeCoverArt sets books.cover_art for the book at path by coverArtSQL, with
-// scanned the scan's reading of its art file ("" for none) and keep whether a
-// file version the row holds stands in for a missing reading. Art that is the
+// scanned the scan's reading of its art file ("" for none) and keep whether the
+// identity the row holds (any but a custom cover's) stands in for a missing
+// reading. Art that is the
 // same as before keeps its identity, so its colour (tagged with its
 // cover_version) still holds.
 func writeCoverArt(ctx context.Context, tx *sql.Tx, libraryID int64, path, scanned string, keep bool) error {
@@ -168,9 +172,10 @@ func (c *Catalog) Cover(ctx context.Context, libraryID int64, path string) (*Cus
 	return &cv, nil
 }
 
-// DeleteCover removes a book path's custom cover (back to its own art, and its
-// cover_version back to that art's). Removing a cover that isn't there is not an
-// error.
+// DeleteCover removes a book path's custom cover (back to its own art, under a
+// cover_version the row never had: coverArtSQL; the art's own version comes
+// back once a scan or a thumbnail reads the file). Removing a cover that isn't
+// there is not an error.
 func (c *Catalog) DeleteCover(ctx context.Context, libraryID int64, path string) error {
 	path = CleanRelPath(path)
 	removed := false

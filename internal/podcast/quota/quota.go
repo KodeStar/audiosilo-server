@@ -64,15 +64,31 @@ func (l *Limiter) Take(key string) Decision {
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	}
-	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = math.Min(b.tokens+elapsed*l.rate, l.burst)
-	}
-	b.last = now
+	l.refill(b, now)
 	if b.tokens >= 1-eps {
 		b.tokens--
 		return Decision{OK: true}
 	}
 	return Decision{RetryAfter: retryAfter(b.tokens, l.rate)}
+}
+
+// Refund gives back a token Take spent from key's bucket for a request that
+// never ran (it waited for a slot and gave up), up to the burst.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.buckets[key]; b != nil {
+		l.refill(b, l.now())
+		b.tokens = math.Min(b.tokens+1, l.burst)
+	}
+}
+
+// refill adds b's tokens since it was last read, up to the burst.
+func (l *Limiter) refill(b *bucket, now time.Time) {
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens = math.Min(b.tokens+elapsed*l.rate, l.burst)
+	}
+	b.last = now
 }
 
 // eps absorbs float residue in refills (5 + 1 seconds of 1/6 token each).

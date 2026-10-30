@@ -267,32 +267,22 @@ func TestUserStateRulesMatchTheSchema(t *testing.T) {
 	}
 }
 
-// TestUserStateRuleWidth (S263-HOOK): a column rule's width is its last watched
-// column plus one, so every column the hook leaves unread is one the rule frees:
-// bridge_status.status, the heartbeat's up to 64 KiB, is never read.
+// TestUserStateRuleWidth (S263-HOOK): the hook reads a row only up to its rule's
+// last watched column (watchedChanged), and bridge_status.status, the
+// heartbeat's up to 64 KiB, comes after it, so it is never read.
 func TestUserStateRuleWidth(t *testing.T) {
 	t.Parallel()
 	db, _ := openUserState(t)
-	for table, rule := range db.userState {
-		if rule.free == nil {
-			continue
-		}
-		cols, err := tableColumns(context.Background(), db.writer, table)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := rule.watched[len(rule.watched)-1] + 1; rule.width != want {
-			t.Errorf("%s: width %d, want %d", table, rule.width, want)
-		}
-		for _, c := range cols[rule.width:] {
-			if !slices.Contains(rule.free, c) {
-				t.Errorf("%s: column %s past the width is watched", table, c)
-			}
-		}
+	cols, err := tableColumns(context.Background(), db.writer, "bridge_status")
+	if err != nil {
+		t.Fatal(err)
 	}
-	cols, _ := tableColumns(context.Background(), db.writer, "bridge_status")
-	if i := slices.Index(cols, "status"); i < db.userState["bridge_status"].width {
-		t.Errorf("bridge_status: status (column %d) is read (width %d)", i, db.userState["bridge_status"].width)
+	watched := db.userState["bridge_status"].watched
+	if len(watched) == 0 {
+		t.Fatal("bridge_status: no watched column")
+	}
+	if i, last := slices.Index(cols, "status"), watched[len(watched)-1]; i <= last {
+		t.Errorf("bridge_status: status (column %d) is read (the last watched is column %d)", i, last)
 	}
 }
 

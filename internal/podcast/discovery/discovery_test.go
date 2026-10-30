@@ -987,6 +987,35 @@ func TestArtworkQueueTimesOut(t *testing.T) {
 	}
 }
 
+// A miss that never got an image slot made no request to an image host, so the
+// server-wide image-miss token its admission took goes back.
+func TestArtworkQueueTimeoutRefundsToken(t *testing.T) {
+	f := newFake(t)
+	c := &clock{t: time.Unix(1700000000, 0)}
+	s, ids := artService(t, f, c, "a.png")
+	s.budget = 50 * time.Millisecond
+	for range maxImageSlots {
+		if !s.imageSlots.TryAcquire() {
+			t.Fatal("a slot was taken")
+		}
+	}
+	defer func() {
+		for range maxImageSlots {
+			s.imageSlots.Release()
+		}
+	}()
+	if _, e := s.Artwork(context.Background(), "u", ids["a.png"]); e == nil || e.Code != "discovery_busy" {
+		t.Fatalf("with every slot held = %+v, want discovery_busy", e)
+	}
+	left := 0
+	for s.imageMiss.Take("").OK {
+		left++
+	}
+	if left != imageMissBurst {
+		t.Fatalf("%d image-miss tokens left, want all %d", left, imageMissBurst)
+	}
+}
+
 // Feed and artwork URL rules: public only, the test origin's exact address
 // admitted, nothing resolved.
 func TestURLRules(t *testing.T) {

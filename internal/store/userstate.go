@@ -43,10 +43,6 @@ type tableRule struct {
 	// watched are the column indexes outside free, in the table's order
 	// (userStateRules fills it from the schema); nil when free is.
 	watched []int
-	// width is the last watched column's index plus one: the columns the hook
-	// reads of a row (watchedChanged), so a freed column after every watched
-	// one (bridge_status.status, up to 64 KiB a heartbeat) is never copied.
-	width int
 }
 
 // userStateTables are the tables a user-state write may change, each with its
@@ -110,7 +106,6 @@ func userStateRules(ctx context.Context, db *sql.DB) (map[string]tableRule, erro
 			for i, c := range cols {
 				if !slices.Contains(rule.free, c) {
 					rule.watched = append(rule.watched, i)
-					rule.width = i + 1
 				}
 			}
 		}
@@ -257,15 +252,17 @@ func (w *userStateWatch) change(d sqlite.SQLitePreUpdateData) {
 	case d.OldRowID != d.NewRowID:
 		w.content = true
 	case rule.watched != nil:
-		w.content = watchedChanged(&d, rule.watched, rule.width)
+		w.content = watchedChanged(&d, rule.watched)
 	}
 }
 
 // watchedChanged reports whether an UPDATE changes any of the watched columns'
-// values (or the values can't be read), reading only the row's first width
-// columns (tableRule.width: up to the last watched one).
-func watchedChanged(d *sqlite.SQLitePreUpdateData, watched []int, width int) bool {
-	n := min(d.Count(), width)
+// values (or the values can't be read), reading the row only up to the last
+// watched column (watched is in the table's order, never empty), so a freed
+// column after every watched one (bridge_status.status, up to 64 KiB a
+// heartbeat) is never copied.
+func watchedChanged(d *sqlite.SQLitePreUpdateData, watched []int) bool {
+	n := min(d.Count(), watched[len(watched)-1]+1)
 	// Old and New store each value in the slice they are handed (they assign
 	// through &dest[i]), so the slices themselves end up holding the row.
 	before, after := make([]any, n), make([]any, n)

@@ -378,10 +378,14 @@ func readableEpub(r io.ReaderAt, size int64) (bool, error) {
 // again when the file at its path has changed since the index read it (another
 // signature: an EPUB replaced in place), so ebook.size follows the file without
 // waiting for a scan (BRIDGE-16): one stat while it hasn't. The new file goes
-// through the scan's rule (checkEbook: one that isn't a readable epub is recorded
-// as none), compare-and-set on the row as read here (SetEbooks with Was), and
-// book.Ebook is set to what was recorded. A file gone, or one that can't be read
-// right now, is left for the next scan; a failure to record is logged.
+// through the scan's rule (checkEbook) and, a readable epub, is recorded
+// compare-and-set on the row as read here (SetEbooks with Was), book.Ebook set
+// to it. One that isn't a readable epub now (a copy still being written over the
+// old, as likely as a file that never will be) answers no ebook but isn't
+// recorded: a recorded none is never read again here, so Read would wait for the
+// next scan, while the next request reads the file again. A file gone, or one
+// that can't be read right now, is left for the next scan; a failure to record
+// is logged.
 func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *catalog.Book) {
 	if book.Ebook == nil {
 		return
@@ -398,6 +402,10 @@ func (s *Scanner) RefreshEbook(ctx context.Context, lib catalog.Library, book *c
 	}
 	r, ok := checkEbook(lib.Root, catalog.EbookReading{Path: rel, Sig: sig, Size: info.Size()})
 	if !ok {
+		return
+	}
+	if r.Path == "" { // no readable epub now: none for this answer, the row left as it is
+		book.Ebook = nil
 		return
 	}
 	r.Was = &was

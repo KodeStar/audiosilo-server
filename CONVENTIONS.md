@@ -578,7 +578,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
   `progress`), which columns an UPDATE may change by value (the hook reads a row only up to
-  the rule's last watched column, `tableRule.width`, so a freed column after them, the
+  the rule's last watched column, `watchedChanged`, so a freed column after them, the
   heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
   test binary), and a rule's table or column a newer server's schema lacks (a rollback) only
@@ -972,7 +972,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   recorded ebook too (`library.Scanner.RefreshEbook`, one stat and one row read): a file replaced in
   place (another signature) is checked by the same rule (`checkEbook`) and recorded the same way
   (compare-and-set), so `ebook.size` follows it before the next scan (BRIDGE-16,
-  `TestItemEbookReplacedInPlace`); a new, renamed or removed file still waits for the scan. A file that can't be read right now (a
+  `TestItemEbookReplacedInPlace`); one that isn't a readable epub at that moment (a copy still being
+  written) answers no ebook and isn't recorded, so the next request reads it again; a new, renamed or
+  removed file still waits for the scan. A file that can't be read right now (a
   folder that won't list, a permission, a flaky mount: `EbookReading.Unread`) keeps what is stored, in
   a backfill and an index alike (`UpsertBook`; a new row gets none), so the next scan looks again
   (`TestIndexKeepsEbookItCantRead`). Every open, the scan's and the route's, is `library.OpenEbook`: a
@@ -2074,7 +2076,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers `{kind, asr_hours, figures, writable, ebook: {path,size}|null, readalong: Book.readalong|null,
   open_job?}` (`asr_hours` the whole audio at the Bridge's `asr_seconds_per_audio_hour`, the most it
   may take: less when the Bridge kept the book's transcript; `open_job` the book's open read-along job,
-  else the generate or detect job it would wait for). Notifications word it "Read-along ready: <book>
+  else the generate or detect job it would wait for). Notifications word it "Read-along made: <book>
   (N% lined up)" (the result's `coverage.text` rounded down; the event's `coverage`) and "Read-along
   failed: <book>". The console's book page shows a **Read-along** card for a book with an ebook
   (`features/book/readalong-*`: the map's state, coverage and stale reason, Make / Make again with a

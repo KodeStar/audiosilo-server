@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"database/sql"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -197,6 +198,14 @@ func TestCustomCoverVersion(t *testing.T) {
 	if cc != nil || v == "" || v == want || v == fileVersion {
 		t.Fatalf("after delete: cover = %+v %q, want no colour and a version other than %q and %q", cc, v, want, fileVersion)
 	}
+	// A refresh with no reading of the file (a join, a move) keeps it: never back
+	// to the identity the row had before the custom cover, for what may be other art.
+	if err := c.db.WithTx(ctx, "refresh", func(tx *sql.Tx) error { return refreshCoverArt(ctx, tx, lib.ID, "A/B") }); err != nil {
+		t.Fatal(err)
+	}
+	if _, again := coverState(t, c, lib.ID, "A/B"); again != v {
+		t.Fatalf("refreshed after delete: version %q, want %q kept (the one before was %q)", again, v, fileVersion)
+	}
 	recordCover(t, c, lib.ID, "A/B", coverSource(t, c, lib.ID, "A/B"), fileColor)
 	if cc, after := coverState(t, c, lib.ID, "A/B"); cc == nil || *cc != fileColor || after != v {
 		t.Fatalf("read after delete: cover = %+v %q, want %+v %q", cc, after, fileColor, v)
@@ -368,7 +377,8 @@ func TestCoverColorsDue(t *testing.T) {
 }
 
 // TestOnBookChangeListeners: every listener hears a change, a custom cover set
-// or removed included; removing a cover that isn't there is no change; a nil
+// or removed and an art file replaced in place included; removing a cover that
+// isn't there, or a reading of art the row no longer holds, is no change; a nil
 // listener is ignored.
 func TestOnBookChangeListeners(t *testing.T) {
 	t.Parallel()
@@ -390,7 +400,16 @@ func TestOnBookChangeListeners(t *testing.T) {
 	if err := c.DeleteCover(ctx, lib.ID, "a.m4b"); err != nil {
 		t.Fatal(err)
 	}
-	if a.Load() != 3 || b.Load() != 3 {
-		t.Fatalf("listeners heard %d and %d changes, want 3 each (index, cover set, cover removed)", a.Load(), b.Load())
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "b.m4b", Title: "B", MTime: 1, ArtVersion: "s1-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetArtVersions(ctx, lib.ID, map[string]ArtChange{"b.m4b": {Was: "s1-1", Now: "s2-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetArtVersions(ctx, lib.ID, map[string]ArtChange{"b.m4b": {Was: "s1-1", Now: "s3-3"}}); err != nil {
+		t.Fatal(err)
+	}
+	if a.Load() != 5 || b.Load() != 5 {
+		t.Fatalf("listeners heard %d and %d changes, want 5 each (index, cover set, cover removed, index, art replaced)", a.Load(), b.Load())
 	}
 }

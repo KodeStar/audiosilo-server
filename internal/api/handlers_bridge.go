@@ -206,7 +206,7 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The database, as for a token the server couldn't check (requireBridge):
-		// 503, which the Bridge retries at once.
+		// 503, a passing fault the Bridge's next heartbeat tries again.
 		a.log.Warn("bridge heartbeat failed", "err", err)
 		writeError(w, http.StatusServiceUnavailable, "could not save the status, try again")
 		return

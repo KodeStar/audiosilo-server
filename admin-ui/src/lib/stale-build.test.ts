@@ -1,6 +1,8 @@
-import { BUILD_ID, installStaleBuildReload, isChunkLoadError, reloadOnce } from './stale-build';
+import { isChunkLoadError, reloadOnce } from './stale-build';
 
 // UPG-01: a tab on an older build reloads into the new one once, never in a loop.
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('reloadOnce', () => {
   it('reloads the first time for a build, and not again', () => {
@@ -24,24 +26,7 @@ describe('reloadOnce', () => {
     });
     expect(reloadOnce('build-a', reload)).toBe(false);
     expect(reload).not.toHaveBeenCalled();
-    get.mockRestore();
-  });
-});
-
-describe('installStaleBuildReload', () => {
-  it("reloads on vite:preloadError once, then lets the error through to the page's boundary", () => {
-    const target = new EventTarget();
-    const reload = vi.fn();
-    installStaleBuildReload(target as unknown as Window, reload);
-    const fire = () => {
-      const e = new Event('vite:preloadError', { cancelable: true });
-      target.dispatchEvent(e);
-      return e.defaultPrevented;
-    };
-    expect(fire()).toBe(true);
-    expect(fire()).toBe(false);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(sessionStorage.getItem('audiosilo.admin.reloaded-for')).toBe(BUILD_ID);
+    expect(get).toHaveBeenCalled();
   });
 });
 

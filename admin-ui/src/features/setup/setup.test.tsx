@@ -348,6 +348,29 @@ describe('folder, naming and metadata', () => {
     expect(puts(calls)).toEqual([{ steps: { folder: 'skipped' } }]);
   });
 
+  it('asks for the books folder on Continue when the server has only a podcasts library', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        {},
+        {
+          'GET /admin/libraries': {
+            body: { libraries: libraries([{ name: 'Podcasts', kind: 'podcasts' }]).slice(0, 1) },
+          },
+        },
+      ),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Where are your books?' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    expect(
+      await screen.findByText(
+        'Type the folder that holds your books, or skip this step to add a library later.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText('Choose the folder again')).toBeNull();
+    expect(puts(calls)).toEqual([]);
+  });
+
   it('Continue past naming with nothing left to name keeps it done', async () => {
     const calls = mockFetch(
       flowRoutes({ steps: { folder: 'skipped', naming: 'done', metadata: 'done' } }),
