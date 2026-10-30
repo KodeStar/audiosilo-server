@@ -494,11 +494,32 @@ type UpcomingEntry struct {
 // or more_series), in library sort order. Items whose community series was
 // never fetched are left out.
 func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEntry, error) {
+	return c.upcomingFor(ctx, scopes, "")
+}
+
+// UpcomingWork is UpcomingFor's first entry for work (ok false for none), read
+// on its own: the entry a list keeping each work once keeps.
+func (c *Catalog) UpcomingWork(ctx context.Context, scopes []Scope, work string) (UpcomingEntry, bool, error) {
+	out, err := c.upcomingFor(ctx, scopes, work)
+	if err != nil || len(out) == 0 {
+		return UpcomingEntry{}, false, err
+	}
+	return out[0], true, nil
+}
+
+// upcomingFor is UpcomingFor's read, or with a work id ("" for every work) the
+// first of that work's entries alone.
+func (c *Catalog) upcomingFor(ctx context.Context, scopes []Scope, work string) ([]UpcomingEntry, error) {
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
-	args := slices.Concat(fargs, fargs)
+	var only, limit string
+	var args []any
+	if work != "" {
+		only, limit, args = "i.work_id = ? AND ", " LIMIT 1", []any{work}
+	}
+	args = slices.Concat(args, fargs, fargs)
 	rows, err := c.db.QueryContext(ctx, `SELECT i.library_id, i.series_key, i.work_id, i.series_id, i.kind,
 		       i.release_date, i.position, i.title, i.authors, i.cover_url, i.first_seen_at, s.name, ms.name
 		  FROM upcoming_items i
@@ -506,11 +527,11 @@ func (c *Catalog) UpcomingFor(ctx context.Context, scopes []Scope) ([]UpcomingEn
 		  JOIN upcoming_series s ON s.library_id = i.library_id AND s.series_key = i.series_key
 		   AND s.series_id = i.series_id
 		  JOIN meta_series ms ON ms.series_id = i.series_id
-		 WHERE EXISTS (SELECT 1 FROM books b WHERE b.library_id = i.library_id AND b.series_key = i.series_key
+		 WHERE `+only+`(EXISTS (SELECT 1 FROM books b WHERE b.library_id = i.library_id AND b.series_key = i.series_key
 		                 AND `+frag+`)
 		    OR EXISTS (SELECT 1 FROM book_more_series m JOIN books b ON b.id = m.book_id
-		                WHERE m.library_id = i.library_id AND m.series_key = i.series_key AND `+frag+`)
-		 ORDER BY l.sort_order, l.name, l.id, i.series_key, i.work_id`, args...)
+		                WHERE m.library_id = i.library_id AND m.series_key = i.series_key AND `+frag+`))
+		 ORDER BY l.sort_order, l.name, l.id, i.series_key, i.work_id`+limit, args...)
 	if err != nil {
 		return nil, err
 	}

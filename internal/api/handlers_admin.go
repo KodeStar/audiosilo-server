@@ -1016,7 +1016,7 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		name = lib.Name
 	case errors.Is(err, catalog.ErrNotFound):
 		// Nothing to delete, so nothing to record (server#198).
-		writeErrorCode(w, http.StatusNotFound, "not_found", "library not found")
+		writeErrorCode(w, http.StatusNotFound, codeNotFound, "library not found")
 		return
 	default:
 		a.writeCatalogError(w, err, "delete library failed", "could not delete library", "library", id)

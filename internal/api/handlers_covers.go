@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -373,6 +374,15 @@ func thumbSizeParam(w http.ResponseWriter, raw string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// optThumbSize is a thumbnail route's optional ?size=: defaultThumbSize when
+// unset, else thumbSizeParam's; false when it wrote the 400.
+func optThumbSize(w http.ResponseWriter, q url.Values) (int, bool) {
+	if !q.Has("size") {
+		return defaultThumbSize, true
+	}
+	return thumbSizeParam(w, q.Get("size"))
 }
 
 // thumbBatch checks a thumbnail batch: its list (named field) holds 1 to max

@@ -121,6 +121,21 @@ func List(ctx context.Context, cat *catalog.Catalog, scopes []catalog.Scope, wor
 	return ans, nil
 }
 
+// CoverFor is the cover URL List hands out for work within scopes, read for
+// that work alone (List's rule: its first entry, unless a copy is in scope):
+// "" when List doesn't carry the work or carries it without a cover.
+func CoverFor(ctx context.Context, cat *catalog.Catalog, scopes []catalog.Scope, work string) (string, error) {
+	e, ok, err := cat.UpcomingWork(ctx, scopes, work)
+	if err != nil || !ok || e.CoverURL == "" {
+		return "", err
+	}
+	held, err := cat.UpcomingOwnedWorks(ctx, scopes, false, []string{work})
+	if err != nil || held[work] {
+		return "", err
+	}
+	return e.CoverURL, nil
+}
+
 // kindRank orders the kinds: preorders, releases, missing volumes.
 func kindRank(k string) int {
 	switch k {

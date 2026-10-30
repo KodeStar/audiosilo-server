@@ -40,7 +40,18 @@ const (
 	// own routes list it, and it works only while its admin is an admin. Never a
 	// device either.
 	KindBridge = "bridge"
+	// KindFeed is a user's calendar feed token (feed.go): one per user, only
+	// GET /me/upcoming/releases.ics lists it, never touched (a calendar's polls
+	// are not the person's activity) and never a device.
+	KindFeed = "feed"
 )
+
+// neverTouched reports whether a token of kind is never touched by resolve: it
+// is no device of its owner's, and its calls are not the owner's activity, which
+// is the newest last_seen of their tokens (userColumns, the inactive accounts).
+// A bridge token's heartbeat every 30 s says when the Bridge was last heard; a
+// feed token's polls are a calendar app's.
+func neverTouched(kind string) bool { return kind == KindBridge || kind == KindFeed }
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
 // and lifetime); a recovery code is a durable, reusable credential the user holds
@@ -354,18 +365,18 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 // and authCodeID are nil for "no expiry" / "unlinked"; signInKey is the hashed
 // browser key of a password sign-in ("" otherwise).
 func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
-	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil)
+	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil, s.ts())
 }
 
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
-// member's sign-in was made on (nil: none) - the single place the column list
-// lives.
+// member's sign-in was made on (nil: none), and createdAt (s.ts(), RFC3339 UTC,
+// except a feed token's millisUTC) - the single place the column list lives.
 func (s *Service) insertTokenOn(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string,
-	expires, authCodeID any, signInKey string, createdOn any) (sql.Result, error) {
+	expires, authCodeID any, signInKey string, createdOn any, createdAt string) (sql.Result, error) {
 	return ex.ExecContext(ctx,
 		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key,
 		                    created_on_token_id)
-		 VALUES(?,?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey, createdOn)
+		 VALUES(?,?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, createdAt, expires, authCodeID, signInKey, createdOn)
 }
 
 // ResolveToken validates a presented token secret of exactly the given kind and
@@ -421,11 +432,7 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
-	// A bridge token is never touched: it is no device of its admin's, and its
-	// calls (a heartbeat every 30 s) are not the admin's activity, which is the
-	// newest last_seen of their tokens (userColumns, the inactive accounts). The
-	// heartbeat says when the Bridge was last heard.
-	if row.kind == KindBridge || !s.needsTouch(row, p) {
+	if neverTouched(row.kind) || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather
@@ -508,8 +515,8 @@ type tokenRow struct {
 // by ResolveRequest and
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
-// real token presented where its kind is not accepted. A valid session, API key
-// or bridge token is answered from s.tokens until the next content write or its
+// real token presented where its kind is not accepted. A valid session, API key,
+// bridge or feed token is answered from s.tokens until the next content write or its
 // own touch (tokencache.go), its expiry still checked against the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
@@ -557,7 +564,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	member.apply(&u)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
-	// lookup is this one two-table query, and a valid session, API key or bridge
+	// lookup is this one two-table query, and a valid session, API key, bridge or feed
 	// token's is then answered from s.tokens until the next content write or touch.
 	switch row.kind {
 	case KindCast:
@@ -1315,7 +1322,8 @@ func (s *Service) CountDemoUsers(ctx context.Context) (int, error) {
 // activity (or, lacking any, their creation time) is older than cutoff. Their
 // child rows (progress, bookmarks, notes, history, tokens, share grants) cascade
 // via ON DELETE CASCADE. Returns the number of accounts deleted. Timestamps are
-// stored as RFC3339 UTC, so the lexical comparison is chronological.
+// stored as RFC3339 UTC, so the lexical comparison is chronological (a feed
+// token's millisUTC created_at would not be, but a demo account never has one).
 func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int64, error) {
 	cut := cutoff.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,

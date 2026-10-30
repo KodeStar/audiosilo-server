@@ -1,0 +1,2 @@
+# CRLF is the iCalendar format itself: never converted.
+*.ics -text

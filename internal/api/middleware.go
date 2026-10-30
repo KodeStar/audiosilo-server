@@ -287,10 +287,12 @@ func rateLimited(w http.ResponseWriter, wait time.Duration) {
 // bearerToken extracts a session token from the Authorization header. When
 // allowQuery is set it additionally accepts the token as a `token` query
 // parameter - used ONLY for media GETs (covers/audio), where browser
-// <img>/<audio> elements cannot set an Authorization header. The fallback is
+// <img>/<audio> elements cannot set an Authorization header, and the calendar
+// feed, which a calendar app reads by its URL alone. The fallback is
 // deliberately NOT accepted on other routes: a session token in a query string
 // can leak into access logs and Referer headers, so it stays confined to the
-// media handlers that actually need it (see requireMediaAuth).
+// handlers that actually need it (mediaAuth: requireMediaAuth,
+// requireBookMediaAuth and requireFeedAuth).
 func bearerToken(r *http.Request, allowQuery bool) string {
 	h := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(h, "Bearer "); ok {
@@ -338,7 +340,7 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 
 // authLimited is requireAuth's and mediaAuth's one sequence (server#252):
 // refuse while the address's bucket is empty (Ready), authenticate one of
-// kinds (queryToken: ?token= too, media GETs only), charge the address for a
+// kinds (queryToken: ?token= too, mediaAuth's GETs only), charge the address for a
 // failure, then spend from the credential's bucket in l (allowCredential). With
 // l nil the request was already charged to its address (rateLimit's
 // authRoutes) and is only authenticated. authed, when set, runs once the
@@ -437,9 +439,9 @@ func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
 	return a.mediaAuth(next, bookMediaKinds)
 }
 
-// mediaAuth is requireMediaAuth and requireBookMediaAuth: the media rate limit
-// and authentication described on requireMediaAuth, accepting the token kinds
-// given.
+// mediaAuth is requireMediaAuth, requireBookMediaAuth and requireFeedAuth: the
+// media rate limit and authentication described on requireMediaAuth, accepting
+// the token kinds given.
 func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ctx, ok := a.authLimited(w, r, a.mediaLimiter, true, kinds, func(ctx context.Context) { a.mediaCrossOrigin(ctx, w) }); ok {
@@ -470,9 +472,9 @@ func (a *API) mediaCrossOrigin(ctx context.Context, w http.ResponseWriter) {
 	}
 }
 
-// mediaHandler marks a route wrapped in mediaAuth (requireMediaAuth or
-// requireBookMediaAuth), so rateLimit can tell media from the general API by
-// the handler the mux picks for a request.
+// mediaHandler marks a route wrapped in mediaAuth (requireMediaAuth,
+// requireBookMediaAuth or requireFeedAuth), so rateLimit can tell media from the
+// general API by the handler the mux picks for a request.
 type mediaHandler struct{ http.Handler }
 
 func isMedia(h http.Handler) bool {
@@ -483,7 +485,8 @@ func isMedia(h http.Handler) bool {
 // The token kinds a route accepts. Session OR api key everywhere: both
 // authenticate, and pairing tokens are never accepted, so a QR/pairing secret
 // can never be used as a durable credential. A cast token only on a book's own
-// media (requireBookMediaAuth).
+// media (requireBookMediaAuth), and a calendar feed token only on the calendar
+// feed, which takes no other kind (feedKinds, requireFeedAuth).
 var (
 	sessionOrAPI   = []string{auth.KindSession, auth.KindAPI}
 	bookMediaKinds = []string{auth.KindSession, auth.KindAPI, auth.KindCast}
@@ -493,7 +496,7 @@ var (
 // carrying the user and the credential, or the reason for a 401 with the error
 // behind it (nil for no token at all; a refused token's, or a failure to check
 // it, which requireBridge tells apart). allowQueryToken also takes the token from
-// ?token= (media GETs only, see bearerToken).
+// ?token= (mediaAuth's GETs only, see bearerToken).
 func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string) (context.Context, string, error) {
 	token := bearerToken(r, allowQueryToken)
 	if token == "" {

@@ -174,8 +174,9 @@ func TestCompressLeavesOtherAnswers(t *testing.T) {
 // TestCompressExclusions: the request half of the rule. Only a GET (or its
 // HEAD) under /api/v1/ is compressed; never a POST or other write (every
 // credential is minted by one), a Range request, the media (stream, cover, ebook,
-// /meta/cover, a backup's download), /api/v1/auth/* (credentials) or the
-// Bridge's routes (the long-poll claim), however large the JSON.
+// /meta/cover, a backup's download, the Upcoming covers and the calendar feed
+// below /me/upcoming/), /api/v1/auth/* (credentials) or the Bridge's routes (the
+// long-poll claim), however large the JSON.
 func TestCompressExclusions(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -187,6 +188,8 @@ func TestCompressExclusions(t *testing.T) {
 		{"GET", "/api/v1/admin/books", nil, true},
 		{"GET", "/api/v1/server", nil, true},
 		{"GET", "/api/v1/libraries/1/meta", nil, true},
+		{"GET", "/api/v1/me/upcoming", nil, true},
+		{"POST", "/api/v1/me/upcoming/calendar", nil, false},
 		{"POST", "/api/v1/auth/login", nil, false},
 		{"POST", "/api/v1/auth/pair", nil, false},
 		{"POST", "/api/v1/auth/exchange", nil, false},
@@ -206,11 +209,16 @@ func TestCompressExclusions(t *testing.T) {
 		{"HEAD", "/api/v1/admin/backups/audiosilo-2026.db", nil, false},
 		{"HEAD", "/api/v1/auth/tokens", nil, false},
 		{"HEAD", bridgeClaimPath, nil, false},
+		{"HEAD", "/api/v1/me/upcoming/releases.ics", nil, false},
+		{"HEAD", "/api/v1/me/upcoming/cover", nil, false},
 		{"GET", "/api/v1/libraries/1/books", map[string]string{"Range": "bytes=0-9"}, false},
 		{"GET", "/api/v1/libraries/1/stream", nil, false},
 		{"GET", "/api/v1/libraries/1/cover", nil, false},
 		{"GET", "/api/v1/libraries/1/ebook", nil, false},
 		{"GET", "/api/v1/libraries/1/meta/cover", nil, false},
+		{"GET", "/api/v1/me/upcoming/releases.ics", nil, false},
+		{"GET", "/api/v1/me/upcoming/cover", nil, false},
+		{"GET", "/api/v1/me/upcoming/calendar", nil, false},
 		{"GET", "/api/v1/admin/backups/audiosilo-2026.db", nil, false},
 		{"GET", "/api/v1/bridge/jobs/next", nil, false},
 		{"GET", "/api/v1/bridge/libraries/1/book", nil, false},
