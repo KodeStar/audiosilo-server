@@ -146,9 +146,12 @@ func (c *Catalog) SetUpcomingSeries(ctx context.Context, libraryID int64, key, n
 	}
 	return c.db.WithUserStateTx(ctx, "SetUpcomingSeries", func(tx *sql.Tx) error {
 		args := append([]any{libraryID, key}, anyOf(ids)...)
-		for _, table := range []string{"upcoming_series", "upcoming_items"} {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE library_id = ? AND series_key = ?
-				AND series_id NOT IN (`+placeholders(len(ids))+`)`, args...); err != nil {
+		in := placeholders(len(ids))
+		for _, del := range []string{
+			`DELETE FROM upcoming_series WHERE library_id = ? AND series_key = ? AND series_id NOT IN (` + in + `)`,
+			`DELETE FROM upcoming_items WHERE library_id = ? AND series_key = ? AND series_id NOT IN (` + in + `)`,
+		} {
+			if _, err := tx.ExecContext(ctx, del, args...); err != nil {
 				return err
 			}
 		}
@@ -173,9 +176,11 @@ func (c *Catalog) DropUpcomingSeries(ctx context.Context, gone []UpcomingSeries)
 	}
 	return c.db.WithUserStateTx(ctx, "DropUpcomingSeries", func(tx *sql.Tx) error {
 		for _, s := range gone {
-			for _, table := range []string{"upcoming_series", "upcoming_items"} {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE library_id = ? AND series_key = ?`,
-					s.LibraryID, s.SeriesKey); err != nil {
+			for _, del := range []string{
+				`DELETE FROM upcoming_series WHERE library_id = ? AND series_key = ?`,
+				`DELETE FROM upcoming_items WHERE library_id = ? AND series_key = ?`,
+			} {
+				if _, err := tx.ExecContext(ctx, del, s.LibraryID, s.SeriesKey); err != nil {
 					return err
 				}
 			}
@@ -269,9 +274,13 @@ func (c *Catalog) DropMetaSeries(ctx context.Context, ids []string) error {
 		return nil
 	}
 	return c.db.WithUserStateTx(ctx, "DropMetaSeries", func(tx *sql.Tx) error {
-		for _, table := range []string{"meta_series", "upcoming_series", "upcoming_items"} {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE series_id IN (`+placeholders(len(ids))+`)`,
-				anyOf(ids)...); err != nil {
+		in := placeholders(len(ids))
+		for _, del := range []string{
+			`DELETE FROM meta_series WHERE series_id IN (` + in + `)`,
+			`DELETE FROM upcoming_series WHERE series_id IN (` + in + `)`,
+			`DELETE FROM upcoming_items WHERE series_id IN (` + in + `)`,
+		} {
+			if _, err := tx.ExecContext(ctx, del, anyOf(ids)...); err != nil {
 				return err
 			}
 		}
@@ -323,16 +332,17 @@ func (c *Catalog) ReplaceUpcomingItems(ctx context.Context, libraryID int64, key
 				return err
 			}
 		}
-		q := `DELETE FROM upcoming_items WHERE library_id = ? AND series_key = ?`
-		args := []any{libraryID, key}
-		if len(works) > 0 {
-			q += ` AND work_id NOT IN (` + placeholders(len(works)) + `)`
-			args = append(args, anyOf(works)...)
-		}
-		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		// The items no longer found (every item, when none is); the ids go in
+		// as one JSON array.
+		found, err := json.Marshal(works)
+		if err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE upcoming_series SET classified_at = COALESCE(classified_at, ?)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM upcoming_items WHERE library_id = ? AND series_key = ?
+			AND work_id NOT IN (SELECT value FROM json_each(?))`, libraryID, key, string(found)); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE upcoming_series SET classified_at = COALESCE(classified_at, ?)
 			WHERE library_id = ? AND series_key = ?`, at, libraryID, key)
 		return err
 	})
@@ -399,25 +409,28 @@ func (c *Catalog) UpcomingOwnedWorks(ctx context.Context, scopes []Scope, all bo
 			q += " AND " + frag
 			args = append(args, fargs...)
 		}
-		rows, err := c.db.QueryContext(ctx, q, args...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out[id] = true
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := c.collectWorkIDs(ctx, out, q, args); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+// collectWorkIDs adds the work ids query q returns to out.
+func (c *Catalog) collectWorkIDs(ctx context.Context, out map[string]bool, q string, args []any) error {
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		out[id] = true
+	}
+	return rows.Err()
 }
 
 // UpcomingEntry is an item as GET /me/upcoming reads it: the item, its local
