@@ -616,7 +616,8 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 
 // clearKidCredentials takes from a member becoming a kid every way to sign in
 // that a kid can't have (plan decision 1): the password (and the browsers it
-// signed in from), API keys, open pairing tokens, the recovery code and any
+// signed in from), API keys, open pairing tokens, the calendar feed token
+// (feed.go: a kid has no Upcoming), the recovery code and any
 // still-redeemable invite (whose linked pairing tokens cascade), so no code can
 // pair a new device into the kid's account. Sessions stay: their devices stay
 // signed in. It also clears their household listening choice
@@ -632,6 +633,7 @@ func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) 
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
 		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `') AND revoked = 0`,
+		deleteFeedTokensSQL,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,
 		`DELETE FROM collection_shares

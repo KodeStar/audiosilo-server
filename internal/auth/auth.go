@@ -40,6 +40,10 @@ const (
 	// own routes list it, and it works only while its admin is an admin. Never a
 	// device either.
 	KindBridge = "bridge"
+	// KindFeed is a user's calendar feed token (feed.go): one per user, only
+	// GET /me/upcoming/releases.ics lists it, never touched (a calendar's polls
+	// are not the person's activity) and never a device.
+	KindFeed = "feed"
 )
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
@@ -425,7 +429,9 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	// calls (a heartbeat every 30 s) are not the admin's activity, which is the
 	// newest last_seen of their tokens (userColumns, the inactive accounts). The
 	// heartbeat says when the Bridge was last heard.
-	if row.kind == KindBridge || !s.needsTouch(row, p) {
+	// A feed token is never touched either: a calendar app's polls are no
+	// activity of its owner's, nor a device of theirs.
+	if row.kind == KindBridge || row.kind == KindFeed || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather
@@ -508,8 +514,8 @@ type tokenRow struct {
 // by ResolveRequest and
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
-// real token presented where its kind is not accepted. A valid session, API key
-// or bridge token is answered from s.tokens until the next content write or its
+// real token presented where its kind is not accepted. A valid session, API key,
+// bridge or feed token is answered from s.tokens until the next content write or its
 // own touch (tokencache.go), its expiry still checked against the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
@@ -557,7 +563,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	member.apply(&u)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
-	// lookup is this one two-table query, and a valid session, API key or bridge
+	// lookup is this one two-table query, and a valid session, API key, bridge or feed
 	// token's is then answered from s.tokens until the next content write or touch.
 	switch row.kind {
 	case KindCast:
