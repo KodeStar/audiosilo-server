@@ -702,7 +702,8 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 	}
 	now := c.now()
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
-		return progressRowArgs(imp.UserID, w.Progress[i].Wrote, now), nil
+		wrote := w.Progress[i].Wrote
+		return progressRowArgs(imp.UserID, wrote, finishChangeStamp(wrote.UpdatedAt, now)), nil
 	}); err != nil {
 		return err
 	}
@@ -753,7 +754,7 @@ func jsonOrNil(p *Progress) (any, error) {
 // progressUpsert writes a progress row whole (dates "" stored as NULL), with
 // progressRowArgs' arguments. A row whose finished state it sets or changes
 // gets finish_changed_at (Sync v2: an older finish or unfinish event is then
-// "older" and can't undo it), at finishChangeStamp's time.
+// "older" and can't undo it), at progressRowArgs' changedAt.
 const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
 	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),CASE WHEN ?6 THEN ?13 END)
@@ -765,10 +766,10 @@ const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, posi
 	                           ELSE progress.finish_changed_at END`
 
 // progressRowArgs are progressUpsert's arguments for p as userID's progress,
-// now the server's time (finishChangeStamp's cap).
-func progressRowArgs(userID int64, p Progress, now time.Time) []any {
+// changedAt the finish_changed_at a finish-state change records.
+func progressRowArgs(userID int64, p Progress, changedAt string) []any {
 	return []any{userID, p.LibraryID, p.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, finishChangeStamp(p.UpdatedAt, now)}
+		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, changedAt}
 }
 
 // sameProgress reports whether a stored row is still the one an import wrote: a
@@ -924,14 +925,20 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 			continue
 		}
 		back := pr.restored()
+		changedAt := finishChangeStamp(back.UpdatedAt, now)
 		if pr.rewound() {
+			// A finish-state change taken back from a row the import had moved on
+			// happens now, replacing or not: dated at the restored row's own (older)
+			// time it would let in the finish or unfinish events the import's
+			// change had made "older".
+			changedAt = formatSessionTime(now)
 			if replacing {
 				rewound = append(rewound, pr)
 			} else {
-				back.UpdatedAt = formatSessionTime(now)
+				back.UpdatedAt = changedAt
 			}
 		}
-		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back, now)...); err != nil {
+		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back, changedAt)...); err != nil {
 			return nil, err
 		}
 	}

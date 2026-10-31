@@ -2760,7 +2760,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
   the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, an import's apply and
-  undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule), a move or
+  undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
+  row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
   carry `device_name` and `other_place` (omitempty).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and

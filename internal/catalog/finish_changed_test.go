@@ -86,9 +86,10 @@ func TestImportUndoStampsTheFinishChange(t *testing.T) {
 	if p == nil || p.Finished {
 		t.Fatalf("undo: %+v", p)
 	}
-	// The undo dates the change at the restored row's time (here now: a rewound
-	// row is restored as a save at now).
-	wantResult(t, syncFinishOn(t, f.c, f.ctx, f.user, f.other, EventFinish, day(2, 9)), statusNotApplied, reasonOlder)
+	// The undo dates the change now (a rewound row is restored as a save at now):
+	// a finish after the import's own change (day 3 22:00) but before the undo is
+	// "older" too.
+	wantResult(t, syncFinishOn(t, f.c, f.ctx, f.user, f.other, EventFinish, day(20, 0)), statusNotApplied, reasonOlder)
 	f.clock = f.clock.Add(time.Second)
 	wantResult(t, syncFinishOn(t, f.c, f.ctx, f.user, f.other, EventFinish, f.clock), statusApplied, "")
 }
@@ -126,4 +127,38 @@ func TestEditedFinishHoldsAgainstAnOlderUnfinish(t *testing.T) {
 	if p := f.progress(t); p.Finished {
 		t.Fatalf("an older finish undid the edit: %+v", p)
 	}
+}
+
+// A re-import's undo of the previous import keeps a rewound row's own
+// updated_at (the new import plans against it) but still dates the finish-state
+// change it takes back now, as a standalone undo does: a finish from after the
+// replaced import's own change is "older".
+func TestReimportUndoStampsTheFinishChangeNow(t *testing.T) {
+	t.Parallel()
+	f := newImportFixture(t)
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 100, Duration: 3600,
+		DeviceID: "phone", UpdatedAt: FormatStamp(day(2, 10))}); err != nil {
+		t.Fatal(err)
+	}
+	finishOther := func(st ImportState) (*ImportWrite, error) {
+		have := st.Progress[f.other]
+		up := have
+		up.Position, up.Finished, up.Version, up.UpdatedAt = 3600, true, have.Version+1, FormatStamp(day(3, 22))
+		return &ImportWrite{Progress: []ImportProgress{{Prior: &have, Wrote: up}}}, nil
+	}
+	if _, err := f.c.ApplyImport(f.ctx, f.newImport(t, day(10, 0)), finishOther); err != nil {
+		t.Fatal(err)
+	}
+	// The re-import writes nothing on other: the undo's restored row stays.
+	if _, err := f.c.ApplyImport(f.ctx, f.newImport(t, day(10, 0)), func(ImportState) (*ImportWrite, error) {
+		return &ImportWrite{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := f.c.GetProgress(f.ctx, f.user, f.other); p == nil || p.Finished {
+		t.Fatalf("re-import: %+v", p)
+	}
+	wantResult(t, syncFinishOn(t, f.c, f.ctx, f.user, f.other, EventFinish, day(20, 0)), statusNotApplied, reasonOlder)
+	f.clock = f.clock.Add(time.Second)
+	wantResult(t, syncFinishOn(t, f.c, f.ctx, f.user, f.other, EventFinish, f.clock), statusApplied, "")
 }
