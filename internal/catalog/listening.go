@@ -185,17 +185,10 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	// RFC3339 UTC to the second (fixed width, so they compare as strings).
 	now := c.now()
 	stamp := now.UTC().Format(time.RFC3339)
-	at := formatSessionTime(now) // the event's time, and finish_changed_at's
 	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
 		stamp = t.UTC().Format(time.RFC3339)
-		// The event's time and finish_changed_at never run ahead of the server's
-		// clock (plausibleUpdatedAt allows a little skew): a finish dated ahead
-		// would make a Sync v2 unfinish sent just after it "older".
-		if t.After(now) {
-			t = now
-		}
-		at = formatSessionTime(t)
 	}
+	at := finishChangeStamp(in.UpdatedAt, now) // the event's time, and finish_changed_at's
 	var out *Progress
 	err := c.db.WithUserStateTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
 		existing, err := getProgress(ctx, tx, userID, in.Ref)
@@ -244,6 +237,22 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 		return nil, err
 	}
 	return out, nil
+}
+
+// finishChangeStamp is the time a write that changes a row's finished state
+// records as finish_changed_at (and a PUT's event time): the write's own
+// updated_at, never ahead of the server's clock now (plausibleUpdatedAt allows a
+// little skew: a finish dated ahead would make a Sync v2 unfinish sent just
+// after it "older"), or now when updated_at doesn't parse. Fixed-width UTC
+// milliseconds. Every non-sync writer of finished uses it (SaveProgressFrom,
+// the imports' progressUpsert); EditProgress, stamped with now, is its case of
+// an updated_at that is now.
+func finishChangeStamp(updatedAt string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339, updatedAt)
+	if err != nil || t.After(now) {
+		t = now
+	}
+	return formatSessionTime(t)
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be

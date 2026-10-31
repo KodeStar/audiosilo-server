@@ -323,3 +323,56 @@ func TestPutProgressStillLegacy(t *testing.T) {
 		t.Fatalf("put event: %s %s %v", kind, status, err)
 	}
 }
+
+// The listener's own PATCH and the admin's PATCH mark a finish-state change: a
+// sync unfinish dated before the edit is "older" and leaves the book finished,
+// one dated after it applies.
+func TestEditedFinishHoldsAgainstAnOlderSyncUnfinish(t *testing.T) {
+	t.Parallel()
+	s := newSyncEnv(t)
+	ctx := context.Background()
+	uid, tok := newUserWithSession(t, s.testEnv, "sam", false)
+	if err := s.cat.GrantWholeLibrary(ctx, uid, s.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	book, err := s.cat.BookPathOfFile(ctx, s.lib.ID, syncUnsouled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminTok := adminSession(t, s.testEnv)
+	unfinish := func(id string, at time.Time) string {
+		t.Helper()
+		_, a, raw := s.post(t, tok, syncBody("watch", fmt.Sprintf(
+			`{"id":%q,"kind":"unfinish","library_id":%d,"path":%q,"at":%q}`, id, s.lib.ID, book,
+			at.UTC().Format(time.RFC3339Nano))))
+		if len(a.Results) != 1 {
+			t.Fatalf("unfinish %s: %s", id, raw)
+		}
+		return a.Results[0].Status + " " + a.Results[0].Reason
+	}
+	finished := func() bool {
+		t.Helper()
+		p, err := s.cat.GetProgress(ctx, uid, catalog.Ref{LibraryID: s.lib.ID, Path: book})
+		if err != nil || p == nil {
+			t.Fatalf("progress: %+v, %v", p, err)
+		}
+		return p.Finished
+	}
+	for _, w := range []struct{ name, url, tok string }{
+		{"own", bookURL(s.lib.ID, "progress", book), tok},
+		{"admin", "/api/v1/admin/libraries/" + strconv.FormatInt(s.lib.ID, 10) + "/progress?path=" +
+			url.QueryEscape(book) + "&user_id=" + strconv.FormatInt(uid, 10), adminTok},
+	} {
+		before := time.Now().Add(-time.Second)
+		if resp, raw := s.do(t, "PATCH", w.url, w.tok, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s PATCH: %d %s", w.name, resp.StatusCode, raw)
+		}
+		if got := unfinish(w.name+"-older", before); got != "not_applied older" || !finished() {
+			t.Fatalf("%s: older unfinish %q, finished %v", w.name, got, finished())
+		}
+		time.Sleep(2 * time.Millisecond)
+		if got := unfinish(w.name+"-newer", time.Now()); got != "applied " || finished() {
+			t.Fatalf("%s: newer unfinish %q, finished %v", w.name, got, finished())
+		}
+	}
+}

@@ -701,7 +701,7 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 		return err
 	}
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
-		return progressRowArgs(imp.UserID, w.Progress[i].Wrote), nil
+		return progressRowArgs(imp.UserID, w.Progress[i].Wrote, c.now()), nil
 	}); err != nil {
 		return err
 	}
@@ -750,19 +750,24 @@ func jsonOrNil(p *Progress) (any, error) {
 }
 
 // progressUpsert writes a progress row whole (dates "" stored as NULL), with
-// progressRowArgs' arguments.
+// progressRowArgs' arguments. A row whose finished state it sets or changes
+// gets finish_changed_at (Sync v2: an older finish or unfinish event is then
+// "older" and can't undo it), at finishChangeStamp's time.
 const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-	    playback_speed, version, device_id, updated_at, started_at, finished_at)
-	VALUES(?,?,?,?,?,?,?,?,?,?,NULLIF(?, ''),NULLIF(?, ''))
+	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
+	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),CASE WHEN ?6 THEN ?13 END)
 	ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 	    position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 	    playback_speed=excluded.playback_speed, version=excluded.version, device_id=excluded.device_id,
-	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at`
+	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at,
+	    finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
+	                           ELSE progress.finish_changed_at END`
 
-// progressRowArgs are progressUpsert's arguments for p as userID's progress.
-func progressRowArgs(userID int64, p Progress) []any {
+// progressRowArgs are progressUpsert's arguments for p as userID's progress,
+// now the server's time (finishChangeStamp's cap).
+func progressRowArgs(userID int64, p Progress, now time.Time) []any {
 	return []any{userID, p.LibraryID, p.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt}
+		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, finishChangeStamp(p.UpdatedAt, now)}
 }
 
 // sameProgress reports whether a stored row is still the one an import wrote: a
@@ -924,7 +929,7 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 				back.UpdatedAt = formatSessionTime(c.now())
 			}
 		}
-		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back)...); err != nil {
+		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back, c.now())...); err != nil {
 			return nil, err
 		}
 	}
