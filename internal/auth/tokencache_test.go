@@ -314,15 +314,24 @@ func TestTokenCacheRefusesAfterTouches(t *testing.T) {
 	if got, _, err := s.ResolveRequest(ctx, other, Presence{}, KindSession); err != nil || got.Role != RoleUser {
 		t.Fatalf("after the demotion: %+v, %v; want role user", got, err)
 	}
-	// A password change empties the cache: the lookups are read again.
+	// A password change empties the cache: the lookups are read again, and
+	// the session it ended (every one but the caller's, sess) is refused at once.
+	_, kept, err := s.ResolveRequest(ctx, sess, Presence{IP: "10.0.0.2"}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
 	warm(t, s, other, KindSession)
 	pw := "new-pw-new-pw"
-	if err := s.SetPassword(ctx, admin.ID, pw); err != nil {
+	if err := s.SetPassword(ctx, admin.ID, pw, kept.ID); err != nil {
 		t.Fatal(err)
 	}
 	if cached(s, other) {
 		t.Fatal("a password change left a lookup cached")
 	}
+	if _, _, err := s.ResolveRequest(ctx, other, Presence{}, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a session the password change ended = %v, want ErrInvalidToken", err)
+	}
+	other, _ = s.IssueToken(ctx, admin.ID, KindSession, "tablet", 0)
 	if _, err := s.Authenticate(ctx, "boss", "pw-pw-pw-pw"); err == nil {
 		t.Fatal("the old password still signs in")
 	}

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
+import type { AdminUser } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   activity,
@@ -370,6 +371,116 @@ describe('a person', () => {
     const keys = screen.getByRole('region', { name: 'API key' });
     expect(within(keys).getByText('Home Assistant')).toBeInTheDocument();
     expect(within(keys).queryByText("Sam's iPhone")).not.toBeInTheDocument();
+  });
+
+  it('signs them out everywhere after saying what keeps working (server#281)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: { devices: [device(), device({ id: 3, kind: 'api', name: 'Home Assistant' })] },
+        },
+        'POST /admin/users/2/sign-out': { body: { signed_out: 1 } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Sign out everywhere' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign sam out everywhere?' });
+    expect(
+      within(dialog).getByText(/API keys and calendar links keep working/),
+    ).toBeInTheDocument();
+    // sam has no password: the way back is a new invite.
+    expect(within(dialog).getByText(/pairing with a new invite/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+    expect(await screen.findByText('Signed sam out of 1 device')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/users/2/sign-out')).toBe(
+      true,
+    );
+  });
+
+  it("offers no sign out everywhere when the console's own session is the only one", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device({ id: 9, user_id: 1, username: 'admin', name: 'Console', current: true }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/people/user/1?tab=devices');
+    expect(await screen.findByText('Console')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign out everywhere' })).not.toBeInTheDocument();
+  });
+
+  it("says a kid's owner signs them in again after signing them out everywhere", async () => {
+    const kid: AdminUser = {
+      ...sam,
+      managed_by: { id: 1, username: 'chris', display_name: '' },
+      member_kind: 'kid',
+      member_access: 'all',
+      can_add_members: false,
+    };
+    mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ user: kid, auth_codes: [] }) },
+        'GET /admin/devices': { body: { devices: [device()] } },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Sign out everywhere' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign sam out everywhere?' });
+    expect(
+      within(dialog).getByText(/chris signs them in again from the player/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/password/)).not.toBeInTheDocument();
+  });
+
+  it('says a password change signs them out, and refreshes their devices (server#281)', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/users/2': { body: samDetail({ user: { ...sam, has_password: true } }) },
+        'PATCH /admin/users/2': { body: { ...sam, has_password: true } },
+      }),
+    );
+    const devicesReads = () =>
+      calls.filter((c) => c.method === 'GET' && c.path === '/admin/devices').length;
+    renderApp('/people/user/2?tab=sign-in');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Change password' }));
+    const dialog = await screen.findByRole('dialog', { name: "Change sam's password" });
+    expect(
+      within(dialog).getByText(/Their phones, tablets and browsers are signed out/),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(devicesReads()).toBeGreaterThan(0));
+    const before = devicesReads();
+    await user.type(within(dialog).getByLabelText('New password'), 'a-long-password');
+    await user.type(within(dialog).getByLabelText('Type it again'), 'a-long-password');
+    await user.click(within(dialog).getByRole('button', { name: 'Save password' }));
+    expect(await screen.findByText("Saved sam's password")).toBeInTheDocument();
+    await waitFor(() => expect(devicesReads()).toBeGreaterThan(before));
+  });
+
+  it('says a first password signs nobody out', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/2?tab=sign-in');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Set a password' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Set a password for sam' });
+    expect(within(dialog).getByText(/Paired devices stay signed in/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/signed out/)).not.toBeInTheDocument();
+  });
+
+  it('says your own password change keeps this console signed in', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/1?tab=sign-in');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Change password' }));
+    const dialog = await screen.findByRole('dialog', { name: "Change chris's password" });
+    expect(within(dialog).getByText(/This console stays signed in/)).toBeInTheDocument();
   });
 
   it('404s an unknown person', async () => {

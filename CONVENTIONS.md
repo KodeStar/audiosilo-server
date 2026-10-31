@@ -97,7 +97,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   CSP (`TestCSPAllowsPlainHTTP`), so the console and player work over http on the LAN.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
-  expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
+  expires; a password change or reset and Sign out everywhere delete it, see Password ends
+  sessions). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
   `ConsumePairing` path. **Redeem validates without consuming** (opening an
   invite link costs nothing); **exchange claims the use** - `ConsumePairing`
   folds the cap check, the code-expiry check and the first-claim `redeemed_at`
@@ -128,6 +129,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
+- **Password ends sessions (server#281)**: replacing or clearing a password the account had
+  (`auth.UpdateUser`: the self-service `POST /auth/password` and the admin's `PATCH /admin/users/{id}`
+  alike; a first password ends nothing) revokes every `session` token of that person but
+  `UserChanges.KeepToken`, the caller's own (so changing your own password, or an admin resetting
+  their own, keeps the device it was done on), in the same durable transaction (`endSessions`). The
+  admin's **Sign out everywhere** (`POST /admin/users/{id}/sign-out`, `auth.SignOutEverywhere`,
+  answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
+  change, and forgets the person's browsers. With the sessions go the ways back in a session can make
+  without the password, which the person can neither see nor revoke: their open pairing codes
+  (unlinked `pairing` tokens, `POST /auth/pair`) and their recovery code (its linked pairing tokens
+  cascade). API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
+  do the calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
+  lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
+  console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
+  write moves the content generation, so the token cache refuses an ended token on the very next
+  request, media `?token=` included. A password sign-in racing the change gets no session:
+  `IssueSession` writes it only while the hash `Authenticate` verified is still the account's and the
+  account enabled, in its writer transaction, else `ErrInvalidCreds` (401). A shipped app takes its
+  existing 401 path (signed out, pair again).
 - **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
   tokens for headless integrations, owner-scoped mint/list/revoke via
   `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
@@ -566,9 +586,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a kid (`clearKidCredentials`, both the owner's member edit and the admin's assign), a move into another
   household when it was made on another owner's device (`leaveOwners`, with the sign-in made there; made
   independent, it stays, as that sign-in does); the account's deletion cascades; a disabled account's is
-  refused by `lookupToken`. A password change revokes no token of any kind on this server, so it leaves
-  the feed too. It is never touched (`resolve`, like a bridge token: a calendar's polls are not the
-  person's activity, and no last_ip is kept), never a device (the device lists take session and API-key
+  refused by `lookupToken`. A password change or reset, and the admin's sign-out everywhere, leave
+  it (server#281, Password ends sessions above): the feed is the person's to end. It is never touched
+  (`resolve`, like a bridge token: a calendar's polls are not the person's activity, and no last_ip
+  is kept), never a device (the device lists take session and API-key
   kinds only) and is held in the token cache like a session (every end above is a content write). **Acceptance**: `GET
   /me/upcoming/releases.ics` is the ONLY route listing `KindFeed` (`requireFeedAuth` = `mediaAuth` with
   `feedKinds`: `?token=` or the header, the media rate limit per credential) and it lists no other kind:
@@ -1930,7 +1951,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   API key or bridge token's is answered from `Service.tokens`, a `store.GenMap`, until the next
   content write or its own touch: every change that could end a token is a content write, and
   expiry is checked on each hit): **signing out the device that
-  minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
+  minted it** (logout, My devices, the console's sign-out of that device or Sign out everywhere, a
+  password change or reset that ends that session) **ends it**, as do the account's delete or
   disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
   `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its
   grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
@@ -2601,8 +2623,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `invalid_target` (+ `field`, `reason` = a `notify.Reason*` constant the console words, never renamed,
   and `max` for a `*_too_long`), `too_many_targets`. A password sign-in's `new_device` is skipped when
   the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
-  an earlier session of that person; an admin's `RevokeDevice`, a new password or disabling the account
-  forgets it.
+  an earlier session of that person; an admin's `RevokeDevice` or Sign out everywhere
+  (`SignOutEverywhere`), a new password or disabling the account forgets it.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
   a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
   account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the

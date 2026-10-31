@@ -90,7 +90,13 @@ func (c *castEnv) mint(t *testing.T, tok string, libID int64, path string) (int,
 // castToken mints for sam on lib's Cradle, wanting 201.
 func (c *castEnv) castToken(t *testing.T, path string) string {
 	t.Helper()
-	status, body := c.mint(t, c.samTok, c.lib, path)
+	return c.castTokenFrom(t, c.samTok, path)
+}
+
+// castTokenFrom is castToken minted as tok, one of sam's sessions.
+func (c *castEnv) castTokenFrom(t *testing.T, tok, path string) string {
+	t.Helper()
+	status, body := c.mint(t, tok, c.lib, path)
 	if status != http.StatusCreated {
 		t.Fatalf("mint %s = %d %s", path, status, body)
 	}

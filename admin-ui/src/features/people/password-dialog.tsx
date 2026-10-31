@@ -5,13 +5,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidatePeople } from '@/api/hooks';
+import { invalidateDevices, invalidatePeople } from '@/api/hooks';
 import type { User } from '@/api/types';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
 import { describedBy } from '@/lib/a11y';
 import { Input } from '@/components/ui/input';
 import { errorMessage, fieldMessage } from '@/lib/errors';
+import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
 
 /** The server's rule (auth.ErrPasswordTooShort); checked here first so the field can say so. */
@@ -30,7 +31,9 @@ type Values = z.infer<typeof schema>;
 
 /**
  * Sets or changes a person's password. With `promote`, it also makes them an
- * admin in the same request (an admin must have a password).
+ * admin in the same request (an admin must have a password). A change signs the
+ * person out of their devices (the server keeps the console's own session when
+ * it is the admin's account); a first password signs nobody out.
  */
 export function PasswordDialog({
   open,
@@ -44,6 +47,7 @@ export function PasswordDialog({
   promote?: boolean;
 }) {
   const { t } = useTranslation();
+  const self = useCurrentUser().id === user.id;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -55,9 +59,15 @@ export function PasswordDialog({
               ? t('user.password.changeTitle', { name: user.username })
               : t('user.password.setTitle', { name: user.username })
         }
-        description={
-          promote ? t('user.password.promoteDescription') : t('user.password.description')
-        }
+        description={t(
+          promote
+            ? 'user.password.promoteDescription'
+            : !user.has_password
+              ? 'user.password.description'
+              : self
+                ? 'user.password.changeDescriptionSelf'
+                : 'user.password.changeDescription',
+        )}
       >
         {open ? (
           <PasswordForm user={user} promote={promote} onDone={() => onOpenChange(false)} />
@@ -93,6 +103,8 @@ function PasswordForm({
         promote ? { password: v.password, role: 'admin' } : { password: v.password },
       );
       invalidatePeople(qc);
+      // A change signs them out of their devices (server#281): the lists move too.
+      invalidateDevices(qc);
       toast.add({
         title: promote
           ? t('user.account.nowAdmin', { name: user.username })

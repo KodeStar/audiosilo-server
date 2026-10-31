@@ -191,13 +191,24 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	ann, _ := s.CreateUser(ctx, "ann", "a-long-password", RoleAdmin)
 	bob, _ := s.CreateUser(ctx, "bob", "a-long-password", RoleUser)
 	const key = "8c4a2f1e-0b9d-4c57-9e1a-3f6d2b7c8e90"
+	passwords := map[int64]string{ann.ID: "a-long-password", bob.ID: "a-long-password"}
 
-	known := func(user *User, key string) bool {
+	// signIn is a password sign-in from the browser holding key.
+	signIn := func(user *User, key string) (string, bool) {
 		t.Helper()
-		secret, known, err := s.IssueSession(ctx, user.ID, "admin-web", key)
+		verified, err := s.Authenticate(ctx, user.Username, passwords[user.ID])
+		if err != nil {
+			t.Fatalf("Authenticate: %v", err)
+		}
+		secret, known, err := s.IssueSession(ctx, verified, "admin-web", key)
 		if err != nil || secret == "" {
 			t.Fatalf("IssueSession: %q %v", secret, err)
 		}
+		return secret, known
+	}
+	known := func(user *User, key string) bool {
+		t.Helper()
+		_, known := signIn(user, key)
 		return known
 	}
 	if known(ann, key) {
@@ -217,7 +228,7 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	}
 
 	// Signing out keeps the browser known.
-	secret, _, _ := s.IssueSession(ctx, ann.ID, "admin-web", key)
+	secret, _ := signIn(ann, key)
 	if err := s.RevokeToken(ctx, secret); err != nil {
 		t.Fatal(err)
 	}
@@ -243,9 +254,10 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	if !known(ann, key) {
 		t.Fatal("setup: the browser should be known again")
 	}
-	if err := s.SetPassword(ctx, ann.ID, "another-long-password"); err != nil {
+	if err := s.SetPassword(ctx, ann.ID, "another-long-password", 0); err != nil {
 		t.Fatal(err)
 	}
+	passwords[ann.ID] = "another-long-password"
 	if known(ann, key) {
 		t.Fatal("a browser is still known after a new password")
 	}
