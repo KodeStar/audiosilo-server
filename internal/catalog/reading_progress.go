@@ -11,7 +11,8 @@ import (
 
 // Reading progress (Bridge Phase 3b, migration 0057): a reader's place in a
 // book's ebook, path-keyed on the book's own path like progress, with Sync v2's
-// conflict rule (ResolvePlace), which listening progress will reuse (Track W).
+// conflict rule (ResolvePlace), which listening sync reuses (Track W1,
+// SyncListening).
 
 // ReadingProgress is one user's place in a book's ebook: the place as an EPUB
 // CFI and as a fraction of the book (Progression, 0-1, what the conflict rule
@@ -54,8 +55,10 @@ type ReadingSave struct {
 
 // Limits of a save's fields (CheckReadingSave).
 const (
-	maxCFIBytes      = 2048
-	maxDeviceIDBytes = 200
+	maxCFIBytes = 2048
+	// MaxDeviceIDBytes is the longest device id a save (reading, or a listening
+	// sync batch's) may carry.
+	MaxDeviceIDBytes = 200
 )
 
 // CheckReadingSave checks a save's fields before anything is read: a CFI that
@@ -76,7 +79,7 @@ func CheckReadingSave(in ReadingSave) error {
 		return errors.New("progression must be from 0 to 1")
 	case in.DeviceID == "":
 		return errors.New("device_id is required")
-	case len(in.DeviceID) > maxDeviceIDBytes:
+	case len(in.DeviceID) > MaxDeviceIDBytes:
 		return errors.New("device_id is too long")
 	case in.BaseVersion != nil && *in.BaseVersion < 0:
 		return errors.New("base_version must not be negative")
@@ -185,9 +188,11 @@ func otherPlace(p ReadingProgress) *OtherPlace {
 }
 
 // Place is one device's place in a book as Sync v2's conflict rule sees it (a
-// save, or the stored row): how far through the book it is (0-1), the device
-// that wrote it, when (RFC3339) and the version it has, or for a save the
-// version it would be stored with.
+// save, or the stored row): how far through the book it is, the device that
+// wrote it, when (RFC3339) and the version it has, or for a save the version it
+// would be stored with. Progression is any measure that grows through the book:
+// a fraction (0-1) for the reader, whole-book seconds for listening
+// (SyncListening); ResolvePlace only compares two of one kind with >.
 type Place struct {
 	Progression float64
 	DeviceID    string
@@ -229,7 +234,7 @@ const (
 // a version it saw, one that saw the stored row, one sent with no base) is
 // last-write-wins exactly like progress (IsNewer: the later updated_at, the
 // version breaking a tie), so moving back on purpose works. Pure: reading
-// progress uses it today, listening progress later.
+// progress and listening sync (SyncListening, Track W1) use it.
 func ResolvePlace(stored *Place, in Place, base *int64) PlaceOutcome {
 	switch {
 	case stored == nil:

@@ -70,8 +70,11 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 //     progress already on the joined book (mergeFurthest: the parts are one book,
 //     unlike a move's collision, where the newer save wins). A part finished counts
 //     as its end; the joined book is finished only when the furthest is the last
-//     part, finished.
-//   - bookmarks, notes, listening history and sessions: offset the same way.
+//     part, finished. The row keeps the newer finish-state change
+//     (finish_changed_at) and drops its offered place (other_place, a place on a
+//     part's timeline).
+//   - bookmarks, notes, listening history, sessions and Sync v2's event log
+//     (listening_events): offset the same way.
 //   - favourites and daily roll-ups: re-keyed (a listener's favourite once).
 //   - ratings: re-keyed; where a listener rated more than one part (or the joined
 //     book), the newest updated_at wins.

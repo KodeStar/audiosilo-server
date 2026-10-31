@@ -181,7 +181,7 @@ func TestCheckReadingSave(t *testing.T) {
 		// would win last-write-wins on its version alone.
 		"before year 1":    func(s *ReadingSave) { s.UpdatedAt = "0000-01-01T00:00:00+01:00" },
 		"no device":        func(s *ReadingSave) { s.DeviceID = "" },
-		"device too long":  func(s *ReadingSave) { s.DeviceID = strings.Repeat("d", maxDeviceIDBytes+1) },
+		"device too long":  func(s *ReadingSave) { s.DeviceID = strings.Repeat("d", MaxDeviceIDBytes+1) },
 		"negative version": func(s *ReadingSave) { s.BaseVersion = base(-1) },
 	} {
 		s := ok

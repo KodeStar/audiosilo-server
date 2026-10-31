@@ -126,6 +126,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"upcoming":           a.upcomingOn(),       // upcoming releases in the caller's series (GET /me/upcoming): metadata on AND upcoming.enabled
 		"upcoming_calendar":  a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
 		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
+		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
 	}
 }
 

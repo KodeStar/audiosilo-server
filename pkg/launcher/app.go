@@ -563,8 +563,9 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 // address of signed-out devices, deletes dead cast tokens (expired, or their
 // sender signed out) with the book each was for and spent or expired pairing
 // tokens, drops audit events and feed
-// events past their retention, and trims the community metadata cache to its
-// newest rows.
+// events past their retention, deletes listening sync events past
+// catalog.SyncRetention, and trims the community metadata cache to its newest
+// rows.
 func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
 	prune := func() {
 		now := time.Now()
@@ -585,6 +586,11 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		}
 		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows, catalog.MetaCacheWorkRows); err != nil && ctx.Err() == nil {
 			log.Warn("meta cache retention failed", "err", err)
+		}
+		// Sync v2's event log keeps 120 days (catalog.SyncRetention): longer than
+		// the 90 a sync accepts, so a replay can't apply twice.
+		if _, err := cat.PruneListeningEvents(ctx, now.Add(-catalog.SyncRetention)); err != nil && ctx.Err() == nil {
+			log.Warn("listening event retention failed", "err", err)
 		}
 		n, err := cat.PruneSessions(ctx, now.Add(-sessions()), time.Local)
 		if err != nil {

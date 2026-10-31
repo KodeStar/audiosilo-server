@@ -18,7 +18,10 @@ import (
 // stops and are dropped while the player is offline, so they can't say who is
 // listening right now, and they carry no device. A progress save carries the
 // token (so the device and app), works for every client already shipped, and
-// arrives while playback runs. See RecordHeartbeat.
+// arrives while playback runs. See RecordHeartbeat. A Sync v2 player (Track W1)
+// posts listen spans instead, folded into the same sessions at their corrected
+// device times (recordSpan, listening_sync.go), so offline listening counts when
+// it happened.
 
 const (
 	// SessionGap is how long a token may go without a progress save on a book
@@ -74,7 +77,8 @@ type Heartbeat struct {
 	Transcoded bool
 	// At is when the server received the save. Only server time is used: a
 	// device's clock can be wrong, and listenedBetween caps any save (a replay
-	// from an offline queue included) by the time that really passed.
+	// from an offline queue included) by the time that really passed. recordSpan
+	// leaves it unset: a Sync v2 span carries its own corrected times.
 	At time.Time
 }
 
@@ -111,69 +115,109 @@ func listenedBetween(wall time.Duration, advanced, speed float64) float64 {
 // has recorded no listening yet (a single save, such as a "mark finished" or a
 // sync from another app) is not shown anywhere (listenedSQL). Recording is
 // best-effort bookkeeping beside the progress itself; callers log a failure and
-// still answer the save.
+// still answer the save. Sync v2's spans take recordSpan instead (the same
+// session rows, the span's own times).
 func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 	if hb.Speed <= 0 {
 		hb.Speed = 1
 	}
 	at := formatSessionTime(hb.At)
 	return c.db.WithUserStateTx(ctx, "RecordHeartbeat", func(tx *sql.Tx) error {
-		var (
-			id     int64
-			lastAt string
-			endPos float64
-		)
-		// A session started before the person turned listening in the house on
-		// (household_sharing.updated_at) never continues: the first save after the
-		// switch starts a new one, so no session holds listening from both sides of
-		// it and HouseListening can tell them apart by started_at (the same bound,
-		// so a session started in the switch's millisecond continues and shows).
-		err := tx.QueryRowContext(ctx,
-			`SELECT id, last_at, end_pos FROM listening_sessions
-			  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
-			    AND started_at >= COALESCE((SELECT updated_at FROM household_sharing
-			                                 WHERE user_id = ?1 AND share_listening = 1), '')
-			  ORDER BY id DESC LIMIT 1`,
-			hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path,
-			formatSessionTime(hb.At.Add(-resumeWindow))).Scan(&id, &lastAt, &endPos)
-		if err == nil {
-			wall := hb.At.Sub(parseSessionTime(lastAt))
-			if wall > SessionGap && !continuousPlayback(wall, hb.Position-endPos, hb.Speed) {
-				err = sql.ErrNoRows // too long ago: this save starts a new session
-			}
-		}
-		if errors.Is(err, sql.ErrNoRows) {
-			var codec string
-			if err := tx.QueryRowContext(ctx,
-				`SELECT codec FROM books WHERE library_id = ? AND rel_path = ?`,
-				hb.Ref.LibraryID, hb.Ref.Path).Scan(&codec); err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO listening_sessions(user_id, library_id, rel_path, token_id, device_name,
-				     client_app, client_version, client_platform, started_at, last_at, start_pos, end_pos,
-				     duration, speed, codec, transcoded, finished)
-				 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				hb.UserID, hb.Ref.LibraryID, hb.Ref.Path, hb.TokenID, hb.DeviceName,
-				hb.Client.App, hb.Client.Version, hb.Client.Platform, at, at, hb.Position, hb.Position,
-				hb.Duration, hb.Speed, codec, hb.Transcoded, hb.Finished)
-			return err
-		}
+		open, err := latestSession(ctx, tx, hb, hb.At)
 		if err != nil {
 			return err
 		}
-		add := listenedBetween(hb.At.Sub(parseSessionTime(lastAt)), hb.Position-endPos, hb.Speed)
-		// hb.Client is already the token's newest app (a save without the header
-		// carries the stored one), so it is written as is.
-		_, err = tx.ExecContext(ctx,
-			`UPDATE listening_sessions SET last_at = ?, end_pos = ?, duration = ?, speed = ?,
-			        listened = listened + ?, finished = MAX(finished, ?), transcoded = MAX(transcoded, ?),
-			        client_app = ?, client_version = ?, client_platform = ?
-			  WHERE id = ?`,
-			at, hb.Position, hb.Duration, hb.Speed, add, hb.Finished, hb.Transcoded,
-			hb.Client.App, hb.Client.Version, hb.Client.Platform, id)
-		return err
+		var wall time.Duration
+		if open != nil {
+			wall = hb.At.Sub(parseSessionTime(open.lastAt))
+			if wall > SessionGap && !continuousPlayback(wall, hb.Position-open.endPos, hb.Speed) {
+				open = nil // too long ago: this save starts a new session
+			}
+		}
+		if open == nil {
+			return insertSession(ctx, tx, hb, at, at, hb.Position, hb.Position, 0)
+		}
+		add := listenedBetween(wall, hb.Position-open.endPos, hb.Speed)
+		return extendSession(ctx, tx, open.id, hb, at, hb.Position, add)
 	})
+}
+
+// openSession is the token's newest session on a book (latestSession).
+type openSession struct {
+	id                int64
+	startedAt, lastAt string
+	endPos            float64
+}
+
+// latestSession is the session hb's token last saved on hb's book, among those
+// begun by at (a save's time, or a span's start) whose last save is within
+// resumeWindow before it, or nil. The newest is the one with the latest last
+// save, not the latest id: a span synced late opens a session dated when it
+// happened. A session started before the person turned listening in the house
+// on (household_sharing.updated_at) never continues past the switch: the first
+// record after it starts a new one, so no session holds listening from both
+// sides of it and HouseListening can tell them apart by started_at (the same
+// bound, so a session started in the switch's millisecond continues and
+// shows); a span from before the switch, synced after it, still continues the
+// session before it.
+func latestSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, at time.Time) (*openSession, error) {
+	var s openSession
+	err := tx.QueryRowContext(ctx,
+		`SELECT id, started_at, last_at, end_pos FROM listening_sessions
+		  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
+		    AND started_at <= ?6
+		    AND (started_at >= COALESCE((SELECT updated_at FROM household_sharing
+		                                  WHERE user_id = ?1 AND share_listening = 1), '')
+		         OR ?6 < COALESCE((SELECT updated_at FROM household_sharing
+		                            WHERE user_id = ?1 AND share_listening = 1), ''))
+		  ORDER BY last_at DESC, id DESC LIMIT 1`,
+		hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path, formatSessionTime(at.Add(-resumeWindow)),
+		formatSessionTime(at)).
+		Scan(&s.id, &s.startedAt, &s.lastAt, &s.endPos)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// insertSession opens a session for hb's token on its book, from startedAt at
+// startPos to lastAt at endPos, with listened seconds already counted.
+func insertSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, startedAt, lastAt string, startPos, endPos, listened float64) error {
+	var codec string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT codec FROM books WHERE library_id = ? AND rel_path = ?`,
+		hb.Ref.LibraryID, hb.Ref.Path).Scan(&codec); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO listening_sessions(user_id, library_id, rel_path, token_id, device_name,
+		     client_app, client_version, client_platform, started_at, last_at, start_pos, end_pos,
+		     duration, speed, codec, transcoded, finished, listened)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		hb.UserID, hb.Ref.LibraryID, hb.Ref.Path, hb.TokenID, hb.DeviceName,
+		hb.Client.App, hb.Client.Version, hb.Client.Platform, startedAt, lastAt, startPos, endPos,
+		hb.Duration, hb.Speed, codec, hb.Transcoded, hb.Finished, listened)
+	return err
+}
+
+// extendSession carries session id on to lastAt (its last save never moves
+// back: a span replayed out of order keeps the later end) at endPos (taken only
+// when lastAt is not before the session's own), adding listened seconds. hb's
+// client is already the token's newest app (a save without the header carries
+// the stored one), so it is written as is.
+func extendSession(ctx context.Context, tx *sql.Tx, id int64, hb Heartbeat, lastAt string, endPos, add float64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE listening_sessions SET last_at = MAX(last_at, ?1),
+		        end_pos = CASE WHEN ?1 >= last_at THEN ?2 ELSE end_pos END, duration = ?3, speed = ?4,
+		        listened = listened + ?5, finished = MAX(finished, ?6), transcoded = MAX(transcoded, ?7),
+		        client_app = ?8, client_version = ?9, client_platform = ?10
+		  WHERE id = ?11`,
+		lastAt, endPos, hb.Duration, hb.Speed, add, hb.Finished, hb.Transcoded,
+		hb.Client.App, hb.Client.Version, hb.Client.Platform, id)
+	return err
 }
 
 // Session states, from the age of the newest save.
@@ -440,15 +484,18 @@ func (c *Catalog) ListSessions(ctx context.Context, f SessionFilter) ([]Session,
 // goneCursor is where a page continues when its cursor session no longer exists
 // and the request didn't say when it started (a client that sends no before_at)
 // (retention rolled it up, an undo took it out, its user was deleted). A session
-// recorded here gets its id as it starts, so among those (import_id 0) ids follow
-// the list's order: the page continues from the recorded session with the
-// greatest id below the cursor (itself included), so no recorded session is
-// skipped or repeated. Without one, every recorded session left was listed
-// already, and the page continues below the recorded one with the smallest id
-// above the cursor (imported sessions dated between it and the gone cursor are
-// listed again rather than skipped). Only an imported session dated between the
-// gone cursor and its recorded neighbour can be missed. With no recorded session
-// at all, ids are all there is to go by.
+// recorded from a progress save gets its id as it starts, so among those
+// (import_id 0) ids follow the list's order: the page continues from the
+// recorded session with the greatest id below the cursor (itself included), so
+// no such session is skipped or repeated. Without one, every recorded session
+// left was listed already, and the page continues below the recorded one with
+// the smallest id above the cursor (imported sessions dated between it and the
+// gone cursor are listed again rather than skipped). Only an imported session
+// dated between the gone cursor and its recorded neighbour can be missed, and a
+// Sync v2 span's session (recordSpan, dated when the span happened, so a late
+// one has a later id than sessions after it) can be missed or repeated: before_at,
+// which the console sends, pages exactly. With no recorded session at all, ids
+// are all there is to go by.
 func (c *Catalog) goneCursor(ctx context.Context, before int64) (string, []any, error) {
 	var (
 		started string

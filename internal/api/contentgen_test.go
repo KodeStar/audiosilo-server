@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -107,6 +108,15 @@ func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 	// Listening still shows where it is per user (uncached): the last save won.
 	if _, body := c.do(t, "GET", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), c.tok, ""); !strings.Contains(body, `"position":5`) {
 		t.Fatalf("progress after the saves: %s", body)
+	}
+	// Sync v2 (Track W1): events on the existing row (a span, which also writes a
+	// session and history, and a finish) are user state too.
+	finish := fmt.Sprintf(`{"id":"cg-finish","kind":"finish","library_id":%d,"path":"A/Alpha One.m4b","at":%q}`,
+		c.lib.ID, time.Now().UTC().Format(time.RFC3339Nano))
+	c.must(t, "POST", "/api/v1/me/listening/sync", syncBody("web",
+		listenJSON("cg-span", c.lib.ID, "A/Alpha One.m4b", 5, 20, ""), finish))
+	if got := c.db.ContentGeneration(); got != gen {
+		t.Errorf("a listening sync moved the content generation %d -> %d", gen, got)
 	}
 }
 
