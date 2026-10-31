@@ -244,9 +244,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 // updated_at, never ahead of the server's clock now (plausibleUpdatedAt allows a
 // little skew: a finish dated ahead would make a Sync v2 unfinish sent just
 // after it "older"), or now when updated_at doesn't parse. Fixed-width UTC
-// milliseconds. Every non-sync writer of finished uses it (SaveProgressFrom,
-// the imports' progressUpsert); EditProgress, stamped with now, is its case of
-// an updated_at that is now.
+// milliseconds.
 func finishChangeStamp(updatedAt string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, updatedAt)
 	if err != nil || t.After(now) {

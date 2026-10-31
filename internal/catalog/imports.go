@@ -700,8 +700,9 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 		}); err != nil {
 		return err
 	}
+	now := c.now()
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
-		return progressRowArgs(imp.UserID, w.Progress[i].Wrote, c.now()), nil
+		return progressRowArgs(imp.UserID, w.Progress[i].Wrote, now), nil
 	}); err != nil {
 		return err
 	}
@@ -912,6 +913,7 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 		return nil, err
 	}
 	var rewound []progressPrior
+	now := c.now()
 	for _, pr := range priors {
 		if pr.prior == nil {
 			if _, err := tx.ExecContext(ctx,
@@ -926,10 +928,10 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 			if replacing {
 				rewound = append(rewound, pr)
 			} else {
-				back.UpdatedAt = formatSessionTime(c.now())
+				back.UpdatedAt = formatSessionTime(now)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back, c.now())...); err != nil {
+		if _, err := tx.ExecContext(ctx, progressUpsert, progressRowArgs(userID, back, now)...); err != nil {
 			return nil, err
 		}
 	}

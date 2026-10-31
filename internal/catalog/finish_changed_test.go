@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 )
@@ -18,7 +17,7 @@ func syncFinishOn(t *testing.T, c *Catalog, ctx context.Context, user int64, ref
 	sent := c.now()
 	a, err := c.SyncListening(ctx, SyncBatch{UserID: user, DeviceID: "watch", TokenID: 9, DeviceName: "Watch",
 		SentAt: &sent, Targets: map[Ref]SyncTarget{ref: {Key: ref}},
-		Events: []SyncEvent{{ID: "fin-" + kind + "-" + strings.ReplaceAll(at.Format("20060102150405.000"), ".", ""), Kind: kind, LibraryID: ref.LibraryID,
+		Events: []SyncEvent{{ID: nextSyncID("fin-"), Kind: kind, LibraryID: ref.LibraryID,
 			Path: ref.Path, At: at.Format(time.RFC3339Nano)}}})
 	if err != nil {
 		t.Fatal(err)
@@ -50,9 +49,10 @@ func TestImportedFinishHoldsAgainstAnOlderUnfinish(t *testing.T) {
 	g := newImportFixture(t)
 	id := g.newImport(t, day(10, 0))
 	future := g.clock.Add(time.Hour)
-	if _, err := g.c.ApplyImport(g.ctx, id, func(ImportState) (*ImportWrite, error) {
-		return &ImportWrite{Progress: []ImportProgress{{Wrote: Progress{Ref: g.book, Position: 7200, Duration: 7200,
-			Finished: true, PlaybackSpeed: 1, Version: 1, UpdatedAt: FormatStamp(future)}}}}, nil
+	if _, err := g.c.ApplyImport(g.ctx, id, func(st ImportState) (*ImportWrite, error) {
+		w := g.write(st)
+		w.Progress[0].Wrote.UpdatedAt = FormatStamp(future)
+		return w, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +100,13 @@ func TestEditedFinishHoldsAgainstAnOlderUnfinish(t *testing.T) {
 	t.Parallel()
 	f := newSyncFixture(t)
 	f.syncOne(t, "phone", f.listen("resume", 0, 600, time.Hour, base(0)))
-	finished := true
-	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &finished}, Scope{AllowAll: true}); err != nil {
-		t.Fatal(err)
+	edit := func(finished bool) {
+		t.Helper()
+		if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &finished}, Scope{AllowAll: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	edit(true)
 	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventUnfinish, time.Minute)), statusNotApplied, reasonOlder)
 	if p := f.progress(t); !p.Finished {
 		t.Fatalf("an older unfinish undid the edit: %+v", p)
@@ -116,14 +119,9 @@ func TestEditedFinishHoldsAgainstAnOlderUnfinish(t *testing.T) {
 	// The other way: an edit marking it finished again, then unfinished, holds
 	// against a finish from before the edit.
 	f.clock = f.clock.Add(time.Minute)
-	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &finished}, Scope{AllowAll: true}); err != nil {
-		t.Fatal(err)
-	}
+	edit(true)
 	f.clock = f.clock.Add(time.Minute)
-	unfinished := false
-	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &unfinished}, Scope{AllowAll: true}); err != nil {
-		t.Fatal(err)
-	}
+	edit(false)
 	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventFinish, 30*time.Second)), statusNotApplied, reasonOlder)
 	if p := f.progress(t); p.Finished {
 		t.Fatalf("an older finish undid the edit: %+v", p)
