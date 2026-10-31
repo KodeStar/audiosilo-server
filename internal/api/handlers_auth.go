@@ -287,7 +287,14 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.loginLimiter.Reset(ip)
-	session, knownBrowser, err := a.auth.IssueSession(r.Context(), u.ID, req.DeviceName, req.DeviceID)
+	session, knownBrowser, err := a.auth.IssueSession(r.Context(), u, req.DeviceName, req.DeviceID)
+	if errors.Is(err, auth.ErrInvalidCreds) {
+		// The password changed (or the account was disabled) while this sign-in
+		// checked the old one: the change ended the sessions there were, and this
+		// one never starts (server#281).
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
@@ -385,7 +392,8 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 // Changing an existing password ends the user's other sessions (their cast tokens
-// with them), keeping the caller's; API keys and the calendar feed token stay.
+// with them), keeping the caller's, and their open pairing codes and recovery
+// code; API keys, the calendar feed token and Bridge tokens stay (auth.endSessions).
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return

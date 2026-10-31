@@ -148,6 +148,10 @@ type User struct {
 	// with no statement of its own; nil for anyone who isn't a member, and for a
 	// member whose owner is themselves or a member (bad data derives nothing).
 	MemberRule *MemberRule `json:"-"`
+	// verifiedHash is the password hash Authenticate checked, set on its answer
+	// only: IssueSession writes a sign-in's session only while it is still the
+	// account's (server#281). Unexported, so no wire carries it.
+	verifiedHash string
 }
 
 // UserRef names another account: a member's owner.
@@ -283,6 +287,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if u.Disabled {
 		return nil, ErrInvalidCreds
 	}
+	u.verifiedHash = hash
 	return &u, nil
 }
 
@@ -333,18 +338,24 @@ func (s *Service) issueToken(ctx context.Context, ex sqlExecer, userID int64, ki
 // (the admin console sends 32 random hex digits), never anything a person typed.
 var signInKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 
-// IssueSession issues a session for a password sign-in. signInKey is the random
-// id the signing-in browser keeps for itself ("" or malformed: it sent none, and
-// the sign-in counts as a new device). knownBrowser reports whether an earlier
-// session of the same person came from that browser, revoked ones included (a
-// sign-out keeps the key; an admin's RevokeDevice forgets it, and a new password
-// or disabling the account forgets them all: forgetBrowsers).
-func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, signInKey string) (secret string, knownBrowser bool, err error) {
+// IssueSession issues a session for a password sign-in. u is Authenticate's
+// answer: the session is written only while the password it verified is still
+// the account's and the account is enabled, checked in the same writer
+// transaction, so a sign-in whose verify ran before a password change committed
+// gets ErrInvalidCreds rather than a session that change could not end
+// (endSessions, server#281); a user Authenticate didn't answer gets it too.
+// signInKey is the random id the signing-in browser keeps for itself ("" or
+// malformed: it sent none, and the sign-in counts as a new device). knownBrowser
+// reports whether an earlier session of the same person came from that browser,
+// revoked ones included (the person's own sign-out keeps the key; an admin's
+// RevokeDevice forgets it, and an admin's Sign out everywhere, a new password or
+// disabling the account forgets them all: forgetBrowsers).
+func (s *Service) IssueSession(ctx context.Context, u *User, deviceName, signInKey string) (secret string, knownBrowser bool, err error) {
 	keyHash := ""
 	if signInKeyPattern.MatchString(signInKey) {
 		keyHash = hashSecret(signInKey)
 		err = s.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = ? AND sign_in_key = ? AND sign_in_key <> '')`, userID, keyHash).
+			`SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = ? AND sign_in_key = ? AND sign_in_key <> '')`, u.ID, keyHash).
 			Scan(&knownBrowser)
 		if err != nil {
 			return "", false, err
@@ -354,7 +365,20 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := s.insertToken(ctx, s.db, userID, hash, KindSession, deviceName, nil, nil, keyHash); err != nil {
+	err = s.db.WithTx(ctx, "IssueSession", func(tx *sql.Tx) error {
+		var current bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM users WHERE id = ? AND password_hash = ? AND password_hash <> '' AND disabled = 0)`,
+			u.ID, u.verifiedHash).Scan(&current); err != nil {
+			return err
+		}
+		if !current {
+			return ErrInvalidCreds
+		}
+		_, err := s.insertToken(ctx, tx, u.ID, hash, KindSession, deviceName, nil, nil, keyHash)
+		return err
+	})
+	if err != nil {
 		return "", false, err
 	}
 	return secret, knownBrowser, nil
@@ -1493,10 +1517,10 @@ type HouseholdChange struct {
 // unknown account is ErrNotFound. The write is one UPDATE; a new password, a
 // disabled account and a kid's assignment forget the person's browsers.
 // Replacing or clearing a password the account had (a change or a reset, not a
-// first password) also ends the person's sessions, all but c.KeepToken
+// first password) also ends the person's sessions, all but c.KeepToken, with the
+// open pairing codes and the recovery code a session could have made
 // (endSessions): whoever knew the old one is signed out wherever they used it.
-// API keys, the calendar feed token and Bridge tokens stay (each is listed and
-// revoked on its own); cast tokens end with the session that minted them.
+// What stays, and why, is endSessions'.
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	hash := ""
 	if c.Password != nil {
@@ -1676,12 +1700,16 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 }
 
 // endSessions signs the person out of every session but keep (a token id, 0
-// for none) inside tx, returning how many it ended. Only kind session: API keys,
-// the calendar feed token and Bridge tokens are the person's to revoke one by one,
-// and a pairing token is a single use that makes a session. A cast token needs no
-// write: it is refused once its parent is revoked (cast.go). The write moves the
-// content generation, so the token cache reads an ended token again and refuses
-// it on the very next request.
+// for none) inside tx, returning how many sessions it ended. With them go the
+// ways back in that a session can make without the password and the person can
+// neither see nor revoke: their open pairing codes (unlinked pairing tokens,
+// POST /auth/pair: one use, but one that would make a session after the end, as
+// leaveOwners ends them) and their recovery code (its linked pairing tokens
+// cascade). API keys stay (listed and revoked on their own), and so do the
+// calendar feed token (the person's to end) and Bridge tokens (the Bridge's). A
+// cast token needs no write: it is refused once its parent is revoked (cast.go).
+// The write moves the content generation, so the token cache reads an ended token
+// again and refuses it on the very next request.
 func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1
@@ -1689,7 +1717,20 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND auth_code_id IS NULL AND revoked = 0`,
+		userID, KindPairing); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // SignOutEverywhere is the admin's "Sign out everywhere" for account id: it ends

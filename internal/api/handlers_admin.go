@@ -569,9 +569,10 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 
 // handleSignOutEverywhere signs a person out of every phone, tablet and browser
 // (the console's "Sign out everywhere"): it ends all their sessions, and the cast
-// tokens minted from them, keeping the admin's own when it is their own account.
-// API keys, the calendar feed token and Bridge tokens stay (each is revoked on
-// its own). Answers {"signed_out": n}, the sessions it ended.
+// tokens minted from them, keeping the admin's own when it is their own account,
+// with their open pairing codes and recovery code; API keys, the calendar feed
+// token and Bridge tokens stay (auth.endSessions). Answers {"signed_out": n}, the
+// sessions it ended.
 func (a *API) handleSignOutEverywhere(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

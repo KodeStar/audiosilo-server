@@ -196,14 +196,23 @@ function UserView({ detail }: { detail: UserDetail }) {
 
 /**
  * Signs a person out of every device (server#281): their sessions end, and with
- * them anything they are casting; API keys and calendar links stay. Offered while
- * they have a session the console isn't using.
+ * them anything they are casting, their open pairing codes and their recovery
+ * code; API keys and calendar links stay. Offered while they have a session the
+ * console isn't using. The words say how they get back in: a password, a new
+ * invite, or a kid's owner.
  */
 function SignOutEverywhere({ user }: { user: AdminUser }) {
   const { t } = useTranslation();
   const self = useCurrentUser().id === user.id;
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const description = self
+    ? t('user.devices.signOutAllSelfBody')
+    : user.member_kind === 'kid'
+      ? t('user.devices.signOutAllKidBody', { name: user.username, owner: ownerName(user) ?? '' })
+      : user.has_password
+        ? t('user.devices.signOutAllBody', { name: user.username })
+        : t('user.devices.signOutAllPairedBody', { name: user.username });
   return (
     <>
       <Button
@@ -220,15 +229,12 @@ function SignOutEverywhere({ user }: { user: AdminUser }) {
         onOpenChange={setOpen}
         icon={LogOut}
         title={t('user.devices.signOutAllTitle', { name: user.username })}
-        description={
-          self
-            ? t('user.devices.signOutAllSelfBody')
-            : t('user.devices.signOutAllBody', { name: user.username })
-        }
+        description={description}
         confirmLabel={t('user.devices.signOutAll')}
         onConfirm={async () => {
           const { signed_out } = await api.signOutEverywhere(user.id);
           invalidateDevices(qc);
+          invalidatePeople(qc); // the recovery code is gone too
           toast.add({
             title: t('user.devices.signedOutAll', { count: signed_out, name: user.username }),
             type: 'success',

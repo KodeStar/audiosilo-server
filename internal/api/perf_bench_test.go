@@ -173,7 +173,7 @@ func seedPerfLibrary(tb testing.TB, n int) *perfEnv {
 		}
 		paths = append(paths, b.RelPath)
 	}
-	token, _, err := authSvc.IssueSession(ctx, admin.ID, "Web browser", "")
+	token, err := authSvc.IssueToken(ctx, admin.ID, auth.KindSession, "Web browser", 0)
 	if err != nil {
 		tb.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidatePeople } from '@/api/hooks';
+import { invalidateDevices, invalidatePeople } from '@/api/hooks';
 import type { User } from '@/api/types';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
@@ -103,6 +103,8 @@ function PasswordForm({
         promote ? { password: v.password, role: 'admin' } : { password: v.password },
       );
       invalidatePeople(qc);
+      // A change signs them out of their devices (server#281): the lists move too.
+      invalidateDevices(qc);
       toast.add({
         title: promote
           ? t('user.account.nowAdmin', { name: user.username })

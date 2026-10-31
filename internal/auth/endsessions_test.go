@@ -4,17 +4,20 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // everyKind is one person's live credentials of every kind (server#281): two
 // sessions (phone, the caller, and laptop), a cast token minted from each, an
-// API key, the calendar feed token and, as they are an admin, the Bridge token.
+// API key, the calendar feed token, an open pairing code, a recovery code and,
+// as they are an admin, the Bridge token.
 type everyKind struct {
 	user                    *User
 	phone, laptop           string
 	phoneID                 int64
 	castPhone, castLaptop   string
 	key, feed, bridgeSecret string
+	pairing, recovery       string
 }
 
 func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) everyKind {
@@ -46,6 +49,13 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 		t.Fatal(err)
 	}
 	k.feed = mustFeed(t, s, ctx, admin.ID, k.phoneID)
+	// The ways back in a session can make without the password.
+	if k.pairing, err = s.IssueOwnPairingToken(ctx, admin.ID, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if k.recovery, err = s.GenerateRecoveryCode(ctx, admin.ID); err != nil {
+		t.Fatal(err)
+	}
 	// Every cacheable lookup warm: an end has to beat the cache.
 	warm(t, s, k.phone, KindSession)
 	warm(t, s, k.laptop, KindSession)
@@ -55,8 +65,9 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 }
 
 // check asserts which of k's credentials still resolve: the named sessions
-// (and the cast tokens minted from them) as live, the others refused, and the
-// API key, feed and Bridge tokens always live.
+// (and the cast tokens minted from them) as live, the others refused, the open
+// pairing code and the recovery code live only while no session has ended, and
+// the API key, feed and Bridge tokens always live.
 func (k everyKind) check(t *testing.T, s *Service, ctx context.Context, phoneLive, laptopLive bool) {
 	t.Helper()
 	want := func(what string, live bool, err error) {
@@ -82,11 +93,23 @@ func (k everyKind) check(t *testing.T, s *Service, ctx context.Context, phoneLiv
 	want("the feed token", true, err)
 	_, _, err = s.ResolveRequest(ctx, k.bridgeSecret, Presence{}, KindBridge)
 	want("the Bridge token", true, err)
+	// Read without spending them: a lookup, and a redeem (which never consumes).
+	ended := !phoneLive || !laptopLive
+	_, _, err = s.lookupToken(ctx, hashSecret(k.pairing), KindPairing)
+	want("the open pairing code", !ended, err)
+	_, err = s.ResolveAuthCode(ctx, k.recovery)
+	switch {
+	case !ended && err != nil:
+		t.Errorf("the recovery code = %v, want it accepted", err)
+	case ended && !errors.Is(err, ErrInvalidCode):
+		t.Errorf("the recovery code = %v, want ErrInvalidCode", err)
+	}
 }
 
 // Security-critical (server#281): a password change ends the person's other
-// sessions and the cast tokens hanging off them, keeping the caller's; API
-// keys, the feed and Bridge tokens stay; nobody else's sessions move.
+// sessions and the cast tokens hanging off them, keeping the caller's, with
+// their open pairing codes and recovery code; API keys, the feed and Bridge
+// tokens stay; nobody else's sessions move.
 func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -105,7 +128,8 @@ func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 }
 
 // Security-critical: a reset with nothing to keep (an admin's for someone
-// else) ends every session of theirs, and only sessions.
+// else) ends every session of theirs and the ways back in a session made, and
+// nothing else.
 func TestPasswordResetEndsEverySession(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -156,7 +180,8 @@ func TestRefusedPasswordChangeEndsNothing(t *testing.T) {
 }
 
 // Security-critical: Sign out everywhere ends every session of the person but
-// the one kept, with their cast tokens, and nothing of another kind.
+// the one kept, with their cast tokens, open pairing codes and recovery code,
+// and no API key, feed or Bridge token.
 func TestSignOutEverywhere(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -185,10 +210,62 @@ func TestSignOutEverywhere(t *testing.T) {
 	if _, _, err := s.ResolveRequest(ctx, theirs, Presence{}, KindSession); err != nil {
 		t.Fatalf("another person's session = %v, want it kept", err)
 	}
-	// The browsers they signed in from are forgotten too.
-	var known int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tokens WHERE user_id = ? AND sign_in_key <> ''`, k.user.ID).Scan(&known); err != nil || known != 0 {
-		t.Fatalf("browsers still known = %d, %v", known, err)
+	// The browsers they signed in from are forgotten too: a password sign-in
+	// from one is a new device again.
+	const browser = "8c4a2f1e-0b9d-4c57-9e1a-3f6d2b7c8e90"
+	signIn := func() bool {
+		t.Helper()
+		verified, err := s.Authenticate(ctx, k.user.Username, "admin-password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, known, err := s.IssueSession(ctx, verified, "admin-web", browser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return known
+	}
+	signIn()
+	if !signIn() {
+		t.Fatal("setup: a second sign-in from the browser should know it")
+	}
+	if n, err = s.SignOutEverywhere(ctx, k.user.ID, 0); err != nil || n != 2 {
+		t.Fatalf("sign out everywhere after two browser sign-ins = %d, %v; want 2", n, err)
+	}
+	if signIn() {
+		t.Fatal("a browser is still known after Sign out everywhere")
+	}
+}
+
+// Security-critical: a password sign-in whose verify ran before a change
+// committed gets no session after it (the change ended the ones there were),
+// one verified after it does, and a user no Authenticate verified gets none.
+func TestSignInRacingAPasswordChangeGetsNoSession(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	mustUser(t, s, ctx, "sam", "old-password", RoleUser)
+	early, err := s.Authenticate(ctx, "sam", "old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, early.ID, "new-password", 0); err != nil {
+		t.Fatal(err)
+	}
+	if secret, _, err := s.IssueSession(ctx, early, "laptop", ""); !errors.Is(err, ErrInvalidCreds) || secret != "" {
+		t.Fatalf("a sign-in verified before the change = %q, %v; want ErrInvalidCreds", secret, err)
+	}
+	if _, _, err := s.IssueSession(ctx, &User{ID: early.ID}, "laptop", ""); !errors.Is(err, ErrInvalidCreds) {
+		t.Fatalf("an unverified user = %v, want ErrInvalidCreds", err)
+	}
+	late, err := s.Authenticate(ctx, "sam", "new-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _, err := s.IssueSession(ctx, late, "laptop", "")
+	if err != nil || secret == "" {
+		t.Fatalf("a sign-in with the new password = %q, %v", secret, err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession); err != nil {
+		t.Fatalf("its session = %v, want it accepted", err)
 	}
 }
