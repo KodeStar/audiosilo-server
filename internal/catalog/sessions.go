@@ -77,7 +77,8 @@ type Heartbeat struct {
 	Transcoded bool
 	// At is when the server received the save. Only server time is used: a
 	// device's clock can be wrong, and listenedBetween caps any save (a replay
-	// from an offline queue included) by the time that really passed.
+	// from an offline queue included) by the time that really passed. recordSpan
+	// leaves it unset: a Sync v2 span carries its own corrected times.
 	At time.Time
 }
 
@@ -122,7 +123,7 @@ func (c *Catalog) RecordHeartbeat(ctx context.Context, hb Heartbeat) error {
 	}
 	at := formatSessionTime(hb.At)
 	return c.db.WithUserStateTx(ctx, "RecordHeartbeat", func(tx *sql.Tx) error {
-		open, err := latestSession(ctx, tx, hb, hb.At.Add(-resumeWindow))
+		open, err := latestSession(ctx, tx, hb, hb.At)
 		if err != nil {
 			return err
 		}
@@ -148,22 +149,30 @@ type openSession struct {
 	endPos            float64
 }
 
-// latestSession is the session hb's token last recorded on hb's book whose last
-// save is at or after since, or nil. A session started before the person turned
-// listening in the house on (household_sharing.updated_at) never continues: the
-// first save after the switch starts a new one, so no session holds listening
-// from both sides of it and HouseListening can tell them apart by started_at
-// (the same bound, so a session started in the switch's millisecond continues
-// and shows).
-func latestSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, since time.Time) (*openSession, error) {
+// latestSession is the session hb's token last saved on hb's book, among those
+// begun by at (a save's time, or a span's start) whose last save is within
+// resumeWindow before it, or nil. The newest is the one with the latest last
+// save, not the latest id: a span synced late opens a session dated when it
+// happened. A session started before the person turned listening in the house
+// on (household_sharing.updated_at) never continues past the switch: the first
+// record after it starts a new one, so no session holds listening from both
+// sides of it and HouseListening can tell them apart by started_at (the same
+// bound, so a session started in the switch's millisecond continues and
+// shows); a span from before the switch, synced after it, still continues the
+// session before it.
+func latestSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, at time.Time) (*openSession, error) {
 	var s openSession
 	err := tx.QueryRowContext(ctx,
 		`SELECT id, started_at, last_at, end_pos FROM listening_sessions
 		  WHERE user_id = ?1 AND token_id = ?2 AND library_id = ?3 AND rel_path = ?4 AND last_at >= ?5
-		    AND started_at >= COALESCE((SELECT updated_at FROM household_sharing
-		                                 WHERE user_id = ?1 AND share_listening = 1), '')
-		  ORDER BY id DESC LIMIT 1`,
-		hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path, formatSessionTime(since)).
+		    AND started_at <= ?6
+		    AND (started_at >= COALESCE((SELECT updated_at FROM household_sharing
+		                                  WHERE user_id = ?1 AND share_listening = 1), '')
+		         OR ?6 < COALESCE((SELECT updated_at FROM household_sharing
+		                            WHERE user_id = ?1 AND share_listening = 1), ''))
+		  ORDER BY last_at DESC, id DESC LIMIT 1`,
+		hb.UserID, hb.TokenID, hb.Ref.LibraryID, hb.Ref.Path, formatSessionTime(at.Add(-resumeWindow)),
+		formatSessionTime(at)).
 		Scan(&s.id, &s.startedAt, &s.lastAt, &s.endPos)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -475,15 +484,18 @@ func (c *Catalog) ListSessions(ctx context.Context, f SessionFilter) ([]Session,
 // goneCursor is where a page continues when its cursor session no longer exists
 // and the request didn't say when it started (a client that sends no before_at)
 // (retention rolled it up, an undo took it out, its user was deleted). A session
-// recorded here gets its id as it starts, so among those (import_id 0) ids follow
-// the list's order: the page continues from the recorded session with the
-// greatest id below the cursor (itself included), so no recorded session is
-// skipped or repeated. Without one, every recorded session left was listed
-// already, and the page continues below the recorded one with the smallest id
-// above the cursor (imported sessions dated between it and the gone cursor are
-// listed again rather than skipped). Only an imported session dated between the
-// gone cursor and its recorded neighbour can be missed. With no recorded session
-// at all, ids are all there is to go by.
+// recorded from a progress save gets its id as it starts, so among those
+// (import_id 0) ids follow the list's order: the page continues from the
+// recorded session with the greatest id below the cursor (itself included), so
+// no such session is skipped or repeated. Without one, every recorded session
+// left was listed already, and the page continues below the recorded one with
+// the smallest id above the cursor (imported sessions dated between it and the
+// gone cursor are listed again rather than skipped). Only an imported session
+// dated between the gone cursor and its recorded neighbour can be missed, and a
+// Sync v2 span's session (recordSpan, dated when the span happened, so a late
+// one has a later id than sessions after it) can be missed or repeated: before_at,
+// which the console sends, pages exactly. With no recorded session at all, ids
+// are all there is to go by.
 func (c *Catalog) goneCursor(ctx context.Context, before int64) (string, []any, error) {
 	var (
 		started string

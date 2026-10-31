@@ -174,7 +174,7 @@ func TestSyncDiverged(t *testing.T) {
 		t.Fatalf("row after the stale span: %+v other %+v", p, p.OtherPlace)
 	}
 	// The row's own device carrying on from an older base (1, before the offer's
-	// version 2) applies and keeps the offer.
+	// version 3) applies and keeps the offer.
 	wantResult(t, f.syncOne(t, "phone", f.listen("continue", 18000, 18100, 20*time.Minute, base(1))), statusApplied, "")
 	if p = f.progress(t); p.Position != 18100 || p.OtherPlace == nil {
 		t.Fatalf("offer dropped: %+v", p)
@@ -198,7 +198,9 @@ func TestSyncDiverged(t *testing.T) {
 	}
 }
 
-// An older-base apply by the device that wrote the row keeps a persisted offer.
+// The row's own device carrying on from the version it acknowledged before an
+// offer existed (its own write) keeps the offer, so its answer carries it; its
+// next span, on the version that answer had, clears it.
 func TestSyncOfferKeptByOlderBase(t *testing.T) {
 	t.Parallel()
 	f := newSyncFixture(t)
@@ -209,12 +211,14 @@ func TestSyncOfferKeptByOlderBase(t *testing.T) {
 	if p.OtherPlace == nil || p.Version != 2 {
 		t.Fatalf("setup: %+v", p)
 	}
-	// The phone's next span still on base 1 (before the offer's version 2).
-	wantResult(t, f.syncOne(t, "phone", f.listen("continue", 18100, 18200, 30*time.Minute, base(1))), statusApplied, "")
-	if p = f.progress(t); p.Position != 18200 || p.OtherPlace == nil {
-		t.Fatalf("offer cleared by an older base: %+v", p)
+	// The phone acknowledged version 2 (its own write) before the watch's offer:
+	// its next span on base 2 applies and keeps the offer, which its answer carries.
+	a := f.sync(t, f.batch(t, "phone", f.listen("continue", 18100, 18200, 30*time.Minute, base(2))))
+	wantResult(t, a.Results[0], statusApplied, "")
+	if p = f.progress(t); p.Position != 18200 || p.OtherPlace == nil || a.Progress[0].OtherPlace == nil {
+		t.Fatalf("offer cleared by the version acknowledged before it: %+v", p)
 	}
-	// ... and one on version 3 (which saw it) clears it.
+	// ... and one on version 3 (the answer that carried it) clears it.
 	wantResult(t, f.syncOne(t, "phone", f.listen("continue", 18200, 18300, 20*time.Minute, base(3))), statusApplied, "")
 	if p = f.progress(t); p.OtherPlace != nil {
 		t.Fatalf("offer kept by a base that saw it: %+v", p.OtherPlace)
@@ -318,6 +322,30 @@ func TestSyncClockCorrection(t *testing.T) {
 	if len(h) != 1 || h[0].EndedAt != formatSessionTime(f.clock) ||
 		h[0].StartedAt != formatSessionTime(f.clock.Add(-10*time.Minute)) {
 		t.Fatalf("future span: %+v", h)
+	}
+	// Past what a Duration holds: a sentinel sent_at (year 1, its shift saturating
+	// alike on every platform) and a span dated in the year 9999 both land at now,
+	// 10 minutes long, never inverted.
+	for _, tc := range []struct{ sent, started, ended string }{
+		{"0001-01-01T00:00:00Z", f.clock.Add(-20 * time.Minute).Format(time.RFC3339),
+			f.clock.Add(-10 * time.Minute).Format(time.RFC3339)},
+		{f.clock.Format(time.RFC3339), "9999-12-31T23:49:59Z", "9999-12-31T23:59:59Z"},
+	} {
+		g := newSyncFixture(t)
+		ev := g.listen("resume", 0, 600, 0, base(0))
+		ev.StartedAt, ev.EndedAt = tc.started, tc.ended
+		b := g.batch(t, "watch", ev)
+		sent, err := time.Parse(time.RFC3339, tc.sent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.SentAt = &sent
+		wantResult(t, g.sync(t, b).Results[0], statusApplied, "")
+		h, _ := g.c.ListHistory(g.ctx, g.user, g.book, 10)
+		if len(h) != 1 || h[0].EndedAt != formatSessionTime(g.clock) ||
+			h[0].StartedAt != formatSessionTime(g.clock.Add(-10*time.Minute)) {
+			t.Fatalf("sent %s, span %s-%s: history %+v", tc.sent, tc.started, tc.ended, h)
+		}
 	}
 }
 
@@ -577,6 +605,36 @@ func TestSyncEventChecks(t *testing.T) {
 	if empty.ServerTime == "" || len(empty.Results) != 0 || empty.Progress == nil {
 		t.Fatalf("empty batch: %+v", empty)
 	}
+	// A listen whose to_pos is null or missing (a player's NaN goes out as null)
+	// would read as 0:00: invalid. The same event with both positions decodes.
+	wire := func(id string, edit func(map[string]any)) json.RawMessage {
+		ev := good
+		ev.ID = id
+		raw, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		edit(m)
+		if raw, err = json.Marshal(m); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	evs = DecodeSyncEvents([]json.RawMessage{
+		wire(nextSyncID("pos-"), func(m map[string]any) { m["to_pos"] = nil }),
+		wire(nextSyncID("pos-"), func(m map[string]any) { delete(m, "from_pos") }),
+		wire(nextSyncID("pos-"), func(map[string]any) {}),
+	})
+	a = f.sync(t, f.batch(t, "phone", evs...))
+	wantResult(t, a.Results[0], statusRejected, SyncInvalid)
+	wantResult(t, a.Results[1], statusRejected, SyncInvalid)
+	if a.Results[2].Status == statusRejected {
+		t.Fatalf("a listen with both positions: %+v", a.Results[2])
+	}
 }
 
 // The legacy PUT is logged as a "put" event (applied, or not applied when
@@ -644,11 +702,11 @@ func TestSyncStateMovesWithTheBook(t *testing.T) {
 	f := newSyncFixture(t)
 	f.syncOne(t, "phone", f.listen("resume", 20000, 30000, 10*time.Minute, base(0)))
 	f.syncOne(t, "phone", f.listen("continue", 30000, 30060, 9*time.Minute, base(1)))
+	f.syncOne(t, "phone", f.finishEvent(EventFinish, 7*time.Minute))
 	f.syncOne(t, "watch", f.listen("resume", 0, 600, 5*time.Minute, base(1)))
 	if p := f.progress(t); p.OtherPlace == nil {
 		t.Fatal("no offer to drop")
 	}
-	f.syncOne(t, "phone", f.finishEvent(EventFinish, 0))
 	if err := f.c.MoveDurableState(f.ctx, f.lib, "Author/Book", "Author/Moved"); err != nil {
 		t.Fatal(err)
 	}
@@ -697,5 +755,182 @@ func TestSyncTranscodedOnlyLive(t *testing.T) {
 			s[0].Client == nil || s[0].Client.Version != "2.6.0" {
 			t.Fatalf("%v ago: %+v, %v", tc.ago, s, err)
 		}
+	}
+}
+
+// The offer is cleared only by a base the device sent (never the in-batch
+// chaining's), follows its device's continue chain behind the row, and is
+// dropped by a finish.
+func TestSyncOfferFollowsAndClears(t *testing.T) {
+	t.Parallel()
+	// In one batch the watch's second span chains on its first (diverged, kept),
+	// but the watch never saw the phone's place the first one offered: it stays.
+	f := newSyncFixture(t)
+	f.syncOne(t, "phone", f.listen("resume", 3000, 3600, 2*time.Hour, base(0)))
+	a := f.sync(t, f.batch(t, "watch",
+		f.listen("resume", 7200, 7215, 30*time.Second, base(0)),
+		f.listen("continue", 7215, 7230, 15*time.Second, base(0))))
+	if a.Results[0].Status != statusDiverged || a.Results[0].Kept != "event" || a.Results[1].Status != statusApplied {
+		t.Fatalf("results: %+v", a.Results)
+	}
+	if p := f.progress(t); p.Position != 7230 || p.OtherPlace == nil || p.OtherPlace.DeviceID != "phone" {
+		t.Fatalf("a chained span cleared the offer: %+v", p)
+	}
+
+	// A jump behind the row on a device that hadn't seen it (base 0) is offered;
+	// its continue chain (resume_behind) takes the offer to where it got to, and a
+	// cold start elsewhere in the book leaves it.
+	g := newSyncFixture(t)
+	g.syncOne(t, "phone", g.listen("resume", 17000, 18000, 3*time.Hour, base(0)))
+	if res := g.syncOne(t, "watch", g.listen("jump", 14400, 14415, 70*time.Minute, base(0))); res.Status != statusDiverged ||
+		res.Kept != "stored" {
+		t.Fatalf("jump: %+v", res)
+	}
+	wantResult(t, g.syncOne(t, "watch", g.listen("continue", 14415, 16800, 30*time.Minute, base(0))),
+		statusNotApplied, reasonResumeBehind)
+	if p := g.progress(t); p.Position != 18000 || p.OtherPlace == nil || p.OtherPlace.Position != 16800 {
+		t.Fatalf("offer after the continue chain: %+v %+v", p, p.OtherPlace)
+	}
+	wantResult(t, g.syncOne(t, "watch", g.listen("resume", 0, 15, 20*time.Minute, base(0))),
+		statusNotApplied, reasonResumeBehind)
+	if p := g.progress(t); p.OtherPlace == nil || p.OtherPlace.Position != 16800 {
+		t.Fatalf("a cold start moved the offer: %+v", p.OtherPlace)
+	}
+
+	// A finish drops it (the listener chose the end), as Mark finished does.
+	wantResult(t, g.syncOne(t, "phone", g.finishEvent(EventFinish, 10*time.Minute)), statusApplied, "")
+	if p := g.progress(t); !p.Finished || p.OtherPlace != nil {
+		t.Fatalf("the finished row kept the offer: %+v %+v", p, p.OtherPlace)
+	}
+}
+
+// Restarting a book another device finished: the unfinish takes the row for
+// this device, so the restart span after it applies (in one batch or two)
+// rather than diverging from the finishing device and leaving the place at the
+// end. An unfinish of a book that isn't finished hands nothing over.
+func TestSyncRestartAfterAnotherDeviceFinished(t *testing.T) {
+	t.Parallel()
+	for _, split := range []bool{false, true} {
+		f := newSyncFixture(t)
+		f.syncOne(t, "phone", f.listen("resume", 0, 1000, 3*time.Hour, base(0)))
+		wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventFinish, time.Hour)), statusApplied, "")
+		seen := f.progress(t).Version // the phone resumes from the finished row
+		unfinish := f.finishEvent(EventUnfinish, 10*time.Minute)
+		restart := f.listen("restart", 0, 15, 10*time.Minute-15*time.Second, base(seen))
+		var results []SyncResult
+		if split {
+			results = []SyncResult{f.syncOne(t, "phone", unfinish), f.syncOne(t, "phone", restart)}
+		} else {
+			results = f.sync(t, f.batch(t, "phone", unfinish, restart)).Results
+		}
+		for _, r := range results {
+			wantResult(t, r, statusApplied, "")
+		}
+		if p := f.progress(t); p.Finished || p.Position != 15 || p.DeviceID != "phone" {
+			t.Fatalf("split %v: restarted row %+v", split, p)
+		}
+	}
+	g := newSyncFixture(t)
+	g.syncOne(t, "phone", g.listen("resume", 0, 1000, time.Hour, base(0)))
+	wantResult(t, g.syncOne(t, "watch", g.finishEvent(EventUnfinish, 30*time.Minute)), statusApplied, "")
+	if p := g.progress(t); p.DeviceID != "phone" {
+		t.Fatalf("an unfinish of an unfinished book took the row: %+v", p)
+	}
+	wantResult(t, g.syncOne(t, "phone", g.listen("continue", 1000, 1100, 20*time.Minute, base(1))), statusApplied, "")
+}
+
+// A batch sent again after its answer was lost: its stored first span is a
+// duplicate, and the device's later base-0 spans chain on the row it wrote, as
+// they did the first time, so its move back applies.
+func TestSyncReplayChainsOnOwnRow(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	first := f.listen("resume", 0, 3600, 2*time.Hour, base(0))
+	wantResult(t, f.syncOne(t, "tablet", first), statusApplied, "") // stored; its answer lost
+	a := f.sync(t, f.batch(t, "tablet", first,
+		f.listen("moved_back", 600, 615, 50*time.Minute, base(0)),
+		f.listen("continue", 615, 1200, 30*time.Minute, base(0))))
+	wantResult(t, a.Results[0], statusDuplicate, "")
+	wantResult(t, a.Results[1], statusApplied, "")
+	wantResult(t, a.Results[2], statusApplied, "")
+	if p := f.progress(t); p.Position != 1200 || p.Version != 3 {
+		t.Fatalf("row after the replay: %+v", p)
+	}
+}
+
+// A late backlog of contiguous spans joins into one history row even when
+// another device's row on the book is newer.
+func TestSyncHistoryJoinsBehindNewerRow(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	f.syncOne(t, "web", f.listen("resume", 9000, 10800, 30*time.Minute, base(0))) // 07:00-07:30
+	f.sync(t, f.batch(t, "phone",
+		f.listen("resume", 100, 1000, 165*time.Minute, base(0)),     // 05:00-05:15
+		f.listen("continue", 1000, 1900, 150*time.Minute, base(0)),  // 05:15-05:30
+		f.listen("continue", 1900, 2800, 135*time.Minute, base(0)))) // 05:30-05:45
+	h, err := f.c.ListHistory(f.ctx, f.user, f.book, 10)
+	if err != nil || len(h) != 2 || h[1].From != 100 || h[1].To != 2800 ||
+		h[1].EndedAt != formatSessionTime(f.clock.Add(-135*time.Minute)) {
+		t.Fatalf("history: %+v, %v", h, err)
+	}
+}
+
+// A span synced late opens a session dated when it happened without taking the
+// token's live session's place; spans from before a household switch, synced
+// after it, continue each other as one session.
+func TestSyncSessionsOfLateSpans(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	at := func(h, m, s int) time.Time { return time.Date(2026, 10, 25, h, m, s, 0, time.UTC) }
+	save := func(when time.Time, pos float64) {
+		t.Helper()
+		if err := f.c.RecordHeartbeat(f.ctx, Heartbeat{UserID: f.user, Ref: f.book, TokenID: tokenOf("phone"),
+			DeviceName: "phone's phone", Position: pos, Duration: syncBookLen, Speed: 1, At: when}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The phone's live saves (PUT), 07:45 to 08:00, then a span of its own from
+	// 07:00 to 07:30 synced late, then its next save.
+	save(at(7, 45, 0), 5000)
+	save(at(7, 52, 30), 5450)
+	save(at(8, 0, 0), 5900)
+	f.syncOne(t, "phone", f.listen("resume", 1000, 2800, 30*time.Minute, nil))
+	save(at(8, 0, 15), 5915)
+	s, _, err := f.c.ListSessions(f.ctx, SessionFilter{})
+	if err != nil || len(s) != 2 || s[0].LastAt != formatSessionTime(at(8, 0, 15)) ||
+		math.Abs(s[0].Listened-915) > 0.01 || math.Abs(s[1].Listened-1800) > 0.01 {
+		t.Fatalf("sessions: %+v, %v", s, err)
+	}
+
+	g := newSyncFixture(t)
+	g.clock = at(7, 30, 0)
+	if err := g.c.SetHouseholdSharing(g.ctx, g.user, true); err != nil {
+		t.Fatal(err)
+	}
+	g.clock = at(8, 0, 0)
+	g.sync(t, g.batch(t, "tablet",
+		g.listen("resume", 100, 1000, 105*time.Minute, nil),    // 06:00-06:15
+		g.listen("continue", 1000, 1900, 90*time.Minute, nil),  // 06:15-06:30
+		g.listen("continue", 1900, 2800, 75*time.Minute, nil))) // 06:30-06:45
+	if s, _, err = g.c.ListSessions(g.ctx, SessionFilter{}); err != nil || len(s) != 1 ||
+		math.Abs(s[0].Listened-2700) > 0.01 {
+		t.Fatalf("pre-switch spans: %+v, %v", s, err)
+	}
+}
+
+// A PUT from a clock a few minutes fast (inside plausibleUpdatedAt's skew)
+// dates its finish change no later than the server's now, so a Sync v2
+// unfinish sent just after it applies.
+func TestSavePutFinishChangeNotAhead(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: syncBookLen, Duration: syncBookLen,
+		Finished: true, DeviceID: "old-app", UpdatedAt: f.clock.Add(4 * time.Minute).Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(time.Minute)
+	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventUnfinish, 0)), statusApplied, "")
+	if p := f.progress(t); p.Finished {
+		t.Fatalf("still finished: %+v", p)
 	}
 }

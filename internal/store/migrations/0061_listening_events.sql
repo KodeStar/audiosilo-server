@@ -41,10 +41,15 @@ CREATE INDEX idx_listening_events_path ON listening_events(library_id, rel_path)
 -- Retention deletes by age.
 CREATE INDEX idx_listening_events_ended ON listening_events(ended_at);
 
+-- A listen span extends the history row on its book that ended just before it
+-- began (catalog's recordHistory looks it up by ended_at on the path).
+CREATE INDEX idx_history_user_path_ended ON listening_history(user_id, library_id, rel_path, ended_at);
+
 -- The progress row learns who saved it by name (the saving token's), when its
 -- finish state last changed (a finish or unfinish older than that is "older"),
 -- and the place a diverged event did not keep (other_place, all NULL = none;
--- other_version is the row's version when it was recorded).
+-- a device whose base is at or after other_version had seen it, so its applied
+-- listen clears it).
 ALTER TABLE progress ADD COLUMN device_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE progress ADD COLUMN finish_changed_at TEXT;
 ALTER TABLE progress ADD COLUMN other_position REAL;

@@ -26,9 +26,11 @@ type Ref struct {
 // Progress is a user's playback position for a book.
 //
 // StartedAt and FinishedAt (RFC3339 UTC, "" = unknown/none, then absent from the
-// JSON) are server-kept: SaveProgress stamps them and ignores a client's; past
-// that, only an edit (EditProgress) sets them, and a move or join carries them. UserProgress shadows both with its own
-// nullable fields for the admin console's wire shape.
+// JSON) are server-kept: SaveProgress stamps them and ignores a client's, and
+// Sync v2's events set them at their corrected times (SyncListening: a listen's
+// start when none is kept, a finish's date, which an unfinish clears); past that, only an
+// edit (EditProgress) sets them, and a move or join carries them. UserProgress
+// shadows both with its own nullable fields for the admin console's wire shape.
 type Progress struct {
 	Ref
 	Position      float64 `json:"position"`
@@ -186,6 +188,12 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	at := formatSessionTime(now) // the event's time, and finish_changed_at's
 	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
 		stamp = t.UTC().Format(time.RFC3339)
+		// The event's time and finish_changed_at never run ahead of the server's
+		// clock (plausibleUpdatedAt allows a little skew): a finish dated ahead
+		// would make a Sync v2 unfinish sent just after it "older".
+		if t.After(now) {
+			t = now
+		}
 		at = formatSessionTime(t)
 	}
 	var out *Progress

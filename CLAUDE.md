@@ -290,7 +290,8 @@ revoked=0` (one calendar feed token per user; see Upcoming releases in CONVENTIO
 `listening_events` (Sync v2's event log: durable, path-keyed on the progress key, no FK to the index, unique
 `(user_id, event_id)`, carried by `carryListeningState`, pruned at 120 days) and the progress columns `device_name`,
 `finish_changed_at` and the persisted offer `other_position` / `other_device_id` / `other_device_name` / `other_at` /
-`other_version` (see Listening sync in CONVENTIONS.md).
+`other_version`, and the index `listening_history(user_id, library_id, rel_path, ended_at)` (a span's history join;
+see Listening sync in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

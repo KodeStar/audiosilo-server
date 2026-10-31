@@ -1671,14 +1671,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (and, since Track W1, from Sync v2's listen spans at their corrected device times: `recordSpan`, see Listening sync), not from the client-posted
   `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
   `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
-  session on that book when the save comes within `SessionGap` (10 min), or later when the position
+  session on that book (`latestSession`: the one with the latest last save among those begun by then,
+  not the latest id, since a span synced late opens a session dated when it happened) when the save
+  comes within `SessionGap` (10 min), or later when the position
   advanced by about the time that passed (`continuousPlayback`, within `resumeWindow`, 12 h: Android
   pauses the player's save timer while the screen is off), and otherwise starts a new one; listened
   time is the position advance / speed, capped by the server time between saves (only server time is
-  used, so a wrong device clock or an offline replay can't inflate it); a session with nothing
+  used for a save, so a wrong device clock or an offline replay can't inflate it; a span counts
+  `listenedBetween`'s clip of its own corrected times); a session with nothing
   listened yet (a single save: "Mark finished", the manager's stats sync) is shown nowhere
-  (`listenedSQL`) and deleted by retention; best effort (a failure is logged, the save still
-  succeeds). `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
+  (`listenedSQL`) and deleted by retention; a save's recording is best effort (a failure is logged, the
+  save still succeeds), a span's is part of its batch's one transaction. `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
   so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
   (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
   loops on a daylight-saving fall-back). Retention: `pkg/launcher.retention` runs
@@ -2704,11 +2707,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a client's kept places: signed out and back in, its start saved on 0 must not replace its own
   place further on). A diverged save never moves the place back silently: the
   further `progression` is kept (the save applied, or the stored row kept; a tie keeps the stored
-  row) and the place not kept comes back as `other_place` (response only, never stored), which the
+  row) and the place not kept comes back as `other_place` (for reading progress response only, never
+  stored; listening sync stores it on the row, see Listening sync), which the
   reader offers ("On {device} you were at {percent}. Jump there?"). Any other save is last-write-wins
   exactly as above (`newerStamp`, which `IsNewer` shares; the save compared at the version it would
   be stored with, so a tie in time applies), a stale one echoing the stored row, so moving back on
-  purpose works. The server bumps `version` on every applied write; `updated_at` is stored as
+  purpose works (listening sync adds its backstop, see Listening sync). The server bumps `version` on every applied write; `updated_at` is stored as
   fixed-width UTC milliseconds (a far-future one replaced by server time) so a move's merge compares
   it as text; `device_name` is the saving token's.
 - **Listening sync** (Sync v2, Track W1, capability `listening_sync`, `catalog/listening_sync.go`,
@@ -2717,34 +2721,44 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   events[0-500]}` and answers `{server_time, results[] (one per event, request order), progress[]}`. Envelope
   400s: `invalid request` (JSON, an unknown top-level field, a body over 1 MiB), `device_id is required` / `is
   too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`.
-  A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type
-  or an unknown field in one is that event's `rejected` `invalid`. The handler resolves each distinct
+  A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
+  an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
+  event's `rejected` `invalid`. The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
-  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate`), the clock (shift = now - sent_at, or
-  clock_offset, added to every time; a corrected time past now pulled back with its span), `too_old` (older than
+  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate`), the clock (shift = now - sent_at, kept as
+  a Duration, or clock_offset, added to every time; a corrected time past now pulled back with its span, keeping
+  its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
-  corrected-time order: an id already stored for the user is `duplicate`; a listen runs `ResolvePlace`
+  corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: while
+  the row is still that device's, the device's later base-0 events chain on it); a listen runs `ResolvePlace`
   (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on
   that version) and the **backstop**: a `resume`/`continue` span ending more than 60 s before an unfinished
-  row is `not_applied` `resume_behind` (with the span's place as `other_place`), unless it diverged from a
+  row is `not_applied` `resume_behind` (with the span's place as `other_place`; one carrying on, within 5 s, from
+  its device's offered place moves the offer to where it got to), unless it diverged from a
   place its device had seen (base > 0, another device's row since): that is real listening elsewhere, so
   `ResolvePlace` keeps the further place and the span's is offered and persisted. A diverged place not kept
-  is stored on the row (`other_*`, `other_version` = the row's version then) unless it is the kept row's
-  device or within 30 s; it is cleared by a non-diverged apply whose base is at or after `other_version`, an
-  edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
+  is stored on the row (`other_*`; `other_version` = the version written when the event's place is kept, else
+  the row's next one, since the row's own device acknowledged its current version before the offer existed)
+  unless it is the kept row's device or within 30 s; it is cleared by a non-diverged apply whose base as sent
+  (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
   `updated_at` (the corrected end), version + 1, never the finish. finish/unfinish apply only when newer than
   `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
-  `finished_at` kept when already finished), unfinish clears it and keeps the position; both bump the version.
-  Every stored listen counts, whatever its place did: `recordSpan` (the token's session, extended within
-  `SessionGap` or by `continuousPlayback`, never before its start; `listenedBetween`'s clip of the span;
+  `finished_at` kept when already finished, the offer dropped), unfinish clears it and keeps the position, taking
+  a finished row for its device (so the restart span after it resolves on that device's own row, not as
+  diverged from the device that finished it); both bump the version.
+  Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
+  start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`; a
+  span from before a household switch continues the session before it; `listenedBetween`'s clip of the span;
   `transcoded` only for a span ending within `livePlaying`) and history (extends the newest row on the book
-  that ended 0-60 s before the span's start, 2 s overlap allowed, and within 5 s of its start; else a row).
+  that ended 0-60 s before the span's start, 2 s overlap allowed, and within 5 s of its start, however many
+  newer rows the book has; else a row; `idx_history_user_path_ended`).
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
-  event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at`, clears no offer. Progress reads
+  event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
+  the server's clock), clears no offer. Progress reads
   carry `device_name` and `other_place` (omitempty).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
