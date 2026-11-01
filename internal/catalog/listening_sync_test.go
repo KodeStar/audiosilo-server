@@ -934,3 +934,69 @@ func TestSavePutFinishChangeNotAhead(t *testing.T) {
 		t.Fatalf("still finished: %+v", p)
 	}
 }
+
+// server#284: an id repeated in one batch whose first copy was rejected is
+// checked on its own, so a valid later copy is applied and stored; a copy after
+// one that passed is still the duplicate.
+func TestSyncRepeatedIDAfterRejectedCopy(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	good := f.listen("resume", 100, 200, 10*time.Minute, nil)
+	bad := good
+	bad.Kind = "skip" // unknown_kind: rejected
+	a := f.sync(t, f.batch(t, "phone", bad, good, good))
+	wantResult(t, a.Results[0], statusRejected, reasonUnknownKind)
+	wantResult(t, a.Results[1], statusApplied, "")
+	wantResult(t, a.Results[2], statusDuplicate, "")
+	if n := f.count(t, `SELECT COUNT(*) FROM listening_events WHERE event_id = ?`, good.ID); n != 1 {
+		t.Fatalf("%d rows for the id, want the valid copy stored once", n)
+	}
+	if p := f.progress(t); p == nil || p.Position != 200 {
+		t.Fatalf("progress = %+v, want the valid copy applied", p)
+	}
+	// A batch of rejected copies only: nothing stored.
+	lone := f.listen("resume", 300, 400, 5*time.Minute, nil)
+	worse := lone
+	worse.Kind = "skip"
+	a = f.sync(t, f.batch(t, "phone", worse, worse))
+	wantResult(t, a.Results[0], statusRejected, reasonUnknownKind)
+	wantResult(t, a.Results[1], statusRejected, reasonUnknownKind)
+	if n := f.count(t, `SELECT COUNT(*) FROM listening_events WHERE event_id = ?`, lone.ID); n != 0 {
+		t.Fatalf("%d rows for a rejected id", n)
+	}
+}
+
+// server#284: a diverged span that ended before the row it replaces keeps the
+// row's updated_at (an old app's PUT dated in between then loses), and the same
+// device's later spans in the batch still chain on it rather than going stale
+// against that kept time.
+func TestSyncDivergedApplyKeepsRowTime(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	// The phone listened to 1:40:00, ten minutes ago.
+	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 5000, 6000, 10*time.Minute, base(0))), statusApplied, "")
+	rowAt := f.progress(t).UpdatedAt
+	// The watch, offline from before, listened further on, ending 40 and 30
+	// minutes ago: the first span diverges and is kept, the second chains on it.
+	a := f.sync(t, f.batch(t, "watch",
+		f.listen("resume", 7000, 8000, 40*time.Minute, base(0)),
+		f.listen("continue", 8000, 8600, 30*time.Minute, base(0))))
+	if r := a.Results[0]; r.Status != statusDiverged || r.Kept != "event" {
+		t.Fatalf("first span: %+v", r)
+	}
+	wantResult(t, a.Results[1], statusApplied, "")
+	p := f.progress(t)
+	if p.Position != 8600 || p.DeviceID != "watch" || p.UpdatedAt != rowAt {
+		t.Fatalf("row = %v by %s at %s, want 8600 by the watch at the phone's %s", p.Position, p.DeviceID, p.UpdatedAt, rowAt)
+	}
+	// The phone's old app queued a PUT dated 20 minutes ago (after the watch's
+	// span, before the row's time): last-write-wins keeps the row.
+	put := Progress{Ref: f.book, Position: 5500, Duration: syncBookLen, DeviceID: "phone",
+		UpdatedAt: f.clock.Add(-20 * time.Minute).Format(time.RFC3339)}
+	if _, err := f.c.SaveProgress(f.ctx, f.user, put); err != nil {
+		t.Fatal(err)
+	}
+	if p = f.progress(t); p.Position != 8600 {
+		t.Fatalf("an older PUT moved the place to %v", p.Position)
+	}
+}

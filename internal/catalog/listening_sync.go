@@ -307,12 +307,14 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 			reject(SyncInvalid)
 			continue
 		}
+		// An id repeated in the batch is a duplicate of its first copy that
+		// passed the checks; a copy rejected is not seen, so the next is checked
+		// on its own (server#284: it was answered duplicate and nothing stored).
 		if seen[ev.ID] {
 			results[i].Status = statusDuplicate
 			touch(ev)
 			continue
 		}
-		seen[ev.ID] = true
 		if ev.Kind != EventListen && ev.Kind != EventFinish && ev.Kind != EventUnfinish {
 			reject(reasonUnknownKind)
 			continue
@@ -352,6 +354,7 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 			p.from = remapEnd(target.Book, ev.FromPos, ev.FromFile, ev.FromFilePos)
 			p.to = remapEnd(target.Book, ev.ToPos, ev.ToFile, ev.ToFilePos)
 		}
+		seen[ev.ID] = true
 		prepared = append(prepared, p)
 		touch(ev)
 	}
@@ -361,8 +364,10 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 		}
 		return prepared[i].index < prepared[j].index
 	})
-	err := c.db.WithUserStateTx(ctx, "SyncListening", func(tx *sql.Tx) error {
-		s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}}
+	// A batch with nothing to apply (empty, or every event rejected or a
+	// duplicate of an earlier copy) opens no writer transaction.
+	err := c.syncApply(ctx, prepared, func(tx *sql.Tx) error {
+		s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}, spanAt: map[Ref]string{}}
 		var err error
 		if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
 			return err
@@ -391,6 +396,15 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 		}
 	}
 	return answer, nil
+}
+
+// syncApply runs apply in the user-state writer transaction, unless no event
+// was prepared.
+func (c *Catalog) syncApply(ctx context.Context, prepared []syncPrepared, apply func(tx *sql.Tx) error) error {
+	if len(prepared) == 0 {
+		return nil
+	}
+	return c.db.WithUserStateTx(ctx, "SyncListening", apply)
 }
 
 // prepareSyncEvent checks an event's fields (a known kind) and parses its
@@ -467,6 +481,10 @@ type syncRun struct {
 	shift float64
 	// written is the version each book's row had after this batch wrote it.
 	written map[Ref]int64
+	// spanAt is the end of the span whose place this batch last wrote on each
+	// book: the time this device's next span on the row compares with, which a
+	// diverged apply's kept updated_at (writePlace) may be later than.
+	spanAt map[Ref]string
 	// stored is the batch's event ids already in the log (a replay: duplicate).
 	stored map[string]bool
 }
@@ -608,6 +626,9 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		in.Version = stored.version + 1
 		storedPlace = &Place{Progression: stored.position, DeviceID: stored.deviceID,
 			UpdatedAt: stored.updatedAt, Version: stored.version}
+		if at, ok := s.spanAt[key]; ok && stored.deviceID == s.b.DeviceID {
+			storedPlace.UpdatedAt = at
+		}
 	}
 	outcome := ResolvePlace(storedPlace, in, base)
 	divergedFromSeen := (outcome == PlaceKeepStored || outcome == PlaceApplyDiverged) && base != nil && *base > 0
@@ -642,7 +663,10 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	case PlaceApplyDiverged:
 		lost := &ListeningOtherPlace{Position: stored.position, DeviceID: stored.deviceID,
 			DeviceName: stored.deviceName, UpdatedAt: stored.updatedAt}
-		if err := s.writePlace(ctx, p, in.Version, false); err != nil {
+		// The row's time never moves back (server#284): a span that ended before
+		// the row it replaces keeps the row's updated_at, so an old app's PUT
+		// dated in between can't win last-write-wins against it.
+		if err := s.writePlace(ctx, p, in.Version, false, laterStamp(mine.UpdatedAt, stored.updatedAt)); err != nil {
 			return SyncResult{}, err
 		}
 		if stored.deviceID != s.b.DeviceID && math.Abs(p.to-stored.position) > otherPlaceMin {
@@ -657,16 +681,22 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	// after the version it was recorded at.
 	sent := p.ev.BaseVersion
 	clear := stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64
-	if err := s.writePlace(ctx, p, in.Version, clear); err != nil {
+	// Newer than the row by last-write-wins, unless it chains on this batch's
+	// diverged apply (spanAt), whose kept time it keeps too.
+	at := mine.UpdatedAt
+	if stored != nil {
+		at = laterStamp(at, stored.updatedAt)
+	}
+	if err := s.writePlace(ctx, p, in.Version, clear, at); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
 }
 
 // writePlace stores a span's place at version: position, length (the span's,
-// else the book's, else kept), speed, device, time and version, a start when
-// none; never the finish state. clear also drops the offered place.
-func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool) error {
+// else the book's, else kept), speed, device, updatedAt and version, a start
+// when none; never the finish state. clear also drops the offered place.
+func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool, updatedAt string) error {
 	key := p.target.Key
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
@@ -684,11 +714,22 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		     other_at=CASE WHEN ?12 THEN NULL ELSE progress.other_at END,
 		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END`,
 		s.b.UserID, key.LibraryID, key.Path, p.to, p.length(), p.speed, version, s.b.DeviceID, s.b.DeviceName,
-		formatSessionTime(p.ended), p.started.UTC().Format(time.RFC3339), clear); err != nil {
+		updatedAt, p.started.UTC().Format(time.RFC3339), clear); err != nil {
 		return err
 	}
 	s.written[key] = version
+	s.spanAt[key] = formatSessionTime(p.ended)
 	return nil
+}
+
+// laterStamp is the later of a span's end (fixed-width) and a stored row's
+// updated_at, which a legacy PUT may have written in any RFC3339 form; the
+// span's when the stored one doesn't parse.
+func laterStamp(span, stored string) string {
+	if t, err := time.Parse(time.RFC3339Nano, stored); err == nil && t.After(parseSessionTime(span)) {
+		return stored
+	}
+	return span
 }
 
 // setOther keeps place on the row as its offered place, recorded at version.
@@ -742,6 +783,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			return SyncResult{}, err
 		}
 		s.written[key] = 1
+		delete(s.spanAt, key) // the row's own time is the comparison now
 		return SyncResult{Status: statusApplied}, nil
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
@@ -779,6 +821,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		return SyncResult{}, err
 	}
 	s.written[key] = version
+	delete(s.spanAt, key) // the row's own time is the comparison now
 	return SyncResult{Status: statusApplied}, nil
 }
 

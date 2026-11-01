@@ -159,16 +159,15 @@ func TestListeningSyncEnvelope(t *testing.T) {
 		many[i] = listenJSON("m"+strconv.Itoa(i), s.lib.ID, syncUnsouled, 0, 1, "")
 	}
 	for name, tc := range map[string]struct{ body, msg, code string }{
-		"not json":       {`{`, "invalid request", ""},
-		"unknown field":  {`{"device_id":"d","sent_at":"` + now + `","events":[],"extra":1}`, "invalid request", ""},
-		"no device":      {`{"sent_at":"` + now + `","events":[]}`, "device_id is required", ""},
-		"long device":    {`{"device_id":"` + strings.Repeat("d", 201) + `","sent_at":"` + now + `","events":[]}`, "device_id is too long", ""},
-		"no clock":       {`{"device_id":"d","events":[]}`, "send sent_at or clock_offset", ""},
-		"both clocks":    {`{"device_id":"d","sent_at":"` + now + `","clock_offset":1,"events":[]}`, "send sent_at or clock_offset", ""},
-		"bad sent_at":    {`{"device_id":"d","sent_at":"today","events":[]}`, "send sent_at or clock_offset", ""},
-		"huge offset":    {`{"device_id":"d","clock_offset":2e9,"events":[]}`, "send sent_at or clock_offset", ""},
-		"too many":       {syncBody("d", many...), "", "too_many_events"},
-		"body over 1MiB": {`{"device_id":"` + strings.Repeat("d", 1<<20) + `"}`, "invalid request", ""},
+		"not json":      {`{`, "invalid request", ""},
+		"unknown field": {`{"device_id":"d","sent_at":"` + now + `","events":[],"extra":1}`, "invalid request", ""},
+		"no device":     {`{"sent_at":"` + now + `","events":[]}`, "device_id is required", ""},
+		"long device":   {`{"device_id":"` + strings.Repeat("d", 201) + `","sent_at":"` + now + `","events":[]}`, "device_id is too long", ""},
+		"no clock":      {`{"device_id":"d","events":[]}`, "send sent_at or clock_offset", ""},
+		"both clocks":   {`{"device_id":"d","sent_at":"` + now + `","clock_offset":1,"events":[]}`, "send sent_at or clock_offset", ""},
+		"bad sent_at":   {`{"device_id":"d","sent_at":"today","events":[]}`, "send sent_at or clock_offset", ""},
+		"huge offset":   {`{"device_id":"d","clock_offset":2e9,"events":[]}`, "send sent_at or clock_offset", ""},
+		"too many":      {syncBody("d", many...), "", "too_many_events"},
 	} {
 		resp, raw := s.do(t, "POST", syncURL, tok, tc.body)
 		var e struct{ Error, Code string }
@@ -176,6 +175,12 @@ func TestListeningSyncEnvelope(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest || (tc.msg != "" && e.Error != tc.msg) || e.Code != tc.code {
 			t.Errorf("%s: %d %.200s", name, resp.StatusCode, raw)
 		}
+	}
+	// A body over 1 MiB is 413 too_large (server#284), so the player halves its
+	// batch rather than retrying the same one.
+	resp, raw := s.do(t, "POST", syncURL, tok, `{"device_id":"`+strings.Repeat("d", 1<<20)+`"}`)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(raw, `"code":"too_large"`) {
+		t.Fatalf("body over 1 MiB: %d %.200s", resp.StatusCode, raw)
 	}
 	// An empty batch is a clock probe; clock_offset is a valid clock; a bad event
 	// is its own "invalid" while the rest applies.

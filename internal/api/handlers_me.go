@@ -99,7 +99,7 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	in.DeviceName = cred.DeviceName
 	saved, err := a.cat.SaveProgressFrom(r.Context(), u.ID, cred.DeviceID, in)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save progress")
+		a.writeCatalogError(w, err, "save progress failed", "could not save progress", "library", lib.ID, "path", key)
 		return
 	}
 	// The save is also the heartbeat of a listening session: what this device

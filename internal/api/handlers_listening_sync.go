@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"time"
@@ -33,13 +34,18 @@ var syncPathReasons = map[int]string{
 	http.StatusNotFound:   catalog.SyncNotFound,
 }
 
-// handleListeningSync applies one batch of listening events: 400 for a bad
-// envelope (JSON, an unknown field or a body over 1 MiB; no device id or one
+// handleListeningSync applies one batch of listening events: 413 code
+// too_large for a body over 1 MiB (the player halves its batch and sends
+// again), 400 for a bad envelope (JSON or an unknown field; no device id or one
 // over 200 bytes; neither or both of sent_at and clock_offset, an unparseable
 // sent_at or an offset beyond 1e9 s; code too_many_events past 500 events).
 func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	var in listeningSyncRequest
 	if err := decodeJSON(r, &in, 0); err != nil {
+		if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
+			writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "a batch is at most 1 MiB")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
@@ -79,6 +85,8 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, cred := userFrom(r.Context()), credentialFrom(r.Context())
+	// TokenID is the token the request acts for (a cast token's sender's,
+	// auth.Credential.DeviceID), never the client's device_id.
 	answer, err := a.cat.SyncListening(r.Context(), catalog.SyncBatch{
 		UserID: u.ID, DeviceID: in.DeviceID, TokenID: cred.DeviceID, DeviceName: cred.DeviceName,
 		Client: catalog.Client(cred.Client), SentAt: sentAt, ClockOffset: in.ClockOffset,
