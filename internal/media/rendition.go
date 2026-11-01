@@ -61,12 +61,15 @@ func renditionETag(key string, size int64) string {
 // that ended the encode early is more).
 const renditionShortMax = 1.0
 
+// errNoAudio is a watch copy that holds no audio track: a refusal.
+var errNoAudio = fmt.Errorf("%w: it holds no audio", errCopyRefused)
+
 // errShortCopy is a watch copy shorter than its source by more than
-// renditionShortMax: not cached, and remembered as a refusal (for
-// cacheRefusalTTL), since a source that is short itself (a truncated MP3 whose
-// Xing header still names the whole length) would be encoded again on every
-// request; a read error partway (an EIO from a NAS, which ends the encode
-// with exit 0, since there is no -xerror) is tried again once it expires.
+// renditionShortMax: not cached, and remembered as a refusal (cacheRefusalTTL),
+// since a source that is short itself (a truncated MP3 whose Xing header still
+// names the whole length) would be encoded again on every request; a read
+// error partway (an EIO from a NAS ends the encode with exit 0, there is no
+// -xerror) is tried again once it expires.
 var errShortCopy = fmt.Errorf("%w: the rendition is shorter than its source", errCopyRefused)
 
 // renditionCheck looks at the watch copy ffmpeg wrote at out from src (size

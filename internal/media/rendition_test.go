@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -280,7 +279,7 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	}
 
 	// A refusal: an exit status before anything was written.
-	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
+	status := exitStatus(t)
 	refusing, refusedRuns := fakeRenditions(t, nil, func(string) error { return status })
 	bad := srcFile(t, "bad.mp3")
 	refusing.Queue(ctx, "ffmpeg", bad)
@@ -522,7 +521,7 @@ func TestRenditionShortRemembered(t *testing.T) {
 		return run(ctx, ffmpegPath, args, stdin)
 	}
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "shorter") {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || !errors.Is(err, errShortCopy) {
 		t.Fatalf("open = %v, want the short copy refused", err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -560,21 +559,24 @@ func TestRenditionShortRemembered(t *testing.T) {
 // expired entries first.
 func TestRefusalExpires(t *testing.T) {
 	t.Parallel()
-	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
+	status := exitStatus(t)
 	ctx := context.Background()
-	for name, mk := range map[string]func(string, *slog.Logger) (*FileCache, error){
-		"rendition": NewRenditionCache, "remux": NewRemuxer,
+	rendition, renditionRuns := fakeRenditions(t, nil, func(string) error { return status })
+	var remuxRuns atomic.Int32
+	remux, remuxSrc := fakeRemuxer(t, func(_, _ string) error { remuxRuns.Add(1); return status })
+	t.Cleanup(remux.Wait)
+	for _, c := range []struct {
+		name string
+		m    *FileCache
+		runs *atomic.Int32
+		src  string
+	}{
+		{"rendition", rendition, renditionRuns, srcFile(t, "a.mp3")},
+		{"remux", remux, &remuxRuns, remuxSrc},
 	} {
-		m, err := mk(filepath.Join(t.TempDir(), name), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(m.Wait)
+		m, runs, src, name := c.m, c.runs, c.src, c.name
 		clock := time.Now()
 		m.now = func() time.Time { return clock }
-		var runs atomic.Int32
-		m.run = func(context.Context, string, []string, *os.File) error { runs.Add(1); return status }
-		src := srcFile(t, "a.mka")
 		for range 2 {
 			if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
 				t.Fatalf("%s: open = %v after %d runs, want the refusal remembered", name, err, runs.Load())

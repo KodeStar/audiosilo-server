@@ -325,6 +325,17 @@ func TestRemuxerDiskGuard(t *testing.T) {
 	}
 }
 
+// exitStatus is a real exit status, as ffmpeg's refusal returns: this test
+// binary run with a flag it doesn't know.
+func exitStatus(t *testing.T) error {
+	t.Helper()
+	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
+	if exit := (*exec.ExitError)(nil); !errors.As(status, &exit) || exit.ExitCode() <= 0 {
+		t.Fatalf("want an exit status, got %v", status)
+	}
+	return status
+}
+
 // fakeRemuxer is a remux cache over a fresh cache dir whose ffmpeg run is run (given
 // the source and the copy's path), with a source file of a few bytes at src.
 func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *FileCache, src string) {
@@ -348,11 +359,7 @@ func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *FileCache, s
 // refusal: it isn't remembered, so the next request tries again.
 func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
 	t.Parallel()
-	// A real exit status: this test binary run with a flag it doesn't know.
-	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
-	if exit := (*exec.ExitError)(nil); !errors.As(status, &exit) || exit.ExitCode() <= 0 {
-		t.Fatalf("want an exit status, got %v", status)
-	}
+	status := exitStatus(t)
 	var runs atomic.Int32
 	m, src := fakeRemuxer(t, func(_, out string) error {
 		runs.Add(1)

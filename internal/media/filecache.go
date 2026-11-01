@@ -491,11 +491,11 @@ func (m *FileCache) rememberLocked(key string) {
 				delete(m.failed, k)
 			}
 		}
-		for k := range m.failed {
-			if len(m.failed) < cacheFailedMax {
+		if len(m.failed) >= cacheFailedMax {
+			for k := range m.failed { // drop one: the map stays bounded
+				delete(m.failed, k)
 				break
 			}
-			delete(m.failed, k)
 		}
 	}
 	m.failed[key] = now.Add(cacheRefusalTTL)
@@ -586,14 +586,11 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 // on: remembered as ffmpeg's own refusal is.
 var errCopyRefused = errors.New("ffmpeg exited 0 but the copy is refused")
 
-// errNoAudio is a copy that holds no audio track.
-var errNoAudio = fmt.Errorf("%w: it holds no audio", errCopyRefused)
-
 // refuse logs ffmpeg's refusal (err) of the source at path and returns it as
 // ErrRefused, which lead remembers.
 func (m *FileCache) refuse(path string, err error) error {
 	m.log.Info(m.spec.refused, "path", path, "err", err)
-	return fmt.Errorf("%w: %v", ErrRefused, err)
+	return fmt.Errorf("%w: %w", ErrRefused, err)
 }
 
 // unchanged reports whether the open source still has the size and mtime its
@@ -607,9 +604,7 @@ func unchanged(src *os.File, info os.FileInfo) bool {
 // exit status before it wrote anything to out (a muxer checks the streams as
 // it starts; a source with no audio stream fails its -map). A run that didn't
 // start, was killed, or failed partway (a full disk, a read error) is not the
-// file's, so it isn't remembered. One that is may still be the environment's
-// (an EIO at open, an ffmpeg without the encoder): the memory expires
-// (cacheRefusalTTL).
+// file's, so it isn't remembered. A remembered one expires (cacheRefusalTTL).
 func refused(err error, out string) bool {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() <= 0 {
