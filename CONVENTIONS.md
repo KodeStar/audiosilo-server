@@ -863,7 +863,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   format is its first file's; the SQL twin `directPlayableExpr`, the console's Playback column, stays
   "as stored"). **Remux (server#174)**: while ffmpeg is configured (`API.remuxOn`: `a.ffmpeg != ""`
   and the cache opened; no capability flag), `GET stream` of an `.mka` (with or without `download=1`,
-  not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.Remuxer`: `-f matroska`
+  not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
   `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
@@ -890,7 +890,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   60 s an idle answer gets from Android's downloader and a reverse proxy; past it they are
   transcoded after all (the busy 503 when no slot freed). The remux's own timeout (30 min) is a
   failure, logged, not this wait. `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
-  `Remuxer.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
+  `FileCache.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
   server so warms hold at most one of the 2 slots, a book warmed once while queued, at most 16 queued
   (more dropped), the cached (not marked used) and known refusals skipped, never a podcast library;
   never blocks the answer; the launcher waits for them at shutdown), so the first
@@ -955,6 +955,38 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to
   transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
+- **Watch renditions (Track W2, capability `renditions`, `media/rendition.go`, `api/handlers_renditions.go`)**:
+  a small copy of each audio file of a book for a watch to download, made by ffmpeg into
+  `<data>/cache/renditions/watch/<key>.m4a`, never into the library (read-only). The encode (`renditionArgs`) is
+  AAC-LC (ffmpeg's own `aac`; HE-AAC needs the non-free libfdk_aac), mono, 48 kbps, 44.1 kHz, MP4 with
+  `+faststart`, no video, metadata or chapters, `+bitexact` (format and encoder), the input only the descriptor
+  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
+  MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.03 s on MP3 and M4B), so positions and
+  chapters (CROSS-REPO §6) hold. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
+  sha256(abs, size, mtime, `watch-v1`), so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
+  of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard, `.part`
+  synced then renamed, never cached when the source changed while read, ffmpeg's refusal (an exit status
+  before anything was written) remembered. The remux is unchanged (same dir, keys, ETags). `GET
+  /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
+  `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
+  for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
+  sees one anyway, `auth.SeesPodcasts`), `renditionsOn` (404 `rendition_unavailable`: no ffmpeg or no data dir),
+  audio and a regular file (404); then the copy, served with Range (`http.ServeContent`), `audio/mp4`, a strong
+  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
+  `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
+  download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
+  live transcode. 422 `rendition_failed` is ffmpeg's remembered refusal; 503 `rendition_error` (`Retry-After:
+  60`) a failure not the file's (disk guard, a run killed partway, the source changed). `POST
+  /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
+  (`FileCache.Queue`, at most 256 waiting across the server, past which a file stays `missing` for the client
+  to ask again) and answers 202; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
+  files: [{path, state: ready|pending|failed|missing, bytes (ready only)}]}` in the book's file order, the book
+  resolved as `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
+  listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
+  in `X-AudioSilo-Client`, shown as a watch in the console. Tests: `media/rendition_test.go` (args, keys,
+  a real encode's codec, channels, rate, bit rate, duration and moov-first, Range/If-Range, queue and status,
+  refusal, eviction per cache), `api/renditions_test.go` (capability, stream, 503 pending, refusals, scope
+  allowed and denied, the routes).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
@@ -2741,15 +2773,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `api/handlers_listening_sync.go`, migration `0061`): `POST /me/listening/sync` (`requireAuth`: session or API
   key; kids and demo accounts too) takes `{device_id (1-200 bytes), sent_at | clock_offset (exactly one),
   events[0-500]}` and answers `{server_time, results[] (one per event, request order), progress[]}`. Envelope
-  400s: `invalid request` (JSON, an unknown top-level field, a body over 1 MiB), `device_id is required` / `is
-  too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`.
+  400s: `invalid request` (JSON, an unknown top-level field), `device_id is required` / `is
+  too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`;
+  a body over 1 MiB is 413 code `too_large` (server#284: the player halves its batch on it). A batch with nothing
+  to apply opens no writer transaction.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
   event's `rejected` `invalid`. The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
-  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate`), the clock (shift = now - sent_at, kept as
+  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
+  leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as
   a Duration, or clock_offset, added to every time; a corrected time past now pulled back with its span, keeping
   its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
@@ -2766,7 +2801,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the row's next one, since the row's own device acknowledged its current version before the offer existed)
   unless it is the kept row's device or within 30 s; it is cleared by a non-diverged apply whose base as sent
   (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
-  `updated_at` (the corrected end), version + 1, never the finish. finish/unfinish apply only when newer than
+  `updated_at` (the corrected end, or the row's own when that is later: a diverged apply never moves it back, so
+  an old app's PUT dated in between can't win, server#284; the device's later spans in the batch then compare
+  with their own span's end, `spanAt`), version + 1, never the finish. finish/unfinish apply only when newer than
   `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
   `finished_at` kept when already finished, the offer dropped), unfinish clears it and keeps the position, taking
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
@@ -2780,7 +2817,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
-  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
+  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
+  fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, an import's apply and
   undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
