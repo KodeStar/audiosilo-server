@@ -101,18 +101,6 @@ func (r *renditionEnv) cached(t *testing.T) int {
 	return n
 }
 
-// errorCode reads an error envelope's code.
-func errorCode(t *testing.T, body string) string {
-	t.Helper()
-	var env struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal([]byte(body), &env); err != nil {
-		t.Fatalf("error body %q: %v", body, err)
-	}
-	return env.Code
-}
-
 type renditionsAnswer struct {
 	Kind  string `json:"kind"`
 	Files []struct {
@@ -234,7 +222,7 @@ func TestRenditionPending(t *testing.T) {
 	}
 	t.Cleanup(release)
 	resp, body := r.do(t, "GET", r.streamURL(rendM4BBook, "&rendition=watch"), r.token, "")
-	if resp.StatusCode != http.StatusServiceUnavailable || errorCode(t, body) != "rendition_pending" ||
+	if resp.StatusCode != http.StatusServiceUnavailable || codeOf(body) != "rendition_pending" ||
 		resp.Header.Get("Retry-After") != "15" {
 		t.Fatalf("cold rendition = %d %q %s", resp.StatusCode, resp.Header.Get("Retry-After"), body)
 	}
@@ -288,7 +276,7 @@ func TestRenditionRefusals(t *testing.T) {
 	} {
 		// A player that sees podcast libraries (auth.SeesPodcasts; a watch never does).
 		resp, body := r.doHeaders(t, d.method, d.url, r.token, d.body, map[string]string{"X-AudioSilo-Client": "AudioSilo/dev (ios)"})
-		if resp.StatusCode != d.status || (d.code != "" && errorCode(t, body) != d.code) {
+		if resp.StatusCode != d.status || (d.code != "" && codeOf(body) != d.code) {
 			t.Errorf("%s = %d %s, want %d %s", d.name, resp.StatusCode, body, d.status, d.code)
 		}
 	}
@@ -302,7 +290,7 @@ func TestRenditionRefusals(t *testing.T) {
 		{"POST", r.renditionsURL(rendPartsBook, ""), `{"kind":"watch"}`},
 		{"GET", r.renditionsURL(rendPartsBook, "&kind=watch"), ""},
 	} {
-		if resp, body := r.do(t, d.method, d.url, r.token, d.body); resp.StatusCode != 404 || errorCode(t, body) != "rendition_unavailable" {
+		if resp, body := r.do(t, d.method, d.url, r.token, d.body); resp.StatusCode != 404 || codeOf(body) != "rendition_unavailable" {
 			t.Errorf("%s %s without ffmpeg = %d %s, want 404 rendition_unavailable", d.method, d.url, resp.StatusCode, body)
 		}
 	}

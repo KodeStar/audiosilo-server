@@ -735,18 +735,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only ever stream recognized audio. The scope check bounds this to the caller's
-	// grant, but the library root can also hold non-audio sidecar files (.nfo, .jpg,
-	// a stray .env/backup); BrowseFS hides those from listings, and cover art has its
-	// own endpoint, so serving them here would be an avenue to exfiltrate arbitrary
-	// in-scope files by guessing paths.
-	if !metadata.IsAudio(rel) {
-		writeError(w, http.StatusNotFound, "not an audio file")
-		return
-	}
-	abs, err := library.SafeJoin(lib.Root, rel)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid path")
+	abs, ok := audioFile(w, lib, rel)
+	if !ok {
 		return
 	}
 
@@ -761,6 +751,47 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	media.ServeFile(w, r, abs, download)
+}
+
+// audioFile is the stream's guard on rel (scope-checked already): its absolute
+// path, or false having written 404 for a file that isn't recognized audio and
+// 400 for a path that escapes the root. The scope check bounds a stream to the
+// caller's grant, but the library root can also hold non-audio sidecar files
+// (.nfo, .jpg, a stray .env/backup); BrowseFS hides those from listings, and
+// cover art has its own endpoint, so serving them here would be an avenue to
+// exfiltrate arbitrary in-scope files by guessing paths.
+func audioFile(w http.ResponseWriter, lib *catalog.Library, rel string) (string, bool) {
+	if !metadata.IsAudio(rel) {
+		writeError(w, http.StatusNotFound, "not an audio file")
+		return "", false
+	}
+	abs, err := library.SafeJoin(lib.Root, rel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return "", false
+	}
+	return abs, true
+}
+
+// copyName is the download name of abs's cached copy: its stem with the
+// copy's extension.
+func copyName(abs, ext string) string {
+	return strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ext
+}
+
+// serveCopy answers with a cached copy f (media.FileCache.Open) and closes it:
+// Range, the copy's strong etag, and its own mtime as Last-Modified (never the
+// source's, so a validator a client kept for the stored file never matches),
+// download an attachment named name.
+func serveCopy(w http.ResponseWriter, r *http.Request, f *os.File, etag, name string, download bool) {
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read the cached copy")
+		return
+	}
+	w.Header().Set("ETag", etag)
+	media.ServeOpenedAs(w, r, f, name, info.ModTime(), download)
 }
 
 // serveTranscode answers with the live MP3 transcode of the library file abs
@@ -800,10 +831,10 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
 	defer cancel()
 	f, etag, err := a.remux.Open(wait, a.baseCtx, a.ffmpeg, abs)
-	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".mp3"
+	name := copyName(abs, a.remux.Ext())
 	var held func() // a transcode slot taken while the remux runs on
 	// Still remuxing when the wait ran out (it goes on): not a failure to warn of.
-	running := err != nil && r.Context().Err() == nil && wait.Err() != nil && errors.Is(err, context.DeadlineExceeded)
+	running := r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 	if running {
 		if !download {
 			held = a.takeTranscodeSlot()
@@ -815,7 +846,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			defer cancelLong()
 			f, etag, err = a.remux.Open(long, a.baseCtx, a.ffmpeg, abs)
 			// A remux that failed by its own timeout is a failure, not this wait.
-			running = err != nil && r.Context().Err() == nil && long.Err() != nil && errors.Is(err, context.DeadlineExceeded)
+			running = r.Context().Err() == nil && errors.Is(err, media.ErrPending)
 		} else {
 			defer held()
 		}
@@ -846,14 +877,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		a.serveTranscode(w, r, lib, rel, abs, downloadName)
 		return true
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read the remux")
-		return true
-	}
-	w.Header().Set("ETag", etag)
-	media.ServeOpenedAs(w, r, f, name, info.ModTime(), download)
+	serveCopy(w, r, f, etag, name, download)
 	return true
 }
 

@@ -149,7 +149,7 @@ func TestRemuxerOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := remuxETag(strings.TrimSuffix(filepath.Base(f.Name()), ".mp3")); etag != want {
+	if want := remuxETag(strings.TrimSuffix(filepath.Base(f.Name()), ".mp3"), 0); etag != want {
 		t.Fatalf("etag = %s, want the strong %s", etag, want)
 	}
 	if ct := sniffAudioType(f); ct != "audio/mpeg" {
@@ -443,7 +443,7 @@ func TestRemuxerEvicts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "e.123.part")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("leftover .part = %v, want removed", err)
 	}
-	m.maxBytes = 200
+	m.spec.maxBytes = 200
 	m.evict("a") // a is the oldest but was just written
 	var left []string
 	entries, _ := os.ReadDir(dir)

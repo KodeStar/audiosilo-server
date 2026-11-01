@@ -224,6 +224,8 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		// An edit is also a finish-state change when it flips finished (Sync v2's
 		// finish and unfinish events older than it are then "older"), and it
 		// clears the offered place (other_place): the listener chose the place.
+		// ?10 and ?13 are the same stamp: finishChangedValue/Set bind ?13.
+		stamp := formatSessionTime(now)
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
@@ -235,7 +237,7 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     `+finishChangedSet+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished, formatSessionTime(now))
+			p.Version+1, p.DeviceID, stamp, started, finished, stamp)
 		return err
 	})
 }

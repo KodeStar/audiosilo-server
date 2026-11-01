@@ -366,22 +366,25 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 	})
 	// A batch with nothing to apply (empty, or every event rejected or a
 	// duplicate of an earlier copy) opens no writer transaction.
-	err := c.syncApply(ctx, prepared, func(tx *sql.Tx) error {
-		s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}, spanAt: map[Ref]string{}}
-		var err error
-		if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
-			return err
-		}
-		for _, p := range prepared {
-			res, err := s.apply(ctx, p)
-			if err != nil {
+	var err error
+	if len(prepared) > 0 {
+		err = c.db.WithUserStateTx(ctx, "SyncListening", func(tx *sql.Tx) error {
+			s := syncRun{c: c, tx: tx, b: b, now: now, shift: shift, written: map[Ref]int64{}, spanAt: map[Ref]string{}}
+			var err error
+			if s.stored, err = storedEventIDs(ctx, tx, b.UserID, prepared); err != nil {
 				return err
 			}
-			res.ID = p.ev.ID
-			results[p.index] = res
-		}
-		return nil
-	})
+			for _, p := range prepared {
+				res, err := s.apply(ctx, p)
+				if err != nil {
+					return err
+				}
+				res.ID = p.ev.ID
+				results[p.index] = res
+			}
+			return nil
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -396,15 +399,6 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 		}
 	}
 	return answer, nil
-}
-
-// syncApply runs apply in the user-state writer transaction, unless no event
-// was prepared.
-func (c *Catalog) syncApply(ctx context.Context, prepared []syncPrepared, apply func(tx *sql.Tx) error) error {
-	if len(prepared) == 0 {
-		return nil
-	}
-	return c.db.WithUserStateTx(ctx, "SyncListening", apply)
 }
 
 // prepareSyncEvent checks an event's fields (a known kind) and parses its
@@ -787,10 +781,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		return SyncResult{Status: statusApplied}, nil
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
-	updated := stored.updatedAt
-	if t, err := time.Parse(time.RFC3339, stored.updatedAt); err != nil || p.ended.After(t) {
-		updated = at
-	}
+	updated := laterStamp(at, stored.updatedAt)
 	version := stored.version + 1
 	if p.ev.Kind == EventFinish {
 		duration := stored.duration

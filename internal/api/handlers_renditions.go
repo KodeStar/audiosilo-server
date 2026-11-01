@@ -4,16 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
-	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Watch renditions (Track W2, capability renditions): a small AAC copy of each
@@ -61,7 +56,7 @@ func (a *API) renditionKindAllowed(w http.ResponseWriter, lib *catalog.Library, 
 // writeRetry writes a 503 with code and msg, asking the client to come back
 // after retry.
 func writeRetry(w http.ResponseWriter, retry time.Duration, code, msg string) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+	setRetryAfter(w, retry)
 	writeErrorCode(w, http.StatusServiceUnavailable, code, msg)
 }
 
@@ -75,17 +70,8 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
-	if !metadata.IsAudio(rel) {
-		writeError(w, http.StatusNotFound, "not an audio file")
-		return
-	}
-	abs, err := library.SafeJoin(lib.Root, rel)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid path")
-		return
-	}
-	if info, err := os.Stat(abs); err != nil || !info.Mode().IsRegular() {
-		writeError(w, http.StatusNotFound, "not found")
+	abs, ok := audioFile(w, lib, rel)
+	if !ok {
 		return
 	}
 	wait, cancel := context.WithTimeout(r.Context(), a.renditionWait)
@@ -95,11 +81,13 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 		switch {
 		case r.Context().Err() != nil:
 			// The client went away: nothing to answer.
+		case errors.Is(err, media.ErrNoSource):
+			writeError(w, http.StatusNotFound, "not found")
 		case errors.Is(err, media.ErrRefused):
 			writeErrorCode(w, http.StatusUnprocessableEntity, codeRenditionFailed, "this file can't be encoded")
 		case a.baseCtx.Err() != nil:
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
-		case wait.Err() != nil && errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, media.ErrPending):
 			writeRetry(w, renditionPendingRetry, codeRenditionPending, "the rendition is still being made")
 		default:
 			if !errors.Is(err, media.ErrUnavailable) {
@@ -109,15 +97,7 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 		}
 		return
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read the rendition")
-		return
-	}
-	w.Header().Set("ETag", etag)
-	name := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)) + ".m4a"
-	media.ServeOpenedAs(w, r, f, name, info.ModTime(), r.URL.Query().Get("download") == "1")
+	serveCopy(w, r, f, etag, copyName(abs, a.renditions.Ext()), r.URL.Query().Get("download") == "1")
 }
 
 // renditionFile is one audio file of a book in a renditions answer: its path

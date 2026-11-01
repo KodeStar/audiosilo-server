@@ -30,7 +30,7 @@ func Remuxable(format, codec string) bool {
 func NewRemuxer(dir string, log *slog.Logger) (*FileCache, error) {
 	return newFileCache(dir, cacheSpec{
 		ext: ".mp3", maxBytes: remuxCacheBytes, concurrent: remuxConcurrent, timeout: remuxTimeout,
-		args: remuxArgs, etag: func(key string, _ int64) string { return remuxETag(key) },
+		args: remuxArgs, etag: remuxETag,
 		refused: "not remuxed: serving Matroska as stored",
 		lowDisk: "remux skipped: too little free disk for the remux cache; transcoding Matroska live",
 	}, log)
@@ -39,7 +39,7 @@ func NewRemuxer(dir string, log *slog.Logger) (*FileCache, error) {
 // remuxETag is the strong validator of key's copy: the key names the source's
 // path, size and mtime, and the remux is bitexact, so the same key is always
 // the same bytes, across a re-remux after an eviction too.
-func remuxETag(key string) string { return `"remux-` + key + `"` }
+func remuxETag(key string, _ int64) string { return `"remux-` + key + `"` }
 
 // remuxArgs is the ffmpeg command line that copies the first audio stream of
 // the Matroska on stdin (in) into an MP3 at out, chapters included. The demuxer

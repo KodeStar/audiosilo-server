@@ -49,6 +49,13 @@ var (
 	// source changed while it waited or while ffmpeg read it, or its cached copy
 	// went before it could be opened).
 	ErrUnavailable = errors.New("media: cached copy unavailable")
+	// ErrNoSource joins ErrRefused when there is no regular file at the path,
+	// so a caller that answers that case itself (a rendition's 404) can tell it
+	// from ffmpeg's refusal.
+	ErrNoSource = errors.New("media: no regular file at the path")
+	// ErrPending: Open stopped waiting (its ctx ended) while the run goes on
+	// for the next request; it wraps ctx's error.
+	ErrPending = errors.New("media: cached copy still being made")
 )
 
 // cacheSpec is what a FileCache makes: the ffmpeg command line that writes a
@@ -85,11 +92,10 @@ type cacheSpec struct {
 // the LRU. A run is shared by every request for the key at once (single-flight)
 // and runs under the server's context, never a request's.
 type FileCache struct {
-	spec     cacheSpec
-	dir      string
-	maxBytes int64
-	log      *slog.Logger
-	sem      chan struct{}
+	spec cacheSpec
+	dir  string
+	log  *slog.Logger
+	sem  chan struct{}
 	// freeSpace reads the free space on dir's disk (diskspace.Of); run starts
 	// ffmpeg. Fields so tests can fake the disk and count the runs.
 	freeSpace func(path string) (uint64, bool)
@@ -131,7 +137,7 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		return nil, err
 	}
 	m := &FileCache{
-		spec: spec, dir: dir, maxBytes: spec.maxBytes, log: log,
+		spec: spec, dir: dir, log: log,
 		sem:       make(chan struct{}, spec.concurrent),
 		freeSpace: func(path string) (uint64, bool) { _, free, ok := diskspace.Of(path); return free, ok },
 		run:       runFFmpeg,
@@ -197,15 +203,19 @@ func (m *FileCache) key(abs string, info os.FileInfo) string {
 
 func (m *FileCache) cachePath(key string) string { return filepath.Join(m.dir, key+m.spec.ext) }
 
-// source stats abs, the file a copy is made of: ErrRefused when there is no
-// regular file there (the stored file's answer, a 404, is the right one).
+// Ext is the copies' file extension (".mp3", ".m4a"), for a download's name.
+func (m *FileCache) Ext() string { return m.spec.ext }
+
+// source stats abs, the file a copy is made of: ErrRefused joined with
+// ErrNoSource when there is no regular file there (the stored file's answer, a
+// 404, is the right one).
 func source(abs string) (os.FileInfo, error) {
 	info, err := os.Stat(abs)
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("%w: %v", ErrRefused, err)
+		return nil, fmt.Errorf("%w: %w: %v", ErrRefused, ErrNoSource, err)
 	case !info.Mode().IsRegular():
-		return nil, fmt.Errorf("%w: %s is not a regular file", ErrRefused, abs)
+		return nil, fmt.Errorf("%w: %w: %s", ErrRefused, ErrNoSource, abs)
 	}
 	return info, nil
 }
@@ -216,9 +226,10 @@ func source(abs string) (os.FileInfo, error) {
 // it. The caller closes the file. A cold key runs under runCtx (the server's
 // lifetime, bounded by the spec's timeout) while this call waits on ctx: a
 // request that leaves, or stops waiting, doesn't stop the run the others wait
-// for. The errors are ErrRefused, ctx's, or one that says the copy can't be
-// had now: ErrUnavailable, runCtx's, or a failure to read abs, run ffmpeg or
-// write the cache.
+// for. The errors are ErrRefused (with ErrNoSource when abs is no regular
+// file), ErrPending wrapping ctx's error when ctx ended first, or one that says
+// the copy can't be had now: ErrUnavailable, runCtx's, or a failure to read
+// abs, run ffmpeg or write the cache.
 func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
 	info, err := source(abs)
 	if err != nil {
@@ -232,7 +243,7 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*
 	select {
 	case <-fl.done:
 	case <-ctx.Done():
-		return nil, "", ctx.Err()
+		return nil, "", fmt.Errorf("%w: %w", ErrPending, ctx.Err())
 	}
 	if fl.err != nil {
 		return nil, "", fl.err
@@ -311,19 +322,21 @@ func (m *FileCache) Status(abs string) (CacheState, int64) {
 		return CacheFailed, 0
 	}
 	key := m.key(abs, info)
-	if fi, err := os.Stat(m.cachePath(key)); err == nil {
-		return CacheReady, fi.Size()
-	}
+	// A key in flight or refused has no copy (a run renames its copy into
+	// place before it leaves inflight), so the cache file is stat'ed once,
+	// outside the lock.
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	_, refused := m.failed[key]
+	_, running := m.inflight[key]
+	m.mu.Unlock()
+	switch {
+	case refused:
+		return CacheFailed, 0
+	case running:
+		return CachePending, 0
+	}
 	if fi, err := os.Stat(m.cachePath(key)); err == nil {
 		return CacheReady, fi.Size()
-	}
-	if _, refused := m.failed[key]; refused {
-		return CacheFailed, 0
-	}
-	if _, ok := m.inflight[key]; ok {
-		return CachePending, 0
 	}
 	return CacheMissing, 0
 }
@@ -391,7 +404,7 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath string, paths []s
 			if runCtx.Err() != nil {
 				return
 			}
-			if m.cached(abs) {
+			if st, _ := m.Status(abs); st == CacheReady {
 				continue
 			}
 			if f, _, err := m.Open(runCtx, runCtx, ffmpegPath, abs); err == nil {
@@ -399,16 +412,6 @@ func (m *FileCache) WarmAll(runCtx context.Context, ffmpegPath string, paths []s
 			}
 		}
 	})
-}
-
-// cached reports whether abs's copy is in the cache, without marking it used.
-func (m *FileCache) cached(abs string) bool {
-	info, err := source(abs)
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(m.cachePath(m.key(abs, info)))
-	return err == nil
 }
 
 // hit opens key's cached copy if it is there and marks it used (its mtime is
@@ -602,7 +605,7 @@ func (m *FileCache) evict(keep string) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].used.Before(files[j].used) })
 	for _, f := range files {
-		if total <= m.maxBytes {
+		if total <= m.spec.maxBytes {
 			return
 		}
 		if f.name == keep+m.spec.ext {

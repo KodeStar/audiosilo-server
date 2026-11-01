@@ -365,7 +365,7 @@ func TestCacheEvictsOwnFilesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.maxBytes = 100
+	m.spec.maxBytes = 100
 	m.evict("")
 	var left []string
 	entries, _ := os.ReadDir(dir)
