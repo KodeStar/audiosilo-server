@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -481,11 +482,12 @@ func TestCacheEvictsOwnFilesOnly(t *testing.T) {
 	}
 }
 
-// TestRenditionShortNotCached: an encode that stops early and still exits 0
-// (a read error partway, with no -xerror) leaves a copy shorter than its
-// source, which is not cached and not remembered: the request fails as one to
-// retry, the file stays missing, and the next request encodes it in full.
-func TestRenditionShortNotCached(t *testing.T) {
+// TestRenditionShortRemembered: an encode that ends early and still exits 0
+// (a source short of the length its header names, a read error partway, with
+// no -xerror) leaves a copy shorter than its source: not cached, and remembered
+// as a refusal, so the next requests are answered at once without encoding it
+// again; once the memory expires the file is encoded again, in full here.
+func TestRenditionShortRemembered(t *testing.T) {
 	t.Parallel()
 	needFFmpeg(t)
 	src := filepath.Join(t.TempDir(), "part.mp3")
@@ -506,33 +508,103 @@ func TestRenditionShortNotCached(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Wait)
+	clock := time.Now()
+	m.now = func() time.Time { return clock }
 	var cut atomic.Bool
+	var runs atomic.Int32
 	cut.Store(true)
 	run := m.run
 	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+		runs.Add(1)
 		if cut.Load() { // the encode ends 15 s early and exits 0
 			args = append(append(slices.Clone(args[:len(args)-1]), "-t", "5"), args[len(args)-1])
 		}
 		return run(ctx, ffmpegPath, args, stdin)
 	}
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, errShortCopy) || errors.Is(err, ErrRefused) {
-		t.Fatalf("open = %v, want a short copy, not a refusal", err)
-	}
-	if st, _ := m.Status(src); st != CacheMissing {
-		t.Fatalf("status = %s, want missing (not remembered)", st)
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "shorter") {
+		t.Fatalf("open = %v, want the short copy refused", err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("cache holds %d files, want none", len(entries))
 	}
+	if st, _ := m.Status(src); st != CacheFailed {
+		t.Fatalf("status = %s, want failed (remembered)", st)
+	}
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
+		t.Fatalf("open again = %v after %d runs, want the remembered refusal and no new encode", err, runs.Load())
+	}
+	if st, _ := m.Queue(ctx, "ffmpeg", src); st != CacheFailed || runs.Load() != 1 {
+		t.Fatalf("queue = %s after %d runs, want failed and no new encode", st, runs.Load())
+	}
+	clock = clock.Add(cacheRefusalTTL)
+	if st, _ := m.Status(src); st != CacheMissing {
+		t.Fatalf("status after the memory expired = %s, want missing", st)
+	}
 	cut.Store(false)
 	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
-	if err != nil {
-		t.Fatalf("open again = %v, want the full copy", err)
+	if err != nil || runs.Load() != 2 {
+		t.Fatalf("open after expiry = %v after %d runs, want a new, full copy", err, runs.Load())
 	}
 	defer f.Close()
 	fi, _ := f.Stat()
 	if got, ok := metadata.ExactDuration(ctx, f, fi.Size(), "m4a"); !ok || got < want-renditionShortMax {
 		t.Fatalf("copy lasts %v %v, source %v", got, ok, want)
+	}
+}
+
+// TestRefusalExpires: ffmpeg's refusal (an exit status before anything was
+// written: the file's fault, or the environment's, an EIO at open or an
+// ffmpeg without the encoder) is remembered for cacheRefusalTTL, then tried
+// again; the remux's refusals expire the same way. The bounded memory drops
+// expired entries first.
+func TestRefusalExpires(t *testing.T) {
+	t.Parallel()
+	status := exec.Command(os.Args[0], "-test.run=^$", "-not-a-flag").Run()
+	ctx := context.Background()
+	for name, mk := range map[string]func(string, *slog.Logger) (*FileCache, error){
+		"rendition": NewRenditionCache, "remux": NewRemuxer,
+	} {
+		m, err := mk(filepath.Join(t.TempDir(), name), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(m.Wait)
+		clock := time.Now()
+		m.now = func() time.Time { return clock }
+		var runs atomic.Int32
+		m.run = func(context.Context, string, []string, *os.File) error { runs.Add(1); return status }
+		src := srcFile(t, "a.mka")
+		for range 2 {
+			if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
+				t.Fatalf("%s: open = %v after %d runs, want the refusal remembered", name, err, runs.Load())
+			}
+		}
+		clock = clock.Add(cacheRefusalTTL - time.Second)
+		if st, _ := m.Status(src); st != CacheFailed {
+			t.Fatalf("%s: status before the TTL = %s, want failed", name, st)
+		}
+		clock = clock.Add(time.Second)
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
+			t.Fatalf("%s: open after the TTL = %v after %d runs, want it tried again", name, err, runs.Load())
+		}
+	}
+
+	// The bound: full of expired refusals, a new one evicts them, not live ones.
+	m, err := NewRenditionCache(filepath.Join(t.TempDir(), "bound"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	m.now = func() time.Time { return clock }
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range cacheFailedMax - 1 {
+		m.failed["old"+strconv.Itoa(i)] = clock.Add(-time.Second)
+	}
+	m.failed["live"] = clock.Add(time.Minute)
+	m.rememberLocked("new")
+	if len(m.failed) != 2 || !m.refusedLocked("live") || !m.refusedLocked("new") {
+		t.Fatalf("after the sweep: %d remembered, want live and new", len(m.failed))
 	}
 }

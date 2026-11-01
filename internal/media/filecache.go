@@ -27,8 +27,13 @@ import (
 // bumps its copy's mtime (a player's run of Range requests is one use, not one
 // inode write each). The rest are each cache's (cacheSpec).
 const (
-	cacheMinFree    = 1 << 30
-	cacheFailedMax  = 1024
+	cacheMinFree   = 1 << 30
+	cacheFailedMax = 1024
+	// cacheRefusalTTL is how long a refusal is remembered (a changed file is a
+	// new key at once): what looks like the file's fault may be the
+	// environment's (an EIO as ffmpeg opened it, an ffmpeg missing an encoder,
+	// a disk full at the first write), so it is tried again after it.
+	cacheRefusalTTL = time.Hour
 	cacheTouchEvery = 10 * time.Minute
 	// cacheWarmQueue bounds the books whose warm (WarmAll) is under way or
 	// queued: past it a warm is dropped (its first stream makes the copy as
@@ -40,10 +45,10 @@ var (
 	// ErrRefused: the file is not one this cache makes a copy of, so its stored
 	// bytes are the answer (the remux) or the request fails (a rendition).
 	// Either ffmpeg refused it (the remux's mp3 muxer takes exactly one MP3
-	// audio stream; a rendition needs an audio stream ffmpeg decodes), which is
-	// remembered for this file's size and mtime so it is not tried again until
-	// the file changes, or there is no regular file at the path (gone, a
-	// folder).
+	// audio stream; a rendition needs an audio stream ffmpeg decodes, and a
+	// copy as long as its source), which is remembered for this file's size and
+	// mtime for cacheRefusalTTL, or there is no regular file at the path
+	// (gone, a folder).
 	ErrRefused = errors.New("media: ffmpeg refused the file")
 	// ErrUnavailable: the run was skipped (too little free disk for it, as many
 	// runs in flight as the cache allows, the source changed while it waited or
@@ -81,9 +86,10 @@ type cacheSpec struct {
 	args func(in inputSpec, out string) []string
 	// check, when set, looks at a copy ffmpeg wrote and exited 0 on (out, the
 	// .part) beside its source (src, size bytes, unchanged since the key was
-	// made): an error matching errNoAudio is ffmpeg's refusal, remembered as an
-	// exit status before anything was written is; any other is a copy not to
-	// cache now (a short one, one that can't be read), tried again next time.
+	// made): an error matching errCopyRefused (no audio, a short copy) is a
+	// refusal, remembered as an exit status before anything was written is;
+	// any other is a copy not to cache now (one that can't be read), tried
+	// again next time.
 	check func(ctx context.Context, src *os.File, size int64, out string) error
 	// etag is the strong validator of key's copy of size bytes.
 	etag func(key string, size int64) string
@@ -106,10 +112,13 @@ type FileCache struct {
 	// ffmpeg. Fields so tests can fake the disk and count the runs.
 	freeSpace func(path string) (uint64, bool)
 	run       func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error
+	// now is the refusals' clock (a field so tests can move it).
+	now func() time.Time
 
 	mu       sync.Mutex
 	inflight map[string]*cacheFlight
-	failed   map[string]struct{}
+	// failed holds the remembered refusals, each until when (cacheRefusalTTL).
+	failed map[string]time.Time
 	// evictMu serializes the sweeps; lowDisk is set while the disk guard is
 	// refusing, so it warns once per spell.
 	evictMu sync.Mutex
@@ -149,7 +158,8 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		freeSpace: func(path string) (uint64, bool) { _, free, ok := diskspace.Of(path); return free, ok },
 		run:       runFFmpeg,
 		inflight:  map[string]*cacheFlight{},
-		failed:    map[string]struct{}{},
+		now:       time.Now,
+		failed:    map[string]time.Time{},
 		reserved:  new(atomic.Int64),
 		warming:   map[string]struct{}{},
 		warmSlot:  make(chan struct{}, 1),
@@ -303,7 +313,7 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, i
 	if f, ok := m.hit(key); ok {
 		return f, nil, nil
 	}
-	if _, refused := m.failed[key]; refused {
+	if m.refusedLocked(key) {
 		return nil, nil, ErrRefused
 	}
 	fl, waiting := m.inflight[key]
@@ -324,8 +334,8 @@ const (
 	CacheReady CacheState = "ready"
 	// CachePending: the copy is being made or waits for a slot.
 	CachePending CacheState = "pending"
-	// CacheFailed: ffmpeg refused the file (remembered until it changes), or
-	// there is no regular file at the path.
+	// CacheFailed: ffmpeg refused the file (remembered for cacheRefusalTTL or
+	// until it changes), or there is no regular file at the path.
 	CacheFailed CacheState = "failed"
 	// CacheMissing: neither cached nor being made (never asked for, evicted,
 	// or a run that failed for a reason not the file's).
@@ -344,7 +354,7 @@ func (m *FileCache) Status(abs string) (CacheState, int64) {
 	// place before it leaves inflight), so the cache file is stat'ed once,
 	// outside the lock.
 	m.mu.Lock()
-	_, refused := m.failed[key]
+	refused := m.refusedLocked(key)
 	_, running := m.inflight[key]
 	m.mu.Unlock()
 	switch {
@@ -451,18 +461,44 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, abs string, in
 	err := m.make(runCtx, ffmpegPath, key, abs, info)
 	m.mu.Lock()
 	if errors.Is(err, ErrRefused) {
-		if len(m.failed) >= cacheFailedMax {
-			for k := range m.failed { // drop one: the map stays bounded
-				delete(m.failed, k)
-				break
-			}
-		}
-		m.failed[key] = struct{}{}
+		m.rememberLocked(key)
 	}
 	delete(m.inflight, key)
 	fl.err = err
 	m.mu.Unlock()
 	close(fl.done)
+}
+
+// refusedLocked reports whether key's refusal is remembered and not expired,
+// forgetting an expired one. The caller holds mu.
+func (m *FileCache) refusedLocked(key string) bool {
+	until, ok := m.failed[key]
+	if ok && !m.now().Before(until) {
+		delete(m.failed, key)
+		return false
+	}
+	return ok
+}
+
+// rememberLocked remembers key's refusal for cacheRefusalTTL, the map bounded
+// by cacheFailedMax (expired entries go first, else an arbitrary one). The
+// caller holds mu.
+func (m *FileCache) rememberLocked(key string) {
+	now := m.now()
+	if len(m.failed) >= cacheFailedMax {
+		for k, until := range m.failed {
+			if !now.Before(until) {
+				delete(m.failed, k)
+			}
+		}
+		for k := range m.failed {
+			if len(m.failed) < cacheFailedMax {
+				break
+			}
+			delete(m.failed, k)
+		}
+	}
+	m.failed[key] = now.Add(cacheRefusalTTL)
 }
 
 // make writes key's copy: a temporary .part file, synced and renamed into
@@ -530,7 +566,7 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 		return ErrUnavailable
 	}
 	if m.spec.check != nil {
-		if err := m.spec.check(ctx, src, info.Size(), tmpName); errors.Is(err, errNoAudio) {
+		if err := m.spec.check(ctx, src, info.Size(), tmpName); errors.Is(err, errCopyRefused) {
 			return m.refuse(src.Name(), err)
 		} else if err != nil {
 			return err
@@ -546,8 +582,12 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	return nil
 }
 
-// errNoAudio is the spec's check refusing a copy ffmpeg wrote and exited 0 on.
-var errNoAudio = errors.New("ffmpeg exited 0 but the copy holds no audio")
+// errCopyRefused is the spec's check refusing a copy ffmpeg wrote and exited 0
+// on: remembered as ffmpeg's own refusal is.
+var errCopyRefused = errors.New("ffmpeg exited 0 but the copy is refused")
+
+// errNoAudio is a copy that holds no audio track.
+var errNoAudio = fmt.Errorf("%w: it holds no audio", errCopyRefused)
 
 // refuse logs ffmpeg's refusal (err) of the source at path and returns it as
 // ErrRefused, which lead remembers.
@@ -567,7 +607,9 @@ func unchanged(src *os.File, info os.FileInfo) bool {
 // exit status before it wrote anything to out (a muxer checks the streams as
 // it starts; a source with no audio stream fails its -map). A run that didn't
 // start, was killed, or failed partway (a full disk, a read error) is not the
-// file's, so it isn't remembered.
+// file's, so it isn't remembered. One that is may still be the environment's
+// (an EIO at open, an ffmpeg without the encoder): the memory expires
+// (cacheRefusalTTL).
 func refused(err error, out string) bool {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() <= 0 {

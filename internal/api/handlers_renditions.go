@@ -24,7 +24,7 @@ const (
 	codeRenditionPending     = "rendition_pending"     // 503: still encoding (Retry-After)
 	codeRenditionUnavailable = "rendition_unavailable" // 404: no ffmpeg or no data dir
 	codeBadRendition         = "bad_rendition"         // 400: unknown kind, or a podcast library
-	codeRenditionFailed      = "rendition_failed"      // 422: ffmpeg refused the file (remembered)
+	codeRenditionFailed      = "rendition_failed"      // 422: ffmpeg refused the file, or its copy came out short (remembered for an hour)
 	codeRenditionError       = "rendition_error"       // 503: the encode failed for a reason not the file's (Retry-After)
 )
 

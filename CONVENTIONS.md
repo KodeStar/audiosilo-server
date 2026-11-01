@@ -879,7 +879,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
+  failed partway, a full disk or a read error, is not one) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
+  environment's, an EIO at open, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
   as they are for no regular file at the path (a 404),
   so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
   running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
@@ -966,14 +967,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
   chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
   source's exact duration (`metadata.ExactDuration`, the in-process probe; skipped when it is unsure, as for a VBR
-  MP3 with no Xing/VBRI header, or can't measure the copy) is not cached and not remembered (503
-  `rendition_error`, the next request encodes again). The cache is the remux's `media.FileCache` over another `cacheSpec`: key
+  MP3 with no Xing/VBRI header, or can't measure the copy) is not cached and is remembered as a refusal (422
+  `rendition_failed`, state `failed`), since a source short itself (a truncated MP3 whose Xing header names the
+  whole length) would otherwise be encoded again on every request; like every refusal it is forgotten after an
+  hour (`cacheRefusalTTL`), so a read error partway is tried again then. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
   sha256(abs, size, mtime, `watch-v1`), so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
   of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
   reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
   source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
   audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
-  without the fd protocol; `metadata.MP4HasTrack`) remembered. A failed run's error carries the first and last
+  without the fd protocol; `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
+  changes. A failed run's error carries the first and last
   2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
@@ -983,8 +987,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
-  live transcode. 422 `rendition_failed` is ffmpeg's remembered refusal; 503 `rendition_error` (`Retry-After:
-  60`) a failure not the file's (disk guard, a run killed partway, a short copy, the source changed). `POST
+  live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour);
+  503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
+  source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
   (`FileCache.Queue`) and answers 202; at most 256 encodes wait or run across the server, a stream's included
   (`cacheSpec.queueMax`): past it a prepared file stays `missing` for the client to ask again and a cold stream

@@ -2,7 +2,6 @@ package media
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -63,10 +62,12 @@ func renditionETag(key string, size int64) string {
 const renditionShortMax = 1.0
 
 // errShortCopy is a watch copy shorter than its source by more than
-// renditionShortMax: not cached, and not remembered (a read error partway, an
-// EIO from a NAS, makes ffmpeg stop and still exit 0, since there is no
-// -xerror), so the next request encodes it again.
-var errShortCopy = errors.New("the rendition is shorter than its source")
+// renditionShortMax: not cached, and remembered as a refusal (for
+// cacheRefusalTTL), since a source that is short itself (a truncated MP3 whose
+// Xing header still names the whole length) would be encoded again on every
+// request; a read error partway (an EIO from a NAS, which ends the encode
+// with exit 0, since there is no -xerror) is tried again once it expires.
+var errShortCopy = fmt.Errorf("%w: the rendition is shorter than its source", errCopyRefused)
 
 // renditionCheck looks at the watch copy ffmpeg wrote at out from src (size
 // bytes): errNoAudio when it holds no audio track (ffmpeg exits 0 having
