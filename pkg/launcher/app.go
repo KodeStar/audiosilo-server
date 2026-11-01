@@ -267,7 +267,7 @@ func Run(ctx context.Context, opts Options) error {
 	a.SetBaseContext(baseCtx)
 	defer func() {
 		stopBase()
-		a.WaitRemuxes()
+		a.WaitMediaCaches()
 	}()
 	a.StartChapterChecks(ctx)
 	a.StartModules(ctx)

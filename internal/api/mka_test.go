@@ -148,7 +148,7 @@ func (m *mkaEnv) cachedFiles(t *testing.T) int {
 func (m *mkaEnv) holdRemuxes(t *testing.T) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
-	m.api.remux.HoldRemuxesForTests(gate)
+	m.api.remux.HoldRunsForTests(gate)
 	var once sync.Once
 	release = func() { once.Do(func() { close(gate) }) }
 	t.Cleanup(release)

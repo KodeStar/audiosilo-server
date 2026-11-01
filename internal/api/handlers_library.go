@@ -670,7 +670,7 @@ func (a *API) directPlayable(book *catalog.Book) bool {
 // warmRemux starts, in the background, the remuxes of the book's MP3-in-MKA
 // files while the remux is on, so the player's first stream finds them cached
 // (a cold remux of a long file takes seconds, past a player's stall timer). It
-// never blocks: media.Remuxer.WarmAll runs them one at a time under the
+// never blocks: media.FileCache.WarmAll runs them one at a time under the
 // server's context, skipping the cached and the known refusals. A podcast
 // library's episodes are not warmed: their stream never remuxes.
 func (a *API) warmRemux(lib *catalog.Library, book *catalog.Book) {
@@ -717,12 +717,17 @@ const remuxDownloadWait = 45 * time.Second
 // one whose remux can't be had now (still running after remuxColdWait, or
 // remuxDownloadWait for a download or with every transcode slot busy; low disk,
 // an ffmpeg failure) is transcoded live, as ?transcode=1 would, since
-// direct_playable told the web player it needn't ask for that. The path is the actual audio file (a chapter's
-// file_path).
+// direct_playable told the web player it needn't ask for that. ?rendition=watch
+// asks for the file's watch rendition instead (serveRendition), whatever else
+// the query says. The path is the actual audio file (a chapter's file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	lib, rel, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	if q := r.URL.Query(); q.Has("rendition") {
+		a.serveRendition(w, r, lib, rel, q.Get("rendition"))
 		return
 	}
 	if lib.Kind == catalog.KindPodcasts {
@@ -778,18 +783,18 @@ func (a *API) transcodeHeld(w http.ResponseWriter, r *http.Request, abs, downloa
 	media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 }
 
-// serveRemuxed answers with abs's remuxed MP3 (media.Remuxer) with Range and
+// serveRemuxed answers with abs's remuxed MP3 (media.NewRemuxer) with Range and
 // its own validators: a strong ETag from the cache key and the copy's mtime as
 // Last-Modified, so an If-Range or If-Modified-Since a client kept from the
 // stored Matroska (a 2.4.x download) never earns a 304 or MP3 bytes spliced
 // onto Matroska. When the remux can't be had now (still running after
-// remuxColdWait, ErrRemuxUnavailable, an ffmpeg or cache failure) it answers
+// remuxColdWait, ErrUnavailable, an ffmpeg or cache failure) it answers
 // with the live transcode, the remux going on for the next request. A remux still
 // running is waited for instead (server#212), up to remuxDownloadWait, when the
 // request is a download (whose saved copy would otherwise be the lossy
 // transcode) or every transcode slot is busy (which would otherwise be a 503). It reports
 // false, having written nothing, when the stored file should be served instead
-// (ErrNotRemuxable: not MP3 inside, or no regular file there); true also when
+// (ErrRefused: not MP3 inside, or no regular file there); true also when
 // the request went away while waiting.
 func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, rel, abs string, download bool) bool {
 	wait, cancel := context.WithTimeout(r.Context(), a.remuxWait)
@@ -819,7 +824,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 		switch {
 		case r.Context().Err() != nil:
 			return true
-		case errors.Is(err, media.ErrNotRemuxable):
+		case errors.Is(err, media.ErrRefused):
 			return false
 		case a.baseCtx.Err() != nil:
 			// The server is stopping, and its remux with it: no new transcode now.
@@ -827,7 +832,7 @@ func (a *API) serveRemuxed(w http.ResponseWriter, r *http.Request, lib int64, re
 			return true
 		case running:
 			// Still remuxing (it goes on): this request is transcoded.
-		case !errors.Is(err, media.ErrRemuxUnavailable):
+		case !errors.Is(err, media.ErrUnavailable):
 			a.log.Warn("remux failed: transcoding Matroska instead", "path", abs, "err", err)
 		}
 		downloadName := ""

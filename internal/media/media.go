@@ -1,8 +1,10 @@
 // Package media serves audiobook bytes to clients. It uses http.ServeContent so
 // HTTP Range requests (seek/scrub, resumable downloads) work out of the box, and
 // extracts embedded cover art on demand. For files whose codec a browser can't
-// decode it can transcode to MP3 on the fly via ffmpeg (see Transcode), and it
-// remuxes MP3 in Matroska into a cached plain MP3 (see Remuxer).
+// decode it can transcode to MP3 on the fly via ffmpeg (see Transcode). Two
+// FileCaches keep copies ffmpeg made: MP3 in Matroska remuxed into a plain MP3
+// (see NewRemuxer), and a small AAC copy of a file for a watch (see
+// NewRenditionCache).
 package media
 
 import (
@@ -35,7 +37,7 @@ var browserCodecs = map[string]bool{
 // containerFormats are the book formats (file extensions, no dot) whose
 // container no browser plays, whatever the codec inside: Matroska audio (#161).
 // DirectPlayable is about the stored bytes; MP3 in .mka is served as its remux
-// to MP3 while ffmpeg is configured (Remuxer, Remuxable), which the API's
+// to MP3 while ffmpeg is configured (NewRemuxer, Remuxable), which the API's
 // direct_playable takes into account.
 var containerFormats = map[string]bool{"mka": true}
 

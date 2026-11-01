@@ -87,9 +87,9 @@ func (p probe) duration(t *testing.T) float64 {
 	return d
 }
 
-// countingRemuxer is a Remuxer over a fresh cache dir whose ffmpeg runs are
+// countingRemuxer is a remux cache over a fresh cache dir whose ffmpeg runs are
 // counted; gate, when set, holds each run until it is closed.
-func countingRemuxer(t *testing.T, gate chan struct{}) (*Remuxer, *atomic.Int32) {
+func countingRemuxer(t *testing.T, gate chan struct{}) (*FileCache, *atomic.Int32) {
 	t.Helper()
 	m, err := NewRemuxer(filepath.Join(t.TempDir(), "cache", "remux"), nil)
 	if err != nil {
@@ -273,8 +273,8 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	m, runs := countingRemuxer(t, nil)
 	ctx := context.Background()
 	for range 2 {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrNotRemuxable) {
-			t.Fatalf("open = %v, want ErrNotRemuxable", err)
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) {
+			t.Fatalf("open = %v, want ErrRefused", err)
 		}
 	}
 	if n := runs.Load(); n != 1 {
@@ -285,7 +285,7 @@ func TestRemuxerRefusesOtherCodecs(t *testing.T) {
 	}
 	later := time.Now().Add(time.Hour)
 	_ = os.Chtimes(src, later, later)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrNotRemuxable) || runs.Load() != 2 {
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
 		t.Fatalf("changed file: %v after %d runs, want a retry", err, runs.Load())
 	}
 }
@@ -298,19 +298,19 @@ func TestRemuxerDiskGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, runs := countingRemuxer(t, nil)
-	m.freeSpace = func(string) (uint64, bool) { return remuxMinFree, true }
+	m.freeSpace = func(string) (uint64, bool) { return cacheMinFree, true }
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) || runs.Load() != 0 {
-		t.Fatalf("open = %v after %d runs, want ErrRemuxUnavailable and no run", err, runs.Load())
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
+		t.Fatalf("open = %v after %d runs, want ErrUnavailable and no run", err, runs.Load())
 	}
 	// Room for this remux alone, but another one still writing has taken it.
-	m.freeSpace = func(string) (uint64, bool) { return 2 * remuxMinFree, true }
-	m.reserved.Store(remuxMinFree)
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) || runs.Load() != 0 {
-		t.Fatalf("open beside a remux writing = %v after %d runs, want ErrRemuxUnavailable", err, runs.Load())
+	m.freeSpace = func(string) (uint64, bool) { return 2 * cacheMinFree, true }
+	m.reserved.Store(cacheMinFree)
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
+		t.Fatalf("open beside a remux writing = %v after %d runs, want ErrUnavailable", err, runs.Load())
 	}
-	if n := m.reserved.Load(); n != remuxMinFree {
-		t.Fatalf("reserved = %d after the refusal, want %d (its own released)", n, int64(remuxMinFree))
+	if n := m.reserved.Load(); n != cacheMinFree {
+		t.Fatalf("reserved = %d after the refusal, want %d (its own released)", n, int64(cacheMinFree))
 	}
 	// No regular file at the path: not remuxable, so the stored file's answer
 	// (a 404) is given.
@@ -319,15 +319,15 @@ func TestRemuxerDiskGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{filepath.Join(t.TempDir(), "missing.mka"), folder} {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", p); !errors.Is(err, ErrNotRemuxable) || runs.Load() != 0 {
-			t.Fatalf("open %s = %v after %d runs, want ErrNotRemuxable and no run", p, err, runs.Load())
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", p); !errors.Is(err, ErrRefused) || runs.Load() != 0 {
+			t.Fatalf("open %s = %v after %d runs, want ErrRefused and no run", p, err, runs.Load())
 		}
 	}
 }
 
-// fakeRemuxer is a Remuxer over a fresh cache dir whose ffmpeg run is run (given
+// fakeRemuxer is a remux cache over a fresh cache dir whose ffmpeg run is run (given
 // the source and the copy's path), with a source file of a few bytes at src.
-func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *Remuxer, src string) {
+func fakeRemuxer(t *testing.T, run func(src, out string) error) (m *FileCache, src string) {
 	t.Helper()
 	src = filepath.Join(t.TempDir(), "book.mka")
 	if err := os.WriteFile(src, []byte("matroska bytes"), 0o644); err != nil {
@@ -363,7 +363,7 @@ func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
 	})
 	ctx := context.Background()
 	for range 2 {
-		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrNotRemuxable) {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrRefused) {
 			t.Fatalf("open = %v, want a failure that is not a refusal", err)
 		}
 	}
@@ -406,8 +406,8 @@ func TestRemuxerSourceChangedWhileRead(t *testing.T) {
 		return os.WriteFile(out, []byte("ID3 copy"), 0o600)
 	})
 	ctx := context.Background()
-	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRemuxUnavailable) {
-		t.Fatalf("open = %v, want ErrRemuxUnavailable", err)
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("open = %v, want ErrUnavailable", err)
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
 		t.Fatalf("cache holds %d files, want none", len(entries))
@@ -509,7 +509,7 @@ func TestRemuxerHeldWaiterTimesOut(t *testing.T) {
 	writeMKA(t, src, "mp3")
 	m, runs := countingRemuxer(t, nil)
 	gate := make(chan struct{})
-	m.HoldRemuxesForTests(gate)
+	m.HoldRunsForTests(gate)
 	wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if _, _, err := m.Open(wait, context.Background(), "ffmpeg", src); !errors.Is(err, context.DeadlineExceeded) {
@@ -529,7 +529,7 @@ func TestRemuxerHeldWaiterTimesOut(t *testing.T) {
 }
 
 // TestRemuxerWarmBounded: a book's second warm while its first is queued does
-// nothing, and past remuxWarmQueue queued warms the rest are dropped.
+// nothing, and past cacheWarmQueue queued warms the rest are dropped.
 func TestRemuxerWarmBounded(t *testing.T) {
 	t.Parallel()
 	m, runs := countingRemuxer(t, nil)
@@ -539,14 +539,14 @@ func TestRemuxerWarmBounded(t *testing.T) {
 	book := missing(0)
 	m.WarmAll(ctx, "ffmpeg", book)
 	m.WarmAll(ctx, "ffmpeg", book)
-	for i := 1; i < 2*remuxWarmQueue; i++ {
+	for i := 1; i < 2*cacheWarmQueue; i++ {
 		m.WarmAll(ctx, "ffmpeg", missing(i))
 	}
 	m.warmMu.Lock()
 	n := len(m.warming)
 	m.warmMu.Unlock()
-	if n != remuxWarmQueue {
-		t.Fatalf("%d warms queued, want %d", n, remuxWarmQueue)
+	if n != cacheWarmQueue {
+		t.Fatalf("%d warms queued, want %d", n, cacheWarmQueue)
 	}
 	<-m.warmSlot
 	m.Wait()

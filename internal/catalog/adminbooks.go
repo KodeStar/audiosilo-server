@@ -192,7 +192,7 @@ func (b *Book) PlaysInBrowsers() bool {
 }
 
 // PlaysRemuxed reports whether the book plays in browsers once its Matroska
-// files are served as their remux to MP3 (media.Remuxer): its codec is MP3 and
+// files are served as their remux to MP3 (media.NewRemuxer): its codec is MP3 and
 // every file is in a container browsers play or is an .mka holding MP3. A
 // folder book's codec is only its first part's, so each .mka part is judged by
 // its own codec (the book's for a part indexed before per-file codecs were

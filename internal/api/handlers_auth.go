@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
 // pairingTTL bounds how long an UNLINKED pairing token is valid (/auth/pair,
@@ -56,6 +57,9 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
 		},
+		// The rendition kinds GET /stream?rendition= serves (Track W2), [] while
+		// capabilities.renditions is false.
+		"renditions": a.renditionKinds(),
 		"demo": map[string]bool{
 			"enabled": a.config().Demo.Enabled, // clients show a "Try the demo" affordance
 		},
@@ -69,6 +73,15 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		info["bridge"] = bridgeOn
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// renditionKinds are the rendition kinds this server serves now: none while
+// renditions are off.
+func (a *API) renditionKinds() []string {
+	if !a.renditionsOn() {
+		return []string{}
+	}
+	return media.RenditionKinds
 }
 
 // signedIn reports whether r carries a session or an API key the server
@@ -127,6 +140,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"upcoming_calendar":  a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
 		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
 		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
+		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
 	}
 }
 
