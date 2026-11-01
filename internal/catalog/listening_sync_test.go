@@ -1000,3 +1000,27 @@ func TestSyncDivergedApplyKeepsRowTime(t *testing.T) {
 		t.Fatalf("an older PUT moved the place to %v", p.Position)
 	}
 }
+
+// server#284: a finish and an unfinish keep that chain: after a diverged span
+// kept the row's later time, the same device's restart later in the batch (the
+// listener finished, changed their mind and started again) is applied, not
+// "older" against the time kept.
+func TestSyncFinishKeepsSpanChain(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 5000, 6000, 10*time.Minute, base(0))), statusApplied, "")
+	a := f.sync(t, f.batch(t, "watch",
+		f.listen("resume", 60000, 61200, 40*time.Minute, base(0)),
+		f.finishEvent(EventFinish, 39*time.Minute+30*time.Second),
+		f.finishEvent(EventUnfinish, 39*time.Minute),
+		f.listen("restart", 0, 480, 30*time.Minute, base(0))))
+	if r := a.Results[0]; r.Status != statusDiverged || r.Kept != "event" {
+		t.Fatalf("first span: %+v", r)
+	}
+	wantResult(t, a.Results[1], statusApplied, "")
+	wantResult(t, a.Results[2], statusApplied, "")
+	wantResult(t, a.Results[3], statusApplied, "")
+	if p := f.progress(t); p.Position != 480 || p.Finished {
+		t.Fatalf("row = %v finished=%v, want the restart's 480, unfinished", p.Position, p.Finished)
+	}
+}

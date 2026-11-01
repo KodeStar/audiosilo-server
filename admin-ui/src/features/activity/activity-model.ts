@@ -307,7 +307,9 @@ export function platformLabel(platform: string): string {
     wearos: 'Wear OS',
     web: 'Web',
   };
-  return known[platform.toLowerCase()] ?? platform;
+  // Own keys only: a platform named "constructor" is not Object's.
+  const key = platform.toLowerCase();
+  return Object.hasOwn(known, key) ? known[key] : platform;
 }
 
 /**

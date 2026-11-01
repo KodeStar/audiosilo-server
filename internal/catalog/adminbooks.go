@@ -212,6 +212,16 @@ func (b *Book) PlaysRemuxed() bool {
 	return true
 }
 
+// AudioFiles is the book's audio files in play order: Files, or for a
+// single-file book (a loose file at the root, a folder of one book per file),
+// which has no book_files rows, the book's own file.
+func (b *Book) AudioFiles() []BookFile {
+	if len(b.Files) == 0 && !b.IsFolder {
+		return []BookFile{{RelPath: b.RelPath, Duration: b.Duration, Format: b.Format, Codec: b.Codec, Size: b.Size}}
+	}
+	return b.Files
+}
+
 // FileRemuxable reports whether the book's file f is an .mka holding MP3, judged
 // by its own codec or, for a part indexed before per-file codecs were recorded,
 // the book's (PlaysRemuxed; the remux warm-up picks its files by it too).

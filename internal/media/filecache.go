@@ -45,9 +45,9 @@ var (
 	// the file changes, or there is no regular file at the path (gone, a
 	// folder).
 	ErrRefused = errors.New("media: ffmpeg refused the file")
-	// ErrUnavailable: the run was skipped (too little free disk for it, the
-	// source changed while it waited or while ffmpeg read it, or its cached copy
-	// went before it could be opened).
+	// ErrUnavailable: the run was skipped (too little free disk for it, as many
+	// runs in flight as the cache allows, the source changed while it waited or
+	// while ffmpeg read it, or its cached copy went before it could be opened).
 	ErrUnavailable = errors.New("media: cached copy unavailable")
 	// ErrNoSource joins ErrRefused when there is no regular file at the path,
 	// so a caller that answers that case itself (a rendition's 404) can tell it
@@ -74,11 +74,17 @@ type cacheSpec struct {
 	maxBytes   int64
 	concurrent int
 	timeout    time.Duration
-	// queueMax bounds the runs Queue starts while that many are in flight (0:
-	// no Queue).
+	// queueMax bounds the runs in flight: with that many, neither Open nor
+	// Queue starts another (0: Open is unbounded, and Queue starts nothing).
 	queueMax int
 	// args is the ffmpeg command line reading in and writing out.
 	args func(in inputSpec, out string) []string
+	// check, when set, looks at a copy ffmpeg wrote and exited 0 on (out, the
+	// .part) beside its source (src, size bytes, unchanged since the key was
+	// made): an error matching errNoAudio is ffmpeg's refusal, remembered as an
+	// exit status before anything was written is; any other is a copy not to
+	// cache now (a short one, one that can't be read), tried again next time.
+	check func(ctx context.Context, src *os.File, size int64, out string) error
 	// etag is the strong validator of key's copy of size bytes.
 	etag func(key string, size int64) string
 	// refused and lowDisk are the log lines of a refusal and of the disk guard.
@@ -109,8 +115,9 @@ type FileCache struct {
 	evictMu sync.Mutex
 	lowDisk atomic.Bool
 	// reserved is the source bytes of the runs past the disk guard and still
-	// writing, which the guard counts as taken.
-	reserved atomic.Int64
+	// writing, which the guard counts as taken: this cache's, and those of the
+	// caches on its disk that share it (ShareDiskGuard).
+	reserved *atomic.Int64
 	// running counts the runs and background warms under way (Wait).
 	running sync.WaitGroup
 	// warming holds the warms under way or queued, by their first path (so a
@@ -143,6 +150,7 @@ func newFileCache(dir string, spec cacheSpec, log *slog.Logger) (*FileCache, err
 		run:       runFFmpeg,
 		inflight:  map[string]*cacheFlight{},
 		failed:    map[string]struct{}{},
+		reserved:  new(atomic.Int64),
 		warming:   map[string]struct{}{},
 		warmSlot:  make(chan struct{}, 1),
 	}
@@ -184,6 +192,12 @@ func (m *FileCache) HoldRunsForTests(gate <-chan struct{}) {
 		return run(ctx, ffmpegPath, args, stdin)
 	}
 }
+
+// ShareDiskGuard makes other's disk guard count m's runs still writing, and m's
+// count other's (one reservation), for two caches on one disk (the remux and
+// the rendition caches, both under <data>/cache), so a run in each can't pass
+// on the same free space. Call it before either cache's first run.
+func (m *FileCache) ShareDiskGuard(other *FileCache) { other.reserved = m.reserved }
 
 // Wait blocks until the runs and background warms under way have ended (the
 // launcher at shutdown, once their context is cancelled; tests, before their
@@ -228,8 +242,9 @@ func source(abs string) (os.FileInfo, error) {
 // request that leaves, or stops waiting, doesn't stop the run the others wait
 // for. The errors are ErrRefused (with ErrNoSource when abs is no regular
 // file), ErrPending wrapping ctx's error when ctx ended first, or one that says
-// the copy can't be had now: ErrUnavailable, runCtx's, or a failure to read
-// abs, run ffmpeg or write the cache.
+// the copy can't be had now: ErrUnavailable (also for a cold key while the
+// spec's queueMax runs are in flight), runCtx's, or a failure to read abs, run
+// ffmpeg or write the cache.
 func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*os.File, string, error) {
 	info, err := source(abs)
 	if err != nil {
@@ -239,6 +254,9 @@ func (m *FileCache) Open(ctx, runCtx context.Context, ffmpegPath, abs string) (*
 	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, true)
 	if f != nil || err != nil {
 		return m.opened(key, f, err)
+	}
+	if fl == nil {
+		return nil, "", ErrUnavailable
 	}
 	select {
 	case <-fl.done:
@@ -271,8 +289,8 @@ func (m *FileCache) opened(key string, f *os.File, err error) (*os.File, string,
 
 // begin is a request for key's copy of abs (info is what the key was made
 // from): the copy when cached (marked used), else ErrRefused for a known
-// refusal, else the flight making it, started under runCtx when there is none
-// and start allows it (else a nil flight).
+// refusal, else the flight making it, started under runCtx when there is none,
+// start allows it and the spec's queueMax isn't reached (else a nil flight).
 func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, info os.FileInfo, start bool) (*os.File, *cacheFlight, error) {
 	// A hit needs no lock (players send many Range requests). A miss is checked
 	// again under mu, so a leader that renamed its copy into place and left
@@ -289,7 +307,7 @@ func (m *FileCache) begin(runCtx context.Context, ffmpegPath, key, abs string, i
 		return nil, nil, ErrRefused
 	}
 	fl, waiting := m.inflight[key]
-	if !waiting && start {
+	if !waiting && start && (m.spec.queueMax == 0 || len(m.inflight) < m.spec.queueMax) {
 		fl = &cacheFlight{done: make(chan struct{})}
 		m.inflight[key] = fl
 		m.running.Add(1)
@@ -351,10 +369,7 @@ func (m *FileCache) Queue(runCtx context.Context, ffmpegPath, abs string) (Cache
 		return CacheFailed, 0
 	}
 	key := m.key(abs, info)
-	m.mu.Lock()
-	room := len(m.inflight) < m.spec.queueMax
-	m.mu.Unlock()
-	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, room)
+	f, fl, err := m.begin(runCtx, ffmpegPath, key, abs, info, m.spec.queueMax > 0)
 	switch {
 	case f != nil:
 		defer f.Close()
@@ -467,10 +482,11 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
 		return err
 	}
-	// The guard counts the other runs still writing as taken (all of them: the
-	// part written already is counted twice, on the safe side), so two at once
-	// can't each pass on the same free space. The source's size stands for the
-	// copy's: a remux's is about it, a rendition's smaller.
+	// The guard counts the other runs still writing as taken (all of them, the
+	// sharing caches' too: the part written already is counted twice, on the
+	// safe side), so two at once can't each pass on the same free space. The
+	// source's size stands for the copy's: a remux's is about it, a rendition's
+	// smaller.
 	size := info.Size()
 	need := uint64(m.reserved.Add(size))
 	defer m.reserved.Add(-size)
@@ -508,11 +524,17 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 		if !refused(err, tmpName) {
 			return err
 		}
-		m.log.Info(m.spec.refused, "path", src.Name(), "err", err)
-		return fmt.Errorf("%w: %v", ErrRefused, err)
+		return m.refuse(src.Name(), err)
 	}
 	if !unchanged(src, info) {
 		return ErrUnavailable
+	}
+	if m.spec.check != nil {
+		if err := m.spec.check(ctx, src, info.Size(), tmpName); errors.Is(err, errNoAudio) {
+			return m.refuse(src.Name(), err)
+		} else if err != nil {
+			return err
+		}
 	}
 	if err := syncFile(tmpName); err != nil {
 		return err
@@ -522,6 +544,16 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	}
 	m.evict(key)
 	return nil
+}
+
+// errNoAudio is the spec's check refusing a copy ffmpeg wrote and exited 0 on.
+var errNoAudio = errors.New("ffmpeg exited 0 but the copy holds no audio")
+
+// refuse logs ffmpeg's refusal (err) of the source at path and returns it as
+// ErrRefused, which lead remembers.
+func (m *FileCache) refuse(path string, err error) error {
+	m.log.Info(m.spec.refused, "path", path, "err", err)
+	return fmt.Errorf("%w: %v", ErrRefused, err)
 }
 
 // unchanged reports whether the open source still has the size and mtime its
@@ -561,16 +593,56 @@ func syncFile(path string) error {
 }
 
 // runFFmpeg runs ffmpegPath with args and stdin under ctx; the error carries
-// its stderr.
+// the start and end of its stderr (stderrLog).
 func runFFmpeg(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	cmd.Stdin = stdin
-	var stderr strings.Builder
+	var stderr stderrLog
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// stderrKeep is how much of a run's stderr a stderrLog keeps at each end.
+const stderrKeep = 2 << 10
+
+// stderrLog keeps the first and the last stderrKeep bytes written to it, so a
+// failed run's error stays small: without -xerror ffmpeg logs a line for every
+// damaged frame it skips (megabytes for a badly damaged MP3), and the error is
+// logged by every request that waited on the run.
+type stderrLog struct {
+	head, tail []byte
+	dropped    int
+}
+
+func (l *stderrLog) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := stderrKeep - len(l.head); room > 0 {
+		k := min(room, len(p))
+		l.head = append(l.head, p[:k]...)
+		p = p[k:]
+	}
+	l.tail = append(l.tail, p...)
+	// Trimmed once it holds twice what it keeps, so each byte is copied at
+	// most once on the way out.
+	if over := len(l.tail) - stderrKeep; over >= stderrKeep {
+		l.dropped += over
+		l.tail = append(l.tail[:0], l.tail[over:]...)
+	}
+	return n, nil
+}
+
+func (l *stderrLog) String() string {
+	tail, dropped := l.tail, l.dropped
+	if over := len(tail) - stderrKeep; over > 0 {
+		tail, dropped = tail[over:], dropped+over
+	}
+	if dropped == 0 {
+		return string(l.head) + string(tail)
+	}
+	return string(l.head) + "\n[" + strconv.Itoa(dropped) + " bytes of ffmpeg's log left out]\n" + string(tail)
 }
 
 // evict trims the cache to its cap, least recently used (oldest mtime) first,

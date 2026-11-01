@@ -81,7 +81,7 @@ func (a *API) renditionKinds() []string {
 	if !a.renditionsOn() {
 		return []string{}
 	}
-	return media.RenditionKinds
+	return []string{media.RenditionWatch}
 }
 
 // signedIn reports whether r carries a session or an API key the server

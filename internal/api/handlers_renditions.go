@@ -113,47 +113,53 @@ type renditionFile struct {
 // queued (encoded one at a time in the background), and the answer, 202, says
 // where each stands.
 func (a *API) handlePrepareRenditions(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Kind string `json:"kind"`
-	}
-	a.renditionsOfBook(w, r, http.StatusAccepted, func() (string, bool) {
-		if err := decodeJSONOptional(r, &in, 0); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request")
-			return "", false
-		}
-		return in.Kind, true
-	}, func(abs string) (media.CacheState, int64) { return a.renditions.Queue(a.baseCtx, a.ffmpeg, abs) })
+	a.renditionsOfBook(w, r, true)
 }
 
 // handleRenditionStatus is GET /libraries/{id}/renditions?path=<book>&kind=watch:
 // where each audio file's rendition stands, queueing nothing.
 func (a *API) handleRenditionStatus(w http.ResponseWriter, r *http.Request) {
-	a.renditionsOfBook(w, r, http.StatusOK, func() (string, bool) { return r.URL.Query().Get("kind"), true },
-		func(abs string) (media.CacheState, int64) { return a.renditions.Status(abs) })
+	a.renditionsOfBook(w, r, false)
 }
 
 // renditionsOfBook is the two renditions routes: the book at ?path= scope-checked
-// as /item (403 outside the grant, 404 no book), the kind (readKind) checked,
-// then each of its files, in play order, through state; answered with status.
-func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, status int, readKind func() (string, bool), state func(abs string) (media.CacheState, int64)) {
+// as /item (403 outside the grant, 404 no book), the kind checked (the body's
+// for a prepare, else ?kind=), then each of its audio files, in play order,
+// queued (prepare: 202) or only read (200).
+func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare bool) {
 	lib, path, scope, code, msg := a.authorizedScope(r)
 	if code != 0 {
 		writeError(w, code, msg)
 		return
 	}
-	kind, ok := readKind()
-	if !ok || !a.renditionKindAllowed(w, lib, kind) {
+	kind, status := r.URL.Query().Get("kind"), http.StatusOK
+	if prepare {
+		var in struct {
+			Kind string `json:"kind"`
+		}
+		if err := decodeJSONOptional(r, &in, 0); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		kind, status = in.Kind, http.StatusAccepted
+	}
+	if !a.renditionKindAllowed(w, lib, kind) {
 		return
 	}
 	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
 	if !ok {
 		return
 	}
-	files := make([]renditionFile, 0, len(book.Files))
-	for _, f := range book.Files {
+	audio := book.AudioFiles()
+	files := make([]renditionFile, 0, len(audio))
+	for _, f := range audio {
 		out := renditionFile{Path: f.RelPath, State: media.CacheFailed}
 		if abs, err := library.SafeJoin(lib.Root, f.RelPath); err == nil {
-			out.State, out.Bytes = state(abs)
+			if prepare {
+				out.State, out.Bytes = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
+			} else {
+				out.State, out.Bytes = a.renditions.Status(abs)
+			}
 		}
 		files = append(files, out)
 	}

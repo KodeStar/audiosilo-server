@@ -257,6 +257,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		} else {
 			a.renditions = rc
 		}
+		if a.remux != nil && a.renditions != nil {
+			a.remux.ShareDiskGuard(a.renditions) // one disk (<data>/cache): one reservation
+		}
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
 	// The runner exists without a service too, for clearing matches: its runs

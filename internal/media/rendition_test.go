@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 func TestRenditionArgs(t *testing.T) {
@@ -202,19 +204,25 @@ func TestRenditionEncodes(t *testing.T) {
 }
 
 // fakeRenditions is a rendition cache over a fresh dir whose ffmpeg run is run
-// (given the copy's path), held until gate closes when gate is set.
+// (given the copy's path), held until gate closes when gate is set (or the test
+// ends, before the cache is waited for, so a failed test never hangs). Its
+// copies are not MP4s, so the spec's check is off.
 func fakeRenditions(t *testing.T, gate chan struct{}, run func(out string) error) (*FileCache, *atomic.Int32) {
 	t.Helper()
 	m, err := NewRenditionCache(filepath.Join(t.TempDir(), "watch"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.spec.check = nil
 	var runs atomic.Int32
+	ended := make(chan struct{})
 	m.run = func(ctx context.Context, _ string, args []string, _ *os.File) error {
 		runs.Add(1)
 		if gate != nil {
 			select {
 			case <-gate:
+			case <-ended:
+				return context.Canceled
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -222,6 +230,7 @@ func fakeRenditions(t *testing.T, gate chan struct{}, run func(out string) error
 		return run(strings.TrimPrefix(args[len(args)-1], "file:"))
 	}
 	t.Cleanup(m.Wait)
+	t.Cleanup(func() { close(ended) }) // runs first
 	return m, &runs
 }
 
@@ -303,8 +312,9 @@ func TestRenditionQueueAndStatus(t *testing.T) {
 	}
 }
 
-// TestRenditionQueueBounded: past renditionQueueMax files in flight a Queue
-// starts nothing and answers missing.
+// TestRenditionQueueBounded: past renditionQueueMax files in flight neither a
+// Queue nor a stream's Open starts a run: Queue answers missing, Open
+// ErrUnavailable (abandoned stream requests can't pile up encodes).
 func TestRenditionQueueBounded(t *testing.T) {
 	t.Parallel()
 	gate := make(chan struct{})
@@ -320,6 +330,55 @@ func TestRenditionQueueBounded(t *testing.T) {
 	if want := []CacheState{CachePending, CachePending, CacheMissing}; !slices.Equal(states, want) {
 		t.Fatalf("queued %v, want %v", states, want)
 	}
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", srcFile(t, "4.mp3")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("open past the bound = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestRenditionNoAudioRefused: an M4B whose index sits at its end, read
+// through pipe:0 (an ffmpeg without the fd protocol), makes ffmpeg exit 0 with
+// an MP4 holding no track. That copy is never cached: the file is refused, and
+// remembered, as an exit status would be.
+func TestRenditionNoAudioRefused(t *testing.T) {
+	t.Parallel()
+	src := nonFaststartM4A(t)
+	ffmpeg := pipeOnlyFFmpeg(t)
+	dir := filepath.Join(t.TempDir(), "watch")
+	m, err := NewRenditionCache(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Wait)
+	ctx := context.Background()
+	if _, _, err := m.Open(ctx, ctx, ffmpeg, src); !errors.Is(err, ErrRefused) || errors.Is(err, ErrNoSource) {
+		t.Fatalf("open = %v, want ffmpeg's refusal", err)
+	}
+	if st, _ := m.Status(src); st != CacheFailed {
+		t.Fatalf("status = %s, want failed (remembered)", st)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("cache holds %d files, want none", len(entries))
+	}
+}
+
+// pipeOnlyFFmpeg is the installed ffmpeg under a path of its own whose fd
+// probe answered no, so inputFor gives it pipe:0, as for an ffmpeg older than
+// 6.1, without touching the answer other tests read for "ffmpeg".
+func pipeOnlyFFmpeg(t *testing.T) string {
+	t.Helper()
+	real, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available")
+	}
+	link := filepath.Join(t.TempDir(), "ffmpeg")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("no symlink: %v", err)
+	}
+	p := &fdProbe{ran: true}
+	p.once.Do(func() {})
+	fdSupport.Store(link, p)
+	t.Cleanup(func() { fdSupport.Delete(link) })
+	return link
 }
 
 // TestRenditionOpenWaitsThenPending: a request that stops waiting for a cold
@@ -343,6 +402,51 @@ func TestRenditionOpenWaitsThenPending(t *testing.T) {
 		t.Fatalf("open after = %v after %d runs, want a hit", err, runs.Load())
 	}
 	f.Close()
+}
+
+// TestCachesShareDiskGuard: caches on one disk share one reservation
+// (ShareDiskGuard), so a rendition still writing counts against a remux.
+func TestCachesShareDiskGuard(t *testing.T) {
+	t.Parallel()
+	src := filepath.Join(t.TempDir(), "book.mka")
+	if err := os.WriteFile(src, []byte("not really matroska"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remux, runs := countingRemuxer(t, nil)
+	watch, err := NewRenditionCache(filepath.Join(t.TempDir(), "watch"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remux.ShareDiskGuard(watch)
+	// Room for this remux alone, but a rendition still writing has taken it.
+	remux.freeSpace = func(string) (uint64, bool) { return 2 * cacheMinFree, true }
+	watch.reserved.Store(cacheMinFree)
+	ctx := context.Background()
+	if _, _, err := remux.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrUnavailable) || runs.Load() != 0 {
+		t.Fatalf("open beside a rendition writing = %v after %d runs, want ErrUnavailable and no run", err, runs.Load())
+	}
+}
+
+// TestStderrLogBounded: a run's stderr keeps its start and its end, whatever
+// ffmpeg writes between them.
+func TestStderrLogBounded(t *testing.T) {
+	t.Parallel()
+	var l stderrLog
+	if _, err := l.Write([]byte("first line\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.String(); got != "first line\n" {
+		t.Fatalf("short log = %q", got)
+	}
+	for i := range 20000 {
+		_, _ = l.Write([]byte("[mp3float @ 0x1] Header missing " + strconv.Itoa(i) + "\n"))
+	}
+	_, _ = l.Write([]byte("last line\n"))
+	got := l.String()
+	if len(got) > 2*stderrKeep+100 || !strings.HasPrefix(got, "first line\n") || !strings.HasSuffix(got, "last line\n") ||
+		!strings.Contains(got, "left out") {
+		t.Fatalf("long log = %d bytes, %q...%q", len(got), got[:40], got[len(got)-40:])
+	}
 }
 
 // TestCacheEvictsOwnFilesOnly: each cache's sweep counts and removes its own
@@ -374,5 +478,61 @@ func TestCacheEvictsOwnFilesOnly(t *testing.T) {
 	}
 	if want := []string{"a.mp3", "c.m4a", "d.mp3"}; !slices.Equal(left, want) {
 		t.Fatalf("after the rendition sweep: %q, want %q", left, want)
+	}
+}
+
+// TestRenditionShortNotCached: an encode that stops early and still exits 0
+// (a read error partway, with no -xerror) leaves a copy shorter than its
+// source, which is not cached and not remembered: the request fails as one to
+// retry, the file stays missing, and the next request encodes it in full.
+func TestRenditionShortNotCached(t *testing.T) {
+	t.Parallel()
+	needFFmpeg(t)
+	src := filepath.Join(t.TempDir(), "part.mp3")
+	writeAudio(t, src, 20, "-c:a", "libmp3lame", "-b:a", "64k")
+	sf, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := sf.Stat()
+	want, ok := metadata.ExactDuration(context.Background(), sf, info.Size(), "mp3")
+	sf.Close()
+	if !ok || want < 19 || want > 21 {
+		t.Fatalf("source's exact duration = %v %v, want about 20 s", want, ok)
+	}
+	dir := filepath.Join(t.TempDir(), "watch")
+	m, err := NewRenditionCache(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Wait)
+	var cut atomic.Bool
+	cut.Store(true)
+	run := m.run
+	m.run = func(ctx context.Context, ffmpegPath string, args []string, stdin *os.File) error {
+		if cut.Load() { // the encode ends 15 s early and exits 0
+			args = append(append(slices.Clone(args[:len(args)-1]), "-t", "5"), args[len(args)-1])
+		}
+		return run(ctx, ffmpegPath, args, stdin)
+	}
+	ctx := context.Background()
+	if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, errShortCopy) || errors.Is(err, ErrRefused) {
+		t.Fatalf("open = %v, want a short copy, not a refusal", err)
+	}
+	if st, _ := m.Status(src); st != CacheMissing {
+		t.Fatalf("status = %s, want missing (not remembered)", st)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("cache holds %d files, want none", len(entries))
+	}
+	cut.Store(false)
+	f, _, err := m.Open(ctx, ctx, "ffmpeg", src)
+	if err != nil {
+		t.Fatalf("open again = %v, want the full copy", err)
+	}
+	defer f.Close()
+	fi, _ := f.Stat()
+	if got, ok := metadata.ExactDuration(ctx, f, fi.Size(), "m4a"); !ok || got < want-renditionShortMax {
+		t.Fatalf("copy lasts %v %v, source %v", got, ok, want)
 	}
 }

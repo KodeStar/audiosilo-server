@@ -270,6 +270,9 @@ describe('versions and clients', () => {
       app: 'Shelfie',
       platform: 'tv',
     });
+    expect(clientParts({ app: 'Shelfie', version: '', platform: 'constructor' }).platform).toBe(
+      'constructor',
+    );
   });
 });
 

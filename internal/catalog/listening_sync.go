@@ -476,8 +476,9 @@ type syncRun struct {
 	// written is the version each book's row had after this batch wrote it.
 	written map[Ref]int64
 	// spanAt is the end of the span whose place this batch last wrote on each
-	// book: the time this device's next span on the row compares with, which a
-	// diverged apply's kept updated_at (writePlace) may be later than.
+	// book (or of a finish or unfinish after it): the time this device's next
+	// span on the row compares with, which a diverged apply's kept updated_at
+	// (writePlace) may be later than.
 	spanAt map[Ref]string
 	// stored is the batch's event ids already in the log (a replay: duplicate).
 	stored map[string]bool
@@ -639,6 +640,14 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		}
 		return SyncResult{Status: statusNotApplied, Reason: reasonResumeBehind, OtherPlace: mine}, nil
 	}
+	// The row's time never moves back (server#284): a span that ended before the
+	// row it replaces keeps the row's updated_at, so an old app's PUT dated in
+	// between can't win last-write-wins against it (and a span chaining on this
+	// batch's diverged apply, spanAt, keeps its kept time too).
+	rowAt := mine.UpdatedAt
+	if stored != nil {
+		rowAt = laterStamp(rowAt, stored.updatedAt)
+	}
 	switch outcome {
 	case PlaceStale:
 		return SyncResult{Status: statusNotApplied, Reason: reasonOlder}, nil
@@ -657,10 +666,7 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	case PlaceApplyDiverged:
 		lost := &ListeningOtherPlace{Position: stored.position, DeviceID: stored.deviceID,
 			DeviceName: stored.deviceName, UpdatedAt: stored.updatedAt}
-		// The row's time never moves back (server#284): a span that ended before
-		// the row it replaces keeps the row's updated_at, so an old app's PUT
-		// dated in between can't win last-write-wins against it.
-		if err := s.writePlace(ctx, p, in.Version, false, laterStamp(mine.UpdatedAt, stored.updatedAt)); err != nil {
+		if err := s.writePlace(ctx, p, in.Version, false, rowAt); err != nil {
 			return SyncResult{}, err
 		}
 		if stored.deviceID != s.b.DeviceID && math.Abs(p.to-stored.position) > otherPlaceMin {
@@ -675,13 +681,7 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	// after the version it was recorded at.
 	sent := p.ev.BaseVersion
 	clear := stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64
-	// Newer than the row by last-write-wins, unless it chains on this batch's
-	// diverged apply (spanAt), whose kept time it keeps too.
-	at := mine.UpdatedAt
-	if stored != nil {
-		at = laterStamp(at, stored.updatedAt)
-	}
-	if err := s.writePlace(ctx, p, in.Version, clear, at); err != nil {
+	if err := s.writePlace(ctx, p, in.Version, clear, rowAt); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -777,7 +777,6 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			return SyncResult{}, err
 		}
 		s.written[key] = 1
-		delete(s.spanAt, key) // the row's own time is the comparison now
 		return SyncResult{Status: statusApplied}, nil
 	}
 	// The row's time never moves back (a later save elsewhere stays later).
@@ -812,7 +811,12 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		return SyncResult{}, err
 	}
 	s.written[key] = version
-	delete(s.spanAt, key) // the row's own time is the comparison now
+	if _, chained := s.spanAt[key]; chained {
+		// This device's span earlier in the batch kept a later row time
+		// (writePlace): its next span compares with this change, not that time
+		// (a finish, an unfinish, then the restart that follows them).
+		s.spanAt[key] = at
+	}
 	return SyncResult{Status: statusApplied}, nil
 }
 

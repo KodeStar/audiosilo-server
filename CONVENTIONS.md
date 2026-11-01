@@ -759,7 +759,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
-  audio file path directly, or transcodes it with `?transcode=1` (see below). The
+  audio file path directly, or transcodes it with `?transcode=1` (see below), or with
+  `?rendition=watch` serves its watch rendition whatever else the query says (see Watch renditions). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
   `.nfo` are filtered in `BrowseFS` so a click is always playable, and so is an `.mka` a book of
   the folder leaves out: `library.shadowedMKA`, shared with `folderAudio`; `ListDir`, the next
@@ -863,7 +864,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   format is its first file's; the SQL twin `directPlayableExpr`, the console's Playback column, stays
   "as stored"). **Remux (server#174)**: while ffmpeg is configured (`API.remuxOn`: `a.ffmpeg != ""`
   and the cache opened; no capability flag), `GET stream` of an `.mka` (with or without `download=1`,
-  not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
+  not `transcode=1` or `rendition=`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
   `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
@@ -874,7 +875,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
   renamed, never under the key when the source changed while read; `.part` swept at
   start; LRU by mtime, a hit (no lock) touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
-  under 1 GiB free after it and the other remux still writing, `internal/diskspace`); single-flight per key, 2 at once, run under
+  under 1 GiB free after it and the other runs still writing, the rendition cache's too (one reservation,
+  `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
   failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
@@ -961,12 +963,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   AAC-LC (ffmpeg's own `aac`; HE-AAC needs the non-free libfdk_aac), mono, 48 kbps, 44.1 kHz, MP4 with
   `+faststart`, no video, metadata or chapters, `+bitexact` (format and encoder), the input only the descriptor
   (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
-  MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.03 s on MP3 and M4B), so positions and
-  chapters (CROSS-REPO §6) hold. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
+  MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
+  chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
+  source's exact duration (`metadata.ExactDuration`, the in-process probe; skipped when it is unsure, as for a VBR
+  MP3 with no Xing/VBRI header, or can't measure the copy) is not cached and not remembered (503
+  `rendition_error`, the next request encodes again). The cache is the remux's `media.FileCache` over another `cacheSpec`: key
   sha256(abs, size, mtime, `watch-v1`), so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
-  of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard, `.part`
-  synced then renamed, never cached when the source changed while read, ffmpeg's refusal (an exit status
-  before anything was written) remembered. The remux is unchanged (same dir, keys, ETags). `GET
+  of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
+  reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
+  source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
+  audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
+  without the fd protocol; `metadata.MP4HasTrack`) remembered. A failed run's error carries the first and last
+  2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
   /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
   `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
   for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
@@ -976,17 +984,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
   live transcode. 422 `rendition_failed` is ffmpeg's remembered refusal; 503 `rendition_error` (`Retry-After:
-  60`) a failure not the file's (disk guard, a run killed partway, the source changed). `POST
+  60`) a failure not the file's (disk guard, a run killed partway, a short copy, the source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
-  (`FileCache.Queue`, at most 256 waiting across the server, past which a file stays `missing` for the client
-  to ask again) and answers 202; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
-  files: [{path, state: ready|pending|failed|missing, bytes (ready only)}]}` in the book's file order, the book
-  resolved as `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
+  (`FileCache.Queue`) and answers 202; at most 256 encodes wait or run across the server, a stream's included
+  (`cacheSpec.queueMax`): past it a prepared file stays `missing` for the client to ask again and a cold stream
+  answers 503 `rendition_error`; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
+  files: [{path, state: ready|pending|failed|missing, bytes (ready only)}]}` in the book's file order
+  (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
+  `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
   listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
   in `X-AudioSilo-Client`, shown as a watch in the console. Tests: `media/rendition_test.go` (args, keys,
   a real encode's codec, channels, rate, bit rate, duration and moov-first, Range/If-Range, queue and status,
-  refusal, eviction per cache), `api/renditions_test.go` (capability, stream, 503 pending, refusals, scope
-  allowed and denied, the routes).
+  refusal, a trackless copy refused, the bound on Queue and Open, eviction per cache, the shared disk guard),
+  `api/renditions_test.go` (capability, stream, 503 pending, 503 rendition_error, refusals, scope allowed and
+  denied, the routes, a loose root file).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
@@ -2803,7 +2814,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
   `updated_at` (the corrected end, or the row's own when that is later: a diverged apply never moves it back, so
   an old app's PUT dated in between can't win, server#284; the device's later spans in the batch then compare
-  with their own span's end, `spanAt`), version + 1, never the finish. finish/unfinish apply only when newer than
+  with their own span's end, `spanAt`, or a finish or unfinish of theirs after it), version + 1, never the finish. finish/unfinish apply only when newer than
   `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
   `finished_at` kept when already finished, the offer dropped), unfinish clears it and keeps the position, taking
   a finished row for its device (so the restart span after it resolves on that device's own row, not as

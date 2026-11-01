@@ -21,7 +21,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
-// renditionEnv is a library over a two-part MP3 book and a one-file M4B book,
+// renditionEnv is a library over a two-part MP3 book, a one-file M4B book in
+// its folder and a loose M4B at the root (a book with no book_files rows),
 // scanned, with ffmpeg on.
 type renditionEnv struct {
 	*testEnv
@@ -34,6 +35,7 @@ const (
 	rendPart1     = rendPartsBook + "/01 One.mp3"
 	rendPart2     = rendPartsBook + "/02 Two.mp3"
 	rendM4BBook   = "Other Author/Single Book/book.m4b"
+	rendLooseBook = "Loose Book.m4b"
 )
 
 // writeTone writes seconds of a tone at root/rel encoded by enc, or skips
@@ -65,6 +67,7 @@ func newRenditionEnv(t *testing.T) *renditionEnv {
 	ffprobe := writeTone(t, root, rendPart1, 3, mp3...)
 	writeTone(t, root, rendPart2, 2, mp3...)
 	writeTone(t, root, rendM4BBook, 4, "-c:a", "aac", "-b:a", "64k")
+	writeTone(t, root, rendLooseBook, 2, "-c:a", "aac", "-b:a", "64k")
 	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -211,16 +214,7 @@ func TestRenditionPending(t *testing.T) {
 	t.Parallel()
 	r := newRenditionEnv(t)
 	r.api.renditionWait = 20 * time.Millisecond
-	gate := make(chan struct{})
-	r.api.renditions.HoldRunsForTests(gate)
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			close(gate)
-		}
-	}
-	t.Cleanup(release)
+	release := holdRuns(t, r.api.renditions)
 	resp, body := r.do(t, "GET", r.streamURL(rendM4BBook, "&rendition=watch"), r.token, "")
 	if resp.StatusCode != http.StatusServiceUnavailable || codeOf(body) != "rendition_pending" ||
 		resp.Header.Get("Retry-After") != "15" {
@@ -231,6 +225,27 @@ func TestRenditionPending(t *testing.T) {
 	if resp, _ := r.do(t, "GET", r.streamURL(rendM4BBook, "&rendition=watch"), r.token, ""); resp.StatusCode != http.StatusOK ||
 		resp.Header.Get("Content-Type") != "audio/mp4" {
 		t.Fatalf("after the encode = %d %q, want the copy", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
+// TestRenditionError: an encode that can't be had for a reason not the file's
+// (here the disk guard) answers 503 rendition_error with Retry-After 60 and
+// caches nothing, and is not remembered: with room again the copy is made.
+func TestRenditionError(t *testing.T) {
+	t.Parallel()
+	r := newRenditionEnv(t)
+	r.api.renditions.FakeFreeSpaceForTests(0)
+	resp, body := r.do(t, "GET", r.streamURL(rendPart1, "&rendition=watch"), r.token, "")
+	if resp.StatusCode != http.StatusServiceUnavailable || codeOf(body) != "rendition_error" ||
+		resp.Header.Get("Retry-After") != "60" {
+		t.Fatalf("low disk = %d %q %s, want 503 rendition_error after 60", resp.StatusCode, resp.Header.Get("Retry-After"), body)
+	}
+	if n := r.cached(t); n != 0 {
+		t.Fatalf("%d renditions cached on a low disk, want none", n)
+	}
+	r.api.renditions.FakeFreeSpaceForTests(1 << 50)
+	if resp, body := r.do(t, "GET", r.streamURL(rendPart1, "&rendition=watch"), r.token, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("with room again = %d %s, want the copy", resp.StatusCode, body)
 	}
 }
 
@@ -346,7 +361,8 @@ func TestRenditionsDenied(t *testing.T) {
 
 // TestRenditionsPrepare: GET queues nothing (missing); POST queues every file
 // of the book in play order (202, pending) and GET then reports each ready with
-// its bytes, which the stream's copy matches; a single-file book is one entry.
+// its bytes, which the stream's copy matches; a one-file book is one entry, a
+// loose file at the root (no book_files rows) too.
 func TestRenditionsPrepare(t *testing.T) {
 	t.Parallel()
 	r := newRenditionEnv(t)
@@ -372,13 +388,12 @@ func TestRenditionsPrepare(t *testing.T) {
 	if n := r.cached(t); n != 0 {
 		t.Fatalf("GET queued %d encodes, want none", n)
 	}
-	gate := make(chan struct{})
-	r.api.renditions.HoldRunsForTests(gate)
+	release := holdRuns(t, r.api.renditions)
 	got := read("POST", rendPartsBook, "", `{"kind":"watch"}`, 202)
 	if s := states(got); !slices.Equal(s, []string{rendPart1 + "=pending", rendPart2 + "=pending"}) {
 		t.Fatalf("prepare = %v, want both pending in play order", s)
 	}
-	close(gate)
+	release()
 	r.api.renditions.Wait()
 	after := read("GET", rendPartsBook, "&kind=watch", "", 200)
 	for _, f := range after.Files {
@@ -396,5 +411,11 @@ func TestRenditionsPrepare(t *testing.T) {
 	}
 	if s := states(read("GET", rendM4BBook, "&kind=watch", "", 200)); !slices.Equal(s, []string{rendM4BBook + "=missing"}) {
 		t.Fatalf("single-file book = %v", s)
+	}
+	if s := states(read("GET", rendLooseBook, "&kind=watch", "", 200)); !slices.Equal(s, []string{rendLooseBook + "=missing"}) {
+		t.Fatalf("loose book = %v, want its own file", s)
+	}
+	if s := states(read("POST", rendLooseBook, "", `{"kind":"watch"}`, 202)); !slices.Equal(s, []string{rendLooseBook + "=pending"}) {
+		t.Fatalf("loose book's prepare = %v, want its own file queued", s)
 	}
 }
