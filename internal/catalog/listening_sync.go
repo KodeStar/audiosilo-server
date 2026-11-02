@@ -836,7 +836,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	// A change after this device's span (this POST's, or an earlier one's:
 	// carryChain) moves its chain here (spanAt): the next span compares with
 	// it, not the row's kept time (a finish, an unfinish, then the restart that
-	// follows them). Else the version bump ends the chain on the row.
+	// follows them). Else the chain on the row ends (NULL).
 	var chainAt, chainVersion any
 	if _, chained := s.spanAt[key]; chained {
 		chainAt, chainVersion = at, version
@@ -851,7 +851,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			     position = CASE WHEN ?2 > 0 THEN ?2 ELSE position END,
 			     duration = CASE WHEN ?2 > 0 THEN ?2 ELSE duration END,
 			     version = ?3, device_id = ?4, device_name = ?5, updated_at = ?6, finish_changed_at = ?7,
-			     span_at = COALESCE(?11, span_at), span_version = COALESCE(?12, span_version),
+			     span_at = ?11, span_version = ?12,
 			     `+clearOtherPlace+`
 			  WHERE user_id = ?8 AND library_id = ?9 AND rel_path = ?10`,
 			day, duration, version, s.b.DeviceID, s.b.DeviceName, updated, at,
@@ -864,7 +864,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		_, err = s.tx.ExecContext(ctx,
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
 			     updated_at = ?, finish_changed_at = ?,
-			     span_at = COALESCE(?, span_at), span_version = COALESCE(?, span_version)
+			     span_at = ?, span_version = ?
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 			version, device, name, updated, at, chainAt, chainVersion, s.b.UserID, key.LibraryID, key.Path)
 	}
