@@ -27,6 +27,7 @@ package match
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -103,22 +104,148 @@ type candLink struct {
 	nums   qNums
 }
 
+// Index is a candidate list prepared for many Best calls (the listening import
+// scores every item of an author against the same books): what Best derives
+// from a candidate alone - its normalized names, its title tokens, its bareness
+// and numbers under its own series - is made once, the first time a query
+// needs it, and kept. Not safe for concurrent use; the books must not change
+// while the Index is in use.
+type Index struct {
+	books []Book
+	prep  []prepBook
+}
+
+// prepBook is one candidate's derivations; each *Done says whether the field
+// after it is made.
+type prepBook struct {
+	gateDone   bool
+	normAuthor string   // Normalize(b.Author)
+	normNarr   []string // Normalize of each narrator
+
+	seriesDone bool
+	seriesTrim string // strings.TrimSpace(b.Series)
+	normSeries string // NormalizeSeries(b.Series)
+
+	toksDone bool
+	toks     []string // titleTokens(b.Title, b.Series)
+
+	seqDone bool
+	seq     float64 // bookSeqRef(b, b.Series)
+	seqOK   bool
+
+	ownDone bool // the bare branch under the candidate's own (non-blank) series
+	bare    bool // bareTitle(b.Title, b.Series)
+	veto    float64
+	vetoOK  bool // bareSeq(b.Title, b.Series), made when bare
+
+	lowerDone  bool
+	lowerTitle string // strings.ToLower(b.Title)
+}
+
+// NewIndex prepares books for Best. It keeps the slice, not a copy.
+func NewIndex(books []Book) *Index {
+	return &Index{books: books, prep: make([]prepBook, len(books))}
+}
+
+func (x *Index) gate(i int) *prepBook {
+	p := &x.prep[i]
+	if !p.gateDone {
+		b := &x.books[i]
+		p.normAuthor = Normalize(b.Author)
+		for _, n := range b.Narrators {
+			p.normNarr = append(p.normNarr, Normalize(n))
+		}
+		p.gateDone = true
+	}
+	return p
+}
+
+func (x *Index) series(i int) *prepBook {
+	p := &x.prep[i]
+	if !p.seriesDone {
+		p.seriesTrim = strings.TrimSpace(x.books[i].Series)
+		p.normSeries = NormalizeSeries(x.books[i].Series)
+		p.seriesDone = true
+	}
+	return p
+}
+
+func (x *Index) toks(i int) []string {
+	p := &x.prep[i]
+	if !p.toksDone {
+		p.toks = titleTokens(x.books[i].Title, x.books[i].Series)
+		p.toksDone = true
+	}
+	return p.toks
+}
+
+func (x *Index) seqRef(i int) (float64, bool) {
+	p := &x.prep[i]
+	if !p.seqDone {
+		p.seq, p.seqOK = bookSeqRef(x.books[i], x.books[i].Series)
+		p.seqDone = true
+	}
+	return p.seq, p.seqOK
+}
+
+func (x *Index) own(i int) *prepBook {
+	p := &x.prep[i]
+	if !p.ownDone {
+		b := &x.books[i]
+		p.bare = bareTitle(b.Title, b.Series)
+		if p.bare {
+			p.veto, p.vetoOK = bareSeq(b.Title, b.Series)
+		}
+		p.ownDone = true
+	}
+	return p
+}
+
+func (x *Index) lowerTitle(i int) string {
+	p := &x.prep[i]
+	if !p.lowerDone {
+		p.lowerTitle = strings.ToLower(x.books[i].Title)
+		p.lowerDone = true
+	}
+	return p.lowerTitle
+}
+
 // Best returns the index of the best-matching book and whether it cleared the
-// confidence threshold (-1, false when none match).
-func Best(books []Book, q Query) (int, bool) {
+// confidence threshold (-1, false when none match). A caller scoring many
+// queries against one list prepares it once with NewIndex instead.
+func Best(books []Book, q Query) (int, bool) { return NewIndex(books).Best(q) }
+
+// Best is the package-level Best over the prepared candidates: the same
+// answer, with each candidate's own derivations made once for every query.
+func (x *Index) Best(q Query) (int, bool) {
+	books := x.books
 	// 1. ASIN - exact, highest confidence (rare in practice, but decisive).
-	for i := range books {
-		if q.ASIN != "" && books[i].ASIN != "" && strings.EqualFold(q.ASIN, books[i].ASIN) {
-			return i, true
+	if q.ASIN != "" {
+		for i := range books {
+			if books[i].ASIN != "" && strings.EqualFold(q.ASIN, books[i].ASIN) {
+				return i, true
+			}
 		}
 	}
-	qSeries := NormalizeSeries(q.Series)
-	qToks := titleTokens(q.Title, q.Series)
-	if len(qToks) == 0 {
-		qToks = titleTokens(q.TitleShort, q.Series)
+	qa := Normalize(q.Author)
+	var qNarr []string
+	for _, n := range q.Narrators {
+		qNarr = append(qNarr, Normalize(n))
 	}
-	qSeq, qHasSeq := querySeq(q)
-	qTitleLower := strings.ToLower(q.Title)
+	// The query's own derivations are made once a candidate passes the person
+	// gate (most lists hold none that do).
+	var (
+		qReady      bool
+		qSeries     string
+		qToks       []string
+		qSeq        float64
+		qHasSeq     bool
+		qTitleLower string
+		qForms      []string // seriesForms(q.Series), made when first needed
+		qFormsDone  bool
+		ownNums     qNums
+		linkMemo    map[string]candLink
+	)
 	numsUnder := func(seriesRef string) qNums {
 		n := qNums{bare: bareTitle(q.Title, seriesRef)}
 		n.veto, n.vetoOK = bareSeq(q.Title, seriesRef)
@@ -136,19 +263,31 @@ func Best(books []Book, q Query) (int, bool) {
 		n.conf, n.confOK = q.Sequence, q.HasSequence
 		return n
 	}
-	ownNums := numsUnder(q.Series)
-	// Candidate lists repeat a series across its volumes, and this derivation
-	// depends only on (q.Title, b.Series), so it is memoized per Best call.
-	linkMemo := map[string]candLink{}
 
 	best, bestScore := -1, 0.0
 	for i := range books {
-		b := books[i]
-		if !personMatch(b, q) {
+		if !personMatch(x.gate(i), qa, qNarr) {
 			continue
 		}
-		bSeriesTrim := strings.TrimSpace(b.Series)
-		sameSeries := qSeries != "" && NormalizeSeries(b.Series) == qSeries
+		if !qReady {
+			qSeries = NormalizeSeries(q.Series)
+			qToks = titleTokens(q.Title, q.Series)
+			if len(qToks) == 0 {
+				qToks = titleTokens(q.TitleShort, q.Series)
+			}
+			qSeq, qHasSeq = querySeq(q)
+			qTitleLower = strings.ToLower(q.Title)
+			ownNums = numsUnder(q.Series)
+			// Candidate lists repeat a series across its volumes, and this
+			// derivation depends only on (q.Title, b.Series), so it is memoized
+			// per query.
+			linkMemo = map[string]candLink{}
+			qReady = true
+		}
+		b := &books[i]
+		ps := x.series(i)
+		bSeriesTrim := ps.seriesTrim
+		sameSeries := qSeries != "" && ps.normSeries == qSeries
 		// A query with NO series column is judged under the candidate's series when
 		// its title spells that series out - the shape a title-only library scan
 		// takes against catalog cards, which nearly all carry a series. Without the
@@ -185,16 +324,26 @@ func Best(books []Book, q Query) (int, bool) {
 		// by being series-less with the series name as its title. bBare is computed
 		// only where it is then read: those tests, and the branch below.
 		seriesLinked := sameSeries || linkedByCandSeries
+		// ownRef: bSeriesRef is the candidate's own series, so its prepared
+		// derivations under it apply.
+		ownRef := bSeriesTrim != ""
 		bBare := false
 		switch {
 		case seriesLinked:
-			bBare = bareTitle(b.Title, bSeriesRef)
+			if ownRef {
+				bBare = x.own(i).bare
+			} else {
+				bBare = bareTitle(b.Title, bSeriesRef)
+			}
 		case bSeriesTrim == "" && qSeries != "":
 			// The series must actually OCCUR in that title. Reducing to nothing is
 			// not enough on its own: a card titled "Unabridged" also reduces to
 			// nothing, and would then claim every numberless volume of the series
 			// by the same author.
-			if _, ok := seriesRefIn(strings.ToLower(b.Title), q.Series); ok {
+			if !qFormsDone {
+				qForms, qFormsDone = seriesForms(q.Series), true
+			}
+			if _, ok := seriesRefInForms(x.lowerTitle(i), qForms); ok {
 				bBare = bareTitle(b.Title, bSeriesRef)
 				seriesLinked = bBare
 			}
@@ -212,10 +361,19 @@ func Best(books []Book, q Query) (int, bool) {
 			bVetoSeq, bVetoOK := 0.0, false
 			bConf, bConfOK := b.SeriesIndex, b.SeriesIndex > 0
 			if bBare {
-				bVetoSeq, bVetoOK = bareSeq(b.Title, bSeriesRef)
+				if ownRef {
+					o := x.own(i)
+					bVetoSeq, bVetoOK = o.veto, o.vetoOK
+				} else {
+					bVetoSeq, bVetoOK = bareSeq(b.Title, bSeriesRef)
+				}
 				bConf, bConfOK = bVetoSeq, bVetoOK
 				if !bConfOK {
-					bConf, bConfOK = bookSeqRef(b, bSeriesRef)
+					if ownRef {
+						bConf, bConfOK = x.seqRef(i)
+					} else {
+						bConf, bConfOK = bookSeqRef(*b, bSeriesRef)
+					}
 				}
 			}
 			// Only two bare sides stating their OWN explicit numbers may disagree
@@ -240,7 +398,7 @@ func Best(books []Book, q Query) (int, bool) {
 				score = scoreBareVol1
 			}
 		} else {
-			bToks := titleTokens(b.Title, b.Series)
+			bToks := x.toks(i)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
 				score += scoreSeriesAgree
@@ -250,7 +408,7 @@ func Best(books []Book, q Query) (int, bool) {
 				// this is what matches progression-fantasy books whose title is just
 				// "Series Name N" (the residual tokens are only the number, which is
 				// dropped).
-				if bSeq, ok := bookSeqRef(b, b.Series); ok && qHasSeq && seqEqual(bSeq, qSeq) {
+				if bSeq, ok := x.seqRef(i); ok && qHasSeq && seqEqual(bSeq, qSeq) {
 					score += scoreSeqAgree
 				}
 				// A covered title inside the same series outranks a bare sequence
@@ -278,11 +436,12 @@ func Best(books []Book, q Query) (int, bool) {
 // "book N"/"vol N" run tokens (markerSeq) - the formatting that differs between
 // sources' titles.
 func stripMatchNoise(s string) string {
-	return markerSeq.ReplaceAllString(stripParenGroups(s), " ")
+	return replaceMarkers(stripParenGroups(s))
 }
 
 // fluffWords are standalone words that are noise in a book title (not "book"/"novel",
-// which appear in real titles like "The Book Thief").
+// which appear in real titles like "The Book Thief"). replaceFluff scans for them by
+// hand (scan.go), and uses it only as markerSeq is used.
 var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobook|dramatized|adaptation)\b`)
 
 // CleanTitle returns a display title with the series name and edition/"Book N" fluff
@@ -307,7 +466,7 @@ func residualTitle(title, series string) string {
 	t := stripSeries(title, series)
 	t = dropGenreSubtitle(t)
 	t = stripMatchNoise(t)
-	t = fluffWords.ReplaceAllString(t, " ")
+	t = replaceFluff(t)
 	return tidyTitle(t)
 }
 
@@ -360,7 +519,12 @@ func seriesForms(series string) []string {
 // of every query would put a 2.0 on a bare number agreement between unrelated
 // books.
 func seriesRefIn(lowerTitle, series string) (string, bool) {
-	for _, form := range seriesForms(series) {
+	return seriesRefInForms(lowerTitle, seriesForms(series))
+}
+
+// seriesRefInForms is seriesRefIn over a series' seriesForms, already made.
+func seriesRefInForms(lowerTitle string, forms []string) (string, bool) {
+	for _, form := range forms {
 		if containsPhraseLower(lowerTitle, form) {
 			return form, true
 		}
@@ -368,26 +532,23 @@ func seriesRefIn(lowerTitle, series string) (string, bool) {
 	return "", false
 }
 
-// parenGroup matches one innermost parenthetical/bracketed group (no bracket
-// inside it), such as a decoration on a series name: "Vorkosigan Saga
-// (chronological)" is the catalog's ordering note, not part of the name a library
-// title carries. stripParenGroups repeats it outward, so a nested group goes whole.
-var parenGroup = regexp.MustCompile(`[\(\[][^\(\)\[\]]*[\)\]]`)
-
 // bracketBlank blanks the brackets a group left without its partner.
 var bracketBlank = strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ")
 
-// stripParenGroups removes the bracketed groups, innermost first until none is
+// stripParenGroups removes the bracketed groups (one innermost group at a time,
+// replaceParenGroupsOnce: an opener, no bracket, a closer), such as a decoration on
+// a series name ("Vorkosigan Saga (chronological)" is the catalog's ordering note,
+// not part of the name a library title carries), innermost first until none is
 // left, so a nested one goes whole ("Eric (Mundodisco 9) [Eric (Discworld)]" is
 // "Eric"), then any bracket left without its partner (#41: one pass left "Eric ]";
 // a lone closer too, "Short Stories, Volume 1]").
 func stripParenGroups(s string) string {
 	if !strings.ContainsAny(s, "()[]") {
-		return s // the common case, kept off the regexp
+		return s // the common case
 	}
 	for {
-		t := parenGroup.ReplaceAllString(s, " ")
-		if t == s {
+		t, changed := replaceParenGroupsOnce(s)
+		if !changed {
 			break
 		}
 		s = t
@@ -457,7 +618,9 @@ func boundedAt(s string, start, end int) bool {
 func isAlnumRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
 
 // markerSeq matches an explicit sequence marker ("Volume 9", "Book 3", "(Book 5)" -
-// the run tokens stripMatchNoise drops) and captures its number.
+// the run tokens stripMatchNoise drops) and captures its number. replaceMarkers and
+// findMarker scan for it by hand (scan.go), and use it only for a string holding a
+// rune that case-folds onto a keyword's letter (ſ, K).
 var markerSeq = regexp.MustCompile(`(?i)\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*(\d+(?:\.\d+)?)\b`)
 
 // bareSeq derives the volume number of a bare "series + number" title from its
@@ -468,10 +631,8 @@ var markerSeq = regexp.MustCompile(`(?i)\b(?:book|bk|vol|volume|part|pt|episode|
 // bookSeqRef for the untrustworthy alternatives).
 func bareSeq(title, series string) (float64, bool) {
 	t := stripSeries(title, series)
-	if m := markerSeq.FindStringSubmatch(t); m != nil {
-		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
-			return v, true
-		}
+	if v, ok := findMarker(t); ok {
+		return v, true
 	}
 	if s := tidyTitle(t); isAllDigits(s) {
 		if v, err := strconv.ParseFloat(s, 64); err == nil {
@@ -497,18 +658,8 @@ func stripSeries(title, series string) string {
 // and taking the first remaining number - the sequence in titles like "… 3",
 // "(Book 5)", "5: A …". Reports false when there is none.
 func SeqFromTitle(title, series string) (float64, bool) {
-	m := firstNumber.FindStringSubmatch(stripSeries(title, series))
-	if m == nil {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return 0, false
-	}
-	return v, true
+	return findFirstNumber(stripSeries(title, series))
 }
-
-var firstNumber = regexp.MustCompile(`\b(\d+(?:\.\d+)?)\b`)
 
 // bookSeqRef is a candidate's volume number: its SeriesIndex column, else the
 // number derived from its title against an explicit series reference, so a
@@ -553,6 +704,17 @@ func removeFoldBounded(s, sub string) string { return removeFoldWith(s, sub, tru
 // the naive `s[:i] + s[i+len(sub):]` did, because i indexes the lowercased string,
 // not s.
 func removeFoldWith(s, sub string, bounded bool) string {
+	if sub == "" {
+		return s
+	}
+	if isASCII(s) && isASCII(sub) {
+		return removeFoldASCII(s, sub, bounded)
+	}
+	return removeFoldRunes(s, sub, bounded)
+}
+
+// removeFoldRunes is removeFoldWith for any input.
+func removeFoldRunes(s, sub string, bounded bool) string {
 	lsub := strings.ToLower(sub)
 	if lsub == "" {
 		return s
@@ -608,6 +770,49 @@ func removeFoldWith(s, sub string, bounded bool) string {
 		s = s[end:]
 	}
 	return b.String()
+}
+
+// removeFoldASCII is removeFoldWith for ASCII s and sub, where lowering keeps
+// every byte offset, so a match's span needs no mapping back onto s.
+func removeFoldASCII(s, sub string, bounded bool) string {
+	ls, lsub := strings.ToLower(s), strings.ToLower(sub)
+	i := strings.Index(ls, lsub)
+	if i < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevRemoved := false // the text just before pos was replaced by ' '
+	pos := 0
+	for i >= 0 {
+		i += pos
+		end := i + len(lsub)
+		keep := false
+		if bounded {
+			before := i > 0 && isAlnumByte(ls[i-1])
+			if i == pos && prevRemoved {
+				before = false
+			}
+			after := end < len(ls) && isAlnumByte(ls[end])
+			keep = before || after
+		}
+		if keep {
+			b.WriteString(s[pos:end])
+			prevRemoved = false
+		} else {
+			b.WriteString(s[pos:i])
+			b.WriteByte(' ')
+			prevRemoved = true
+		}
+		pos = end
+		i = strings.Index(ls[pos:], lsub)
+	}
+	b.WriteString(s[pos:])
+	return b.String()
+}
+
+func isAlnumByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words
@@ -671,22 +876,42 @@ var titleStopwords = map[string]bool{
 
 // titleTokens reduces a title to its set of significant lowercase word tokens after
 // CleanTitle has removed the series name and fluff.
-func titleTokens(title, series string) map[string]struct{} {
+func titleTokens(title, series string) []string {
 	return tokenize(CleanTitle(title, series))
 }
 
-// tokenize splits a cleaned title into its significant lowercase word tokens.
+// tokenize splits a cleaned title into its significant lowercase word tokens,
+// sorted and without repeats (a set, as tokenScore and titleCovers read it).
 // Stopwords, single characters, and pure numbers are dropped so the distinctive
 // book words drive the match.
-func tokenize(s string) map[string]struct{} {
-	out := map[string]struct{}{}
+func tokenize(s string) []string {
+	var out []string
 	for _, w := range strings.FieldsFunc(strings.ToLower(s), notAlnum) {
 		if len(w) < 2 || titleStopwords[w] || isAllDigits(w) {
 			continue
 		}
-		out[w] = struct{}{}
+		out = append(out, w)
 	}
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// intersect counts the tokens two token sets (tokenize's) share.
+func intersect(a, b []string) int {
+	n := 0
+	for i, j := 0, 0; i < len(a) && j < len(b); {
+		switch {
+		case a[i] < b[j]:
+			i++
+		case a[i] > b[j]:
+			j++
+		default:
+			n++
+			i++
+			j++
+		}
+	}
+	return n
 }
 
 func notAlnum(r rune) bool {
@@ -705,16 +930,11 @@ func isAllDigits(s string) bool {
 // tokenScore measures title-token overlap: 1.0 when one set is wholly contained in
 // the other (a dropped subtitle or an added shortcode token), else the Jaccard
 // similarity. 0 when there is no shared distinctive token.
-func tokenScore(a, b map[string]struct{}) float64 {
+func tokenScore(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
-	inter := 0
-	for w := range a {
-		if _, ok := b[w]; ok {
-			inter++
-		}
-	}
+	inter := intersect(a, b)
 	if inter == 0 {
 		return 0
 	}
@@ -731,14 +951,12 @@ func tokenScore(a, b map[string]struct{}) float64 {
 // must not tie the true "Halo: Primordium" card. And a lone shared token is a
 // coincidence, not a title match ("Winter" ⊆ "Winds of Winter"), so a single token
 // only counts when the two titles reduce to exactly it.
-func titleCovers(qToks, bToks map[string]struct{}) bool {
+func titleCovers(qToks, bToks []string) bool {
 	if len(qToks) == 0 || len(bToks) == 0 {
 		return false
 	}
-	for w := range bToks {
-		if _, ok := qToks[w]; !ok {
-			return false
-		}
+	if intersect(qToks, bToks) != len(bToks) {
+		return false
 	}
 	return len(bToks) >= 2 || len(qToks) == len(bToks)
 }
@@ -747,28 +965,26 @@ func titleCovers(qToks, bToks map[string]struct{}) bool {
 // the author (David Tennant on Cressida Cowell's books) while catalog cards list
 // author and narrators separately, so a credit on one side may legitimately be a
 // narrator on the other. Narrator-to-narrator is deliberately not a link: two
-// unrelated books share a prolific narrator constantly.
-func personMatch(b Book, q Query) bool {
-	if authorMatch(b.Author, q.Author) {
+// unrelated books share a prolific narrator constantly. A link is a normalized
+// equality, or one name contained in the other (NamesMatch: multi-author and
+// "and"-joined credits); qa and qNarr are the query's author and narrators
+// through Normalize.
+func personMatch(p *prepBook, qa string, qNarr []string) bool {
+	if NamesMatch(p.normAuthor, qa) {
 		return true
 	}
-	for _, n := range b.Narrators {
-		if authorMatch(n, q.Author) {
+	for _, n := range p.normNarr {
+		if NamesMatch(n, qa) {
 			return true
 		}
 	}
-	for _, n := range q.Narrators {
-		if authorMatch(b.Author, n) {
+	for _, n := range qNarr {
+		if NamesMatch(p.normAuthor, n) {
 			return true
 		}
 	}
 	return false
 }
-
-// authorMatch is tolerant of multi-author / "and"-joined credits: a normalized
-// equality, or one author string contained in the other. An empty name never
-// matches.
-func authorMatch(a, b string) bool { return NamesMatch(Normalize(a), Normalize(b)) }
 
 // NamesMatch is the person gate over two names already through Normalize: equal,
 // or one contained in the other (multi-author and "and"-joined credits). An
