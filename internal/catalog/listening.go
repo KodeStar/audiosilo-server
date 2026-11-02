@@ -222,7 +222,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 			     finished_at=CASE WHEN NOT excluded.finished THEN NULL
 			                      WHEN progress.finished THEN progress.finished_at
 			                      ELSE ?11 END,
-			     `+finishChangedSet+`
+			     `+finishChangedSet+`, `+endSpanChain+`
 			 RETURNING `+progressColumns,
 			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
 			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp, in.DeviceName, at), &in); err != nil {
@@ -252,6 +252,13 @@ const (
 	finishChangedSet   = `finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
 	                                         ELSE progress.finish_changed_at END`
 )
+
+// endSpanChain is the ON CONFLICT assignment of every progress write that is
+// not a sync span's (a PUT, an edit, an import, a move): the row no longer
+// holds a device's last applied span, so its device's next sync span compares
+// with updated_at again (span_at, 0062; see carryChain). A PUT may keep the
+// version, so the version check alone wouldn't end it.
+const endSpanChain = `span_at=NULL, span_version=NULL`
 
 // finishChangeStamp is the time a write that changes a row's finished state
 // records as finish_changed_at (and a PUT's event time): the write's own
@@ -579,8 +586,8 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			p.FinishedAt = &at
 		}
 		// The device name follows the merge's winner and the newer finish-state
-		// change is kept; an offered place (other_place) is dropped: it was a place
-		// on the old path's timeline.
+		// change is kept; an offered place (other_place) and a device's span chain
+		// (span_at, 0062) are dropped: they were on the old path's timeline.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
@@ -592,7 +599,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			     device_id=excluded.device_id, updated_at=excluded.updated_at,
 			     started_at=excluded.started_at, finished_at=excluded.finished_at,
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
-			     `+clearOtherPlace,
+			     `+endSpanChain+`, `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
 			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged); err != nil {
 			return err

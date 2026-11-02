@@ -762,7 +762,7 @@ const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, posi
 	    position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 	    playback_speed=excluded.playback_speed, version=excluded.version, device_id=excluded.device_id,
 	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at,
-	    ` + finishChangedSet
+	    ` + finishChangedSet + `, ` + endSpanChain
 
 // progressRowArgs are progressUpsert's arguments for p as userID's progress,
 // changedAt the finish_changed_at a finish-state change records.

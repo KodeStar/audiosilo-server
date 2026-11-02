@@ -475,8 +475,9 @@ type syncRun struct {
 	shift float64
 	// written is the version each book's row had after this batch wrote it.
 	written map[Ref]int64
-	// spanAt is the end of the span whose place this batch last wrote on each
-	// book (or of a finish or unfinish after it): the time this device's next
+	// spanAt is the end of the span whose place this device last wrote on each
+	// book (or of a finish or unfinish after it), in this batch or, kept on the
+	// row (span_at), an earlier one (carryChain): the time this device's next
 	// span on the row compares with, which a diverged apply's kept updated_at
 	// (writePlace) may be later than.
 	spanAt map[Ref]string
@@ -521,17 +522,22 @@ type syncRow struct {
 	otherPosition sql.NullFloat64
 	otherDeviceID sql.NullString
 	otherVersion  sql.NullInt64
+	// spanAt is the end of the span the row's device last applied (or of a
+	// finish or unfinish chained after it), null unless recorded at the row's
+	// current version (0062): the batch's spanAt carried across POSTs.
+	spanAt sql.NullString
 }
 
 func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 	var r syncRow
 	err := s.tx.QueryRowContext(ctx,
 		`SELECT position, duration, finished, version, device_id, device_name, updated_at, finish_changed_at,
-		        other_position, other_device_id, CASE WHEN other_position IS NULL THEN NULL ELSE other_version END
+		        other_position, other_device_id, CASE WHEN other_position IS NULL THEN NULL ELSE other_version END,
+		        CASE WHEN span_version = version THEN span_at END
 		   FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 		s.b.UserID, key.LibraryID, key.Path).
 		Scan(&r.position, &r.duration, &r.finished, &r.version, &r.deviceID, &r.deviceName, &r.updatedAt,
-			&r.finishChangedAt, &r.otherPosition, &r.otherDeviceID, &r.otherVersion)
+			&r.finishChangedAt, &r.otherPosition, &r.otherDeviceID, &r.otherVersion, &r.spanAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -609,9 +615,11 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 // (and persists) the span's, which the backstop would drop.
 func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syncRow, mine *ListeningOtherPlace) (SyncResult, error) {
 	key := p.target.Key
+	s.carryChain(key, stored, p)
 	base := p.ev.BaseVersion
 	// In-batch chaining: a device's first spans on a book in one POST share base
-	// 0; the later ones resolve on what the earlier wrote, not against it.
+	// 0; the later ones resolve on what the earlier wrote, not against it (and
+	// a continuation in a later POST on what that POST wrote: carryChain).
 	if v, ok := s.written[key]; ok && base != nil && *base == 0 {
 		base = &v
 	}
@@ -689,13 +697,16 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 
 // writePlace stores a span's place at version: position, length (the span's,
 // else the book's, else kept), speed, device, updatedAt and version, a start
-// when none; never the finish state. clear also drops the offered place.
+// when none; never the finish state. clear also drops the offered place. The
+// span's end is the device's chain (spanAt), kept on the row at version for
+// its next POST (span_at, carryChain).
 func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool, updatedAt string) error {
 	key := p.target.Key
+	spanAt := formatSessionTime(p.ended)
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
-		     version, device_id, device_name, updated_at, started_at)
-		 VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8,?9,?10,?11)
+		     version, device_id, device_name, updated_at, started_at, span_at, span_version)
+		 VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8,?9,?10,?11,?13,?14)
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 		     position=excluded.position,
 		     duration=CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE progress.duration END,
@@ -706,14 +717,47 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		     other_device_id=CASE WHEN ?12 THEN NULL ELSE progress.other_device_id END,
 		     other_device_name=CASE WHEN ?12 THEN NULL ELSE progress.other_device_name END,
 		     other_at=CASE WHEN ?12 THEN NULL ELSE progress.other_at END,
-		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END`,
+		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END,
+		     span_at=excluded.span_at, span_version=excluded.span_version`,
 		s.b.UserID, key.LibraryID, key.Path, p.to, p.length(), p.speed, version, s.b.DeviceID, s.b.DeviceName,
-		updatedAt, p.started.UTC().Format(time.RFC3339), clear); err != nil {
+		updatedAt, p.started.UTC().Format(time.RFC3339), clear, spanAt, version); err != nil {
 		return err
 	}
 	s.written[key] = version
-	s.spanAt[key] = formatSessionTime(p.ended)
+	s.spanAt[key] = spanAt
 	return nil
+}
+
+// carryChain carries the device's span chain on key over from its earlier
+// POSTs (server#289): a backlog split across POSTs (the player halving a batch
+// on 413, an outbox longer than one batch) resolves as it would in one. It
+// seeds the batch's chain on key once, from a row whose place this device's
+// last applied span wrote (span_at at the row's version, 0062): its next span
+// compares with that span's end, not the row's updated_at that a diverged
+// apply kept later (spanAt); and a base-0 span that continues that span, by
+// starting where (historyJoinPos) or when (historyJoinGap, historyJoinOverlap
+// before) it ended, resolves on the row's version (written), as a base-0 span
+// later in the same POST does. A base-0 span that doesn't continue it is still
+// diverged from the device's own place (a device signed out and back in).
+func (s *syncRun) carryChain(key Ref, stored *syncRow, p syncPrepared) {
+	if stored == nil || stored.deviceID != s.b.DeviceID || !stored.spanAt.Valid {
+		return
+	}
+	if _, ok := s.spanAt[key]; ok {
+		return
+	}
+	last := stored.spanAt.String
+	s.spanAt[key] = last
+	if _, ok := s.written[key]; ok {
+		return
+	}
+	end := parseSessionTime(last)
+	after := !p.started.Before(end.Add(-historyJoinOverlap))
+	when := after && !p.started.After(end.Add(historyJoinGap))
+	where := after && math.Abs(p.from-stored.position) <= historyJoinPos
+	if when || where {
+		s.written[key] = stored.version
+	}
 }
 
 // laterStamp is the later of a span's end (fixed-width) and a stored row's
@@ -753,6 +797,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return SyncResult{}, err
 	}
+	s.carryChain(key, stored, p)
 	if stored != nil && stored.finishChangedAt.Valid {
 		if changed := parseSessionTime(stored.finishChangedAt.String); !p.ended.After(changed) {
 			return SyncResult{Status: statusNotApplied, Reason: reasonOlder}, nil
@@ -782,6 +827,14 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	// The row's time never moves back (a later save elsewhere stays later).
 	updated := laterStamp(at, stored.updatedAt)
 	version := stored.version + 1
+	// A change after this device's span (this POST's, or an earlier one's:
+	// carryChain) moves its chain here (spanAt): the next span compares with
+	// it, not the row's kept time (a finish, an unfinish, then the restart that
+	// follows them). Else the version bump ends the chain on the row.
+	var chainAt, chainVersion any
+	if _, chained := s.spanAt[key]; chained {
+		chainAt, chainVersion = at, version
+	}
 	if p.ev.Kind == EventFinish {
 		duration := stored.duration
 		if duration <= 0 && p.target.Book != nil {
@@ -792,10 +845,11 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			     position = CASE WHEN ?2 > 0 THEN ?2 ELSE position END,
 			     duration = CASE WHEN ?2 > 0 THEN ?2 ELSE duration END,
 			     version = ?3, device_id = ?4, device_name = ?5, updated_at = ?6, finish_changed_at = ?7,
+			     span_at = COALESCE(?11, span_at), span_version = COALESCE(?12, span_version),
 			     `+clearOtherPlace+`
 			  WHERE user_id = ?8 AND library_id = ?9 AND rel_path = ?10`,
 			day, duration, version, s.b.DeviceID, s.b.DeviceName, updated, at,
-			s.b.UserID, key.LibraryID, key.Path)
+			s.b.UserID, key.LibraryID, key.Path, chainAt, chainVersion)
 	} else {
 		device, name := stored.deviceID, stored.deviceName
 		if stored.finished {
@@ -803,18 +857,16 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		}
 		_, err = s.tx.ExecContext(ctx,
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
-			     updated_at = ?, finish_changed_at = ?
+			     updated_at = ?, finish_changed_at = ?,
+			     span_at = COALESCE(?, span_at), span_version = COALESCE(?, span_version)
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-			version, device, name, updated, at, s.b.UserID, key.LibraryID, key.Path)
+			version, device, name, updated, at, chainAt, chainVersion, s.b.UserID, key.LibraryID, key.Path)
 	}
 	if err != nil {
 		return SyncResult{}, err
 	}
 	s.written[key] = version
-	if _, chained := s.spanAt[key]; chained {
-		// This device's span earlier in the batch kept a later row time
-		// (writePlace): its next span compares with this change, not that time
-		// (a finish, an unfinish, then the restart that follows them).
+	if chainAt != nil {
 		s.spanAt[key] = at
 	}
 	return SyncResult{Status: statusApplied}, nil
