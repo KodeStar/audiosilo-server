@@ -434,3 +434,22 @@ func TestSyncReplayOfAKeptStoredSpanDoesNotChain(t *testing.T) {
 		}
 	}
 }
+
+// A replay of a late finish (dated before the chain's end, which it keeps)
+// still seeds the chain: the finish wrote the row's version, so the base-0 span
+// after it applies as it did in the same POST.
+func TestSyncReplayOfALateFinishChains(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 0, 3600, 10*time.Minute, base(0))), statusApplied, "")
+		fin := f.finishEvent(EventFinish, 30*time.Minute)
+		if replay {
+			wantResult(t, f.syncOne(t, "watch", fin), statusApplied, "") // stored; its answer lost
+		}
+		r := f.sync(t, f.batch(t, "watch", fin, f.listen("moved_back", 100, 400, time.Minute, base(0)))).Results
+		if back := r[1]; back.Status != statusApplied || f.progress(t).Position != 400 {
+			t.Fatalf("replay %v: %+v, row at %v; want applied at 400", replay, back, f.progress(t).Position)
+		}
+	}
+}

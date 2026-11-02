@@ -563,14 +563,17 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 		// it again ahead of what it recorded since): when it is the newest link
 		// of this device's chain on the row (chainOf, ending at its end: no edit,
 		// PUT or other writer since, and it wrote the row, not a span that
-		// diverged and kept the stored place), the device's later events on base
-		// 0 chain on it, as they would have in that post.
+		// diverged and kept the stored place; a finish or unfinish by its
+		// finish_changed_at, as a late one keeps the chain's later end), the
+		// device's later events on base 0 chain on it, as they would have in
+		// that post.
 		if _, ok := s.written[p.target.Key]; !ok {
 			stored, err := s.row(ctx, p.target.Key)
 			if err != nil {
 				return SyncResult{}, err
 			}
-			if at, chained := s.chainOf(stored); chained && at == ended {
+			if at, chained := s.chainOf(stored); chained &&
+				(at == ended || p.ev.Kind != EventListen && stored.finishChangedAt.String == ended) {
 				s.written[p.target.Key] = stored.version
 			}
 		}
