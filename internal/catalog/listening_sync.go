@@ -483,17 +483,19 @@ type syncRun struct {
 	shift float64
 	// written is the version each book's row had after this batch wrote it, or
 	// the row's own version when the batch carries on from this device's earlier
-	// POST (a replay of one of its events, or a span continuing its chain:
-	// continues): a base-0 span resolves on it.
+	// POST (a replay of the newest link of its chain, or a span continuing that
+	// chain: continues): a base-0 span resolves on it.
 	written map[Ref]int64
-	// stored is the batch's event ids already in the log (a replay: duplicate).
-	stored map[string]bool
+	// stored is the batch's event ids already in the log (a replay: duplicate),
+	// each with the end it was stored with (ended_at, corrected then).
+	stored map[string]string
 }
 
 // storedEventIDs is which of the prepared events' ids the user's log already
-// holds, read in one statement (a batch is at most MaxSyncEvents ids).
-func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]bool, error) {
-	out := map[string]bool{}
+// holds, each with its stored ended_at, read in one statement (a batch is at
+// most MaxSyncEvents ids).
+func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []syncPrepared) (map[string]string, error) {
+	out := map[string]string{}
 	if len(prepared) == 0 {
 		return out, nil
 	}
@@ -502,14 +504,15 @@ func storedEventIDs(ctx context.Context, tx *sql.Tx, userID int64, prepared []sy
 	for _, p := range prepared {
 		args = append(args, p.ev.ID)
 	}
-	ids, err := queryRows(ctx, tx, func(rows *sql.Rows, id *string) error { return rows.Scan(id) },
-		`SELECT event_id FROM listening_events WHERE user_id = ? AND event_id IN (`+placeholders(len(prepared))+`)`,
+	type storedEvent struct{ id, ended string }
+	evs, err := queryRows(ctx, tx, func(rows *sql.Rows, e *storedEvent) error { return rows.Scan(&e.id, &e.ended) },
+		`SELECT event_id, ended_at FROM listening_events WHERE user_id = ? AND event_id IN (`+placeholders(len(prepared))+`)`,
 		args...)
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		out[id] = true
+	for _, e := range evs {
+		out[e.id] = e.ended
 	}
 	return out, nil
 }
@@ -555,17 +558,19 @@ func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 // apply runs one prepared event: the dedupe, then its kind's rule, then its
 // row in the log.
 func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error) {
-	if s.stored[p.ev.ID] {
+	if ended, replay := s.stored[p.ev.ID]; replay {
 		// A replay (the post that stored it lost its answer, so the device sends
-		// it again ahead of what it recorded since): when the row is still this
-		// device's, the device's later events on base 0 chain on it, as they would
-		// have in that post.
+		// it again ahead of what it recorded since): when it is the newest link
+		// of this device's chain on the row (chainOf, ending at its end: no edit,
+		// PUT or other writer since, and it wrote the row, not a span that
+		// diverged and kept the stored place), the device's later events on base
+		// 0 chain on it, as they would have in that post.
 		if _, ok := s.written[p.target.Key]; !ok {
 			stored, err := s.row(ctx, p.target.Key)
 			if err != nil {
 				return SyncResult{}, err
 			}
-			if stored != nil && stored.deviceID == s.b.DeviceID {
+			if at, chained := s.chainOf(stored); chained && at == ended {
 				s.written[p.target.Key] = stored.version
 			}
 		}

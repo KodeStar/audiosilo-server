@@ -386,3 +386,51 @@ func TestSyncChainOnlyWhileRecorded(t *testing.T) {
 		}
 	}
 }
+
+// A replay seeds the batch's chain only while the row is still as the device's
+// chain left it: an edit since (which keeps the row's device) ends it, so the
+// base-0 span after the replay diverges from the edited place rather than
+// replacing it unseen.
+func TestSyncReplayAfterAnEditDoesNotChain(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	first := f.listen("resume", 7000, 7300, 60*time.Minute, base(0))
+	wantResult(t, f.syncOne(t, "watch", first), statusApplied, "")
+	pos := 50000.0
+	f.clock = f.clock.Add(-30 * time.Minute)
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Position: &pos}, Scope{AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(30 * time.Minute)
+	r := f.sync(t, f.batch(t, "watch", first, f.listen("moved_back", 100, 400, 2*time.Minute, base(0)))).Results
+	wantResult(t, r[0], statusDuplicate, "")
+	if r[1].Status != statusDiverged || r[1].Kept != "stored" {
+		t.Fatalf("span after the replay: %+v, want diverged with the edit kept", r[1])
+	}
+	if p := f.progress(t); p.Position != 50000 {
+		t.Fatalf("row at %v, want the edit's 50000", p.Position)
+	}
+}
+
+// A replay of a span that diverged and kept the stored place wrote nothing, so
+// it seeds no chain: the base-0 span after it diverges as it would without the
+// replay, never moving the device's own further place back unseen.
+func TestSyncReplayOfAKeptStoredSpanDoesNotChain(t *testing.T) {
+	t.Parallel()
+	for _, replay := range []bool{false, true} {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "watch", f.listen("resume", 49700, 50000, 3*time.Hour, base(0))), statusApplied, "")
+		jump := f.listen("jump", 100, 400, 20*time.Minute, base(0))
+		if r := f.syncOne(t, "watch", jump); r.Status != statusDiverged || r.Kept != "stored" {
+			t.Fatalf("jump: %+v", r)
+		}
+		events := []SyncEvent{f.listen("moved_back", 50, 350, 10*time.Minute, base(0))}
+		if replay {
+			events = append([]SyncEvent{jump}, events...)
+		}
+		r := f.sync(t, f.batch(t, "watch", events...)).Results
+		if back := r[len(r)-1]; back.Status != statusDiverged || back.Kept != "stored" || f.progress(t).Position != 50000 {
+			t.Fatalf("replay %v: %+v, row at %v; want diverged, 50000 kept", replay, back, f.progress(t).Position)
+		}
+	}
+}

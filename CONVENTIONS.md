@@ -746,8 +746,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `library.SafeJoin`, which rejects traversal outside the library root.
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
-  is the handle (a query param, to avoid encoded-slash issues). Every one checks it in
-  `pathInScope` first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
+  is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
+  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
+  the admin folder-override and enrichment routes, which take their path on their own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
   long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
@@ -2810,8 +2811,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
-  corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: while
-  the row is still that device's, the device's later base-0 events chain on it); a listen runs `ResolvePlace`
+  corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: when it
+  is the newest link of the device's chain on the row, `span_at` at the row's version equal to its stored `ended_at`,
+  the device's later base-0 events chain on it; a replay of a span that kept the stored place, or one an edit or
+  another writer has since overtaken, seeds nothing); a listen runs `ResolvePlace`
   (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on
   that version) and the **backstop**: a `resume`/`continue` span ending more than 60 s before an unfinished
   row is `not_applied` `resume_behind` (with the span's place as `other_place`; one carrying on, within 5 s, from
