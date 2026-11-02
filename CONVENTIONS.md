@@ -987,14 +987,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
   `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
   download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
-  live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour);
+  live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
+  `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289);
   503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
   source changed). `POST
   /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
   (`FileCache.Queue`) and answers 202; at most 256 encodes wait or run across the server, a stream's included
   (`cacheSpec.queueMax`): past it a prepared file stays `missing` for the client to ask again and a cold stream
   answers 503 `rendition_error`; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
-  files: [{path, state: ready|pending|failed|missing, bytes (ready only)}]}` in the book's file order
+  files: [{path, state: ready|pending|failed|missing, bytes (ready only), retry_after (seconds, a remembered
+  refusal only: not a failed file that isn't there)}]}` in the book's file order
   (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
   `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
   listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
@@ -2795,7 +2797,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   to apply opens no writer transaction.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
-  event's `rejected` `invalid`. The handler resolves each distinct
+  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, server#289; PUT
+  .../progress answers one with 400 `path is too long`). The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
@@ -2839,7 +2842,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
-  carry `device_name` and `other_place` (omitempty).
+  carry `device_name` and `other_place` (omitempty). The chain lasts across POSTs (server#289, `0062`,
+  `carryChain`): `writePlace` keeps the span's end on the row as `span_at` at its version (`span_version`; a
+  chained finish or unfinish moves it), and while the row is still the device's at that version its next POST
+  compares with `span_at`, not the kept `updated_at`, and a base-0 span that continues it (from within 5 s of
+  the place, or starting 0-60 s after `span_at`, 2 s overlap) resolves on the row's version; any other base-0
+  span still diverges from its own place. Every other writer ends the chain (`endSpanChain`: the PUT, which can
+  keep the client's version, `EditProgress`, an import's apply and undo, a move or join).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
