@@ -471,13 +471,36 @@ func (m *FileCache) lead(runCtx context.Context, ffmpegPath, key, abs string, in
 
 // refusedLocked reports whether key's refusal is remembered and not expired,
 // forgetting an expired one. The caller holds mu.
-func (m *FileCache) refusedLocked(key string) bool {
+func (m *FileCache) refusedLocked(key string) bool { return m.refusalLeftLocked(key) > 0 }
+
+// refusalLeftLocked is how long key's remembered refusal has left, 0 for
+// none, forgetting an expired one. The caller holds mu.
+func (m *FileCache) refusalLeftLocked(key string) time.Duration {
 	until, ok := m.failed[key]
-	if ok && !m.now().Before(until) {
-		delete(m.failed, key)
-		return false
+	if !ok {
+		return 0
 	}
-	return ok
+	left := until.Sub(m.now())
+	if left <= 0 {
+		delete(m.failed, key)
+		return 0
+	}
+	return left
+}
+
+// RefusedFor is how long the remembered refusal of abs's current file has
+// left (its copy is tried again once it expires, or as soon as the file
+// changes), 0 when there is none: the hint a client is given to ask again
+// (Retry-After, a renditions answer's retry_after).
+func (m *FileCache) RefusedFor(abs string) time.Duration {
+	info, err := source(abs)
+	if err != nil {
+		return 0
+	}
+	key := m.key(abs, info)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.refusalLeftLocked(key)
 }
 
 // rememberLocked remembers key's refusal for cacheRefusalTTL, the map bounded

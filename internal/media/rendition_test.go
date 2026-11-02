@@ -577,16 +577,28 @@ func TestRefusalExpires(t *testing.T) {
 		m, runs, src, name := c.m, c.runs, c.src, c.name
 		clock := time.Now()
 		m.now = func() time.Time { return clock }
+		if left := m.RefusedFor(src); left != 0 {
+			t.Fatalf("%s: refused for %v before any refusal", name, left)
+		}
 		for range 2 {
 			if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 1 {
 				t.Fatalf("%s: open = %v after %d runs, want the refusal remembered", name, err, runs.Load())
 			}
 		}
+		if left := m.RefusedFor(src); left != cacheRefusalTTL {
+			t.Fatalf("%s: refused for %v, want the whole TTL", name, left)
+		}
+		if left := m.RefusedFor(src + ".gone"); left != 0 {
+			t.Fatalf("%s: a missing file refused for %v", name, left)
+		}
 		clock = clock.Add(cacheRefusalTTL - time.Second)
-		if st, _ := m.Status(src); st != CacheFailed {
-			t.Fatalf("%s: status before the TTL = %s, want failed", name, st)
+		if st, _ := m.Status(src); st != CacheFailed || m.RefusedFor(src) != time.Second {
+			t.Fatalf("%s: status before the TTL = %s, %v left, want failed for a second more", name, st, m.RefusedFor(src))
 		}
 		clock = clock.Add(time.Second)
+		if left := m.RefusedFor(src); left != 0 {
+			t.Fatalf("%s: refused for %v after the TTL", name, left)
+		}
 		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
 			t.Fatalf("%s: open after the TTL = %v after %d runs, want it tried again", name, err, runs.Load())
 		}

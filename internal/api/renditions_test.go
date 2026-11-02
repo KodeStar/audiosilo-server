@@ -110,6 +110,8 @@ type renditionsAnswer struct {
 		Path  string `json:"path"`
 		State string `json:"state"`
 		Bytes int64  `json:"bytes"`
+		// RetryAfter is absent (0) but on a remembered refusal.
+		RetryAfter int64 `json:"retry_after"`
 	} `json:"files"`
 }
 
@@ -311,6 +313,60 @@ func TestRenditionRefusals(t *testing.T) {
 	}
 	if n := r.cached(t); n != 0 {
 		t.Fatalf("%d renditions cached, want none", n)
+	}
+}
+
+// TestRenditionRefusalRetryHint (server#289): a remembered refusal says when it
+// is tried again: the 422 carries Retry-After (the refusal's hour, in seconds)
+// and the renditions answer gives the failed file retry_after; a file not
+// refused (missing, ready) has none, and a failed file that isn't there has
+// none either (nothing to retry).
+func TestRenditionRefusalRetryHint(t *testing.T) {
+	t.Parallel()
+	r := newRenditionEnv(t)
+	// The book's second part, indexed, is now bytes ffmpeg can't decode.
+	if err := os.WriteFile(filepath.Join(r.lib.Root, filepath.FromSlash(rendPart2)), []byte("not audio at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hour := int64(time.Hour / time.Second)
+	for range 2 { // the refusal made, then remembered
+		resp, body := r.do(t, "GET", r.streamURL(rendPart2, "&rendition=watch"), r.token, "")
+		secs, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64)
+		if resp.StatusCode != 422 || codeOf(body) != "rendition_failed" || err != nil || secs < hour-60 || secs > hour {
+			t.Fatalf("refused = %d %q %s, want 422 rendition_failed after about an hour", resp.StatusCode,
+				resp.Header.Get("Retry-After"), body)
+		}
+	}
+	for _, method := range []string{"GET", "POST"} {
+		extra, body, want := "&kind=watch", "", http.StatusOK
+		if method == "POST" {
+			extra, body, want = "", `{"kind":"watch"}`, http.StatusAccepted
+		}
+		resp, out := r.do(t, method, r.renditionsURL(rendPartsBook, extra), r.token, body)
+		var a renditionsAnswer
+		if resp.StatusCode != want || json.Unmarshal([]byte(out), &a) != nil || len(a.Files) != 2 {
+			t.Fatalf("%s renditions = %d %s", method, resp.StatusCode, out)
+		}
+		if f := a.Files[0]; f.State == "failed" || f.RetryAfter != 0 {
+			t.Fatalf("%s: first part %+v, want no retry hint", method, f)
+		}
+		if f := a.Files[1]; f.State != "failed" || f.RetryAfter < hour-60 || f.RetryAfter > hour {
+			t.Fatalf("%s: second part %+v, want failed with retry_after about an hour", method, f)
+		}
+		if !strings.Contains(out, `"retry_after"`) || strings.Count(out, `"retry_after"`) != 1 {
+			t.Fatalf("%s: retry_after on other files: %s", method, out)
+		}
+	}
+	r.api.renditions.Wait()
+	// A failed file that isn't there: failed, nothing to retry.
+	if err := os.Remove(filepath.Join(r.lib.Root, filepath.FromSlash(rendPart2))); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := r.do(t, "GET", r.renditionsURL(rendPartsBook, "&kind=watch"), r.token, "")
+	var a renditionsAnswer
+	if resp.StatusCode != 200 || json.Unmarshal([]byte(out), &a) != nil || len(a.Files) != 2 ||
+		a.Files[1].State != "failed" || strings.Contains(out, `"retry_after"`) {
+		t.Fatalf("a missing file = %d %s, want failed with no retry_after", resp.StatusCode, out)
 	}
 }
 

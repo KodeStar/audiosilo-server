@@ -24,7 +24,7 @@ const (
 	codeRenditionPending     = "rendition_pending"     // 503: still encoding (Retry-After)
 	codeRenditionUnavailable = "rendition_unavailable" // 404: no ffmpeg or no data dir
 	codeBadRendition         = "bad_rendition"         // 400: unknown kind, or a podcast library
-	codeRenditionFailed      = "rendition_failed"      // 422: ffmpeg refused the file, or its copy came out short (remembered for an hour)
+	codeRenditionFailed      = "rendition_failed"      // 422: ffmpeg refused the file, or its copy came out short (remembered for an hour; Retry-After)
 	codeRenditionError       = "rendition_error"       // 503: the encode failed for a reason not the file's (Retry-After)
 )
 
@@ -84,6 +84,9 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 		case errors.Is(err, media.ErrNoSource):
 			writeError(w, http.StatusNotFound, "not found")
 		case errors.Is(err, media.ErrRefused):
+			// Remembered for an hour (or until the file changes), then tried
+			// again: Retry-After says when (server#289).
+			setRetryAfter(w, a.renditions.RefusedFor(abs))
 			writeErrorCode(w, http.StatusUnprocessableEntity, codeRenditionFailed, "this file can't be encoded")
 		case a.baseCtx.Err() != nil:
 			writeError(w, http.StatusServiceUnavailable, "the server is shutting down")
@@ -101,11 +104,14 @@ func (a *API) serveRendition(w http.ResponseWriter, r *http.Request, lib *catalo
 }
 
 // renditionFile is one audio file of a book in a renditions answer: its path
-// (as /stream takes it), where its rendition stands, and its size once ready.
+// (as /stream takes it), where its rendition stands, its size once ready, and
+// for a remembered refusal (failed) the seconds until it is tried again
+// (server#289; absent for a failed file that isn't there).
 type renditionFile struct {
-	Path  string           `json:"path"`
-	State media.CacheState `json:"state"`
-	Bytes int64            `json:"bytes,omitempty"`
+	Path       string           `json:"path"`
+	State      media.CacheState `json:"state"`
+	Bytes      int64            `json:"bytes,omitempty"`
+	RetryAfter int64            `json:"retry_after,omitempty"`
 }
 
 // handlePrepareRenditions is POST /libraries/{id}/renditions?path=<book> with
@@ -159,6 +165,11 @@ func (a *API) renditionsOfBook(w http.ResponseWriter, r *http.Request, prepare b
 				out.State, out.Bytes = a.renditions.Queue(a.baseCtx, a.ffmpeg, abs)
 			} else {
 				out.State, out.Bytes = a.renditions.Status(abs)
+			}
+			if out.State == media.CacheFailed {
+				if left := a.renditions.RefusedFor(abs); left > 0 {
+					out.RetryAfter = retrySeconds(left)
+				}
 			}
 		}
 		files = append(files, out)
