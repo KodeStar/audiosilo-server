@@ -662,6 +662,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
+  Both pools open modernc's driver behind a per-connection prepared-statement cache
+  (`store/stmtcache.go`, driver `sqlite-stmtcache`): a statement's SQL text is its key, so SQL
+  built per call (a value formatted into the text, an `IN` list sized to its arguments) misses
+  and churns the cache (256 statements per connection, least recently used out); bind values as
+  parameters instead. SQL holding several statements, and a statement whose rows are still open,
+  take modernc's own path. A `conn.Raw` gets the cache's connection: it takes modernc's hooks
+  (`sqlite.HookRegisterer`); anything else of modernc's connection is `Unwrap()`'s. A join with a
+  bound parameter is re-parsed by SQLite on each run whatever the cache does (modernc's SQLite
+  3.54 with STAT4 plans it on the value; about 10 µs against 1.8 µs for a single-table lookup).
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
   `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside

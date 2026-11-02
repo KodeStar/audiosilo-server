@@ -157,7 +157,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 		o(&cfg)
 	}
 
-	writer, err := sql.Open("sqlite", dsnPragmas(dsn))
+	writer, err := sql.Open(driverName, dsnPragmas(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -185,7 +185,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 	if !isMemoryDSN(dsn) {
 		// Asked once the writer has created the file, so statfs sees it.
 		mmap := readerMmap(cfg.mmap, func() bool { return cfg.mappable(dsnFile(dsn)) })
-		reader, err := sql.Open("sqlite", dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
+		reader, err := sql.Open(driverName, dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
 		if err != nil {
 			writer.Close()
 			return nil, fmt.Errorf("open sqlite reader: %w", err)

@@ -106,7 +106,7 @@ cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
 pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup
 internal/config/      YAML + env config, validation, secure defaults
-internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
+internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
