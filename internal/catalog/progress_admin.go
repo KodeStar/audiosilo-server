@@ -234,7 +234,7 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     position=excluded.position, finished=excluded.finished, version=excluded.version,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at,
-			     `+finishChangedSet+`,
+			     `+finishChangedSet+`, `+endSpanChain+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
 			p.Version+1, p.DeviceID, stamp, started, finished, stamp)

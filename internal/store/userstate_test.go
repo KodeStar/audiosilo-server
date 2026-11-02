@@ -267,6 +267,26 @@ func TestUserStateRulesMatchTheSchema(t *testing.T) {
 	}
 }
 
+// TestUserStateProgressWatchesItsKey (server#289): every progress column but
+// its key is free, so a listening write (a sync span's place and its chain,
+// span_at) never empties the content caches; a column added to progress and
+// left out of the rule fails here, not as a silently cold cache.
+func TestUserStateProgressWatchesItsKey(t *testing.T) {
+	t.Parallel()
+	db, _ := openUserState(t)
+	cols, err := tableColumns(context.Background(), db.writer, "progress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var watched []string
+	for _, i := range db.userState["progress"].watched {
+		watched = append(watched, cols[i])
+	}
+	if want := []string{"user_id", "library_id", "rel_path"}; !slices.Equal(watched, want) {
+		t.Fatalf("progress watches %v, want only its key %v", watched, want)
+	}
+}
+
 // TestUserStateRuleWidth (S263-HOOK): the hook reads a row only up to its rule's
 // last watched column (watchedChanged), and bridge_status.status, the
 // heartbeat's up to 64 KiB, comes after it, so it is never read.

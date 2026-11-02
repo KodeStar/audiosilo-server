@@ -381,3 +381,60 @@ func TestEditedFinishHoldsAgainstAnOlderSyncUnfinish(t *testing.T) {
 		}
 	}
 }
+
+// server#289: a path is at most catalog.MaxPathBytes (4096 bytes, as sent).
+// Allowed: an event and a PUT naming a path of exactly 4096 bytes apply.
+// Denied: one byte more is the event's rejected invalid (the batch's other
+// events still apply) and the PUT's 400; neither stores anything for it.
+func TestListeningSyncPathCap(t *testing.T) {
+	t.Parallel()
+	s := newSyncEnv(t)
+	tok, _ := s.auth.IssueToken(context.Background(), s.adminID, auth.KindSession, "phone", 0)
+	atCap := "Long/" + strings.Repeat("a", catalog.MaxPathBytes-len("Long/"))
+	over := atCap + "b"
+	if len(atCap) != 4096 || len(over) != 4097 {
+		t.Fatalf("paths of %d and %d bytes", len(atCap), len(over))
+	}
+	code, a, raw := s.post(t, tok, syncBody("phone",
+		listenJSON("cap", s.lib.ID, atCap, 0, 60, "0"),
+		listenJSON("over", s.lib.ID, over, 0, 60, "0")))
+	if code != http.StatusOK || len(a.Results) != 2 {
+		t.Fatalf("sync = %d %s", code, raw)
+	}
+	if r := a.Results[0]; r.Status != "applied" {
+		t.Fatalf("at the cap: %+v", r)
+	}
+	if r := a.Results[1]; r.Status != "rejected" || r.Reason != "invalid" {
+		t.Fatalf("over the cap: %+v, want rejected invalid", r)
+	}
+
+	body := `{"position":30,"duration":120,"device_id":"old","updated_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+	if resp, raw := s.do(t, "PUT", bookURL(s.lib.ID, "progress", atCap), tok, body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT at the cap = %d %s", resp.StatusCode, raw)
+	}
+	// Every path-addressed route refuses it (pathInScope), the writes and the
+	// reads that would walk its ancestors alike.
+	for _, req := range []struct{ method, endpoint, body string }{
+		{"PUT", "progress", body},
+		{"POST", "history", `{"from_pos":1,"to_pos":5}`},
+		{"POST", "bookmarks", `{"position":3}`},
+		{"POST", "notes", `{"position":3,"body":"here"}`},
+		{"GET", "item", ""},
+	} {
+		if resp, raw := s.do(t, req.method, bookURL(s.lib.ID, req.endpoint, over), tok, req.body); resp.StatusCode != http.StatusBadRequest ||
+			!strings.Contains(raw, "path is too long") {
+			t.Fatalf("%s %s over the cap = %d %s, want 400", req.method, req.endpoint, resp.StatusCode, raw)
+		}
+	}
+	for _, table := range []string{"progress", "listening_events", "listening_sessions", "listening_history", "bookmarks", "notes"} {
+		var n int
+		if err := s.db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM `+table+` WHERE length(CAST(rel_path AS BLOB)) > ?`, catalog.MaxPathBytes).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("%s: %d rows over the cap, %v", table, n, err)
+		}
+	}
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM progress WHERE rel_path = ?`, atCap).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("progress at the cap: %d rows, %v", n, err)
+	}
+}

@@ -101,11 +101,11 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 
 // syncTargets resolves every distinct (library_id, path) the events name, as
 // PUT .../progress resolves its path: the scope check (403 is the events'
-// no_access, 404 their not_found, a path that cleans to nothing their invalid),
-// the progress key (progressPath: a file or part path keys its book), and the
-// indexed book there with its files' offsets. An event with no library or path
-// is left out (catalog checks it invalid). A failed lookup is the batch's
-// error, written here (false).
+// no_access, 404 their not_found, a path that cleans to nothing or is over
+// catalog.MaxPathBytes their invalid), the progress key (progressPath: a file
+// or part path keys its book), and the indexed book there with its files'
+// offsets. An event with no library or path is left out (catalog checks it
+// invalid). A failed lookup is the batch's error, written here (false).
 func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catalog.Scope, events []catalog.SyncEvent) (map[catalog.Ref]catalog.SyncTarget, bool) {
 	ctx := r.Context()
 	cred := credentialFrom(ctx)

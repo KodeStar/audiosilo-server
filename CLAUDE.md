@@ -291,7 +291,9 @@ revoked=0` (one calendar feed token per user; see Upcoming releases in CONVENTIO
 `(user_id, event_id)`, carried by `carryListeningState`, pruned at 120 days) and the progress columns `device_name`,
 `finish_changed_at` and the persisted offer `other_position` / `other_device_id` / `other_device_name` / `other_at` /
 `other_version`, and the index `listening_history(user_id, library_id, rel_path, ended_at)` (a span's history join;
-see Listening sync in CONVENTIONS.md).
+see Listening sync in CONVENTIONS.md). `0062` adds `progress.span_at` / `span_version` (server#289: the end of the
+span the row's device last applied, at the version then, so its backlog's chain lasts across POSTs; NULL or a
+stale version = the old rule; see Listening sync in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

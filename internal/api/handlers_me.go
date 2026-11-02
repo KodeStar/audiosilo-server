@@ -75,7 +75,8 @@ func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutProgress upserts progress using last-write-wins reconciliation, on
-// the book path addresses (progressPath), as is its listening session.
+// the book path addresses (progressPath), as is its listening session. A path
+// over catalog.MaxPathBytes is 400 (pathInScope).
 func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {

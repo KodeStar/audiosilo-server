@@ -56,10 +56,11 @@ var userStateTables = map[string]tableRule{
 	// A progress row's fields are no list's, but a new, removed or re-keyed row
 	// changes the Health summary's duplicate ranking (how many people listen to
 	// each copy: catalog.duplicateSets), so its key (user_id, library_id,
-	// rel_path) is watched.
+	// rel_path) is watched, and only its key (TestUserStateProgressWatchesItsKey:
+	// a new column belongs here, or every sync span empties the caches).
 	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
 		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
-		"other_device_id", "other_device_name", "other_at", "other_version"}},
+		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version"}},
 	// Sync v2's event log (catalog.SyncListening, migration 0061): read only by
 	// the sync itself, never by a content cache.
 	"listening_events":   {rows: true},

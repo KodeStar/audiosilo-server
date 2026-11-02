@@ -109,14 +109,21 @@ func TestListeningKeepsTheListCacheWarm(t *testing.T) {
 	if _, body := c.do(t, "GET", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), c.tok, ""); !strings.Contains(body, `"position":5`) {
 		t.Fatalf("progress after the saves: %s", body)
 	}
-	// Sync v2 (Track W1): events on the existing row (a span, which also writes a
-	// session and history, and a finish) are user state too.
+	// Sync v2 (Track W1): events on the existing row are user state too. The span
+	// (which also writes a session and history) is base 0 and further on than
+	// the row, so it is diverged with its own place kept: it writes the place and
+	// the device's chain (span_at, server#289); the finish after it moves that
+	// chain, and a PUT then ends it.
 	finish := fmt.Sprintf(`{"id":"cg-finish","kind":"finish","library_id":%d,"path":"A/Alpha One.m4b","at":%q}`,
 		c.lib.ID, time.Now().UTC().Format(time.RFC3339Nano))
-	c.must(t, "POST", "/api/v1/me/listening/sync", syncBody("web",
-		listenJSON("cg-span", c.lib.ID, "A/Alpha One.m4b", 5, 20, ""), finish))
+	if resp, body := c.do(t, "POST", "/api/v1/me/listening/sync", c.tok, syncBody("web",
+		listenJSON("cg-span", c.lib.ID, "A/Alpha One.m4b", 5, 20, "0"), finish)); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"kept":"event"`) || !strings.Contains(body, `{"id":"cg-finish","status":"applied"}`) {
+		t.Fatalf("sync = %d %s, want the span's place kept and the finish applied", resp.StatusCode, body)
+	}
+	c.must(t, "PUT", bookURL(c.lib.ID, "progress", "A/Alpha One.m4b"), `{"position":6,"duration":60}`)
 	if got := c.db.ContentGeneration(); got != gen {
-		t.Errorf("a listening sync moved the content generation %d -> %d", gen, got)
+		t.Errorf("a listening sync (or the PUT after it) moved the content generation %d -> %d", gen, got)
 	}
 }
 
