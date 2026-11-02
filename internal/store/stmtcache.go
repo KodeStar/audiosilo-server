@@ -15,11 +15,10 @@ package store
 // use is closed to make room. A statement whose schema changes is re-prepared by
 // SQLite itself (sqlite3_prepare_v2), as an uncached one would be.
 //
-// A join with a bound parameter gains little: modernc's SQLite (3.54, STAT4)
-// plans it on the parameter's value, so the next binding expires it and SQLite
-// re-parses it on its next run (about 10 µs against 1.8 µs for a single-table
-// lookup; the same join on a literal value runs in 1.6 µs). That is SQLite's
-// own re-prepare, no worse than the uncached path's prepare.
+// A join whose parameters are bare ? gains little: SQLite 3.54 reads their
+// bound values to estimate the join's rows, so each new binding expires the
+// statement and SQLite re-parses it on its next run. Joins take +? instead
+// (see SQLite in CONVENTIONS.md).
 //
 // database/sql never uses one driver connection from two goroutines at once
 // (it holds the connection's lock around every driver call, a Rows.Close from

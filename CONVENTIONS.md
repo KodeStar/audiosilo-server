@@ -668,9 +668,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and churns the cache (256 statements per connection, least recently used out); bind values as
   parameters instead. SQL holding several statements, and a statement whose rows are still open,
   take modernc's own path. A `conn.Raw` gets the cache's connection: it takes modernc's hooks
-  (`sqlite.HookRegisterer`); anything else of modernc's connection is `Unwrap()`'s. A join with a
-  bound parameter is re-parsed by SQLite on each run whatever the cache does (modernc's SQLite
-  3.54 with STAT4 plans it on the value; about 10 µs against 1.8 µs for a single-table lookup).
+  (`sqlite.HookRegisterer`); anything else of modernc's connection is `Unwrap()`'s. A join takes
+  its parameters as `+?` (`+?1`): SQLite 3.54's estimate of a join loop's rows
+  (`whereLoopOutputAdjust`) reads a bare `?`'s bound value, which marks the statement to be
+  re-parsed whenever a new value is bound, so every run (the scan's per-book joins: 40-80 µs a
+  run, 5 µs as `+?`). A unary plus on the value keeps the plan (an index still serves `col = +?`)
+  and the comparison (a parameter has no affinity or collation either way); it only hides the
+  value from the planner, which a statement whose plan must not follow its values wants anyway.
+  A single-table statement and a correlated subquery are not affected.
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
   `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
