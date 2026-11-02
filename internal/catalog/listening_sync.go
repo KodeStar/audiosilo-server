@@ -61,6 +61,11 @@ const (
 	MaxSyncEvents = 500
 	// MaxClockOffset bounds a batch's clock_offset (seconds).
 	MaxClockOffset = 1e9
+	// MaxPathBytes is the longest path, as sent, a sync event or a PUT
+	// .../progress may name (server#289): a longer one is no file's (PATH_MAX
+	// is 4096 on Linux, and the library's root comes first), and it would be
+	// stored as is on the progress, event, session and history rows.
+	MaxPathBytes = 4096
 	// syncRejectAge: an event older than this (corrected) is rejected too_old.
 	syncRejectAge = 90 * 24 * time.Hour
 	// SyncRetention is how long stored events are kept (PruneListeningEvents):
@@ -402,14 +407,15 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 }
 
 // prepareSyncEvent checks an event's fields (a known kind) and parses its
-// times, false for an invalid one: library_id > 0 and a path; a listen's
+// times, false for an invalid one: library_id > 0 and a path of at most
+// MaxPathBytes; a listen's
 // positions finite and >= 0, RFC3339 times with ended >= started at most 24 h
 // apart, a known start, file places both-or-neither with a seconds >= 0, a
 // duration >= 0 and a speed in (0, 4] (0 = 1); a finish's or unfinish's at in
 // RFC3339; a base version >= 0 when sent.
 func prepareSyncEvent(ev SyncEvent) (syncPrepared, bool) {
 	p := syncPrepared{ev: ev, speed: 1}
-	if ev.LibraryID <= 0 || ev.Path == "" || (ev.BaseVersion != nil && *ev.BaseVersion < 0) {
+	if ev.LibraryID <= 0 || ev.Path == "" || len(ev.Path) > MaxPathBytes || (ev.BaseVersion != nil && *ev.BaseVersion < 0) {
 		return p, false
 	}
 	if ev.Kind != EventListen {
