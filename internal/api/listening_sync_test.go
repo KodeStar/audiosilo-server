@@ -408,18 +408,25 @@ func TestListeningSyncPathCap(t *testing.T) {
 		t.Fatalf("over the cap: %+v, want rejected invalid", r)
 	}
 
-	prog := func(path string) string {
-		return "/api/v1/libraries/" + strconv.FormatInt(s.lib.ID, 10) + "/progress?path=" + url.QueryEscape(path)
-	}
 	body := `{"position":30,"duration":120,"device_id":"old","updated_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
-	if resp, raw := s.do(t, "PUT", prog(atCap), tok, body); resp.StatusCode != http.StatusOK {
+	if resp, raw := s.do(t, "PUT", bookURL(s.lib.ID, "progress", atCap), tok, body); resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT at the cap = %d %s", resp.StatusCode, raw)
 	}
-	if resp, raw := s.do(t, "PUT", prog(over), tok, body); resp.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(raw, "path is too long") {
-		t.Fatalf("PUT over the cap = %d %s, want 400", resp.StatusCode, raw)
+	// Every path-addressed route refuses it (pathInScope), the writes and the
+	// reads that would walk its ancestors alike.
+	for _, req := range []struct{ method, endpoint, body string }{
+		{"PUT", "progress", body},
+		{"POST", "history", `{"from_pos":1,"to_pos":5}`},
+		{"POST", "bookmarks", `{"position":3}`},
+		{"POST", "notes", `{"position":3,"body":"here"}`},
+		{"GET", "item", ""},
+	} {
+		if resp, raw := s.do(t, req.method, bookURL(s.lib.ID, req.endpoint, over), tok, req.body); resp.StatusCode != http.StatusBadRequest ||
+			!strings.Contains(raw, "path is too long") {
+			t.Fatalf("%s %s over the cap = %d %s, want 400", req.method, req.endpoint, resp.StatusCode, raw)
+		}
 	}
-	for _, table := range []string{"progress", "listening_events", "listening_sessions", "listening_history"} {
+	for _, table := range []string{"progress", "listening_events", "listening_sessions", "listening_history", "bookmarks", "notes"} {
 		var n int
 		if err := s.db.QueryRowContext(context.Background(),
 			`SELECT COUNT(*) FROM `+table+` WHERE length(CAST(rel_path AS BLOB)) > ?`, catalog.MaxPathBytes).Scan(&n); err != nil || n != 0 {

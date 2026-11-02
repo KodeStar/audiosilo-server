@@ -491,7 +491,7 @@ func (m *FileCache) refusalLeftLocked(key string) time.Duration {
 // RefusedFor is how long the remembered refusal of abs's current file has
 // left (its copy is tried again once it expires, or as soon as the file
 // changes), 0 when there is none: the hint a client is given to ask again
-// (Retry-After, a renditions answer's retry_after).
+// (Retry-After, a renditions answer's retry_after_seconds).
 func (m *FileCache) RefusedFor(abs string) time.Duration {
 	info, err := source(abs)
 	if err != nil {

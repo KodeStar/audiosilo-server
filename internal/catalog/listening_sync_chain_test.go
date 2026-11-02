@@ -7,18 +7,17 @@ import (
 )
 
 // chainBacklog is the watch's offline backlog for the server#289 tests: six
-// five-minute spans ending 60 to 35 minutes ago, every one on base (the
+// five-minute spans ending 60 to 35 minutes ago, every one on base seen (the
 // version it last saw: 0 none, else the phone's first), with a move back in
 // the middle (s4) that only a chained span applies.
-func (f *syncFixture) chainBacklog(base int64) []SyncEvent {
-	b := func() *int64 { v := base; return &v }
+func (f *syncFixture) chainBacklog(seen int64) []SyncEvent {
 	return []SyncEvent{
-		f.listen("resume", 7000, 7300, 60*time.Minute, b()),
-		f.listen("continue", 7300, 7600, 55*time.Minute, b()),
-		f.listen("continue", 7600, 7900, 50*time.Minute, b()),
-		f.listen("moved_back", 7100, 7400, 45*time.Minute, b()),
-		f.listen("continue", 7400, 7700, 40*time.Minute, b()),
-		f.listen("continue", 7700, 8000, 35*time.Minute, b()),
+		f.listen("resume", 7000, 7300, 60*time.Minute, base(seen)),
+		f.listen("continue", 7300, 7600, 55*time.Minute, base(seen)),
+		f.listen("continue", 7600, 7900, 50*time.Minute, base(seen)),
+		f.listen("moved_back", 7100, 7400, 45*time.Minute, base(seen)),
+		f.listen("continue", 7400, 7700, 40*time.Minute, base(seen)),
+		f.listen("continue", 7700, 8000, 35*time.Minute, base(seen)),
 	}
 }
 
@@ -166,20 +165,196 @@ func TestSyncChainKeepsOlderAndReplays(t *testing.T) {
 	}
 }
 
+// sameAcrossPOSTs posts the backlog events makes (on a fixture setup makes) in
+// one POST from device, then split every way listed, and fails unless each
+// split leaves exactly what the one POST did; it returns the one POST's
+// fixture and results.
+func sameAcrossPOSTs(t *testing.T, setup func() *syncFixture, device string, events func(*syncFixture) []SyncEvent,
+	splits ...[]int) (*syncFixture, []SyncResult) {
+	t.Helper()
+	one := setup()
+	backlog := events(one)
+	results := one.postSplit(t, device, backlog, len(backlog))
+	want := one.chainOutcome(t, results)
+	for _, sizes := range splits {
+		f := setup()
+		if got := f.chainOutcome(t, f.postSplit(t, device, events(f), sizes...)); got != want {
+			t.Fatalf("POSTs of %v:\n%s\nwant (one POST):\n%s", sizes, got, want)
+		}
+	}
+	return one, results
+}
+
 // A finish, an unfinish and the restart after them, each in its own POST after
 // the diverged span, chain as they do in one (TestSyncFinishKeepsSpanChain).
 func TestSyncChainFinishAcrossPOSTs(t *testing.T) {
 	t.Parallel()
-	f := newSyncFixture(t)
-	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 5000, 6000, 10*time.Minute, base(0))), statusApplied, "")
-	if r := f.syncOne(t, "watch", f.listen("resume", 60000, 61200, 40*time.Minute, base(0))); r.Status != statusDiverged {
-		t.Fatalf("first span: %+v", r)
+	one, results := sameAcrossPOSTs(t, func() *syncFixture {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "phone", f.listen("resume", 5000, 6000, 10*time.Minute, base(0))), statusApplied, "")
+		return f
+	}, "watch", func(f *syncFixture) []SyncEvent {
+		return []SyncEvent{
+			f.listen("resume", 60000, 61200, 40*time.Minute, base(0)),
+			f.finishEvent(EventFinish, 39*time.Minute+30*time.Second),
+			f.finishEvent(EventUnfinish, 39*time.Minute),
+			f.listen("restart", 0, 480, 30*time.Minute, base(0)),
+		}
+	}, []int{1, 1, 1, 1}, []int{1, 3}, []int{2, 2}, []int{3, 1})
+	if results[0].Status != statusDiverged {
+		t.Fatalf("first span: %+v", results[0])
 	}
-	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventFinish, 39*time.Minute+30*time.Second)), statusApplied, "")
-	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventUnfinish, 39*time.Minute)), statusApplied, "")
-	wantResult(t, f.syncOne(t, "watch", f.listen("restart", 0, 480, 30*time.Minute, base(0))), statusApplied, "")
-	if p := f.progress(t); p.Position != 480 || p.Finished {
+	if p := one.progress(t); p.Position != 480 || p.Finished {
 		t.Fatalf("row = %v finished=%v, want the restart's 480, unfinished", p.Position, p.Finished)
+	}
+}
+
+// A finish or unfinish with no span of the device's before it chains too: the
+// unfinish that takes another device's finished row, and a finish that makes
+// the row, are the device's chain in the next POST, so the restart after them
+// (from the unfinish's time, as the player sends it) resolves on the row there
+// as in one POST, never diverged from the device's own row.
+func TestSyncChainFromAFinishAcrossPOSTs(t *testing.T) {
+	t.Parallel()
+	restart := func(f *syncFixture) []SyncEvent {
+		return []SyncEvent{
+			f.finishEvent(EventUnfinish, 30*time.Minute),
+			f.listen("restart", 0, 480, 22*time.Minute, base(0)),
+			f.listen("continue", 480, 780, 17*time.Minute, base(0)),
+		}
+	}
+	one, _ := sameAcrossPOSTs(t, func() *syncFixture {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "phone", f.listen("resume", 5000, 6000, 3*time.Hour, base(0))), statusApplied, "")
+		wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, 2*time.Hour)), statusApplied, "")
+		return f
+	}, "watch", restart, []int{1, 2}, []int{2, 1}, []int{1, 1, 1})
+	if p := one.progress(t); p.Position != 780 || p.Finished || p.DeviceID != "watch" {
+		t.Fatalf("taken row: %+v, want the watch's 780, unfinished", p)
+	}
+
+	one, _ = sameAcrossPOSTs(t, func() *syncFixture { return newSyncFixture(t) }, "watch", func(f *syncFixture) []SyncEvent {
+		return []SyncEvent{
+			f.finishEvent(EventFinish, 40*time.Minute),
+			f.finishEvent(EventUnfinish, 39*time.Minute),
+			f.listen("restart", 0, 480, 31*time.Minute, base(0)),
+		}
+	}, []int{1, 2}, []int{2, 1}, []int{1, 1, 1})
+	if p := one.progress(t); p.Position != 480 || p.Finished {
+		t.Fatalf("made row: %+v, want the restart's 480, unfinished", p)
+	}
+}
+
+// An unfinish of another device's unfinished row takes nothing, so the
+// device's base-0 restart after it diverges from that row, in one POST as in
+// two: the further place (the phone's) is kept and the restart's offered,
+// never replaced unseen.
+func TestSyncUnfinishOfAnotherDevicesRowTakesNothing(t *testing.T) {
+	t.Parallel()
+	one, results := sameAcrossPOSTs(t, func() *syncFixture {
+		f := newSyncFixture(t)
+		wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, 3*time.Hour)), statusApplied, "")
+		wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventUnfinish, 150*time.Minute)), statusApplied, "")
+		wantResult(t, f.syncOne(t, "phone", f.listen("jump", 49700, 50000, time.Hour, base(2))), statusApplied, "")
+		return f
+	}, "watch", func(f *syncFixture) []SyncEvent {
+		return []SyncEvent{
+			f.finishEvent(EventUnfinish, 30*time.Minute),
+			f.listen("restart", 0, 480, 22*time.Minute, base(0)),
+		}
+	}, []int{1, 1})
+	wantResult(t, results[0], statusApplied, "")
+	if r := results[1]; r.Status != statusDiverged || r.Kept != "stored" {
+		t.Fatalf("restart: %+v, want diverged with the phone's place kept", r)
+	}
+	if p := one.progress(t); p.Position != 50000 || p.DeviceID != "phone" || p.OtherPlace == nil ||
+		p.OtherPlace.Position != 480 || p.OtherPlace.DeviceID != "watch" {
+		t.Fatalf("row: %+v, want the phone's 50000 with the watch's 480 offered", p)
+	}
+}
+
+// A finish or unfinish that comes back "older" decides nothing about the
+// device's spans after it in the POST: each is judged on its own against the
+// chain of the earlier POST (a jump elsewhere still diverges; a move back
+// that starts where the chain ended still applies).
+func TestSyncChainIgnoresAnOlderFinish(t *testing.T) {
+	t.Parallel()
+	setup := func() *syncFixture {
+		f := newSyncFixture(t)
+		// The phone's place 5000, its finish state last changed 30 minutes ago.
+		for i, finished := range []bool{true, false} {
+			if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 5000, Duration: syncBookLen,
+				Finished: finished, DeviceID: "phone",
+				UpdatedAt: f.clock.Add(-time.Duration(31-i) * time.Minute).Format(time.RFC3339)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The watch's first POST: a span further on, diverged, its place kept.
+		if r := f.syncOne(t, "watch", f.listen("resume", 7000, 7300, 50*time.Minute, base(0))); r.Kept != "event" {
+			t.Fatalf("first span: %+v", r)
+		}
+		return f
+	}
+	for _, older := range []bool{false, true} {
+		var unfinish []SyncEvent
+		f := setup()
+		if older {
+			unfinish = append(unfinish, f.finishEvent(EventUnfinish, 50*time.Minute-10*time.Second))
+		}
+		r := f.sync(t, f.batch(t, "watch", append(unfinish, f.listen("jump", 100, 400, 35*time.Minute, base(0)))...)).Results
+		if older {
+			wantResult(t, r[0], statusNotApplied, reasonOlder)
+		}
+		if jump := r[len(r)-1]; jump.Status != statusDiverged || jump.Kept != "stored" || f.progress(t).Position != 7300 {
+			t.Fatalf("older unfinish %v: jump %+v, row at %v; want diverged, 7300 kept", older, jump, f.progress(t).Position)
+		}
+
+		f = setup()
+		unfinish = nil
+		if older {
+			unfinish = append(unfinish, f.finishEvent(EventUnfinish, 48*time.Minute))
+		}
+		r = f.sync(t, f.batch(t, "watch", append(unfinish, f.listen("moved_back", 6800, 7070, 45*time.Minute, base(0)))...)).Results
+		if back := r[len(r)-1]; back.Status != statusApplied || f.progress(t).Position != 7070 {
+			t.Fatalf("older unfinish %v: move back %+v, row at %v; want applied at 7070", older, back, f.progress(t).Position)
+		}
+	}
+}
+
+// A finish or unfinish never dates the chain earlier than what it compares
+// against already: a late batch's unfinish keeps the end of the device's
+// later span (its restart is older than the continuation delivered first, as
+// without a chain; one POST, applied in time order, can't arrive out of
+// order), and one older than a save elsewhere since starts no chain (the
+// restart is older than that save, as without a chain).
+func TestSyncFinishNeverDatesTheChainBack(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, time.Hour)), statusApplied, "")
+	wantResult(t, f.syncOne(t, "watch", f.listen("continue", 480, 780, 30*time.Minute, base(1))), statusApplied, "")
+	r := f.sync(t, f.batch(t, "watch",
+		f.finishEvent(EventUnfinish, 40*time.Minute),
+		f.listen("restart", 0, 480, 35*time.Minute, base(1)))).Results
+	wantResult(t, r[0], statusApplied, "")
+	wantResult(t, r[1], statusNotApplied, reasonOlder)
+	if p := f.progress(t); p.Position != 780 || p.Finished || p.DeviceID != "watch" {
+		t.Fatalf("late unfinish: row %+v, want the watch's 780, unfinished", p)
+	}
+
+	f = newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, time.Hour)), statusApplied, "")
+	// An old app's save on the finished row, newer than the watch's unfinish.
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 30000, Duration: syncBookLen,
+		Finished: true, DeviceID: "tablet", UpdatedAt: f.clock.Add(-20 * time.Minute).Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	r = f.sync(t, f.batch(t, "watch",
+		f.finishEvent(EventUnfinish, 40*time.Minute),
+		f.listen("restart", 0, 480, 35*time.Minute, base(0)))).Results
+	wantResult(t, r[0], statusApplied, "")
+	wantResult(t, r[1], statusNotApplied, reasonOlder)
+	if p := f.progress(t); p.Position != 30000 {
+		t.Fatalf("unfinish under a newer save: row at %v, want the tablet's 30000", p.Position)
 	}
 }
 

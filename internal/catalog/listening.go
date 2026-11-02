@@ -256,7 +256,7 @@ const (
 // endSpanChain is the ON CONFLICT assignment of every progress write that is
 // not a sync span's (a PUT, an edit, an import, a move): the row no longer
 // holds a device's last applied span, so its device's next sync span compares
-// with updated_at again (span_at, 0062; see carryChain). A PUT may keep the
+// with updated_at again (span_at, 0062; see chainOf). A PUT may keep the
 // version, so the version check alone wouldn't end it.
 const endSpanChain = `span_at=NULL, span_version=NULL`
 

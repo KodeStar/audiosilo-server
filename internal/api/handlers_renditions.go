@@ -111,7 +111,7 @@ type renditionFile struct {
 	Path       string           `json:"path"`
 	State      media.CacheState `json:"state"`
 	Bytes      int64            `json:"bytes,omitempty"`
-	RetryAfter int64            `json:"retry_after,omitempty"`
+	RetryAfter int64            `json:"retry_after_seconds,omitempty"`
 }
 
 // handlePrepareRenditions is POST /libraries/{id}/renditions?path=<book> with

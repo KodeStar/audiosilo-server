@@ -76,14 +76,8 @@ func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 
 // handlePutProgress upserts progress using last-write-wins reconciliation, on
 // the book path addresses (progressPath), as is its listening session. A path
-// over catalog.MaxPathBytes is 400.
+// over catalog.MaxPathBytes is 400 (pathInScope).
 func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
-	// A path no file can have is refused before it is cleaned or looked up
-	// (server#289: it would be stored as is).
-	if len(r.URL.Query().Get("path")) > catalog.MaxPathBytes {
-		writeError(w, http.StatusBadRequest, "path is too long")
-		return
-	}
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)

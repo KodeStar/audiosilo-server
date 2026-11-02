@@ -595,12 +595,19 @@ func TestRefusalExpires(t *testing.T) {
 		if st, _ := m.Status(src); st != CacheFailed || m.RefusedFor(src) != time.Second {
 			t.Fatalf("%s: status before the TTL = %s, %v left, want failed for a second more", name, st, m.RefusedFor(src))
 		}
+		// Open finds the expired refusal itself (RefusedFor would forget it
+		// first), tries again and remembers the new one, which RefusedFor
+		// forgets once it expires in turn.
 		clock = clock.Add(time.Second)
-		if left := m.RefusedFor(src); left != 0 {
-			t.Fatalf("%s: refused for %v after the TTL", name, left)
-		}
 		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) || runs.Load() != 2 {
 			t.Fatalf("%s: open after the TTL = %v after %d runs, want it tried again", name, err, runs.Load())
+		}
+		if left := m.RefusedFor(src); left != cacheRefusalTTL {
+			t.Fatalf("%s: refused again for %v, want the whole TTL", name, left)
+		}
+		clock = clock.Add(cacheRefusalTTL)
+		if left := m.RefusedFor(src); left != 0 {
+			t.Fatalf("%s: refused for %v after the TTL", name, left)
 		}
 	}
 

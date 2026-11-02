@@ -111,7 +111,7 @@ type renditionsAnswer struct {
 		State string `json:"state"`
 		Bytes int64  `json:"bytes"`
 		// RetryAfter is absent (0) but on a remembered refusal.
-		RetryAfter int64 `json:"retry_after"`
+		RetryAfter int64 `json:"retry_after_seconds"`
 	} `json:"files"`
 }
 
@@ -318,7 +318,7 @@ func TestRenditionRefusals(t *testing.T) {
 
 // TestRenditionRefusalRetryHint (server#289): a remembered refusal says when it
 // is tried again: the 422 carries Retry-After (the refusal's hour, in seconds)
-// and the renditions answer gives the failed file retry_after; a file not
+// and the renditions answer gives the failed file retry_after_seconds; a file not
 // refused (missing, ready) has none, and a failed file that isn't there has
 // none either (nothing to retry).
 func TestRenditionRefusalRetryHint(t *testing.T) {
@@ -351,10 +351,10 @@ func TestRenditionRefusalRetryHint(t *testing.T) {
 			t.Fatalf("%s: first part %+v, want no retry hint", method, f)
 		}
 		if f := a.Files[1]; f.State != "failed" || f.RetryAfter < hour-60 || f.RetryAfter > hour {
-			t.Fatalf("%s: second part %+v, want failed with retry_after about an hour", method, f)
+			t.Fatalf("%s: second part %+v, want failed with retry_after_seconds about an hour", method, f)
 		}
-		if !strings.Contains(out, `"retry_after"`) || strings.Count(out, `"retry_after"`) != 1 {
-			t.Fatalf("%s: retry_after on other files: %s", method, out)
+		if strings.Count(out, `"retry_after_seconds"`) != 1 {
+			t.Fatalf("%s: retry_after_seconds on other files: %s", method, out)
 		}
 	}
 	r.api.renditions.Wait()
@@ -365,8 +365,8 @@ func TestRenditionRefusalRetryHint(t *testing.T) {
 	resp, out := r.do(t, "GET", r.renditionsURL(rendPartsBook, "&kind=watch"), r.token, "")
 	var a renditionsAnswer
 	if resp.StatusCode != 200 || json.Unmarshal([]byte(out), &a) != nil || len(a.Files) != 2 ||
-		a.Files[1].State != "failed" || strings.Contains(out, `"retry_after"`) {
-		t.Fatalf("a missing file = %d %s, want failed with no retry_after", resp.StatusCode, out)
+		a.Files[1].State != "failed" || strings.Contains(out, `"retry_after_seconds"`) {
+		t.Fatalf("a missing file = %d %s, want failed with no retry_after_seconds", resp.StatusCode, out)
 	}
 }
 

@@ -746,7 +746,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `library.SafeJoin`, which rejects traversal outside the library root.
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
-  is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
+  is the handle (a query param, to avoid encoded-slash issues). Every one checks it in
+  `pathInScope` first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
+  long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
@@ -995,7 +997,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`FileCache.Queue`) and answers 202; at most 256 encodes wait or run across the server, a stream's included
   (`cacheSpec.queueMax`): past it a prepared file stays `missing` for the client to ask again and a cold stream
   answers 503 `rendition_error`; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
-  files: [{path, state: ready|pending|failed|missing, bytes (ready only), retry_after (seconds, a remembered
+  files: [{path, state: ready|pending|failed|missing, bytes (ready only), retry_after_seconds (a remembered
   refusal only: not a failed file that isn't there)}]}` in the book's file order
   (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
   `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
@@ -2797,10 +2799,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   to apply opens no writer transaction.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
-  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, server#289; PUT
-  .../progress answers one with 400 `path is too long`). The handler resolves each distinct
+  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, server#289; every
+  path-addressed route answers one with 400 `path is too long`, `pathInScope`). The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
-  cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
+  cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
   (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
   leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as
@@ -2821,12 +2823,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unless it is the kept row's device or within 30 s; it is cleared by a non-diverged apply whose base as sent
   (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
   `updated_at` (the corrected end, or the row's own when that is later: a diverged apply never moves it back, so
-  an old app's PUT dated in between can't win, server#284; the device's later spans in the batch then compare
-  with their own span's end, `spanAt`, or a finish or unfinish of theirs after it), version + 1, never the finish. finish/unfinish apply only when newer than
+  an old app's PUT dated in between can't win, server#284; the device's later spans then compare with the end
+  of its own last span, or of a finish or unfinish of its own after it, `span_at`: the chain below), version + 1, never the finish. finish/unfinish apply only when newer than
   `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
   `finished_at` kept when already finished, the offer dropped), unfinish clears it and keeps the position, taking
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
-  diverged from the device that finished it); both bump the version.
+  diverged from the device that finished it; an unfinish of another device's unfinished row takes nothing, so
+  that device's place stays and this device's next base-0 span still diverges from it); both bump the version.
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
   start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`; a
   span from before a household switch continues the session before it; `listenedBetween`'s clip of the span;
@@ -2843,12 +2846,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
   carry `device_name` and `other_place` (omitempty). The chain lasts across POSTs (server#289, `0062`,
-  `carryChain`): `writePlace` keeps the span's end on the row as `span_at` at its version (`span_version`; a
-  chained finish or unfinish moves it), and while the row is still the device's at that version its next POST
-  compares with `span_at`, not the kept `updated_at`, and a base-0 span that continues it (from within 5 s of
-  the place, or starting 0-60 s after `span_at`, 2 s overlap) resolves on the row's version; any other base-0
-  span still diverges from its own place. Every other writer ends the chain (`endSpanChain`: the PUT, which can
-  keep the client's version, `EditProgress`, an import's apply and undo, a move or join).
+  `chainOf`): `writePlace` keeps the span's end on the row as `span_at` at its version (`span_version`; a
+  finish or unfinish that leaves the row the device's moves it there, never back, and starts one only when it
+  is not older than the row's `updated_at` (a save elsewhere since stays newer), a finish with no row starts it,
+  one that leaves another device's row ends it), and while the row is still the device's at that version its next span,
+  in this POST or a later one, compares with `span_at`, not the kept `updated_at`. A base-0 span of a later POST
+  resolves on the row's version when it continues the chain (`continues`: from within 5 s of the place, or
+  starting 0-60 s after `span_at`, 2 s overlap), and so do the POST's base-0 spans after it (in-batch chaining);
+  until one does, each is judged on its own, so one that does not still diverges from its own place (a device signed out and
+  back in, but also a backlog that resumes after a pause and a seek: one POST would have chained it). Every
+  other writer ends the chain (`endSpanChain`: the PUT, which can keep the client's version, `EditProgress`, an
+  import's apply and undo, a move or join).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and

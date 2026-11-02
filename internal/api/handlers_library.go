@@ -238,9 +238,14 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	return pathInScope(lib, scope, rawPath)
 }
 
-// pathInScope cleans rawPath and checks scope allows it (400 empty, 403 outside,
-// 404 through a hidden folder).
+// pathInScope cleans rawPath and checks scope allows it (400 empty or over
+// catalog.MaxPathBytes, 403 outside, 404 through a hidden folder).
 func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	// A path no file can have is refused before it is cleaned, looked up (a
+	// book's ancestors are walked) or stored (server#289).
+	if len(rawPath) > catalog.MaxPathBytes {
+		return nil, "", scope, http.StatusBadRequest, "path is too long"
+	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.
