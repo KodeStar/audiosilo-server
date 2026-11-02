@@ -192,7 +192,7 @@ func (b *Book) PlaysInBrowsers() bool {
 }
 
 // PlaysRemuxed reports whether the book plays in browsers once its Matroska
-// files are served as their remux to MP3 (media.Remuxer): its codec is MP3 and
+// files are served as their remux to MP3 (media.NewRemuxer): its codec is MP3 and
 // every file is in a container browsers play or is an .mka holding MP3. A
 // folder book's codec is only its first part's, so each .mka part is judged by
 // its own codec (the book's for a part indexed before per-file codecs were
@@ -210,6 +210,16 @@ func (b *Book) PlaysRemuxed() bool {
 		}
 	}
 	return true
+}
+
+// AudioFiles is the book's audio files in play order: Files, or for a
+// single-file book (a loose file at the root, a folder of one book per file),
+// which has no book_files rows, the book's own file.
+func (b *Book) AudioFiles() []BookFile {
+	if len(b.Files) == 0 && !b.IsFolder {
+		return []BookFile{{RelPath: b.RelPath, Duration: b.Duration, Format: b.Format, Codec: b.Codec, Size: b.Size}}
+	}
+	return b.Files
 }
 
 // FileRemuxable reports whether the book's file f is an .mka holding MP3, judged

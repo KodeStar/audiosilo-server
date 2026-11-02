@@ -54,6 +54,18 @@ func readMP4Narrator(r io.ReaderAt, size int64) string {
 	return tagText(strings.ToValidUTF8(string(buf[8:]), ""))
 }
 
+// MP4HasTrack reports whether the MP4 r holds (size bytes long) has a track: a
+// trak box among its moov's children (the same bounded walk). False for a file
+// that is not an MP4 or is malformed.
+func MP4HasTrack(r io.ReaderAt, size int64) bool {
+	moov, moovEnd, ok := findMP4Box(r, 0, size, "moov")
+	if !ok {
+		return false
+	}
+	_, _, ok = findMP4Box(r, moov, moovEnd, "trak")
+	return ok
+}
+
 // metaChildren is where a meta box's children start: after its four bytes of
 // version and flags (ISO's full box, as iTunes writes it), or straight away in
 // the QuickTime form, whose first child (hdlr) follows the header.

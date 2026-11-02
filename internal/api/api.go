@@ -138,7 +138,15 @@ type API struct {
 	// remux is the cache of Matroska files holding MP3 copied into plain MP3
 	// (server#174), served at the same stream URL while ffmpeg is configured
 	// (remuxOn). nil without a data dir.
-	remux *media.Remuxer
+	remux *media.FileCache
+	// renditions is the watch rendition cache (Track W2): a small AAC copy of
+	// each audio file of a book, made on request (handlers_renditions.go),
+	// offered while ffmpeg is configured (renditionsOn). nil without a data dir.
+	renditions *media.FileCache
+	// renditionWait is how long a rendition request waits for its encode before
+	// it answers 503 rendition_pending (remuxDownloadWait; a field so tests can
+	// shorten it).
+	renditionWait time.Duration
 	// remuxWait is how long a stream waits for a cold remux before it is
 	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
 	remuxWait time.Duration
@@ -228,6 +236,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
 		remuxLongWait:  remuxDownloadWait,
+		renditionWait:  remuxDownloadWait,
 		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
@@ -242,6 +251,14 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)
 		} else {
 			a.remux = rm
+		}
+		if rc, err := media.NewRenditionCache(filepath.Join(cfg.DataDir, "cache", "renditions", media.RenditionWatch), log); err != nil {
+			log.Warn("rendition cache unavailable: no watch renditions", "err", err)
+		} else {
+			a.renditions = rc
+		}
+		if a.remux != nil && a.renditions != nil {
+			a.remux.ShareDiskGuard(a.renditions) // one disk (<data>/cache): one reservation
 		}
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
@@ -280,12 +297,18 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 // ffmpeg configured (read per request; tests flip it) and the cache open.
 func (a *API) remuxOn() bool { return a.remux != nil && a.ffmpeg != "" }
 
-// WaitRemuxes waits for the remuxes and warms under way to end (the launcher
-// defers it, so once shutdown cancels the base context their ffmpeg is killed
-// and its .part removed before the process exits).
-func (a *API) WaitRemuxes() {
-	if a.remux != nil {
-		a.remux.Wait()
+// renditionsOn reports whether watch renditions are offered: ffmpeg
+// configured (read per request; tests flip it) and the cache open.
+func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != "" }
+
+// WaitMediaCaches waits for the remuxes, warms and rendition encodes under way
+// to end (the launcher defers it, so once shutdown cancels the base context
+// their ffmpeg is killed and its .part removed before the process exits).
+func (a *API) WaitMediaCaches() {
+	for _, c := range []*media.FileCache{a.remux, a.renditions} {
+		if c != nil {
+			c.Wait()
+		}
 	}
 }
 
@@ -417,6 +440,10 @@ func (a *API) Handler() http.Handler {
 	// A book's own cover and stream also take a cast token (requireBookMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireBookMediaAuth(http.HandlerFunc(a.handleCover)))
 	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireBookMediaAuth(http.HandlerFunc(a.handleStream)))
+	// Watch renditions of a book's files (Track W2): prepare them all, or read
+	// where each stands; the files themselves come from /stream?rendition=.
+	mux.Handle("POST /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handlePrepareRenditions)))
+	mux.Handle("GET /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handleRenditionStatus)))
 	// A community cover the book's /meta envelope hands out, as a thumbnail from
 	// this server (the web player's CSP takes images only from it).
 	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))

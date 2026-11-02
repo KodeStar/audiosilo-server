@@ -253,6 +253,15 @@ describe('versions and clients', () => {
     expect(clientKind({ app: 'AudioSilo Admin', platform: 'web' })).toBe('console');
     expect(clientKind({ app: 'AudioSilo', platform: 'iOS' })).toBe('phone');
     expect(clientKind({ app: 'AudioSilo', platform: 'web' })).toBe('web');
+    expect(clientKind({ app: 'audiosilo-watch', platform: 'watchos' })).toBe('watch');
+    expect(clientKind({ app: 'audiosilo-watch', platform: 'wearos' })).toBe('watch');
+    expect(clientParts({ app: 'audiosilo-watch', version: '0.1.0', platform: 'watchos' })).toEqual({
+      app: 'audiosilo-watch 0.1.0',
+      platform: 'Apple Watch',
+    });
+    expect(clientParts({ app: 'audiosilo-watch', version: '', platform: 'wearos' }).platform).toBe(
+      'Wear OS',
+    );
     expect(clientParts({ app: 'AudioSilo', version: '1.4.2', platform: 'android' })).toEqual({
       app: 'AudioSilo 1.4.2',
       platform: 'Android',
@@ -261,6 +270,9 @@ describe('versions and clients', () => {
       app: 'Shelfie',
       platform: 'tv',
     });
+    expect(clientParts({ app: 'Shelfie', version: '', platform: 'constructor' }).platform).toBe(
+      'constructor',
+    );
   });
 });
 

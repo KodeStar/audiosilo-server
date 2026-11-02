@@ -90,7 +90,7 @@ type Metadata struct {
 // .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
 // is in the library too, though no browser or iOS player opens the container:
 // with ffmpeg configured an .mka holding MP3 is served as its lossless remux to
-// MP3 at the same stream URL (media.Remuxer, server#174), so every client plays
+// MP3 at the same stream URL (media.NewRemuxer, server#174), so every client plays
 // it; one holding another codec plays only in the web player, through
 // ?transcode=1 (#161).
 // An .mka beside a file of the same name in another audio format is that file's

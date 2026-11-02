@@ -142,15 +142,14 @@ func (m *mkaEnv) cachedFiles(t *testing.T) int {
 	return n
 }
 
-// holdRemuxes holds the env's remuxes until the returned release is called
-// (also at cleanup, before the env waits for its remuxes, so a failed test
-// never hangs).
-func (m *mkaEnv) holdRemuxes(t *testing.T) (release func()) {
+// holdRuns holds the runs of c (the env's remux or rendition cache) until the
+// returned release is called (also at cleanup, before the env waits for its
+// media caches, so a failed test never hangs).
+func holdRuns(t *testing.T, c *media.FileCache) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
-	m.api.remux.HoldRemuxesForTests(gate)
-	var once sync.Once
-	release = func() { once.Do(func() { close(gate) }) }
+	c.HoldRunsForTests(gate)
+	release = sync.OnceFunc(func() { close(gate) })
 	t.Cleanup(release)
 	return release
 }
@@ -382,7 +381,7 @@ func TestMatroskaRemuxWarmsOnItem(t *testing.T) {
 	t.Parallel()
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
-	release := m.holdRemuxes(t)
+	release := holdRuns(t, m.api.remux)
 
 	// Held remuxes: the answers still come back at once.
 	if resp, body := m.do(t, "GET", m.url("item", mkaMixed), m.token, ""); resp.StatusCode != http.StatusOK {
@@ -430,7 +429,7 @@ func TestMatroskaColdRemuxTranscodes(t *testing.T) {
 	m := newMKAEnv(t)
 	m.api.ffmpeg = "ffmpeg"
 	m.api.remuxWait = 20 * time.Millisecond
-	release := m.holdRemuxes(t)
+	release := holdRuns(t, m.api.remux)
 
 	resp, body := m.do(t, "GET", m.url("stream", mkaFile), m.token, "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "audio/mpeg" ||
@@ -510,7 +509,7 @@ func TestMatroskaColdRemuxWaits(t *testing.T) {
 			m := newMKAEnv(t)
 			m.api.ffmpeg = "ffmpeg"
 			m.api.remuxWait = 20 * time.Millisecond
-			release := m.holdRemuxes(t)
+			release := holdRuns(t, m.api.remux)
 			if tc.fill {
 				for range cap(m.api.transcodeSem) {
 					m.api.transcodeSem <- struct{}{}
@@ -561,7 +560,7 @@ func TestMatroskaColdRemuxWaitBounded(t *testing.T) {
 			m.api.ffmpeg = "ffmpeg"
 			m.api.remuxWait = 20 * time.Millisecond
 			m.api.remuxLongWait = 100 * time.Millisecond
-			m.holdRemuxes(t)
+			holdRuns(t, m.api.remux)
 			if tc.fill {
 				for range cap(m.api.transcodeSem) {
 					m.api.transcodeSem <- struct{}{}

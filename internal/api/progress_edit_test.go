@@ -45,14 +45,16 @@ func TestEditMyProgress(t *testing.T) {
 	}
 	started := p.StartedAt
 	// A device save that knows the length (the fixtures have none without ffprobe).
-	if _, err := e.cat.SaveProgress(ctx, e.kidID, catalog.Progress{Ref: ref, Position: 30, Duration: 120,
-		UpdatedAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339)}); err != nil {
+	if _, err := e.cat.SaveProgressFrom(ctx, e.kidID, 0, catalog.Progress{Ref: ref, Position: 30, Duration: 120,
+		DeviceName: "Kid's iPad", UpdatedAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339)}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Mark finished: the position goes to the end, finished now.
+	// Mark finished: the position goes to the end, finished now; the answer
+	// names the device that saved the place (server#284), as progress reads do.
 	status, p, raw = e.patchProgress(t, e.kidTok, cradleBook, `{"finished":true}`)
-	if status != http.StatusOK || !p.Finished || p.Position != 120 || p.FinishedAt == "" || p.StartedAt != started || p.Version != 3 {
+	if status != http.StatusOK || !p.Finished || p.Position != 120 || p.FinishedAt == "" || p.StartedAt != started || p.Version != 3 ||
+		p.DeviceName != "Kid's iPad" {
 		t.Fatalf("mark finished = %d %s", status, raw)
 	}
 

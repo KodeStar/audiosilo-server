@@ -757,13 +757,12 @@ func jsonOrNil(p *Progress) (any, error) {
 // "older" and can't undo it), at progressRowArgs' changedAt.
 const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
-	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),CASE WHEN ?6 THEN ?13 END)
+	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),` + finishChangedValue + `)
 	ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 	    position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 	    playback_speed=excluded.playback_speed, version=excluded.version, device_id=excluded.device_id,
 	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at,
-	    finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
-	                           ELSE progress.finish_changed_at END`
+	    ` + finishChangedSet
 
 // progressRowArgs are progressUpsert's arguments for p as userID's progress,
 // changedAt the finish_changed_at a finish-state change records.

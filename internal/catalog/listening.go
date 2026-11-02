@@ -213,7 +213,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
 			     finish_changed_at)
-			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,CASE WHEN ?6 THEN ?11 END,?12,CASE WHEN ?6 THEN ?13 END)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,CASE WHEN ?6 THEN ?11 END,?12,`+finishChangedValue+`)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, duration=excluded.duration,
 			     finished=excluded.finished, playback_speed=excluded.playback_speed,
@@ -222,8 +222,7 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 			     finished_at=CASE WHEN NOT excluded.finished THEN NULL
 			                      WHEN progress.finished THEN progress.finished_at
 			                      ELSE ?11 END,
-			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
-			                            ELSE progress.finish_changed_at END
+			     `+finishChangedSet+`
 			 RETURNING `+progressColumns,
 			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
 			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp, in.DeviceName, at), &in); err != nil {
@@ -238,6 +237,21 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 	}
 	return out, nil
 }
+
+// finishChangedValue and finishChangedSet are the one statement of the rule
+// every progress upsert that writes finished follows (Sync v2: a finish or
+// unfinish event older than the change is then "older" and can't undo it):
+// SaveProgressFrom, EditProgress and an import's progressUpsert, each binding
+// the finished value as ?6 and the change's time as ?13 (the sync's own finish
+// writes stamp it directly). finishChangedValue is finish_changed_at in the
+// VALUES: the time when the row is inserted finished, else NULL;
+// finishChangedSet its ON CONFLICT assignment: the time when the write flips
+// finished, else the row's own.
+const (
+	finishChangedValue = `CASE WHEN ?6 THEN ?13 END`
+	finishChangedSet   = `finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
+	                                         ELSE progress.finish_changed_at END`
+)
 
 // finishChangeStamp is the time a write that changes a row's finished state
 // records as finish_changed_at (and a PUT's event time): the write's own
