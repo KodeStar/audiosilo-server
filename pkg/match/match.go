@@ -112,6 +112,7 @@ type candLink struct {
 // while the Index is in use.
 type Index struct {
 	books []Book
+	opts  Options // what the candidates are prepared and scored under
 	prep  []prepBook
 }
 
@@ -127,24 +128,31 @@ type prepBook struct {
 	normSeries string // NormalizeSeries(b.Series)
 
 	toksDone bool
-	toks     []string // titleTokens(b.Title, b.Series)
+	toks     []string // titleTokens(b.Title, b.Series, opts)
 
 	seqDone bool
 	seq     float64 // bookSeqRef(b, b.Series)
 	seqOK   bool
 
 	ownDone bool // the bare branch under the candidate's own (non-blank) series
-	bare    bool // bareTitle(b.Title, b.Series)
+	bare    bool // bareTitle(b.Title, b.Series, opts)
 	veto    float64
 	vetoOK  bool // bareSeq(b.Title, b.Series), made when bare
 
 	lowerDone  bool
 	lowerTitle string // strings.ToLower(b.Title)
+
+	exactDone bool
+	exactKey  string // exactTitleKey(b.Title), for Options.ExactTitle
 }
 
 // NewIndex prepares books for Best. It keeps the slice, not a copy.
-func NewIndex(books []Book) *Index {
-	return &Index{books: books, prep: make([]prepBook, len(books))}
+func NewIndex(books []Book) *Index { return NewIndexWith(books, Options{}) }
+
+// NewIndexWith prepares books for BestWith under o: its Best and BestScore
+// answer what BestWith(books, q, o) does. It keeps the slice, not a copy.
+func NewIndexWith(books []Book, o Options) *Index {
+	return &Index{books: books, opts: o, prep: make([]prepBook, len(books))}
 }
 
 func (x *Index) gate(i int) *prepBook {
@@ -173,7 +181,7 @@ func (x *Index) series(i int) *prepBook {
 func (x *Index) toks(i int) []string {
 	p := &x.prep[i]
 	if !p.toksDone {
-		p.toks = titleTokens(x.books[i].Title, x.books[i].Series)
+		p.toks = titleTokens(x.books[i].Title, x.books[i].Series, x.opts)
 		p.toksDone = true
 	}
 	return p.toks
@@ -192,7 +200,7 @@ func (x *Index) own(i int) *prepBook {
 	p := &x.prep[i]
 	if !p.ownDone {
 		b := &x.books[i]
-		p.bare = bareTitle(b.Title, b.Series)
+		p.bare = bareTitle(b.Title, b.Series, x.opts)
 		if p.bare {
 			p.veto, p.vetoOK = bareSeq(b.Title, b.Series)
 		}
@@ -210,20 +218,48 @@ func (x *Index) lowerTitle(i int) string {
 	return p.lowerTitle
 }
 
+func (x *Index) exactKey(i int) string {
+	p := &x.prep[i]
+	if !p.exactDone {
+		p.exactKey = exactTitleKey(x.books[i].Title)
+		p.exactDone = true
+	}
+	return p.exactKey
+}
+
 // Best returns the index of the best-matching book and whether it cleared the
-// confidence threshold (-1, false when none match). A caller scoring many
-// queries against one list prepares it once with NewIndex instead.
+// confidence threshold (-1, false when none match). It is BestWith under the
+// default Options: none of the opt-in rules. A caller scoring many queries
+// against one list prepares it once with NewIndex instead.
 func Best(books []Book, q Query) (int, bool) { return NewIndex(books).Best(q) }
 
+// BestWith is Best under o's opt-in rules (see Options), also returning the
+// winning score so a caller matching many queries against one list can compare
+// two that land on the same book (an ASIN match scores ScoreASIN). The score is 0
+// with -1, false when none match. A caller scoring many queries against one
+// list prepares it once with NewIndexWith instead.
+func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
+	return NewIndexWith(books, o).BestScore(q)
+}
+
 // Best is the package-level Best over the prepared candidates: the same
-// answer, with each candidate's own derivations made once for every query.
+// answer, with each candidate's own derivations made once for every query. An
+// Index made by NewIndexWith answers under its Options.
 func (x *Index) Best(q Query) (int, bool) {
-	books := x.books
+	i, _, ok := x.BestScore(q)
+	return i, ok
+}
+
+// BestScore is the package-level BestWith over the prepared candidates, under
+// the Options the Index was made with: the best match's index, its score and
+// whether it cleared the threshold.
+func (x *Index) BestScore(q Query) (int, float64, bool) {
+	books, o := x.books, x.opts
 	// 1. ASIN - exact, highest confidence (rare in practice, but decisive).
 	if q.ASIN != "" {
 		for i := range books {
 			if books[i].ASIN != "" && strings.EqualFold(q.ASIN, books[i].ASIN) {
-				return i, true
+				return i, ScoreASIN, true
 			}
 		}
 	}
@@ -244,10 +280,11 @@ func (x *Index) Best(q Query) (int, bool) {
 		qForms      []string // seriesForms(q.Series), made when first needed
 		qFormsDone  bool
 		ownNums     qNums
+		qExact      string // Options.ExactTitle's key ("" = the rule is off for q)
 		linkMemo    map[string]candLink
 	)
 	numsUnder := func(seriesRef string) qNums {
-		n := qNums{bare: bareTitle(q.Title, seriesRef)}
+		n := qNums{bare: bareTitle(q.Title, seriesRef, o)}
 		n.veto, n.vetoOK = bareSeq(q.Title, seriesRef)
 		if n.bare {
 			// A bare title's own number, else the sequence column it was scanned with.
@@ -271,13 +308,19 @@ func (x *Index) Best(q Query) (int, bool) {
 		}
 		if !qReady {
 			qSeries = NormalizeSeries(q.Series)
-			qToks = titleTokens(q.Title, q.Series)
+			qToks = titleTokens(q.Title, q.Series, o)
 			if len(qToks) == 0 {
-				qToks = titleTokens(q.TitleShort, q.Series)
+				qToks = titleTokens(q.TitleShort, q.Series, o)
 			}
 			qSeq, qHasSeq = querySeq(q)
 			qTitleLower = strings.ToLower(q.Title)
 			ownNums = numsUnder(q.Series)
+			// Options.ExactTitle's key, left empty when the query's title is just
+			// its series name (and number): a same-titled candidate is then a
+			// sibling volume.
+			if o.ExactTitle && (qSeries == "" || !ownNums.bare) {
+				qExact = exactTitleKey(q.Title)
+			}
 			// Candidate lists repeat a series across its volumes, and this
 			// derivation depends only on (q.Title, b.Series), so it is memoized
 			// per query.
@@ -333,7 +376,7 @@ func (x *Index) Best(q Query) (int, bool) {
 			if ownRef {
 				bBare = x.own(i).bare
 			} else {
-				bBare = bareTitle(b.Title, bSeriesRef)
+				bBare = bareTitle(b.Title, bSeriesRef, o)
 			}
 		case bSeriesTrim == "" && qSeries != "":
 			// The series must actually OCCUR in that title. Reducing to nothing is
@@ -344,12 +387,13 @@ func (x *Index) Best(q Query) (int, bool) {
 				qForms, qFormsDone = seriesForms(q.Series), true
 			}
 			if _, ok := seriesRefInForms(x.lowerTitle(i), qForms); ok {
-				bBare = bareTitle(b.Title, bSeriesRef)
+				bBare = bareTitle(b.Title, bSeriesRef, o)
 				seriesLinked = bBare
 			}
 		}
 		score := 0.0
-		if seriesLinked && (qn.bare || bBare) {
+		switch {
+		case seriesLinked && (qn.bare || bBare):
 			// A bare title ("Series: Volume N", or just the series name - Audible
 			// lists whole series that way) carries no title evidence: token overlap
 			// is the series matching itself, and the volume number is the only
@@ -362,8 +406,8 @@ func (x *Index) Best(q Query) (int, bool) {
 			bConf, bConfOK := b.SeriesIndex, b.SeriesIndex > 0
 			if bBare {
 				if ownRef {
-					o := x.own(i)
-					bVetoSeq, bVetoOK = o.veto, o.vetoOK
+					p := x.own(i)
+					bVetoSeq, bVetoOK = p.veto, p.vetoOK
 				} else {
 					bVetoSeq, bVetoOK = bareSeq(b.Title, bSeriesRef)
 				}
@@ -375,6 +419,12 @@ func (x *Index) Best(q Query) (int, bool) {
 						bConf, bConfOK = bookSeqRef(*b, bSeriesRef)
 					}
 				}
+			}
+			if o.SeriesMarker && !bBare && !bConfOK {
+				// A wordy title with no column may still name its place right after
+				// the series ("Iron Will: Dragon Heart Series, Book 2"): confirm-grade
+				// like the column, never a veto.
+				bConf, bConfOK = seriesBookMarker(b.Title, bSeriesRef)
 			}
 			// Only two bare sides stating their OWN explicit numbers may disagree
 			// hard enough to mean "a sibling, not this book" (see bookSeqRef for why
@@ -397,7 +447,20 @@ func (x *Index) Best(q Query) (int, bool) {
 				// is still claimable by volume 1 - pinned in TestBestSequenceConflict).
 				score = scoreBareVol1
 			}
-		} else {
+		default:
+			if o.WordlessFallback && qHasSeq && x.seriesOnly(i) {
+				// The fallback gave this series-named candidate its title's words
+				// back, so token overlap is the series matching itself: like a bare
+				// pair, only its number (1 when it states none) may agree, or one
+				// numberless volume would absorb every later one.
+				bSeq, ok := x.seqRef(i)
+				if !ok {
+					bSeq = 1
+				}
+				if !seqEqual(bSeq, qSeq) {
+					continue
+				}
+			}
 			bToks := x.toks(i)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
@@ -422,14 +485,24 @@ func (x *Index) Best(q Query) (int, bool) {
 				}
 			}
 		}
+		if qExact != "" && x.exactKey(i) == qExact && !x.seriesOnly(i) {
+			// Options.ExactTitle: the same title by the same person is the book, even
+			// when the two sides file it under differently named series - unless a
+			// side is just its series name (and number), which every volume shares.
+			// A bonus on the pair's own score, never in place of it: two volumes
+			// whose titles differ only in a bracketed group ("Forged in Blood (Part
+			// 1)", "(Part 2)") share the key, and the series and number still tell
+			// them apart.
+			score += scoreExactTitle
+		}
 		if score > bestScore {
 			bestScore, best = score, i
 		}
 	}
 	if bestScore >= threshold {
-		return best, true
+		return best, bestScore, true
 	}
-	return -1, false
+	return -1, 0, false
 }
 
 // stripMatchNoise strips parenthetical/bracketed groups (stripParenGroups) and
@@ -448,8 +521,17 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 // removed: "Diary of a Wimpy Kid: The Ugly Truth (Book 5)" + series "Diary of a
 // Wimpy Kid" → "The Ugly Truth". Useful both to name a file and (tokenized) to
 // match. Falls back to the original (minus parentheticals) if cleaning empties it.
-func CleanTitle(title, series string) string {
-	t := residualTitle(title, series)
+func CleanTitle(title, series string) string { return cleanTitle(title, series, Options{}) }
+
+// cleanTitle is CleanTitle under o. With Options.WordlessFallback a residual
+// with no word tokens and no digit ("The" of "The Mayor of Noobtown" in series
+// "Mayor of Noobtown") falls back like an empty one; a residual holding a number
+// is a volume's own, so it stays.
+func cleanTitle(title, series string, o Options) string {
+	t := residualTitle(title, series, o)
+	if o.WordlessFallback && !strings.ContainsAny(t, "0123456789") && len(tokenize(t)) == 0 {
+		t = ""
+	}
 	if t == "" {
 		t = tidyTitle(stripMatchNoise(title))
 	}
@@ -462,8 +544,14 @@ func CleanTitle(title, series string) string {
 // residualTitle is the title with the series name and numbering/edition fluff
 // removed and NO fallback - empty when the title carries nothing of its own
 // ("Unintended Cultivator: Volume 9" with that series is pure series + number).
-func residualTitle(title, series string) string {
+func residualTitle(title, series string, o Options) string {
 	t := stripSeries(title, series)
+	if o.DropUnabridged && strings.ContainsAny(t, "([") {
+		// "(Unabridged)" is not genre fluff, so it kept a genre tail before it
+		// ("The Primal Hunter 15: A LitRPG Adventure (Unabridged)"). The
+		// regexp runs only on a title holding an opening bracket.
+		t = unabridgedGroup.ReplaceAllString(t, " ")
+	}
 	t = dropGenreSubtitle(t)
 	t = stripMatchNoise(t)
 	t = replaceFluff(t)
@@ -473,8 +561,8 @@ func residualTitle(title, series string) string {
 // bareTitle reports whether a title reduces to nothing beyond its series name and
 // numbering - the shape whose CleanTitle fallback reintroduces the series words,
 // making token overlap between two such titles meaningless as title evidence.
-func bareTitle(title, series string) bool {
-	return len(tokenize(residualTitle(title, series))) == 0
+func bareTitle(title, series string, o Options) bool {
+	return len(tokenize(residualTitle(title, series, o))) == 0
 }
 
 // seriesForms enumerates the spellings one series name appears in, most specific
@@ -586,7 +674,13 @@ func dropSeriesSuffix(s string) string {
 func containsPhraseLower(ls, sub string) bool {
 	// Offsets index the lowered copies only, and lowering preserves whether a rune
 	// is alphanumeric, so the boundary test needs no mapping back onto the original.
-	lsub := strings.ToLower(sub)
+	return boundedMatch(ls, strings.ToLower(sub), func(int) bool { return true })
+}
+
+// boundedMatch reports whether fn accepts the end offset of some occurrence of
+// the lowercased lsub in the lowercased ls that sits on alphanumeric boundaries,
+// trying them left to right. An empty lsub never matches.
+func boundedMatch(ls, lsub string, fn func(end int) bool) bool {
 	if lsub == "" {
 		return false
 	}
@@ -596,7 +690,7 @@ func containsPhraseLower(ls, sub string) bool {
 			return false
 		}
 		i += from
-		if boundedAt(ls, i, i+len(lsub)) {
+		if end := i + len(lsub); boundedAt(ls, i, end) && fn(end) {
 			return true
 		}
 		from = i + 1
@@ -869,8 +963,8 @@ var titleStopwords = map[string]bool{
 
 // titleTokens reduces a title to its set of significant lowercase word tokens after
 // CleanTitle has removed the series name and fluff.
-func titleTokens(title, series string) []string {
-	return tokenize(CleanTitle(title, series))
+func titleTokens(title, series string, o Options) []string {
+	return tokenize(cleanTitle(title, series, o))
 }
 
 // tokenize splits a cleaned title into its significant lowercase word tokens,

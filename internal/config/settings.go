@@ -113,6 +113,8 @@ var fields = []field{
 	{key: "modules.podcasts.enabled", env: "AUDIOSILO_MODULES_PODCASTS_ENABLED", setting: "modules.podcasts", ptr: func(c *Config) any { return &c.Modules.Podcasts.Enabled }},
 	{key: "modules.contributions.enabled", env: "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", setting: "modules.contributions",
 		ptr: func(c *Config) any { return &c.Modules.Contributions.Enabled }},
+	{key: "modules.audible.enabled", env: "AUDIOSILO_MODULES_AUDIBLE_ENABLED", setting: "modules.audible",
+		ptr: func(c *Config) any { return &c.Modules.Audible.Enabled }},
 
 	// Podcast directory search: read once at start, no console setting (the
 	// podcasts module is the live switch).

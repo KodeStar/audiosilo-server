@@ -2864,3 +2864,97 @@ export interface LibraryPreviewRequest {
   root: string;
   ignore_patterns?: string[];
 }
+
+// Audible (Bridge Phase 4a, handlers_audible.go, catalog/audible.go): the
+// accounts the Bridge signed in to, each mapped to a person and a books library
+// on the Bridge's own page, and the titles each owns. Read-only here.
+
+/** A title's state: what the account's last poll said, or gone from it. */
+export type AudibleTitleState = 'available' | 'preorder' | 'unavailable' | 'gone';
+export const AUDIBLE_TITLE_STATES: readonly AudibleTitleState[] = [
+  'available',
+  'preorder',
+  'unavailable',
+  'gone',
+];
+
+/** What an account backs up after each poll (Phase 4b). */
+export type AudiblePolicy = 'all' | 'series' | 'manual';
+
+/** An account's titles counted (GET /admin/audible/accounts). */
+export interface AudibleCounts {
+  total: number;
+  available: number;
+  preorder: number;
+  unavailable: number;
+  gone: number;
+  /** Titles matched to a book on this server. */
+  matched: number;
+}
+
+/** One Audible account (catalog.AudibleAccount): its mapping, never a credential. */
+export interface AudibleAccount {
+  id: string;
+  label: string;
+  /** The store: us, uk, de, ... */
+  marketplace: string;
+  user_id: number;
+  user: { id: number; display_name: string };
+  /** null while paused: its library was deleted. */
+  library_id: number | null;
+  library: { id: number; name: string } | null;
+  paused: boolean;
+  policy: AudiblePolicy;
+  /** Keep the place in step with Audible (Phase 4c). */
+  sync: boolean;
+  poll_hours: number;
+  created_at: string;
+  updated_at: string;
+  last_poll_at: string | null;
+  last_queued_at: string | null;
+  titles?: AudibleCounts;
+}
+
+/** GET /admin/audible/accounts. */
+export interface AudibleAccounts {
+  accounts: AudibleAccount[];
+}
+
+/** One title an account owns (catalog.AudibleTitle). */
+export interface AudibleTitle {
+  account: string;
+  asin: string;
+  title: string;
+  authors: string[];
+  series: { name: string; position: string }[];
+  /** YYYY-MM-DD, "" when unknown. */
+  release_date: string;
+  runtime_s: number;
+  state: AudibleTitleState;
+  reason: string;
+  /** The book on this server it was matched to, by ASIN or by title and author. */
+  match: { library_id: number; path: string; how: 'asin' | 'fuzzy' } | null;
+  rejected: boolean;
+  ignored: boolean;
+  dest_path: string;
+  first_seen: string;
+  updated_at: string;
+  import_job_id: number | null;
+}
+
+/** GET /admin/audible/titles: a page, and the next page's cursor ("" at the end). */
+export interface AudibleTitlePage {
+  titles: AudibleTitle[];
+  next: string;
+}
+
+/** GET /admin/audible/titles filters. */
+export interface AudibleTitleQuery {
+  account?: string;
+  state?: AudibleTitleState;
+  /** 1: on this server only; 0: not on it. */
+  matched?: 0 | 1;
+  q?: string;
+  after?: string;
+  limit?: number;
+}

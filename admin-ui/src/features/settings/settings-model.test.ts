@@ -19,8 +19,16 @@ describe('outOfRange', () => {
 describe('visiblePages', () => {
   const pages = ['general', 'bridge', 'modules'] as const;
 
-  it('lists every page while no module brings one (Phase 2a)', () => {
-    expect(visiblePages(SETTINGS_PAGES, settingsWith())).toEqual([...SETTINGS_PAGES]);
+  it("lists every page but a module's whose module is off", () => {
+    expect(visiblePages(SETTINGS_PAGES, settingsWith())).toEqual(
+      SETTINGS_PAGES.filter((p) => p !== 'audible'),
+    );
+    expect(
+      visiblePages(
+        SETTINGS_PAGES,
+        settingsWith({ modules: { contributions: false, audible: true } }),
+      ),
+    ).toEqual([...SETTINGS_PAGES]);
     expect(SETTINGS_PAGES).toContain('modules');
     expect(SETTINGS_PAGES.indexOf('modules')).toBe(SETTINGS_PAGES.indexOf('bridge') + 1);
   });

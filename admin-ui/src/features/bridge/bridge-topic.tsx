@@ -30,6 +30,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { formatDateTime, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { AudibleAccountsCard } from '@/features/audible/audible-accounts-card';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { queueJob } from './bridge-actions';
 import { BridgeCompose } from './bridge-compose';
@@ -188,6 +189,7 @@ function Paired({
   onPair: () => void;
   making: boolean;
 }) {
+  const settings = useSettings();
   const setup = status.setup;
   const setupCard = setup ? <SetupCard status={status} setup={setup} /> : null;
   const setupFirst = setup ? presence(status) !== 'offline' && !setupComplete(setup) : false;
@@ -197,6 +199,8 @@ function Paired({
       <StatusCard status={status} onPair={onPair} making={making} />
       {setupFirst ? null : setupCard}
       <LibrariesCard status={status} />
+      {/* Audible (Phase 4a): the accounts, while the module is on. */}
+      {settings.data?.modules?.audible ? <AudibleAccountsCard uiUrl={status.ui_url} /> : null}
       <WorkersCard status={status} />
       <JobsCard libraryNames={libraryNames} uiUrl={status.ui_url} />
       <UnpairZone />

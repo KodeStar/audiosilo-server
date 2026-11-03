@@ -1214,6 +1214,8 @@ describe('cancelledView (BRIDGE-02)', () => {
     for (const error of [
       'a generate job for the book replaced it; make the read-along again after',
       'a newer request replaced it',
+      'the Audible account was removed',
+      "the Audible account's library was deleted",
     ]) {
       expect(cancelledView(cancelled({ error }))).toEqual({ byAdmin: false, reason: error });
     }
