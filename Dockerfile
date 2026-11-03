@@ -37,7 +37,8 @@ RUN npm run build
 # and glibc's static libraries; a cross leg adds the target's cross compiler.
 # netgo and osusergo keep the static binary off glibc's NSS, and
 # sqlite_omit_load_extension off dlopen. SQLITE_ENGINE=modernc builds the
-# pure-Go engine without cgo, as before.
+# pure-Go engine without cgo, as before. Keep the tags and the static link in
+# step with .goreleaser.yml's audiosilo-linux build (the native tarballs).
 FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin

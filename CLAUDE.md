@@ -39,10 +39,8 @@ setup wizard** instead of the auto-admin banner - see below).
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
 `DISTRIBUTION.md`): the Linux binaries build the native SQLite engine in, static
-against glibc like the Docker image (see the Dockerfile's build stage; the runner
-cross-compiles arm64 with `aarch64-linux-gnu-gcc`), and macOS/Windows stay CGO-free
-(the pure-Go engine). Two
-build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
+against glibc like the Docker image (see the Dockerfile's build stage), and
+macOS/Windows stay CGO-free (the pure-Go engine). Two build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
 the web player into the binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
 `web_dir`. **ffmpeg/ffprobe are NOT bundled** (large, and usually already present):

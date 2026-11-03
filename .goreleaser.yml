@@ -6,10 +6,8 @@
 # sqlite_native engine, see SQLite in CONVENTIONS.md), linked statically against
 # glibc exactly as the Docker image's build stage does: one static binary that
 # runs on any distro, Alpine included (the LinuxServer.io image downloads these
-# tarballs), with glibc's allocator rather than musl's. They need a C compiler
-# per architecture (release.yml installs the arm64 cross compiler on the amd64
-# runner). macOS and Windows stay CGO-free (modernc's pure-Go engine), so they
-# cross-compile from the same runner with no C toolchain.
+# tarballs), with glibc's allocator rather than musl's. macOS and Windows stay
+# CGO-free (modernc's pure-Go engine), so they cross-compile with no C toolchain.
 #
 # Self-contained where it's cheap: the admin console (admin-ui/) is always
 # embedded (built by a before-hook), and the web player is embedded via `-tags
@@ -54,7 +52,7 @@ builds:
       - -trimpath
       - -tags=embedplayer,sqlite_native,sqlite_fts5,sqlite_preupdate_hook,sqlite_omit_load_extension,netgo,osusergo
     ldflags:
-      - -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
+      - &version_ldflags -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
       - -linkmode external -extldflags -static
     goos: [linux]
     goarch: [amd64, arm64]
@@ -69,7 +67,7 @@ builds:
       - -trimpath
       - -tags=embedplayer
     ldflags:
-      - -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
+      - *version_ldflags
     goos: [darwin, windows]
     goarch: [amd64, arm64]
 
