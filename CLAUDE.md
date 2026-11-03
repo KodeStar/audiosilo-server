@@ -303,7 +303,8 @@ stale version = the old rule; see Listening sync in CONVENTIONS.md). Bridge Phas
 `audible_accounts` and `audible_titles` (the Bridge's Audible accounts and their titles; a title's match is
 path-keyed with no FK, nulled with its library and moved with its book; user-state writes; see Audible accounts
 in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `policy_since` and
-`audible_titles.import_pending` (see Audible backups in CONVENTIONS.md).
+`audible_titles.import_pending` (see Audible backups in CONVENTIONS.md). `0065` adds `audible_titles.planned` /
+`contest_library_id` / `contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -372,6 +373,7 @@ keep this index in step (one line per topic).
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
   - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `DELETE /admin/audible/accounts/{account}` outside the toggle)
   - Audible backups (Bridge Phase 4b, `audible.import`: `0064`, the policy and `policy_since`, preorders, the fold onto the title's match, the backup routes, the console's actions)
+  - Audible unmatched titles (4b owner fixes, `0065`: `planned` and `contested` on the titles, the poll's `template`, the console's planned line and contested explanation)
   - Unavailable-root guard
   - First-run setup (Phase F1, `catalog/setup.go`, `library/preview.go`, `api/handlers_admin_setup.go`)
 

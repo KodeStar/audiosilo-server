@@ -672,9 +672,15 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}
-	// So do the Audible titles matched to it (migration 0063).
+	// So do the Audible titles matched to it (migration 0063), and those left
+	// contested over it (0065).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
+		newPath, libraryID, oldPath); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}

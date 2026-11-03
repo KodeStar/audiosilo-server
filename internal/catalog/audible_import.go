@@ -134,7 +134,14 @@ func (c *Catalog) AudibleTitle(ctx context.Context, account, asin string) (*Audi
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUnknownTitle
 	}
-	return t, err
+	if err != nil {
+		return nil, err
+	}
+	one := []AudibleTitle{*t}
+	if err := c.fillContests(ctx, one); err != nil {
+		return nil, err
+	}
+	return &one[0], nil
 }
 
 // AudibleTitlePatch is the console's change to a title: "Not this book"
@@ -502,7 +509,8 @@ var (
 
 // FoldAudibleImport takes a done backup's place as its title's match (how
 // "import"), and clears its "Not this book" (the match is now this title's
-// own). The result must name the job's own library and a book indexed there
+// own) and what the last poll said of it unmatched (its planned destination
+// and contested book). The result must name the job's own library and a book indexed there
 // (the Bridge rescans before it reports done), else ErrImportNotIndexed, and
 // the title's own book (importOwnBook), else ErrImportNotOwn. A job that isn't
 // a done audible.import, or whose title has another backup since, changes
@@ -523,7 +531,8 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ?, match_how = ?,
-			    rejected = 0, import_pending = 0, import_job_id = ?, updated_at = ?
+			    rejected = 0, import_pending = 0, import_job_id = ?, planned = '',
+			    contest_library_id = NULL, contest_path = '', updated_at = ?
 			  WHERE account = ? AND asin = ? AND (import_job_id IS NULL OR import_job_id = ?)`,
 			r.LibraryID, r.Path, AudibleMatchImport, j.ID, c.ts(), p.Account, p.ASIN, j.ID)
 		return err

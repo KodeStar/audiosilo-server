@@ -159,7 +159,8 @@ type kindSpec struct {
 	// promotes: a request that finds a job of the kind already open raises
 	// the open job's priority to its own, never lowers it (Check now on a
 	// scheduled audible.poll; a podcast fetch does the same through its
-	// demand, NewJob.fetch).
+	// demand, NewJob.fetch), and gives a job still queued its params (an
+	// audible.poll's template, changed since the scheduler queued it).
 	promotes bool
 }
 
@@ -721,6 +722,21 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 					promoted = true
 					job.Priority = j.Priority
 					job.UpdatedAt = now
+				}
+				// A job not claimed yet runs with the newest request's params
+				// (both normalised by checkNew): a Check now after the
+				// account's template changed plans by the new one.
+				if kinds[j.Kind].promotes && job.State == StateQueued && !bytes.Equal(job.Params, j.Params) {
+					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET params=?,updated_at=? WHERE id=? AND state=?`,
+						string(j.Params), now, id, StateQueued)
+					if err != nil {
+						return err
+					}
+					if n, err := res.RowsAffected(); err != nil {
+						return err
+					} else if n > 0 {
+						job.Params, job.UpdatedAt = j.Params, now
+					}
 				}
 				return nil
 			}

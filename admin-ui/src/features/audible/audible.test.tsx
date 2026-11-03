@@ -2,7 +2,13 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AudibleAccount, AudibleTitle, BridgeJob, BridgeStatus } from '@/api/types';
+import type {
+  AudibleAccount,
+  AudiblePlan,
+  AudibleTitle,
+  BridgeJob,
+  BridgeStatus,
+} from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { settingsWith } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
@@ -15,7 +21,10 @@ import {
   cleanDest,
   importStatus,
   matchedParam,
+  plannedLine,
+  plannedPlaceholder,
   pollTarget,
+  reasonKey,
   titleByline,
 } from './audible-model';
 
@@ -67,6 +76,22 @@ function title(over: Partial<AudibleTitle> = {}): AudibleTitle {
     import_job_id: null,
     import: null,
     needs_attention: false,
+    planned: null,
+    contested: null,
+    ...over,
+  };
+}
+
+function plan(over: Partial<AudiblePlan> = {}): AudiblePlan {
+  return {
+    library_id: 1,
+    path: 'Ben Aaronovitch/Rivers of London/2 - Moon over Soho/Moon over Soho.m4b',
+    file: 'Moon over Soho.m4b',
+    kind: 'series_existing',
+    siblings: 7,
+    state: 'joins',
+    conflict: '',
+    template: '',
     ...over,
   };
 }
@@ -607,5 +632,217 @@ describe('audible backups', () => {
       expect(patch?.body).toEqual({ policy: 'series', template: '{Author}/{Title}' });
     });
     expect(await screen.findByText('Backups for Chris (US) saved')).toBeInTheDocument();
+  });
+});
+
+describe('unmatched titles, explained', () => {
+  it('words a planned destination, its warnings and a stale template', () => {
+    expect(plannedLine(title({ match: null }), '')).toBeNull();
+    expect(plannedLine(title({ match: null, planned: plan() }), '')).toEqual({
+      key: 'audible.planned.seriesExisting',
+      values: { path: plan().path, count: 7 },
+      warn: false,
+      stale: false,
+    });
+    expect(
+      plannedLine({ planned: plan({ kind: 'series_new', siblings: 0 }), dest_path: '' }, '')?.key,
+    ).toBe('audible.planned.seriesNew');
+    expect(
+      plannedLine({ planned: plan({ kind: 'standalone', siblings: 0 }), dest_path: '' }, '')?.key,
+    ).toBe('audible.planned.joinsAuthor');
+    // With a template, joins only says the top folder already exists.
+    expect(
+      plannedLine(
+        {
+          planned: plan({ kind: 'standalone', siblings: 0, template: '{Author}/{Title}' }),
+          dest_path: '',
+        },
+        '{Author}/{Title}',
+      )?.key,
+    ).toBe('audible.planned.joinsFolder');
+    expect(
+      plannedLine(
+        {
+          planned: plan({ kind: 'series_existing', siblings: 0, template: '{Narrator}/{Title}' }),
+          dest_path: '',
+        },
+        '{Narrator}/{Title}',
+      )?.key,
+    ).toBe('audible.planned.joinsFolder');
+    // Siblings still win over a template.
+    expect(
+      plannedLine({ planned: plan({ template: '{Author}/{Series}/{Title}' }), dest_path: '' }, '')
+        ?.key,
+    ).toBe('audible.planned.seriesExisting');
+    expect(
+      plannedLine(
+        { planned: plan({ kind: 'standalone', siblings: 0, state: 'new' }), dest_path: '' },
+        '',
+      )?.key,
+    ).toBe('audible.planned.standalone');
+    const exists = plannedLine(
+      { planned: plan({ state: 'exists', conflict: 'book' }), dest_path: '' },
+      '',
+    );
+    expect(exists).toMatchObject({ key: 'audible.planned.exists.book', warn: true });
+    const failed = plannedLine(
+      {
+        planned: plan({ state: 'error', path: '', kind: '', conflict: 'unknown variable {Nope}' }),
+        dest_path: '',
+      },
+      '',
+    );
+    expect(failed).toMatchObject({
+      key: 'audible.planned.error',
+      values: { message: 'unknown variable {Nope}' },
+      warn: true,
+    });
+    // The account's template changed since the plan; unknown: no note.
+    expect(plannedLine({ planned: plan(), dest_path: '' }, '{Author}/{Title}')?.stale).toBe(true);
+    expect(plannedLine({ planned: plan(), dest_path: '' }, undefined)?.stale).toBe(false);
+    // A destination of the admin's own replaces the plan.
+    expect(plannedLine({ planned: plan(), dest_path: 'Mine/Book.m4b' }, '')).toBeNull();
+    expect(plannedPlaceholder({ planned: plan() })).toBe(plan().path);
+    expect(plannedPlaceholder({ planned: null })).toBe('Author/Series/Title.m4b');
+    expect(reasonKey('contested')).toBeNull();
+    expect(reasonKey('no_candidate')).toBe('audible.reason.other');
+    expect(reasonKey('Not released yet (pre-order)')).toBeNull();
+    expect(reasonKey('')).toBeNull();
+  });
+
+  it('shows where a backup would go, and warns when that place is taken', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': {
+          body: { accounts: [account({ template: '{Author}/{Title}' })] },
+        },
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({ asin: 'B000000001', title: 'Moon over Soho', match: null, planned: plan() }),
+              title({
+                asin: 'B000000002',
+                title: 'Whispers Under Ground',
+                match: null,
+                planned: plan({
+                  path: 'Ben Aaronovitch/Whispers Under Ground.m4b',
+                  state: 'exists',
+                  conflict: 'file',
+                  template: '{Author}/{Title}',
+                }),
+              }),
+              title({
+                asin: 'B000000003',
+                title: 'Broken Homes',
+                match: null,
+                dest_path: 'Mine/Broken Homes.m4b',
+                planned: plan({ path: 'Ben Aaronovitch/Broken Homes.m4b' }),
+              }),
+              title({
+                asin: 'B000000004',
+                title: 'Foxglove Summer',
+                state: 'unavailable',
+                reason: 'Audible reports no download rights for this title',
+                match: null,
+                planned: plan({ path: 'Ben Aaronovitch/Foxglove Summer.m4b' }),
+              }),
+            ],
+            next: '',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(
+      within(rows[0]).getByText(`Will go to ${plan().path}, beside 7 books of its series`, {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+    expect(within(rows[0]).getAllByText(/planned at the last check/).length).toBeGreaterThan(0);
+    // The plan used the automatic placement; the account has a template now.
+    expect(within(rows[0]).getByText(/changes at the next check/)).toBeInTheDocument();
+    expect(
+      within(rows[1]).getByText(/a file is already there, so the backup would stop/),
+    ).toBeInTheDocument();
+    expect(within(rows[1]).queryByText(/changes at the next check/)).not.toBeInTheDocument();
+    // An override: checked when the backup starts, no plan shown.
+    expect(within(rows[2]).getByText(/checked when the backup starts/)).toBeInTheDocument();
+    expect(within(rows[2]).queryByText(/Will go to/)).not.toBeInTheDocument();
+    // A title that can't be backed up shows no plan.
+    expect(within(rows[3]).queryByText(/Will go to/)).not.toBeInTheDocument();
+    // The destination dialog suggests the planned path, never fills it in.
+    const user = userEvent.setup();
+    await user.click(
+      within(rows[0]).getByRole('button', { name: 'Destination for Moon over Soho' }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Where Moon over Soho goes' });
+    const field = within(dialog).getByRole('textbox');
+    expect(field).toHaveAttribute('placeholder', plan().path);
+    expect(field).toHaveValue('');
+  });
+
+  it('explains a contested title, with its book and the other titles on it', async () => {
+    const book = 'Ben Aaronovitch/PG02 - Moon over Soho';
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({
+                asin: 'B000000001',
+                title: 'Rivers of London',
+                match: null,
+                reason: 'contested',
+                contested: {
+                  library_id: 1,
+                  path: book,
+                  with: [
+                    { asin: 'B000000002', title: 'Moon over Soho' },
+                    { asin: 'B000000003', title: 'Whispers Under Ground' },
+                  ],
+                },
+              }),
+              title({
+                asin: 'B000000004',
+                title: 'Foxglove Summer',
+                match: null,
+                reason: 'contested',
+              }),
+              title({
+                asin: 'B000000005',
+                title: 'Lies Sleeping',
+                match: null,
+                reason: 'no_candidate',
+              }),
+            ],
+            next: '',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(
+      within(rows[0]).getByText(
+        /Matched the same book as Moon over Soho and Whispers Under Ground/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(rows[0]).getByRole('link', { name: book })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/admin/library/book?library=1&path=Ben'),
+    );
+    expect(within(rows[0]).queryByText('contested')).not.toBeInTheDocument();
+    expect(
+      within(rows[1]).getByText(
+        "Another Audible title matched the same book, so this one isn't shown as here.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[2]).getByText("The Bridge couldn't match it to a book on this server."),
+    ).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('no_candidate')).not.toBeInTheDocument();
   });
 });

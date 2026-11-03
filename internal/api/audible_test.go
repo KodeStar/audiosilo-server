@@ -583,7 +583,7 @@ func TestAudibleLibraryDeleteAndMove(t *testing.T) {
 		title("B000000003", "On a disc", "available", b.lib.ID, "Some Author/Big Book/CD1")); code != http.StatusOK {
 		t.Fatalf("titles: %d %s", code, out)
 	}
-	poll, created, err := b.api.bridge.Enqueue(ctx, bridge.AudiblePoll(testAccount, 0))
+	poll, created, err := b.api.bridge.Enqueue(ctx, bridge.AudiblePoll(testAccount, "", 0))
 	if err != nil || !created {
 		t.Fatalf("poll = %+v, %v, %v", poll, created, err)
 	}
@@ -636,7 +636,7 @@ func TestAudibleLibraryDeleteAndMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	due, err := b.cat.DueAudiblePolls(ctx, time.Now(), 10)
-	if err != nil || len(due) != 1 || due[0] != "acct0002" {
+	if err != nil || len(due) != 1 || due[0].Account != "acct0002" {
 		t.Fatalf("due = %v, %v (a paused account, or a disabled person's, is never due)", due, err)
 	}
 	// Mapped again, it resumes.

@@ -6,7 +6,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { canBackUp, cleanDest, titleName } from './audible-model';
+import { canBackUp, cleanDest, plannedPlaceholder, titleName } from './audible-model';
 import type { Backups } from './use-audible';
 
 /**
@@ -104,7 +104,7 @@ function DestDialog({
           value={dest}
           autoComplete="off"
           spellCheck={false}
-          placeholder="Author/Series/Title.m4b"
+          placeholder={plannedPlaceholder(x)}
           onChange={(e) => setDest(e.target.value)}
           aria-describedby={`${id}-desc`}
         />

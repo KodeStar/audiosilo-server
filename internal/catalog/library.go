@@ -224,7 +224,8 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		                     WHERE sp.share_id = shares.id AND sp.library_id != ?)`, id, id); err != nil {
 		return err
 	}
-	// Audible titles matched to its books lose the match (path-keyed, no FK) and
+	// Audible titles matched to its books lose the match (path-keyed, no FK), those
+	// contested over one the contest, and
 	// the accounts mapped to it pause (library_id SET NULL by the FK), their open
 	// polls cancelled: all with the library's own delete, so no titles call can
 	// match a book of it in between.
@@ -232,6 +233,10 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE audible_titles SET match_library_id = NULL, match_path = NULL, match_how = ''
 			  WHERE match_library_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE audible_titles SET contest_library_id = NULL, contest_path = '' WHERE contest_library_id = ?`, id); err != nil {
 			return err
 		}
 		paused, err := queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },

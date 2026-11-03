@@ -63,15 +63,15 @@ func SchedulerTick(ctx context.Context, d modules.Deps, now time.Time) error {
 		return err
 	}
 	var errs []error
-	for _, account := range due {
+	for _, poll := range due {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, _, err := d.Bridge.Enqueue(ctx, bridge.AudiblePoll(account, schedulerPriority)); err != nil {
-			errs = append(errs, fmt.Errorf("poll audible account %s: %w", account, err))
+		if _, _, err := d.Bridge.Enqueue(ctx, bridge.AudiblePoll(poll.Account, poll.Template, schedulerPriority)); err != nil {
+			errs = append(errs, fmt.Errorf("poll audible account %s: %w", poll.Account, err))
 			continue
 		}
-		if err := d.Catalog.MarkAudibleQueued(ctx, account); err != nil {
+		if err := d.Catalog.MarkAudibleQueued(ctx, poll.Account); err != nil {
 			errs = append(errs, err)
 		}
 	}

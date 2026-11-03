@@ -164,6 +164,8 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			// a title, so moved rather than copied, as moveBookState moves it).
 			{`UPDATE audible_titles SET match_path = ?1 WHERE match_library_id = ?2 AND match_path = ?3`,
 				[]any{into, libraryID, p.Path}},
+			{`UPDATE audible_titles SET contest_path = ?1 WHERE contest_library_id = ?2 AND contest_path = ?3`,
+				[]any{into, libraryID, p.Path}},
 		}
 		for _, st := range stmts {
 			if _, err := tx.ExecContext(ctx, st.q, st.args...); err != nil {
