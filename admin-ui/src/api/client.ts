@@ -6,6 +6,9 @@ import type {
   AdminBookDetail,
   AdminBookPage,
   AdminBookSort,
+  AudibleAccounts,
+  AudibleTitlePage,
+  AudibleTitleQuery,
   AuditFilter,
   AuditPage,
   BackupsEnvelope,
@@ -452,6 +455,24 @@ export const api = {
    */
   queueBridgeJob: async (req: BridgeJobRequest) => {
     const res = await send('/admin/bridge/jobs', { method: 'POST', body: req });
+    return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
+  },
+
+  // Audible (Settings > Bridge's Audible accounts, Settings > Audible): read-only;
+  // the accounts are signed in and mapped on the Bridge's own page.
+  /** 404 module_off while the audible module is off. */
+  audibleAccounts: () => request<AudibleAccounts>('GET', '/admin/audible/accounts'),
+  /** Titles by title, a page at a time (`after` is the previous page's next). */
+  audibleTitles: (opts: AudibleTitleQuery = {}) =>
+    request<AudibleTitlePage>('GET', `/admin/audible/titles${bookQuery(opts)}`),
+  /**
+   * Check now: queues the account's poll (`created`), or returns the one already
+   * open. 409 account_paused (its library was deleted), 409 kind_unavailable.
+   */
+  pollAudible: async (account: string) => {
+    const res = await send(`/admin/audible/accounts/${encodeURIComponent(account)}/poll`, {
+      method: 'POST',
+    });
     return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
   },
 

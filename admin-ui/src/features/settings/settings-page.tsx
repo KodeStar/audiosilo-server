@@ -6,6 +6,7 @@ import {
   ArrowRight,
   BellRing,
   Globe,
+  Headphones,
   House,
   Import,
   Info,
@@ -36,6 +37,7 @@ import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { activeMirror, mirrorLook } from '@/features/health/system-model';
+import { AudibleTopic } from '@/features/audible/audible-topic';
 import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
@@ -68,6 +70,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   import: Import,
   bridge: Waypoints,
   modules: Puzzle,
+  audible: Headphones,
 };
 
 /**
@@ -162,6 +165,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <BridgeTopic />;
     case 'modules':
       return <ModulesTopic settings={settings} />;
+    case 'audible':
+      return <AudibleTopic />;
     default:
       return <GeneralTopic settings={settings} />;
   }

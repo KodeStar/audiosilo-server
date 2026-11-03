@@ -70,6 +70,8 @@ const BY_CODE: Record<string, string> = {
   // The Bridge: queueing a job kind the paired Bridge doesn't run, cancelling a
   // job that already ended.
   kind_unavailable: 'errors.kindUnavailable',
+  // Audible's Check now for an account whose library was deleted.
+  account_paused: 'errors.accountPaused',
   finished: 'errors.jobFinished',
   // Queueing a job that writes (sidecars.generate, sidecars.describe) for a
   // library the Bridge's last heartbeat doesn't report as mapped and writable.

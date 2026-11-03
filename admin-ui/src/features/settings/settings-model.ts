@@ -25,15 +25,15 @@ export const SETTINGS_PAGES = [
   'import',
   'bridge',
   'modules',
+  'audible',
 ] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
 /**
  * The settings pages a managed module brings, by page: the module id whose
- * toggle shows it (Settings > Modules). None yet: Bridge Phase 2b's
- * contributions module is the first to add one.
+ * toggle shows it (Settings > Modules). Audible's titles (Bridge Phase 4a).
  */
-export const MODULE_PAGES: Partial<Record<SettingsPage, string>> = {};
+export const MODULE_PAGES: Partial<Record<SettingsPage, string>> = { audible: 'audible' };
 
 /**
  * The pages the nav lists: every page, less those whose module is off (or
