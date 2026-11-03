@@ -13,9 +13,9 @@ import (
 // to back up and builds each job's params (catalog/audible_import.go); these
 // queue the jobs and record each on its title.
 
-// Job priorities: one title asked for in the console comes first, then
-// "Back up everything", then what a policy queued after a poll (with the
-// scheduled polls).
+// Job priorities: one title asked for in the console comes first (a
+// preorder's request too, once a poll queues it), then "Back up everything",
+// then what a policy queued after a poll (with the scheduled polls).
 const (
 	priorityBackup    = 0
 	priorityBackupAll = -5
@@ -31,7 +31,8 @@ type Queues struct {
 // queue queues p's backup at priority for requestedBy (0: the server) and
 // records it on the title. The open backup of the title, if there is one, is
 // returned instead (created false) and recorded too: a job queued before a
-// crash that lost its record is found by its dedupe key.
+// crash that lost its record is found by its dedupe key. A job queued whose
+// record failed comes back with the error (created true).
 func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, requestedBy int64, priority int) (*bridge.Job, bool, error) {
 	job, created, err := q.Bridge.Enqueue(ctx, bridge.AudibleImport(p, requestedBy, priority))
 	if err != nil {
@@ -68,21 +69,21 @@ func (q Queues) BackupAll(ctx context.Context, account string, requestedBy int64
 			return queued, err
 		}
 		_, created, err := q.queue(ctx, p, requestedBy, priorityBackupAll)
-		if err != nil {
-			return queued, err
-		}
 		if created {
 			queued++
+		}
+		if err != nil {
+			return queued, err
 		}
 	}
 	return queued, nil
 }
 
 // AfterPoll queues what a completed poll of account asks for
-// (catalog.AudiblePolicyImports: pending requests now available, and the new
-// purchases its policy covers). Nothing while no online Bridge runs
-// audible.import (a later poll asks again: the titles stay as they are), and
-// a title the queue refuses is skipped.
+// (catalog.AudiblePolicyImports: pending requests now available, at the
+// console's priority, and the new purchases its policy covers). Nothing while
+// no online Bridge runs audible.import (a later poll asks again: the titles
+// stay as they are), and a title the queue refuses is skipped.
 func (q Queues) AfterPoll(ctx context.Context, account string) (queued int, err error) {
 	h, err := q.Bridge.Online(ctx)
 	if err != nil || h == nil || !h.Offers(bridge.KindAudibleImport) {
@@ -97,14 +98,19 @@ func (q Queues) AfterPoll(ctx context.Context, account string) (queued int, err 
 		if err := ctx.Err(); err != nil {
 			return queued, err
 		}
-		_, created, err := q.queue(ctx, p, 0, priorityPolicy)
+		priority := priorityPolicy
+		if p.Requested {
+			priority = priorityBackup
+		}
+		_, created, err := q.queue(ctx, p.AudibleImportParams, 0, priority)
+		if created {
+			queued++
+		}
 		switch {
 		case errors.Is(err, bridge.ErrLibraryNotWritable), errors.Is(err, bridge.ErrKindUnavailable):
 			return queued, nil // none will be taken: the next poll asks again
 		case err != nil:
 			errs = append(errs, fmt.Errorf("back up %s %s: %w", account, p.ASIN, err))
-		case created:
-			queued++
 		}
 	}
 	return queued, errors.Join(errs...)

@@ -16,10 +16,19 @@ import type {
 } from '@/api/types';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { accountName, matchedParam, titleName, type MatchedFilter } from './audible-model';
+import {
+  accountName,
+  backupRunning,
+  matchedParam,
+  titleName,
+  type MatchedFilter,
+} from './audible-model';
 
 /** How often the accounts are asked again while shown (a poll lands, a sign-in). */
 const ACCOUNTS_POLL_MS = 30_000;
+
+/** How often the loaded titles are asked again while a backup on them is queued or running. */
+const TITLES_POLL_MS = 5000;
 
 const TITLES_PAGE = 50;
 
@@ -32,7 +41,11 @@ export function useAudibleAccounts() {
   });
 }
 
-/** The titles by title, a page at a time, narrowed by the page's filters. */
+/**
+ * The titles by title, a page at a time, narrowed by the page's filters; asked
+ * again every few seconds while a loaded title's backup is queued or running
+ * (its state and match change with the job, not with a poll).
+ */
 export function useAudibleTitles(f: {
   account: string;
   state: AudibleTitleState | '';
@@ -53,6 +66,8 @@ export function useAudibleTitles(f: {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next || undefined,
     placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      query.state.data?.pages.some((p) => p.titles.some(backupRunning)) ? TITLES_POLL_MS : false,
   });
   return {
     rows: pages.data?.pages.flatMap((p) => p.titles) ?? [],

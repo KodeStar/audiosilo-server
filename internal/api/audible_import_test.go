@@ -132,6 +132,11 @@ func TestAudibleBackupFlow(t *testing.T) {
 		`{"dest_path":"Brandon Sanderson/New/One.m4b"}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"dest_path":"Brandon Sanderson/New/One.m4b"`) {
 		t.Fatalf("dest: %d %s", resp.StatusCode, out)
 	}
+	var audited int
+	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE action = 'bridge.audible.title'
+		  AND details LIKE '%B000000001%' AND details LIKE '%New/One.m4b%'`).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("the destination was audited %d times (%v), want once", audited, err)
+	}
 	resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, "")
 	var queued struct {
 		JobID int64 `json:"job_id"`
@@ -169,6 +174,11 @@ func TestAudibleBackupFlow(t *testing.T) {
 	claimed := b.claim(t, bridge.KindAudibleImport)
 	if claimed.ID != job.ID {
 		t.Fatalf("claimed %d, want %d", claimed.ID, job.ID)
+	}
+	// It placed the file, the server indexed it, and it gave the book the
+	// title's ASIN (enriched): the book is the title's own.
+	if err := b.cat.BackfillASIN(ctx, b.lib.ID, mistbornBook, "B000000001"); err != nil {
+		t.Fatal(err)
 	}
 	result := fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[{"path":"x.m4b","size":10}],"bytes":10,"enriched":true}`, b.lib.ID, mistbornBook)
 	b.finish(t, claimed, "done", result, "")
@@ -300,15 +310,21 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	if resp, out := b.do(t, "PUT", "/api/v1/bridge/audible/accounts/"+testAccount, b.bridgeTok, body); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"policy":"all"`) {
 		t.Fatalf("create: %d %s", resp.StatusCode, out)
 	}
-	if code, out := b.putTitles(t, testAccount, "p1", true, title("B000000001", "Old", "available", 0, "")); code != http.StatusOK {
+	if code, out := b.putTitles(t, testAccount, "p1", true, title("B000000001", "Old", "available", 0, ""),
+		title("B000000005", "Soon", "preorder", 0, "")); code != http.StatusOK {
 		t.Fatalf("p1: %d %s", code, out)
 	}
 	if x := b.audibleTitle(t, "B000000001"); x.ImportJobID != nil {
 		t.Fatal("the first poll's library was backed up")
 	}
+	// The console asks for the preorder: queued once a poll says it is available.
+	if resp, out := b.do(t, "POST", backupPath("B000000005"), b.adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"pending":true`) {
+		t.Fatalf("preorder backup: %d %s", resp.StatusCode, out)
+	}
 	// A non-final call queues nothing; the final call does.
 	if code, out := b.putTitles(t, testAccount, "p2", false, title("B000000001", "Old", "available", 0, ""),
-		title("B000000002", "New", "available", 0, ""), contestedTitle("B000000009", "Tied")); code != http.StatusOK {
+		title("B000000002", "New", "available", 0, ""), contestedTitle("B000000009", "Tied"),
+		title("B000000005", "Soon", "available", 0, "")); code != http.StatusOK {
 		t.Fatalf("p2a: %d %s", code, out)
 	}
 	if x := b.audibleTitle(t, "B000000002"); x.ImportJobID != nil {
@@ -327,6 +343,14 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	job, _ := b.api.bridge.Job(context.Background(), *x.ImportJobID)
 	if job.Priority != -10 || job.RequestedBy != nil {
 		t.Fatalf("policy job = %+v", job)
+	}
+	// The console's request comes first, as a Back up of an available title.
+	soon := b.audibleTitle(t, "B000000005")
+	if soon.ImportJobID == nil {
+		t.Fatal("the pending request wasn't queued")
+	}
+	if req, _ := b.api.bridge.Job(context.Background(), *soon.ImportJobID); req.Priority != 0 {
+		t.Fatalf("the request's job = %+v, want the console's priority", req)
 	}
 	// The Bridge's PUT again with manual leaves the console's policy.
 	body = strings.Replace(body, `"all"`, `"manual"`, 1)
@@ -358,6 +382,9 @@ func TestAudibleImportMatchMoves(t *testing.T) {
 	ctx := context.Background()
 	if resp, out := b.do(t, "POST", backupPath("B000000001"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("backup: %d %s", resp.StatusCode, out)
+	}
+	if err := b.cat.BackfillASIN(ctx, b.lib.ID, mistbornBook, "B000000001"); err != nil { // the Bridge's enrichment
+		t.Fatal(err)
 	}
 	b.finish(t, b.claim(t, bridge.KindAudibleImport), "done",
 		fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[],"bytes":1,"enriched":true}`, b.lib.ID, mistbornBook), "")

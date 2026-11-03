@@ -140,7 +140,7 @@ type AudibleLibrary struct {
 }
 
 // AudibleCounts are an account's titles by state, and how many are matched to
-// a book on this server.
+// a book on this server (a match marked "Not this book" isn't).
 type AudibleCounts struct {
 	Total       int `json:"total"`
 	Available   int `json:"available"`
@@ -350,7 +350,7 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	_ = rows.Close()
 	counts, err := c.db.QueryContext(ctx, `SELECT t.account, COUNT(*),
 		    SUM(t.state = 'available'), SUM(t.state = 'preorder'), SUM(t.state = 'unavailable'), SUM(t.state = 'gone'),
-		    SUM(t.match_path IS NOT NULL),
+		    SUM(t.match_path IS NOT NULL AND t.rejected = 0),
 		    SUM(CASE WHEN `+backupAllSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
 		  FROM audible_titles t GROUP BY t.account`)
 	if err != nil {
@@ -607,7 +607,8 @@ func booksLibraries(ctx context.Context, q rowQuerier) (map[int64]bool, error) {
 type AudibleTitleFilter struct {
 	Account string // "" for every account
 	State   string // one of AudibleStates, "" for any
-	// Matched: nil any, true only titles matched to a book here, false only the rest.
+	// Matched: nil any, true only titles matched to a book here (not marked
+	// "Not this book"), false only the rest.
 	Matched *bool
 	Query   string // in the title, the authors or the ASIN
 	After   string // the cursor from the previous page
@@ -651,9 +652,9 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 	}
 	if f.Matched != nil {
 		if *f.Matched {
-			where = append(where, `t.match_path IS NOT NULL`)
+			where = append(where, `t.match_path IS NOT NULL AND t.rejected = 0`)
 		} else {
-			where = append(where, `t.match_path IS NULL`)
+			where = append(where, `(t.match_path IS NULL OR t.rejected = 1)`)
 		}
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
@@ -748,14 +749,14 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 		t.ImportJobID = &jobID.Int64
 	}
 	switch {
-	case pending && t.Match == nil:
+	case pending && (t.Match == nil || t.Rejected): // a match marked "Not this book" isn't this title
 		t.Import = &AudibleImport{State: AudibleImportPending}
 	case jobID.Valid && jobState.Valid:
 		j := bridge.Job{ID: jobID.Int64, State: jobState.String, Error: jobErr.String,
 			Result: json.RawMessage(jobRes.String), Progress: json.RawMessage(jobProgrs.String)}
 		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: bridge.AudibleImportCode(j)}
 	}
-	t.NeedsAttention = preorderOverdue(t.State, t.ReleaseDate, now)
+	t.NeedsAttention = preorderOverdue(&t, pending, now)
 	return &t, nil
 }
 

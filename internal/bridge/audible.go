@@ -214,7 +214,8 @@ var audibleTemplateVars = []string{"Author", "Series", "Title", "TitleShort", "S
 // placement.Parse: literal text, {Var} or {Var:mods} tokens (mods width=N,
 // upper, lower, trim), optional groups { ... }, and \ escaping a character.
 // It must also be bounded, printable, relative (no leading slash) and name no
-// ".." segment. The Bridge parses it again when it places a backup.
+// ".." or hidden segment (one starting with a dot: the scan skips it, as
+// CheckAudibleDestPath). The Bridge parses it again when it places a backup.
 func CheckAudibleTemplate(s string) error {
 	if s == "" {
 		return nil
@@ -229,8 +230,11 @@ func CheckAudibleTemplate(s string) error {
 		return bad("a path inside the library, not starting with /")
 	}
 	for seg := range strings.SplitSeq(s, "/") {
-		if strings.TrimSpace(seg) == ".." {
+		switch seg = strings.TrimPrefix(strings.TrimSpace(seg), `\`); {
+		case seg == "..":
 			return bad(`no ".." folders`)
+		case strings.HasPrefix(seg, "."):
+			return bad("no hidden folders or files (a part starting with a dot)")
 		}
 	}
 	depth := 0
@@ -291,13 +295,16 @@ func templateVar(s string, i int) (name string, end int, isVar bool) {
 func isASCIILetter(b byte) bool { return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') }
 
 // templateMods checks a variable's modifiers: width=N (N >= 0), upper, lower,
-// trim, comma-separated.
+// trim, comma-separated (an empty part skipped, as the Bridge's parseMods; an
+// empty name with a value, "=x", is unknown there too).
 func templateMods(spec string) error {
 	for part := range strings.SplitSeq(spec, ",") {
 		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
 		key, val, hasVal := strings.Cut(part, "=")
 		switch key {
-		case "":
 		case "width":
 			if n, err := strconv.Atoi(val); !hasVal || err != nil || n < 0 {
 				return fmt.Errorf("invalid width %q", val)

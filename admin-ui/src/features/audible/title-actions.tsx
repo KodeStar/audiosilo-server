@@ -14,9 +14,17 @@ import type { Backups } from './use-audible';
  * its release), "Not this book" (never backed up by a policy or Back up
  * everything, and its match isn't this title) and its undo, and the
  * destination: where in the library the backup goes instead of the account's
- * placement.
+ * placement. Back up is off while the account is paused, as Back up everything.
  */
-export function TitleActions({ title: x, backups }: { title: AudibleTitle; backups: Backups }) {
+export function TitleActions({
+  title: x,
+  paused = false,
+  backups,
+}: {
+  title: AudibleTitle;
+  paused?: boolean;
+  backups: Backups;
+}) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const busy = backups.busy === backups.titleKey(x);
@@ -24,7 +32,12 @@ export function TitleActions({ title: x, backups }: { title: AudibleTitle; backu
   return (
     <div className="flex flex-wrap items-center gap-2">
       {canBackUp(x) ? (
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void backups.backUp(x)}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || paused}
+          onClick={() => void backups.backUp(x)}
+        >
           {busy ? (
             <LoaderCircle className="animate-spin" aria-hidden="true" />
           ) : (

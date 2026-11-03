@@ -375,8 +375,11 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 // audibleQueues are the API's backup queues.
 func (a *API) audibleQueues() audible.Queues { return audible.Queues{Catalog: a.cat, Bridge: a.bridge} }
 
-// afterAudiblePollTimeout bounds the backups a poll's final call queues.
-const afterAudiblePollTimeout = 30 * time.Second
+// afterAudiblePollTimeout bounds the backups a poll's final call queues: well
+// inside the 30 s the Bridge (and the request timeout) give the whole call, so
+// a slow pass still leaves the stored poll time to answer; what it didn't
+// queue, the next poll asks for again.
+const afterAudiblePollTimeout = 10 * time.Second
 
 // afterAudiblePoll queues the backups a completed poll of account asks for
 // (audible.Queues.AfterPoll) while the module is on, past the Bridge's
@@ -442,6 +445,11 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	by := userFrom(r.Context()).ID
 	job, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
+	if created {
+		// Queued, even when recording it on the title failed (a repeat finds
+		// it by its dedupe key and records it then).
+		a.audit(r, "bridge.job", "", map[string]any{"job": job.ID, "kind": job.Kind, "account": account, "asin": asin})
+	}
 	if !a.writeAudibleBackupError(w, err, "audible backup failed") {
 		return
 	}
@@ -449,9 +457,6 @@ func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
 		a.audit(r, "bridge.audible.backup", "", map[string]any{"account": account, "asin": asin, "pending": true})
 		writeJSON(w, http.StatusOK, map[string]any{"pending": true, "job_id": nil})
 		return
-	}
-	if created {
-		a.audit(r, "bridge.job", "", map[string]any{"job": job.ID, "kind": job.Kind, "account": account, "asin": asin})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"pending": false, "job_id": job.ID})
 }
@@ -481,8 +486,9 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 }
 
 // handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}
-// {"rejected"?, "dest_path"?}: "Not this book" and a backup's destination.
-// 200 the title; 400 invalid_dest_path; 404 unknown_account, unknown_title.
+// {"rejected"?, "dest_path"?}: "Not this book" and a backup's destination,
+// audited. 200 the title; 400 invalid_dest_path; 404 unknown_account,
+// unknown_title.
 func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	account, asin, ok := audibleTitleID(w, r)
 	if !ok {
@@ -498,6 +504,14 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 		a.writeAudibleError(w, err, "patch audible title failed")
 		return
 	}
+	details := map[string]any{"account": account, "asin": asin}
+	if p.Rejected != nil {
+		details["rejected"] = *p.Rejected
+	}
+	if p.DestPath != nil {
+		details["dest_path"] = *p.DestPath
+	}
+	a.audit(r, "bridge.audible.title", "", details)
 	writeJSON(w, http.StatusOK, t)
 }
 

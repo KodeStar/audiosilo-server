@@ -60,6 +60,7 @@ export function AudibleTopic() {
   const backups = useBackups();
   const target = pollTarget(list, account);
   const names = new Map(list.map((a) => [a.id, accountName(t, a)] as const));
+  const paused = new Set(list.filter((a) => a.paused).map((a) => a.id));
   const filtered = Boolean(account || state || matched || q);
 
   if (accounts.isError)
@@ -179,6 +180,7 @@ export function AudibleTopic() {
               key={`${x.account}/${x.asin}`}
               title={x}
               account={list.length > 1 ? names.get(x.account) : undefined}
+              paused={paused.has(x.account)}
               backups={backups}
             />
           ))}
@@ -200,10 +202,13 @@ export function AudibleTopic() {
 function TitleRow({
   title: x,
   account,
+  paused,
   backups,
 }: {
   title: AudibleTitle;
   account?: string;
+  /** The title's account is paused (its library was deleted): nothing can be backed up. */
+  paused: boolean;
   backups: Backups;
 }) {
   const { t, i18n } = useTranslation();
@@ -235,7 +240,7 @@ function TitleRow({
         {backup?.code ? (
           <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
         ) : null}
-        <TitleActions title={x} backups={backups} />
+        <TitleActions title={x} paused={paused} backups={backups} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <StatusText

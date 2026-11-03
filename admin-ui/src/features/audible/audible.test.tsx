@@ -9,6 +9,7 @@ import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 import {
   accountName,
+  backupRunning,
   canBackUp,
   chosenAccount,
   cleanDest,
@@ -412,6 +413,16 @@ describe('audible backups', () => {
     expect(cleanDest('  /A/B/C.m4b/ ')).toBe('A/B/C.m4b');
   });
 
+  it('asks the titles again only while a backup job is queued or running', () => {
+    for (const state of ['queued', 'claimed', 'running'] as const) {
+      expect(backupRunning(title({ import: { job_id: 4, state, code: '' } }))).toBe(true);
+    }
+    for (const state of ['pending', 'needs_attention', 'done', 'failed', 'cancelled'] as const) {
+      expect(backupRunning(title({ import: { job_id: 4, state, code: '' } }))).toBe(false);
+    }
+    expect(backupRunning(title())).toBe(false);
+  });
+
   it("words a title's backup and its code", () => {
     expect(importStatus(title())).toBeNull();
     expect(importStatus(title({ import: { job_id: null, state: 'pending', code: '' } }))?.key).toBe(
@@ -476,6 +487,18 @@ describe('audible backups', () => {
       await screen.findByText('The Well of Ascension is backed up on release'),
     ).toBeInTheDocument();
     expect(screen.getByText(/A personal backup of books you bought/)).toBeInTheDocument();
+  });
+
+  it("keeps a paused account's titles from Back up, as Back up everything", async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': { body: { accounts: [account({ paused: true })] } },
+        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    expect(within(list).getByRole('button', { name: 'Back up' })).toBeDisabled();
   });
 
   it('marks a title Not this book and sets where it goes', async () => {

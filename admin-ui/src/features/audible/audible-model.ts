@@ -89,6 +89,16 @@ export function importOpen(x: Pick<AudibleTitle, 'import'>): boolean {
 }
 
 /**
+ * Whether a title's backup job is queued or running (not a pending request,
+ * not parked): its state, and then its match, change with the job, so the
+ * loaded titles are asked again meanwhile.
+ */
+export function backupRunning(x: Pick<AudibleTitle, 'import'>): boolean {
+  const s = x.import?.state;
+  return s === 'queued' || s === 'claimed' || s === 'running';
+}
+
+/**
  * Whether "Back up" is offered for a title: one the account can download (or a
  * preorder, which waits for its release), not on this server (or marked "Not
  * this book", whose match isn't it), with no backup waiting or running.

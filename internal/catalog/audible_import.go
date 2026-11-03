@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -90,9 +91,12 @@ const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejec
 
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked
 // hourly: a preorder released by the UTC date ?1 but not before ?2 (?1 less
-// AudiblePreorderWait), not on this server, not marked or ignored.
+// AudiblePreorderWait) that a backup may wait for (preorderOverdue's): not on
+// this server, not marked or ignored, or a console request for it while it
+// isn't here (a match marked "Not this book" isn't).
 const preorderWaitingSQL = `t.state = 'preorder' AND t.release_date <> '' AND t.release_date <= ?1 AND t.release_date > ?2
-	AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0`
+	AND ((t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0)
+	  OR (t.import_pending = 1 AND (t.match_path IS NULL OR t.rejected = 1)))`
 
 // preorderWindow is today's UTC date at now and the release date a preorder
 // waits past, both YYYY-MM-DD.
@@ -101,15 +105,16 @@ func preorderWindow(now time.Time) (today, cutoff string) {
 	return now.Format(time.DateOnly), now.Add(-AudiblePreorderWait).Format(time.DateOnly)
 }
 
-// preorderOverdue reports whether a title in state with release date release
-// (YYYY-MM-DD) is a preorder still not available AudiblePreorderWait after it
-// was released, at now.
-func preorderOverdue(state, release string, now time.Time) bool {
-	if state != AudiblePreorder || release == "" {
+// preorderOverdue reports whether t (pending: a console request waits for it)
+// is a preorder a backup may wait for, as preorderWaitingSQL's, still not
+// available AudiblePreorderWait after it was released, at now.
+func preorderOverdue(t *AudibleTitle, pending bool, now time.Time) bool {
+	if t.State != AudiblePreorder || t.ReleaseDate == "" {
 		return false
 	}
+	waited := (t.Match == nil && !t.Rejected && !t.Ignored) || (pending && (t.Match == nil || t.Rejected))
 	_, cutoff := preorderWindow(now)
-	return release <= cutoff
+	return waited && t.ReleaseDate <= cutoff
 }
 
 // AudibleTitle returns one title, ErrUnknownTitle when there is none.
@@ -292,7 +297,7 @@ type autoImport struct {
 	PolicySince time.Time
 	FirstSeen   time.Time
 	State       string
-	Matched     bool // on this server
+	Matched     bool // on this server: a match not marked "Not this book"
 	Rejected    bool // "Not this book"
 	Contested   bool // left unmatched: another title claimed the same book
 	Ignored     bool
@@ -327,13 +332,21 @@ func (a autoImport) wants() bool {
 	return false
 }
 
+// AudiblePolicyImport is a backup a poll queues: its params, and whether a
+// console request waited for it (Requested: a preorder's Back up, now
+// available) rather than the account's policy asking.
+type AudiblePolicyImport struct {
+	bridge.AudibleImportParams
+	Requested bool
+}
+
 // AudiblePolicyImports are the backups a poll of account queues once its final
 // titles call landed (autoImport.wants), by title: the pending console
 // requests whose preorder is now available, and the new purchases its policy
 // covers. None for a paused account, or one mapped to a person it may no
 // longer be (disabled, made a kid). A pending request for a title now on this
-// server is dropped.
-func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]bridge.AudibleImportParams, error) {
+// server (a match not marked "Not this book") is dropped.
+func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]AudiblePolicyImport, error) {
 	acct, err := c.AudibleAccount(ctx, account)
 	if err != nil {
 		return nil, err
@@ -350,7 +363,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 		return nil, nil
 	}
 	if _, err := c.db.ExecUserState(ctx, `UPDATE audible_titles SET import_pending = 0
-		  WHERE account = ? AND import_pending = 1 AND match_path IS NOT NULL`, account); err != nil {
+		  WHERE account = ? AND import_pending = 1 AND match_path IS NOT NULL AND rejected = 0`, account); err != nil {
 		return nil, err
 	}
 	since, err := time.Parse(time.RFC3339Nano, acct.PolicySince)
@@ -374,7 +387,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 		x.series = decodeSeries(series)
 		x.Policy, x.PolicySince = acct.Policy, since
 		return nil
-	}, `SELECT t.asin, t.dest_path, t.state, t.match_path IS NOT NULL, t.first_seen, t.series, t.rejected, `+contestedSQL+`,
+	}, `SELECT t.asin, t.dest_path, t.state, t.match_path IS NOT NULL AND t.rejected = 0, t.first_seen, t.series, t.rejected, `+contestedSQL+`,
 		    t.ignored, t.import_pending, t.import_job_id IS NOT NULL, `+openImportSQL+`
 		  FROM audible_titles t WHERE t.account = ?
 		 ORDER BY t.title COLLATE NOCASE, t.asin`, account)
@@ -382,7 +395,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 		return nil, err
 	}
 	var owned *seriesOwner
-	out := []bridge.AudibleImportParams{}
+	out := []AudiblePolicyImport{}
 	for _, x := range cands {
 		// Ask wants first as if the person had the series, so the series are
 		// looked up only for a title that turns on them.
@@ -403,7 +416,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 				continue
 			}
 		}
-		out = append(out, importParams(acct, x.asin, x.dest))
+		out = append(out, AudiblePolicyImport{AudibleImportParams: importParams(acct, x.asin, x.dest), Requested: x.Pending})
 	}
 	return out, nil
 }
@@ -465,16 +478,25 @@ func (c *Catalog) SetAudibleImport(ctx context.Context, account, asin string, jo
 	return err
 }
 
-// ErrImportNotIndexed is a done backup whose result names no book indexed in
-// a books library: its title's match is left as it was.
-var ErrImportNotIndexed = errors.New("the backup's book is not indexed")
+var (
+	// ErrImportNotIndexed is a done backup whose result names no book indexed
+	// in a books library: its title's match is left as it was.
+	ErrImportNotIndexed = errors.New("the backup's book is not indexed")
+	// ErrImportNotOwn is a done backup whose book isn't its title's own: the
+	// placed file joined a book the library already had (other files, not the
+	// title's ASIN), or the book is the one the admin marked "Not this book"
+	// for the title. Its title's match, and every other title's, are left as
+	// they were.
+	ErrImportNotOwn = errors.New("the backup's book is not the title's own")
+)
 
 // FoldAudibleImport takes a done backup's place as its title's match (how
 // "import"), and clears its "Not this book" (the match is now this title's
 // own). The result must name the job's own library and a book indexed there
-// (the Bridge rescans before it reports done), else ErrImportNotIndexed. A job
-// that isn't a done audible.import, or whose title has another backup since,
-// changes nothing. A user-state write.
+// (the Bridge rescans before it reports done), else ErrImportNotIndexed, and
+// the title's own book (importOwnBook), else ErrImportNotOwn. A job that isn't
+// a done audible.import, or whose title has another backup since, changes
+// nothing. A user-state write.
 func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 	if j.Kind != bridge.KindAudibleImport || j.State != bridge.StateDone || j.LibraryID == nil {
 		return nil
@@ -487,13 +509,8 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 		return ErrImportNotIndexed
 	}
 	return c.db.WithUserStateTx(ctx, "FoldAudibleImport", func(tx *sql.Tx) error {
-		var indexed bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM books b JOIN libraries l ON l.id = b.library_id
-			  WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?)`, r.LibraryID, r.Path, KindBooks).Scan(&indexed); err != nil {
+		if err := importOwnBook(ctx, tx, p, r); err != nil {
 			return err
-		}
-		if !indexed {
-			return ErrImportNotIndexed
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ?, match_how = ?,
 			    rejected = 0, import_pending = 0, import_job_id = ?, updated_at = ?
@@ -501,4 +518,57 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 			r.LibraryID, r.Path, AudibleMatchImport, j.ID, c.ts(), p.Account, p.ASIN, j.ID)
 		return err
 	})
+}
+
+// importOwnBook checks, through tx, that the book a done backup's result names
+// is indexed in a books library (else ErrImportNotIndexed) and is the title's
+// own (else ErrImportNotOwn): it carries the title's ASIN (the Bridge's
+// enrichment set it, or the book had it), or it holds only the files the
+// backup placed (a book the backup made). A file the Bridge placed into a
+// folder book already there (the scan makes a folder one book) joins that
+// book, which stays its own title's. Never the book the admin marked "Not
+// this book" for the title.
+func importOwnBook(ctx context.Context, tx *sql.Tx, p bridge.AudibleImportParams, r bridge.AudibleImportResult) error {
+	var (
+		id       int64
+		folder   bool
+		asin     string
+		rejected bool
+	)
+	err := tx.QueryRowContext(ctx, `SELECT b.id, b.is_folder, b.asin,
+		    EXISTS(SELECT 1 FROM audible_titles t WHERE t.account = ? AND t.asin = ? AND t.rejected = 1
+		       AND t.match_library_id = b.library_id AND t.match_path = b.rel_path)
+		  FROM books b JOIN libraries l ON l.id = b.library_id
+		 WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?`,
+		p.Account, p.ASIN, r.LibraryID, r.Path, KindBooks).Scan(&id, &folder, &asin, &rejected)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrImportNotIndexed
+	case err != nil:
+		return err
+	case rejected:
+		return ErrImportNotOwn
+	case strings.EqualFold(asin, p.ASIN):
+		return nil
+	}
+	placed := make(map[string]bool, len(r.Files))
+	for _, f := range r.Files {
+		placed[f.Path] = true
+	}
+	files := []string{r.Path} // a single-file book is its file
+	if folder {
+		if files, err = queryRows(ctx, tx, func(rows *sql.Rows, path *string) error { return rows.Scan(path) },
+			`SELECT rel_path FROM book_files WHERE book_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	if len(files) == 0 {
+		return ErrImportNotOwn
+	}
+	for _, f := range files {
+		if !placed[f] {
+			return ErrImportNotOwn
+		}
+	}
+	return nil
 }

@@ -3473,6 +3473,7 @@
   "audit.action.bridge.audible.backup": "Sicherung eines Audible-Buchs angefordert",
   "audit.action.bridge.audible.backup_all": "Alles aus einem Audible-Konto gesichert",
   "audit.action.bridge.audible.account": "Sicherungen eines Audible-Kontos geändert",
+  "audit.action.bridge.audible.title": "Zuordnung oder Ziel eines Audible-Buchs geändert",
   "errors.audibleMatched": "Dieses Buch ist schon auf diesem Server. Markiere es zuerst als Nicht dieses Buch, wenn die Zuordnung falsch ist.",
   "errors.audibleImportOpen": "Eine Sicherung dieses Buchs wartet schon oder läuft.",
   "errors.audibleNotAvailable": "Audible bietet dieses Buch gerade nicht zum Download an. Prüfe das Konto später erneut.",

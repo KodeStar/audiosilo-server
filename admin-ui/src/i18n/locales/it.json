@@ -3662,6 +3662,7 @@
   "audit.action.bridge.audible.backup": "Ha chiesto il backup di un libro Audible",
   "audit.action.bridge.audible.backup_all": "Ha fatto il backup di tutto un account Audible",
   "audit.action.bridge.audible.account": "Ha cambiato i backup di un account Audible",
+  "audit.action.bridge.audible.title": "Ha cambiato l'abbinamento o la destinazione di un libro Audible",
   "errors.audibleMatched": "Quel libro è già su questo server. Segnalo prima come Non è questo libro se l'abbinamento è sbagliato.",
   "errors.audibleImportOpen": "Un backup di quel libro è già in attesa o in corso.",
   "errors.audibleNotAvailable": "Audible ora non offre quel libro per il download. Controlla l'account più tardi.",

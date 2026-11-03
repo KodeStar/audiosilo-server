@@ -117,7 +117,11 @@ func (f *audibleFixture) policyImports(t *testing.T) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return asins(ps)
+	out := []string{}
+	for _, p := range ps {
+		out = append(out, p.ASIN)
+	}
+	return out
 }
 
 // policy_since: the account's first complete poll is the library it already
@@ -248,8 +252,8 @@ func TestAudiblePendingBackup(t *testing.T) {
 	}
 	pre.State = AudibleAvailable
 	f.poll(t, "p2", pre, AudibleTitleInput{ASIN: "B000000002", Title: "Later", State: AudibleAvailable})
-	if got := f.policyImports(t); !slices.Equal(got, []string{"B000000001"}) {
-		t.Fatalf("available now: %v, want the pending one only", got)
+	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || ps[0].ASIN != "B000000001" || !ps[0].Requested {
+		t.Fatalf("available now: %+v, %v; want the pending one only, as a request", ps, err)
 	}
 	if err := f.c.SetAudibleImport(f.ctx, "acct0001", "B000000001", 7); err != nil {
 		t.Fatal(err)
@@ -259,6 +263,35 @@ func TestAudiblePendingBackup(t *testing.T) {
 	}
 	if got := f.policyImports(t); len(got) != 0 {
 		t.Fatalf("once queued: %v", got)
+	}
+}
+
+// A Back up of a preorder whose match is marked "Not this book" waits as any
+// other: shown pending, kept by the polls while it is a preorder, and queued as
+// a console request once it is available.
+func TestAudiblePendingRejectedMatch(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	pre := AudibleTitleInput{ASIN: "B000000001", Title: "Soon", State: AudiblePreorder, ReleaseDate: "2026-11-10",
+		Match: &AudibleMatch{LibraryID: f.lib.ID, Path: "Author/Wrong", How: "fuzzy"}}
+	f.poll(t, "p1", pre)
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000001", AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000001"); err != nil || !pending {
+		t.Fatalf("back up = %t, %v", pending, err)
+	}
+	f.poll(t, "p2", pre)
+	if got := f.policyImports(t); len(got) != 0 {
+		t.Fatalf("still a preorder: %v", got)
+	}
+	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000001"); tt.Import == nil || tt.Import.State != AudibleImportPending {
+		t.Fatalf("the request after a poll = %+v", tt.Import)
+	}
+	pre.State = AudibleAvailable
+	f.poll(t, "p3", pre)
+	if ps, err := f.c.AudiblePolicyImports(f.ctx, "acct0001"); err != nil || len(ps) != 1 || ps[0].ASIN != "B000000001" || !ps[0].Requested {
+		t.Fatalf("available now: %+v, %v; want the request", ps, err)
 	}
 }
 
@@ -333,6 +366,25 @@ func TestAudiblePreorderClock(t *testing.T) {
 	if due(f.clock.Add(61 * time.Minute)) {
 		t.Fatal("a rejected preorder makes the account hourly")
 	}
+	// A console request for it does (a title marked "Not this book" isn't
+	// here), and past the wait it needs attention; a preorder on this server
+	// needs none.
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000002"); err != nil || !pending {
+		t.Fatalf("back up the rejected preorder = %t, %v", pending, err)
+	}
+	if !due(f.clock.Add(61 * time.Minute)) {
+		t.Fatal("a requested preorder doesn't make the account hourly")
+	}
+	f.clock = time.Date(2026, 12, 8, 9, 0, 0, 0, time.UTC)
+	here := AudibleTitleInput{ASIN: "B000000003", Title: "Here", State: AudiblePreorder, ReleaseDate: "2026-11-01",
+		Match: &AudibleMatch{LibraryID: f.lib.ID, Path: "Author/Here", How: "asin"}}
+	f.poll(t, "p4", AudibleTitleInput{ASIN: "B000000002", Title: "Other", State: AudiblePreorder, ReleaseDate: "2026-11-23"}, here)
+	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000002"); !tt.NeedsAttention || tt.Import == nil || tt.Import.State != AudibleImportPending {
+		t.Fatalf("the requested preorder past the wait = %+v", tt)
+	}
+	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000003"); tt.NeedsAttention {
+		t.Fatal("a preorder on this server needs attention")
+	}
 }
 
 // A done backup becomes its title's match (how import, Not this book cleared);
@@ -352,12 +404,15 @@ func TestFoldAudibleImport(t *testing.T) {
 	params, _ := json.Marshal(bridge.AudibleImportParams{Account: "acct0001", ASIN: "B000000001", LibraryID: lib})
 	job := func(id int64, libID int64, path string) bridge.Job {
 		return bridge.Job{ID: id, Kind: bridge.KindAudibleImport, State: bridge.StateDone, LibraryID: &lib, Params: params,
-			Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[],"bytes":1,"enriched":true}`, libID, path))}
+			Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[{"path":%q,"size":1}],"bytes":1,"enriched":false}`,
+				libID, path, path+"/Book.m4b"))}
 	}
 	if err := f.c.FoldAudibleImport(f.ctx, job(5, lib, "Author/Book")); !errors.Is(err, ErrImportNotIndexed) {
 		t.Fatalf("no book there: %v", err)
 	}
-	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: lib, RelPath: "Author/Book", Title: "Book"}); err != nil {
+	// The book the backup made: its one file is the placed one.
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: lib, RelPath: "Author/Book", IsFolder: true, Title: "Book",
+		Files: []BookFile{{RelPath: "Author/Book/Book.m4b"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.c.FoldAudibleImport(f.ctx, job(5, lib+1, "Author/Book")); !errors.Is(err, ErrImportNotIndexed) {
@@ -396,6 +451,86 @@ func TestFoldAudibleImport(t *testing.T) {
 	f.poll(t, "p4", same)
 	if tt, _ := f.c.AudibleTitle(f.ctx, "acct0001", "B000000001"); tt.Match == nil || tt.Match.Path != "Author/Other" {
 		t.Fatalf("the poll's other match: %+v", tt.Match)
+	}
+}
+
+// A backup whose file joined a book the library already had (the scan makes a
+// folder one book) doesn't make that book its title's: the fold leaves the
+// title, and the title already matched to the book, as they were, unless the
+// book carries the title's ASIN. It never takes back the book the admin marked
+// "Not this book" for the title, nor clears that mark. A single-file book is
+// its file.
+func TestFoldAudibleImportOwnBook(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	lib := f.lib.ID
+	other := avail("B000000002", "")
+	other.Match = &AudibleMatch{LibraryID: lib, Path: "Author/Other", How: "fuzzy"}
+	wrong := avail("B000000003", "")
+	wrong.Match = &AudibleMatch{LibraryID: lib, Path: "Author/Wrong", How: "fuzzy"}
+	f.poll(t, "p1", avail("B000000001", ""), other, wrong, avail("B000000004", ""))
+	for _, b := range []*Book{
+		{LibraryID: lib, RelPath: "Author/Other", IsFolder: true, Title: "Other",
+			Files: []BookFile{{RelPath: "Author/Other/Other.mp3"}, {RelPath: "Author/Other/One.m4b", Seq: 1}}},
+		{LibraryID: lib, RelPath: "Author/Wrong", IsFolder: true, Title: "Wrong", ASIN: "B000000003",
+			Files: []BookFile{{RelPath: "Author/Wrong/Wrong.m4b"}}},
+		{LibraryID: lib, RelPath: "Solo.m4b", Title: "Solo"},
+	} {
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000003", AudibleTitlePatch{Rejected: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	done := func(id int64, asin, path, file string) bridge.Job {
+		params, _ := json.Marshal(bridge.AudibleImportParams{Account: "acct0001", ASIN: asin, LibraryID: lib})
+		return bridge.Job{ID: id, Kind: bridge.KindAudibleImport, State: bridge.StateDone, LibraryID: &lib, Params: params,
+			Result: json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[{"path":%q,"size":1}],"bytes":1,"enriched":false}`,
+				lib, path, file))}
+	}
+	match := func(asin string) *AudibleTitle {
+		t.Helper()
+		tt, err := f.c.AudibleTitle(f.ctx, "acct0001", asin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tt
+	}
+	// One's file joined Other's folder book: not One's.
+	if err := f.c.FoldAudibleImport(f.ctx, done(1, "B000000001", "Author/Other", "Author/Other/One.m4b")); !errors.Is(err, ErrImportNotOwn) {
+		t.Fatalf("joined another title's book: %v, want ErrImportNotOwn", err)
+	}
+	if x := match("B000000001"); x.Match != nil {
+		t.Fatalf("One claimed the joined book: %+v", x.Match)
+	}
+	if x := match("B000000002"); x.Match == nil || x.Match.Path != "Author/Other" || x.Match.How != "fuzzy" {
+		t.Fatalf("Other's match = %+v", x.Match)
+	}
+	// The same book once it carries One's ASIN (the Bridge's enrichment) is One's.
+	if err := f.c.BackfillASIN(f.ctx, lib, "Author/Other", "B000000001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.FoldAudibleImport(f.ctx, done(1, "B000000001", "Author/Other", "Author/Other/One.m4b")); err != nil {
+		t.Fatalf("a book with the title's ASIN: %v", err)
+	}
+	if x := match("B000000001"); x.Match == nil || x.Match.Path != "Author/Other" || x.Match.How != AudibleMatchImport {
+		t.Fatalf("One's match = %+v", x.Match)
+	}
+	// Wrong's backup landed in the book marked "Not this book" for it, though
+	// that book carries its ASIN: the mark and the poll's match stay.
+	if err := f.c.FoldAudibleImport(f.ctx, done(3, "B000000003", "Author/Wrong", "Author/Wrong/Wrong.m4b")); !errors.Is(err, ErrImportNotOwn) {
+		t.Fatalf("the rejected book: %v, want ErrImportNotOwn", err)
+	}
+	if x := match("B000000003"); !x.Rejected || x.Match == nil || x.Match.How != "fuzzy" {
+		t.Fatalf("Wrong after the fold = rejected %t, match %+v", x.Rejected, x.Match)
+	}
+	// A single-file book made by the backup.
+	if err := f.c.FoldAudibleImport(f.ctx, done(4, "B000000004", "Solo.m4b", "Solo.m4b")); err != nil {
+		t.Fatalf("a single-file book: %v", err)
+	}
+	if x := match("B000000004"); x.Match == nil || x.Match.Path != "Solo.m4b" {
+		t.Fatalf("Solo's match = %+v", x.Match)
 	}
 }
 

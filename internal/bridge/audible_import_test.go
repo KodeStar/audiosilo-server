@@ -29,13 +29,16 @@ func TestCheckAudibleTemplate(t *testing.T) {
 	t.Parallel()
 	for _, ok := range []string{"", "{Author}/{Series}/{ { PaddedSeq } - }{Title}", "{Author}/{Title:upper,trim}",
 		"{Author}/{PaddedSeq:width=3} {Title}{Ext}", `Books/\{literal\}/{ASIN}`, "{SHORTCODE}{Seq} - {TitleShort}",
-		"{Narrator}/{Year}/{OriginalFilename}", "{ plain group }"} {
+		"{Narrator}/{Year}/{OriginalFilename}", "{ plain group }", "{Title:upper,,trim}", "{Author}/{Title}.m4b"} {
 		if err := CheckAudibleTemplate(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
+	// A hidden part (the scan skips it) and an empty modifier name with a
+	// value (the Bridge's parseMods refuses it) too.
 	for _, bad := range []string{"{Nope}", "{Author", "{Author}}", "{ unclosed", "{Title:width}", "{Title:width=-1}",
-		"{Title:bold}", "{Title:upper{", "/{Author}", " /x", "{Author}/../{Title}", "a\nb", strings.Repeat("x", MaxAudibleTemplate+1)} {
+		"{Title:bold}", "{Title:upper{", "/{Author}", " /x", "{Author}/../{Title}", "a\nb", strings.Repeat("x", MaxAudibleTemplate+1),
+		"{Title:=x}", "{Title:upper, =1}", ".hidden/{Title}", "{Author}/.x/{Title}", `\.x/{Title}`, "{Author}/{Title}/.m4b"} {
 		if err := CheckAudibleTemplate(bad); !errors.Is(err, ErrAudibleTemplate) {
 			t.Errorf("%q: %v, want refused", bad, err)
 		}

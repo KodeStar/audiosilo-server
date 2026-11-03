@@ -3473,6 +3473,7 @@
   "audit.action.bridge.audible.backup": "Asked to back up an Audible book",
   "audit.action.bridge.audible.backup_all": "Backed up everything from an Audible account",
   "audit.action.bridge.audible.account": "Changed an Audible account's backups",
+  "audit.action.bridge.audible.title": "Changed an Audible book's match or destination",
   "errors.audibleMatched": "That book is already on this server. Mark it Not this book first if the match is wrong.",
   "errors.audibleImportOpen": "A backup of that book is already waiting or running.",
   "errors.audibleNotAvailable": "Audible doesn't offer that book for download now. Check the account again later.",
