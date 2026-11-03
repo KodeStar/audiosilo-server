@@ -78,12 +78,15 @@ type AudibleEstimate struct {
 // openImportSQL is a title (aliased t) whose backup job is open.
 const openImportSQL = `EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id AND j.state IN ` + bridge.OpenStatesSQL + `)`
 
-// retryImportSQL is a title (aliased t) with no backup yet, or whose latest
-// one failed or was cancelled: not open, and not done (a done one was folded,
-// or refused, ErrImportNotOwn leaving it unmatched, so "Back up everything"
-// doesn't queue it again; a console Back up still does).
+// retryImportSQL is a title (aliased t) "Back up everything" may back up
+// again: no backup yet, none open, and the latest not a done one whose book is
+// still indexed (a refused fold, ErrImportNotOwn, leaves the title unmatched
+// beside the book its file joined, so it isn't queued again every time; a
+// console Back up still does). A failed or cancelled one is tried again, and a
+// done one whose book has since left the library (deleted or moved) too.
 const retryImportSQL = `NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id
-	AND j.state NOT IN ('` + bridge.StateFailed + `', '` + bridge.StateCancelled + `'))`
+	AND (j.state IN ` + bridge.OpenStatesSQL + ` OR j.state = '` + bridge.StateDone + `' AND EXISTS(SELECT 1 FROM books b
+	     WHERE b.library_id = json_extract(j.result, '$.library_id') AND b.rel_path = json_extract(j.result, '$.path'))))`
 
 // contestedSQL is a title (aliased t) the Bridge left unmatched because
 // another title claimed the same book (AudibleReasonContested).
@@ -91,8 +94,8 @@ const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
 
 // backupAllSQL is a title (aliased t) "Back up everything" queues: available,
 // not on this server, not marked "Not this book" or ignored, not contested
-// (on this server under another title), and no backup open or done (a failed
-// or cancelled one is tried again).
+// (on this server under another title), and no backup open or refused
+// (retryImportSQL).
 const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
 	AND NOT ` + contestedSQL + ` AND ` + retryImportSQL
 

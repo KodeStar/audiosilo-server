@@ -670,38 +670,48 @@ func TestAudibleContestedSkipped(t *testing.T) {
 	}
 }
 
-// A title whose latest backup is done but still isn't on this server (its fold
-// was refused, ErrImportNotOwn) is left out of "Back up everything" and its
-// estimate, so it isn't queued again every time; a failed or cancelled one is
-// tried again, and the console's Back up of the done title still queues it.
+// A title whose latest backup is done but still isn't on this server, beside
+// the book its file joined (its fold was refused, ErrImportNotOwn), is left
+// out of "Back up everything" and its estimate, so it isn't queued again every
+// time; a failed or cancelled one is tried again, and so is a done one whose
+// book has left the library. The console's Back up of the refused title still
+// queues it.
 func TestAudibleBackupAllSkipsDone(t *testing.T) {
 	t.Parallel()
 	f := newAudibleFixture(t, "manual")
-	titles := []AudibleTitleInput{avail("B000000001", ""), avail("B000000002", ""), avail("B000000003", ""), avail("B000000004", "")}
+	titles := []AudibleTitleInput{avail("B000000001", ""), avail("B000000002", ""), avail("B000000003", ""),
+		avail("B000000004", ""), avail("B000000005", "")}
 	for i := range titles {
 		titles[i].RuntimeS = 60
 	}
 	f.poll(t, "p1", titles...)
-	for i, state := range []string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled} {
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "A/Joined", Title: "Joined"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, job := range []struct{ state, path string }{
+		{bridge.StateDone, "A/Joined"}, {bridge.StateDone, "A/Deleted"}, {bridge.StateFailed, ""}, {bridge.StateCancelled, ""},
+	} {
 		id := int64(i + 1)
-		if _, err := f.c.db.ExecContext(f.ctx, `INSERT INTO bridge_jobs(id,kind,state,params,dedupe_key,created_at,updated_at) VALUES(?,?,?,'{}',?,'t','t')`,
-			id, bridge.KindAudibleImport, state, fmt.Sprintf("k%d", id)); err != nil {
+		result := fmt.Sprintf(`{"library_id":%d,"path":%q}`, f.lib.ID, job.path)
+		if _, err := f.c.db.ExecContext(f.ctx, `INSERT INTO bridge_jobs(id,kind,state,params,result,dedupe_key,created_at,updated_at) VALUES(?,?,?,'{}',?,?,'t','t')`,
+			id, bridge.KindAudibleImport, job.state, result, fmt.Sprintf("k%d", id)); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.c.SetAudibleImport(f.ctx, "acct0001", titles[i].ASIN, id); err != nil {
 			t.Fatal(err)
 		}
 	}
+	want := []string{"B000000002", "B000000003", "B000000004", "B000000005"}
 	all, err := f.c.AudibleBackupAll(f.ctx, "acct0001")
-	if err != nil || !slices.Equal(asins(all), []string{"B000000002", "B000000003", "B000000004"}) {
-		t.Fatalf("everything = %v, %v, want the done title left out", asins(all), err)
+	if err != nil || !slices.Equal(asins(all), want) {
+		t.Fatalf("everything = %v, %v, want %v", asins(all), err, want)
 	}
 	accts, err := f.c.AudibleAccounts(f.ctx)
 	if err != nil || accts[0].BackupEstimate == nil ||
-		*accts[0].BackupEstimate != (AudibleEstimate{Count: 3, Bytes: 180 * audibleBytesPerSecond}) {
-		t.Fatalf("estimate = %+v, %v, want the done title left out", accts[0].BackupEstimate, err)
+		*accts[0].BackupEstimate != (AudibleEstimate{Count: 4, Bytes: 240 * audibleBytesPerSecond}) {
+		t.Fatalf("estimate = %+v, %v, want the refused title left out", accts[0].BackupEstimate, err)
 	}
 	if p, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000001"); err != nil || pending || p == nil || p.ASIN != "B000000001" {
-		t.Fatalf("back up the done title on its own = %+v, %t, %v", p, pending, err)
+		t.Fatalf("back up the refused title on its own = %+v, %t, %v", p, pending, err)
 	}
 }

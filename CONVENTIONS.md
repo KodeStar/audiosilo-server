@@ -2688,8 +2688,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
   `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
   (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
-  latest import not `done` (a refused fold, `ErrImportNotOwn`, isn't queued again), a failed or cancelled
-  one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
+  latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
+  queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
