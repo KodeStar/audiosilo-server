@@ -82,6 +82,7 @@ archives:
     files:
       - README.md
       - LICENSE*
+      - NOTICE
       - RELEASING.md
 
 # Linux .deb/.rpm: depend on the distro's ffmpeg rather than bundling, and install
@@ -95,7 +96,7 @@ nfpms:
     homepage: https://github.com/kodestar/audiosilo-server
     maintainer: AudioSilo <noreply@audiosilo.app>
     description: Self-hosted audiobook server (JSON API + admin UI + web player).
-    license: MIT
+    license: MIT and LGPL-2.1-or-later # the binary statically links glibc: see NOTICE
     formats: [deb, rpm]
     bindir: /usr/bin
     dependencies:
@@ -104,6 +105,8 @@ nfpms:
       - src: packaging/systemd/audiosilo.service
         dst: /lib/systemd/system/audiosilo.service
         type: config
+      - src: NOTICE
+        dst: /usr/share/doc/audiosilo/NOTICE
 
 checksum:
   name_template: "checksums.txt"
@@ -130,6 +133,12 @@ release:
     Native builds embed the web player; ffmpeg/ffprobe are found locally or
     auto-downloaded on first use. Prefer Docker for advanced / multi-user
     setups: `ghcr.io/kodestar/audiosilo-server`.
+
+    The Linux binaries and the Docker image use the native SQLite engine, a
+    static binary linked against the GNU C Library (LGPL-2.1-or-later; source and
+    relinking: [NOTICE](https://github.com/KodeStar/audiosilo-server/blob/main/NOTICE)).
+    In Docker it needs Docker 20.10.10 or newer: older Docker blocks the system call
+    glibc starts threads with, and the server stops at start-up.
 
     AudioSilo is free; sponsors keep it going:
     [GitHub Sponsors](https://github.com/sponsors/KodeStar).

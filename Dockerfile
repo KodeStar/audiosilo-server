@@ -87,6 +87,8 @@ RUN apk add --no-cache ca-certificates ffmpeg su-exec
 COPY --from=build /out/audiosilo /usr/local/bin/audiosilo
 COPY --from=web   /web           /app/web
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The server statically links glibc (LGPL-2.1-or-later): its notice ships with it.
+COPY NOTICE /usr/share/doc/audiosilo/NOTICE
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Default to uid/gid 1000; override with PUID/PGID to match your data dir's owner
 # (Unraid: 99/100). The entrypoint chowns /data and drops to that user.
