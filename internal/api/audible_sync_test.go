@@ -1093,3 +1093,25 @@ func TestBridgeProgressFeedRematch(t *testing.T) {
 		t.Fatalf("feed after a poll with no new match = %+v", again.Rows)
 	}
 }
+
+// A title synced again (Don't sync this book cleared) offers its book's
+// existing place again; one left out of the sync offers nothing.
+func TestBridgeProgressFeedSyncedAgain(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 1 {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	for _, v := range []int{1, 0} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET no_sync = ? WHERE asin = ?`, v, cradleASIN); err != nil {
+			t.Fatal(err)
+		}
+		f := s.feed(t, "&since="+url.QueryEscape(end.Next))
+		if len(f.Rows) != 1-v || (v == 0 && f.Rows[0].ASIN != cradleASIN) {
+			t.Fatalf("feed with no_sync = %d: %+v", v, f.Rows)
+		}
+	}
+}

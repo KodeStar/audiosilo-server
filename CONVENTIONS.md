@@ -3210,8 +3210,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reused, so a deleted row can't hand its number to the next write), set by two triggers on every insert and every
   UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in
   the user-state rule, the counter's `seq` too), existing rows numbered in updated_at order. Two triggers on
-  `audible_titles` (a title inserted with a match, or its match changed) move the person's row on that book to the
-  next number, so a newly matched book's existing place is offered to Audible. A row written late with
+  `audible_titles` (a title inserted with a match; its match changed, synced again (`no_sync`, `rejected`, `ignored`
+  cleared, back from gone) or its `runtime_s` changed) move the person's row on that book to the next number, so a
+  newly matched or re-synced book's existing place (or one left out for a length that may agree now) is offered to Audible. A row written late with
   an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
   clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the

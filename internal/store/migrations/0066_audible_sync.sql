@@ -67,9 +67,12 @@ BEGIN
      WHERE rowid = NEW.rowid;
 END;
 
--- A title matched to a book (a new title, or one matched to another book) offers
--- that book's existing place to Audible again: its person's row there moves to
--- the counter's next number, so a cursor already past it reads it again.
+-- A title matched to a book (a new title, or one matched to another book), one
+-- synced again (Don't sync this book cleared, un-rejected, un-ignored, back from
+-- gone) or one whose runtime changed (a row the feed left out for a length that
+-- disagreed may agree now) offers that book's existing place to Audible again:
+-- its person's row there moves to the counter's next number, so a cursor
+-- already past it reads it again (the Bridge drops a place it already holds).
 CREATE TRIGGER audible_title_match_insert AFTER INSERT ON audible_titles
 WHEN NEW.match_path IS NOT NULL
 BEGIN
@@ -79,9 +82,13 @@ BEGIN
        AND user_id = (SELECT user_id FROM audible_accounts WHERE account = NEW.account);
 END;
 
-CREATE TRIGGER audible_title_match_update AFTER UPDATE OF match_library_id, match_path ON audible_titles
+CREATE TRIGGER audible_title_match_update
+AFTER UPDATE OF match_library_id, match_path, runtime_s, state, rejected, ignored, no_sync ON audible_titles
 WHEN NEW.match_path IS NOT NULL
- AND (OLD.match_path IS NOT NEW.match_path OR OLD.match_library_id IS NOT NEW.match_library_id)
+ AND NEW.rejected = 0 AND NEW.ignored = 0 AND NEW.no_sync = 0 AND NEW.state <> 'gone'
+ AND (OLD.match_path IS NOT NEW.match_path OR OLD.match_library_id IS NOT NEW.match_library_id
+      OR OLD.runtime_s IS NOT NEW.runtime_s
+      OR OLD.rejected <> 0 OR OLD.ignored <> 0 OR OLD.no_sync <> 0 OR OLD.state = 'gone')
 BEGIN
     UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
     UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)
