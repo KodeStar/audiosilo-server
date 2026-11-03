@@ -46,11 +46,12 @@ jobs:
 
       # The Linux builds link the native SQLite engine statically against glibc
       # (.goreleaser.yml). The amd64 runner has gcc and glibc's static libraries;
-      # arm64 needs the cross compiler and the arm64 glibc.
-      - name: Install the arm64 C cross compiler
+      # arm64 needs the cross compiler and the arm64 glibc, and qemu for the smoke
+      # test to run the arm64 binary.
+      - name: Install the arm64 C cross compiler and qemu
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
 
       # GHCR refs must be lowercase; the owner login can be mixed-case.
       - name: Resolve owner (lowercase)
@@ -93,14 +94,22 @@ jobs:
             tar xzf "dist/audiosilo_${version}_linux_${arch}.tar.gz" -C "$dir" audiosilo
             info=$(go version -m "$dir/audiosilo")
             # Word matches, so the order of .goreleaser.yml's tags doesn't matter:
-            # the engine, and netgo/osusergo that keep the static binary off NSS.
-            for want in -tags=embedplayer sqlite_native netgo osusergo CGO_ENABLED=1 "GOARCH=$arch"; do
-              grep -qw -- "$want" <<<"$info"
+            # the engine's, and netgo/osusergo that keep the static binary off NSS.
+            for want in -tags=embedplayer sqlite_native sqlite_fts5 sqlite_preupdate_hook \
+              sqlite_omit_load_extension netgo osusergo CGO_ENABLED=1 "GOARCH=$arch"; do
+              grep -qw -- "$want" <<<"$info" || { echo "linux_$arch: no $want" >&2; exit 1; }
             done
-            if readelf -lW "$dir/audiosilo" | grep -q INTERP; then
+            # Not grep -q: under pipefail its early exit can fail readelf (SIGPIPE)
+            # and so pass a dynamic binary.
+            if readelf -lW "$dir/audiosilo" | grep INTERP > /dev/null; then
               echo "linux_$arch binary is dynamically linked" >&2
               exit 1
             fi
+            # It runs (arm64 under qemu) and carries the release's version.
+            run=()
+            if [ "$arch" = arm64 ]; then run=(qemu-aarch64-static); fi
+            got=$("${run[@]}" "$dir/audiosilo" version)
+            [ "$got" = "audiosilo $version" ] || { echo "linux_$arch: version says '$got'" >&2; exit 1; }
           done
           # macOS and Windows: pure Go.
           for target in darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
@@ -112,18 +121,20 @@ jobs:
             esac
             info=$(go version -m "$dir"/audiosilo*)
             for want in -tags=embedplayer CGO_ENABLED=0 "GOARCH=${target#*_}"; do
-              grep -qw -- "$want" <<<"$info"
+              grep -qw -- "$want" <<<"$info" || { echo "$target: no $want" >&2; exit 1; }
             done
           done
           # Boot amd64 as their image does: --data only, so the headless first run
           # and the self-signed TLS default. Its one-time credentials banner (stdout)
           # stays out of the log; ffmpeg/ffprobe are off so nothing downloads.
+          log="$RUNNER_TEMP/smoke/server.log"
           AUDIOSILO_BIND=127.0.0.1:18080 AUDIOSILO_UPDATE_CHECK=false \
             "$RUNNER_TEMP/smoke/linux_amd64/audiosilo" --data "$RUNNER_TEMP/smoke/data" --ffprobe "" --ffmpeg "" \
-            > /dev/null 2> >(tee "$RUNNER_TEMP/smoke/server.log" >&2) &
+            > /dev/null 2> "$log" &
           server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
+          # Its log (stderr) goes to the step's output on the way out, pass or fail.
+          trap 'kill "$server" 2>/dev/null || true; cat "$log" >&2' EXIT
           curl -kfsS --retry 30 --retry-delay 1 --retry-connrefused https://127.0.0.1:18080/healthz
           curl -kfsSL https://127.0.0.1:18080/web/ | grep -i '<html' > /dev/null
-          # The start logs its engine (stderr, kept above).
-          grep -q 'database: sqlite.*engine=native' "$RUNNER_TEMP/smoke/server.log"
+          # The start logs its engine.
+          grep -q 'database: sqlite.*engine=native' "$log"
