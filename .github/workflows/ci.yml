@@ -1,6 +1,6 @@
-# Gates every pull request and push to main on race tests + lint (govet included),
-# race tests on the native SQLite engine the image ships, plus the admin
-# console's own gate (admin-ui: typecheck, lint, prettier, vitest).
+# Gates every pull request and push to main on tests + coverage, race tests +
+# lint on the native SQLite engine the image ships, lint (govet included) and
+# the admin console's own gate (admin-ui: typecheck, lint, prettier, vitest).
 # The four jobs run side by side; the image build (image.yml) stays separate
 # and runs on tags (releases) and pushes to main (:edge).
 name: ci
@@ -36,15 +36,15 @@ jobs:
       - name: Admin console (install, vite build)
         run: scripts/build-admin.sh --vite-only
 
-      # ffprobe powers the duration/embedded-chapter scanner tests; without it
-      # those tests t.Skip (the suite still passes), so install it to keep them live.
       - name: Install ffmpeg (ffprobe)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        uses: ./.github/actions/setup-ffmpeg
 
       # No separate build or vet step: -coverprofile compiles every package,
-      # test files or not, and the lint job runs govet.
-      - name: Test (race + coverage)
-        run: go test -race -coverprofile=coverage.out ./...
+      # test files or not, and the lint job runs govet. No -race here: on the
+      # pure-Go engine it instruments the transpiled SQLite and is several times
+      # slower; test-native runs the same suite with -race.
+      - name: Test (coverage)
+        run: go test -coverprofile=coverage.out ./...
 
       - name: Upload coverage
         uses: actions/upload-artifact@v7
@@ -54,10 +54,11 @@ jobs:
           if-no-files-found: ignore
 
   # The Docker image ships the native SQLite engine (-tags sqlite_native, cgo):
-  # its files build only under those tags, so vet, test and lint them here too,
-  # the whole suite on that engine. TestNativeFastRows fails here when a mattn
-  # upgrade drops the statement field the fast path reads. (No ffmpeg or admin
-  # console build: those tests skip here and run in the test job.)
+  # its files build only under those tags, so race test and lint them here (the
+  # lint step runs govet), the whole suite on that engine. TestNativeFastRows
+  # fails here when a mattn upgrade drops the statement field the fast path
+  # reads. (No admin console build: the embed tests skip here and run in the
+  # test job.)
   test-native:
     runs-on: ubuntu-latest
     env:
@@ -71,8 +72,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Vet (native engine)
-        run: go vet -tags "$TAGS" ./...
+      - name: Install ffmpeg (ffprobe)
+        uses: ./.github/actions/setup-ffmpeg
 
       - name: Test (native engine, race)
         run: go test -race -tags "$TAGS" ./...
@@ -108,7 +109,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # golangci-lint-action@v8 installs golangci-lint v2 (required since Go 1.25)
+      # golangci-lint-action@v9 installs golangci-lint v2 (required since Go 1.25)
       # and manages its own cache; config is .golangci.yml.
       - uses: golangci/golangci-lint-action@v9
         with:
