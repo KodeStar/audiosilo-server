@@ -38,7 +38,9 @@ export function RemoveAccountButton({ account }: { account: AudibleAccount }) {
           await api.removeAudibleAccount(account.id);
           toast.add({ title: t('audible.remove.done', { name }), type: 'success' });
           void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
-          void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+          // Marked stale only: on the titles page useTitlesAfterPolls refetches
+          // them once the accounts move, so this would fetch them twice.
+          void qc.invalidateQueries({ queryKey: keys.audibleTitleLists, refetchType: 'none' });
           void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
         }}
       >

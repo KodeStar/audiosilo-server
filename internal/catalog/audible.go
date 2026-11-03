@@ -276,15 +276,22 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 
 // DeleteAudibleAccount forgets account id and its titles (the Bridge removed
 // it), cancelling its open poll. Forgetting an unknown account is not an
-// error: the Bridge forgets locally first and may call again.
-func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) error {
-	return c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
+// error: the Bridge forgets locally first and may call again. removed says
+// whether there was one.
+func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed bool, err error) {
+	err = c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
 		if err := bridge.CancelAudiblePolls(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
+		res, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		removed = n > 0
 		return err
 	})
+	return removed, err
 }
 
 // AudibleAccount returns account id, ErrUnknownAccount when there is none.

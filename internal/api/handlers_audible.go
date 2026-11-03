@@ -111,7 +111,7 @@ func (a *API) handleBridgeAudibleAccountDelete(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	if err := a.cat.DeleteAudibleAccount(r.Context(), id); err != nil {
+	if _, err := a.cat.DeleteAudibleAccount(r.Context(), id); err != nil {
 		a.writeAudibleError(w, err, "delete audible account failed")
 		return
 	}
@@ -329,18 +329,12 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	known := true
-	if _, err := a.cat.AudibleAccount(r.Context(), id); errors.Is(err, catalog.ErrUnknownAccount) {
-		known = false
-	} else if err != nil {
+	removed, err := a.cat.DeleteAudibleAccount(r.Context(), id)
+	if err != nil {
 		a.writeAudibleError(w, err, "delete audible account failed")
 		return
 	}
-	if err := a.cat.DeleteAudibleAccount(r.Context(), id); err != nil {
-		a.writeAudibleError(w, err, "delete audible account failed")
-		return
-	}
-	if known {
+	if removed {
 		a.audit(r, "bridge.audible.remove", "", map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
