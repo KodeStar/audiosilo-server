@@ -174,6 +174,7 @@ var kinds = map[string]kindSpec{
 	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audiblePollSuffix},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
 			KindReadalong: ErrReadalongOpen},
@@ -746,6 +747,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		}
 		if podcastWork(j.Kind) {
 			if err := s.prunePolls(ctx, tx, j); err != nil {
+				return err
+			}
+		}
+		if j.Kind == KindAudiblePoll {
+			if err := pruneAudiblePolls(ctx, tx, key); err != nil {
 				return err
 			}
 		}
