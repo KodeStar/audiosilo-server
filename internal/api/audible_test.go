@@ -723,7 +723,7 @@ func TestBridgeBooksFolderCode(t *testing.T) {
 		{"Jim Butcher/Dresden Files/DF15.5 Brief Cases", catalog.Book{Series: "Dresden Files"}, "15.5"},
 		{"HALO/HALO 07 - Evolutions (M4B)", catalog.Book{Series: "Halo"}, ""},                                              // a franchise's number
 		{"Kirill Klevanski/Dragon Heart/DH07 - Land of Demons", catalog.Book{Series: "Dragon Heart", SeriesIndex: 9}, "9"}, // a stored position wins
-		{"Michael Sisa/Legend of the Arch Magus/LAM05-06", catalog.Book{Series: "Legend of the Arch Magus"}, "5"},
+		{"Michael Sisa/Legend of the Arch Magus/LAM05-06", catalog.Book{Series: "Legend of the Arch Magus"}, "5-6"},        // an omnibus stays a range
 	}
 	for _, c := range books {
 		bk := c.book
@@ -756,7 +756,8 @@ func TestBridgeBooksFolderCode(t *testing.T) {
 	}
 }
 
-// bridgeSeries fills only the main series, and leaves a range alone.
+// bridgeSeries fills only the main series, leaves a stored range alone and
+// keeps a range folder code a range.
 func TestBridgeSeriesFolderCode(t *testing.T) {
 	t.Parallel()
 	b := &catalog.Book{RelPath: "A/Dragon Heart/DH06 - Land of Magic", Series: "Dragon Heart", SeriesList: []catalog.SeriesRef{
@@ -774,6 +775,10 @@ func TestBridgeSeriesFolderCode(t *testing.T) {
 	r := &catalog.Book{RelPath: "A/Dragon Heart/DH06-07", Series: "Dragon Heart", SeriesIndex: 6, SeriesIndexEnd: 7}
 	if got := bridgeSeries(r); len(got) != 1 || got[0].Position != "6-7" {
 		t.Errorf("a range = %+v", got)
+	}
+	omnibus := &catalog.Book{RelPath: "A/Legend of the Arch Magus/LAM05-06", Series: "Legend of the Arch Magus"}
+	if got := bridgeSeries(omnibus); len(got) != 1 || got[0].Position != "5-6" {
+		t.Errorf("a range folder code = %+v", got)
 	}
 	none := &catalog.Book{RelPath: "A/Standalone"}
 	if got := bridgeSeries(none); len(got) != 0 {

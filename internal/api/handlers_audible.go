@@ -170,16 +170,18 @@ type bridgeListBook struct {
 // position as stored ("3", "1-3", "" for none). A main series with no position
 // takes the one the code leading the book's folder name gives
 // (metadata.FolderCodePosition: "DH06 - Land of Magic" is Dragon Heart #6), so
-// the Bridge's matcher can tell the volumes apart. Only this listing reads it:
-// the scan's positions are unchanged.
+// the Bridge's matcher can tell the volumes apart. A range code stays a range
+// ("LAM05-06" is "5-6", never "5"), so an omnibus folder never looks like its
+// first volume and takes that volume's ASIN. Only this listing reads it: the
+// scan's positions are unchanged.
 func bridgeSeries(b *catalog.Book) []catalog.AudibleSeries {
 	list := b.AllSeries()
 	out := make([]catalog.AudibleSeries, 0, len(list))
 	for i, s := range list {
 		pos := catalog.FormatSeriesRange(s.Position, s.PositionEnd)
 		if i == 0 && pos == "" && b.Series != "" {
-			if v, ok := metadata.FolderCodePosition(path.Base(b.RelPath), s.Name); ok {
-				pos = catalog.FormatSeriesPosition(v)
+			if start, end, ok := metadata.FolderCodePosition(path.Base(b.RelPath), s.Name); ok {
+				pos = catalog.FormatSeriesRange(start, end)
 			}
 		}
 		out = append(out, catalog.AudibleSeries{Name: s.Name, Position: pos})
