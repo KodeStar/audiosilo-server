@@ -7,7 +7,7 @@ import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatNumber, formatRelative } from '@/lib/format';
+import { counted, formatNumber, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { bridgeTabLink } from '@/features/bridge/bridge-model';
@@ -146,7 +146,7 @@ function AccountRow({
               t('audible.account.titles'),
               counts
                 ? t('audible.account.counts', {
-                    total: formatNumber(counts.total, lang),
+                    ...counted(counts.total, lang),
                     matched: formatNumber(counts.matched, lang),
                   })
                 : '',

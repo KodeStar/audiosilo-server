@@ -91,6 +91,7 @@ describe('the setup checklist', () => {
     const ui = 'http://192.168.1.20:8090/';
     expect(setupItemLink(ui, 'agent')).toBe('http://192.168.1.20:8090/#/accounts');
     expect(setupItemLink(ui, 'github')).toBe('http://192.168.1.20:8090/#/accounts');
+    expect(setupItemLink(ui, 'audible')).toBe('http://192.168.1.20:8090/#/accounts');
     expect(setupItemLink(ui, 'libraries')).toBe('http://192.168.1.20:8090/#/libraries');
     expect(setupItemLink(ui, 'budget')).toBe('http://192.168.1.20:8090/#/settings');
     // The ASR step goes to Settings, or to Workers while it waits for a worker.
@@ -132,7 +133,11 @@ describe('what generating waits on', () => {
 
   it('never waits on the budget, GitHub, or a step it knows nothing of', () => {
     const s = status({
-      setup: setup([item('budget', false), item('github', false, false), item('audible', false)]),
+      setup: setup([
+        item('budget', false),
+        item('github', false, false),
+        item('cloud_sync', false),
+      ]),
     });
     expect(generateNeed(s, 1)).toBeUndefined();
   });

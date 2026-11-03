@@ -25,6 +25,15 @@ export function matchedParam(f: MatchedFilter): 0 | 1 | undefined {
 }
 
 /**
+ * The titles page's account filter: the account chosen while it is still
+ * listed, else none, so one removed on the Bridge (its picker gone with it when
+ * one account is left) never leaves the list filtered to nothing.
+ */
+export function chosenAccount(accounts: readonly AudibleAccount[], chosen: string): string {
+  return accounts.some((a) => a.id === chosen) ? chosen : '';
+}
+
+/**
  * The account Check now polls on the titles page: the one chosen, else the
  * only one there is; undefined when several and none chosen.
  */

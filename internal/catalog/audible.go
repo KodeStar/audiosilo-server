@@ -80,7 +80,8 @@ var (
 	ErrUnknownLibrary = errors.New("unknown library")
 	// ErrUnknownAccount is an account id the Bridge never mapped: a 404.
 	ErrUnknownAccount = errors.New("unknown audible account")
-	// ErrASINSet is an ASIN backfill for a book that already has an ASIN: a 409.
+	// ErrASINSet is an ASIN backfill for a book that already has an ASIN, or
+	// whose ASIN an admin edited (cleared included): a 409.
 	ErrASINSet = errors.New("the book already has an asin")
 )
 
@@ -278,7 +279,7 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 // error: the Bridge forgets locally first and may call again.
 func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) error {
 	return c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
-		if err := bridge.CancelAudiblePolls(ctx, tx, id, c.now()); err != nil {
+		if err := bridge.CancelAudiblePolls(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
@@ -384,13 +385,14 @@ type AudibleTitle struct {
 
 // checkAudibleTitle checks and normalises one reported title: its identity,
 // state, dates and match strictly (a Bridge's mistake), its free text cleaned
-// and bounded (what Audible said, never refused).
+// and bounded (what Audible said, never refused: an anthology's long author
+// list keeps its first maxAudibleNames).
 func checkAudibleTitle(t *AudibleTitleInput) error {
 	t.ASIN = strings.ToUpper(strings.TrimSpace(t.ASIN))
 	if !ValidASIN(t.ASIN) {
 		return audibleInvalid("asin %q is not an ASIN", t.ASIN)
 	}
-	if !slices.Contains([]string{AudibleAvailable, AudiblePreorder, AudibleUnavailable}, t.State) {
+	if t.State == AudibleGone || !slices.Contains(AudibleStates, t.State) {
 		return audibleInvalid("state must be available, preorder or unavailable")
 	}
 	if t.ReleaseDate != "" {
@@ -402,25 +404,27 @@ func checkAudibleTitle(t *AudibleTitleInput) error {
 		return audibleInvalid("runtime_s out of range")
 	}
 	if m := t.Match; m != nil {
-		if m.LibraryID <= 0 || m.Path == "" || len(m.Path) > MaxPathBytes || CleanRelPath(m.Path) != m.Path ||
-			(m.How != "asin" && m.How != "fuzzy") {
+		if m.LibraryID <= 0 || !bridgeBookPath(m.Path) || (m.How != "asin" && m.How != "fuzzy") {
 			return audibleInvalid("match must name a library, a clean book path and how (asin or fuzzy)")
 		}
 	}
-	if len(t.Authors) > maxAudibleNames || len(t.Series) > maxAudibleSeries {
-		return audibleInvalid("too many authors or series")
-	}
 	t.Title = bridge.CleanText(t.Title, maxAudibleTitle)
 	t.Reason = bridge.CleanText(t.Reason, maxAudibleReason)
-	authors := make([]string, 0, len(t.Authors))
+	authors := make([]string, 0, min(len(t.Authors), maxAudibleNames))
 	for _, a := range t.Authors {
+		if len(authors) == maxAudibleNames {
+			break
+		}
 		if a = bridge.CleanText(a, maxAudibleName); a != "" {
 			authors = append(authors, a)
 		}
 	}
 	t.Authors = authors
-	series := make([]AudibleSeries, 0, len(t.Series))
+	series := make([]AudibleSeries, 0, min(len(t.Series), maxAudibleSeries))
 	for _, s := range t.Series {
+		if len(series) == maxAudibleSeries {
+			break
+		}
 		s.Name, s.Position = bridge.CleanText(s.Name, maxAudibleName), bridge.CleanText(s.Position, maxAudiblePosition)
 		if s.Name != "" {
 			series = append(series, s)
@@ -428,6 +432,13 @@ func checkAudibleTitle(t *AudibleTitleInput) error {
 	}
 	t.Series = series
 	return nil
+}
+
+// bridgeBookPath reports whether p is a book path as BridgeBooks lists one: a
+// clean library-relative path, or "." for a `book` override on the library
+// root (the index keeps that book's path as "."; CleanRelPath would make it "").
+func bridgeBookPath(p string) bool {
+	return p == "." || (p != "" && len(p) <= MaxPathBytes && CleanRelPath(p) == p)
 }
 
 // PutAudibleTitles stores titles (at most MaxAudibleTitles) of one poll of
@@ -573,9 +584,12 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 		if len(q) > maxAudibleQueryText {
 			return AudibleTitlePage{}, audibleInvalid("query too long")
 		}
+		// Each author as written (json_each decodes the stored list), so a
+		// search never matches the list's JSON: its quotes, brackets, escapes.
 		like := "%" + escapeLike(q) + "%"
-		where = append(where, `(title LIKE ? ESCAPE '\' OR authors LIKE ? ESCAPE '\' OR asin = ?)`)
-		args = append(args, like, like, strings.ToUpper(q))
+		where = append(where, `(title LIKE ? ESCAPE '\' OR asin = ?
+		    OR EXISTS(SELECT 1 FROM json_each(authors) WHERE value LIKE ? ESCAPE '\'))`)
+		args = append(args, like, strings.ToUpper(q), like)
 	}
 	if f.After != "" {
 		var cur audibleCursor
@@ -643,12 +657,15 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 }
 
 // DueAudiblePolls are the accounts whose scheduled poll is due at now: mapped
-// to a library (a paused one waits) and never queued, or last queued at least
-// poll_hours ago. At most limit, the longest waiting first.
+// to a library (a paused one waits) and to a person an account may still be
+// mapped to (bridgeUserSQL: one disabled or made a kid since waits too), and
+// never queued, or last queued at least poll_hours ago. At most limit, the
+// longest waiting first.
 func (c *Catalog) DueAudiblePolls(ctx context.Context, now time.Time, limit int) ([]string, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT account, poll_hours, last_queued_at FROM audible_accounts WHERE library_id IS NOT NULL
-		  ORDER BY last_queued_at IS NOT NULL, last_queued_at, account`)
+		`SELECT a.account, a.poll_hours, a.last_queued_at FROM audible_accounts a JOIN users u ON u.id = a.user_id
+		  WHERE a.library_id IS NOT NULL AND `+bridgeUserSQL+`
+		  ORDER BY a.last_queued_at IS NOT NULL, a.last_queued_at, a.account`)
 	if err != nil {
 		return nil, err
 	}
@@ -731,25 +748,24 @@ func (c *Catalog) BridgeBooks(ctx context.Context, libraryID int64, after string
 
 // BackfillASIN attaches asin to an indexed book that has none (the Bridge's
 // unambiguous Audible match), durably (book_enrichment) and on the index row
-// at once. ErrNotFound when no book is indexed at path; ErrASINSet when the
-// book already has another ASIN (the same one is a no-op).
+// at once. ErrNotFound when no book of a books library is indexed at path;
+// ErrASINSet when the book has another ASIN, or an admin's edit of its ASIN
+// (an override, a cleared one too: a backfill never goes under one). The
+// same ASIN again is a no-op. Only a write moves the content generation: the
+// Bridge asks again for such a book after every poll.
 func (c *Catalog) BackfillASIN(ctx context.Context, libraryID int64, path, asin string) error {
-	path = CleanRelPath(path)
+	if path != "." { // the library root's book keeps "." (bridgeBookPath)
+		path = CleanRelPath(path)
+	}
+	if write, err := backfillWanted(ctx, c.db, libraryID, path, asin); err != nil || !write {
+		return err
+	}
 	written := false
 	err := c.db.WithTx(ctx, "BackfillASIN", func(tx *sql.Tx) error {
-		var have string
-		err := tx.QueryRowContext(ctx, `SELECT asin FROM books WHERE library_id = ? AND rel_path = ?`, libraryID, path).Scan(&have)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
+		// Again in the writer: an edit or a scan may have landed since.
+		write, err := backfillWanted(ctx, tx, libraryID, path, asin)
+		if err != nil || !write {
 			return err
-		}
-		switch {
-		case strings.EqualFold(have, asin):
-			return nil
-		case have != "":
-			return ErrASINSet
 		}
 		written = true
 		return setEnrichmentTx(ctx, tx, libraryID, path, asin, "", c.ts())
@@ -758,4 +774,32 @@ func (c *Catalog) BackfillASIN(ctx context.Context, libraryID int64, path, asin 
 		c.changed()
 	}
 	return err
+}
+
+// backfillWanted reports whether BackfillASIN writes asin onto the book at
+// path, read through q: false for a book that has it already, ErrNotFound for
+// no book of a books library (a podcast's episode is none), ErrASINSet for a
+// book with another ASIN or an ASIN override.
+func backfillWanted(ctx context.Context, q querier, libraryID int64, path, asin string) (bool, error) {
+	var (
+		have, kind string
+		edited     bool
+	)
+	err := q.QueryRowContext(ctx, `SELECT b.asin, l.kind,
+		    EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?)
+		  FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.library_id = ? AND b.rel_path = ?`,
+		FieldASIN, libraryID, path).Scan(&have, &kind, &edited)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, ErrNotFound
+	case err != nil:
+		return false, err
+	case kind != KindBooks:
+		return false, ErrNotFound
+	case strings.EqualFold(have, asin):
+		return false, nil
+	case have != "" || edited:
+		return false, ErrASINSet
+	}
+	return true, nil
 }

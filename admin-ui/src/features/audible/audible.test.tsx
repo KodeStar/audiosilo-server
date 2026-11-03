@@ -1,12 +1,13 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { AudibleAccount, AudibleTitle, BridgeJob, BridgeStatus } from '@/api/types';
-import { mockFetch, type MockRoute } from '@/test/fetch-mock';
+import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { settingsWith } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { accountName, matchedParam, pollTarget, titleByline } from './audible-model';
+import { accountName, chosenAccount, matchedParam, pollTarget, titleByline } from './audible-model';
 
 // Audible (Bridge Phase 4a): Settings > Bridge's read-only Audible accounts card
 // and Settings > Audible's titles, both shown only while the module is on.
@@ -84,6 +85,18 @@ function routes(on: boolean, over: Record<string, MockRoute> = {}) {
 
 beforeEach(() => setToken('stored'));
 
+/** Runs fn with the process in time zone tz (Node reads a new TZ at once). */
+async function inZone<T>(tz: string, fn: () => Promise<T>): Promise<T> {
+  const zone = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await fn();
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
+}
+
 describe('audible model', () => {
   it('words the filters and names', () => {
     expect(matchedParam('matched')).toBe(1);
@@ -94,6 +107,9 @@ describe('audible model', () => {
     expect(pollTarget([a], '')).toBe(a);
     expect(pollTarget([a, b], '')).toBeUndefined();
     expect(pollTarget([a, b], 'acct0002')).toBe(b);
+    expect(chosenAccount([a, b], 'acct0002')).toBe('acct0002');
+    expect(chosenAccount([a], 'acct0002')).toBe('');
+    expect(chosenAccount([a, b], '')).toBe('');
     expect(titleByline(title())).toBe('Brandon Sanderson · Mistborn 1');
     expect(titleByline(title({ authors: [], series: [] }))).toBe('');
     const t = ((k: string, o?: Record<string, string>) => `${k}:${o?.name}:${o?.store}`) as never;
@@ -125,6 +141,14 @@ describe('settings > bridge > audible accounts', () => {
                 library_id: null,
                 library: null,
                 paused: true,
+                titles: {
+                  total: 1,
+                  available: 1,
+                  preorder: 0,
+                  unavailable: 0,
+                  gone: 0,
+                  matched: 0,
+                },
               }),
             ],
           },
@@ -142,6 +166,7 @@ describe('settings > bridge > audible accounts', () => {
     expect(within(rows[0]).getByText('30 titles, 12 on this server')).toBeInTheDocument();
     expect(within(rows[0]).getByText('Only books you choose')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Paused')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('1 title, 0 on this server')).toBeInTheDocument();
     expect(within(rows[1]).getByRole('button', { name: 'Check now' })).toBeDisabled();
     // Nothing on the card edits the mapping: that is the Bridge's page.
     expect(within(card).queryByRole('textbox')).not.toBeInTheDocument();
@@ -177,6 +202,30 @@ describe('settings > bridge > audible accounts', () => {
     expect(await screen.findByText('Checking Chris (US)')).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/poll'))).toBe(true);
   });
+
+  it('says a poll being cancelled is still stopping, and words an account gone since', async () => {
+    let reply: MockReply = {
+      status: 200,
+      body: { id: 9, kind: 'audible.poll', cancel_requested: true } as Partial<BridgeJob>,
+    };
+    mockFetch(routes(true, { 'POST /admin/audible/accounts/acct0001/poll': () => reply }));
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const user = userEvent.setup();
+    await user.click(await within(card).findByRole('button', { name: 'Check now' }));
+    expect(
+      await screen.findByText('The check of Chris (US) is still stopping'),
+    ).toBeInTheDocument();
+    reply = {
+      status: 404,
+      body: { error: 'no such Audible account', code: 'unknown_account' },
+    };
+    await user.click(within(card).getByRole('button', { name: 'Check now' }));
+    expect(
+      await screen.findByText(/That Audible account isn't on this server any more/),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('settings > audible', () => {
@@ -203,9 +252,15 @@ describe('settings > audible', () => {
         }),
       }),
     );
-    renderApp('/server?topic=audible');
-    const list = await screen.findByRole('list', { name: 'Audible titles' });
-    const rows = within(list).getAllByRole('listitem');
+    // A preorder's release day as Audible gives it, wherever the console is
+    // (west of UTC, the day read as a moment would show the 19th).
+    const rows = await inZone('Pacific/Pago_Pago', async () => {
+      renderApp('/server?topic=audible');
+      const list = await screen.findByRole('list', { name: 'Audible titles' });
+      const rows = within(list).getAllByRole('listitem');
+      expect(within(rows[1]).getByText(/Releases Nov 20, 2026/)).toBeInTheDocument();
+      return rows;
+    });
     expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByRole('link', { name: 'On this server' })).toHaveAttribute(
       'href',
@@ -213,7 +268,6 @@ describe('settings > audible', () => {
     );
     expect(within(rows[1]).getByText('Preorder')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Not here')).toBeInTheDocument();
-    expect(within(rows[1]).getByText(/Releases/)).toBeInTheDocument();
     const user = userEvent.setup();
     await user.selectOptions(screen.getByRole('combobox', { name: 'On this server' }), 'missing');
     expect(await screen.findByText('The Well of Ascension')).toBeInTheDocument();
@@ -229,10 +283,55 @@ describe('settings > audible', () => {
     expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled();
   });
 
-  it('says so when a filter matches nothing', async () => {
+  it('says so when there are none, and when a filter matches nothing', async () => {
     mockFetch(routes(true, { 'GET /admin/audible/titles': { body: { titles: [], next: '' } } }));
     renderApp('/server?topic=audible');
     expect(await screen.findByText('No titles yet')).toBeInTheDocument();
+    await userEvent.setup().type(screen.getByRole('textbox', { name: 'Search titles' }), 'zzz');
+    expect(await screen.findByText('No titles match')).toBeInTheDocument();
+  });
+
+  it('drops the account filter once that account is gone', async () => {
+    let accounts = [account(), account({ id: 'acct0002', label: 'Sam (UK)' })];
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': () => ({ body: { accounts } }),
+        'GET /admin/audible/titles': (req) => ({
+          body: { titles: req.query.get('account') === 'acct0002' ? [] : [title()], next: '' },
+        }),
+      }),
+    );
+    const { queryClient } = renderApp('/server?topic=audible');
+    await userEvent
+      .setup()
+      .selectOptions(await screen.findByRole('combobox', { name: 'Account' }), 'acct0002');
+    expect(await screen.findByText('No titles match')).toBeInTheDocument();
+    // Sam's account is removed on the Bridge: the accounts, asked again, drop it.
+    accounts = [account()];
+    await queryClient.invalidateQueries({ queryKey: keys.audibleAccounts });
+    expect(await screen.findByText('The Final Empire')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Account' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled();
+  });
+
+  it('refreshes the titles once a poll lands', async () => {
+    let polled = '2026-11-01T09:00:00Z';
+    let titles = [title()];
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': () => ({
+          body: { accounts: [account({ last_poll_at: polled })] },
+        }),
+        'GET /admin/audible/titles': () => ({ body: { titles, next: '' } }),
+      }),
+    );
+    const { queryClient } = renderApp('/server?topic=audible');
+    expect(await screen.findByText('The Final Empire')).toBeInTheDocument();
+    // The poll lands: the accounts, asked again every 30 s, carry its time.
+    polled = '2026-11-01T10:00:00Z';
+    titles = [title(), title({ asin: 'B000000005', title: 'Elantris', match: null })];
+    await queryClient.invalidateQueries({ queryKey: keys.audibleAccounts });
+    expect(await screen.findByText('Elantris')).toBeInTheDocument();
   });
 
   it('opens General while the module is off', async () => {

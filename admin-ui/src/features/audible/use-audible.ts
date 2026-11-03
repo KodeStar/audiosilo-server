@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -63,9 +63,29 @@ export function useAudibleTitles(f: {
 }
 
 /**
- * Check now: queues an account's poll and says so (queued, or already waiting),
- * refreshing the accounts (the queued time) and the Bridge's jobs; the titles
- * change only once the poll lands. A refusal is a toast.
+ * Refreshes the loaded titles once a poll lands: the accounts, asked again every
+ * 30 s, carry each one's last poll time, and a new one means new titles (an
+ * account added or removed changes them too).
+ */
+export function useTitlesAfterPolls(accounts: readonly AudibleAccount[] | undefined) {
+  const qc = useQueryClient();
+  const stamp = accounts?.map((a) => `${a.id}@${a.last_poll_at ?? ''}`).join(' ');
+  const seen = useRef(stamp);
+  useEffect(() => {
+    if (stamp === undefined) return;
+    if (seen.current !== undefined && stamp !== seen.current) {
+      void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+    }
+    seen.current = stamp;
+  }, [stamp, qc]);
+}
+
+/**
+ * Check now: queues an account's poll and says so (queued, already waiting, or
+ * still stopping: the open poll that came back is being cancelled, so nothing
+ * runs until it has stopped), refreshing the accounts (the queued time) and the
+ * Bridge's jobs; the titles change once the poll lands (useTitlesAfterPolls). A
+ * refusal is a toast.
  */
 export function useCheckNow() {
   const { t } = useTranslation();
@@ -75,7 +95,7 @@ export function useCheckNow() {
     setBusy(account.id);
     const name = accountName(t, account);
     try {
-      const { created } = await api.pollAudible(account.id);
+      const { job, created } = await api.pollAudible(account.id);
       toast.add(
         created
           ? {
@@ -83,10 +103,16 @@ export function useCheckNow() {
               description: t('audible.check.doneBody'),
               type: 'success',
             }
-          : {
-              title: t('audible.check.already', { name }),
-              description: t('audible.check.alreadyBody'),
-            },
+          : job.cancel_requested
+            ? {
+                title: t('audible.check.stopping', { name }),
+                description: t('audible.check.stoppingBody'),
+                type: 'warning',
+              }
+            : {
+                title: t('audible.check.already', { name }),
+                description: t('audible.check.alreadyBody'),
+              },
       );
     } catch (err) {
       toastError(t('audible.check.failed'), err);

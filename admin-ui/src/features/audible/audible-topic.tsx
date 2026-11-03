@@ -11,17 +11,23 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
-import { formatDate, formatHours } from '@/lib/format';
+import { formatDay, formatHours } from '@/lib/format';
 import { CardEmpty } from '@/features/settings/card-empty';
 import {
   accountName,
+  chosenAccount,
   pollTarget,
   TITLE_STATE_TONE,
   titleByline,
   type MatchedFilter,
 } from './audible-model';
 import { CheckNowButton } from './check-now-button';
-import { useAudibleAccounts, useAudibleTitles, useCheckNow } from './use-audible';
+import {
+  useAudibleAccounts,
+  useAudibleTitles,
+  useCheckNow,
+  useTitlesAfterPolls,
+} from './use-audible';
 
 /**
  * Settings > Audible (Bridge Phase 4a; a page of the audible module, listed
@@ -34,11 +40,13 @@ export function AudibleTopic() {
   const { t } = useTranslation();
   const accounts = useAudibleAccounts();
   const list = accounts.data?.accounts ?? [];
-  const [account, setAccount] = useState('');
+  const [picked, setPicked] = useState('');
+  const account = chosenAccount(list, picked);
   const [state, setState] = useState<AudibleTitleState | ''>('');
   const [matched, setMatched] = useState<MatchedFilter>('');
   const [q, setQ] = useState('');
   const titles = useAudibleTitles({ account, state, matched, q });
+  useTitlesAfterPolls(accounts.data?.accounts);
   const { checkNow, busy } = useCheckNow();
   const target = pollTarget(list, account);
   const names = new Map(list.map((a) => [a.id, accountName(t, a)] as const));
@@ -82,7 +90,7 @@ export function AudibleTopic() {
           <NativeSelect
             className="w-[180px]"
             value={account}
-            onChange={(e) => setAccount(e.target.value)}
+            onChange={(e) => setPicked(e.target.value)}
             aria-label={t('audible.titles.account')}
           >
             <option value="">{t('audible.titles.allAccounts')}</option>
@@ -178,7 +186,13 @@ function TitleRow({ title: x, account }: { title: AudibleTitle; account?: string
   const details = [
     x.runtime_s > 0 ? formatHours(x.runtime_s, lang) : '',
     x.state === 'preorder' && x.release_date
-      ? t('audible.titles.releases', { date: formatDate(x.release_date, lang) })
+      ? t('audible.titles.releases', {
+          date: formatDay(x.release_date, lang, {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+          }),
+        })
       : '',
     x.asin,
     account ?? '',

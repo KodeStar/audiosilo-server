@@ -347,9 +347,6 @@ func TestAudibleTitlesPoll(t *testing.T) {
 	if p := adminTitles(t, b, "q=b000000003"); len(p.Titles) != 1 {
 		t.Errorf("q=asin = %+v", p.Titles)
 	}
-	if p := adminTitles(t, b, "q=50%25_"); len(p.Titles) != 0 {
-		t.Errorf("a LIKE wildcard matched: %+v", p.Titles)
-	}
 	var seen []string
 	after := ""
 	for range 5 {
@@ -369,8 +366,12 @@ func TestAudibleTitlesPoll(t *testing.T) {
 			t.Errorf("?%s: %d %s, want 400", q, resp.StatusCode, body)
 		}
 	}
-	// Bad titles calls are refused whole.
+	// Bad titles calls are refused whole: a final call without its titles
+	// array too, which must never read as "the account owns nothing" (the
+	// counts below show nothing went gone).
 	for name, body := range map[string]string{
+		"no titles":    `{"poll_id":"p3","final":true}`,
+		"null titles":  `{"poll_id":"p3","final":true,"titles":null}`,
 		"bad asin":     `{"poll_id":"p3","final":false,"titles":[{"asin":"nope","state":"available"}]}`,
 		"bad state":    `{"poll_id":"p3","final":false,"titles":[{"asin":"B000000009","state":"gone"}]}`,
 		"bad date":     `{"poll_id":"p3","final":false,"titles":[{"asin":"B000000009","state":"available","release_date":"soon"}]}`,
@@ -417,9 +418,68 @@ func TestAudibleTitlesPoll(t *testing.T) {
 	}
 }
 
+// What Audible says is bounded, never refused: an anthology's long author and
+// series lists keep their first 20 and 10, and a match to the library root's
+// book (".", a `book` override there) is a match. The search reads each author
+// as written, never the stored list's JSON, and LIKE's wildcards are literal.
+func TestAudibleTitlesBoundedAndSearched(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setAudible(t, b.testEnv, b.adminTok, true)
+	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put account: %d %s", code, out)
+	}
+	authors := make([]string, 30)
+	for i := range authors {
+		authors[i] = fmt.Sprintf(`"Author %02d"`, i)
+	}
+	series := make([]string, 12)
+	for i := range series {
+		series[i] = fmt.Sprintf(`{"name":"Series %02d","position":"%d"}`, i, i)
+	}
+	anthology := fmt.Sprintf(`{"asin":"B000000010","title":"The Big Anthology","authors":[%s],"series":[%s],"state":"available"}`,
+		strings.Join(authors, ","), strings.Join(series, ","))
+	duo := fmt.Sprintf(`{"asin":"B000000011","title":"Cat and Mouse","authors":["Tom & Jerry","<Anon>"],"state":"available",
+		"match":{"library_id":%d,"path":".","how":"fuzzy"}}`, b.lib.ID)
+	if code, out := b.putTitles(t, testAccount, "p1", true, anthology, duo); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	big := adminTitles(t, b, "q=anthology").Titles
+	if len(big) != 1 || len(big[0].Authors) != 20 || big[0].Authors[19] != "Author 19" ||
+		len(big[0].Series) != 10 || big[0].Series[9].Name != "Series 09" {
+		t.Fatalf("anthology = %+v", big)
+	}
+	if p := adminTitles(t, b, "matched=1").Titles; len(p) != 1 || p[0].Match == nil || p[0].Match.Path != "." {
+		t.Fatalf("root book match = %+v", p)
+	}
+	for q, want := range map[string]string{
+		"Tom & J":   "B000000011", // json.Marshal stores "&" escaped
+		"<anon>":    "B000000011",
+		"author 07": "B000000010",
+		"author 25": "", // past the first 20
+		`"`:         "", // the stored list's quotes and brackets
+		"[":         "",
+		"%":         "", // LIKE's wildcards
+		"_":         "",
+	} {
+		got := ""
+		switch p := adminTitles(t, b, "q="+url.QueryEscape(q)).Titles; len(p) {
+		case 0:
+		case 1:
+			got = p[0].ASIN
+		default:
+			got = fmt.Sprintf("%d titles", len(p))
+		}
+		if got != want {
+			t.Errorf("q=%q found %q, want %q", q, got, want)
+		}
+	}
+}
+
 // A library deleted: titles matched to it lose the match, accounts mapped to
-// it pause (no poll queued for them, Check now 409 account_paused) until the
-// Bridge maps them again; a book moved carries its match.
+// it pause (no poll queued for them, Check now 409 account_paused, an open one
+// cancelled) until the Bridge maps them again; a book moved or joined carries
+// its match; an account whose person can no longer have one is never due.
 func TestAudibleLibraryDeleteAndMove(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -438,11 +498,21 @@ func TestAudibleLibraryDeleteAndMove(t *testing.T) {
 	}
 	if code, out := b.putTitles(t, testAccount, "p1", true,
 		title("B000000001", "On the other", "available", other.ID, "A/B"),
-		title("B000000002", "On main", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+		title("B000000002", "On main", "available", b.lib.ID, mistbornBook),
+		title("B000000003", "On a disc", "available", b.lib.ID, "Some Author/Big Book/CD1")); code != http.StatusOK {
 		t.Fatalf("titles: %d %s", code, out)
 	}
-	// Moved: the match follows the book.
+	poll, created, err := b.api.bridge.Enqueue(ctx, bridge.AudiblePoll(testAccount, 0))
+	if err != nil || !created {
+		t.Fatalf("poll = %+v, %v, %v", poll, created, err)
+	}
+	// Moved or joined: the match follows the book.
 	if err := b.cat.MoveDurableState(ctx, b.lib.ID, mistbornBook, "Brandon Sanderson/Mistborn Era One"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cat.JoinDurableState(ctx, b.lib.ID, "Some Author/Big Book", []catalog.JoinPart{
+		{Path: "Some Author/Big Book/CD1"}, {Path: "Some Author/Big Book/CD2", Offset: 3600, Last: true},
+	}, 7200); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.cat.DeleteLibrary(ctx, other.ID); err != nil {
@@ -459,19 +529,34 @@ func TestAudibleLibraryDeleteAndMove(t *testing.T) {
 			if x.Match == nil || x.Match.Path != "Brandon Sanderson/Mistborn Era One" {
 				t.Errorf("match didn't move with its book: %+v", x)
 			}
+		case "B000000003":
+			if x.Match == nil || x.Match.Path != "Some Author/Big Book" {
+				t.Errorf("match didn't follow its disc into the joined book: %+v", x)
+			}
 		}
 	}
 	acct, err := b.cat.AudibleAccount(ctx, testAccount)
 	if err != nil || !acct.Paused || acct.LibraryID != nil {
 		t.Fatalf("account after its library went = %+v, %v", acct, err)
 	}
+	if j, err := b.api.bridge.Job(ctx, poll.ID); err != nil || j.State != bridge.StateCancelled || j.Error != bridge.CancelAudiblePaused {
+		t.Fatalf("the paused account's open poll = %+v, %v", j, err)
+	}
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/poll", b.adminTok, "")
 	if resp.StatusCode != http.StatusConflict || codeOf(out) != "account_paused" {
 		t.Fatalf("Check now on a paused account: %d %s", resp.StatusCode, out)
 	}
+	// Nor is one whose person was disabled since it was mapped.
+	gone, _ := newUserWithSession(t, b.testEnv, "dana", false)
+	if code, out := b.putAccount(t, "acct0003", gone, b.lib.ID); code != http.StatusOK {
+		t.Fatalf("put account 3: %d %s", code, out)
+	}
+	if _, err := b.db.ExecContext(ctx, `UPDATE users SET disabled = 1 WHERE id = ?`, gone); err != nil {
+		t.Fatal(err)
+	}
 	due, err := b.cat.DueAudiblePolls(ctx, time.Now(), 10)
 	if err != nil || len(due) != 1 || due[0] != "acct0002" {
-		t.Fatalf("due = %v, %v (a paused account is never due)", due, err)
+		t.Fatalf("due = %v, %v (a paused account, or a disabled person's, is never due)", due, err)
 	}
 	// Mapped again, it resumes.
 	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK || strings.Contains(out, `"paused":true`) {
@@ -574,6 +659,48 @@ func TestBridgeEnrichment(t *testing.T) {
 			t.Errorf("%s: %d %s", name, code, out)
 		}
 	}
+	// An admin's ASIN edit, a cleared one too, is never gone under (409); that,
+	// the same ASIN again and a refusal write nothing: the content generation
+	// (the player's list caches) stays, though the Bridge asks after every poll.
+	if err := b.cat.EditBook(ctx, b.lib.ID, cradleBook, catalog.BookEdit{Set: map[string]string{catalog.FieldASIN: ""}, UserID: b.adminID}); err != nil {
+		t.Fatal(err)
+	}
+	gen := b.db.ContentGeneration()
+	if code, out := put(cradleBook, `{"asin":"B0TESTASIN"}`); code != http.StatusConflict || codeOf(out) != "asin_set" {
+		t.Fatalf("under a cleared ASIN edit: %d %s", code, out)
+	}
+	for _, path := range []string{mistbornBook, "Nobody/Here"} {
+		_, _ = put(path, `{"asin":"B0TESTASIN"}`)
+	}
+	if after := b.db.ContentGeneration(); after != gen {
+		t.Fatalf("content generation moved %d -> %d with nothing written", gen, after)
+	}
+	var stored int
+	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_enrichment WHERE library_id = ? AND path = ?`, b.lib.ID, cradleBook).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("enrichment under the edit: %d rows, %v", stored, err)
+	}
+	// A podcast's episode is no book (404); the library root's book (".", a
+	// `book` override there) is one.
+	pods, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: pods.ID, RelPath: "Show/Episode.mp3", Title: "Episode", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	resp, out := b.do(t, "PUT", fmt.Sprintf("/api/v1/bridge/libraries/%d/enrichment?path=%s", pods.ID, url.QueryEscape("Show/Episode.mp3")), b.bridgeTok, `{"asin":"B0TESTASIN"}`)
+	if resp.StatusCode != http.StatusNotFound || codeOf(out) != "book_not_found" {
+		t.Fatalf("a podcast episode: %d %s", resp.StatusCode, out)
+	}
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: ".", Title: "Everything", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := put(".", `{"asin":"B0ROOTBOOK"}`); code != http.StatusNoContent {
+		t.Fatalf("the root book: %d %s", code, out)
+	}
+	if book, err := b.cat.GetBookByPath(ctx, b.lib.ID, "."); err != nil || book.ASIN != "B0ROOTBOOK" {
+		t.Fatalf("root book = %+v, %v", book, err)
+	}
 }
 
 // The scheduler queues each mapped account's poll when due, once (deduped per
@@ -638,11 +765,20 @@ func TestAudibleScheduler(t *testing.T) {
 	if n := countPolls(); fmt.Sprint(n) != fmt.Sprint(want) {
 		t.Fatalf("later ticks = %v, want %v (one open poll per account)", n, want)
 	}
-	// Check now returns the open poll (200), not a second.
+	// Check now returns the open poll (200), not a second, raised from the
+	// scheduler's priority to a person's.
 	setAudible(t, b.testEnv, b.adminTok, true)
 	resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/poll", b.adminTok, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Check now with one open: %d %s", resp.StatusCode, out)
+	}
+	var adopted bridge.Job
+	decodeInto(t, out, &adopted)
+	if adopted.Priority != 0 {
+		t.Fatalf("Check now left the scheduled poll at priority %d", adopted.Priority)
+	}
+	if j, err := b.api.bridge.Job(ctx, adopted.ID); err != nil || j.Priority != 0 {
+		t.Fatalf("stored poll = %+v, %v", j, err)
 	}
 	// While the module is off a queued poll is held: the claim passes it over.
 	setAudible(t, b.testEnv, b.adminTok, false)
@@ -660,6 +796,11 @@ func TestAudibleScheduler(t *testing.T) {
 	}
 	if n := countPolls(); n["acct0002:cancelled"] != 1 {
 		t.Fatalf("polls after removal = %v", n)
+	}
+	var reason string
+	if err := b.db.QueryRowContext(ctx, `SELECT error FROM bridge_jobs WHERE kind = ? AND state = 'cancelled'`,
+		bridge.KindAudiblePoll).Scan(&reason); err != nil || !bridge.IsCancelReason(reason) || reason != bridge.CancelAudibleRemoved {
+		t.Fatalf("cancelled poll's reason = %q, %v", reason, err)
 	}
 }
 

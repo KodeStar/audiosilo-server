@@ -75,11 +75,20 @@ func pruneAudiblePolls(ctx context.Context, tx *sql.Tx, key string) error {
 	return err
 }
 
-// CancelAudiblePolls cancels account's open poll inside tx (the account is
-// being removed): at once when queued or parked, else at the Bridge's next
-// report.
-func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account string, now time.Time) error {
-	return cancelOpenTx(ctx, tx, jobKey(AudiblePoll(account, 0)), at(now), "the Audible account was removed")
+// The server's reasons for cancelling an account's open poll (IsCancelReason;
+// the console keeps a copy: admin-ui generate-model.ts).
+const (
+	// CancelAudibleRemoved: the Bridge removed the account.
+	CancelAudibleRemoved = "the Audible account was removed"
+	// CancelAudiblePaused: the account's library was deleted (it is paused).
+	CancelAudiblePaused = "the Audible account's library was deleted"
+)
+
+// CancelAudiblePolls cancels account's open poll inside tx, reason one of
+// CancelAudibleRemoved or CancelAudiblePaused: at once when queued or parked,
+// else at the Bridge's next report.
+func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
+	return cancelOpenTx(ctx, tx, jobKey(AudiblePoll(account, 0)), at(now), reason)
 }
 
 // CleanText is v as printable bounded text on one line (cleanText): what the

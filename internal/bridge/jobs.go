@@ -147,6 +147,11 @@ type kindSpec struct {
 	module string
 	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
+	// promotes: a request that finds a job of the kind already open raises
+	// the open job's priority to its own, never lowers it (Check now on a
+	// scheduled audible.poll; a podcast fetch does the same through its
+	// demand, NewJob.fetch).
+	promotes bool
 }
 
 // paramsCap is the most bytes of params a job of the kind may send.
@@ -174,7 +179,7 @@ var kinds = map[string]kindSpec{
 	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audiblePollSuffix},
+	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audiblePollSuffix, promotes: true},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
 			KindReadalong: ErrReadalongOpen},
@@ -689,19 +694,22 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 					if err := checkPodcastTarget(ctx, tx, j); err != nil {
 						return err
 					}
-					// Promotion only ever raises the priority; an unchanged row
-					// is not rewritten and wakes no claim.
-					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
-					if err != nil {
-						return err
-					}
-					if n, err := res.RowsAffected(); err != nil {
-						return err
-					} else if n > 0 {
-						promoted = true
-						job.Priority = j.Priority
-						job.UpdatedAt = now
-					}
+				}
+				if j.fetch == nil && !kinds[j.Kind].promotes {
+					return nil
+				}
+				// Promotion only ever raises the priority; an unchanged row
+				// is not rewritten and wakes no claim.
+				res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
+				if err != nil {
+					return err
+				}
+				if n, err := res.RowsAffected(); err != nil {
+					return err
+				} else if n > 0 {
+					promoted = true
+					job.Priority = j.Priority
+					job.UpdatedAt = now
 				}
 				return nil
 			}
@@ -1594,9 +1602,11 @@ const (
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
-// reasons: the kinds' cancelsOpen, CancelMoved or CancelReplacedRequest.
+// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest or an
+// Audible poll's (CancelAudibleRemoved, CancelAudiblePaused).
 func IsCancelReason(text string) bool {
-	if text == CancelMoved || text == CancelReplacedRequest {
+	switch text {
+	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused:
 		return true
 	}
 	for _, spec := range kinds {

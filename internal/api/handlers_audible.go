@@ -127,7 +127,8 @@ type audibleTitlesRequest struct {
 
 // handleBridgeAudibleTitles serves PUT /bridge/audible/accounts/{account}/
 // titles: up to 500 titles of one poll; on its final call the titles the poll
-// didn't report become gone. {"stored": N}.
+// didn't report become gone. {"stored": N}. A call without its titles array
+// is 400, never "the account owns nothing" (an empty poll sends []).
 func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {
@@ -136,6 +137,10 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 	var req audibleTitlesRequest
 	if err := decodeJSON(r, &req, maxAudibleTitlesBody); err != nil {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.Titles == nil {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "titles is required")
 		return
 	}
 	if err := a.cat.PutAudibleTitles(r.Context(), id, req.PollID, req.Final, req.Titles); err != nil {
@@ -210,8 +215,8 @@ func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 
 // handleBridgeEnrichment serves PUT /bridge/libraries/{id}/enrichment?path=
 // {"asin": ".."}: the ASIN of an Audible title the Bridge matched to the book
-// without doubt, for a book with none. 204; 404 no such book; 409 asin_set
-// when it has another.
+// without doubt, for a book with none. 204; 404 no such book (none in a books
+// library); 409 asin_set when it has another, or an admin's ASIN edit.
 func (a *API) handleBridgeEnrichment(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -281,7 +286,8 @@ func (a *API) handleAdminAudibleTitles(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminAudiblePoll serves POST /admin/audible/accounts/{account}/poll:
 // Check now. Queues the account's audible.poll (201), or answers its open one
-// (200); 404 unknown_account, 409 account_paused, 409 kind_unavailable.
+// (200), raised to a person's priority when the scheduler queued it; 404
+// unknown_account, 409 account_paused, 409 kind_unavailable.
 func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
 	if !ok {

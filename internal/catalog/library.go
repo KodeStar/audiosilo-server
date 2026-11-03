@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -223,15 +224,29 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 		                     WHERE sp.share_id = shares.id AND sp.library_id != ?)`, id, id); err != nil {
 		return err
 	}
-	// Audible titles matched to its books lose the match (path-keyed, no FK);
-	// the accounts mapped to it pause (library_id SET NULL by the FK).
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE audible_titles SET match_library_id = NULL, match_path = NULL, match_how = ''
-		  WHERE match_library_id = ?`, id); err != nil {
+	// Audible titles matched to its books lose the match (path-keyed, no FK) and
+	// the accounts mapped to it pause (library_id SET NULL by the FK), their open
+	// polls cancelled: all with the library's own delete, so no titles call can
+	// match a book of it in between.
+	return c.db.WithTx(ctx, "DeleteLibrary", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE audible_titles SET match_library_id = NULL, match_path = NULL, match_how = ''
+			  WHERE match_library_id = ?`, id); err != nil {
+			return err
+		}
+		paused, err := queryRows(ctx, tx, func(rows *sql.Rows, account *string) error { return rows.Scan(account) },
+			`SELECT account FROM audible_accounts WHERE library_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		for _, account := range paused {
+			if err := bridge.CancelAudiblePolls(ctx, tx, account, bridge.CancelAudiblePaused, c.now()); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM libraries WHERE id = ?`, id)
 		return err
-	}
-	_, err := c.db.ExecContext(ctx, `DELETE FROM libraries WHERE id = ?`, id)
-	return err
+	})
 }
 
 // libraryCols is what scanLibrary reads.
