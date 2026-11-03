@@ -73,6 +73,7 @@ function title(over: Partial<AudibleTitle> = {}): AudibleTitle {
     match: { library_id: 1, path: 'Brandon Sanderson/Mistborn', how: 'asin' },
     rejected: false,
     ignored: false,
+    no_sync: false,
     dest_path: '',
     first_seen: '2026-11-01T09:00:00Z',
     updated_at: '2026-11-01T09:00:00Z',
@@ -860,6 +861,7 @@ describe('audible sync', () => {
     expect(canSync(title({ rejected: true }))).toBe(false);
     expect(canSync(title({ state: 'gone' }))).toBe(false);
     expect(canSync(title({ ignored: true }))).toBe(false);
+    expect(canSync(title({ no_sync: true }))).toBe(false);
   });
 
   it("says whether each account's places sync, and when Audible refused it", async () => {
@@ -895,14 +897,14 @@ describe('audible sync', () => {
           body: {
             titles: [
               title(),
-              title({ asin: 'B000000002', title: 'Left Out', ignored: true }),
+              title({ asin: 'B000000002', title: 'Left Out', no_sync: true }),
               title({ asin: 'B000000003', title: 'Not Here', match: null }),
             ],
             next: '',
           },
         },
-        'PATCH /admin/audible/titles/acct0001/B000000001': { body: title({ ignored: true }) },
-        'PATCH /admin/audible/titles/acct0001/B000000002': { body: title({ ignored: false }) },
+        'PATCH /admin/audible/titles/acct0001/B000000001': { body: title({ no_sync: true }) },
+        'PATCH /admin/audible/titles/acct0001/B000000002': { body: title({ no_sync: false }) },
       }),
     );
     renderApp('/server?topic=audible');
@@ -916,7 +918,7 @@ describe('audible sync', () => {
           (c) =>
             c.method === 'PATCH' &&
             c.path.endsWith('/B000000001') &&
-            (c.body as { ignored?: boolean }).ignored === true,
+            (c.body as { no_sync?: boolean }).no_sync === true,
         ),
       ).toBe(true),
     );
@@ -928,7 +930,7 @@ describe('audible sync', () => {
           (c) =>
             c.method === 'PATCH' &&
             c.path.endsWith('/B000000002') &&
-            (c.body as { ignored?: boolean }).ignored === false,
+            (c.body as { no_sync?: boolean }).no_sync === false,
         ),
       ).toBe(true),
     );

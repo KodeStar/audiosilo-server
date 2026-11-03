@@ -19,6 +19,9 @@ ALTER TABLE audible_accounts ADD COLUMN sync_queued_at TEXT;
 ALTER TABLE audible_accounts ADD COLUMN last_sync_at TEXT;
 ALTER TABLE audible_accounts ADD COLUMN refused_at TEXT;
 
--- audible_titles.ignored (0063, never set before 4c) is the console's
--- "Don't sync this book": neither direction touches the title's book. It
--- says nothing about backups.
+-- no_sync is the console's "Don't sync this book" (PATCH
+-- /admin/audible/titles/{account}/{asin} {no_sync}): neither direction touches
+-- the title's book. It is the sync's alone (backups don't read it) and, like
+-- rejected and ignored, a poll keeps it. A title also stays out of the sync
+-- while unmatched, rejected or ignored.
+ALTER TABLE audible_titles ADD COLUMN no_sync INTEGER NOT NULL DEFAULT 0;

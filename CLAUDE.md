@@ -305,7 +305,7 @@ path-keyed with no FK, nulled with its library and moved with its book; user-sta
 in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `policy_since` and
 `audible_titles.import_pending` (see Audible backups in CONVENTIONS.md). `0065` adds `audible_titles.planned` /
 `contest_library_id` / `contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md). Bridge Phase 4c: `0066` turns every account's `sync` off (the console's from now on) and adds
-`audible_accounts.sync_queued_at` / `last_sync_at` / `refused_at`; `audible_titles.ignored` is Don't sync (see Audible sync in
+`audible_accounts.sync_queued_at` / `last_sync_at` / `refused_at`; `audible_titles.no_sync` (Don't sync this book; see Audible sync in
 CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,

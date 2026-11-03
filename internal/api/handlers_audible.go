@@ -487,9 +487,9 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 }
 
 // handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}
-// {"rejected"?, "dest_path"?, "ignored"?}: "Not this book", a backup's
-// destination and "Don't sync this book" (Phase 4c), audited. 200 the title; 400 invalid_dest_path; 404 unknown_account,
-// unknown_title.
+// {"rejected"?, "dest_path"?, "no_sync"?}: "Not this book", a backup's
+// destination and "Don't sync this book" (Phase 4c), audited. 200 the title;
+// 400 invalid_dest_path; 404 unknown_account, unknown_title.
 func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	account, asin, ok := audibleTitleID(w, r)
 	if !ok {
@@ -512,8 +512,8 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	if p.DestPath != nil {
 		details["dest_path"] = *p.DestPath
 	}
-	if p.Ignored != nil {
-		details["ignored"] = *p.Ignored
+	if p.NoSync != nil {
+		details["no_sync"] = *p.NoSync
 	}
 	a.audit(r, "bridge.audible.title", "", details)
 	writeJSON(w, http.StatusOK, t)

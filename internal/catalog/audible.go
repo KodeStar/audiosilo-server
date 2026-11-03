@@ -498,9 +498,10 @@ type AudibleTitle struct {
 	Account string `json:"account"`
 	AudibleTitleInput
 	Rejected bool `json:"rejected"`
-	// Ignored is the console's "Don't sync this book" (Phase 4c): neither
-	// direction of the account's sync touches its book. Backups ignore it.
-	Ignored     bool   `json:"ignored"`
+	Ignored  bool `json:"ignored"`
+	// NoSync is the console's "Don't sync this book" (Phase 4c): neither
+	// direction of the account's sync touches its book. Backups don't read it.
+	NoSync      bool   `json:"no_sync"`
 	DestPath    string `json:"dest_path"`
 	FirstSeen   string `json:"first_seen"`
 	UpdatedAt   string `json:"updated_at"`
@@ -637,7 +638,7 @@ func bridgeBookPath(p string) bool {
 // account (pollID, the Bridge's), each replacing what an earlier poll said of
 // it (its planned destination and contested book too, both dropped when a
 // match is stored) but keeping the console's and an import's columns
-// (rejected, ignored, dest_path, import_job_id, first_seen). A match to a library that is gone or
+// (rejected, ignored, no_sync, dest_path, import_job_id, first_seen). A match to a library that is gone or
 // not a books library is stored as none. A backup's match (how "import",
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
@@ -954,7 +955,7 @@ func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error
 // audibleTitleSelect reads a title (aliased t) with its import job (j) and its
 // account's library (acct), for scanAudibleTitle.
 const audibleTitleSelect = `SELECT t.account, t.asin, t.title, t.authors, t.series, t.release_date, t.runtime_s, t.state,
-	t.reason, t.match_library_id, t.match_path, t.match_how, t.rejected, t.ignored, t.dest_path, t.first_seen,
+	t.reason, t.match_library_id, t.match_path, t.match_how, t.rejected, t.ignored, t.no_sync, t.dest_path, t.first_seen,
 	t.updated_at, t.import_job_id, t.import_pending, j.state, j.error, j.result, j.progress,
 	t.planned, t.contest_library_id, t.contest_path, acct.library_id
 	FROM audible_titles t LEFT JOIN bridge_jobs j ON j.id = t.import_job_id
@@ -975,7 +976,7 @@ func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
 		contestLib, acctLib                 sql.NullInt64
 	)
 	if err := row.Scan(&t.Account, &t.ASIN, &t.Title, &authors, &series, &t.ReleaseDate, &t.RuntimeS, &t.State,
-		&t.Reason, &matchLib, &matchPath, &how, &t.Rejected, &t.Ignored, &t.DestPath, &t.FirstSeen, &t.UpdatedAt,
+		&t.Reason, &matchLib, &matchPath, &how, &t.Rejected, &t.Ignored, &t.NoSync, &t.DestPath, &t.FirstSeen, &t.UpdatedAt,
 		&jobID, &pending, &jobState, &jobErr, &jobRes, &jobProgrs, &planned, &contestLib, &contest, &acctLib); err != nil {
 		return nil, err
 	}

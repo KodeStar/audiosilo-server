@@ -2963,8 +2963,9 @@ export interface AudibleTitle {
   /** The book on this server it was matched to: by ASIN, by title and author, or by its backup. */
   match: { library_id: number; path: string; how: 'asin' | 'fuzzy' | 'import' } | null;
   rejected: boolean;
-  /** "Don't sync this book" (Phase 4c): its place never syncs with Audible either way. */
   ignored: boolean;
+  /** "Don't sync this book" (Phase 4c): its place never syncs with Audible either way; backups don't read it. */
+  no_sync: boolean;
   dest_path: string;
   first_seen: string;
   updated_at: string;
@@ -3009,7 +3010,7 @@ export interface AudibleTitlePatch {
   rejected?: boolean;
   /** Folders and file name in the library ("Author/Series/Title.m4b"); "" for the account's placement. */
   dest_path?: string;
-  ignored?: boolean;
+  no_sync?: boolean;
 }
 
 /** PATCH /admin/audible/accounts/{account}: what it backs up by itself, where, and whether its places sync. */

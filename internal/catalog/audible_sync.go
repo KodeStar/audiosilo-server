@@ -19,7 +19,7 @@ import (
 // pushes the person's places here back to Audible from GET /bridge/progress
 // (AudibleProgress). Only the titles the console lets sync take part: matched
 // to a book here, not "Not this book" (rejected), not "Don't sync this book"
-// (ignored), not gone from the account. See CONVENTIONS.md, Audible sync.
+// (no_sync), not ignored (the manager registry's Ignored), not gone from the account. See CONVENTIONS.md, Audible sync.
 
 var (
 	// ErrAudibleSyncOff: the account's sync is off (403 sync_off).
@@ -36,7 +36,7 @@ const AudibleDevicePrefix = "audible:"
 
 // syncTitleSQL is a title (aliased t) whose book takes part in its account's
 // sync.
-const syncTitleSQL = `t.match_library_id IS NOT NULL AND t.match_path IS NOT NULL AND t.rejected = 0 AND t.ignored = 0
+const syncTitleSQL = `t.match_library_id IS NOT NULL AND t.match_path IS NOT NULL AND t.rejected = 0 AND t.ignored = 0 AND t.no_sync = 0
 	AND t.state <> '` + AudibleGone + `'`
 
 // AudibleSyncAccount is an account a sync call acts for: its person (whose

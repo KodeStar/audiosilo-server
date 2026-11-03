@@ -202,10 +202,10 @@ export function useBackups() {
   };
 
   /** "Don't sync this book" and its undo (Phase 4c). */
-  const setIgnored = async (x: AudibleTitle, ignored: boolean) => {
+  const setNoSync = async (x: AudibleTitle, noSync: boolean) => {
     setBusy(titleKey(x));
     try {
-      await api.patchAudibleTitle(x.account, x.asin, { ignored });
+      await api.patchAudibleTitle(x.account, x.asin, { no_sync: noSync });
     } catch (err) {
       toastError(t('audible.nosync.failed'), err);
     } finally {
@@ -241,5 +241,5 @@ export function useBackups() {
     void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
   };
 
-  return { backUp, setRejected, setIgnored, setDest, backUpAll, saveAccount, busy, titleKey };
+  return { backUp, setRejected, setNoSync, setDest, backUpAll, saveAccount, busy, titleKey };
 }

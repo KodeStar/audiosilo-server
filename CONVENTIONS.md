@@ -2713,14 +2713,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   result's `code` (or a `code:` error prefix, or a park's code): `AudibleImportCodes`, shown on the title
   (`import {job_id, state, code}`, `state` a job state or `pending`). **Policy** (`AudiblePolicyImports`,
   after each final titles PUT while the module is on and a Bridge offers the kind; `autoImport.wants`, a
-  table test): available, not on this server, nothing open; a pending request always; otherwise not
+  table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
   rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
   claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
   its series the account's person can see (`seriesOwner`, by series key, `book_more_series` too).
   `policy_since` moves to now when the console turns on `all` or `series` and at the account's first
   complete poll, so the library it already had is never a flood: that is Back up everything's.
   **Preorders**: an account with a preorder a backup may wait for (`preorderWaitingSQL`: not on this server,
-  not rejected, or with a pending request while not here) released by today's UTC date, at most
+  not rejected or ignored, or with a pending request while not here) released by today's UTC date, at most
   14 days ago, is due every hour (`DueAudiblePolls`); past 14 days such a title reads `needs_attention`
   (`preorderOverdue`, the same terms). A pending request survives a restart (a column) and is queued by the
   first poll that reports the title available (a rejected match's too). **Admin routes**
@@ -2729,7 +2729,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
   `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
-  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected or contested, nothing open, the
+  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
   latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
   queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
@@ -3152,9 +3152,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `0066`)**: an account's listening places kept in step with Audible both ways. The console owns the switch
   (`PATCH /admin/audible/accounts/{account}` `{sync}`, audited; off cancels the open sync with
   `bridge.CancelAudibleSyncOff`); `0066` sets every account off, a new account is created off and a Bridge PUT never
-  changes it (its `sync` is read and ignored). "Don't sync this book" is `audible_titles.ignored`
-  (`PATCH /admin/audible/titles/{account}/{asin}` `{ignored}`); it says nothing about backups (4b's predicates no
-  longer read it). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not `gone`. **Audible to
+  changes it (its `sync` is read and ignored). "Don't sync this book" is `audible_titles.no_sync`
+  (`0066`; `PATCH /admin/audible/titles/{account}/{asin}` `{no_sync}`, audited, kept by a poll like `rejected` and
+  `ignored`); it is the sync's alone, backups never read it (the registry's `ignored` still keeps a title out of
+  backups). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not no_sync, not `gone`. **Audible to
   here**: `audible/scheduler.go` `queueSyncs` (while the Bridge offers the kind) queues one `audible.sync` per
   `DueAudibleSyncs` account (sync on, not paused, `refused_at` NULL, `bridgeUserSQL`, `sync_queued_at` older than
   `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title; params

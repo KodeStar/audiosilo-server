@@ -58,16 +58,16 @@ export function TitleActions({
         {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
         {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
       </Button>
-      {canSync(x) || x.ignored ? (
+      {canSync(x) || x.no_sync ? (
         <Button
           size="sm"
           variant="ghost"
           disabled={busy}
-          onClick={() => void backups.setIgnored(x, !x.ignored)}
-          aria-label={t(x.ignored ? 'audible.nosync.undoLabel' : 'audible.nosync.label', { name })}
+          onClick={() => void backups.setNoSync(x, !x.no_sync)}
+          aria-label={t(x.no_sync ? 'audible.nosync.undoLabel' : 'audible.nosync.label', { name })}
         >
-          {x.ignored ? <Undo2 aria-hidden="true" /> : <RefreshCwOff aria-hidden="true" />}
-          {t(x.ignored ? 'audible.nosync.undo' : 'audible.nosync.action')}
+          {x.no_sync ? <Undo2 aria-hidden="true" /> : <RefreshCwOff aria-hidden="true" />}
+          {t(x.no_sync ? 'audible.nosync.undo' : 'audible.nosync.action')}
         </Button>
       ) : null}
       {!x.match || x.rejected ? (

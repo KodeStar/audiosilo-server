@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -288,7 +289,7 @@ func TestAudibleListeningOnlySyncedBooks(t *testing.T) {
 	}
 
 	// Don't sync this book: neither direction.
-	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+cradleASIN, s.adminTok, `{"ignored":true}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"ignored":true`) {
+	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+cradleASIN, s.adminTok, `{"no_sync":true}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"no_sync":true`) {
 		t.Fatalf("don't sync: %d %s", resp.StatusCode, out)
 	}
 	wantSync(t, s.postResults(t, place("aud-c", s.lib.ID, cradleBook, 900, time.Minute))[0], "rejected", "not_synced")
@@ -299,10 +300,24 @@ func TestAudibleListeningOnlySyncedBooks(t *testing.T) {
 		t.Fatalf("a Don't sync book moved: %+v", p)
 	}
 	// Undone, it syncs again.
-	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+cradleASIN, s.adminTok, `{"ignored":false}`); resp.StatusCode != http.StatusOK {
+	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+cradleASIN, s.adminTok, `{"no_sync":false}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("sync again: %d %s", resp.StatusCode, out)
 	}
 	wantSync(t, s.postResults(t, place("aud-c2", s.lib.ID, cradleBook, 900, time.Minute))[0], "applied", "")
+
+	// Ignored (the manager registry's): out of the sync too, both ways.
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET ignored = 1 WHERE asin = ?`, cradleASIN); err != nil {
+		t.Fatal(err)
+	}
+	wantSync(t, s.postResults(t, place("aud-c3", s.lib.ID, cradleBook, 1900, time.Minute))[0], "rejected", "not_synced")
+	p := s.patProgress(t, cradleBook)
+	wantSync(t, s.patListens(t, "pat-c3", cradleBook, p.Position, p.Position+60, strconv.FormatInt(p.Version, 10)), "applied", "")
+	if f := s.feed(t, ""); len(f.Rows) != 0 {
+		t.Fatalf("feed with the title ignored = %+v", f.Rows)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET ignored = 0 WHERE asin = ?`, cradleASIN); err != nil {
+		t.Fatal(err)
+	}
 
 	// Not this book.
 	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+mistbornASIN, s.adminTok, `{"rejected":true}`); resp.StatusCode != http.StatusOK {
@@ -598,7 +613,7 @@ func TestAudibleSyncScheduler(t *testing.T) {
 		t.Fatalf("after mapping again = %+v", j)
 	}
 	// An account whose titles are all Don't sync queues nothing.
-	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET ignored = 1 WHERE account = 'acct0002'`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET no_sync = 1 WHERE account = 'acct0002'`); err != nil {
 		t.Fatal(err)
 	}
 	if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/accounts/acct0002", s.adminTok, `{"sync":true}`); resp.StatusCode != http.StatusOK {
