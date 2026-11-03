@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"math"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -294,12 +293,10 @@ func mergeProgress(have *catalog.Progress, a Progress, m Match, now time.Time) (
 	w.Version = have.Version + 1
 	if r.moved {
 		w.UpdatedAt = abs.UpdatedAt
-		// A place an Audible account wrote, moved on by the import, is no longer
-		// Audible's: GET /bridge/progress leaves the account's own rows out (no
-		// echo), so it would never reach Audible and Audible's next report could
-		// undo it. Named by no device, as an edit's (Bridge Phase 4c). An undo
-		// puts the Audible row back as it was (import_progress_prior).
-		if strings.HasPrefix(w.DeviceID, catalog.AudibleDevicePrefix) {
+		// Moved on, an Audible account's place is no longer Audible's, as in
+		// EditProgress (Bridge Phase 4c); an undo restores it from
+		// import_progress_prior.
+		if catalog.IsAudibleDevice(w.DeviceID) {
 			w.DeviceID, w.DeviceName = "", ""
 		}
 	}

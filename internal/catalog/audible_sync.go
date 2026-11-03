@@ -35,6 +35,9 @@ var (
 // ("audible:<account>").
 const AudibleDevicePrefix = "audible:"
 
+// IsAudibleDevice reports whether a device id names an Audible account.
+func IsAudibleDevice(id string) bool { return strings.HasPrefix(id, AudibleDevicePrefix) }
+
 // syncTitleSQL is a title (aliased t) whose book takes part in its account's
 // sync.
 const syncTitleSQL = `t.match_library_id IS NOT NULL AND t.match_path IS NOT NULL AND t.rejected = 0 AND t.ignored = 0 AND t.no_sync = 0

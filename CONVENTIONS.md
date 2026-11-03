@@ -3191,7 +3191,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
   none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
   undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
-  its undo restores Audible's row, device and name, from `import_progress_prior`). No listening session, `listening_daily` or history row is recorded (owner decision 2); the
+  its undo restores Audible's row, device and name, from `import_progress_prior`). No listening session,
+  `listening_daily` or history row is recorded (owner decision 2); the
   events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
   the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
   `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,

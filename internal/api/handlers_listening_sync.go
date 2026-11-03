@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -53,7 +52,7 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	case len(in.DeviceID) > catalog.MaxDeviceIDBytes:
 		writeError(w, http.StatusBadRequest, "device_id is too long")
 		return
-	case strings.HasPrefix(in.DeviceID, catalog.AudibleDevicePrefix):
+	case catalog.IsAudibleDevice(in.DeviceID):
 		writeError(w, http.StatusBadRequest, "device_id is reserved")
 		return
 	}
