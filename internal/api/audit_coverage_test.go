@@ -40,7 +40,8 @@ func TestAdminChangesAreAudited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := regexp.MustCompile(`mux\.Handle\("(POST|PUT|PATCH|DELETE) (/api/v1/admin[^"]*)",[^\n]*?a\.(handle\w+)`)
+	// A managed module's admin routes too (moduleRoutes.Admin: ar.Admin(...)).
+	route := regexp.MustCompile(`(?:mux\.Handle|\w+\.Admin)\("(POST|PUT|PATCH|DELETE) (/api/v1/admin[^"]*)",[^\n]*?a\.(handle\w+)`)
 	matches := route.FindAllStringSubmatch(string(src), -1)
 	if len(matches) < 30 {
 		t.Fatalf("found only %d admin write routes: the pattern no longer matches api.go", len(matches))

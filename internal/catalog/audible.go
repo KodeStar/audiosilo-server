@@ -41,6 +41,13 @@ const (
 	AudibleGone        = "gone"
 )
 
+// AudibleReasonContested is the reason a Bridge stores a title unmatched with
+// when another title of the account claimed the same book (a different work
+// tied for it). The book is on this server under the other title's match, so
+// neither "Back up everything" nor a policy backs it up; a console Back up of
+// the one title still may (the admin decides).
+const AudibleReasonContested = "contested"
+
 // AudibleStates are the states a title may be in, as the console filters them.
 var AudibleStates = []string{AudibleAvailable, AudiblePreorder, AudibleUnavailable, AudibleGone}
 
@@ -133,7 +140,7 @@ type AudibleLibrary struct {
 }
 
 // AudibleCounts are an account's titles by state, and how many are matched to
-// a book on this server.
+// a book on this server (a match marked "Not this book" isn't).
 type AudibleCounts struct {
 	Total       int `json:"total"`
 	Available   int `json:"available"`
@@ -162,8 +169,16 @@ type AudibleAccount struct {
 	UpdatedAt    string          `json:"updated_at"`
 	LastPollAt   *string         `json:"last_poll_at"`
 	LastQueuedAt *string         `json:"last_queued_at"`
-	// Titles are the account's titles counted (the console's list only).
-	Titles *AudibleCounts `json:"titles,omitempty"`
+	// Template is the account's placement template for its backups ("" = the
+	// Bridge's automatic placement), PolicySince when its automatic policy
+	// began to act (Phase 4b: only titles first seen after it are backed up by
+	// the policy).
+	Template    string `json:"template"`
+	PolicySince string `json:"policy_since"`
+	// Titles are the account's titles counted, BackupEstimate what "Back up
+	// everything" would queue (the console's list only).
+	Titles         *AudibleCounts   `json:"titles,omitempty"`
+	BackupEstimate *AudibleEstimate `json:"backup_estimate,omitempty"`
 }
 
 // AudibleAccountInput is the Bridge's mapping of an account (PUT
@@ -178,7 +193,8 @@ type AudibleAccountInput struct {
 }
 
 const audibleAccountSelect = `SELECT a.account, a.label, a.marketplace, a.user_id, ` + displayNameSQL + `,
-	a.library_id, l.name, a.policy, a.sync, a.poll_hours, a.created_at, a.updated_at, a.last_poll_at, a.last_queued_at
+	a.library_id, l.name, a.policy, a.sync, a.poll_hours, a.created_at, a.updated_at, a.last_poll_at, a.last_queued_at,
+	a.template, a.policy_since
 	FROM audible_accounts a JOIN users u ON u.id = a.user_id LEFT JOIN libraries l ON l.id = a.library_id`
 
 func scanAudibleAccount(row rowScanner) (*AudibleAccount, error) {
@@ -188,7 +204,7 @@ func scanAudibleAccount(row rowScanner) (*AudibleAccount, error) {
 		libName, poll, queue sql.NullString
 	)
 	if err := row.Scan(&a.ID, &a.Label, &a.Marketplace, &a.UserID, &a.User.DisplayName, &lib, &libName,
-		&a.Policy, &a.Sync, &a.PollHours, &a.CreatedAt, &a.UpdatedAt, &poll, &queue); err != nil {
+		&a.Policy, &a.Sync, &a.PollHours, &a.CreatedAt, &a.UpdatedAt, &poll, &queue, &a.Template, &a.PolicySince); err != nil {
 		return nil, err
 	}
 	a.User.ID = a.UserID
@@ -229,7 +245,9 @@ func checkAudibleAccount(in *AudibleAccountInput) error {
 // bridge.AudibleAccountPattern): the user must be an enabled adult or admin
 // (ErrAudibleUnknownUser) and the library a books library (ErrUnknownLibrary,
 // ErrNotBookLibrary). A known account is mapped again (a paused one resumes); its
-// titles and poll times stay.
+// titles and poll times stay, and so do its policy and template (Phase 4b: the
+// Bridge's policy is a new account's; after that the console sets it,
+// PatchAudibleAccount). A new account's policy_since is now.
 func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAccountInput) (*AudibleAccount, error) {
 	if !bridge.AudibleAccountPattern.MatchString(id) {
 		return nil, audibleInvalid("account must match %s", bridge.AudibleAccountPattern)
@@ -260,12 +278,13 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 		}
 		now := c.ts()
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO audible_accounts(account, label, marketplace, user_id, library_id, policy, sync, created_at, updated_at)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO audible_accounts(account, label, marketplace, user_id, library_id, policy, sync, created_at, updated_at,
+			     policy_since)
+			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account) DO UPDATE SET label = excluded.label, marketplace = excluded.marketplace,
-			     user_id = excluded.user_id, library_id = excluded.library_id, policy = excluded.policy,
+			     user_id = excluded.user_id, library_id = excluded.library_id,
 			     sync = excluded.sync, updated_at = excluded.updated_at`,
-			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, in.Sync, now, now); err != nil {
+			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, in.Sync, now, now, now); err != nil {
 			return err
 		}
 		out, err = scanAudibleAccount(tx.QueryRowContext(ctx, audibleAccountSelect+` WHERE a.account = ?`, id))
@@ -275,12 +294,15 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 }
 
 // DeleteAudibleAccount forgets account id and its titles (the Bridge, or the
-// console, removed it), cancelling its open poll. Forgetting an unknown
+// console, removed it), cancelling its open poll and backups. Forgetting an unknown
 // account is not an error: the Bridge forgets locally first and may call
 // again. removed says whether there was one.
 func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed bool, err error) {
 	err = c.db.WithTx(ctx, "DeleteAudibleAccount", func(tx *sql.Tx) error {
 		if err := bridge.CancelAudiblePolls(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
+			return err
+		}
+		if err := bridge.CancelAudibleImports(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
@@ -312,41 +334,49 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []AudibleAccount{}
-	byID := map[string]*AudibleCounts{}
+	byID := map[string]*AudibleAccount{} // its Titles and BackupEstimate are shared with out's copy
 	for rows.Next() {
 		a, err := scanAudibleAccount(rows)
 		if err != nil {
 			return nil, err
 		}
-		a.Titles = &AudibleCounts{}
-		byID[a.ID] = a.Titles
+		a.Titles, a.BackupEstimate = &AudibleCounts{}, &AudibleEstimate{}
+		byID[a.ID] = a
 		out = append(out, *a)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	_ = rows.Close()
-	counts, err := c.db.QueryContext(ctx, `SELECT account, COUNT(*),
-		    SUM(state = 'available'), SUM(state = 'preorder'), SUM(state = 'unavailable'), SUM(state = 'gone'),
-		    SUM(match_path IS NOT NULL)
-		  FROM audible_titles GROUP BY account`)
+	counts, err := c.db.QueryContext(ctx, `SELECT t.account, COUNT(*),
+		    SUM(t.state = 'available'), SUM(t.state = 'preorder'), SUM(t.state = 'unavailable'), SUM(t.state = 'gone'),
+		    SUM(t.match_path IS NOT NULL AND t.rejected = 0),
+		    SUM(CASE WHEN `+backupAllSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
+		  FROM audible_titles t GROUP BY t.account`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = counts.Close() }()
 	for counts.Next() {
 		var (
-			id string
-			n  AudibleCounts
+			id      string
+			n       AudibleCounts
+			e       AudibleEstimate
+			seconds int64
 		)
-		if err := counts.Scan(&id, &n.Total, &n.Available, &n.Preorder, &n.Unavailable, &n.Gone, &n.Matched); err != nil {
+		if err := counts.Scan(&id, &n.Total, &n.Available, &n.Preorder, &n.Unavailable, &n.Gone, &n.Matched,
+			&e.Count, &seconds); err != nil {
 			return nil, err
 		}
-		if c := byID[id]; c != nil {
-			*c = n
+		e.Bytes = seconds * audibleBytesPerSecond
+		if a := byID[id]; a != nil {
+			*a.Titles, *a.BackupEstimate = n, e
 		}
 	}
-	return out, counts.Err()
+	if err := counts.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // AudibleSeries is a title's place in one series, as Audible names it.
@@ -388,6 +418,12 @@ type AudibleTitle struct {
 	FirstSeen   string `json:"first_seen"`
 	UpdatedAt   string `json:"updated_at"`
 	ImportJobID *int64 `json:"import_job_id"`
+	// Import is the title's backup (Phase 4b): its job's state and code, or a
+	// console request waiting for a preorder ("pending"); nil for none.
+	Import *AudibleImport `json:"import"`
+	// NeedsAttention: a preorder still not available AudiblePreorderWait after
+	// its release date; the account is no longer checked hourly for it.
+	NeedsAttention bool `json:"needs_attention"`
 }
 
 // checkAudibleTitle checks and normalises one reported title: its identity,
@@ -452,10 +488,14 @@ func bridgeBookPath(p string) bool {
 // account (pollID, the Bridge's), each replacing what an earlier poll said of
 // it but keeping the console's and an import's columns (rejected, ignored,
 // dest_path, import_job_id, first_seen). A match to a library that is gone or
-// not a books library is stored as none. On the poll's final call every title
-// of the account the poll didn't report becomes gone, and the account's
-// last_poll_at is now. A user-state write: no content cache reads these
-// tables.
+// not a books library is stored as none. A backup's match (how "import",
+// FoldAudibleImport) stays while its book is indexed and the poll names no
+// other: the next poll may have listed the library before the backup landed.
+// On the poll's final call every title of the account the poll didn't report
+// becomes gone, and the account's last_poll_at is now; on its first complete
+// poll its policy_since moves to now too, so the library the account already
+// had is never backed up by a policy (new purchases only). A user-state write:
+// no content cache reads these tables.
 func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, final bool, titles []AudibleTitleInput) error {
 	if !audiblePollPattern.MatchString(pollID) {
 		return audibleInvalid("poll_id must be 1-64 letters, digits, dots, dashes or underscores")
@@ -481,6 +521,10 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			return err
 		}
 		now := c.ts()
+		imported, err := importMatches(ctx, tx, account)
+		if err != nil {
+			return err
+		}
 		upsert, err := tx.PrepareContext(ctx,
 			`INSERT INTO audible_titles(account, asin, title, authors, series, release_date, runtime_s, state, reason,
 			     match_library_id, match_path, match_how, first_seen, updated_at, poll_id)
@@ -505,6 +549,10 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			if t.Match != nil && books[t.Match.LibraryID] {
 				matchLib, matchPath, how = t.Match.LibraryID, t.Match.Path, t.Match.How
 			}
+			if im, ok := imported[t.ASIN]; ok && books[im.LibraryID] &&
+				(matchPath == nil || (t.Match.LibraryID == im.LibraryID && t.Match.Path == im.Path)) {
+				matchLib, matchPath, how = im.LibraryID, im.Path, AudibleMatchImport
+			}
 			if _, err := upsert.ExecContext(ctx,
 				account, t.ASIN, t.Title, string(authors), string(series), t.ReleaseDate, t.RuntimeS, t.State, t.Reason,
 				matchLib, matchPath, how, now, now, pollID); err != nil {
@@ -519,9 +567,29 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			now, account, pollID); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ? WHERE account = ?`, now, account)
+		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ?1,
+			    policy_since = CASE WHEN last_poll_at IS NULL THEN ?1 ELSE policy_since END WHERE account = ?2`, now, account)
 		return err
 	})
+}
+
+// importMatches are account's titles matched by a backup whose book is still
+// indexed, by ASIN, read through tx.
+func importMatches(ctx context.Context, tx *sql.Tx, account string) (map[string]AudibleMatch, error) {
+	rows, err := queryRows(ctx, tx, func(rows *sql.Rows, m *struct {
+		asin string
+		AudibleMatch
+	}) error {
+		return rows.Scan(&m.asin, &m.LibraryID, &m.Path)
+	}, `SELECT t.asin, t.match_library_id, t.match_path FROM audible_titles t
+		  WHERE t.account = ? AND t.match_how = ? AND t.match_path IS NOT NULL
+		    AND EXISTS(SELECT 1 FROM books b WHERE b.library_id = t.match_library_id AND b.rel_path = t.match_path)`,
+		account, AudibleMatchImport)
+	out := make(map[string]AudibleMatch, len(rows))
+	for _, r := range rows {
+		out[r.asin] = r.AudibleMatch
+	}
+	return out, err
 }
 
 // booksLibraries are the ids of the books libraries, read through q.
@@ -539,7 +607,8 @@ func booksLibraries(ctx context.Context, q rowQuerier) (map[int64]bool, error) {
 type AudibleTitleFilter struct {
 	Account string // "" for every account
 	State   string // one of AudibleStates, "" for any
-	// Matched: nil any, true only titles matched to a book here, false only the rest.
+	// Matched: nil any, true only titles matched to a book here (not marked
+	// "Not this book"), false only the rest.
 	Matched *bool
 	Query   string // in the title, the authors or the ASIN
 	After   string // the cursor from the previous page
@@ -560,7 +629,8 @@ type audibleCursor struct {
 }
 
 // AudibleTitles lists titles by title (any case), then account and ASIN,
-// keyset-paged.
+// keyset-paged, each with its backup (AudibleImport) and whether it needs
+// attention.
 func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (AudibleTitlePage, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -572,19 +642,19 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 		args  []any
 	)
 	if f.Account != "" {
-		where, args = append(where, `account = ?`), append(args, f.Account)
+		where, args = append(where, `t.account = ?`), append(args, f.Account)
 	}
 	if f.State != "" {
 		if !slices.Contains(AudibleStates, f.State) {
 			return AudibleTitlePage{}, audibleInvalid("state must be one of %s", strings.Join(AudibleStates, ", "))
 		}
-		where, args = append(where, `state = ?`), append(args, f.State)
+		where, args = append(where, `t.state = ?`), append(args, f.State)
 	}
 	if f.Matched != nil {
 		if *f.Matched {
-			where = append(where, `match_path IS NOT NULL`)
+			where = append(where, `t.match_path IS NOT NULL AND t.rejected = 0`)
 		} else {
-			where = append(where, `match_path IS NULL`)
+			where = append(where, `(t.match_path IS NULL OR t.rejected = 1)`)
 		}
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
@@ -594,8 +664,8 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 		// Each author as written (json_each decodes the stored list), so a
 		// search never matches the list's JSON: its quotes, brackets, escapes.
 		like := "%" + escapeLike(q) + "%"
-		where = append(where, `(title LIKE ? ESCAPE '\' OR asin = ?
-		    OR EXISTS(SELECT 1 FROM json_each(authors) WHERE value LIKE ? ESCAPE '\'))`)
+		where = append(where, `(t.title LIKE ? ESCAPE '\' OR t.asin = ?
+		    OR EXISTS(SELECT 1 FROM json_each(t.authors) WHERE value LIKE ? ESCAPE '\'))`)
 		args = append(args, like, strings.ToUpper(q), like)
 	}
 	if f.After != "" {
@@ -606,17 +676,15 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 		}
 		// The leading range term lets the title index seek to the cursor; the
 		// row value keeps the exact order past it.
-		where = append(where, `title >= ? COLLATE NOCASE`,
-			`(title COLLATE NOCASE, account, asin) > (? COLLATE NOCASE, ?, ?)`)
+		where = append(where, `t.title >= ? COLLATE NOCASE`,
+			`(t.title COLLATE NOCASE, t.account, t.asin) > (? COLLATE NOCASE, ?, ?)`)
 		args = append(args, cur.Title, cur.Title, cur.Account, cur.ASIN)
 	}
-	query := `SELECT account, asin, title, authors, series, release_date, runtime_s, state, reason,
-		match_library_id, match_path, match_how, rejected, ignored, dest_path, first_seen, updated_at, import_job_id
-		FROM audible_titles`
+	query := audibleTitleSelect
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
-	query += ` ORDER BY title COLLATE NOCASE, account, asin LIMIT ?`
+	query += ` ORDER BY t.title COLLATE NOCASE, t.account, t.asin LIMIT ?`
 	args = append(args, limit+1)
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -624,32 +692,13 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 	}
 	defer func() { _ = rows.Close() }()
 	page := AudibleTitlePage{Titles: []AudibleTitle{}}
+	now := c.now()
 	for rows.Next() {
-		var (
-			t               AudibleTitle
-			authors, series string
-			matchLib, jobID sql.NullInt64
-			matchPath       sql.NullString
-			how             string
-		)
-		if err := rows.Scan(&t.Account, &t.ASIN, &t.Title, &authors, &series, &t.ReleaseDate, &t.RuntimeS, &t.State,
-			&t.Reason, &matchLib, &matchPath, &how, &t.Rejected, &t.Ignored, &t.DestPath, &t.FirstSeen, &t.UpdatedAt,
-			&jobID); err != nil {
+		t, err := scanAudibleTitle(rows, now)
+		if err != nil {
 			return AudibleTitlePage{}, err
 		}
-		if json.Unmarshal([]byte(authors), &t.Authors) != nil || t.Authors == nil {
-			t.Authors = []string{}
-		}
-		if json.Unmarshal([]byte(series), &t.Series) != nil || t.Series == nil {
-			t.Series = []AudibleSeries{}
-		}
-		if matchLib.Valid && matchPath.Valid {
-			t.Match = &AudibleMatch{LibraryID: matchLib.Int64, Path: matchPath.String, How: how}
-		}
-		if jobID.Valid {
-			t.ImportJobID = &jobID.Int64
-		}
-		page.Titles = append(page.Titles, t)
+		page.Titles = append(page.Titles, *t)
 	}
 	if err := rows.Err(); err != nil {
 		return AudibleTitlePage{}, err
@@ -663,16 +712,69 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 	return page, nil
 }
 
+// audibleTitleSelect reads a title (aliased t) with its import job (j), for
+// scanAudibleTitle.
+const audibleTitleSelect = `SELECT t.account, t.asin, t.title, t.authors, t.series, t.release_date, t.runtime_s, t.state,
+	t.reason, t.match_library_id, t.match_path, t.match_how, t.rejected, t.ignored, t.dest_path, t.first_seen,
+	t.updated_at, t.import_job_id, t.import_pending, j.state, j.error, j.result, j.progress
+	FROM audible_titles t LEFT JOIN bridge_jobs j ON j.id = t.import_job_id`
+
+// scanAudibleTitle reads one row of audibleTitleSelect, its needs_attention
+// as of now.
+func scanAudibleTitle(row rowScanner, now time.Time) (*AudibleTitle, error) {
+	var (
+		t                                   AudibleTitle
+		authors, series                     string
+		matchLib, jobID                     sql.NullInt64
+		matchPath                           sql.NullString
+		how                                 string
+		pending                             bool
+		jobState, jobErr, jobRes, jobProgrs sql.NullString
+	)
+	if err := row.Scan(&t.Account, &t.ASIN, &t.Title, &authors, &series, &t.ReleaseDate, &t.RuntimeS, &t.State,
+		&t.Reason, &matchLib, &matchPath, &how, &t.Rejected, &t.Ignored, &t.DestPath, &t.FirstSeen, &t.UpdatedAt,
+		&jobID, &pending, &jobState, &jobErr, &jobRes, &jobProgrs); err != nil {
+		return nil, err
+	}
+	if json.Unmarshal([]byte(authors), &t.Authors) != nil || t.Authors == nil {
+		t.Authors = []string{}
+	}
+	if json.Unmarshal([]byte(series), &t.Series) != nil || t.Series == nil {
+		t.Series = []AudibleSeries{}
+	}
+	if matchLib.Valid && matchPath.Valid {
+		t.Match = &AudibleMatch{LibraryID: matchLib.Int64, Path: matchPath.String, How: how}
+	}
+	if jobID.Valid {
+		t.ImportJobID = &jobID.Int64
+	}
+	switch {
+	case pending && (t.Match == nil || t.Rejected): // a match marked "Not this book" isn't this title
+		t.Import = &AudibleImport{State: AudibleImportPending}
+	case jobID.Valid && jobState.Valid:
+		j := bridge.Job{ID: jobID.Int64, State: jobState.String, Error: jobErr.String,
+			Result: json.RawMessage(jobRes.String), Progress: json.RawMessage(jobProgrs.String)}
+		t.Import = &AudibleImport{JobID: &j.ID, State: j.State, Code: bridge.AudibleImportCode(j)}
+	}
+	t.NeedsAttention = preorderOverdue(&t, pending, now)
+	return &t, nil
+}
+
 // DueAudiblePolls are the accounts whose scheduled poll is due at now: mapped
 // to a library (a paused one waits) and to a person an account may still be
 // mapped to (bridgeUserSQL: one disabled or made a kid since waits too), and
-// never queued, or last queued at least poll_hours ago. At most limit, the
+// never queued, or last queued at least poll_hours ago (an hour ago while one
+// of its preorders is waiting: released by the UTC date, not yet available,
+// for at most AudiblePreorderWait: preorderWaitingSQL). At most limit, the
 // longest waiting first.
 func (c *Catalog) DueAudiblePolls(ctx context.Context, now time.Time, limit int) ([]string, error) {
+	today, cutoff := preorderWindow(now)
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT a.account, a.poll_hours, a.last_queued_at FROM audible_accounts a JOIN users u ON u.id = a.user_id
+		`SELECT a.account, a.poll_hours, a.last_queued_at,
+		     EXISTS(SELECT 1 FROM audible_titles t WHERE t.account = a.account AND `+preorderWaitingSQL+`)
+		   FROM audible_accounts a JOIN users u ON u.id = a.user_id
 		  WHERE a.library_id IS NOT NULL AND `+bridgeUserSQL+`
-		  ORDER BY a.last_queued_at IS NOT NULL, a.last_queued_at, a.account`)
+		  ORDER BY a.last_queued_at IS NOT NULL, a.last_queued_at, a.account`, today, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -680,12 +782,16 @@ func (c *Catalog) DueAudiblePolls(ctx context.Context, now time.Time, limit int)
 	var out []string
 	for rows.Next() && len(out) < limit {
 		var (
-			id     string
-			hours  int
-			queued sql.NullString
+			id      string
+			hours   int
+			queued  sql.NullString
+			waiting bool
 		)
-		if err := rows.Scan(&id, &hours, &queued); err != nil {
+		if err := rows.Scan(&id, &hours, &queued, &waiting); err != nil {
 			return nil, err
+		}
+		if waiting {
+			hours = 1
 		}
 		if queued.Valid {
 			at, err := time.Parse(time.RFC3339Nano, queued.String)

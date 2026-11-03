@@ -2682,6 +2682,69 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
   A scheduled poll reads "Scheduled by the server" in the job list (`serverScheduled`), and the Bridge's
   optional `audible` setup step links its Accounts tab.
+- **Audible backups (BRIDGE-PLAN.md Phase 4b, `audible.import`, `catalog/audible_import.go`,
+  `audible/imports.go`, `bridge/audible.go`)**: the server decides what to back up and when; the Bridge
+  downloads, decrypts for the account and places the book. `0064`: `audible_accounts.template` (the account's
+  placement template, `''` = the Bridge's placement beside the series' other books; checked by
+  `bridge.CheckAudibleTemplate`, a copy of the Bridge's `placement` grammar: keep `audibleTemplateVars` in
+  step with its `knownVars` and `templateMods` with its `parseMods`; no `..` or hidden, dot-led part, which
+  the scan would skip), `policy_since` (a free column; backfilled `COALESCE(last_poll_at, created_at)`)
+  and `audible_titles.import_pending` (a console Back up on a preorder). **The job**: `audible.import` is
+  internal, `writes` (a writable books mapping), not quiet (done and failed are notified, named by the title),
+  gated by `ModuleFor`; params `{account, asin, library_id, dest_path, template}` (strict here, read leniently
+  by the Bridge; `dest_path` is the title's library-relative file path, or a folder for it when the last
+  segment has no audio extension (a template's too), or `''`, `CheckAudibleDestPath`; library and template
+  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities: a console Back up 0
+  (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
+  requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
+  in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
+  (`import_job_id`); the open one comes back on a repeat. **On this server** is a match not marked Not this
+  book (rejected): Back up, the policy's pending drop, the titles' `matched` filter and the accounts'
+  `matched` count read it so. **Done** (`FoldAudibleImport` from `OnEnded`): the
+  result (`{library_id, path, files:[{path,size}], bytes, enriched}`; `enriched:false` is no ASIN added: one
+  already set, or a file that joined a book that isn't the title's) names the book path `POST /bridge/rescan`
+  answered for the placed file; it must be the job's library and an indexed book (`ErrImportNotIndexed`), and
+  the title's own (`importOwnBook`, else `ErrImportNotOwn`, logged): a book carrying the title's ASIN, or one
+  holding only the files the backup placed (a single-file book is its file), so a file placed into a folder
+  book already there (the scan makes it one book) never makes that book, nor another title's, the title's
+  match; and never the book the admin marked Not this book for the title. It sets the match
+  (`match_how:"import"`), clears rejected and pending, only while `import_job_id` is still this job. A poll
+  keeps an `import` match while its book is indexed and the poll names no other. A failure's code is the
+  result's `code` (or a `code:` error prefix, or a park's code): `AudibleImportCodes`, shown on the title
+  (`import {job_id, state, code}`, `state` a job state or `pending`). **Policy** (`AudiblePolicyImports`,
+  after each final titles PUT while the module is on and a Bridge offers the kind; `autoImport.wants`, a
+  table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
+  rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
+  claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
+  its series the account's person can see (`seriesOwner`, by series key, `book_more_series` too).
+  `policy_since` moves to now when the console turns on `all` or `series` and at the account's first
+  complete poll, so the library it already had is never a flood: that is Back up everything's.
+  **Preorders**: an account with a preorder a backup may wait for (`preorderWaitingSQL`: not on this server,
+  not rejected or ignored, or with a pending request while not here) released by today's UTC date, at most
+  14 days ago, is due every hour (`DueAudiblePolls`); past 14 days such a title reads `needs_attention`
+  (`preorderOverdue`, the same terms). A pending request survives a restart (a column) and is queued by the
+  first poll that reports the title available (a rejected match's too). **Admin routes**
+  (`moduleRoutes`, admin session or admin API key; cast, feed and bridge tokens 401):
+  `POST /admin/audible/titles/{account}/{asin}/backup` (202 `{pending:false, job_id}`, 200 `{pending:true,
+  job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
+  `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
+  `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
+  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
+  latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
+  queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
+  `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
+  `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
+  when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
+  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
+  accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
+  titles, runtime at 8000 bytes a second); titles add `import` and `needs_attention`. The Bridge's account
+  PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
+  imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
+  Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
+  again every 5 s while one's backup is queued or running, `backupRunning`); the Bridge's job list names an
+  `audible.import` by its ASIN, and its placed files are no verify check (`resultSummary`); per account Backup settings... (policy, template) and Back up
+  everything... with a confirm "N books, ~X GB" (`backup-all-button.tsx`), and the legal line on the
+  titles page and both dialogs.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start

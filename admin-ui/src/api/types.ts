@@ -2880,6 +2880,7 @@ export const AUDIBLE_TITLE_STATES: readonly AudibleTitleState[] = [
 
 /** What an account backs up after each poll (Phase 4b). */
 export type AudiblePolicy = 'all' | 'series' | 'manual';
+export const AUDIBLE_POLICIES: readonly AudiblePolicy[] = ['manual', 'series', 'all'];
 
 /** An account's titles counted (GET /admin/audible/accounts). */
 export interface AudibleCounts {
@@ -2912,7 +2913,30 @@ export interface AudibleAccount {
   updated_at: string;
   last_poll_at: string | null;
   last_queued_at: string | null;
+  /** The placement template for its backups; "" = beside the series' other books (Phase 4b). */
+  template: string;
+  /** When its automatic policy began: only titles first seen after it are backed up by it. */
+  policy_since: string;
   titles?: AudibleCounts;
+  /** What "Back up everything" would queue (the accounts list only). */
+  backup_estimate?: AudibleEstimate;
+}
+
+/** "Back up everything": how many titles, and about how many bytes (64 kbps). */
+export interface AudibleEstimate {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * A title's backup (Phase 4b): its audible.import job's state and code, or a
+ * request waiting for a preorder ("pending", no job yet).
+ */
+export interface AudibleImport {
+  job_id: number | null;
+  state: BridgeJobState | 'pending';
+  /** A failed or parked backup's code: not_released, no_rights, exists, disk_full, ... */
+  code: string;
 }
 
 /** GET /admin/audible/accounts. */
@@ -2932,14 +2956,31 @@ export interface AudibleTitle {
   runtime_s: number;
   state: AudibleTitleState;
   reason: string;
-  /** The book on this server it was matched to, by ASIN or by title and author. */
-  match: { library_id: number; path: string; how: 'asin' | 'fuzzy' } | null;
+  /** The book on this server it was matched to: by ASIN, by title and author, or by its backup. */
+  match: { library_id: number; path: string; how: 'asin' | 'fuzzy' | 'import' } | null;
   rejected: boolean;
   ignored: boolean;
   dest_path: string;
   first_seen: string;
   updated_at: string;
   import_job_id: number | null;
+  /** Its backup (Phase 4b); null when none was asked for. */
+  import: AudibleImport | null;
+  /** A preorder still not available 14 days after its release date. */
+  needs_attention: boolean;
+}
+
+/** PATCH /admin/audible/titles/{account}/{asin}: "Not this book" and a destination. */
+export interface AudibleTitlePatch {
+  rejected?: boolean;
+  /** Folders and file name in the library ("Author/Series/Title.m4b"); "" for the account's placement. */
+  dest_path?: string;
+}
+
+/** PATCH /admin/audible/accounts/{account}: what it backs up by itself, and where. */
+export interface AudibleAccountPatch {
+  policy?: AudiblePolicy;
+  template?: string;
 }
 
 /** GET /admin/audible/titles: a page, and the next page's cursor ("" at the end). */

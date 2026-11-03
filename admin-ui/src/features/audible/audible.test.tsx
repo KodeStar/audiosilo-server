@@ -7,7 +7,17 @@ import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { settingsWith } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { accountName, chosenAccount, matchedParam, pollTarget, titleByline } from './audible-model';
+import {
+  accountName,
+  backupRunning,
+  canBackUp,
+  chosenAccount,
+  cleanDest,
+  importStatus,
+  matchedParam,
+  pollTarget,
+  titleByline,
+} from './audible-model';
 
 // Audible (Bridge Phase 4a): Settings > Bridge's read-only Audible accounts card
 // and Settings > Audible's titles, both shown only while the module is on.
@@ -30,6 +40,9 @@ function account(over: Partial<AudibleAccount> = {}): AudibleAccount {
     last_poll_at: new Date().toISOString(),
     last_queued_at: null,
     titles: { total: 30, available: 25, preorder: 3, unavailable: 1, gone: 1, matched: 12 },
+    template: '',
+    policy_since: '2026-11-01T09:00:00Z',
+    backup_estimate: { count: 13, bytes: 9_400_000_000 },
     ...over,
   };
 }
@@ -52,6 +65,8 @@ function title(over: Partial<AudibleTitle> = {}): AudibleTitle {
     first_seen: '2026-11-01T09:00:00Z',
     updated_at: '2026-11-01T09:00:00Z',
     import_job_id: null,
+    import: null,
+    needs_attention: false,
     ...over,
   };
 }
@@ -377,5 +392,220 @@ describe('settings > audible', () => {
     mockFetch(routes(false));
     renderApp('/server?topic=audible');
     expect(await screen.findByRole('textbox', { name: 'Server name' })).toBeInTheDocument();
+  });
+});
+
+describe('audible backups', () => {
+  it('offers Back up only for a title it can download and nobody is backing up', () => {
+    const missing = title({ match: null });
+    expect(canBackUp(missing)).toBe(true);
+    expect(canBackUp(title())).toBe(false);
+    expect(canBackUp(title({ rejected: true }))).toBe(true);
+    expect(canBackUp(title({ match: null, state: 'preorder' }))).toBe(true);
+    expect(canBackUp(title({ match: null, state: 'unavailable' }))).toBe(false);
+    expect(canBackUp(title({ match: null, state: 'gone' }))).toBe(false);
+    for (const state of ['pending', 'queued', 'claimed', 'running', 'needs_attention'] as const) {
+      expect(canBackUp(title({ match: null, import: { job_id: 4, state, code: '' } }))).toBe(false);
+    }
+    expect(
+      canBackUp(title({ match: null, import: { job_id: 4, state: 'failed', code: 'exists' } })),
+    ).toBe(true);
+    expect(cleanDest('  /A/B/C.m4b/ ')).toBe('A/B/C.m4b');
+  });
+
+  it('asks the titles again only while a backup job is queued or running', () => {
+    for (const state of ['queued', 'claimed', 'running'] as const) {
+      expect(backupRunning(title({ import: { job_id: 4, state, code: '' } }))).toBe(true);
+    }
+    for (const state of ['pending', 'needs_attention', 'done', 'failed', 'cancelled'] as const) {
+      expect(backupRunning(title({ import: { job_id: 4, state, code: '' } }))).toBe(false);
+    }
+    expect(backupRunning(title())).toBe(false);
+  });
+
+  it("words a title's backup and its code", () => {
+    expect(importStatus(title())).toBeNull();
+    expect(importStatus(title({ import: { job_id: null, state: 'pending', code: '' } }))?.key).toBe(
+      'audible.import.pending',
+    );
+    expect(
+      importStatus(title({ import: { job_id: 4, state: 'failed', code: 'disk_full' } })),
+    ).toEqual({ key: 'audible.import.failed', tone: 'bad', code: 'audible.code.disk_full' });
+    // A code this console doesn't know reads as the state alone.
+    expect(
+      importStatus(title({ import: { job_id: 4, state: 'failed', code: 'something_new' } }))?.code,
+    ).toBeUndefined();
+    expect(
+      importStatus(
+        title({ needs_attention: true, import: { job_id: null, state: 'pending', code: '' } }),
+      )?.key,
+    ).toBe('audible.import.attention');
+  });
+
+  it('backs a title up, and says a preorder waits for its release', async () => {
+    let pending = false;
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title({ asin: 'B000000002', title: 'The Well of Ascension', match: null }),
+              title({
+                asin: 'B000000004',
+                title: 'The Bands of Mourning',
+                match: null,
+                import: { job_id: 7, state: 'failed', code: 'exists' },
+              }),
+            ],
+            next: '',
+          },
+        },
+        'POST /admin/audible/titles/acct0001/B000000002/backup': () =>
+          pending
+            ? { status: 200, body: { pending: true, job_id: null } }
+            : { status: 202, body: { pending: false, job_id: 12 } },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(within(rows[1]).getByText('Backup failed')).toBeInTheDocument();
+    expect(
+      within(rows[1]).getByText(/A different file is already where it would go/),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(within(rows[0]).getByRole('button', { name: 'Back up' }));
+    expect(await screen.findByText('Backing up The Well of Ascension')).toBeInTheDocument();
+    expect(
+      calls.some(
+        (c) => c.method === 'POST' && c.path === '/admin/audible/titles/acct0001/B000000002/backup',
+      ),
+    ).toBe(true);
+    pending = true;
+    await user.click(within(rows[0]).getByRole('button', { name: 'Back up' }));
+    expect(
+      await screen.findByText('The Well of Ascension is backed up on release'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/A personal backup of books you bought/)).toBeInTheDocument();
+  });
+
+  it("keeps a paused account's titles from Back up, as Back up everything", async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': { body: { accounts: [account({ paused: true })] } },
+        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const list = await screen.findByRole('list', { name: 'Audible titles' });
+    expect(within(list).getByRole('button', { name: 'Back up' })).toBeDisabled();
+  });
+
+  it('marks a title Not this book and sets where it goes', async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+        'PATCH /admin/audible/titles/acct0001/B000000001': (req) => ({
+          body: { title: title({ match: null, ...(req.body as object) }) },
+        }),
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole('button', { name: 'Not this book: The Final Empire' }),
+    );
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === 'PATCH' && (c.body as { rejected?: boolean }).rejected),
+      ).toBe(true),
+    );
+    await user.click(screen.getByRole('button', { name: 'Destination for The Final Empire' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Where The Final Empire goes' });
+    await user.type(within(dialog).getByRole('textbox'), ' /Sanderson/Final Empire.m4b/');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === 'PATCH' &&
+            (c.body as { dest_path?: string }).dest_path === 'Sanderson/Final Empire.m4b',
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('backs everything up after saying how many and how much', async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'POST /admin/audible/accounts/acct0001/backup-all': { body: { queued: 13 } },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const user = userEvent.setup();
+    await user.click(await within(card).findByRole('button', { name: 'Back up everything...' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Back up everything from Chris (US)?',
+    });
+    expect(within(dialog).getByText('13 books, ~9.4 GB.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/check your local law/)).toBeInTheDocument();
+    expect(calls.some((c) => c.path.endsWith('/backup-all'))).toBe(false);
+    await user.click(within(dialog).getByRole('button', { name: 'Back up 13 books' }));
+    expect(await screen.findByText('13 backups queued for Chris (US)')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/backup-all'))).toBe(true);
+  });
+
+  it('is off with nothing to back up or a paused account', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': {
+          body: {
+            accounts: [
+              account({ backup_estimate: { count: 0, bytes: 0 } }),
+              account({ id: 'acct0002', label: 'Paused', paused: true }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const buttons = await within(card).findAllByRole('button', { name: 'Back up everything...' });
+    expect(buttons).toHaveLength(2);
+    for (const b of buttons) expect(b).toBeDisabled();
+  });
+
+  it("saves an account's policy and template", async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'PATCH /admin/audible/accounts/acct0001': (req) => ({
+          body: { account: account(req.body as object) },
+        }),
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    expect(await within(card).findByText("Beside the series' other books")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole('button', { name: 'Backup settings...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Backups for Chris (US)' });
+    await user.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'Back up by itself' }),
+      'series',
+    );
+    await user.type(
+      within(dialog).getByRole('textbox', { name: 'Placement template' }),
+      '{{Author}/{{Title}',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH');
+      expect(patch?.body).toEqual({ policy: 'series', template: '{Author}/{Title}' });
+    });
+    expect(await screen.findByText('Backups for Chris (US) saved')).toBeInTheDocument();
   });
 });

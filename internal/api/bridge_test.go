@@ -380,6 +380,15 @@ func TestBridgeRescan(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, mistbornBook) {
 		t.Fatalf("rescan: %d %s", resp.StatusCode, body)
 	}
+	// The Bridge's audible.import rescans the FILE it placed and takes the
+	// answer as the book's path (its result's path, then enrichment's): a file
+	// of a folder book answers the folder.
+	resp, body = b.do(t, "POST", "/api/v1/bridge/rescan", b.bridgeTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, mistbornBook+"/01 - The Final Empire.m4b"))
+	var got struct{ Path string }
+	decodeInto(t, body, &got)
+	if resp.StatusCode != http.StatusOK || got.Path != mistbornBook {
+		t.Fatalf("rescan of a book's file: %d %s, want the book %q", resp.StatusCode, body, mistbornBook)
+	}
 	for _, p := range []string{"../etc", mistbornBook + "/.audiosilo", "Nobody"} {
 		resp, body := b.do(t, "POST", "/api/v1/bridge/rescan", b.bridgeTok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, b.lib.ID, p))
 		if resp.StatusCode != http.StatusNotFound {

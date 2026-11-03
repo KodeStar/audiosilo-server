@@ -377,20 +377,25 @@ func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int
 }
 
 func queryIDs(ctx context.Context, db rowsQuerier, q string, args ...any) ([]int64, error) {
+	return queryColumn[int64](ctx, db, q, args...)
+}
+
+// queryColumn reads a query's one column.
+func queryColumn[T any](ctx context.Context, db rowsQuerier, q string, args ...any) ([]T, error) {
 	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []int64
+	var out []T
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var v T
+		if err := rows.Scan(&v); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		out = append(out, v)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }
 
 func (s *Service) reportEnded(ctx context.Context, j *Job, from string) {
