@@ -140,7 +140,6 @@ func TestAudiblePlannedChecked(t *testing.T) {
 		{"no path", func(p *AudiblePlan) { p.Path = "" }, "", false},
 		{"dot-dot path", func(p *AudiblePlan) { p.Path = "A/../../etc/B.m4b" }, "", false},
 		{"absolute path", func(p *AudiblePlan) { p.Path = "/A/B.m4b" }, "", false},
-		{"long path", func(p *AudiblePlan) { p.Path = strings.Repeat("a/", MaxPathBytes/2) + "B.m4b" }, "", false},
 		{"file with a folder", func(p *AudiblePlan) { p.File = "S/B.m4b" }, "", false},
 		{"dot-dot file", func(p *AudiblePlan) { p.File = ".." }, "", false},
 		{"negative siblings", func(p *AudiblePlan) { p.Siblings = -1 }, "", false},
@@ -157,6 +156,18 @@ func TestAudiblePlannedChecked(t *testing.T) {
 		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrAudibleInvalid)) {
 			t.Errorf("%s: err = %v, want ok %v", tc.name, err, tc.ok)
 		}
+	}
+	// A path past MaxPathBytes is Audible's long text through a template, not
+	// a Bridge's mistake: stored as a plan that failed, never a refused poll.
+	ti := avail("B000000001", "")
+	ti.Planned = good()
+	ti.Planned.Path = strings.Repeat("a/", MaxPathBytes/2) + "B.m4b"
+	if err := f.c.PutAudibleTitles(f.ctx, "acct0001", "p1", false, []AudibleTitleInput{ti}); err != nil {
+		t.Fatalf("long path: %v", err)
+	}
+	if p := f.title(t, "B000000001").Planned; p == nil || p.State != AudiblePlanError || p.Path != "" || p.File != "" ||
+		!strings.Contains(p.Conflict, "longer than the server allows") {
+		t.Fatalf("long path stored as %+v", p)
 	}
 }
 
@@ -234,5 +245,45 @@ func TestAudibleContestedWith(t *testing.T) {
 	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles
 		WHERE contest_library_id IS NOT NULL OR contest_path <> ''`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("contests left after the library's delete = %d, %v", left, err)
+	}
+}
+
+// A title gone from the account loses its plan and is no other title's
+// contender (the poll that contested it didn't have it); a contest the poll
+// made in another library (the account mapped elsewhere while it ran) is
+// never stored against the account's.
+func TestAudibleContestGoneAndRemapped(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "manual")
+	const book = "A/Book"
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: book, Title: "Book"}); err != nil {
+		t.Fatal(err)
+	}
+	a := contested("B000000001", "")
+	a.ContestedPath, a.Planned = book, planned(f, "A/One/One.m4b")
+	m := avail("B000000002", "")
+	m.Match = &AudibleMatch{LibraryID: f.lib.ID, Path: book, How: "fuzzy"}
+	g := contested("B000000003", "")
+	g.ContestedPath, g.Planned = book, planned(f, "A/Gone/Gone.m4b")
+	f.poll(t, "p1", a, m, g)
+	if c := f.title(t, "B000000001").Contested; c == nil || len(c.With) != 2 {
+		t.Fatalf("before = %+v", c)
+	}
+	// The next complete poll reports a alone: m and g are gone.
+	f.poll(t, "p2", a)
+	if c := f.title(t, "B000000001").Contested; c == nil || len(c.With) != 0 {
+		t.Fatalf("with gone titles = %+v", c)
+	}
+	if p := f.title(t, "B000000003").Planned; p != nil {
+		t.Fatalf("a gone title kept its plan %+v", p)
+	}
+	// A poll that listed another library: its contest isn't this library's.
+	a.Planned.LibraryID = f.lib.ID + 100
+	f.poll(t, "p3", a)
+	var lib any
+	var path string
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT contest_library_id, contest_path FROM audible_titles
+		WHERE asin = 'B000000001'`).Scan(&lib, &path); err != nil || lib != nil || path != "" {
+		t.Fatalf("a remapped poll's contest = %v %q, %v", lib, path, err)
 	}
 }

@@ -559,6 +559,13 @@ func checkAudiblePlan(p *AudiblePlan) error {
 	if p == nil {
 		return nil
 	}
+	// A path past what the server keeps is Audible's long text through the
+	// account's template (the Bridge bounds no length), not a Bridge's
+	// mistake: the plan reads as one that failed, never a refused poll.
+	if len(p.Path) > MaxPathBytes && slices.Contains(audiblePlanStates, p.State) {
+		p.State, p.Path, p.File = AudiblePlanError, "", ""
+		p.Conflict = fmt.Sprintf("the path is longer than the server allows (%d bytes)", MaxPathBytes)
+	}
 	failed := p.State == AudiblePlanError
 	switch {
 	case p.LibraryID <= 0:
@@ -685,7 +692,10 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 				contestLib       any
 			)
 			if matchPath == nil {
-				if t.ContestedPath != "" && acctLib.Valid {
+				// The contest's path is in the library the poll listed: the
+				// account's, unless the poll planned in another (the account
+				// was mapped elsewhere while it ran), whose path this isn't.
+				if t.ContestedPath != "" && acctLib.Valid && (t.Planned == nil || t.Planned.LibraryID == acctLib.Int64) {
 					contestLib, contest = acctLib.Int64, t.ContestedPath
 				}
 				if t.Planned != nil {
@@ -702,8 +712,10 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 		if !final {
 			return nil
 		}
+		// A title gone from the account is backed up nowhere: its plan goes.
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE audible_titles SET state = 'gone', updated_at = ? WHERE account = ? AND poll_id <> ? AND state <> 'gone'`,
+			`UPDATE audible_titles SET state = 'gone', planned = '', updated_at = ?
+			  WHERE account = ? AND poll_id <> ? AND state <> 'gone'`,
 			now, account, pollID); err != nil {
 			return err
 		}
@@ -854,8 +866,9 @@ func (c *Catalog) AudibleTitles(ctx context.Context, f AudibleTitleFilter) (Audi
 }
 
 // fillContests lists, for each contested title of titles, the other titles of
-// its account on the same book: matched to it, or left contested over it too.
-// By title, at most maxAudibleContest each. One query for the page.
+// its account on the same book: matched to it, or left contested over it too
+// (never a gone one: the poll that contested it didn't have it). By title, at
+// most maxAudibleContest each. One query for the page.
 func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error {
 	type key struct {
 		account string
@@ -892,7 +905,7 @@ func (c *Catalog) fillContests(ctx context.Context, titles []AudibleTitle) error
 	}, `SELECT o.account, COALESCE(o.contest_library_id, 0), o.contest_path,
 		    COALESCE(o.match_library_id, 0), COALESCE(o.match_path, ''), o.asin, o.title
 		  FROM audible_titles o
-		 WHERE `+strings.Join(terms, ` OR `)+`
+		 WHERE o.state <> 'gone' AND (`+strings.Join(terms, ` OR `)+`)
 		 ORDER BY o.title COLLATE NOCASE, o.asin`, args...)
 	if err != nil {
 		return err

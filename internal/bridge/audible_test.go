@@ -87,6 +87,37 @@ func TestAudiblePollPromotedAndCancelled(t *testing.T) {
 	}
 }
 
+// A request for a poll still queued gives it its params: Check now after the
+// account's template changed plans by the new one (the scheduler's request
+// likewise). A claimed poll runs as it was claimed.
+func TestAudiblePollTakesTheNewestTemplate(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	q.beat(t, KindVerify, KindAudiblePoll)
+	scheduled, _, err := q.Enqueue(ctx, AudiblePoll("acct0001", "", -10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const newest = `{"account":"acct0001","template":"{Author}/{Title}"}`
+	asked, created, err := q.Enqueue(ctx, AudiblePoll("acct0001", "{Author}/{Title}", 0))
+	if err != nil || created || asked.ID != scheduled.ID || string(asked.Params) != newest {
+		t.Fatalf("Check now = %+v, %v, %v; want the open poll with the new template", asked, created, err)
+	}
+	if again, _, err := q.Enqueue(ctx, AudiblePoll("acct0001", "{Title}", 0)); err != nil ||
+		string(again.Params) != `{"account":"acct0001","template":"{Title}"}` {
+		t.Fatalf("Check now again = %+v, %v; want its template though the priority is unchanged", again, err)
+	}
+	claimed, err := q.ClaimFor(ctx, q.token, nil, 0)
+	if err != nil || claimed == nil || claimed.ID != scheduled.ID {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	if later, _, err := q.Enqueue(ctx, AudiblePoll("acct0001", "", 0)); err != nil ||
+		string(later.Params) != `{"account":"acct0001","template":"{Title}"}` {
+		t.Fatalf("after the claim = %+v, %v; want the params it was claimed with", later, err)
+	}
+}
+
 // audible.poll's params carry the account's template (omitted when ""),
 // decoded strictly; a template is bounded but never parsed, so one the grammar
 // refuses still polls (the Bridge reports such a plan as an error).

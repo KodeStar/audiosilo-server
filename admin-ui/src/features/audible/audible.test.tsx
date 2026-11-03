@@ -714,6 +714,14 @@ describe('unmatched titles, explained', () => {
                 dest_path: 'Mine/Broken Homes.m4b',
                 planned: plan({ path: 'Ben Aaronovitch/Broken Homes.m4b' }),
               }),
+              title({
+                asin: 'B000000004',
+                title: 'Foxglove Summer',
+                state: 'unavailable',
+                reason: 'Audible reports no download rights for this title',
+                match: null,
+                planned: plan({ path: 'Ben Aaronovitch/Foxglove Summer.m4b' }),
+              }),
             ],
             next: '',
           },
@@ -738,6 +746,8 @@ describe('unmatched titles, explained', () => {
     // An override: checked when the backup starts, no plan shown.
     expect(within(rows[2]).getByText(/checked when the backup starts/)).toBeInTheDocument();
     expect(within(rows[2]).queryByText(/Will go to/)).not.toBeInTheDocument();
+    // A title that can't be backed up shows no plan.
+    expect(within(rows[3]).queryByText(/Will go to/)).not.toBeInTheDocument();
     // The destination dialog suggests the planned path, never fills it in.
     const user = userEvent.setup();
     await user.click(
@@ -803,7 +813,7 @@ describe('unmatched titles, explained', () => {
     expect(within(rows[0]).queryByText('contested')).not.toBeInTheDocument();
     expect(
       within(rows[1]).getByText(
-        'Another Audible title matched the same book, so neither shows as here.',
+        "Another Audible title matched the same book, so this one isn't shown as here.",
       ),
     ).toBeInTheDocument();
     expect(
