@@ -112,28 +112,6 @@ func preorderOverdue(state, release string, now time.Time) bool {
 	return release <= cutoff
 }
 
-// audibleBackupEstimates are "Back up everything"'s estimates by account.
-func (c *Catalog) audibleBackupEstimates(ctx context.Context) (map[string]AudibleEstimate, error) {
-	type row struct {
-		account string
-		AudibleEstimate
-	}
-	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *row) error {
-		var seconds int64
-		if err := rows.Scan(&r.account, &r.Count, &seconds); err != nil {
-			return err
-		}
-		r.Bytes = seconds * audibleBytesPerSecond
-		return nil
-	}, `SELECT t.account, COUNT(*), COALESCE(SUM(t.runtime_s), 0) FROM audible_titles t WHERE `+backupAllSQL+`
-		GROUP BY t.account`)
-	out := make(map[string]AudibleEstimate, len(rows))
-	for _, r := range rows {
-		out[r.account] = r.AudibleEstimate
-	}
-	return out, err
-}
-
 // AudibleTitle returns one title, ErrUnknownTitle when there is none.
 func (c *Catalog) AudibleTitle(ctx context.Context, account, asin string) (*AudibleTitle, error) {
 	t, err := scanAudibleTitle(c.db.QueryRowContext(ctx, audibleTitleSelect+` WHERE t.account = ? AND t.asin = ?`,
@@ -274,7 +252,7 @@ func (c *Catalog) RequestAudibleBackup(ctx context.Context, account, asin string
 		return nil, false, ErrAudiblePaused
 	case t.Match != nil && !t.Rejected:
 		return nil, false, ErrAudibleMatched
-	case t.Import != nil && (t.Import.State == AudibleImportPending || slices.Contains(bridge.OpenStates, t.Import.State)):
+	case t.Import != nil && (t.Import.State == AudibleImportPending || bridge.IsOpenState(t.Import.State)):
 		return nil, false, ErrAudibleImportOpen
 	case t.State == AudiblePreorder:
 		_, err := c.db.ExecUserState(ctx, `UPDATE audible_titles SET import_pending = 1, updated_at = ? WHERE account = ? AND asin = ?`,
@@ -384,28 +362,35 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 		series     []AudibleSeries
 		autoImport
 	}
+	// Every title of the account: autoImport.wants is the one statement of the
+	// rule (a poll reads a few hundred rows once).
 	cands, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *cand) error {
 		var first, series string
-		if err := rows.Scan(&x.asin, &x.dest, &first, &series, &x.Rejected, &x.Contested, &x.Ignored, &x.Pending, &x.Attempted); err != nil {
+		if err := rows.Scan(&x.asin, &x.dest, &x.State, &x.Matched, &first, &series, &x.Rejected, &x.Contested,
+			&x.Ignored, &x.Pending, &x.Attempted, &x.Open); err != nil {
 			return err
 		}
 		x.FirstSeen, _ = time.Parse(time.RFC3339Nano, first)
 		x.series = decodeSeries(series)
-		x.State, x.Policy, x.PolicySince = AudibleAvailable, acct.Policy, since
+		x.Policy, x.PolicySince = acct.Policy, since
 		return nil
-	}, `SELECT t.asin, t.dest_path, t.first_seen, t.series, t.rejected, `+contestedSQL+`, t.ignored, t.import_pending,
-		    t.import_job_id IS NOT NULL
-		  FROM audible_titles t
-		 WHERE t.account = ? AND t.state = 'available' AND t.match_path IS NULL AND t.ignored = 0 AND NOT `+openImportSQL+`
-		   AND (t.import_pending = 1 OR (? <> 'manual' AND t.rejected = 0 AND NOT `+contestedSQL+` AND t.import_job_id IS NULL))
-		 ORDER BY t.title COLLATE NOCASE, t.asin`, account, acct.Policy)
+	}, `SELECT t.asin, t.dest_path, t.state, t.match_path IS NOT NULL, t.first_seen, t.series, t.rejected, `+contestedSQL+`,
+		    t.ignored, t.import_pending, t.import_job_id IS NOT NULL, `+openImportSQL+`
+		  FROM audible_titles t WHERE t.account = ?
+		 ORDER BY t.title COLLATE NOCASE, t.asin`, account)
 	if err != nil {
 		return nil, err
 	}
 	var owned *seriesOwner
 	out := []bridge.AudibleImportParams{}
 	for _, x := range cands {
-		if acct.Policy == "series" && !x.Pending && x.FirstSeen.After(since) {
+		// Ask wants first as if the person had the series, so the series are
+		// looked up only for a title that turns on them.
+		x.SeriesOwned = true
+		if !x.wants() {
+			continue
+		}
+		if acct.Policy == "series" && !x.Pending {
 			if owned == nil {
 				if owned, err = c.newSeriesOwner(ctx, acct.UserID, admin); err != nil {
 					return nil, err
@@ -414,10 +399,11 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 			if x.SeriesOwned, err = owned.any(ctx, x.series); err != nil {
 				return nil, err
 			}
+			if !x.wants() {
+				continue
+			}
 		}
-		if x.wants() {
-			out = append(out, importParams(acct, x.asin, x.dest))
-		}
+		out = append(out, importParams(acct, x.asin, x.dest))
 	}
 	return out, nil
 }
@@ -457,18 +443,11 @@ func (o *seriesOwner) any(ctx context.Context, series []AudibleSeries) (bool, er
 		}
 		has, ok := o.seen[key]
 		if !ok {
-			refs, err := queryRows(ctx, o.c.db, func(rows *sql.Rows, r *Ref) error {
-				return rows.Scan(&r.LibraryID, &r.Path)
-			}, `SELECT b.library_id, b.rel_path FROM books b JOIN libraries l ON l.id = b.library_id AND l.kind = ?1
-				  WHERE b.series_key = ?2
-				UNION
-				SELECT b.library_id, b.rel_path FROM book_more_series m JOIN books b ON b.id = m.book_id
-				  JOIN libraries l ON l.id = b.library_id AND l.kind = ?1
-				  WHERE m.series_key = ?2`, KindBooks, key)
+			books, err := o.c.SeriesBooks(ctx, o.scopes, []string{s.Name})
 			if err != nil {
 				return false, err
 			}
-			has = slices.ContainsFunc(refs, func(r Ref) bool { return ScopesAllow(o.scopes, r) })
+			has = len(books) > 0
 			o.seen[key] = has
 		}
 		if has {

@@ -54,6 +54,11 @@ export function accountName(t: TFunction, a: AudibleAccount): string {
   );
 }
 
+/** A title's name: its title, else its ASIN. */
+export function titleName(x: Pick<AudibleTitle, 'title' | 'asin'>): string {
+  return x.title || x.asin;
+}
+
 /** A title's authors and series in one line ("Brandon Sanderson · Mistborn 1"). */
 export function titleByline(title: Pick<AudibleTitle, 'authors' | 'series'>): string {
   const parts = [title.authors.join(', ')];

@@ -102,8 +102,8 @@ func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string,
 // account was removed: CancelAudibleRemoved), as CancelAudiblePolls does its
 // poll: at once when queued or parked, else at the Bridge's next report.
 func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
-	keys, err := queryKeys(ctx, tx, `SELECT dedupe_key FROM bridge_jobs WHERE kind = ? AND state IN `+OpenStatesSQL+`
-		AND substr(dedupe_key, -(length(?) + 12)) LIKE ?`, KindAudibleImport, account, "|"+account+"|%")
+	keys, err := queryColumn[string](ctx, tx, `SELECT dedupe_key FROM bridge_jobs WHERE kind = ? AND state IN `+OpenStatesSQL+`
+		AND json_extract(params, '$.account') = ?`, KindAudibleImport, account)
 	if err != nil {
 		return err
 	}
@@ -113,24 +113,6 @@ func CancelAudibleImports(ctx context.Context, tx *sql.Tx, account, reason strin
 		}
 	}
 	return nil
-}
-
-// queryKeys reads one string column.
-func queryKeys(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
 }
 
 // CleanText is v as printable bounded text on one line (cleanText): what the

@@ -6,7 +6,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { formatBytes } from '@/lib/format';
 import { accountName } from './audible-model';
-import type { useBackups } from './use-audible';
+import type { Backups } from './use-audible';
 
 /**
  * "Back up everything" for an account (Bridge Phase 4b): every title that is
@@ -20,7 +20,7 @@ export function BackupAllButton({
   backups,
 }: {
   account: AudibleAccount;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';

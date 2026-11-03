@@ -6,8 +6,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { canBackUp, cleanDest } from './audible-model';
-import type { useBackups } from './use-audible';
+import { canBackUp, cleanDest, titleName } from './audible-model';
+import type { Backups } from './use-audible';
 
 /**
  * A title's backup actions (Bridge Phase 4b): Back up (a preorder's waits for
@@ -16,17 +16,11 @@ import type { useBackups } from './use-audible';
  * destination: where in the library the backup goes instead of the account's
  * placement.
  */
-export function TitleActions({
-  title: x,
-  backups,
-}: {
-  title: AudibleTitle;
-  backups: ReturnType<typeof useBackups>;
-}) {
+export function TitleActions({ title: x, backups }: { title: AudibleTitle; backups: Backups }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const busy = backups.busy === backups.titleKey(x);
-  const name = x.title || x.asin;
+  const name = titleName(x);
   return (
     <div className="flex flex-wrap items-center gap-2">
       {canBackUp(x) ? (
@@ -39,29 +33,16 @@ export function TitleActions({
           {t('audible.backup.action')}
         </Button>
       ) : null}
-      {x.rejected ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void backups.setRejected(x, false)}
-          aria-label={t('audible.reject.undoLabel', { name })}
-        >
-          <Undo2 aria-hidden="true" />
-          {t('audible.reject.undo')}
-        </Button>
-      ) : (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void backups.setRejected(x, true)}
-          aria-label={t('audible.reject.label', { name })}
-        >
-          <Ban aria-hidden="true" />
-          {t('audible.reject.action')}
-        </Button>
-      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => void backups.setRejected(x, !x.rejected)}
+        aria-label={t(x.rejected ? 'audible.reject.undoLabel' : 'audible.reject.label', { name })}
+      >
+        {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
+        {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
+      </Button>
       {!x.match || x.rejected ? (
         <Button
           size="sm"
@@ -86,7 +67,7 @@ function DestDialog({
   onClose,
 }: {
   title: AudibleTitle;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -99,7 +80,7 @@ function DestDialog({
       icon={FolderInput}
       tone="brand"
       destructive={false}
-      title={t('audible.dest.title', { name: x.title || x.asin })}
+      title={t('audible.dest.title', { name: titleName(x) })}
       description={t('audible.dest.description')}
       confirmLabel={t('audible.dest.save')}
       onConfirm={() => backups.setDest(x, cleanDest(dest))}

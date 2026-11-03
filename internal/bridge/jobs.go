@@ -32,8 +32,14 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
-// OpenStates are OpenStatesSQL's states.
-var OpenStates = []string{StateQueued, StateClaimed, StateRunning, StateNeedsAttention}
+// IsOpenState reports whether state is one of OpenStatesSQL's.
+func IsOpenState(state string) bool {
+	switch state {
+	case StateQueued, StateClaimed, StateRunning, StateNeedsAttention:
+		return true
+	}
+	return false
+}
 
 const (
 	// Lease is how long a claim holds a job without a progress update. The

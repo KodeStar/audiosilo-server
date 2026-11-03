@@ -16,7 +16,7 @@ import type {
 } from '@/api/types';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { accountName, matchedParam, type MatchedFilter } from './audible-model';
+import { accountName, matchedParam, titleName, type MatchedFilter } from './audible-model';
 
 /** How often the accounts are asked again while shown (a poll lands, a sign-in). */
 const ACCOUNTS_POLL_MS = 30_000;
@@ -136,6 +136,9 @@ export function useCheckNow() {
  * toast, or the dialog's error when it throws) and refreshes the titles, the
  * accounts (their estimate) and the Bridge's jobs.
  */
+/** What useBackups gives the account card and the title rows. */
+export type Backups = ReturnType<typeof useBackups>;
+
 export function useBackups() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -146,7 +149,6 @@ export function useBackups() {
     void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
   };
   const titleKey = (x: AudibleTitle) => `${x.account}/${x.asin}`;
-  const name = (x: AudibleTitle) => x.title || x.asin;
 
   const backUp = async (x: AudibleTitle) => {
     setBusy(titleKey(x));
@@ -155,11 +157,11 @@ export function useBackups() {
       toast.add(
         pending
           ? {
-              title: t('audible.backup.pending', { name: name(x) }),
+              title: t('audible.backup.pending', { name: titleName(x) }),
               description: t('audible.backup.pendingBody'),
             }
           : {
-              title: t('audible.backup.queued', { name: name(x) }),
+              title: t('audible.backup.queued', { name: titleName(x) }),
               description: t('audible.backup.queuedBody'),
               type: 'success',
             },
@@ -207,7 +209,8 @@ export function useBackups() {
       title: t('audible.settings.saved', { name: accountName(t, account) }),
       type: 'success',
     });
-    refresh();
+    // A policy or template changes no title row: only the account card.
+    void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
   };
 
   return { backUp, setRejected, setDest, backUpAll, saveAccount, busy, titleKey };

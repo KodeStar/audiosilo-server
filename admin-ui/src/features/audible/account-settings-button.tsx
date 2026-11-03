@@ -8,7 +8,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { accountName } from './audible-model';
-import type { useBackups } from './use-audible';
+import type { Backups } from './use-audible';
 
 /**
  * An account's backup settings (Bridge Phase 4b): what it backs up by itself
@@ -21,7 +21,7 @@ export function AccountSettingsButton({
   backups,
 }: {
   account: AudibleAccount;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -44,7 +44,7 @@ function SettingsDialog({
   onClose,
 }: {
   account: AudibleAccount;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
   onClose: () => void;
 }) {
   const { t } = useTranslation();

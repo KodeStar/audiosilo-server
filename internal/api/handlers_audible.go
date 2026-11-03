@@ -81,6 +81,12 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 		writeErrorCode(w, http.StatusNotFound, "unknown_library", "no such library")
 	case errors.Is(err, catalog.ErrUnknownAccount):
 		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
+	case errors.Is(err, catalog.ErrUnknownTitle):
+		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
+	case errors.Is(err, bridge.ErrAudibleDestPath):
+		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
+	case errors.Is(err, bridge.ErrAudibleTemplate):
+		writeErrorCode(w, http.StatusBadRequest, "invalid_template", err.Error())
 	case errors.Is(err, catalog.ErrASINSet):
 		writeErrorCode(w, http.StatusConflict, "asin_set", "the book already has an ASIN")
 	default:
@@ -407,8 +413,8 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 	switch {
 	case err == nil:
 		return true
-	case errors.Is(err, catalog.ErrUnknownTitle):
-		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
+	case errors.Is(err, catalog.ErrUnknownTitle), errors.Is(err, catalog.ErrUnknownAccount):
+		a.writeAudibleError(w, err, op)
 	case errors.Is(err, catalog.ErrAudibleMatched):
 		writeErrorCode(w, http.StatusConflict, "already_matched", "the title is already on this server")
 	case errors.Is(err, catalog.ErrAudibleImportOpen):
@@ -417,8 +423,6 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 		writeErrorCode(w, http.StatusConflict, "not_available", "the title can't be downloaded from the account now")
 	case errors.Is(err, catalog.ErrAudiblePaused):
 		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
-	case errors.Is(err, catalog.ErrUnknownAccount):
-		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
 	default:
 		return a.writeBridgeError(w, err, op)
 	}
@@ -426,8 +430,8 @@ func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op strin
 }
 
 // handleAdminAudibleBackup serves POST /admin/audible/titles/{account}/{asin}/
-// backup: "Back up" one title. 202 {"job_id": N} with its queued (or already
-// open) backup; 200 {"pending": true, "job_id": null} for a preorder, queued
+// backup: "Back up" one title. 202 {"job_id": N} with its queued backup (the
+// open one when a concurrent request queued it first); 200 {"pending": true, "job_id": null} for a preorder, queued
 // once a poll says it is available. 404 unknown_account, unknown_title; 409
 // already_matched, import_open, not_available, account_paused,
 // kind_unavailable, library_not_writable.
@@ -490,16 +494,11 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := a.cat.PatchAudibleTitle(r.Context(), account, asin, p)
-	switch {
-	case errors.Is(err, bridge.ErrAudibleDestPath):
-		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
-	case errors.Is(err, catalog.ErrUnknownTitle):
-		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
-	case err != nil:
+	if err != nil {
 		a.writeAudibleError(w, err, "patch audible title failed")
-	default:
-		writeJSON(w, http.StatusOK, t)
+		return
 	}
+	writeJSON(w, http.StatusOK, t)
 }
 
 // handleAdminAudibleAccount serves PATCH /admin/audible/accounts/{account}
@@ -516,20 +515,17 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	acct, err := a.cat.PatchAudibleAccount(r.Context(), id, p)
-	switch {
-	case errors.Is(err, bridge.ErrAudibleTemplate):
-		writeErrorCode(w, http.StatusBadRequest, "invalid_template", err.Error())
-	case err != nil:
+	if err != nil {
 		a.writeAudibleError(w, err, "patch audible account failed")
-	default:
-		details := map[string]any{"account": id}
-		if p.Policy != nil {
-			details["policy"] = *p.Policy
-		}
-		if p.Template != nil {
-			details["template"] = *p.Template
-		}
-		a.audit(r, "bridge.audible.account", "", details)
-		writeJSON(w, http.StatusOK, map[string]any{"account": acct})
+		return
 	}
+	details := map[string]any{"account": id}
+	if p.Policy != nil {
+		details["policy"] = *p.Policy
+	}
+	if p.Template != nil {
+		details["template"] = *p.Template
+	}
+	a.audit(r, "bridge.audible.account", "", details)
+	writeJSON(w, http.StatusOK, map[string]any{"account": acct})
 }

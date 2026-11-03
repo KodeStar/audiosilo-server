@@ -334,51 +334,47 @@ func (c *Catalog) AudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []AudibleAccount{}
-	byID := map[string]*AudibleCounts{}
+	byID := map[string]*AudibleAccount{} // its Titles and BackupEstimate are shared with out's copy
 	for rows.Next() {
 		a, err := scanAudibleAccount(rows)
 		if err != nil {
 			return nil, err
 		}
-		a.Titles = &AudibleCounts{}
-		byID[a.ID] = a.Titles
+		a.Titles, a.BackupEstimate = &AudibleCounts{}, &AudibleEstimate{}
+		byID[a.ID] = a
 		out = append(out, *a)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	_ = rows.Close()
-	counts, err := c.db.QueryContext(ctx, `SELECT account, COUNT(*),
-		    SUM(state = 'available'), SUM(state = 'preorder'), SUM(state = 'unavailable'), SUM(state = 'gone'),
-		    SUM(match_path IS NOT NULL)
-		  FROM audible_titles GROUP BY account`)
+	counts, err := c.db.QueryContext(ctx, `SELECT t.account, COUNT(*),
+		    SUM(t.state = 'available'), SUM(t.state = 'preorder'), SUM(t.state = 'unavailable'), SUM(t.state = 'gone'),
+		    SUM(t.match_path IS NOT NULL),
+		    SUM(CASE WHEN `+backupAllSQL+` THEN 1 ELSE 0 END), SUM(CASE WHEN `+backupAllSQL+` THEN COALESCE(t.runtime_s, 0) ELSE 0 END)
+		  FROM audible_titles t GROUP BY t.account`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = counts.Close() }()
 	for counts.Next() {
 		var (
-			id string
-			n  AudibleCounts
+			id      string
+			n       AudibleCounts
+			e       AudibleEstimate
+			seconds int64
 		)
-		if err := counts.Scan(&id, &n.Total, &n.Available, &n.Preorder, &n.Unavailable, &n.Gone, &n.Matched); err != nil {
+		if err := counts.Scan(&id, &n.Total, &n.Available, &n.Preorder, &n.Unavailable, &n.Gone, &n.Matched,
+			&e.Count, &seconds); err != nil {
 			return nil, err
 		}
-		if c := byID[id]; c != nil {
-			*c = n
+		e.Bytes = seconds * audibleBytesPerSecond
+		if a := byID[id]; a != nil {
+			*a.Titles, *a.BackupEstimate = n, e
 		}
 	}
 	if err := counts.Err(); err != nil {
 		return nil, err
-	}
-	_ = counts.Close()
-	estimates, err := c.audibleBackupEstimates(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		e := estimates[out[i].ID]
-		out[i].BackupEstimate = &e
 	}
 	return out, nil
 }

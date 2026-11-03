@@ -37,10 +37,7 @@ func (q Queues) queue(ctx context.Context, p bridge.AudibleImportParams, request
 	if err != nil {
 		return nil, false, err
 	}
-	if err := q.Catalog.SetAudibleImport(ctx, p.Account, p.ASIN, job.ID); err != nil {
-		return job, created, err
-	}
-	return job, created, nil
+	return job, created, q.Catalog.SetAudibleImport(ctx, p.Account, p.ASIN, job.ID)
 }
 
 // Backup is the console's "Back up" of one title: the job queued (created), or

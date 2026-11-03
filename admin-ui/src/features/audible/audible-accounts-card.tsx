@@ -17,7 +17,7 @@ import { AccountSettingsButton } from './account-settings-button';
 import { BackupAllButton } from './backup-all-button';
 import { CheckNowButton } from './check-now-button';
 import { RemoveAccountButton } from './remove-account-button';
-import { useAudibleAccounts, useBackups, useCheckNow } from './use-audible';
+import { useAudibleAccounts, useBackups, useCheckNow, type Backups } from './use-audible';
 
 /**
  * Settings > Bridge's Audible accounts (Bridge Phase 4a), while the audible
@@ -113,7 +113,7 @@ function AccountRow({
   account: AudibleAccount;
   busy: boolean;
   onCheck: () => void;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';

@@ -20,6 +20,7 @@ import {
   pollTarget,
   TITLE_STATE_TONE,
   titleByline,
+  titleName,
   type MatchedFilter,
 } from './audible-model';
 import { BackupAllButton } from './backup-all-button';
@@ -32,6 +33,7 @@ import {
   useBackups,
   useCheckNow,
   useTitlesAfterPolls,
+  type Backups,
 } from './use-audible';
 
 /**
@@ -202,7 +204,7 @@ function TitleRow({
 }: {
   title: AudibleTitle;
   account?: string;
-  backups: ReturnType<typeof useBackups>;
+  backups: Backups;
 }) {
   const { t, i18n } = useTranslation();
   const backup = importStatus(x);
@@ -226,7 +228,7 @@ function TitleRow({
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-1.5 px-5 py-3">
       <div className="flex min-w-0 flex-1 basis-64 flex-col gap-0.5">
-        <b className="font-semibold [overflow-wrap:anywhere]">{x.title || x.asin}</b>
+        <b className="font-semibold [overflow-wrap:anywhere]">{titleName(x)}</b>
         {byline ? <span className="text-[13px] text-muted-foreground">{byline}</span> : null}
         <span className="font-mono text-[12px] text-muted-foreground">{details.join(' · ')}</span>
         {x.reason ? <span className="text-[12.5px] text-muted-foreground">{x.reason}</span> : null}
