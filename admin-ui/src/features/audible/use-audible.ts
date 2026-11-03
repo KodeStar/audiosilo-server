@@ -12,6 +12,7 @@ import type {
   AudibleAccount,
   AudibleAccountPatch,
   AudibleTitle,
+  AudibleTitlePatch,
   AudibleTitleState,
 } from '@/api/types';
 import { toastError } from '@/lib/errors';
@@ -149,7 +150,7 @@ export function useCheckNow() {
  * Backups (Phase 4b): "Back up", "Not this book", a destination, "Back up
  * everything" and an account's settings; "Don't sync this book" (Phase 4c). Each says how it went (a refusal is a
  * toast, or the dialog's error when it throws) and refreshes the titles, the
- * accounts (their estimate) and the Bridge's jobs.
+ * accounts (their estimate) and the Bridge's jobs ("Don't sync" the titles only).
  */
 /** What useBackups gives the account card and the title rows. */
 export type Backups = ReturnType<typeof useBackups>;
@@ -189,30 +190,32 @@ export function useBackups() {
     }
   };
 
-  const setRejected = async (x: AudibleTitle, rejected: boolean) => {
+  /** A title's flag from its row's menu: a refusal is a toast, then `done` refreshes. */
+  const patchTitle = async (
+    x: AudibleTitle,
+    patch: AudibleTitlePatch,
+    failed: string,
+    done: () => void,
+  ) => {
     setBusy(titleKey(x));
     try {
-      await api.patchAudibleTitle(x.account, x.asin, { rejected });
+      await api.patchAudibleTitle(x.account, x.asin, patch);
     } catch (err) {
-      toastError(t('audible.reject.failed'), err);
+      toastError(failed, err);
     } finally {
       setBusy(null);
-      refresh();
+      done();
     }
   };
 
-  /** "Don't sync this book" and its undo (Phase 4c). */
-  const setNoSync = async (x: AudibleTitle, noSync: boolean) => {
-    setBusy(titleKey(x));
-    try {
-      await api.patchAudibleTitle(x.account, x.asin, { no_sync: noSync });
-    } catch (err) {
-      toastError(t('audible.nosync.failed'), err);
-    } finally {
-      setBusy(null);
-      refresh();
-    }
-  };
+  const setRejected = (x: AudibleTitle, rejected: boolean) =>
+    patchTitle(x, { rejected }, t('audible.reject.failed'), refresh);
+
+  /** "Don't sync this book" and its undo (Phase 4c): it changes no estimate or job, only the title rows. */
+  const setNoSync = (x: AudibleTitle, noSync: boolean) =>
+    patchTitle(x, { no_sync: noSync }, t('audible.nosync.failed'), () => {
+      void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+    });
 
   /** Throws for the dialog to show. */
   const setDest = async (x: AudibleTitle, dest: string) => {

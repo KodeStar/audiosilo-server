@@ -628,10 +628,10 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 		return SyncResult{}, err
 	}
 	at := formatSessionTime(p.ended)
-	mine := &ListeningOtherPlace{Position: p.to, DeviceID: s.b.DeviceID, DeviceName: s.b.DeviceName, UpdatedAt: at}
 	if s.b.FurthestOnly {
-		return s.furthestListen(ctx, p, stored, mine.UpdatedAt)
+		return s.furthestListen(ctx, p, stored, at)
 	}
+	mine := &ListeningOtherPlace{Position: p.to, DeviceID: s.b.DeviceID, DeviceName: s.b.DeviceName, UpdatedAt: at}
 	res, err := s.resolveListen(ctx, p, stored, mine)
 	if err != nil {
 		return res, err

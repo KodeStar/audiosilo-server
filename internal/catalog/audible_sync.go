@@ -132,13 +132,13 @@ const MaxAudibleProgress = 500
 // progressCursor is a GET /bridge/progress position: the last row's
 // (updated_at, library_id, path), opaque on the wire (base64url JSON).
 type progressCursor struct {
-	At   string
-	Lib  int64
-	Path string
+	At   string `json:"a"`
+	Lib  int64  `json:"l"`
+	Path string `json:"p"`
 }
 
 func (k progressCursor) encode() string {
-	raw, _ := json.Marshal([]any{k.At, k.Lib, k.Path})
+	raw, _ := json.Marshal(k)
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
@@ -150,10 +150,8 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 	if err != nil {
 		return progressCursor{}, audibleInvalid("bad cursor")
 	}
-	var parts []json.RawMessage
 	var k progressCursor
-	if json.Unmarshal(raw, &parts) != nil || len(parts) != 3 || json.Unmarshal(parts[0], &k.At) != nil ||
-		json.Unmarshal(parts[1], &k.Lib) != nil || json.Unmarshal(parts[2], &k.Path) != nil {
+	if json.Unmarshal(raw, &k) != nil {
 		return progressCursor{}, audibleInvalid("bad cursor")
 	}
 	return k, nil
@@ -178,7 +176,9 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	if limit <= 0 || limit > MaxAudibleProgress {
 		limit = MaxAudibleProgress
 	}
-	read, err := queryRows(ctx, c.db, func(r *sql.Rows, x *AudibleProgressRow) error {
+	scoped, scopeArgs := scopesFilterSQL("p.library_id", "p.rel_path", scopes)
+	args := append([]any{a.UserID, a.Account, a.DeviceID(), from.At, from.Lib, from.Path}, scopeArgs...)
+	rows, err = queryRows(ctx, c.db, func(r *sql.Rows, x *AudibleProgressRow) error {
 		return r.Scan(&x.LibraryID, &x.Path, &x.ASIN, &x.Position, &x.Duration, &x.Finished, &x.UpdatedAt, &x.DeviceID,
 			&x.Version)
 	}, `SELECT p.library_id, p.rel_path, MIN(t.asin), p.position,
@@ -188,32 +188,19 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	      JOIN progress p ON p.user_id = ? AND p.library_id = t.match_library_id AND p.rel_path = t.match_path
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
 	     WHERE t.account = ? AND `+syncTitleSQL+` AND p.device_id <> ?
-	       AND (p.updated_at, p.library_id, p.rel_path) > (?, ?, ?)
+	       AND (p.updated_at, p.library_id, p.rel_path) > (?, ?, ?) AND `+scoped+`
 	     GROUP BY p.library_id, p.rel_path
 	     ORDER BY p.updated_at, p.library_id, p.rel_path
-	     LIMIT ?`, a.UserID, a.Account, a.DeviceID(), from.At, from.Lib, from.Path, limit)
+	     LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, "", false, err
 	}
-	rows = []AudibleProgressRow{}
 	next = since
-	for _, x := range read {
-		next = progressCursor{At: x.UpdatedAt, Lib: x.LibraryID, Path: x.Path}.encode()
-		if scope, ok := scopeOf(scopes, x.LibraryID); ok && scope.Allows(x.Path) {
-			rows = append(rows, x)
-		}
+	if n := len(rows); n > 0 {
+		last := rows[n-1]
+		next = progressCursor{At: last.UpdatedAt, Lib: last.LibraryID, Path: last.Path}.encode()
 	}
-	return rows, next, len(read) == limit, nil
-}
-
-// scopeOf is the scope for libraryID among scopes.
-func scopeOf(scopes []Scope, libraryID int64) (Scope, bool) {
-	for _, s := range scopes {
-		if s.LibraryID == libraryID {
-			return s, true
-		}
-	}
-	return Scope{}, false
+	return rows, next, len(rows) == limit, nil
 }
 
 // DueAudibleSyncs are the accounts whose audible.sync is due at now, at most

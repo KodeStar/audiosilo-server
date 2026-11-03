@@ -64,10 +64,13 @@ func audiblePollParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
-// audiblePollSuffix extends an audible.poll's dedupe key with its account, so
-// each account has at most one open poll.
-func audiblePollSuffix(j NewJob) string {
-	var p AudiblePollParams
+// audibleAccountSuffix extends an audible.poll's or audible.sync's dedupe key
+// with its params' account, so each account has at most one open job of the
+// kind.
+func audibleAccountSuffix(j NewJob) string {
+	var p struct {
+		Account string `json:"account"`
+	}
 	_ = json.Unmarshal(j.Params, &p)
 	return "|" + p.Account
 }
@@ -412,13 +415,20 @@ func AudibleImportCode(j Job) string {
 	default:
 		return ""
 	}
+	return failureCode(j, AudibleImportCodes)
+}
+
+// failureCode is the code an ended audible job failed with, "" for none: the
+// result's "code" (the Bridge reports a failure as {"code","message"}),
+// cleaned and bounded, else one of codes its error starts with ("exists: ...").
+func failureCode(j Job, codes []string) string {
 	var r struct {
 		Code string `json:"code"`
 	}
 	if json.Unmarshal(j.Result, &r) == nil && r.Code != "" {
 		return cleanText(r.Code, maxShortText, false)
 	}
-	for _, c := range AudibleImportCodes {
+	for _, c := range codes {
 		if j.Error == c || strings.HasPrefix(j.Error, c+":") {
 			return c
 		}
@@ -434,7 +444,7 @@ func AudibleImportCode(j Job) string {
 // furthest only); the other direction is the Bridge's push loop over GET
 // /bridge/progress, not a job. Params AudibleSyncParams; the server queues it
 // (internal, quiet) every AudibleSyncEvery per synced account, one open per
-// account (audibleSyncSuffix).
+// account (audibleAccountSuffix).
 const KindAudibleSync = "audible.sync"
 
 // AudibleSyncEvery is how often the scheduler queues a synced account's
@@ -506,14 +516,6 @@ func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
-// audibleSyncSuffix extends an audible.sync's dedupe key with its account, so
-// each account has at most one open sync.
-func audibleSyncSuffix(j NewJob) string {
-	var p AudibleSyncParams
-	_ = json.Unmarshal(j.Params, &p)
-	return "|" + p.Account
-}
-
 // AudibleSync is the NewJob that syncs account's titles (in the order given),
 // leaving out the last ones when their params would pass
 // maxAudibleSyncParamsBytes (dropped reports how many).
@@ -543,16 +545,7 @@ func AudibleSyncCode(j Job) string {
 	if j.State != StateFailed {
 		return ""
 	}
-	var r struct {
-		Code string `json:"code"`
-	}
-	if json.Unmarshal(j.Result, &r) == nil && r.Code != "" {
-		return cleanText(r.Code, maxShortText, false)
-	}
-	if j.Error == SyncAudibleRefused || strings.HasPrefix(j.Error, SyncAudibleRefused+":") {
-		return SyncAudibleRefused
-	}
-	return ""
+	return failureCode(j, []string{SyncAudibleRefused})
 }
 
 // CancelAudibleSyncs cancels account's open sync inside tx (removed or paused,

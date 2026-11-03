@@ -41,12 +41,7 @@ var syncPathReasons = map[int]string{
 // sent_at or an offset beyond 1e9 s; code too_many_events past 500 events).
 func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	var in listeningSyncRequest
-	if err := decodeJSON(r, &in, 0); err != nil {
-		if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
-			writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "a batch is at most 1 MiB")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeSyncEnvelope(w, r, &in) {
 		return
 	}
 	switch {
@@ -71,8 +66,7 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 		}
 		sentAt = &t
 	}
-	if len(in.Events) > catalog.MaxSyncEvents {
-		writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
+	if tooManySyncEvents(w, in.Events) {
 		return
 	}
 	events := catalog.DecodeSyncEvents(in.Events)
@@ -105,6 +99,32 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, answer)
+}
+
+// decodeSyncEnvelope decodes a Sync v2 batch's envelope into dst (a pointer):
+// 413 code too_large for a body over 1 MiB, 400 for bad JSON or an unknown
+// field, written here (false).
+func decodeSyncEnvelope(w http.ResponseWriter, r *http.Request, dst any) bool {
+	err := decodeJSON(r, dst, 0)
+	if err == nil {
+		return true
+	}
+	if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
+		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "a batch is at most 1 MiB")
+		return false
+	}
+	writeError(w, http.StatusBadRequest, "invalid request")
+	return false
+}
+
+// tooManySyncEvents answers 400 too_many_events for a batch past
+// catalog.MaxSyncEvents (true).
+func tooManySyncEvents(w http.ResponseWriter, events []json.RawMessage) bool {
+	if len(events) <= catalog.MaxSyncEvents {
+		return false
+	}
+	writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
+	return true
 }
 
 // syncResolver checks one event's (library_id, path) against the scopes of the

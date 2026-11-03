@@ -23,7 +23,7 @@ import (
 // clock when it sent them and the events (listen spans of no length at
 // Audible's place, finishes), each decoded on its own as a player's are.
 type audibleListeningRequest struct {
-	SentAt *string           `json:"sent_at"`
+	SentAt string            `json:"sent_at"`
 	Events []json.RawMessage `json:"events"`
 }
 
@@ -64,22 +64,31 @@ func (a *API) audibleSyncFor(w http.ResponseWriter, r *http.Request, account, op
 	return acct, scopes, true
 }
 
-// pathForUser is scopedPathIn for a person who is not the caller (an Audible
-// account's): their scope in the library (none, or no such library, is 403),
-// then pathInScope.
-func (a *API) pathForUser(r *http.Request, scopes []catalog.Scope, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
-	scope, ok := scopeIn(scopes, libraryID)
-	if !ok || (!scope.AllowAll && len(scope.Paths) == 0) {
-		return nil, "", scope, http.StatusForbidden, "no access to this library"
+// userPathResolver is scopedPathIn for a person who is not the caller (an
+// Audible account's): their scope in the library (none, or no such library, is
+// 403), then pathInScope. Each library is loaded once per batch (an Audible
+// batch can name hundreds of books in one).
+func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncResolver {
+	libs := map[int64]*catalog.Library{}
+	return func(libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+		scope, ok := scopeIn(scopes, libraryID)
+		if !ok || (!scope.AllowAll && len(scope.Paths) == 0) {
+			return nil, "", scope, http.StatusForbidden, "no access to this library"
+		}
+		lib, done := libs[libraryID]
+		if !done {
+			var err error
+			lib, err = a.cat.GetLibrary(r.Context(), libraryID)
+			if errors.Is(err, catalog.ErrNotFound) {
+				return nil, "", scope, http.StatusNotFound, "library not found"
+			}
+			if err != nil {
+				return nil, "", scope, http.StatusInternalServerError, "could not load library"
+			}
+			libs[libraryID] = lib
+		}
+		return pathInScope(lib, scope, rawPath)
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), libraryID)
-	if errors.Is(err, catalog.ErrNotFound) {
-		return nil, "", scope, http.StatusNotFound, "library not found"
-	}
-	if err != nil {
-		return nil, "", scope, http.StatusInternalServerError, "could not load library"
-	}
-	return pathInScope(lib, scope, rawPath)
 }
 
 // handleBridgeAudibleListening serves POST /bridge/audible/accounts/{account}/
@@ -103,25 +112,15 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var in audibleListeningRequest
-	if err := decodeJSON(r, &in, 0); err != nil {
-		if tooBig := (*http.MaxBytesError)(nil); errors.As(err, &tooBig) {
-			writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "a batch is at most 1 MiB")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeSyncEnvelope(w, r, &in) {
 		return
 	}
-	if in.SentAt == nil {
-		writeError(w, http.StatusBadRequest, "sent_at is required")
-		return
-	}
-	sentAt, err := time.Parse(time.RFC3339, *in.SentAt)
+	sentAt, err := time.Parse(time.RFC3339, in.SentAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "sent_at is required")
 		return
 	}
-	if len(in.Events) > catalog.MaxSyncEvents {
-		writeErrorCode(w, http.StatusBadRequest, "too_many_events", "a batch carries at most 500 events")
+	if tooManySyncEvents(w, in.Events) {
 		return
 	}
 	allowed, err := a.cat.AudibleSyncBooks(r.Context(), id)
@@ -130,10 +129,7 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	events := catalog.DecodeSyncEvents(in.Events)
-	resolve := func(libraryID int64, path string) (*catalog.Library, string, catalog.Scope, int, string) {
-		return a.pathForUser(r, scopes, libraryID, path)
-	}
-	targets, ok := a.syncTargets(w, r, events, resolve, nil, allowed)
+	targets, ok := a.syncTargets(w, r, events, a.userPathResolver(r, scopes), nil, allowed)
 	if !ok {
 		return
 	}
