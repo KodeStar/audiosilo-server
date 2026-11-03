@@ -25,7 +25,8 @@ go build -o bin/audiosilo ./cmd/audiosilo
 
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
 CGO_ENABLED=1 go build -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook" -o bin/audiosilo ./cmd/audiosilo
-                                     # native C SQLite compiled in (opt-in; AUDIOSILO_SQLITE=modernc picks the pure-Go one; see SQLite in CONVENTIONS.md)
+                                     # native C SQLite compiled in (AUDIOSILO_SQLITE=modernc picks the pure-Go one; see SQLite in CONVENTIONS.md).
+                                     # The Dockerfile builds this by default, static against glibc (SQLITE_ENGINE=modernc: pure Go)
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
 scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
@@ -37,7 +38,9 @@ setup wizard** instead of the auto-admin banner - see below).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
-`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere. Two
+`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere (the
+Docker image instead builds the native SQLite engine in, a static glibc binary
+on Alpine; see the Dockerfile's build stage). Two
 build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
 the web player into the binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
