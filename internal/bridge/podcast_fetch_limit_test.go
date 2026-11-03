@@ -16,10 +16,14 @@ func fetchLimitJobs(t *testing.T, q *testQueue, n int) []NewJob {
 	for i := range jobs {
 		path := fmt.Sprintf("Show/limit-%d.mp3", i)
 		id := fmt.Sprintf("%016x", i+1)
-		if _, err := q.db.ExecContext(ctx, `INSERT INTO books(library_id,rel_path,title,indexed_at) VALUES(?1,?2,'Episode','t');
-		 INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source)
-		 SELECT id,library_id,'Show',?3,'','full',0,0,0,0,'','none' FROM books WHERE library_id=?1 AND rel_path=?2`, q.lib, path, id); err != nil {
-			t.Fatal(err)
+		for _, stmt := range []string{ // one statement an Exec (see fetchQueue)
+			`INSERT INTO books(library_id,rel_path,title,indexed_at) VALUES(?1,?2,'Episode','t')`,
+			`INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source)
+			 SELECT id,library_id,'Show',?3,'','full',0,0,0,0,'','none' FROM books WHERE library_id=?1 AND rel_path=?2`,
+		} {
+			if _, err := q.db.ExecContext(ctx, stmt, q.lib, path, id); err != nil {
+				t.Fatal(err)
+			}
 		}
 		raw, _ := json.Marshal(EpisodeParams{ShowID: "0123456789abcdef", EpisodeID: id})
 		jobs[i] = NewJob{LibraryID: &q.lib, Path: &path, Params: raw, Priority: 10, RequestedBy: q.admin}

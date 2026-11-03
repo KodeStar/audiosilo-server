@@ -24,6 +24,9 @@ go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
 
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
+CGO_ENABLED=1 go build -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook" -o bin/audiosilo ./cmd/audiosilo
+                                     # native C SQLite compiled in (AUDIOSILO_SQLITE=modernc picks the pure-Go one; see SQLite in CONVENTIONS.md).
+                                     # The Dockerfile builds this by default, static against glibc (SQLITE_ENGINE=modernc: pure Go)
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
 scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
@@ -35,7 +38,9 @@ setup wizard** instead of the auto-admin banner - see below).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
-`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere. Two
+`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere (the
+Docker image instead builds the native SQLite engine in, a static glibc binary
+on Alpine; see the Dockerfile's build stage). Two
 build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
 the web player into the binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
@@ -64,7 +69,7 @@ in-process, can open a browser).
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push in three parallel jobs (Go tests, lint with govet, admin console),
+gates all of them on every PR/push in four parallel jobs (Go tests, the same on the native SQLite engine (`test-native`: vet, race tests and lint with the native tags), lint with govet, admin console),
 the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The `probe-drift` workflow compares the in-process probe
@@ -104,9 +109,9 @@ admin/connect UI changes. Mapping table:
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
-pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup; options.go: BestWith (Best under opt-in Options, with the winning score) and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
-internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
+internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)

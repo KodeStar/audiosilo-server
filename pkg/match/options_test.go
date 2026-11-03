@@ -12,12 +12,22 @@ type optCase struct {
 
 func runOptCases(t *testing.T, books []Book, cases []optCase) {
 	t.Helper()
+	// One Index per rule set, shared by every case: a prepared candidate list
+	// answers each query exactly as the one-shot call does, whatever an earlier
+	// query left prepared.
+	ix, ixOpt := NewIndex(books), NewIndexWith(books, ImportOptions())
 	for _, tc := range cases {
 		got, _ := Best(books, tc.q)
 		if got != tc.want {
 			t.Errorf("%s: default got %d, want %d", tc.name, got, tc.want)
 		}
+		if ixGot, _ := ix.Best(tc.q); ixGot != got {
+			t.Errorf("%s: default Index got %d, Best %d", tc.name, ixGot, got)
+		}
 		got, score, ok := BestWith(books, tc.q, ImportOptions())
+		if ixGot, ixScore, ixOK := ixOpt.BestScore(tc.q); ixGot != got || ixScore != score || ixOK != ok {
+			t.Errorf("%s: options Index got %d, %v, %v; BestWith %d, %v, %v", tc.name, ixGot, ixScore, ixOK, got, score, ok)
+		}
 		if !ok {
 			if score != 0 {
 				t.Errorf("%s: no match scored %v", tc.name, score)

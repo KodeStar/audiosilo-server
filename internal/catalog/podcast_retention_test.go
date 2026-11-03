@@ -319,7 +319,10 @@ func TestPodcastRetentionPrivateHouseholdAccess(t *testing.T) {
 	}
 	owner := seedNamedUser(t, c, "owner")
 	member := seedNamedUser(t, c, "member")
-	if _, err := c.db.ExecContext(ctx, `UPDATE users SET role='admin' WHERE id=?1; UPDATE users SET managed_by=?1,member_kind='kid',member_access='all' WHERE id=?2`, owner, member); err != nil {
+	if _, err := c.db.ExecContext(ctx, `UPDATE users SET role='admin' WHERE id=?`, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE users SET managed_by=?1,member_kind='kid',member_access='all' WHERE id=?2`, owner, member); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.FollowPodcast(ctx, member, lib.ID, "Fixture Show", f.ShowID); err != nil {

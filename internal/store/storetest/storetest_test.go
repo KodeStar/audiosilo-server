@@ -47,11 +47,27 @@ func TestOpenIsMigratedAndIndependent(t *testing.T) {
 }
 
 // Reads go to the read-only reader pool, as for any file-backed database: a
-// write sent through a read method fails.
+// write sent through a read method fails, and writes nothing. (The failure
+// comes from the query or from its rows, by library: modernc steps a query
+// before returning it, mattn when its rows are read.)
 func TestOpenReaderIsReadOnly(t *testing.T) {
+	ctx := context.Background()
 	db := Open(t)
-	_, err := db.QueryContext(context.Background(), insertUser+" RETURNING id")
+	err := func() error {
+		rows, err := db.QueryContext(ctx, insertUser+" RETURNING id")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+		}
+		return rows.Err()
+	}()
 	if err == nil {
 		t.Fatal("a write through the reader pool succeeded")
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("users after a write through the reader pool: %d, %v", n, err)
 	}
 }

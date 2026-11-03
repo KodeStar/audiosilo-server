@@ -25,25 +25,56 @@ COPY admin-ui/ ./
 RUN npm run build
 
 # --- build the Go server -------------------------------------------------------
-# Pinned to the build host's platform: the binary is CGO-free, so multi-arch legs
-# cross-compile natively via GOOS/GOARCH instead of running the whole Go toolchain
-# under QEMU emulation (which made the arm64 image build many times slower).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+# Pinned to the build host's platform: multi-arch legs cross-compile via
+# GOOS/GOARCH instead of running the whole Go toolchain under QEMU emulation
+# (which made the arm64 image build many times slower).
+#
+# SQLITE_ENGINE=native (the default) builds the native C SQLite in (the store's
+# sqlite_native engine, see SQLite in CONVENTIONS.md), linked statically against
+# glibc: one static binary, so the Alpine image below runs it as it is, and with
+# glibc's allocator, not musl's (musl's cost a first scan 27% against the
+# pure-Go engine; glibc's runs it 6% faster). The Debian-based Go image has gcc
+# and glibc's static libraries; a cross leg adds the target's cross compiler.
+# netgo and osusergo keep the static binary off glibc's NSS, and
+# sqlite_omit_load_extension off dlopen. SQLITE_ENGINE=modernc builds the
+# pure-Go engine without cgo, as before.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin
 # console and the web player). image.yml passes the release tag on a v* tag and
 # dev-<short sha> otherwise (:edge, dispatch); defaults to dev.
 ARG VERSION=dev
+ARG SQLITE_ENGINE=native
 # Target platform for the cross-compile, provided by BuildKit per leg (empty on
 # a legacy single-platform build, where the host defaults apply).
-ARG TARGETOS TARGETARCH
+ARG TARGETOS TARGETARCH BUILDARCH
+RUN if [ "$SQLITE_ENGINE" = native ] && [ -n "$TARGETARCH" ] && [ "$TARGETARCH" != "$BUILDARCH" ]; then \
+      case "$TARGETARCH" in \
+        arm64) pkgs="gcc-aarch64-linux-gnu libc6-dev-arm64-cross" ;; \
+        amd64) pkgs="gcc-x86-64-linux-gnu libc6-dev-amd64-cross" ;; \
+        *) echo "no cross compiler for $TARGETARCH" >&2; exit 1 ;; \
+      esac; \
+      apt-get update && apt-get install -y --no-install-recommends $pkgs && rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=admin /src/internal/web/adminui/dist ./internal/web/adminui/dist
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-    -ldflags="-s -w -X github.com/kodestar/audiosilo-server/internal/api.Version=${VERSION}" \
-    -o /out/audiosilo ./cmd/audiosilo
+RUN set -e; \
+    ldflags="-s -w -X github.com/kodestar/audiosilo-server/internal/api.Version=${VERSION}"; \
+    if [ "$SQLITE_ENGINE" = native ]; then \
+      cc=gcc; \
+      if [ -n "$TARGETARCH" ] && [ "$TARGETARCH" != "$BUILDARCH" ]; then \
+        case "$TARGETARCH" in arm64) cc=aarch64-linux-gnu-gcc ;; amd64) cc=x86_64-linux-gnu-gcc ;; esac; \
+      fi; \
+      CGO_ENABLED=1 CC=$cc GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+        -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook sqlite_omit_load_extension netgo osusergo" \
+        -ldflags="$ldflags -linkmode external -extldflags -static" \
+        -o /out/audiosilo ./cmd/audiosilo; \
+    else \
+      CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+        -ldflags="$ldflags" -o /out/audiosilo ./cmd/audiosilo; \
+    fi
 
 # --- pin the prebuilt web player ----------------------------------------------
 FROM ${WEB_IMAGE} AS web

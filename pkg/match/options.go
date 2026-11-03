@@ -54,10 +54,11 @@ const scoreExactTitle = 3.0
 var unabridgedGroup = regexp.MustCompile(`(?i)[\(\[]\s*unabridged\s*[\)\]]`)
 
 // exactTitleKey is a title as Options.ExactTitle compares it: bracketed groups
-// and the edition words (fluffWords) dropped, then Fold, so case, spacing and
-// punctuation never matter and two titles in another script stay apart.
+// and the edition words (fluffWords, through replaceFluff) dropped, then Fold,
+// so case, spacing and punctuation never matter and two titles in another
+// script stay apart.
 func exactTitleKey(title string) string {
-	return Fold(fluffWords.ReplaceAllString(stripParenGroups(title), " "))
+	return Fold(replaceFluff(stripParenGroups(title)))
 }
 
 // afterSeriesBook is what Options.SeriesMarker reads right after a series name:
@@ -98,9 +99,10 @@ func seriesBookMarker(title, series string) (float64, bool) {
 	return 0, false
 }
 
-// candSeriesOnly reports whether a candidate's title is just its own series
-// name (and number), which Options.ExactTitle never matches on: every volume of
-// the series shares it.
-func candSeriesOnly(b Book, o Options) bool {
-	return strings.TrimSpace(b.Series) != "" && bareTitle(b.Title, b.Series, o)
+// seriesOnly reports whether candidate i's title is just its own series name
+// (and number), which every volume of the series shares: Options.ExactTitle
+// never matches on it, and under Options.WordlessFallback only its number may
+// agree.
+func (x *Index) seriesOnly(i int) bool {
+	return x.series(i).seriesTrim != "" && x.own(i).bare
 }

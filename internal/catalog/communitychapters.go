@@ -302,21 +302,23 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 	r := chapterRow{book: Book{ID: bookID, LibraryID: libID, RelPath: path}}
 	// Whether a chapters.json is stored, from the record header alone
 	// (octet_length, as BookAttachmentParts: the column is the row's last, past
-	// the characters and recaps, so reading it would page through them).
+	// the characters and recaps, so reading it would page through them). These
+	// joins take their parameters as +?, which keeps SQLite from re-parsing them
+	// on every run (see SQLite in CONVENTIONS.md).
 	if err := tx.QueryRowContext(ctx,
 		`SELECT b.is_folder, b.size, b.duration, b.chapters_source, b.chapters_fit, b.scanned_chapters,
 		        COALESCE(octet_length(a.chapters), 0) > 0
-		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.id = ?`, bookID).
+		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.id = +?`, bookID).
 		Scan(&r.book.IsFolder, &r.book.Size, &r.book.Duration, &r.current, &r.fit, &r.snapshot, &r.generated); err != nil {
 		return err
 	}
 	var choice, status, fittedJSON string
 	err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE((SELECT source FROM chapter_choices WHERE library_id = ?1 AND path = ?2), ''),
+		`SELECT COALESCE((SELECT source FROM chapter_choices WHERE library_id = +?1 AND path = +?2), ''),
 		        COALESCE(cc.status, ''), COALESCE(cc.chapters, ''),
 		        COALESCE(cc.basis = `+chapterBasisExpr+`, 0)
-		   FROM books b LEFT JOIN community_chapters cc ON cc.library_id = ?1 AND cc.path = ?2
-		  WHERE b.id = ?3`, libID, path, bookID).
+		   FROM books b LEFT JOIN community_chapters cc ON cc.library_id = +?1 AND cc.path = +?2
+		  WHERE b.id = +?3`, libID, path, bookID).
 		Scan(&choice, &status, &fittedJSON, &r.checkCurrent)
 	if err != nil {
 		return err

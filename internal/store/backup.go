@@ -30,7 +30,7 @@ func (db *DB) VacuumInto(ctx context.Context, path string) error {
 // as VacuumInto does, without migrating or otherwise opening it as the server's
 // database (a restore copies the database it is about to replace this way).
 func VacuumFile(ctx context.Context, path, to string) error {
-	c, err := sql.Open("sqlite", dsnPragmas(path))
+	c, err := sql.Open(driverName(), dsnPragmas(path)) // the server's engine: see engine.go
 	if err != nil {
 		return fmt.Errorf("vacuum into: %w", err)
 	}
@@ -151,7 +151,7 @@ func PendingMigrations(ctx context.Context, path string) ([]string, error) {
 // opens without creating; immutable is not set, so a -wal beside the file (there
 // should be none for a VACUUM INTO copy) is still read correctly.
 func openReadOnly(path string) (*sql.DB, error) {
-	conn, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	conn, err := sql.Open(driverName(), "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
 	if err != nil {
 		return nil, err
 	}

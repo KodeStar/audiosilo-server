@@ -241,7 +241,10 @@ func TestPodcastFetchStatusGoldenAndSanitization(t *testing.T) {
 	if st := get(); st.State != "unavailable" || st.RequestID == nil || st.Error.Code != "module_off" {
 		t.Fatalf("held %+v", st)
 	}
-	if _, err = q.db.ExecContext(ctx, `DELETE FROM bridge_jobs; INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,failures,error_code,error) VALUES(?,'Show/episode.mp3','0123456789abcdef',1,'too_large','CANARY')`, q.lib); err != nil {
+	if _, err = q.db.ExecContext(ctx, `DELETE FROM bridge_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.db.ExecContext(ctx, `INSERT INTO podcast_fetch_state(library_id,rel_path,show_id,failures,error_code,error) VALUES(?,'Show/episode.mp3','0123456789abcdef',1,'too_large','CANARY')`, q.lib); err != nil {
 		t.Fatal(err)
 	}
 	q.ModuleOn = nil

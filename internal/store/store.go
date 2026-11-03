@@ -1,7 +1,8 @@
 // Package store opens the SQLite database and applies schema migrations.
 //
 // AudioSilo uses modernc.org/sqlite (pure Go, no CGO) so binaries cross-compile
-// without a C toolchain. The database is a rebuildable index/cache; the audio
+// without a C toolchain; a build with -tags sqlite_native uses the native C
+// library instead (engine.go). The database is a rebuildable index/cache; the audio
 // files on disk remain the source of truth for content.
 package store
 
@@ -10,7 +11,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -22,9 +22,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 //go:embed migrations/*.sql
@@ -36,18 +33,10 @@ var migrationName = regexp.MustCompile(`^\d{4}_.*\.sql$`)
 
 // IsUniqueViolation reports whether err is a SQLite UNIQUE (or PRIMARY KEY)
 // constraint violation, so the transport layer can map a duplicate-name insert
-// to a 409 Conflict instead of an opaque 500. Connections enable extended result
-// codes (see the modernc driver), so the error carries the specific
+// to a 409 Conflict instead of an opaque 500. The error carries the extended
 // SQLITE_CONSTRAINT_UNIQUE code - distinct from e.g. a FOREIGN KEY violation,
-// which stays a generic internal error.
-func IsUniqueViolation(err error) bool {
-	var serr *sqlite.Error
-	if errors.As(err, &serr) {
-		return serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE ||
-			serr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
-	}
-	return false
-}
+// which stays a generic internal error. The engine reads it (engine.go).
+func IsUniqueViolation(err error) bool { return activeEngine().isUnique(err) }
 
 // DB is the AudioSilo database handle. It owns two connection pools over the same
 // SQLite file: a single-connection WRITER (SQLite serializes writers; one
@@ -157,7 +146,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 		o(&cfg)
 	}
 
-	writer, err := sql.Open("sqlite", dsnPragmas(dsn))
+	writer, err := sql.Open(driverName(), dsnPragmas(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -166,6 +155,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	logEngine(ctx, writer, cfg.log)
 
 	// reader == writer until (and unless) a separate read pool is opened, so
 	// migrate() and any read during bootstrap go through the writer connection.
@@ -185,7 +175,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 	if !isMemoryDSN(dsn) {
 		// Asked once the writer has created the file, so statfs sees it.
 		mmap := readerMmap(cfg.mmap, func() bool { return cfg.mappable(dsnFile(dsn)) })
-		reader, err := sql.Open("sqlite", dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
+		reader, err := sql.Open(driverName(), dsnPragmas(dsn, "query_only(ON)", fmt.Sprintf("mmap_size(%d)", mmap)))
 		if err != nil {
 			writer.Close()
 			return nil, fmt.Errorf("open sqlite reader: %w", err)

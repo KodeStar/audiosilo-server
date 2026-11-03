@@ -662,6 +662,48 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
+  The library is the build's **engine** (`store/engine*.go`): modernc's, pure Go, by default;
+  with `CGO_ENABLED=1 -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook"` the native C
+  SQLite (mattn/go-sqlite3's amalgamation, compiled in), where `AUDIOSILO_SQLITE=modernc` picks
+  modernc's for the process (A/B on one binary). A native build missing cgo or either mattn tag
+  doesn't compile (`engine_native_guard.go`: without `sqlite_preupdate_hook` mattn's pre-update
+  hook is a silent no-op, and the user-state watch with it). Every open of the database goes
+  through the engine's driver (`driverName()`: Open's pools, `VacuumFile`, `openReadOnly`), never
+  `sql.Open("sqlite", ...)`: two SQLite copies on one file in one process don't see each other's
+  POSIX locks. What else is a library's goes through the engine: the pre-update and commit hooks,
+  SQL functions (`store.RegisterFunction`, from an `init`), `IsUniqueViolation`. The start logs
+  which (`database: sqlite engine=... version=...`). SQL holding several statements takes no
+  parameters: modernc gives each statement the whole argument list, mattn hands them out statement
+  by statement (`not enough args to execute query`); run one statement an Exec. A statement is
+  handed only the numbered arguments it has (`argsFor`: one list may serve several statements, as
+  in `carryListeningState`), and a connection that runs DDL drops its cached statements (mattn
+  reads a query's columns before SQLite re-prepares it for a new schema). On the native engine a
+  cached query is read a row a C call (`engine_native_rows.go`), its values as modernc's (int64,
+  float64, string, []byte, nil; no time or bool conversion by declared type): mattn's own rows
+  cross into C two or three times a column. As modernc's, its first step runs in the query (its
+  columns are then the statement's as SQLite re-prepared it after another connection's DDL, and a
+  failure is the query's error), and its context's interrupt never outlives its rows (a late
+  `sqlite3_interrupt` would end the connection's next statement, another request's). It reads mattn's unexported `SQLiteStmt.s`;
+  `TestNativeFastRows` fails if a mattn upgrade drops it (queries would quietly fall back).
+  Both pools open the engine's library behind a per-connection prepared-statement cache
+  (`store/stmtcache.go`): a statement's SQL text is its key, so SQL
+  built per call (a value formatted into the text, an `IN` list sized to its arguments) misses
+  and churns the cache (256 statements per connection, least recently used out); bind values as
+  parameters instead. SQL holding several statements, and a statement whose rows are still open,
+  take the library's own path, and on mattn so does an Exec of anything but plain DML (its Exec
+  steps a statement once: one that returns rows would be left mid-run); after a cached Exec the
+  native engine resets the statement and clears its bindings, as modernc does, so no copy of the
+  last arguments (a cover's bytes) stays held. SQL functions take their arity on both engines. A
+  `conn.Raw` gets the cache's connection: the engine's hooks unwrap it; anything else of the
+  library's connection is `Unwrap()`'s. A hot join (one run per book or per row: the
+  scan's, `catalog/communitychapters.go`, `catalog/overrides.go`) takes
+  its parameters as `+?` (`+?1`): SQLite 3.54's estimate of a join loop's rows
+  (`whereLoopOutputAdjust`) reads a bare `?`'s bound value, which marks the statement to be
+  re-parsed whenever a new value is bound, so every run (the scan's per-book joins: 40-80 µs a
+  run, 5 µs as `+?`). A unary plus on the value keeps the plan (an index still serves `col = +?`)
+  and the comparison (a parameter has no affinity or collation either way); it only hides the
+  value from the planner, which a statement whose plan must not follow its values wants anyway.
+  A single-table statement and a correlated subquery are not affected.
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
   `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
