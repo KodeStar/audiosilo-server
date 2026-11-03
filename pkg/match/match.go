@@ -144,6 +144,10 @@ type prepBook struct {
 
 	exactDone bool
 	exactKey  string // exactTitleKey(b.Title), for Options.ExactTitle
+
+	markerDone bool
+	marker     float64 // seriesBookMarker(b.Title, b.Series), for Options.SeriesMarker
+	markerOK   bool
 }
 
 // NewIndex prepares books for Best. It keeps the slice, not a copy.
@@ -225,6 +229,15 @@ func (x *Index) exactKey(i int) string {
 		p.exactDone = true
 	}
 	return p.exactKey
+}
+
+func (x *Index) marker(i int) (float64, bool) {
+	p := &x.prep[i]
+	if !p.markerDone {
+		p.marker, p.markerOK = seriesBookMarker(x.books[i].Title, x.books[i].Series)
+		p.markerDone = true
+	}
+	return p.marker, p.markerOK
 }
 
 // Best returns the index of the best-matching book and whether it cleared the
@@ -424,7 +437,11 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 				// A wordy title with no column may still name its place right after
 				// the series ("Iron Will: Dragon Heart Series, Book 2"): confirm-grade
 				// like the column, never a veto.
-				bConf, bConfOK = seriesBookMarker(b.Title, bSeriesRef)
+				if ownRef {
+					bConf, bConfOK = x.marker(i)
+				} else {
+					bConf, bConfOK = seriesBookMarker(b.Title, bSeriesRef)
+				}
 			}
 			// Only two bare sides stating their OWN explicit numbers may disagree
 			// hard enough to mean "a sibling, not this book" (see bookSeqRef for why
