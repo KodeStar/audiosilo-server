@@ -677,7 +677,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by statement (`not enough args to execute query`); run one statement an Exec. A statement is
   handed only the numbered arguments it has (`argsFor`: one list may serve several statements, as
   in `carryListeningState`), and a connection that runs DDL drops its cached statements (mattn
-  reads a query's columns before SQLite re-prepares it for a new schema).
+  reads a query's columns before SQLite re-prepares it for a new schema). On the native engine a
+  cached query is read a row a C call (`engine_native_rows.go`), its values as modernc's (int64,
+  float64, string, []byte, nil; no time or bool conversion by declared type): mattn's own rows
+  cross into C two or three times a column. It reads mattn's unexported `SQLiteStmt.s`;
+  `TestNativeFastRows` fails if a mattn upgrade drops it (queries would quietly fall back).
   Both pools open the engine's library behind a per-connection prepared-statement cache
   (`store/stmtcache.go`): a statement's SQL text is its key, so SQL
   built per call (a value formatted into the text, an `IN` list sized to its arguments) misses

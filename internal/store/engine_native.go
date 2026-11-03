@@ -45,7 +45,7 @@ func init() {
 		}
 		return nil
 	}}
-	sql.Register(nativeDriver, cacheDriver{d: pragmaDriver{d}, execCacheable: plainDML})
+	sql.Register(nativeDriver, cacheDriver{d: pragmaDriver{d}, execCacheable: plainDML, query: nativeQuery})
 }
 
 func chooseEngine() *engine {
@@ -62,6 +62,10 @@ var nativeEngine = &engine{
 		var serr mattn.Error
 		if errors.As(err, &serr) {
 			return serr.ExtendedCode == mattn.ErrConstraintUnique || serr.ExtendedCode == mattn.ErrConstraintPrimaryKey
+		}
+		var nerr *nativeError // the fast query path's (engine_native_rows.go)
+		if errors.As(err, &nerr) {
+			return nerr.extended == int(mattn.ErrConstraintUnique) || nerr.extended == int(mattn.ErrConstraintPrimaryKey)
 		}
 		return false
 	},

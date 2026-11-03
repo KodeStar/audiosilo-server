@@ -46,6 +46,9 @@ var maxCachedStmts = 256
 type cacheDriver struct {
 	d             driver.Driver
 	execCacheable func(q string) bool
+	// query, when set, runs a cached statement's query instead of the library's
+	// own rows (the native engine's one-C-call-a-row path); ok false: it can't.
+	query func(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (r driver.Rows, ok bool, err error)
 }
 
 func (c cacheDriver) Open(name string) (driver.Conn, error) {
@@ -53,7 +56,7 @@ func (c cacheDriver) Open(name string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &cacheConn{Conn: cn, execCacheable: c.execCacheable, stmts: map[string]*list.Element{}, lru: list.New()}, nil
+	return &cacheConn{Conn: cn, execCacheable: c.execCacheable, query: c.query, stmts: map[string]*list.Element{}, lru: list.New()}, nil
 }
 
 // cachedStmt is one prepared statement and whether its rows are open.
@@ -70,6 +73,7 @@ type cachedStmt struct {
 type cacheConn struct {
 	driver.Conn
 	execCacheable func(q string) bool
+	query         func(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (driver.Rows, bool, error)
 	stmts         map[string]*list.Element // query -> element of lru, Value *cachedStmt
 	lru           *list.List               // front: most recently used
 	// prepared and hits count the cache's outcomes (tests).
@@ -241,6 +245,16 @@ func (c *cacheConn) QueryContext(ctx context.Context, q string, args []driver.Na
 	}
 	if cs == nil {
 		return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
+	}
+	if c.query != nil {
+		r, ok, err := c.query(ctx, cs.s, argsFor(cs.s, args))
+		if ok {
+			if err != nil {
+				return nil, err
+			}
+			cs.busy = true
+			return &cacheRows{rows: r, cs: cs}, nil
+		}
 	}
 	r, err := cs.s.(driver.StmtQueryContext).QueryContext(ctx, argsFor(cs.s, args))
 	if err != nil {
