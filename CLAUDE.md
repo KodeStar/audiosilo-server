@@ -69,10 +69,10 @@ in-process, can open a browser).
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push in four parallel jobs (Go tests, the same on the native SQLite engine (`test-native`: vet, race tests and lint with the native tags), lint with govet, admin console),
+gates all of them on every PR/push in four parallel jobs (Go tests with coverage, no `-race`; the same suite on the native SQLite engine with `-race` (`test-native`: race tests and lint with the native tags; race checks run only there, as `-race` on the pure-Go engine instruments the transpiled SQLite and is several times slower); lint with govet; admin console),
 the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
-without it they `t.Skip` (CI installs it). The `probe-drift` workflow compares the in-process probe
+without it they `t.Skip` (CI puts a pinned static FFmpeg build of the image's release on PATH in both Go test jobs: `.github/actions/setup-ffmpeg`). The `probe-drift` workflow compares the in-process probe
 with the Docker image's ffprobe (see In-process probe in CONVENTIONS.md). The linter is adopted at a **green
 baseline** - its suppressions in `.golangci.yml` are documented and intentional;
 fix new findings rather than widening the excludes.
