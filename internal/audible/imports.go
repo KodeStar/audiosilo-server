@@ -14,12 +14,14 @@ import (
 // queue the jobs and record each on its title.
 
 // Job priorities: one title asked for in the console comes first (a
-// preorder's request too, once a poll queues it), then "Back up everything",
-// then what a policy queued after a poll (with the scheduled polls).
+// preorder's request too, once a poll queues it), then what a policy queued
+// after a poll (with the scheduled polls and the podcast scheduler's fetches),
+// then "Back up everything", so a bulk backup in the Bridge's one download
+// slot never holds back new episodes.
 const (
 	priorityBackup    = 0
-	priorityBackupAll = -5
 	priorityPolicy    = schedulerPriority
+	priorityBackupAll = -20
 )
 
 // Queues is what queueing a backup needs: the titles and the job queue.

@@ -261,9 +261,20 @@ func TestAudibleBackupAll(t *testing.T) {
 		title("B000000003", "Here", "available", 0, cradleBook),
 		title("B000000004", "Soon", "preorder", 0, ""),
 		title("B000000005", "Skip", "available", 0, ""),
-		contestedTitle("B000000006", "Tied"))
+		contestedTitle("B000000006", "Tied"),
+		title("B000000007", "Refused", "available", 0, ""))
 	if resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000005", b.adminTok, `{"rejected":true}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"rejected":true`) {
 		t.Fatalf("Not this book: %d %s", resp.StatusCode, out)
+	}
+	// A done backup whose file joined another book (the fold refuses it,
+	// ErrImportNotOwn): still unmatched, never queued again by everything.
+	if resp, out := b.do(t, "POST", backupPath("B000000007"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("back up Refused: %d %s", resp.StatusCode, out)
+	}
+	b.finish(t, b.claim(t, bridge.KindAudibleImport), "done",
+		fmt.Sprintf(`{"library_id":%d,"path":%q,"files":[{"path":"x.m4b","size":10}],"bytes":10,"enriched":false}`, b.lib.ID, mistbornBook), "")
+	if x := b.audibleTitle(t, "B000000007"); x.Match != nil || x.Import == nil || x.Import.State != bridge.StateDone {
+		t.Fatalf("refused fold: match %+v import %+v", x.Match, x.Import)
 	}
 	resp, out := b.do(t, "GET", "/api/v1/admin/audible/accounts", b.adminTok, "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(out, `"backup_estimate":{"count":2,"bytes":576000000}`) ||
@@ -281,8 +292,22 @@ func TestAudibleBackupAll(t *testing.T) {
 		t.Fatalf("backup-all again: %d %q", resp.StatusCode, out)
 	}
 	var n int
-	if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindAudibleImport).Scan(&n); err != nil || n != 2 {
+	if err := b.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM bridge_jobs WHERE kind = ?`, bridge.KindAudibleImport).Scan(&n); err != nil || n != 3 {
 		t.Fatalf("import jobs = %d, %v", n, err)
+	}
+	// The console's Back up first, then everything below the podcast
+	// scheduler's fetches (-10).
+	for asin, want := range map[string]int{"B000000001": 0, "B000000002": -20} {
+		x := b.audibleTitle(t, asin)
+		if x.ImportJobID == nil {
+			t.Fatalf("%s not backed up", asin)
+		}
+		if j, err := b.api.bridge.Job(context.Background(), *x.ImportJobID); err != nil || j.Priority != want {
+			t.Fatalf("%s's job = %+v, %v, want priority %d", asin, j, err, want)
+		}
+	}
+	if resp, out := b.do(t, "POST", backupPath("B000000007"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("back up the refused title on its own: %d %s", resp.StatusCode, out)
 	}
 	if x := b.audibleTitle(t, "B000000005"); x.ImportJobID != nil {
 		t.Fatal("Not this book was backed up")

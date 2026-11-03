@@ -2653,8 +2653,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   by the Bridge; `dest_path` is the title's library-relative file path, or a folder for it when the last
   segment has no audio extension (a template's too), or `''`, `CheckAudibleDestPath`; library and template
   are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities: a console Back up 0
-  (a preorder's pending request too, when a poll queues it, with no requester), Back up everything -5, a
-  policy -10 with no requester. `SetAudibleImport` records the job on the title
+  (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
+  requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
+  in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
   (`import_job_id`); the open one comes back on a repeat. **On this server** is a match not marked Not this
   book (rejected): Back up, the policy's pending drop, the titles' `matched` filter and the accounts'
   `matched` count read it so. **Done** (`FoldAudibleImport` from `OnEnded`): the
@@ -2686,8 +2687,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
   `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
-  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, a
-  failed one again; a console Back up of one contested title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
+  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
+  latest import not `done` (a refused fold, `ErrImportNotOwn`, isn't queued again), a failed or cancelled
+  one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`

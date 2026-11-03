@@ -78,16 +78,21 @@ type AudibleEstimate struct {
 // openImportSQL is a title (aliased t) whose backup job is open.
 const openImportSQL = `EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id AND j.state IN ` + bridge.OpenStatesSQL + `)`
 
+// doneImportSQL is a title (aliased t) whose latest backup job is done: its
+// result was folded, or refused (ErrImportNotOwn leaves it unmatched), so
+// "Back up everything" doesn't queue it again (a console Back up still does).
+const doneImportSQL = `EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id AND j.state = '` + bridge.StateDone + `')`
+
 // contestedSQL is a title (aliased t) the Bridge left unmatched because
 // another title claimed the same book (AudibleReasonContested).
 const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
 
 // backupAllSQL is a title (aliased t) "Back up everything" queues: available,
 // not on this server, not marked "Not this book" or ignored, not contested
-// (on this server under another title), and no backup open (a failed one is
-// tried again).
+// (on this server under another title), and no backup open or done (a failed
+// or cancelled one is tried again).
 const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
-	AND NOT ` + contestedSQL + ` AND NOT ` + openImportSQL
+	AND NOT ` + contestedSQL + ` AND NOT ` + openImportSQL + ` AND NOT ` + doneImportSQL
 
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked
 // hourly: a preorder released by the UTC date ?1 but not before ?2 (?1 less
