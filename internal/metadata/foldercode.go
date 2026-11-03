@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // folderCode is a leading series code on a book's folder or file name: one to
@@ -27,28 +28,29 @@ func FolderCodePosition(name, series string) (float64, bool) {
 		return 0, false
 	}
 	v, err := strconv.ParseFloat(m[2], 64)
-	if err != nil || v <= 0 || v > MaxSeriesPosition {
+	if err != nil || v == 0 { // the pattern caps it at three digits
 		return 0, false
 	}
 	return v, true
 }
 
+// apostrophes are dropped before a series is split into words, so one joins
+// a word ("Emperor's Edge" is two words).
+var apostrophes = strings.NewReplacer("'", "", "’", "")
+
 // initialsOf reports whether code's letters are, case aside, the initials of
-// series' words, all or some of them in order. An apostrophe joins a word
-// ("Emperor's Edge" is two words).
+// series' words, all or some of them in order.
 func initialsOf(code, series string) bool {
-	clean := strings.NewReplacer("'", "", "’", "").Replace(series)
-	words := strings.FieldsFunc(clean, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	words := strings.FieldsFunc(apostrophes.Replace(series), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	want := []rune(strings.ToLower(code))
 	i := 0
 	for _, w := range words {
 		if i == len(want) {
 			break
 		}
-		first := []rune(strings.ToLower(w))[0]
-		if first == want[i] {
+		if first, _ := utf8.DecodeRuneInString(w); unicode.ToLower(first) == want[i] {
 			i++
 		}
 	}
-	return len(want) > 0 && i == len(want)
+	return i == len(want)
 }

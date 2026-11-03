@@ -129,12 +129,6 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 	}
 	qSeq, qHasSeq := querySeq(q)
 	qTitleLower := strings.ToLower(q.Title)
-	// The exact-title rule's key, and whether the query is just its series name
-	// (then a same-titled candidate is a sibling volume, not this book).
-	qExact := ""
-	if o.ExactTitle {
-		qExact = exactTitleKey(q.Title)
-	}
 	numsUnder := func(seriesRef string) qNums {
 		n := qNums{bare: bareTitle(q.Title, seriesRef, o)}
 		n.veto, n.vetoOK = bareSeq(q.Title, seriesRef)
@@ -153,6 +147,12 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 		return n
 	}
 	ownNums := numsUnder(q.Series)
+	// Options.ExactTitle's key, left empty when the query's title is just its
+	// series name (and number): a same-titled candidate is then a sibling volume.
+	qExact := ""
+	if o.ExactTitle && (qSeries == "" || !ownNums.bare) {
+		qExact = exactTitleKey(q.Title)
+	}
 	// Candidate lists repeat a series across its volumes, and this derivation
 	// depends only on (q.Title, b.Series), so it is memoized per Best call.
 	linkMemo := map[string]candLink{}
@@ -217,8 +217,7 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 		}
 		score := 0.0
 		switch {
-		case qExact != "" && exactTitleKey(b.Title) == qExact &&
-			(qSeries == "" || !ownNums.bare) && (bSeriesTrim == "" || !bareTitle(b.Title, b.Series, o)):
+		case qExact != "" && exactTitleKey(b.Title) == qExact && !candSeriesOnly(b, o):
 			// Options.ExactTitle: the same title by the same person is the book, even
 			// when the two sides file it under differently named series - unless a
 			// side is just its series name (and number), which every volume shares.
@@ -326,7 +325,7 @@ func CleanTitle(title, series string) string { return cleanTitle(title, series, 
 // is a volume's own, so it stays.
 func cleanTitle(title, series string, o Options) string {
 	t := residualTitle(title, series, o)
-	if o.WordlessFallback && len(tokenize(t)) == 0 && !strings.ContainsAny(t, "0123456789") {
+	if o.WordlessFallback && !strings.ContainsAny(t, "0123456789") && len(tokenize(t)) == 0 {
 		t = ""
 	}
 	if t == "" {
@@ -468,7 +467,13 @@ func dropSeriesSuffix(s string) string {
 func containsPhraseLower(ls, sub string) bool {
 	// Offsets index the lowered copies only, and lowering preserves whether a rune
 	// is alphanumeric, so the boundary test needs no mapping back onto the original.
-	lsub := strings.ToLower(sub)
+	return boundedMatch(ls, strings.ToLower(sub), func(int) bool { return true })
+}
+
+// boundedMatch reports whether fn accepts the end offset of some occurrence of
+// the lowercased lsub in the lowercased ls that sits on alphanumeric boundaries,
+// trying them left to right. An empty lsub never matches.
+func boundedMatch(ls, lsub string, fn func(end int) bool) bool {
 	if lsub == "" {
 		return false
 	}
@@ -478,7 +483,7 @@ func containsPhraseLower(ls, sub string) bool {
 			return false
 		}
 		i += from
-		if boundedAt(ls, i, i+len(lsub)) {
+		if end := i + len(lsub); boundedAt(ls, i, end) && fn(end) {
 			return true
 		}
 		from = i + 1

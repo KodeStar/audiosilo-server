@@ -63,24 +63,26 @@ var afterSeriesBook = regexp.MustCompile(`^(?:\s+series)?\s*[,:\-–(]?\s*book\s
 // boundaries) in title, if any.
 func seriesBookMarker(title, series string) (float64, bool) {
 	lt := strings.ToLower(title)
+	var v float64
 	for _, form := range seriesForms(series) {
-		lf := strings.ToLower(form)
-		for from := 0; ; {
-			i := strings.Index(lt[from:], lf)
-			if i < 0 {
-				break
+		if boundedMatch(lt, strings.ToLower(form), func(end int) bool {
+			m := afterSeriesBook.FindStringSubmatch(lt[end:])
+			if m == nil {
+				return false
 			}
-			i += from
-			end := i + len(lf)
-			if boundedAt(lt, i, end) {
-				if m := afterSeriesBook.FindStringSubmatch(lt[end:]); m != nil {
-					if v, err := strconv.ParseFloat(m[1], 64); err == nil {
-						return v, true
-					}
-				}
-			}
-			from = i + 1
+			var err error
+			v, err = strconv.ParseFloat(m[1], 64)
+			return err == nil
+		}) {
+			return v, true
 		}
 	}
 	return 0, false
+}
+
+// candSeriesOnly reports whether a candidate's title is just its own series
+// name (and number), which Options.ExactTitle never matches on: every volume of
+// the series shares it.
+func candSeriesOnly(b Book, o Options) bool {
+	return strings.TrimSpace(b.Series) != "" && bareTitle(b.Title, b.Series, o)
 }

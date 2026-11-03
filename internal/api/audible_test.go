@@ -713,15 +713,21 @@ func TestBridgeBooksFolderCode(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 	ctx := context.Background()
-	books := map[string]catalog.Book{
-		"Kirill Klevanski/Dragon Heart/DH06 - Land of Magic":  {Series: "Dragon Heart"},
-		"Jim Butcher/Dresden Files/DF15.5 Brief Cases":        {Series: "Dresden Files"},
-		"HALO/HALO 07 - Evolutions (M4B)":                     {Series: "Halo"},
-		"Kirill Klevanski/Dragon Heart/DH07 - Land of Demons": {Series: "Dragon Heart", SeriesIndex: 9},
-		"Michael Sisa/Legend of the Arch Magus/LAM05-06":      {Series: "Legend of the Arch Magus"},
+	const dh06 = "Kirill Klevanski/Dragon Heart/DH06 - Land of Magic"
+	books := []struct {
+		path string
+		book catalog.Book
+		want string // the listed position
+	}{
+		{dh06, catalog.Book{Series: "Dragon Heart"}, "6"},
+		{"Jim Butcher/Dresden Files/DF15.5 Brief Cases", catalog.Book{Series: "Dresden Files"}, "15.5"},
+		{"HALO/HALO 07 - Evolutions (M4B)", catalog.Book{Series: "Halo"}, ""},                                              // a franchise's number
+		{"Kirill Klevanski/Dragon Heart/DH07 - Land of Demons", catalog.Book{Series: "Dragon Heart", SeriesIndex: 9}, "9"}, // a stored position wins
+		{"Michael Sisa/Legend of the Arch Magus/LAM05-06", catalog.Book{Series: "Legend of the Arch Magus"}, "5"},
 	}
-	for p, bk := range books {
-		bk.LibraryID, bk.RelPath, bk.Title, bk.AddedAt = b.lib.ID, p, "T", "2020-01-01"
+	for _, c := range books {
+		bk := c.book
+		bk.LibraryID, bk.RelPath, bk.Title, bk.AddedAt = b.lib.ID, c.path, "T", "2020-01-01"
 		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
 			t.Fatal(err)
 		}
@@ -740,18 +746,12 @@ func TestBridgeBooksFolderCode(t *testing.T) {
 			got[bk.Path] = bk.Series[0].Position
 		}
 	}
-	for p, want := range map[string]string{
-		"Kirill Klevanski/Dragon Heart/DH06 - Land of Magic":  "6",
-		"Jim Butcher/Dresden Files/DF15.5 Brief Cases":        "15.5",
-		"HALO/HALO 07 - Evolutions (M4B)":                     "",  // a franchise's number
-		"Kirill Klevanski/Dragon Heart/DH07 - Land of Demons": "9", // a stored position wins
-		"Michael Sisa/Legend of the Arch Magus/LAM05-06":      "5",
-	} {
-		if got[p] != want {
-			t.Errorf("%s: position %q, want %q", p, got[p], want)
+	for _, c := range books {
+		if got[c.path] != c.want {
+			t.Errorf("%s: position %q, want %q", c.path, got[c.path], c.want)
 		}
 	}
-	if bk, err := b.cat.GetBookByPath(ctx, b.lib.ID, "Kirill Klevanski/Dragon Heart/DH06 - Land of Magic"); err != nil || bk.SeriesIndex != 0 {
+	if bk, err := b.cat.GetBookByPath(ctx, b.lib.ID, dh06); err != nil || bk.SeriesIndex != 0 {
 		t.Fatalf("the book's own position changed: %+v, %v", bk, err)
 	}
 }

@@ -13,16 +13,12 @@ type optCase struct {
 func runOptCases(t *testing.T, books []Book, cases []optCase) {
 	t.Helper()
 	for _, tc := range cases {
-		got, ok := Best(books, tc.q)
-		if !ok {
-			got = -1
-		}
+		got, _ := Best(books, tc.q)
 		if got != tc.want {
 			t.Errorf("%s: default got %d, want %d", tc.name, got, tc.want)
 		}
 		got, score, ok := BestWith(books, tc.q, ImportOptions())
 		if !ok {
-			got = -1
 			if score != 0 {
 				t.Errorf("%s: no match scored %v", tc.name, score)
 			}
