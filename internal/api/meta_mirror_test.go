@@ -60,7 +60,11 @@ func newMirrorEnv(t *testing.T) *mirrorEnv {
 	go func() { defer close(done); m.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done; _ = m.Close() })
 	m.CheckNow()
-	mirrortest.Eventually(t, "the mirror's copy", 5*time.Second, m.Ready)
+	// The copy answers (Ready) before the check that fetched it has finished;
+	// a running check reports no next one, so wait for that too.
+	mirrortest.Eventually(t, "the mirror's first check", 5*time.Second, func() bool {
+		return m.Ready() && !m.Status().NextCheckAt.IsZero()
+	})
 	e.api.SetMetaMirror(m)
 	adminTok, memberTok := opsTokens(t, e)
 	return &mirrorEnv{testEnv: e, mirror: m, remoteHits: hits, adminTok: adminTok, memberTok: memberTok, remoteURL: remote.URL}
