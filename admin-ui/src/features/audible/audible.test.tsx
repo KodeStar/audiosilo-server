@@ -203,6 +203,44 @@ describe('settings > bridge > audible accounts', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/poll'))).toBe(true);
   });
 
+  it('removes an account from this server after saying the Bridge still holds its sign-in', async () => {
+    let removed = false;
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': () => ({
+          body: { accounts: removed ? [] : [account()] },
+        }),
+        'DELETE /admin/audible/accounts/acct0001': () => {
+          removed = true;
+          return { status: 204 };
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    const user = userEvent.setup();
+    await user.click(await within(card).findByRole('button', { name: 'Remove...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Chris (US)?' });
+    expect(
+      within(dialog).getByText('This removes the account and its titles from this server only.'),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        /To sign the device out of Amazon, remove it on the Bridge's Accounts page too/,
+      ),
+    ).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === 'DELETE' && c.path === '/admin/audible/accounts/acct0001'),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Chris (US) removed')).toBeInTheDocument();
+    expect(await within(card).findByText('No Audible accounts yet')).toBeInTheDocument();
+  });
+
   it('says a poll being cancelled is still stopping, and words an account gone since', async () => {
     let reply: MockReply = {
       status: 200,
@@ -278,9 +316,10 @@ describe('settings > audible', () => {
     );
     await user.selectOptions(screen.getByRole('combobox', { name: 'State' }), 'gone');
     await waitFor(() => expect(calls.some((c) => c.query.get('state') === 'gone')).toBe(true));
-    // One account: Check now polls it, no account picker.
+    // One account: Check now polls it and Remove is offered, no account picker.
     expect(screen.queryByRole('combobox', { name: 'Account' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Remove...' })).toBeInTheDocument();
   });
 
   it('says so when there are none, and when a filter matches nothing', async () => {

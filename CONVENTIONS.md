@@ -2614,6 +2614,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
   asin, `after` cursor), `POST /admin/audible/accounts/{account}/poll` (Check now: 201 a new `audible.poll`
   job, 200 the open one, raised to a person's priority (the kind `promotes`), audited as `bridge.job`).
+  `DELETE /admin/audible/accounts/{account}` is admin only (`requireAdmin`, the bridge token refused) and
+  **not** behind the toggle: it removes an account the Bridge can no longer remove (unpaired, paired again, a
+  DELETE that failed), which the scheduler would otherwise poll for good, so it must work after the module is
+  turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
+  known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
+  `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
   **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
   per account (`audiblePollSuffix`), only the newest ended one kept, gated by
   `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
@@ -2622,9 +2628,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   since), `last_queued_at` older than `poll_hours`) at priority -10 and marks them queued, so a failed poll
   waits its interval.
   **Console**: Settings > Bridge's Audible accounts card (`features/audible/audible-accounts-card.tsx`,
-  read-only, links to the Bridge's Accounts tab) while the module is on, and Settings > Audible
-  (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state and on-this-server filters,
-  search, Check now; the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  read-only mapping, links to the Bridge's Accounts tab, Check now and Remove per account) while the module
+  is on, and Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
+  and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
+  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
+  the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
   A scheduled poll reads "Scheduled by the server" in the job list (`serverScheduled`), and the Bridge's
   optional `audible` setup step links its Accounts tab.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`

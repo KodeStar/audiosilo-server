@@ -476,6 +476,14 @@ export const api = {
     return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
   },
 
+  /**
+   * Removes an account and its titles from this server (its open poll is
+   * cancelled); 204 known or not. Signs nothing out of Amazon: that is the
+   * Bridge's Accounts page. Not behind the module's toggle.
+   */
+  removeAudibleAccount: (account: string) =>
+    request<void>('DELETE', `/admin/audible/accounts/${encodeURIComponent(account)}`),
+
   // Listening import (Settings > Import). The Audiobookshelf token rides in the
   // request body only; the server never stores or returns it.
   /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / not_abs / abs_unauthorized). */

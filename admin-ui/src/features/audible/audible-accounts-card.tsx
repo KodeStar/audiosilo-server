@@ -14,14 +14,16 @@ import { bridgeTabLink } from '@/features/bridge/bridge-model';
 import { ACCOUNTS_TAB } from '@/features/bridge/setup-model';
 import { accountName } from './audible-model';
 import { CheckNowButton } from './check-now-button';
+import { RemoveAccountButton } from './remove-account-button';
 import { useAudibleAccounts, useCheckNow } from './use-audible';
 
 /**
  * Settings > Bridge's Audible accounts (Bridge Phase 4a), while the audible
  * module is on: each account the Bridge signed in to, the person and library it
- * is mapped to, when it was last checked and its titles counted, read-only.
- * Signing in and mapping happen on the Bridge's own Accounts tab (the server
- * never holds an Audible credential), so the card links there.
+ * is mapped to, when it was last checked and its titles counted. Signing in and
+ * mapping happen on the Bridge's own Accounts tab (the server never holds an
+ * Audible credential), so the card links there; Remove only takes an account
+ * the Bridge can no longer remove (unpaired, paired again) off this server.
  */
 export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
   const { t } = useTranslation();
@@ -154,7 +156,10 @@ function AccountRow({
           ]}
         />
       </div>
-      <CheckNowButton busy={busy} paused={a.paused} onCheck={onCheck} />
+      <div className="flex flex-wrap items-center gap-2">
+        <CheckNowButton busy={busy} paused={a.paused} onCheck={onCheck} />
+        <RemoveAccountButton account={a} />
+      </div>
     </li>
   );
 }

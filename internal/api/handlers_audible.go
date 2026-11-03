@@ -318,3 +318,30 @@ func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, status, job)
 }
+
+// handleAdminAudibleAccountDelete serves DELETE /admin/audible/accounts/
+// {account}: the console removes an account from this server (its titles go
+// with it, its open poll is cancelled), for one the Bridge can no longer
+// remove itself. It signs nothing out of Amazon: that is the Bridge's. 204,
+// known or not; audited when there was one.
+func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := audibleAccountID(w, r)
+	if !ok {
+		return
+	}
+	known := true
+	if _, err := a.cat.AudibleAccount(r.Context(), id); errors.Is(err, catalog.ErrUnknownAccount) {
+		known = false
+	} else if err != nil {
+		a.writeAudibleError(w, err, "delete audible account failed")
+		return
+	}
+	if err := a.cat.DeleteAudibleAccount(r.Context(), id); err != nil {
+		a.writeAudibleError(w, err, "delete audible account failed")
+		return
+	}
+	if known {
+		a.audit(r, "bridge.audible.remove", "", map[string]any{"account": id})
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

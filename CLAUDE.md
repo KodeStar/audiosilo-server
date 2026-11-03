@@ -364,7 +364,7 @@ keep this index in step (one line per topic).
   - Community chapters (incl. Generated chapters, Bridge Phase 1d)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
-  - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page)
+  - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `DELETE /admin/audible/accounts/{account}` outside the toggle)
   - Unavailable-root guard
   - First-run setup (Phase F1, `catalog/setup.go`, `library/preview.go`, `api/handlers_admin_setup.go`)
 

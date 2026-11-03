@@ -157,6 +157,87 @@ func TestAudibleAdminRoutes(t *testing.T) {
 	}
 }
 
+// Security-critical: the console removes an account the Bridge can no longer
+// remove (admin only, the bridge token refused, whether or not the module is
+// on): its titles go and its open poll is cancelled; an unknown one is 204.
+func TestAudibleAdminAccountDelete(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	b.beat(t, bridge.KindVerify, bridge.KindAudiblePoll)
+	for _, id := range []string{testAccount, "acct0002"} {
+		if code, out := b.putAccount(t, id, b.adminID, b.lib.ID); code != http.StatusOK {
+			t.Fatalf("put %s: %d %s", id, code, out)
+		}
+		if code, out := b.putTitles(t, id, "p1", true, title("B000000001", "The Final Empire", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+			t.Fatalf("titles %s: %d %s", id, code, out)
+		}
+	}
+	setAudible(t, b.testEnv, b.adminTok, true)
+	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/"+testAccount+"/poll", b.adminTok, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Check now: %d %s", resp.StatusCode, out)
+	}
+	// Turned off: removal still works (cleanup after the module is off).
+	setAudible(t, b.testEnv, b.adminTok, false)
+	path := "/api/v1/admin/audible/accounts/" + testAccount
+	alexID, alexTok := newUserWithSession(t, b.testEnv, "alex", false)
+	userKey, _ := b.auth.IssueToken(ctx, alexID, auth.KindAPI, "key", 0)
+	for name, tok := range map[string]string{"user session": alexTok, "user api key": userKey} {
+		if resp, _ := b.do(t, "DELETE", path, tok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("delete as %s: %d, want 403", name, resp.StatusCode)
+		}
+	}
+	for name, tok := range map[string]string{"none": "", "bridge": b.bridgeTok} {
+		if resp, _ := b.do(t, "DELETE", path, tok, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("delete with %s: %d, want 401", name, resp.StatusCode)
+		}
+	}
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := b.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(`SELECT COUNT(*) FROM audible_accounts WHERE account = ?`, testAccount); n != 1 {
+		t.Fatalf("a refused delete removed the account (%d)", n)
+	}
+	if resp, out := b.do(t, "DELETE", path, b.adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete as the admin: %d %s", resp.StatusCode, out)
+	}
+	if n := count(`SELECT COUNT(*) FROM audible_accounts WHERE account = ?`, testAccount); n != 0 {
+		t.Fatalf("account left: %d", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM audible_titles WHERE account = ?`, testAccount); n != 0 {
+		t.Fatalf("titles left: %d", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM bridge_jobs WHERE kind = ? AND state = 'cancelled'`, bridge.KindAudiblePoll); n != 1 {
+		t.Fatalf("cancelled polls = %d, want 1", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM bridge_jobs WHERE kind = ? AND state IN ('queued','running')`, bridge.KindAudiblePoll); n != 0 {
+		t.Fatalf("open polls left = %d", n)
+	}
+	// The other account is untouched.
+	if n := count(`SELECT COUNT(*) FROM audible_titles WHERE account = 'acct0002'`); n != 1 {
+		t.Fatalf("other account's titles = %d", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM audit_events WHERE action = 'bridge.audible.remove' AND details LIKE ?`, "%"+testAccount+"%"); n != 1 {
+		t.Fatalf("audit rows = %d, want 1", n)
+	}
+	// Again (now unknown), and the API key: 204, nothing audited.
+	if resp, out := b.do(t, "DELETE", path, b.adminKey, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete unknown: %d %s", resp.StatusCode, out)
+	}
+	if n := count(`SELECT COUNT(*) FROM audit_events WHERE action = 'bridge.audible.remove'`); n != 1 {
+		t.Fatalf("an unknown account was audited (%d rows)", n)
+	}
+	// An id the Bridge could never have made: 404 unknown_account, as the Bridge's route.
+	if resp, out := b.do(t, "DELETE", "/api/v1/admin/audible/accounts/NOPE", b.adminTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
+		t.Fatalf("bad id: %d %s", resp.StatusCode, out)
+	}
+}
+
 // GET /bridge/users lists the enabled adults and admins (a grown-up member
 // too), never a kid, a demo or a disabled account, and nothing but names.
 func TestBridgeUsers(t *testing.T) {

@@ -22,6 +22,7 @@ import {
   type MatchedFilter,
 } from './audible-model';
 import { CheckNowButton } from './check-now-button';
+import { RemoveAccountButton } from './remove-account-button';
 import {
   useAudibleAccounts,
   useAudibleTitles,
@@ -34,7 +35,8 @@ import {
  * only while it is on): every title the Bridge's Audible accounts own, which are
  * on this server and which aren't, filtered by account, state and whether it is
  * here, searched by title, author or ASIN. Read-only, but for Check now, which
- * asks the Bridge to look at an account's library again.
+ * asks the Bridge to look at an account's library again, and Remove, which
+ * takes an account the Bridge can no longer remove off this server.
  */
 export function AudibleTopic() {
   const { t } = useTranslation();
@@ -69,11 +71,14 @@ export function AudibleTopic() {
         description={t('audible.titles.description')}
         action={
           target ? (
-            <CheckNowButton
-              busy={busy === target.id}
-              paused={target.paused}
-              onCheck={() => void checkNow(target)}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <CheckNowButton
+                busy={busy === target.id}
+                paused={target.paused}
+                onCheck={() => void checkNow(target)}
+              />
+              <RemoveAccountButton account={target} />
+            </div>
           ) : undefined
         }
       />

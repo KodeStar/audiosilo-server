@@ -692,6 +692,10 @@ func (a *API) Handler() http.Handler {
 	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))
 	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
 	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
+	// Removing an account is not behind the toggle: an account the Bridge can no
+	// longer remove (unpaired, re-paired, a failed DELETE) must be cleanable
+	// after the module is turned off.
+	mux.Handle("DELETE /api/v1/admin/audible/accounts/{account}", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccountDelete)))
 
 	// Managed modules (modules.go): Settings > Modules' list, and each module's
 	// own routes, always mounted and answering 404 module_off while it is off.
