@@ -78,10 +78,12 @@ func place(id string, lib int64, path string, pos float64, ago time.Duration) st
 		`"started_at":%q,"ended_at":%q,"start":"jump"}`, id, lib, path, pos, pos, at, at)
 }
 
-// post sends a batch of the account's places as the Bridge.
+// post sends a batch of the account's places as the Bridge, sent_at to the
+// nanosecond (a whole second would shift its events by up to a second: now -
+// sent_at, reordering them against a span posted within that second).
 func (s *audibleSyncEnv) post(t *testing.T, events ...string) (int, string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"sent_at":%q,"events":[%s]}`, time.Now().UTC().Format(time.RFC3339), strings.Join(events, ","))
+	body := fmt.Sprintf(`{"sent_at":%q,"events":[%s]}`, time.Now().UTC().Format(time.RFC3339Nano), strings.Join(events, ","))
 	resp, out := s.do(t, "POST", audibleListeningURL, s.bridgeTok, body)
 	return resp.StatusCode, out
 }
@@ -101,7 +103,7 @@ func (s *audibleSyncEnv) postResults(t *testing.T, events ...string) []catalog.S
 // patListens posts a span as pat's phone (Sync v2).
 func (s *audibleSyncEnv) patListens(t *testing.T, id, path string, from, to float64, base string) catalog.SyncResult {
 	t.Helper()
-	body := fmt.Sprintf(`{"device_id":"pat-phone","sent_at":%q,"events":[%s]}`, time.Now().UTC().Format(time.RFC3339),
+	body := fmt.Sprintf(`{"device_id":"pat-phone","sent_at":%q,"events":[%s]}`, time.Now().UTC().Format(time.RFC3339Nano),
 		listenJSON(id, s.lib.ID, path, from, to, base))
 	resp, out := s.do(t, "POST", syncURL, s.patTok, body)
 	if resp.StatusCode != http.StatusOK {
@@ -626,5 +628,355 @@ func TestAudibleSyncScheduler(t *testing.T) {
 		if acc, _ := bridge.AudibleSyncOf(job); acc == "acct0002" {
 			t.Fatalf("a sync with nothing to sync: %+v", job)
 		}
+	}
+}
+
+// syncJobs are the audible.sync jobs, newest first.
+func (s *audibleSyncEnv) syncJobs(t *testing.T) []bridge.Job {
+	t.Helper()
+	jobs, _, err := s.api.bridge.List(context.Background(), bridge.Filter{Kind: bridge.KindAudibleSync})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
+
+// queueSync has the scheduler queue the account's sync at now.
+func (s *audibleSyncEnv) queueSync(t *testing.T, now time.Time) {
+	t.Helper()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	d := modules.Deps{Log: slog.New(slog.DiscardHandler), Catalog: s.cat, Bridge: s.api.bridge}
+	if err := audible.SchedulerTick(context.Background(), d, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Mapped to another person, an account's sync is off (the console turned it
+// on for the person it showed then): its last sync forgotten, its open sync
+// cancelled, both routes sync_off until the console turns it on again.
+func TestAudibleSyncRemapTurnsSyncOff(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.queueSync(t, time.Now())
+	s.finish(t, s.claim(t, bridge.KindAudibleSync), bridge.StateDone, `{"sent":1}`, "")
+	s.queueSync(t, time.Now().Add(16*time.Minute))
+	quinnID, _ := newUserWithSession(t, s.testEnv, "quinn", false)
+	if code, out := s.putAccount(t, testAccount, quinnID, s.lib.ID); code != http.StatusOK || !strings.Contains(out, `"sync":false`) {
+		t.Fatalf("mapped to quinn: %d %s", code, out)
+	}
+	if a, err := s.cat.AudibleAccount(ctx, testAccount); err != nil || a.Sync || a.LastSyncAt != nil {
+		t.Fatalf("after the re-map: %+v, %v", a, err)
+	}
+	if j := s.syncJobs(t); len(j) != 2 || j[0].State != bridge.StateCancelled || j[0].Error != bridge.CancelAudibleSyncOff {
+		t.Fatalf("syncs after the re-map = %+v", j)
+	}
+	if resp, out := s.do(t, "GET", "/api/v1/bridge/progress?account="+testAccount, s.bridgeTok, ""); resp.StatusCode != http.StatusForbidden ||
+		!strings.Contains(out, "sync_off") {
+		t.Fatalf("feed after the re-map: %d %s", resp.StatusCode, out)
+	}
+	if code, out := s.post(t, place("aud-q", s.lib.ID, mistbornBook, 400, time.Minute)); code != http.StatusForbidden {
+		t.Fatalf("listening after the re-map: %d %s", code, out)
+	}
+}
+
+// A paused account (its library gone) syncs neither way: both routes answer
+// sync_off, as the scheduler queues none for it.
+func TestAudibleSyncPaused(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE audible_accounts SET library_id = NULL WHERE account = ?`, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := s.do(t, "GET", "/api/v1/bridge/progress?account="+testAccount, s.bridgeTok, ""); resp.StatusCode != http.StatusForbidden ||
+		!strings.Contains(out, "sync_off") {
+		t.Fatalf("paused feed: %d %s", resp.StatusCode, out)
+	}
+	if code, out := s.post(t, place("aud-p", s.lib.ID, mistbornBook, 400, time.Minute)); code != http.StatusForbidden || !strings.Contains(out, "sync_off") {
+		t.Fatalf("paused listening: %d %s", code, out)
+	}
+}
+
+// Only a sync that read Audible's places is the account's last sync: one that
+// waited on Audible, or found the sync off, is not. A complete poll ends a
+// refusal (Audible answered the account), so syncs are due again.
+func TestAudibleSyncLastSyncAndRefusal(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	now := time.Now()
+	for i, result := range []string{`{"waiting":true,"wait_until":"2030-01-01T00:00:00Z"}`, `{"sync_off":true}`} {
+		s.queueSync(t, now.Add(time.Duration(i)*16*time.Minute))
+		s.finish(t, s.claim(t, bridge.KindAudibleSync), bridge.StateDone, result, "")
+		if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.LastSyncAt != nil {
+			t.Fatalf("after a done sync %s: last sync %v", result, *a.LastSyncAt)
+		}
+	}
+	s.queueSync(t, now.Add(32*time.Minute))
+	s.finish(t, s.claim(t, bridge.KindAudibleSync), bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
+		t.Fatalf("after a refused sync: %+v", a)
+	}
+	if code, out := s.putTitles(t, testAccount, "p2", false, title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("partial poll: %d %s", code, out)
+	}
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
+		t.Fatalf("a partial poll ended the refusal: %+v", a)
+	}
+	if code, out := s.putTitles(t, testAccount, "p2", true,
+		title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook),
+		title(cradleASIN, "Unsouled", "available", s.lib.ID, cradleBook)); code != http.StatusOK {
+		t.Fatalf("complete poll: %d %s", code, out)
+	}
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt != nil {
+		t.Fatalf("a complete poll kept the refusal: %+v", a)
+	}
+	s.queueSync(t, now.Add(48*time.Minute))
+	if j := s.syncJobs(t); len(j) == 0 || j[0].State != bridge.StateQueued {
+		t.Fatalf("no sync after the refusal ended: %+v", j)
+	}
+}
+
+// The person's access is read at every call: once their share is revoked the
+// book's place leaves the feed and Audible's place on it is no_access.
+func TestAudibleSyncRevokedShare(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	if f := s.feed(t, ""); len(f.Rows) != 1 {
+		t.Fatalf("feed before the revoke = %+v", f.Rows)
+	}
+	var share int64
+	if err := s.db.QueryRowContext(ctx, `SELECT share_id FROM user_share_access WHERE user_id = ?`, s.patID).Scan(&share); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cat.RevokeShare(ctx, s.patID, share); err != nil {
+		t.Fatal(err)
+	}
+	if f := s.feed(t, ""); len(f.Rows) != 0 {
+		t.Fatalf("feed after the revoke = %+v", f.Rows)
+	}
+	wantSync(t, s.postResults(t, place("aud-m", s.lib.ID, mistbornBook, 400, time.Minute))[0], "rejected", catalog.SyncNoAccess)
+}
+
+// The account's open sync goes with it: removed (CancelAudibleRemoved), or
+// paused by its library's deletion (CancelAudiblePaused).
+func TestAudibleSyncCancelledWithItsAccount(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, reason string
+		end          func(s *audibleSyncEnv) error
+	}{
+		{"removed", bridge.CancelAudibleRemoved, func(s *audibleSyncEnv) error {
+			_, err := s.cat.DeleteAudibleAccount(context.Background(), testAccount)
+			return err
+		}},
+		{"paused", bridge.CancelAudiblePaused, func(s *audibleSyncEnv) error {
+			return s.cat.DeleteLibrary(context.Background(), s.lib.ID)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newAudibleSyncEnv(t)
+			s.queueSync(t, time.Now())
+			if err := tc.end(s); err != nil {
+				t.Fatal(err)
+			}
+			if j := s.syncJobs(t); len(j) != 1 || j[0].State != bridge.StateCancelled || j[0].Error != tc.reason {
+				t.Fatalf("sync after the account %s = %+v", tc.name, j)
+			}
+		})
+	}
+}
+
+// Two titles on one book (an edition owned twice) are two feed rows, one per
+// ASIN, paged one by one.
+func TestBridgeProgressFeedRowPerTitle(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	const second = "B000000009"
+	if code, out := s.putTitles(t, testAccount, "p2", true,
+		title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook),
+		title(second, "The Final Empire (2)", "available", s.lib.ID, mistbornBook),
+		title(cradleASIN, "Unsouled", "available", s.lib.ID, cradleBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	first := s.feed(t, "&limit=1")
+	next := s.feed(t, "&limit=1&since="+url.QueryEscape(first.Next))
+	end := s.feed(t, "&limit=1&since="+url.QueryEscape(next.Next))
+	if len(first.Rows) != 1 || first.Rows[0].ASIN != mistbornASIN || len(next.Rows) != 1 || next.Rows[0].ASIN != second ||
+		next.Rows[0].Path != mistbornBook || len(end.Rows) != 0 {
+		t.Fatalf("pages = %+v, %+v, %+v", first.Rows, next.Rows, end.Rows)
+	}
+}
+
+// An Audible account's device id is the Bridge's route's alone: Sync v2
+// refuses a batch naming one, and a legacy save naming one (a row echoed back)
+// is stored under none, so the feed still sends it. An edit of a place Audible
+// wrote is no longer Audible's either: it reaches the feed.
+func TestAudibleDeviceIDIsTheBridges(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	body := fmt.Sprintf(`{"device_id":"audible:%s","sent_at":%q,"events":[%s]}`, testAccount,
+		time.Now().UTC().Format(time.RFC3339Nano), listenJSON("pat-x", s.lib.ID, mistbornBook, 0, 20, "0"))
+	if resp, out := s.do(t, "POST", syncURL, s.patTok, body); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Sync v2 as the Audible device: %d %s", resp.StatusCode, out)
+	}
+	prog := "/api/v1/libraries/" + strconv.FormatInt(s.lib.ID, 10) + "/progress?path="
+	put := fmt.Sprintf(`{"position":50,"duration":36000,"device_id":"audible:%s","updated_at":%q}`, testAccount,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	if resp, out := s.do(t, "PUT", prog+url.QueryEscape(cradleBook), s.patTok, put); resp.StatusCode != http.StatusOK {
+		t.Fatalf("legacy save: %d %s", resp.StatusCode, out)
+	}
+	if p := s.patProgress(t, cradleBook); p == nil || p.DeviceID != "" || p.Position != 50 {
+		t.Fatalf("legacy save as the Audible device: %+v", p)
+	}
+	wantSync(t, s.postResults(t, place("aud-m", s.lib.ID, mistbornBook, 400, time.Minute))[0], "applied", "")
+	if f := s.feed(t, ""); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("feed before the edit = %+v", f.Rows)
+	}
+	if resp, out := s.do(t, "PATCH", prog+url.QueryEscape(mistbornBook), s.patTok, `{"position":100}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit: %d %s", resp.StatusCode, out)
+	}
+	if p := s.patProgress(t, mistbornBook); p.DeviceID != "" || p.DeviceName != "" || p.Position != 100 {
+		t.Fatalf("an edit of Audible's place: %+v", p)
+	}
+	f := s.feed(t, "")
+	if len(f.Rows) != 2 || f.Rows[1].ASIN != mistbornASIN || f.Rows[1].Position != 100 {
+		t.Fatalf("feed after the edit = %+v", f.Rows)
+	}
+}
+
+// The feed follows the order this server wrote the rows in (change_seq), not
+// their updated_at: a row written after the cursor with an earlier time (a
+// device's offline backlog, a diverged apply keeping the later time) is still
+// sent.
+func TestBridgeProgressFeedWriteOrder(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 2 {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE progress SET position = 90, version = version + 1, updated_at = '2020-01-01T00:00:00.000Z'
+		  WHERE user_id = ? AND rel_path = ?`, s.patID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	f := s.feed(t, "&since="+url.QueryEscape(end.Next))
+	if len(f.Rows) != 1 || f.Rows[0].ASIN != mistbornASIN || f.Rows[0].Position != 90 ||
+		f.Rows[0].UpdatedAt != "2020-01-01T00:00:00.000Z" {
+		t.Fatalf("feed after a late write with an early time = %+v", f.Rows)
+	}
+	if again := s.feed(t, "&since="+url.QueryEscape(f.Next)); len(again.Rows) != 0 {
+		t.Fatalf("feed after it = %+v", again.Rows)
+	}
+}
+
+// A title whose Audible runtime disagrees with the indexed book's duration is
+// matched to another recording: neither its places nor its finish apply
+// (rejected duration_mismatch). A book whose duration agrees, or is unknown,
+// syncs as usual.
+func TestAudibleListeningRuntimeMismatch(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	for path, d := range map[string]float64{mistbornBook: 20000, cradleBook: 36030} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE books SET duration = ? WHERE library_id = ? AND rel_path = ?`,
+			d, s.lib.ID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	finish := fmt.Sprintf(`{"id":"aud-fin","kind":"finish","library_id":%d,"path":%q,"at":%q}`, s.lib.ID, mistbornBook, at)
+	res := s.postResults(t, place("aud-m", s.lib.ID, mistbornBook, 400, time.Minute), finish,
+		place("aud-c", s.lib.ID, cradleBook, 500, time.Minute))
+	wantSync(t, res[0], "rejected", "duration_mismatch")
+	wantSync(t, res[1], "rejected", "duration_mismatch")
+	wantSync(t, res[2], "applied", "")
+	if p := s.patProgress(t, mistbornBook); p != nil {
+		t.Fatalf("a mismatched title wrote %+v", p)
+	}
+}
+
+// A console change to which titles take part in an account's sync queues its
+// audible.sync at once with the titles now (an open one the Bridge hasn't
+// claimed takes them), so the Bridge stops pushing a left-out title without
+// waiting for the next turn; with no Bridge running audible.sync, nothing is
+// queued.
+func TestAudibleSyncQueuedOnTitleChange(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	patch := func(asin, body string) {
+		t.Helper()
+		if resp, out := s.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/"+asin, s.adminTok, body); resp.StatusCode != http.StatusOK {
+			t.Fatalf("patch %s: %d %s", asin, resp.StatusCode, out)
+		}
+	}
+	syncs := func() []bridge.AudibleSyncParams {
+		t.Helper()
+		var out []bridge.AudibleSyncParams
+		rows, err := s.db.QueryContext(ctx, `SELECT params FROM bridge_jobs WHERE kind = ? AND state = ?`,
+			bridge.KindAudibleSync, bridge.StateQueued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			var p bridge.AudibleSyncParams
+			if err := rows.Scan(&raw); err != nil || json.Unmarshal(raw, &p) != nil {
+				t.Fatal(err)
+			}
+			out = append(out, p)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	patch(mistbornASIN, `{"no_sync":true}`)
+	if got := syncs(); len(got) != 0 {
+		t.Fatalf("queued with no Bridge running audible.sync: %+v", got)
+	}
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	patch(cradleASIN, `{"rejected":true}`)
+	if got := syncs(); len(got) != 1 || len(got[0].Titles) != 0 {
+		t.Fatalf("after Not this book = %+v", got)
+	}
+	patch(mistbornASIN, `{"no_sync":false}`)
+	if got := syncs(); len(got) != 1 || len(got[0].Titles) != 1 || got[0].Titles[0].ASIN != mistbornASIN {
+		t.Fatalf("after Sync again = %+v", got)
+	}
+	patch(mistbornASIN, `{"dest_path":"Other/Place"}`) // a destination changes no sync
+	if got := syncs(); len(got) != 1 {
+		t.Fatalf("after a destination = %+v", got)
+	}
+}
+
+// A sync failing with audible_sign_in (Audible refused the sign-in for now,
+// the Bridge tries again) is an ordinary failure: the account is not marked
+// refused and its next sync falls due as usual.
+func TestAudibleSyncSignInIsTransient(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	s.beat(t, bridge.KindVerify, bridge.KindAudibleSync)
+	d := modules.Deps{Log: slog.New(slog.DiscardHandler), Catalog: s.cat, Bridge: s.api.bridge}
+	if err := audible.SchedulerTick(ctx, d, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	job := s.claim(t, bridge.KindAudibleSync)
+	s.finish(t, job, bridge.StateFailed, `{"code":"audible_sign_in","message":"try later"}`, "audible_sign_in: try later")
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt != nil {
+		t.Fatalf("a transient sign-in refusal marked the account refused: %+v", a)
+	}
+	if due, err := s.cat.DueAudibleSyncs(ctx, time.Now().Add(time.Hour), 10); err != nil || len(due) != 1 {
+		t.Fatalf("due after it = %v, %v", due, err)
 	}
 }

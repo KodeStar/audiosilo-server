@@ -75,6 +75,7 @@ export const IMPORT_CODES = [
   'not_released',
   'no_rights',
   'audible_refused',
+  'audible_sign_in',
   'not_writable',
   'exists',
   'disk_full',

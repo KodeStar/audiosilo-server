@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -103,30 +104,55 @@ func queueSyncs(ctx context.Context, d modules.Deps, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	q := Queues{Catalog: d.Catalog, Bridge: d.Bridge}
 	var errs []error
 	for _, account := range due {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		titles, err := d.Catalog.AudibleSyncTitles(ctx, account)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("sync audible account %s: %w", account, err))
-			continue
-		}
-		if len(titles) > 0 {
-			job, dropped := bridge.AudibleSync(account, titles, schedulerPriority)
-			if dropped > 0 && d.Log != nil {
-				d.Log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
-					"dropped", dropped)
-			}
-			if _, _, err := d.Bridge.Enqueue(ctx, job); err != nil {
-				errs = append(errs, fmt.Errorf("sync audible account %s: %w", account, err))
-				continue
-			}
-		}
-		if err := d.Catalog.MarkAudibleSyncQueued(ctx, account); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, q.queueSync(ctx, d.Log, account, false))
 	}
 	return errors.Join(errs...)
+}
+
+// queueSync queues account's audible.sync with its synced titles as params
+// (none queues nothing unless empty, the Bridge then told the set is empty)
+// and records its queue time.
+func (q Queues) queueSync(ctx context.Context, log *slog.Logger, account string, empty bool) error {
+	titles, err := q.Catalog.AudibleSyncTitles(ctx, account)
+	if err != nil {
+		return fmt.Errorf("sync audible account %s: %w", account, err)
+	}
+	if len(titles) > 0 || empty {
+		job, dropped := bridge.AudibleSync(account, titles, schedulerPriority)
+		if dropped > 0 && log != nil {
+			log.Warn("audible: an account's sync leaves out titles past the params' bound", "account", account,
+				"dropped", dropped)
+		}
+		if _, _, err := q.Bridge.Enqueue(ctx, job); err != nil {
+			return fmt.Errorf("sync audible account %s: %w", account, err)
+		}
+	}
+	return q.Catalog.MarkAudibleSyncQueued(ctx, account)
+}
+
+// SyncNow queues account's audible.sync at once (Phase 4c) when the titles
+// that take part in its sync may have changed (a title's "Not this book" or
+// "Don't sync this book") or its sync was turned on, so the Bridge stops
+// pushing a title the console just left out without waiting for the next
+// turn: only while an online Bridge runs audible.sync and the account would be
+// due but for its time (catalog.AudibleSyncQueueable). Its params are the
+// titles now, even none when titlesChanged (the Bridge is told the set is
+// empty); an open sync the Bridge hasn't claimed yet takes them (the kind
+// promotes), one it is running keeps the ones it was given.
+func (q Queues) SyncNow(ctx context.Context, log *slog.Logger, account string, titlesChanged bool) error {
+	h, err := q.Bridge.Online(ctx)
+	if err != nil || h == nil || !h.Offers(bridge.KindAudibleSync) {
+		return err
+	}
+	ok, err := q.Catalog.AudibleSyncQueueable(ctx, account)
+	if err != nil || !ok {
+		return err
+	}
+	return q.queueSync(ctx, log, account, titlesChanged)
 }

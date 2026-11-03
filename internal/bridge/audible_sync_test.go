@@ -106,6 +106,9 @@ func TestAudibleSyncCode(t *testing.T) {
 		{Job{State: StateFailed, Error: "audible_refused"}, SyncAudibleRefused},
 		{Job{State: StateFailed, Error: "audible_refusedx"}, ""},
 		{Job{State: StateFailed, Error: "lastpositions: 503"}, ""},
+		// A sign-in refused for now is not the device refused: an ordinary failure.
+		{Job{State: StateFailed, Result: json.RawMessage(`{"code":"audible_sign_in"}`)}, ImportAudibleSignIn},
+		{Job{State: StateFailed, Error: "audible_sign_in: try later"}, ""},
 		{Job{State: StateCancelled, Error: "audible_refused: x"}, ""},
 		{Job{State: StateDone, Result: json.RawMessage(`{"code":"audible_refused"}`)}, ""},
 	} {

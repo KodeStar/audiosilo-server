@@ -162,9 +162,14 @@ type AudibleImportParams struct {
 // The audible.import result's and failure's codes the console names (the
 // Bridge's; a failed job's code is AudibleImportCode's reading).
 const (
-	ImportNotReleased       = "not_released"
-	ImportNoRights          = "no_rights"
-	ImportAudibleRefused    = "audible_refused"
+	ImportNotReleased    = "not_released"
+	ImportNoRights       = "no_rights"
+	ImportAudibleRefused = "audible_refused"
+	// ImportAudibleSignIn: Audible refused the account's sign-in for now
+	// (transient: the Bridge tries again), not the device (audible_refused). An
+	// audible.sync failing with it is an ordinary failure: the account is not
+	// marked refused.
+	ImportAudibleSignIn     = "audible_sign_in"
 	ImportNotWritable       = "not_writable"
 	ImportExists            = "exists"
 	ImportDiskFull          = "disk_full"
@@ -173,8 +178,8 @@ const (
 )
 
 // AudibleImportCodes are the codes an audible.import failure may name.
-var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportNotWritable,
-	ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
+var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportAudibleSignIn,
+	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
 
 var asinPattern = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 
@@ -546,6 +551,22 @@ func AudibleSyncCode(j Job) string {
 		return ""
 	}
 	return failureCode(j, []string{SyncAudibleRefused})
+}
+
+// AudibleSynced reports whether an ended audible.sync read Audible's places:
+// done, and its result says neither waiting (Audible asked the Bridge to wait,
+// so it called nothing) nor sync_off (the server's sync was off by the time it
+// ran). The Bridge's result fields, hand-mirrored like the failure code.
+func AudibleSynced(j Job) bool {
+	if j.State != StateDone {
+		return false
+	}
+	var r struct {
+		Waiting bool `json:"waiting"`
+		SyncOff bool `json:"sync_off"`
+	}
+	_ = json.Unmarshal(j.Result, &r) // a result that isn't one of these is a sync's
+	return !r.Waiting && !r.SyncOff
 }
 
 // CancelAudibleSyncs cancels account's open sync inside tx (removed or paused,

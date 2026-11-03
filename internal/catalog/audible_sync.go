@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -64,14 +65,16 @@ func (a AudibleSyncAccount) DeviceName() string {
 
 // AudibleSyncFor is account as a sync call acting for it needs it:
 // ErrUnknownAccount for none (its person deleted, too), ErrAudibleSyncOff while
-// its sync is off, ErrAudibleSyncUser for a person an account may no longer be
-// mapped to (bridgeUserSQL: disabled, a kid or a demo account).
+// its sync is off or the account is paused (its library deleted: no sync is
+// queued for it either, DueAudibleSyncs), ErrAudibleSyncUser for a person an
+// account may no longer be mapped to (bridgeUserSQL: disabled, a kid or a demo
+// account).
 func (c *Catalog) AudibleSyncFor(ctx context.Context, account string) (*AudibleSyncAccount, error) {
 	a := AudibleSyncAccount{Account: account}
 	var on, allowed bool
 	var role string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT a.label, a.marketplace, a.sync, a.user_id, u.role, `+bridgeUserSQL+`
+		`SELECT a.label, a.marketplace, a.sync = 1 AND a.library_id IS NOT NULL, a.user_id, u.role, `+bridgeUserSQL+`
 		   FROM audible_accounts a JOIN users u ON u.id = a.user_id WHERE a.account = ?`, account).
 		Scan(&a.Label, &a.Marketplace, &on, &a.UserID, &role, &allowed)
 	switch {
@@ -98,17 +101,46 @@ func (c *Catalog) AudibleSyncTitles(ctx context.Context, account string) ([]brid
 }
 
 // AudibleSyncBooks are the books account's sync may write (its titles'
-// matches, AudibleSyncTitles), as progress keys.
-func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref]bool, error) {
-	titles, err := c.AudibleSyncTitles(ctx, account)
+// matches, syncTitleSQL), as progress keys, each with "" or the reason the
+// sync's events on it are rejected: duration_mismatch when no title on the
+// book has a runtime that agrees with the indexed book's duration
+// (audibleRuntimeAgrees: the title is matched to another edition or volume, so
+// neither its places nor its finish are this book's).
+func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref]string, error) {
+	type row struct {
+		ref      Ref
+		runtimeS int64
+		duration float64
+	}
+	titles, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *row) error {
+		return rows.Scan(&x.ref.LibraryID, &x.ref.Path, &x.runtimeS, &x.duration)
+	}, `SELECT t.match_library_id, t.match_path, t.runtime_s, COALESCE(b.duration, 0) FROM audible_titles t
+		  LEFT JOIN books b ON b.library_id = t.match_library_id AND b.rel_path = t.match_path
+		 WHERE t.account = ? AND `+syncTitleSQL, account)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[Ref]bool, len(titles))
+	out := make(map[Ref]string, len(titles))
 	for _, t := range titles {
-		out[Ref{LibraryID: t.LibraryID, Path: t.Path}] = true
+		if audibleRuntimeAgrees(t.runtimeS, t.duration) {
+			out[t.ref] = ""
+		} else if _, ok := out[t.ref]; !ok {
+			out[t.ref] = reasonDurationMismatch
+		}
 	}
 	return out, nil
+}
+
+// audibleRuntimeAgrees reports whether an Audible title's runtime (seconds)
+// and the indexed book's duration are one recording's: within 5% of the
+// longer plus 2 minutes (furthestPastEndRatio, the manager's wrong-match
+// guard), or either unknown.
+func audibleRuntimeAgrees(runtimeS int64, duration float64) bool {
+	if runtimeS <= 0 || duration <= 0 {
+		return true
+	}
+	rt := float64(runtimeS)
+	return math.Abs(rt-duration) <= max(rt, duration)*(furthestPastEndRatio-1)+furthestPastEndSlack
 }
 
 // AudibleProgressRow is one of the person's places the Bridge may push to the
@@ -126,15 +158,18 @@ type AudibleProgressRow struct {
 	Version   int64   `json:"version"`
 }
 
-// MaxAudibleProgress is the most rows one GET /bridge/progress answers.
-const MaxAudibleProgress = 500
+// MaxAudibleProgress is the most rows one GET /bridge/progress answers, and
+// defaultAudibleProgress its page when the call names no limit.
+const (
+	MaxAudibleProgress     = 500
+	defaultAudibleProgress = 200
+)
 
 // progressCursor is a GET /bridge/progress position: the last row's
-// (updated_at, library_id, path), opaque on the wire (base64url JSON).
+// (change_seq, asin), opaque on the wire (base64url JSON).
 type progressCursor struct {
-	At   string `json:"a"`
-	Lib  int64  `json:"l"`
-	Path string `json:"p"`
+	Seq  int64  `json:"q"`
+	ASIN string `json:"s"`
 }
 
 func (k progressCursor) encode() string {
@@ -159,48 +194,70 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 
 // AudibleProgress is a page of the places of a's person that the Bridge may
 // push to Audible: the progress rows on the books of the account's synced
-// titles (syncTitleSQL) that the person can still reach (scopes, theirs), not
+// titles (syncTitleSQL) that the person can still reach (scopes, theirs), one
+// per title (two titles on one book are two rows, each with its ASIN), not
 // written by the account itself (the place Audible gave is never echoed back),
-// changed after the cursor since ("" from the start), oldest change first, at
-// most limit (MaxAudibleProgress). next is where the next page starts (the
-// last row read, or since when none was: a feed's cursor, kept for the next
-// poll) and more whether a full page was read (ask again with next now). A
-// row whose updated_at stayed (a diverged apply keeps the later time) is not
-// read again. ErrAudibleInvalid for a cursor not made here.
+// written after the cursor since ("" from the start), in the order this server
+// wrote them (progress.change_seq, migration 0066: a row written late with an
+// earlier updated_at, such as a device's offline backlog or a diverged apply
+// keeping the later time, still comes after the cursor), at most limit
+// (defaultAudibleProgress for none, never past MaxAudibleProgress). next is
+// where the next page starts (the last row read, or since when none was: a
+// feed's cursor, kept for the next poll) and more whether a full page was read
+// (ask again with next now). ErrAudibleInvalid for a cursor not made here.
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
 	from, err := decodeProgressCursor(since)
 	if err != nil {
 		return nil, "", false, err
 	}
-	if limit <= 0 || limit > MaxAudibleProgress {
-		limit = MaxAudibleProgress
+	if limit <= 0 {
+		limit = defaultAudibleProgress
+	}
+	limit = min(limit, MaxAudibleProgress)
+	type read struct {
+		AudibleProgressRow
+		seq int64
 	}
 	scoped, scopeArgs := scopesFilterSQL("p.library_id", "p.rel_path", scopes)
-	args := append([]any{a.UserID, a.Account, a.DeviceID(), from.At, from.Lib, from.Path}, scopeArgs...)
-	rows, err = queryRows(ctx, c.db, func(r *sql.Rows, x *AudibleProgressRow) error {
+	args := append([]any{a.Account, a.UserID, a.DeviceID(), from.Seq, from.Seq, from.ASIN}, scopeArgs...)
+	got, err := queryRows(ctx, c.db, func(r *sql.Rows, x *read) error {
 		return r.Scan(&x.LibraryID, &x.Path, &x.ASIN, &x.Position, &x.Duration, &x.Finished, &x.UpdatedAt, &x.DeviceID,
-			&x.Version)
-	}, `SELECT p.library_id, p.rel_path, MIN(t.asin), p.position,
+			&x.Version, &x.seq)
+	}, `SELECT p.library_id, p.rel_path, t.asin, p.position,
 	           CASE WHEN p.duration > 0 THEN p.duration ELSE COALESCE(b.duration, 0) END,
-	           p.finished, p.updated_at, p.device_id, p.version
-	      FROM audible_titles t
-	      JOIN progress p ON p.user_id = ? AND p.library_id = t.match_library_id AND p.rel_path = t.match_path
+	           p.finished, p.updated_at, p.device_id, p.version, p.change_seq
+	      FROM progress p
+	      JOIN audible_titles t ON t.account = ? AND t.match_library_id = p.library_id AND t.match_path = p.rel_path
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
-	     WHERE t.account = ? AND `+syncTitleSQL+` AND p.device_id <> ?
-	       AND (p.updated_at, p.library_id, p.rel_path) > (?, ?, ?) AND `+scoped+`
-	     GROUP BY p.library_id, p.rel_path
-	     ORDER BY p.updated_at, p.library_id, p.rel_path
+	     WHERE p.user_id = ? AND `+syncTitleSQL+` AND p.device_id <> ?
+	       AND p.change_seq >= ? AND (p.change_seq, t.asin) > (?, ?) AND `+scoped+`
+	     ORDER BY p.change_seq, t.asin
 	     LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, "", false, err
 	}
+	rows = make([]AudibleProgressRow, len(got))
 	next = since
-	if n := len(rows); n > 0 {
-		last := rows[n-1]
-		next = progressCursor{At: last.UpdatedAt, Lib: last.LibraryID, Path: last.Path}.encode()
+	for i, x := range got {
+		rows[i] = x.AudibleProgressRow
+		next = progressCursor{Seq: x.seq, ASIN: x.ASIN}.encode()
 	}
 	return rows, next, len(rows) == limit, nil
+}
+
+// syncQueueableSQL is an account (aliased a, its person u) whose sync may be
+// queued: sync on, not paused, not refused, mapped to a person an account may
+// still be mapped to (bridgeUserSQL).
+const syncQueueableSQL = `a.sync = 1 AND a.library_id IS NOT NULL AND a.refused_at IS NULL AND ` + bridgeUserSQL
+
+// AudibleSyncQueueable reports whether account's sync may be queued now
+// (syncQueueableSQL), whenever it was last queued: audible.SyncNow's check.
+func (c *Catalog) AudibleSyncQueueable(ctx context.Context, account string) (bool, error) {
+	var ok bool
+	err := c.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audible_accounts a JOIN users u ON u.id = a.user_id
+		  WHERE a.account = ? AND `+syncQueueableSQL+`)`, account).Scan(&ok)
+	return ok, err
 }
 
 // DueAudibleSyncs are the accounts whose audible.sync is due at now, at most
@@ -214,7 +271,7 @@ func (c *Catalog) DueAudibleSyncs(ctx context.Context, now time.Time, limit int)
 	}
 	all, err := queryRows(ctx, c.db, func(r *sql.Rows, x *row) error { return r.Scan(&x.account, &x.queued) },
 		`SELECT a.account, a.sync_queued_at FROM audible_accounts a JOIN users u ON u.id = a.user_id
-		  WHERE a.sync = 1 AND a.library_id IS NOT NULL AND a.refused_at IS NULL AND `+bridgeUserSQL+`
+		  WHERE `+syncQueueableSQL+`
 		  ORDER BY a.sync_queued_at IS NOT NULL, a.sync_queued_at, a.account`)
 	if err != nil {
 		return nil, err
@@ -241,18 +298,20 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 	return err
 }
 
-// FoldAudibleSync records an ended audible.sync on its account: a done one is
-// the account's last sync (last_sync_at), one that failed because Audible
-// refused the account (bridge.SyncAudibleRefused) marks it refused, so none is
-// queued until the Bridge maps the account again. Any other ending changes
-// nothing (the next sync is due as usual). A user-state write.
+// FoldAudibleSync records an ended audible.sync on its account: one that read
+// Audible's places (bridge.AudibleSynced: done, neither waiting on Audible nor
+// finding the sync off) is the account's last sync (last_sync_at), one that
+// failed because Audible refused the account (bridge.SyncAudibleRefused) marks
+// it refused, so none is queued until the Bridge maps the account again or
+// polls it whole (PutAudibleTitles: Audible answered the account). Any other
+// ending changes nothing (the next sync is due as usual). A user-state write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	account, err := bridge.AudibleSyncOf(job)
 	if err != nil {
 		return err
 	}
 	switch {
-	case job.State == bridge.StateDone:
+	case bridge.AudibleSynced(job):
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
 	case bridge.AudibleSyncCode(job) == bridge.SyncAudibleRefused:
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ?`, c.ts(), account)

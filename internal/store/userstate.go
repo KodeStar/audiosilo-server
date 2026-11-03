@@ -57,7 +57,8 @@ var userStateTables = map[string]tableRule{
 	// a new column belongs here, or every sync span empties the caches).
 	"progress": {free: []string{"position", "duration", "finished", "playback_speed", "version", "device_id",
 		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
-		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version"}},
+		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version",
+		"change_seq"}},
 	// Sync v2's event log (catalog.SyncListening, migration 0061): read only by
 	// the sync itself, never by a content cache.
 	"listening_events":   {rows: true},
@@ -83,9 +84,12 @@ var userStateTables = map[string]tableRule{
 	// (catalog.PutAudibleTitles) and an account's poll times, read only by the
 	// console's Audible routes and the scheduler, never by a content cache. An
 	// account mapped, re-mapped or removed (its other columns, its rows) moves
-	// the generation; its first complete poll sets policy_since (Phase 4b).
-	"audible_titles":   {rows: true},
-	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at", "policy_since"}},
+	// the generation; its first complete poll sets policy_since (Phase 4b), and
+	// its sync's times (Phase 4c: sync_queued_at, last_sync_at, refused_at, set by
+	// the scheduler and an ended audible.sync every 15 minutes) are free too.
+	"audible_titles": {rows: true},
+	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at", "policy_since", "sync_queued_at",
+		"last_sync_at", "refused_at"}},
 	// A token's touch (auth.Service.resolve): the token cache holds the row,
 	// and drops the touched one itself. Any other change (a revoke, a new
 	// token) moves the generation.

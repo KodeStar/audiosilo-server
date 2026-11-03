@@ -71,6 +71,30 @@ func TestSyncFurthestOnly(t *testing.T) {
 	}
 }
 
+// An Audible place keeps the row's playback speed (Audible sends none), and a
+// place far past the book's end is another book's (duration_mismatch): one
+// just past the end is the end.
+func TestSyncFurthestOnlyKeepsSpeedAndBook(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	ev := f.listen("resume", 1000, 2000, time.Minute, base(0))
+	ev.PlaybackSpeed = 1.5
+	wantResult(t, f.syncOne(t, "phone", ev), statusApplied, "")
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(3000, 0))).Results[0], statusApplied, "")
+	if p := f.progress(t); p.Position != 3000 || p.PlaybackSpeed != 1.5 || p.DeviceID != "audible:acct0001" {
+		t.Fatalf("row after Audible's place: %+v", p)
+	}
+	far := f.audiblePlace(syncBookLen*furthestPastEndRatio+furthestPastEndSlack+1, 0)
+	wantResult(t, f.sync(t, f.audibleBatch(t, far)).Results[0], statusRejected, reasonDurationMismatch)
+	if p := f.progress(t); p.Position != 3000 {
+		t.Fatalf("a place far past the end moved the row: %+v", p)
+	}
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(syncBookLen+60, 0))).Results[0], statusApplied, "")
+	if p := f.progress(t); p.Position != syncBookLen || p.Finished || p.PlaybackSpeed != 1.5 {
+		t.Fatalf("row after a place just past the end: %+v", p)
+	}
+}
+
 // Audible's places are a place only: a furthest-only listen records no
 // listening session, daily roll-up or history, and its events name no token.
 // With no row yet, a place applies.
@@ -96,4 +120,27 @@ func TestSyncFurthestOnlyRecordsNoListening(t *testing.T) {
 	if n := f.count(t, `SELECT COUNT(*) FROM listening_events WHERE device_id = 'audible:acct0001'`); n != 1 {
 		t.Fatalf("events logged = %d, want 1", n)
 	}
+}
+
+// A restart here ends the old reading: an Audible place heard at or before
+// the row's last finish or unfinish (finish_changed_at) is behind, however far
+// ahead it is; one heard after it applies as usual.
+func TestSyncFurthestOnlyRespectsRestart(t *testing.T) {
+	t.Parallel()
+	f := newSyncFixture(t)
+	wantResult(t, f.syncOne(t, "phone", f.listen("resume", 1000, 2000, time.Hour, base(0))), statusApplied, "")
+	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, 50*time.Minute)), statusApplied, "")
+	wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventUnfinish, 30*time.Minute)), statusApplied, "")
+	wantResult(t, f.syncOne(t, "phone", f.listen("restart", 0, 100, 25*time.Minute, base(3))), statusApplied, "")
+	before := f.progress(t)
+	if before.Finished || before.Position != 100 {
+		t.Fatalf("row after the restart: %+v", before)
+	}
+	old := f.audiblePlace(syncBookLen-600, 40*time.Minute)
+	wantResult(t, f.sync(t, f.audibleBatch(t, old)).Results[0], statusNotApplied, reasonBehind)
+	if p := f.progress(t); p.Position != before.Position || p.Version != before.Version {
+		t.Fatalf("a place from before the restart moved the row: %+v (before %+v)", p, before)
+	}
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(3000, 10*time.Minute))).Results[0],
+		statusApplied, "")
 }

@@ -193,6 +193,8 @@ function AccountRow({
 function SyncState({ account: a, lang }: { account: AudibleAccount; lang: string }) {
   const { t } = useTranslation();
   if (!a.sync) return <span className="text-muted-foreground">{t('audible.account.syncOff')}</span>;
+  if (a.paused)
+    return <span className="text-muted-foreground">{t('audible.account.syncPaused')}</span>;
   if (a.refused_at)
     return (
       <StatusText tone="warn" colored>

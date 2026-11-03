@@ -266,8 +266,11 @@ func checkAudibleAccount(in *AudibleAccountInput) error {
 // titles and poll times stay, and so do its policy and template (Phase 4b: the
 // Bridge's policy is a new account's; after that the console sets it,
 // PatchAudibleAccount). A new account's policy_since is now. Its sync is the
-// console's, off for a new account whatever the Bridge sends (Phase 4c), and
-// a mapping again ends a refusal (refused_at: a fresh sign-in maps it again).
+// console's, off for a new account whatever the Bridge sends (Phase 4c), never
+// turned on by a PUT; mapped to another person it is turned off (the console
+// turned it on for the person it showed then), its last sync forgotten and its
+// open sync cancelled. A mapping again ends a refusal (refused_at: a fresh
+// sign-in maps it again).
 func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAccountInput) (*AudibleAccount, error) {
 	if !bridge.AudibleAccountPattern.MatchString(id) {
 		return nil, audibleInvalid("account must match %s", bridge.AudibleAccountPattern)
@@ -296,6 +299,12 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 		if kind != KindBooks {
 			return ErrNotBookLibrary
 		}
+		var was int64
+		err = tx.QueryRowContext(ctx, `SELECT user_id FROM audible_accounts WHERE account = ?`, id).Scan(&was)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		remapped := err == nil && was != in.UserID
 		now := c.ts()
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO audible_accounts(account, label, marketplace, user_id, library_id, policy, sync, created_at, updated_at,
@@ -306,6 +315,15 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 			     refused_at = NULL, updated_at = excluded.updated_at`,
 			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, now, now, now); err != nil {
 			return err
+		}
+		if remapped {
+			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET sync = 0, sync_queued_at = NULL, last_sync_at = NULL
+				  WHERE account = ?`, id); err != nil {
+				return err
+			}
+			if err := bridge.CancelAudibleSyncs(ctx, tx, id, bridge.CancelAudibleSyncOff, c.now()); err != nil {
+				return err
+			}
 		}
 		out, err = scanAudibleAccount(tx.QueryRowContext(ctx, audibleAccountSelect+` WHERE a.account = ?`, id))
 		return err
@@ -643,8 +661,9 @@ func bridgeBookPath(p string) bool {
 // FoldAudibleImport) stays while its book is indexed and the poll names no
 // other: the next poll may have listed the library before the backup landed.
 // On the poll's final call every title of the account the poll didn't report
-// becomes gone, and the account's last_poll_at is now; on its first complete
-// poll its policy_since moves to now too, so the library the account already
+// becomes gone, and the account's last_poll_at is now, its sync's refusal
+// ended (refused_at: Audible answered the account's whole library); on its
+// first complete poll its policy_since moves to now too, so the library the account already
 // had is never backed up by a policy (new purchases only). A user-state write:
 // no content cache reads these tables.
 func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, final bool, titles []AudibleTitleInput) error {
@@ -743,7 +762,7 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			now, account, pollID); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ?1,
+		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ?1, refused_at = NULL,
 			    policy_since = CASE WHEN last_poll_at IS NULL THEN ?1 ELSE policy_since END WHERE account = ?2`, now, account)
 		return err
 	})

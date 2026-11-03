@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -36,9 +37,10 @@ var syncPathReasons = map[int]string{
 
 // handleListeningSync applies one batch of listening events: 413 code
 // too_large for a body over 1 MiB (the player halves its batch and sends
-// again), 400 for a bad envelope (JSON or an unknown field; no device id or one
-// over 200 bytes; neither or both of sent_at and clock_offset, an unparseable
-// sent_at or an offset beyond 1e9 s; code too_many_events past 500 events).
+// again), 400 for a bad envelope (JSON or an unknown field; no device id, one
+// over 200 bytes or an Audible account's ("audible:", the Bridge's route's
+// alone); neither or both of sent_at and clock_offset, an unparseable sent_at
+// or an offset beyond 1e9 s; code too_many_events past 500 events).
 func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	var in listeningSyncRequest
 	if !decodeSyncEnvelope(w, r, &in) {
@@ -50,6 +52,9 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(in.DeviceID) > catalog.MaxDeviceIDBytes:
 		writeError(w, http.StatusBadRequest, "device_id is too long")
+		return
+	case strings.HasPrefix(in.DeviceID, catalog.AudibleDevicePrefix):
+		writeError(w, http.StatusBadRequest, "device_id is reserved")
 		return
 	}
 	var sentAt *time.Time
@@ -138,11 +143,13 @@ type syncResolver func(libraryID int64, path string) (*catalog.Library, string, 
 // over catalog.MaxPathBytes their invalid), the progress key (progressPath: a
 // file or part path keys its book), and the indexed book there with its files'
 // offsets. allowed, when not nil, is every progress key the batch may write
-// (an Audible account's synced books): any other is not_synced. An event with
+// (an Audible account's synced books, catalog.AudibleSyncBooks), each with ""
+// or the reason its events are rejected (duration_mismatch): any other key is
+// not_synced. An event with
 // no library or path is left out (catalog checks it invalid). A failed lookup
 // is the batch's error, written here (false).
 func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, events []catalog.SyncEvent, resolve syncResolver,
-	transcoding func(libraryID int64, key string) bool, allowed map[catalog.Ref]bool) (map[catalog.Ref]catalog.SyncTarget, bool) {
+	transcoding func(libraryID int64, key string) bool, allowed map[catalog.Ref]string) (map[catalog.Ref]catalog.SyncTarget, bool) {
 	ctx := r.Context()
 	targets := map[catalog.Ref]catalog.SyncTarget{}
 	books := map[catalog.Ref]*catalog.SyncBook{} // by key: several sent paths may key one book
@@ -167,9 +174,15 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, events []catal
 			return nil, false
 		}
 		ref := catalog.Ref{LibraryID: lib.ID, Path: key}
-		if allowed != nil && !allowed[ref] {
-			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncNotSynced}
-			continue
+		if allowed != nil {
+			reason, ok := allowed[ref]
+			if !ok {
+				reason = catalog.SyncNotSynced
+			}
+			if reason != "" {
+				targets[sent] = catalog.SyncTarget{Reason: reason}
+				continue
+			}
 		}
 		book, done := books[ref]
 		if !done {

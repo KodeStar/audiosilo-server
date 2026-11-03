@@ -864,7 +864,7 @@ describe('audible sync', () => {
     expect(canSync(title({ no_sync: true }))).toBe(false);
   });
 
-  it("says whether each account's places sync, and when Audible refused it", async () => {
+  it("says whether each account's places sync, paused or refused", async () => {
     mockFetch(
       routes(true, {
         'GET /admin/audible/accounts': {
@@ -874,6 +874,13 @@ describe('audible sync', () => {
               account({ id: 'acct0002', label: 'Second', sync: false }),
               account({ id: 'acct0003', label: 'Refused', refused_at: new Date().toISOString() }),
               account({ id: 'acct0004', label: 'New' }),
+              account({
+                id: 'acct0005',
+                label: 'Paused',
+                paused: true,
+                library_id: null,
+                library: null,
+              }),
             ],
           },
         },
@@ -888,6 +895,7 @@ describe('audible sync', () => {
       within(card).getByText('Stopped: Audible refused the account. Sign in again on the Bridge.'),
     ).toBeInTheDocument();
     expect(within(card).getByText('On, not synced yet')).toBeInTheDocument();
+    expect(within(card).getByText('On, paused with the account')).toBeInTheDocument();
   });
 
   it("marks a title Don't sync, shows it, and undoes it", async () => {

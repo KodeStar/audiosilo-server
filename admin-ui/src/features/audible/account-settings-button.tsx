@@ -113,8 +113,7 @@ function SettingsDialog({
         <Switch
           id={`${id}-sync`}
           checked={sync}
-          onCheckedChange={(on) => setSync(on)}
-          aria-label={t('audible.settings.sync')}
+          onCheckedChange={setSync}
           aria-describedby={`${id}-sync-desc`}
         />
       </Field>

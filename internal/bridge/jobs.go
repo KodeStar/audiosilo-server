@@ -1634,7 +1634,8 @@ const (
 
 // IsCancelReason reports whether text is one of the server's own cancel
 // reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest or an
-// Audible poll's (CancelAudibleRemoved, CancelAudiblePaused).
+// Audible account's job's (CancelAudibleRemoved, CancelAudiblePaused,
+// CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
 	switch text {
 	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff:

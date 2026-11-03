@@ -17,7 +17,8 @@ import (
 // the paired admin: that person's scopes, their progress rows only, and the
 // books of the account's synced titles only. A bridge token, header only, like
 // the Bridge's other Audible routes; while the audible module or the account's
-// sync is off both answer 403 sync_off.
+// sync is off, or the account is paused (its library deleted), both answer 403
+// sync_off.
 
 // audibleListeningRequest is a batch of an account's places: the Bridge's
 // clock when it sent them and the events (listen spans of no length at
@@ -28,8 +29,9 @@ type audibleListeningRequest struct {
 }
 
 // writeAudibleSyncError answers a sync call's refusal: 404 unknown_account, 403
-// sync_off (the module or the account's sync off), 403 user_unavailable (the
-// account's person is disabled, a kid or a demo account since it was mapped).
+// sync_off (the module or the account's sync off, or the account paused), 403
+// user_unavailable (the account's person is disabled, a kid or a demo account
+// since it was mapped).
 func (a *API) writeAudibleSyncError(w http.ResponseWriter, err error, op string) {
 	switch {
 	case errors.Is(err, catalog.ErrAudibleSyncOff):
@@ -66,26 +68,19 @@ func (a *API) audibleSyncFor(w http.ResponseWriter, r *http.Request, account, op
 
 // userPathResolver is scopedPathIn for a person who is not the caller (an
 // Audible account's): their scope in the library (none, or no such library, is
-// 403), then pathInScope. Each library is loaded once per batch (an Audible
-// batch can name hundreds of books in one).
+// 403), then pathInScope.
 func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncResolver {
-	libs := map[int64]*catalog.Library{}
 	return func(libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 		scope, ok := scopeIn(scopes, libraryID)
 		if !ok || (!scope.AllowAll && len(scope.Paths) == 0) {
 			return nil, "", scope, http.StatusForbidden, "no access to this library"
 		}
-		lib, done := libs[libraryID]
-		if !done {
-			var err error
-			lib, err = a.cat.GetLibrary(r.Context(), libraryID)
-			if errors.Is(err, catalog.ErrNotFound) {
-				return nil, "", scope, http.StatusNotFound, "library not found"
-			}
-			if err != nil {
-				return nil, "", scope, http.StatusInternalServerError, "could not load library"
-			}
-			libs[libraryID] = lib
+		lib, err := a.cat.GetLibrary(r.Context(), libraryID)
+		if errors.Is(err, catalog.ErrNotFound) {
+			return nil, "", scope, http.StatusNotFound, "library not found"
+		}
+		if err != nil {
+			return nil, "", scope, http.StatusInternalServerError, "could not load library"
 		}
 		return pathInScope(lib, scope, rawPath)
 	}
@@ -97,7 +92,9 @@ func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncReso
 // of the stored one is not_applied "behind") under device "audible:<account>"
 // named "Audible (<label>)", recording no listening and nothing against the
 // bridge token. An event on a book that is none of the account's synced titles
-// is rejected not_synced, one outside the person's access no_access. 200 the
+// is rejected not_synced, one whose titles' Audible runtimes all disagree with
+// the indexed book's duration duration_mismatch (catalog.AudibleSyncBooks), one
+// outside the person's access no_access. 200 the
 // Sync v2 answer {server_time, results, progress}; 400 a bad envelope (as POST
 // /me/listening/sync's, sent_at required); 413 too_large; 403 sync_off,
 // user_unavailable; 404 unknown_account.
@@ -146,9 +143,6 @@ func (a *API) handleBridgeAudibleListening(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, answer)
 }
 
-// defaultAudibleProgress is GET /bridge/progress's page without a limit.
-const defaultAudibleProgress = 200
-
 // handleBridgeProgress serves GET /bridge/progress?account=&since=&limit=: a
 // page of the places of the account's person that the Bridge may push to
 // Audible (catalog.AudibleProgress: the books of the account's synced titles
@@ -172,9 +166,6 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if limit == 0 {
-		limit = defaultAudibleProgress
-	}
 	const op = "audible progress failed"
 	acct, scopes, ok := a.audibleSyncFor(w, r, id, op)
 	if !ok {
@@ -185,6 +176,5 @@ func (a *API) handleBridgeProgress(w http.ResponseWriter, r *http.Request) {
 		a.writeAudibleError(w, err, op)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "next": next, "more": more})
+	writeNoStore(w, http.StatusOK, map[string]any{"rows": rows, "next": next, "more": more})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -94,6 +95,12 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Ref = catalog.Ref{LibraryID: lib.ID, Path: key}
+	// An Audible account's device id is the Bridge's route's alone (Bridge Phase
+	// 4c: GET /bridge/progress leaves its rows out). A body naming one (a row
+	// echoed back) saves under none, so the place still reaches Audible.
+	if strings.HasPrefix(in.DeviceID, catalog.AudibleDevicePrefix) {
+		in.DeviceID = ""
+	}
 	u, cred := userFrom(r.Context()), credentialFrom(r.Context())
 	// The device's name is the token's, never the body's (an echoed row may
 	// carry one), and the save is logged as a Sync v2 "put" event.

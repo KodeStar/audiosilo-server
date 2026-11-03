@@ -1009,10 +1009,13 @@ func TestAudibleMarketplacesAreTheRegions(t *testing.T) {
 }
 
 // A poll's titles and its poll times are user state: they leave the content
-// generation (the player's list caches) alone; mapping an account is content.
+// generation (the player's list caches) alone, and so do the sync's times
+// (Phase 4c: queued, last synced, refused and a complete poll ending the
+// refusal); mapping an account is content.
 func TestAudibleTitlesAreUserState(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
+	ctx := context.Background()
 	if code, out := b.putAccount(t, testAccount, b.adminID, b.lib.ID); code != http.StatusOK {
 		t.Fatalf("put: %d %s", code, out)
 	}
@@ -1020,8 +1023,26 @@ func TestAudibleTitlesAreUserState(t *testing.T) {
 	if code, out := b.putTitles(t, testAccount, "p1", true, title("B000000001", "x", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
 		t.Fatalf("titles: %d %s", code, out)
 	}
-	if err := b.cat.MarkAudibleQueued(context.Background(), testAccount); err != nil {
+	if err := b.cat.MarkAudibleQueued(ctx, testAccount); err != nil {
 		t.Fatal(err)
+	}
+	if err := b.cat.MarkAudibleSyncQueued(ctx, testAccount); err != nil {
+		t.Fatal(err)
+	}
+	sync, _ := bridge.AudibleSync(testAccount, nil, 0)
+	for _, j := range []bridge.Job{
+		{Kind: bridge.KindAudibleSync, Params: sync.Params, State: bridge.StateDone},
+		{Kind: bridge.KindAudibleSync, Params: sync.Params, State: bridge.StateFailed, Error: bridge.SyncAudibleRefused},
+	} {
+		if err := b.cat.FoldAudibleSync(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, err := b.cat.AudibleAccount(ctx, testAccount); err != nil || a.LastSyncAt == nil || a.RefusedAt == nil {
+		t.Fatalf("after the syncs: %+v, %v", a, err)
+	}
+	if code, out := b.putTitles(t, testAccount, "p2", true, title("B000000001", "x", "available", b.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("titles again: %d %s", code, out)
 	}
 	if after := b.db.ContentGeneration(); after != before {
 		t.Fatalf("content generation moved %d -> %d", before, after)

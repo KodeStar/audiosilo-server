@@ -376,6 +376,19 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 // audibleQueues are the API's backup queues.
 func (a *API) audibleQueues() audible.Queues { return audible.Queues{Catalog: a.cat, Bridge: a.bridge} }
 
+// audibleSyncNow queues account's audible.sync at once after the console
+// changed which titles take part in it or turned it on (audible.SyncNow),
+// while the module is on; a failure is logged, the change stands and the next
+// scheduled sync carries it.
+func (a *API) audibleSyncNow(r *http.Request, account string, titlesChanged bool) {
+	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
+		return
+	}
+	if err := a.audibleQueues().SyncNow(r.Context(), a.log, account, titlesChanged); err != nil {
+		a.log.Warn("audible: queue a sync after a console change failed", "account", account, "err", err)
+	}
+}
+
 // afterAudiblePollTimeout bounds the backups a poll's final call queues: well
 // inside the 30 s the Bridge (and the request timeout) give the whole call, so
 // a slow pass still leaves the stored poll time to answer; what it didn't
@@ -516,6 +529,9 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 		details["no_sync"] = *p.NoSync
 	}
 	a.audit(r, "bridge.audible.title", "", details)
+	if p.Rejected != nil || p.NoSync != nil {
+		a.audibleSyncNow(r, account, true)
+	}
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -550,5 +566,8 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 		details["sync"] = *p.Sync
 	}
 	a.audit(r, "bridge.audible.account", "", details)
+	if p.Sync != nil && *p.Sync {
+		a.audibleSyncNow(r, id, false)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"account": acct})
 }

@@ -757,8 +757,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
-  the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`) and the
-  scheduler's `MarkAudibleQueued` (`last_queued_at`),
+  the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`, a
+  complete poll's `refused_at` cleared), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
+  `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
   `PutMetaCache`, the upcoming releases job's tables
   (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
@@ -2668,7 +2669,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
   `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
   **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
-  per account (`audiblePollSuffix`), only the newest ended one kept, gated by
+  per account (`audibleAccountSuffix`), only the newest ended one kept, gated by
   `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
   with an online Bridge that offers the kind, it queues the accounts due (`DueAudiblePolls`: not paused,
   mapped to a person an account may still be mapped to (`bridgeUserSQL`: not one disabled or made a kid
@@ -2743,7 +2744,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
   Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
   again every 5 s while one's backup is queued or running, `backupRunning`); the Bridge's job list names an
-  `audible.import` by its ASIN, and its placed files are no verify check (`resultSummary`); per account Backup settings... (policy, template) and Back up
+  `audible.import` by its ASIN, and its placed files are no verify check (`resultSummary`); per account Account settings... (policy, template) and Back up
   everything... with a confirm "N books, ~X GB" (`backup-all-button.tsx`), and the legal line on the
   titles page and both dialogs.
 - **Audible unmatched titles (4b owner fixes, `0065`, `catalog/audible.go`)**: what the console says of a title the
@@ -3152,7 +3153,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `0066`)**: an account's listening places kept in step with Audible both ways. The console owns the switch
   (`PATCH /admin/audible/accounts/{account}` `{sync}`, audited; off cancels the open sync with
   `bridge.CancelAudibleSyncOff`); `0066` sets every account off, a new account is created off and a Bridge PUT never
-  changes it (its `sync` is read and ignored). "Don't sync this book" is `audible_titles.no_sync`
+  turns it on (its `sync` is read and ignored); a PUT mapping the account to another person turns it off, forgets
+  its `last_sync_at` and cancels its open sync (`CancelAudibleSyncOff`: the console turned it on for the person it
+  showed then). "Don't sync this book" is `audible_titles.no_sync`
   (`0066`; `PATCH /admin/audible/titles/{account}/{asin}` `{no_sync}`, audited, kept by a poll like `rejected` and
   `ignored`); it is the sync's alone, backups never read it (the registry's `ignored` still keeps a title out of
   backups). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not no_sync, not `gone`. **Audible to
@@ -3162,31 +3165,49 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `{account, titles:[{asin, library_id, path, runtime_s}]}` (strict, `audibleSyncParams`; ASIN once each, a clean
   book path or `.`; at most 1 MiB, `AudibleSync` drops the last titles past it), internal, quiet, `ModuleFor`
   audible, deduped per account, `promotes` (a queued one takes the newest titles), only the newest ended kept
-  (`pruneAudibleEnded`). Ended (`OnEnded`, `FoldAudibleSync`): done sets `last_sync_at`; failed with code
-  `audible_refused` (result `code`, or an `audible_refused:` error prefix, `AudibleSyncCode`) sets `refused_at`,
-  cleared by the Bridge's next account PUT (a fresh sign-in). The Bridge posts the places to `POST
+  (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
+  or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same
+  rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
+  Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
+  `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
+  fields, hand-mirrored); failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
+  `AudibleSyncCode`; `audible_sign_in`, the Bridge's transient sign-in refusal, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
+  complete poll (`PutAudibleTitles` final: Audible answered the account). The Bridge posts the places to `POST
   /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
   `sent_at` required, the Sync v2 event shapes and limits): the batch is `SyncBatch{UserID: the account's person,
   DeviceID: "audible:<account>", DeviceName: "Audible (<label or STORE>)", TokenID: 0, FurthestOnly: true}`, set by
   the route alone (no body field reaches either; `/me/listening/sync` refuses an unknown field). Each event's book is
-  resolved under the PERSON's scopes (`pathForUser`, `catalog.UserScopes`: no access is `no_access`), then must be a
-  synced title's match (`AudibleSyncBooks`, else `rejected` `not_synced`). **FurthestOnly** (`furthestListen`): a
+  resolved under the PERSON's scopes (`userPathResolver`, `catalog.UserScopes`: no access is `no_access`), then must
+  be a synced title's match (`AudibleSyncBooks`, else `rejected` `not_synced`; `rejected` `duration_mismatch`, listen
+  and finish alike, when no title on the book has an Audible `runtime_s` within 5% of the longer plus 2 min of the
+  indexed book's duration, `audibleRuntimeAgrees`: matched to another recording; either unknown agrees). **FurthestOnly** (`furthestListen`): a
   listen more than 1 s (`furthestSlack`) ahead of the stored place applies over any device's row whatever its time
-  (the row's `updated_at` never moves back, its offer kept; the player's own reconcile then moves or offers, and a
-  device's diverged span offers Audible's place by name); at or behind it, or on a finished row, `not_applied`
-  `behind` (no offer, nothing stored on the row); an unfinish is `behind`; a finish is any finish. No listening
-  session, `listening_daily` or history row is recorded (owner decision 2); the events are logged with token 0. 200
-  the Sync v2 answer; 403 `sync_off` (the module or the account's sync off), 403 `user_unavailable` (the person
-  disabled, a kid or a demo since: `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person
-  deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
+  (the row's `updated_at` never moves back, its playback speed and offer kept; the player's own reconcile then moves
+  or offers, and a device's diverged span offers Audible's place by name); at or behind it, or on a finished row,
+  `not_applied` `behind` (no offer, nothing stored on the row), and so is a listen heard at or before the row's
+  `finish_changed_at` (a place from before a finish or a restart here is the old reading's); a place past the book's end by more than 5% plus 2
+  min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
+  is the end; an unfinish is `behind`; a finish is any finish. The device id `audible:<account>` is this route's
+  alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
+  none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
+  undo it unseen). No listening session, `listening_daily` or history row is recorded (owner decision 2); the
+  events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
+  the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
+  `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
   at most 500; the same 403s and 404, 400 `invalid_request` for no account, a bad limit or cursor) answers
   `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more}`:
-  the person's progress rows on the synced titles' books inside their scopes, rows whose `device_id` is the
-  account's left out (no echo), keyset by `(updated_at, library_id, rel_path)` after the opaque cursor `since`
-  (base64url JSON); `next` is the last row read (since again when none), a feed cursor the Bridge keeps between
-  polls; `more` a full page. A row whose `updated_at` stayed (a diverged apply) is not read again. Console:
+  the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
+  are two rows), rows whose `device_id` is the account's left out (no echo), keyset by `(change_seq, asin)` after
+  the opaque cursor `since` (base64url JSON); `next` is the last row read (since again when none), a feed cursor the
+  Bridge keeps between polls; `more` a full page. `progress.change_seq` (`0066`, `idx_progress_user_change`) is the
+  order this server wrote the person's rows in: per person, one more than their highest, set by two triggers on
+  every insert and every UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path
+  can miss it; free in the user-state rule), existing rows numbered in updated_at order. A row written late with
+  an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
+  clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the
-  account card's Sync row says off, on and when it last synced, or stopped since Audible refused the account; a title
+  account card's Sync row says off, on and when it last synced, paused with the account, or stopped since Audible
+  refused the account; a scheduled sync's job reads "Syncing places with Audible", scheduled by the server; a title
   on this server has Don't sync / Sync again (`title-actions.tsx`, `canSync`) and a Not synced badge.
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
