@@ -78,7 +78,7 @@ func pruneAudiblePolls(ctx context.Context, tx *sql.Tx, key string) error {
 // The server's reasons for cancelling an account's open poll (IsCancelReason;
 // the console keeps a copy: admin-ui generate-model.ts).
 const (
-	// CancelAudibleRemoved: the Bridge removed the account.
+	// CancelAudibleRemoved: the account was removed (by the Bridge, or the console).
 	CancelAudibleRemoved = "the Audible account was removed"
 	// CancelAudiblePaused: the account's library was deleted (it is paused).
 	CancelAudiblePaused = "the Audible account's library was deleted"

@@ -15,7 +15,8 @@ import (
 // titles each poll found, list the people an account may be mapped to and a
 // library's books for its matching, and backfill an ASIN it matched without
 // doubt. The console's routes (admin, behind the audible module's toggle,
-// mounted in api.go) show them read-only and ask for a poll now.
+// mounted in api.go) show them read-only and ask for a poll now; removing an
+// account is admin only and outside the toggle.
 
 // maxAudibleTitlesBody bounds a titles call: 500 titles at their bounds.
 const maxAudibleTitlesBody = 4 << 20
