@@ -104,23 +104,33 @@ type candLink struct {
 }
 
 // Best returns the index of the best-matching book and whether it cleared the
-// confidence threshold (-1, false when none match).
+// confidence threshold (-1, false when none match). It is BestWith under the
+// default Options: none of the opt-in rules.
 func Best(books []Book, q Query) (int, bool) {
+	i, _, ok := BestWith(books, q, Options{})
+	return i, ok
+}
+
+// BestWith is Best under o's opt-in rules (see Options), also returning the
+// winning score so a caller matching many queries against one list can compare
+// two that land on the same book (an ASIN match scores ScoreASIN). The score is 0
+// with -1, false when none match.
+func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 	// 1. ASIN - exact, highest confidence (rare in practice, but decisive).
 	for i := range books {
 		if q.ASIN != "" && books[i].ASIN != "" && strings.EqualFold(q.ASIN, books[i].ASIN) {
-			return i, true
+			return i, ScoreASIN, true
 		}
 	}
 	qSeries := NormalizeSeries(q.Series)
-	qToks := titleTokens(q.Title, q.Series)
+	qToks := titleTokens(q.Title, q.Series, o)
 	if len(qToks) == 0 {
-		qToks = titleTokens(q.TitleShort, q.Series)
+		qToks = titleTokens(q.TitleShort, q.Series, o)
 	}
 	qSeq, qHasSeq := querySeq(q)
 	qTitleLower := strings.ToLower(q.Title)
 	numsUnder := func(seriesRef string) qNums {
-		n := qNums{bare: bareTitle(q.Title, seriesRef)}
+		n := qNums{bare: bareTitle(q.Title, seriesRef, o)}
 		n.veto, n.vetoOK = bareSeq(q.Title, seriesRef)
 		if n.bare {
 			// A bare title's own number, else the sequence column it was scanned with.
@@ -137,6 +147,12 @@ func Best(books []Book, q Query) (int, bool) {
 		return n
 	}
 	ownNums := numsUnder(q.Series)
+	// Options.ExactTitle's key, left empty when the query's title is just its
+	// series name (and number): a same-titled candidate is then a sibling volume.
+	qExact := ""
+	if o.ExactTitle && (qSeries == "" || !ownNums.bare) {
+		qExact = exactTitleKey(q.Title)
+	}
 	// Candidate lists repeat a series across its volumes, and this derivation
 	// depends only on (q.Title, b.Series), so it is memoized per Best call.
 	linkMemo := map[string]candLink{}
@@ -188,19 +204,20 @@ func Best(books []Book, q Query) (int, bool) {
 		bBare := false
 		switch {
 		case seriesLinked:
-			bBare = bareTitle(b.Title, bSeriesRef)
+			bBare = bareTitle(b.Title, bSeriesRef, o)
 		case bSeriesTrim == "" && qSeries != "":
 			// The series must actually OCCUR in that title. Reducing to nothing is
 			// not enough on its own: a card titled "Unabridged" also reduces to
 			// nothing, and would then claim every numberless volume of the series
 			// by the same author.
 			if _, ok := seriesRefIn(strings.ToLower(b.Title), q.Series); ok {
-				bBare = bareTitle(b.Title, bSeriesRef)
+				bBare = bareTitle(b.Title, bSeriesRef, o)
 				seriesLinked = bBare
 			}
 		}
 		score := 0.0
-		if seriesLinked && (qn.bare || bBare) {
+		switch {
+		case seriesLinked && (qn.bare || bBare):
 			// A bare title ("Series: Volume N", or just the series name - Audible
 			// lists whole series that way) carries no title evidence: token overlap
 			// is the series matching itself, and the volume number is the only
@@ -217,6 +234,12 @@ func Best(books []Book, q Query) (int, bool) {
 				if !bConfOK {
 					bConf, bConfOK = bookSeqRef(b, bSeriesRef)
 				}
+			}
+			if o.SeriesMarker && !bBare && !bConfOK {
+				// A wordy title with no column may still name its place right after
+				// the series ("Iron Will: Dragon Heart Series, Book 2"): confirm-grade
+				// like the column, never a veto.
+				bConf, bConfOK = seriesBookMarker(b.Title, bSeriesRef)
 			}
 			// Only two bare sides stating their OWN explicit numbers may disagree
 			// hard enough to mean "a sibling, not this book" (see bookSeqRef for why
@@ -239,8 +262,21 @@ func Best(books []Book, q Query) (int, bool) {
 				// is still claimable by volume 1 - pinned in TestBestSequenceConflict).
 				score = scoreBareVol1
 			}
-		} else {
-			bToks := titleTokens(b.Title, b.Series)
+		default:
+			if o.WordlessFallback && qHasSeq && candSeriesOnly(b, o) {
+				// The fallback gave this series-named candidate its title's words
+				// back, so token overlap is the series matching itself: like a bare
+				// pair, only its number (1 when it states none) may agree, or one
+				// numberless volume would absorb every later one.
+				bSeq, ok := bookSeqRef(b, b.Series)
+				if !ok {
+					bSeq = 1
+				}
+				if !seqEqual(bSeq, qSeq) {
+					continue
+				}
+			}
+			bToks := titleTokens(b.Title, b.Series, o)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
 				score += scoreSeriesAgree
@@ -264,14 +300,24 @@ func Best(books []Book, q Query) (int, bool) {
 				}
 			}
 		}
+		if qExact != "" && exactTitleKey(b.Title) == qExact && !candSeriesOnly(b, o) {
+			// Options.ExactTitle: the same title by the same person is the book, even
+			// when the two sides file it under differently named series - unless a
+			// side is just its series name (and number), which every volume shares.
+			// A bonus on the pair's own score, never in place of it: two volumes
+			// whose titles differ only in a bracketed group ("Forged in Blood (Part
+			// 1)", "(Part 2)") share the key, and the series and number still tell
+			// them apart.
+			score += scoreExactTitle
+		}
 		if score > bestScore {
 			bestScore, best = score, i
 		}
 	}
 	if bestScore >= threshold {
-		return best, true
+		return best, bestScore, true
 	}
-	return -1, false
+	return -1, 0, false
 }
 
 // stripMatchNoise strips parenthetical/bracketed groups (stripParenGroups) and
@@ -289,8 +335,17 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 // removed: "Diary of a Wimpy Kid: The Ugly Truth (Book 5)" + series "Diary of a
 // Wimpy Kid" → "The Ugly Truth". Useful both to name a file and (tokenized) to
 // match. Falls back to the original (minus parentheticals) if cleaning empties it.
-func CleanTitle(title, series string) string {
-	t := residualTitle(title, series)
+func CleanTitle(title, series string) string { return cleanTitle(title, series, Options{}) }
+
+// cleanTitle is CleanTitle under o. With Options.WordlessFallback a residual
+// with no word tokens and no digit ("The" of "The Mayor of Noobtown" in series
+// "Mayor of Noobtown") falls back like an empty one; a residual holding a number
+// is a volume's own, so it stays.
+func cleanTitle(title, series string, o Options) string {
+	t := residualTitle(title, series, o)
+	if o.WordlessFallback && !strings.ContainsAny(t, "0123456789") && len(tokenize(t)) == 0 {
+		t = ""
+	}
 	if t == "" {
 		t = tidyTitle(stripMatchNoise(title))
 	}
@@ -303,8 +358,13 @@ func CleanTitle(title, series string) string {
 // residualTitle is the title with the series name and numbering/edition fluff
 // removed and NO fallback - empty when the title carries nothing of its own
 // ("Unintended Cultivator: Volume 9" with that series is pure series + number).
-func residualTitle(title, series string) string {
+func residualTitle(title, series string, o Options) string {
 	t := stripSeries(title, series)
+	if o.DropUnabridged {
+		// "(Unabridged)" is not genre fluff, so it kept a genre tail before it
+		// ("The Primal Hunter 15: A LitRPG Adventure (Unabridged)").
+		t = unabridgedGroup.ReplaceAllString(t, " ")
+	}
 	t = dropGenreSubtitle(t)
 	t = stripMatchNoise(t)
 	t = fluffWords.ReplaceAllString(t, " ")
@@ -314,8 +374,8 @@ func residualTitle(title, series string) string {
 // bareTitle reports whether a title reduces to nothing beyond its series name and
 // numbering - the shape whose CleanTitle fallback reintroduces the series words,
 // making token overlap between two such titles meaningless as title evidence.
-func bareTitle(title, series string) bool {
-	return len(tokenize(residualTitle(title, series))) == 0
+func bareTitle(title, series string, o Options) bool {
+	return len(tokenize(residualTitle(title, series, o))) == 0
 }
 
 // seriesForms enumerates the spellings one series name appears in, most specific
@@ -425,7 +485,13 @@ func dropSeriesSuffix(s string) string {
 func containsPhraseLower(ls, sub string) bool {
 	// Offsets index the lowered copies only, and lowering preserves whether a rune
 	// is alphanumeric, so the boundary test needs no mapping back onto the original.
-	lsub := strings.ToLower(sub)
+	return boundedMatch(ls, strings.ToLower(sub), func(int) bool { return true })
+}
+
+// boundedMatch reports whether fn accepts the end offset of some occurrence of
+// the lowercased lsub in the lowercased ls that sits on alphanumeric boundaries,
+// trying them left to right. An empty lsub never matches.
+func boundedMatch(ls, lsub string, fn func(end int) bool) bool {
 	if lsub == "" {
 		return false
 	}
@@ -435,7 +501,7 @@ func containsPhraseLower(ls, sub string) bool {
 			return false
 		}
 		i += from
-		if boundedAt(ls, i, i+len(lsub)) {
+		if end := i + len(lsub); boundedAt(ls, i, end) && fn(end) {
 			return true
 		}
 		from = i + 1
@@ -671,8 +737,8 @@ var titleStopwords = map[string]bool{
 
 // titleTokens reduces a title to its set of significant lowercase word tokens after
 // CleanTitle has removed the series name and fluff.
-func titleTokens(title, series string) map[string]struct{} {
-	return tokenize(CleanTitle(title, series))
+func titleTokens(title, series string, o Options) map[string]struct{} {
+	return tokenize(cleanTitle(title, series, o))
 }
 
 // tokenize splits a cleaned title into its significant lowercase word tokens.

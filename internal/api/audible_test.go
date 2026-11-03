@@ -706,6 +706,86 @@ func TestBridgeBooksPaged(t *testing.T) {
 	}
 }
 
+// GET /bridge/libraries/{id}/books fills a main series' empty position from the
+// code leading the book's folder name, when the code is the series' initials;
+// the book's own position is unchanged.
+func TestBridgeBooksFolderCode(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	const dh06 = "Kirill Klevanski/Dragon Heart/DH06 - Land of Magic"
+	books := []struct {
+		path string
+		book catalog.Book
+		want string // the listed position
+	}{
+		{dh06, catalog.Book{Series: "Dragon Heart"}, "6"},
+		{"Jim Butcher/Dresden Files/DF15.5 Brief Cases", catalog.Book{Series: "Dresden Files"}, "15.5"},
+		{"HALO/HALO 07 - Evolutions (M4B)", catalog.Book{Series: "Halo"}, ""},                                              // a franchise's number
+		{"Kirill Klevanski/Dragon Heart/DH07 - Land of Demons", catalog.Book{Series: "Dragon Heart", SeriesIndex: 9}, "9"}, // a stored position wins
+		{"Michael Sisa/Legend of the Arch Magus/LAM05-06", catalog.Book{Series: "Legend of the Arch Magus"}, "5-6"},        // an omnibus stays a range
+	}
+	for _, c := range books {
+		bk := c.book
+		bk.LibraryID, bk.RelPath, bk.Title, bk.AddedAt = b.lib.ID, c.path, "T", "2020-01-01"
+		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, out := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/books?limit=500", b.lib.ID), b.bridgeTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("books: %d %s", resp.StatusCode, out)
+	}
+	var page struct {
+		Books []bridgeListBook `json:"books"`
+	}
+	decodeInto(t, out, &page)
+	got := map[string]string{}
+	for _, bk := range page.Books {
+		if len(bk.Series) > 0 {
+			got[bk.Path] = bk.Series[0].Position
+		}
+	}
+	for _, c := range books {
+		if got[c.path] != c.want {
+			t.Errorf("%s: position %q, want %q", c.path, got[c.path], c.want)
+		}
+	}
+	if bk, err := b.cat.GetBookByPath(ctx, b.lib.ID, dh06); err != nil || bk.SeriesIndex != 0 {
+		t.Fatalf("the book's own position changed: %+v, %v", bk, err)
+	}
+}
+
+// bridgeSeries fills only the main series, leaves a stored range alone and
+// keeps a range folder code a range.
+func TestBridgeSeriesFolderCode(t *testing.T) {
+	t.Parallel()
+	b := &catalog.Book{RelPath: "A/Dragon Heart/DH06 - Land of Magic", Series: "Dragon Heart", SeriesList: []catalog.SeriesRef{
+		{Name: "Dragon Heart"}, {Name: "Dragon Heart Universe"},
+	}}
+	got := bridgeSeries(b)
+	if len(got) != 2 || got[0].Position != "6" || got[1].Position != "" {
+		t.Errorf("bridgeSeries = %+v", got)
+	}
+	// No main series: an other series' position is never filled.
+	more := &catalog.Book{RelPath: "A/Dragon Heart/DH06 - Land of Magic", SeriesList: []catalog.SeriesRef{{Name: "Dragon Heart"}}}
+	if got := bridgeSeries(more); len(got) != 1 || got[0].Position != "" {
+		t.Errorf("bridgeSeries without a main series = %+v", got)
+	}
+	r := &catalog.Book{RelPath: "A/Dragon Heart/DH06-07", Series: "Dragon Heart", SeriesIndex: 6, SeriesIndexEnd: 7}
+	if got := bridgeSeries(r); len(got) != 1 || got[0].Position != "6-7" {
+		t.Errorf("a range = %+v", got)
+	}
+	omnibus := &catalog.Book{RelPath: "A/Legend of the Arch Magus/LAM05-06", Series: "Legend of the Arch Magus"}
+	if got := bridgeSeries(omnibus); len(got) != 1 || got[0].Position != "5-6" {
+		t.Errorf("a range folder code = %+v", got)
+	}
+	none := &catalog.Book{RelPath: "A/Standalone"}
+	if got := bridgeSeries(none); len(got) != 0 {
+		t.Errorf("no series = %+v", got)
+	}
+}
+
 // PUT /bridge/libraries/{id}/enrichment backfills an ASIN on a book with none,
 // once: the same ASIN again is fine, another 409 asin_set.
 func TestBridgeEnrichment(t *testing.T) {
