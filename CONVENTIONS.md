@@ -2605,7 +2605,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
   this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
   (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
-  500); `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
+  500; a main series with no position takes the one the code leading the book's folder name gives,
+  `metadata.FolderCodePosition`: "DH06 - ..." is Dragon Heart 6, "LAM05-06" 5, only when the code's letters
+  are the series' initials (all or some, in order; "HALO 07" in "Halo" gives none), in this listing only,
+  never the scan's position; the Bridge matches under `match.ImportOptions`, see `pkg/match` `Options`);
+  `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
   same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
   another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
   since the Bridge asks again for such a book after every poll).
