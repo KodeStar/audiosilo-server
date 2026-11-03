@@ -81,7 +81,7 @@ END;
 
 CREATE TRIGGER audible_title_match_update AFTER UPDATE OF match_library_id, match_path ON audible_titles
 WHEN NEW.match_path IS NOT NULL
- AND (OLD.match_path IS NULL OR OLD.match_path <> NEW.match_path OR OLD.match_library_id IS NOT NEW.match_library_id)
+ AND (OLD.match_path IS NOT NEW.match_path OR OLD.match_library_id IS NOT NEW.match_library_id)
 BEGIN
     UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
     UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)

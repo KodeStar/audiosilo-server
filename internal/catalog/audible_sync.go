@@ -208,7 +208,8 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // where the next page starts (the last row read, or since when none was: a
 // feed's cursor, kept for the next poll) and more whether a full page was read
 // (ask again with next now; a page may carry fewer rows than it read, a book
-// whose length no title agrees with left out: AudibleSyncBooks). ErrAudibleInvalid for a cursor not made here.
+// whose length no title agrees with left out: AudibleSyncBooks).
+// ErrAudibleInvalid for a cursor not made here.
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
 	from, err := decodeProgressCursor(since)
@@ -240,6 +241,9 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	     LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, "", false, err
+	}
+	if len(got) == 0 {
+		return []AudibleProgressRow{}, since, false, nil
 	}
 	// A book no title on it agrees with (duration_mismatch: another edition or
 	// volume) is never pushed, as its places are never taken (the listening
