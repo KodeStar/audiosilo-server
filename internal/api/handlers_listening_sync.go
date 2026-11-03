@@ -80,11 +80,19 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targets, ok := a.syncTargets(w, r, scopes, events)
+	cred := credentialFrom(r.Context())
+	resolve := func(libraryID int64, path string) (*catalog.Library, string, catalog.Scope, int, string) {
+		return a.scopedPathIn(r, scopes, libraryID, path)
+	}
+	now := time.Now()
+	transcoding := func(libraryID int64, key string) bool {
+		return a.streams.Transcoding(cred.DeviceID, libraryID, key, now)
+	}
+	targets, ok := a.syncTargets(w, r, events, resolve, transcoding, nil)
 	if !ok {
 		return
 	}
-	u, cred := userFrom(r.Context()), credentialFrom(r.Context())
+	u := userFrom(r.Context())
 	// TokenID is the token the request acts for (a cast token's sender's,
 	// auth.Credential.DeviceID), never the client's device_id.
 	answer, err := a.cat.SyncListening(r.Context(), catalog.SyncBatch{
@@ -99,17 +107,23 @@ func (a *API) handleListeningSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answer)
 }
 
+// syncResolver checks one event's (library_id, path) against the scopes of the
+// user a batch is for, as scopedPathIn does: the library, the cleaned path and
+// the scope, or the status and message of a refusal.
+type syncResolver func(libraryID int64, path string) (*catalog.Library, string, catalog.Scope, int, string)
+
 // syncTargets resolves every distinct (library_id, path) the events name, as
-// PUT .../progress resolves its path: the scope check (403 is the events'
-// no_access, 404 their not_found, a path that cleans to nothing or is over
-// catalog.MaxPathBytes their invalid), the progress key (progressPath: a file
-// or part path keys its book), and the indexed book there with its files'
-// offsets. An event with no library or path is left out (catalog checks it
-// invalid). A failed lookup is the batch's error, written here (false).
-func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catalog.Scope, events []catalog.SyncEvent) (map[catalog.Ref]catalog.SyncTarget, bool) {
+// PUT .../progress resolves its path: the scope check (resolve; 403 is the
+// events' no_access, 404 their not_found, a path that cleans to nothing or is
+// over catalog.MaxPathBytes their invalid), the progress key (progressPath: a
+// file or part path keys its book), and the indexed book there with its files'
+// offsets. allowed, when not nil, is every progress key the batch may write
+// (an Audible account's synced books): any other is not_synced. An event with
+// no library or path is left out (catalog checks it invalid). A failed lookup
+// is the batch's error, written here (false).
+func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, events []catalog.SyncEvent, resolve syncResolver,
+	transcoding func(libraryID int64, key string) bool, allowed map[catalog.Ref]bool) (map[catalog.Ref]catalog.SyncTarget, bool) {
 	ctx := r.Context()
-	cred := credentialFrom(ctx)
-	now := time.Now()
 	targets := map[catalog.Ref]catalog.SyncTarget{}
 	books := map[catalog.Ref]*catalog.SyncBook{} // by key: several sent paths may key one book
 	for _, ev := range events {
@@ -117,7 +131,7 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catal
 		if _, done := targets[sent]; done || ev.LibraryID <= 0 || ev.Path == "" {
 			continue
 		}
-		lib, rel, scope, status, msg := a.scopedPathIn(r, scopes, ev.LibraryID, ev.Path)
+		lib, rel, scope, status, msg := resolve(ev.LibraryID, ev.Path)
 		if reason, ok := syncPathReasons[status]; ok {
 			targets[sent] = catalog.SyncTarget{Reason: reason}
 			continue
@@ -133,6 +147,10 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catal
 			return nil, false
 		}
 		ref := catalog.Ref{LibraryID: lib.ID, Path: key}
+		if allowed != nil && !allowed[ref] {
+			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncNotSynced}
+			continue
+		}
 		book, done := books[ref]
 		if !done {
 			if book, err = a.cat.SyncBookAt(ctx, lib.ID, key); err != nil {
@@ -146,7 +164,7 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, scopes []catal
 			Key:         ref,
 			Exact:       book != nil && rel == key,
 			Book:        book,
-			Transcoding: a.streams.Transcoding(cred.DeviceID, lib.ID, key, now),
+			Transcoding: transcoding != nil && transcoding(lib.ID, key),
 		}
 	}
 	return targets, true

@@ -404,12 +404,16 @@ func maxCorrection(enc func(string) string, current, corrected, evidence string)
 }
 
 // MaxParamsBytes, which bounds the queue route's body, is the largest cap of
-// any kind: a kind given a larger one would be refused before Enqueue.
+// any kind an admin may queue: such a kind given a larger one would be refused
+// before Enqueue. An internal kind (audible.sync's larger params) never comes
+// through the route.
 func TestMaxParamsBytesIsTheLargestCap(t *testing.T) {
 	t.Parallel()
 	most := 0
 	for _, s := range kinds {
-		most = max(most, s.paramsCap())
+		if !s.internal {
+			most = max(most, s.paramsCap())
+		}
 	}
 	if most != MaxParamsBytes {
 		t.Fatalf("MaxParamsBytes is %d, the largest kind's cap %d", MaxParamsBytes, most)

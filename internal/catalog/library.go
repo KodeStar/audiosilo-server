@@ -248,6 +248,9 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 			if err := bridge.CancelAudiblePolls(ctx, tx, account, bridge.CancelAudiblePaused, c.now()); err != nil {
 				return err
 			}
+			if err := bridge.CancelAudibleSyncs(ctx, tx, account, bridge.CancelAudiblePaused, c.now()); err != nil {
+				return err
+			}
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM libraries WHERE id = ?`, id)
 		return err

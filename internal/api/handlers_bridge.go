@@ -55,6 +55,12 @@ func (a *API) SetBridge(b *bridge.Service) {
 				a.log.Warn("audible: recording a backup failed", "job", job.ID, "err", err)
 			}
 		}
+		if job.Kind == bridge.KindAudibleSync {
+			// The account's last sync, or Audible refusing it.
+			if err := a.cat.FoldAudibleSync(ctx, job); err != nil {
+				a.log.Warn("audible: recording a sync failed", "job", job.ID, "err", err)
+			}
+		}
 	}
 	b.ModuleOn = a.moduleOn
 }

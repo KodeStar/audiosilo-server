@@ -57,7 +57,9 @@ const (
 	DefaultListLimit = 50
 
 	// defaultParamsBytes bounds a job's params as sent, unless its kind sets
-	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind takes.
+	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind an
+	// admin may queue takes (the console's POST /admin/bridge/jobs body; an
+	// internal kind's params, audible.sync's larger ones, are the server's own).
 	defaultParamsBytes = 16 << 10
 	MaxParamsBytes     = max(defaultParamsBytes, maxCorrectParamsBytes)
 	maxProgressBytes   = 16 << 10
@@ -190,6 +192,8 @@ var kinds = map[string]kindSpec{
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audiblePollSuffix, promotes: true},
+	KindAudibleSync: {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleSyncSuffix,
+		promotes: true, maxParams: maxAudibleSyncParamsBytes},
 	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
 		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
@@ -792,8 +796,8 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 				return err
 			}
 		}
-		if j.Kind == KindAudiblePoll {
-			if err := pruneAudiblePolls(ctx, tx, key); err != nil {
+		if j.Kind == KindAudiblePoll || j.Kind == KindAudibleSync {
+			if err := pruneAudibleEnded(ctx, tx, j.Kind, key); err != nil {
 				return err
 			}
 		}
@@ -1633,7 +1637,7 @@ const (
 // Audible poll's (CancelAudibleRemoved, CancelAudiblePaused).
 func IsCancelReason(text string) bool {
 	switch text {
-	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused:
+	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff:
 		return true
 	}
 	for _, spec := range kinds {

@@ -319,7 +319,7 @@ func TestAudibleAccountPut(t *testing.T) {
 	decodeInto(t, out, &got)
 	a := got.Account
 	if a.ID != testAccount || a.Label != "Chris (US)" || a.Marketplace != "us" || a.User.ID != b.adminID ||
-		a.User.DisplayName == "" || a.LibraryID == nil || *a.LibraryID != b.lib.ID || a.Policy != "manual" || !a.Sync ||
+		a.User.DisplayName == "" || a.LibraryID == nil || *a.LibraryID != b.lib.ID || a.Policy != "manual" || a.Sync ||
 		a.PollHours != 6 || a.Paused {
 		t.Fatalf("account = %s", out)
 	}

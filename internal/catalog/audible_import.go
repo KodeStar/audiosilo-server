@@ -93,19 +93,19 @@ const retryImportSQL = `NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.im
 const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
 
 // backupAllSQL is a title (aliased t) "Back up everything" queues: available,
-// not on this server, not marked "Not this book" or ignored, not contested
+// not on this server, not marked "Not this book", not contested
 // (on this server under another title), and no backup open or refused
 // (retryImportSQL).
-const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
+const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0
 	AND NOT ` + contestedSQL + ` AND ` + retryImportSQL
 
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked
 // hourly: a preorder released by the UTC date ?1 but not before ?2 (?1 less
 // AudiblePreorderWait) that a backup may wait for (preorderOverdue's): not on
-// this server, not marked or ignored, or a console request for it while it
+// this server, not marked, or a console request for it while it
 // isn't here (a match marked "Not this book" isn't).
 const preorderWaitingSQL = `t.state = 'preorder' AND t.release_date <> '' AND t.release_date <= ?1 AND t.release_date > ?2
-	AND ((t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0)
+	AND ((t.match_path IS NULL AND t.rejected = 0)
 	  OR (t.import_pending = 1 AND (t.match_path IS NULL OR t.rejected = 1)))`
 
 // preorderWindow is today's UTC date at now and the release date a preorder
@@ -122,7 +122,7 @@ func preorderOverdue(t *AudibleTitle, pending bool, now time.Time) bool {
 	if t.State != AudiblePreorder || t.ReleaseDate == "" {
 		return false
 	}
-	waited := (t.Match == nil && !t.Rejected && !t.Ignored) || (pending && (t.Match == nil || t.Rejected))
+	waited := (t.Match == nil && !t.Rejected) || (pending && (t.Match == nil || t.Rejected))
 	_, cutoff := preorderWindow(now)
 	return waited && t.ReleaseDate <= cutoff
 }
@@ -145,11 +145,13 @@ func (c *Catalog) AudibleTitle(ctx context.Context, account, asin string) (*Audi
 }
 
 // AudibleTitlePatch is the console's change to a title: "Not this book"
-// (rejected) and the backup's destination (dest_path, "" for the account's
-// placement). A nil field is left as it is.
+// (rejected), the backup's destination (dest_path, "" for the account's
+// placement) and "Don't sync this book" (ignored, Phase 4c). A nil field is
+// left as it is.
 type AudibleTitlePatch struct {
 	Rejected *bool   `json:"rejected"`
 	DestPath *string `json:"dest_path"`
+	Ignored  *bool   `json:"ignored"`
 }
 
 // PatchAudibleTitle applies the console's change to a title and returns it:
@@ -187,6 +189,12 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 				return err
 			}
 		}
+		if p.Ignored != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE audible_titles SET ignored = ?, updated_at = ? WHERE account = ? AND asin = ?`,
+				*p.Ignored, now, account, asin); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -195,11 +203,13 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 	return c.AudibleTitle(ctx, account, asin)
 }
 
-// AudibleAccountPatch is the console's change to an account: its policy and
-// its placement template. A nil field is left as it is.
+// AudibleAccountPatch is the console's change to an account: its policy, its
+// placement template and whether its places sync with Audible (Phase 4c). A
+// nil field is left as it is.
 type AudibleAccountPatch struct {
 	Policy   *string `json:"policy"`
 	Template *string `json:"template"`
+	Sync     *bool   `json:"sync"`
 }
 
 // PatchAudibleAccount applies the console's change to account id and returns
@@ -237,6 +247,20 @@ func (c *Catalog) PatchAudibleAccount(ctx context.Context, id string, p AudibleA
 			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET template = ?, updated_at = ? WHERE account = ?`,
 				*p.Template, now, id); err != nil {
 				return err
+			}
+		}
+		// Turned on, the account's first sync is due at the scheduler's next
+		// pass; turned off, its open sync is cancelled (a running one posts
+		// nothing more: the listening route answers sync_off).
+		if p.Sync != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET sync = ?1, sync_queued_at = NULL, updated_at = ?2
+				  WHERE account = ?3 AND sync <> ?1`, *p.Sync, now, id); err != nil {
+				return err
+			}
+			if !*p.Sync {
+				if err := bridge.CancelAudibleSyncs(ctx, tx, id, bridge.CancelAudibleSyncOff, c.now()); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -317,7 +341,6 @@ type autoImport struct {
 	Matched     bool // on this server: a match not marked "Not this book"
 	Rejected    bool // "Not this book"
 	Contested   bool // left unmatched: another title claimed the same book
-	Ignored     bool
 	Pending     bool // a console request waiting for the preorder
 	Attempted   bool // a backup was queued before (whatever became of it)
 	Open        bool // that backup is still open
@@ -327,11 +350,11 @@ type autoImport struct {
 // wants reports whether a poll queues the title's backup: an available title
 // not on this server, with no backup open, that a console request waits for,
 // or that the account's automatic policy covers: a new purchase (first seen
-// after policy_since) never marked "Not this book", ignored, contested or
+// after policy_since) never marked "Not this book", contested or
 // tried, under "all", or under "series" when the person already has a book of
 // its series.
 func (a autoImport) wants() bool {
-	if a.State != AudibleAvailable || a.Matched || a.Open || a.Ignored {
+	if a.State != AudibleAvailable || a.Matched || a.Open {
 		return false
 	}
 	if a.Pending {
@@ -397,7 +420,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]A
 	cands, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *cand) error {
 		var first, series string
 		if err := rows.Scan(&x.asin, &x.dest, &x.State, &x.Matched, &first, &series, &x.Rejected, &x.Contested,
-			&x.Ignored, &x.Pending, &x.Attempted, &x.Open); err != nil {
+			&x.Pending, &x.Attempted, &x.Open); err != nil {
 			return err
 		}
 		x.FirstSeen, _ = time.Parse(time.RFC3339Nano, first)
@@ -405,7 +428,7 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]A
 		x.Policy, x.PolicySince = acct.Policy, since
 		return nil
 	}, `SELECT t.asin, t.dest_path, t.state, t.match_path IS NOT NULL AND t.rejected = 0, t.first_seen, t.series, t.rejected, `+contestedSQL+`,
-		    t.ignored, t.import_pending, t.import_job_id IS NOT NULL, `+openImportSQL+`
+		    t.import_pending, t.import_job_id IS NOT NULL, `+openImportSQL+`
 		  FROM audible_titles t WHERE t.account = ?
 		 ORDER BY t.title COLLATE NOCASE, t.asin`, account)
 	if err != nil {

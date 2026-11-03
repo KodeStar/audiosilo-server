@@ -177,6 +177,12 @@ type AudibleAccount struct {
 	// the policy).
 	Template    string `json:"template"`
 	PolicySince string `json:"policy_since"`
+	// LastSyncAt is when the account's last audible.sync finished, RefusedAt
+	// when one failed because Audible refused the account (Phase 4c: no sync
+	// is queued until the Bridge maps it again); nil for none. Sync (above) is
+	// the console's toggle, off for a new account.
+	LastSyncAt *string `json:"last_sync_at"`
+	RefusedAt  *string `json:"refused_at"`
 	// Titles are the account's titles counted, BackupEstimate what "Back up
 	// everything" would queue (the console's list only).
 	Titles         *AudibleCounts   `json:"titles,omitempty"`
@@ -191,12 +197,14 @@ type AudibleAccountInput struct {
 	UserID      int64  `json:"user_id"`
 	LibraryID   int64  `json:"library_id"`
 	Policy      string `json:"policy"`
-	Sync        bool   `json:"sync"`
+	// Sync is read and ignored (Phase 4c): the console owns the account's sync
+	// toggle, off for a new account.
+	Sync bool `json:"sync"`
 }
 
 const audibleAccountSelect = `SELECT a.account, a.label, a.marketplace, a.user_id, ` + displayNameSQL + `,
 	a.library_id, l.name, a.policy, a.sync, a.poll_hours, a.created_at, a.updated_at, a.last_poll_at, a.last_queued_at,
-	a.template, a.policy_since
+	a.template, a.policy_since, a.last_sync_at, a.refused_at
 	FROM audible_accounts a JOIN users u ON u.id = a.user_id LEFT JOIN libraries l ON l.id = a.library_id`
 
 func scanAudibleAccount(row rowScanner) (*AudibleAccount, error) {
@@ -204,10 +212,18 @@ func scanAudibleAccount(row rowScanner) (*AudibleAccount, error) {
 		a                    AudibleAccount
 		lib                  sql.NullInt64
 		libName, poll, queue sql.NullString
+		synced, refused      sql.NullString
 	)
 	if err := row.Scan(&a.ID, &a.Label, &a.Marketplace, &a.UserID, &a.User.DisplayName, &lib, &libName,
-		&a.Policy, &a.Sync, &a.PollHours, &a.CreatedAt, &a.UpdatedAt, &poll, &queue, &a.Template, &a.PolicySince); err != nil {
+		&a.Policy, &a.Sync, &a.PollHours, &a.CreatedAt, &a.UpdatedAt, &poll, &queue, &a.Template, &a.PolicySince,
+		&synced, &refused); err != nil {
 		return nil, err
+	}
+	if synced.Valid {
+		a.LastSyncAt = &synced.String
+	}
+	if refused.Valid {
+		a.RefusedAt = &refused.String
 	}
 	a.User.ID = a.UserID
 	if lib.Valid {
@@ -249,7 +265,9 @@ func checkAudibleAccount(in *AudibleAccountInput) error {
 // ErrNotBookLibrary). A known account is mapped again (a paused one resumes); its
 // titles and poll times stay, and so do its policy and template (Phase 4b: the
 // Bridge's policy is a new account's; after that the console sets it,
-// PatchAudibleAccount). A new account's policy_since is now.
+// PatchAudibleAccount). A new account's policy_since is now. Its sync is the
+// console's, off for a new account whatever the Bridge sends (Phase 4c), and
+// a mapping again ends a refusal (refused_at: a fresh sign-in maps it again).
 func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAccountInput) (*AudibleAccount, error) {
 	if !bridge.AudibleAccountPattern.MatchString(id) {
 		return nil, audibleInvalid("account must match %s", bridge.AudibleAccountPattern)
@@ -282,11 +300,11 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO audible_accounts(account, label, marketplace, user_id, library_id, policy, sync, created_at, updated_at,
 			     policy_since)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 			 ON CONFLICT(account) DO UPDATE SET label = excluded.label, marketplace = excluded.marketplace,
 			     user_id = excluded.user_id, library_id = excluded.library_id,
-			     sync = excluded.sync, updated_at = excluded.updated_at`,
-			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, in.Sync, now, now, now); err != nil {
+			     refused_at = NULL, updated_at = excluded.updated_at`,
+			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, now, now, now); err != nil {
 			return err
 		}
 		out, err = scanAudibleAccount(tx.QueryRowContext(ctx, audibleAccountSelect+` WHERE a.account = ?`, id))
@@ -305,6 +323,9 @@ func (c *Catalog) DeleteAudibleAccount(ctx context.Context, id string) (removed 
 			return err
 		}
 		if err := bridge.CancelAudibleImports(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
+			return err
+		}
+		if err := bridge.CancelAudibleSyncs(ctx, tx, id, bridge.CancelAudibleRemoved, c.now()); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM audible_accounts WHERE account = ?`, id)
@@ -476,7 +497,9 @@ type AudibleContender struct {
 type AudibleTitle struct {
 	Account string `json:"account"`
 	AudibleTitleInput
-	Rejected    bool   `json:"rejected"`
+	Rejected bool `json:"rejected"`
+	// Ignored is the console's "Don't sync this book" (Phase 4c): neither
+	// direction of the account's sync touches its book. Backups ignore it.
 	Ignored     bool   `json:"ignored"`
 	DestPath    string `json:"dest_path"`
 	FirstSeen   string `json:"first_seen"`

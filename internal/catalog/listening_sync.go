@@ -45,6 +45,9 @@ const (
 const (
 	reasonOlder        = "older"
 	reasonResumeBehind = "resume_behind"
+	// reasonBehind: a furthest-only batch's (SyncBatch.FurthestOnly) place not
+	// ahead of the stored one, or its unfinish: never applied, never offered.
+	reasonBehind = "behind"
 	// SyncInvalid, SyncNoAccess and SyncNotFound are also a SyncTarget's
 	// reason: the handler decides them while resolving an event's path.
 	SyncInvalid            = "invalid"
@@ -53,6 +56,10 @@ const (
 	reasonDurationMismatch = "duration_mismatch"
 	SyncNoAccess           = "no_access"
 	SyncNotFound           = "not_found"
+	// SyncNotSynced is a target's reason for an Audible account's batch (Bridge
+	// Phase 4c): the book is none of the account's synced titles (unmatched,
+	// "Not this book", "Don't sync this book", or gone from the account).
+	SyncNotSynced = "not_synced"
 )
 
 // Sync limits and tolerances.
@@ -83,6 +90,10 @@ const (
 	resumeBehindSlack = 60.0
 	// otherPlaceMin: a place within this of the kept one is not offered.
 	otherPlaceMin = 30.0
+	// furthestSlack: a furthest-only listen must be more than this ahead of
+	// the stored place to apply (an Audible place the Bridge pushed there,
+	// read back, is the same place, not a move).
+	furthestSlack = 1.0
 	// historyJoinGap and historyJoinOverlap: a span starting up to historyJoinGap
 	// after a history row on the book ended (or up to historyJoinOverlap before
 	// it: two batches' clock shifts differ by their latency) and within
@@ -235,6 +246,14 @@ type SyncBatch struct {
 	ClockOffset *float64
 	Events      []SyncEvent
 	Targets     map[Ref]SyncTarget
+	// FurthestOnly is an Audible account's batch (Bridge Phase 4c), set only by
+	// the Bridge's route, never from a request body: a listen applies only
+	// ahead of the stored place (furthestSlack), over any device's row and
+	// whatever its time, else it is not_applied "behind" with no offer (a
+	// finished row is at its end); an unfinish is "behind" too; a finish applies
+	// as any finish. Its spans are a place only: no listening session, daily
+	// roll-up or history is recorded (owner decision 2), and TokenID is 0.
+	FurthestOnly bool
 }
 
 // SyncResult is one event's answer.
@@ -610,11 +629,34 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 	}
 	at := formatSessionTime(p.ended)
 	mine := &ListeningOtherPlace{Position: p.to, DeviceID: s.b.DeviceID, DeviceName: s.b.DeviceName, UpdatedAt: at}
+	if s.b.FurthestOnly {
+		return s.furthestListen(ctx, p, stored, mine.UpdatedAt)
+	}
 	res, err := s.resolveListen(ctx, p, stored, mine)
 	if err != nil {
 		return res, err
 	}
 	return res, s.recordListening(ctx, p)
+}
+
+// furthestListen is a furthest-only batch's listen (SyncBatch.FurthestOnly):
+// behind (or at) the stored place, or on a finished row, it is not applied and
+// offers nothing; ahead it is written whatever device or time the row has
+// (the player's own reconcile then moves or offers), the row's time never
+// moving back and its offered place kept. No listening is recorded.
+func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *syncRow, at string) (SyncResult, error) {
+	version := int64(1)
+	if stored != nil {
+		if stored.finished || p.to <= stored.position+furthestSlack {
+			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+		}
+		version = stored.version + 1
+		at = laterStamp(at, stored.updatedAt)
+	}
+	if err := s.writePlace(ctx, p, version, false, at); err != nil {
+		return SyncResult{}, err
+	}
+	return SyncResult{Status: statusApplied}, nil
 }
 
 // resolveListen is a span's place: ResolvePlace, with the backstop, and the
@@ -815,6 +857,9 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // change (applied, nothing written).
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
+	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
+		return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+	}
 	stored, err := s.row(ctx, key)
 	if err != nil {
 		return SyncResult{}, err
