@@ -147,7 +147,7 @@ export function useCheckNow() {
 
 /**
  * Backups (Phase 4b): "Back up", "Not this book", a destination, "Back up
- * everything" and an account's settings. Each says how it went (a refusal is a
+ * everything" and an account's settings; "Don't sync this book" (Phase 4c). Each says how it went (a refusal is a
  * toast, or the dialog's error when it throws) and refreshes the titles, the
  * accounts (their estimate) and the Bridge's jobs.
  */
@@ -201,6 +201,19 @@ export function useBackups() {
     }
   };
 
+  /** "Don't sync this book" and its undo (Phase 4c). */
+  const setIgnored = async (x: AudibleTitle, ignored: boolean) => {
+    setBusy(titleKey(x));
+    try {
+      await api.patchAudibleTitle(x.account, x.asin, { ignored });
+    } catch (err) {
+      toastError(t('audible.nosync.failed'), err);
+    } finally {
+      setBusy(null);
+      refresh();
+    }
+  };
+
   /** Throws for the dialog to show. */
   const setDest = async (x: AudibleTitle, dest: string) => {
     await api.patchAudibleTitle(x.account, x.asin, { dest_path: dest });
@@ -224,9 +237,9 @@ export function useBackups() {
       title: t('audible.settings.saved', { name: accountName(t, account) }),
       type: 'success',
     });
-    // A policy or template changes no title row: only the account card.
+    // A policy, template or sync changes no title row: only the account card.
     void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
   };
 
-  return { backUp, setRejected, setDest, backUpAll, saveAccount, busy, titleKey };
+  return { backUp, setRejected, setIgnored, setDest, backUpAll, saveAccount, busy, titleKey };
 }

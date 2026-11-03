@@ -1,12 +1,12 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ban, CloudDownload, FolderInput, LoaderCircle, Undo2 } from 'lucide-react';
+import { Ban, CloudDownload, FolderInput, LoaderCircle, RefreshCwOff, Undo2 } from 'lucide-react';
 import type { AudibleTitle } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { canBackUp, cleanDest, plannedPlaceholder, titleName } from './audible-model';
+import { canBackUp, canSync, cleanDest, plannedPlaceholder, titleName } from './audible-model';
 import type { Backups } from './use-audible';
 
 /**
@@ -15,6 +15,8 @@ import type { Backups } from './use-audible';
  * everything, and its match isn't this title) and its undo, and the
  * destination: where in the library the backup goes instead of the account's
  * placement. Back up is off while the account is paused, as Back up everything.
+ * Phase 4c: "Don't sync this book" (its place never syncs with Audible, either
+ * way) for a title on this server, and its undo.
  */
 export function TitleActions({
   title: x,
@@ -56,6 +58,18 @@ export function TitleActions({
         {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
         {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
       </Button>
+      {canSync(x) || x.ignored ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => void backups.setIgnored(x, !x.ignored)}
+          aria-label={t(x.ignored ? 'audible.nosync.undoLabel' : 'audible.nosync.label', { name })}
+        >
+          {x.ignored ? <Undo2 aria-hidden="true" /> : <RefreshCwOff aria-hidden="true" />}
+          {t(x.ignored ? 'audible.nosync.undo' : 'audible.nosync.action')}
+        </Button>
+      ) : null}
       {!x.match || x.rejected ? (
         <Button
           size="sm"

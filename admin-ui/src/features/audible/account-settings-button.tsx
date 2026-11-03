@@ -7,14 +7,16 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
+import { Switch } from '@/components/ui/switch';
 import { accountName } from './audible-model';
 import type { Backups } from './use-audible';
 
 /**
- * An account's backup settings (Bridge Phase 4b): what it backs up by itself
- * after each check (new purchases only: the books it already had are "Back up
- * everything"'s) and the placement template. The person and library stay the
- * Bridge's.
+ * An account's settings: what it backs up by itself after each check (Bridge
+ * Phase 4b; new purchases only: the books it already had are "Back up
+ * everything"'s), the placement template, and whether its listening places
+ * sync with Audible (Phase 4c, off for a new account). The person and library
+ * stay the Bridge's.
  */
 export function AccountSettingsButton({
   account,
@@ -51,6 +53,7 @@ function SettingsDialog({
   const id = useId();
   const [policy, setPolicy] = useState<AudiblePolicy>(account.policy);
   const [template, setTemplate] = useState(account.template);
+  const [sync, setSync] = useState(account.sync);
   return (
     <ConfirmDialog
       open
@@ -65,6 +68,7 @@ function SettingsDialog({
         backups.saveAccount(account, {
           ...(policy !== account.policy ? { policy } : {}),
           ...(template.trim() !== account.template ? { template: template.trim() } : {}),
+          ...(sync !== account.sync ? { sync } : {}),
         })
       }
     >
@@ -99,6 +103,19 @@ function SettingsDialog({
           placeholder="{Author}/{Series}/{ {PaddedSeq} - }{Title}"
           onChange={(e) => setTemplate(e.target.value)}
           aria-describedby={`${id}-template-desc`}
+        />
+      </Field>
+      <Field
+        htmlFor={`${id}-sync`}
+        label={t('audible.settings.sync')}
+        description={t('audible.settings.syncHint')}
+      >
+        <Switch
+          id={`${id}-sync`}
+          checked={sync}
+          onCheckedChange={(on) => setSync(on)}
+          aria-label={t('audible.settings.sync')}
+          aria-describedby={`${id}-sync-desc`}
         />
       </Field>
       <p className="text-[12.5px] text-muted-foreground">{t('audible.legal')}</p>
