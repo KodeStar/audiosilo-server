@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/audible"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/names"
@@ -147,6 +150,9 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 	if err := a.cat.PutAudibleTitles(r.Context(), id, req.PollID, req.Final, req.Titles); err != nil {
 		a.writeAudibleError(w, err, "put audible titles failed")
 		return
+	}
+	if req.Final {
+		a.afterAudiblePoll(r, id)
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"stored": len(req.Titles)})
 }
@@ -339,4 +345,177 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 		a.audit(r, "bridge.audible.remove", "", map[string]any{"account": id})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Bridge Phase 4b: backing up Audible titles (internal/audible's Queues, the
+// catalog's rules in catalog/audible_import.go). The console's routes are
+// admin, behind the module's toggle; a completed poll queues what the
+// account's policy asks for (afterAudiblePoll).
+
+// audibleQueues are the API's backup queues.
+func (a *API) audibleQueues() audible.Queues { return audible.Queues{Catalog: a.cat, Bridge: a.bridge} }
+
+// afterAudiblePollTimeout bounds the backups a poll's final call queues.
+const afterAudiblePollTimeout = 30 * time.Second
+
+// afterAudiblePoll queues the backups a completed poll of account asks for
+// (audible.Queues.AfterPoll) while the module is on, past the Bridge's
+// request: its titles call has landed whatever happens here, so a failure is
+// logged and the next poll asks again.
+func (a *API) afterAudiblePoll(r *http.Request, account string) {
+	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterAudiblePollTimeout)
+	defer cancel()
+	if n, err := a.audibleQueues().AfterPoll(ctx, account); err != nil {
+		a.log.Warn("audible: queueing a poll's backups failed", "account", account, "queued", n, "err", err)
+	}
+}
+
+// audibleTitleID is the {account} and {asin} path values of a title, else it
+// answers 404 and reports false.
+func audibleTitleID(w http.ResponseWriter, r *http.Request) (account, asin string, ok bool) {
+	if account, ok = audibleAccountID(w, r); !ok {
+		return "", "", false
+	}
+	asin = r.PathValue("asin")
+	if !catalog.ValidASIN(asin) {
+		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
+		return "", "", false
+	}
+	return account, asin, true
+}
+
+// writeAudibleBackupError answers a backup's refusal (the catalog's, then the
+// queue's), reporting whether there was none.
+func (a *API) writeAudibleBackupError(w http.ResponseWriter, err error, op string) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, catalog.ErrUnknownTitle):
+		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
+	case errors.Is(err, catalog.ErrAudibleMatched):
+		writeErrorCode(w, http.StatusConflict, "already_matched", "the title is already on this server")
+	case errors.Is(err, catalog.ErrAudibleImportOpen):
+		writeErrorCode(w, http.StatusConflict, "import_open", "a backup of the title is already waiting or running")
+	case errors.Is(err, catalog.ErrAudibleNotAvailable):
+		writeErrorCode(w, http.StatusConflict, "not_available", "the title can't be downloaded from the account now")
+	case errors.Is(err, catalog.ErrAudiblePaused):
+		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
+	case errors.Is(err, catalog.ErrUnknownAccount):
+		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
+	default:
+		return a.writeBridgeError(w, err, op)
+	}
+	return false
+}
+
+// handleAdminAudibleBackup serves POST /admin/audible/titles/{account}/{asin}/
+// backup: "Back up" one title. 202 {"job_id": N} with its queued (or already
+// open) backup; 200 {"pending": true, "job_id": null} for a preorder, queued
+// once a poll says it is available. 404 unknown_account, unknown_title; 409
+// already_matched, import_open, not_available, account_paused,
+// kind_unavailable, library_not_writable.
+func (a *API) handleAdminAudibleBackup(w http.ResponseWriter, r *http.Request) {
+	account, asin, ok := audibleTitleID(w, r)
+	if !ok {
+		return
+	}
+	by := userFrom(r.Context()).ID
+	job, created, pending, err := a.audibleQueues().Backup(r.Context(), account, asin, by)
+	if !a.writeAudibleBackupError(w, err, "audible backup failed") {
+		return
+	}
+	if pending {
+		a.audit(r, "bridge.audible.backup", "", map[string]any{"account": account, "asin": asin, "pending": true})
+		writeJSON(w, http.StatusOK, map[string]any{"pending": true, "job_id": nil})
+		return
+	}
+	if created {
+		a.audit(r, "bridge.job", "", map[string]any{"job": job.ID, "kind": job.Kind, "account": account, "asin": asin})
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"pending": false, "job_id": job.ID})
+}
+
+// handleAdminAudibleBackupAll serves POST /admin/audible/accounts/{account}/
+// backup-all: "Back up everything" (every title available, not here, not
+// marked "Not this book" and with no backup open). 200 {"queued": N}; 404
+// unknown_account; 409 account_paused, kind_unavailable, library_not_writable
+// (nothing queued: the Bridge can't take them).
+func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request) {
+	account, ok := audibleAccountID(w, r)
+	if !ok {
+		return
+	}
+	n, err := a.audibleQueues().BackupAll(r.Context(), account, userFrom(r.Context()).ID)
+	if n > 0 {
+		a.audit(r, "bridge.audible.backup_all", "", map[string]any{"account": account, "queued": n})
+	}
+	if err != nil && n == 0 {
+		a.writeAudibleBackupError(w, err, "audible backup all failed")
+		return
+	}
+	if err != nil {
+		a.log.Warn("audible backup all stopped early", "account", account, "queued", n, "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"queued": n})
+}
+
+// handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}
+// {"rejected"?, "dest_path"?}: "Not this book" and a backup's destination.
+// 200 the title; 400 invalid_dest_path; 404 unknown_account, unknown_title.
+func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
+	account, asin, ok := audibleTitleID(w, r)
+	if !ok {
+		return
+	}
+	var p catalog.AudibleTitlePatch
+	if err := decodeJSON(r, &p, 8<<10); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	t, err := a.cat.PatchAudibleTitle(r.Context(), account, asin, p)
+	switch {
+	case errors.Is(err, bridge.ErrAudibleDestPath):
+		writeErrorCode(w, http.StatusBadRequest, "invalid_dest_path", err.Error())
+	case errors.Is(err, catalog.ErrUnknownTitle):
+		writeErrorCode(w, http.StatusNotFound, "unknown_title", "no such Audible title")
+	case err != nil:
+		a.writeAudibleError(w, err, "patch audible title failed")
+	default:
+		writeJSON(w, http.StatusOK, t)
+	}
+}
+
+// handleAdminAudibleAccount serves PATCH /admin/audible/accounts/{account}
+// {"policy"?, "template"?}: what the account backs up by itself and where. 200
+// the account; 400 invalid_policy, invalid_template; 404 unknown_account.
+func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) {
+	id, ok := audibleAccountID(w, r)
+	if !ok {
+		return
+	}
+	var p catalog.AudibleAccountPatch
+	if err := decodeJSON(r, &p, 8<<10); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	acct, err := a.cat.PatchAudibleAccount(r.Context(), id, p)
+	switch {
+	case errors.Is(err, bridge.ErrAudibleTemplate):
+		writeErrorCode(w, http.StatusBadRequest, "invalid_template", err.Error())
+	case err != nil:
+		a.writeAudibleError(w, err, "patch audible account failed")
+	default:
+		details := map[string]any{"account": id}
+		if p.Policy != nil {
+			details["policy"] = *p.Policy
+		}
+		if p.Template != nil {
+			details["template"] = *p.Template
+		}
+		a.audit(r, "bridge.audible.account", "", details)
+		writeJSON(w, http.StatusOK, map[string]any{"account": acct})
+	}
 }

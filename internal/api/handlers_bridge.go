@@ -49,6 +49,12 @@ func (a *API) SetBridge(b *bridge.Service) {
 				a.log.Warn("fold podcast outcome failed", "job", job.ID, "err", err)
 			}
 		}
+		if job.Kind == bridge.KindAudibleImport {
+			// A done backup becomes its title's match.
+			if err := a.cat.FoldAudibleImport(ctx, job); err != nil {
+				a.log.Warn("audible: recording a backup failed", "job", job.ID, "err", err)
+			}
+		}
 	}
 	b.ModuleOn = a.moduleOn
 }
@@ -521,6 +527,14 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		Code: job.ParkCode(), Error: job.Error, SharedNothing: job.SharedNothing()}
 	if c, ok := job.ReadalongCoverage(); ok {
 		ev.Coverage = &c
+	}
+	if job.Kind == bridge.KindAudibleImport {
+		// A backup names no book until it is placed: the title it backs up.
+		if p, _, err := bridge.AudibleImportOf(*job); err == nil {
+			if t, err := a.cat.AudibleTitle(ctx, p.Account, p.ASIN); err == nil {
+				ev.Title = t.Title
+			}
+		}
 	}
 	if job.LibraryID != nil {
 		ev.LibraryID = *job.LibraryID

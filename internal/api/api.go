@@ -692,6 +692,12 @@ func (a *API) Handler() http.Handler {
 	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))
 	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
 	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
+	// Backups (Phase 4b): "Back up", "Back up everything", "Not this book" and a
+	// destination, the account's policy and template.
+	ar.Admin("PATCH /api/v1/admin/audible/accounts/{account}", http.HandlerFunc(a.handleAdminAudibleAccount))
+	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/backup-all", http.HandlerFunc(a.handleAdminAudibleBackupAll))
+	ar.Admin("PATCH /api/v1/admin/audible/titles/{account}/{asin}", http.HandlerFunc(a.handleAdminAudibleTitle))
+	ar.Admin("POST /api/v1/admin/audible/titles/{account}/{asin}/backup", http.HandlerFunc(a.handleAdminAudibleBackup))
 	// Removing an account is not behind the toggle: an account the Bridge can no
 	// longer remove (unpaired, re-paired, a failed DELETE) must be cleanable
 	// after the module is turned off.

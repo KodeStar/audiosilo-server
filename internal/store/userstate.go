@@ -86,9 +86,9 @@ var userStateTables = map[string]tableRule{
 	// (catalog.PutAudibleTitles) and an account's poll times, read only by the
 	// console's Audible routes and the scheduler, never by a content cache. An
 	// account mapped, re-mapped or removed (its other columns, its rows) moves
-	// the generation.
+	// the generation; its first complete poll sets policy_since (Phase 4b).
 	"audible_titles":   {rows: true},
-	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at"}},
+	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at", "policy_since"}},
 	// A token's touch (auth.Service.resolve): the token cache holds the row,
 	// and drops the touched one itself. Any other change (a revoke, a new
 	// token) moves the generation.

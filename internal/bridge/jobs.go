@@ -32,6 +32,9 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
+// OpenStates are OpenStatesSQL's states.
+var OpenStates = []string{StateQueued, StateClaimed, StateRunning, StateNeedsAttention}
+
 const (
 	// Lease is how long a claim holds a job without a progress update. The
 	// Bridge reports at least every 30 s while it works.
@@ -180,6 +183,8 @@ var kinds = map[string]kindSpec{
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audiblePollSuffix, promotes: true},
+	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
+		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
 			KindReadalong: ErrReadalongOpen},
