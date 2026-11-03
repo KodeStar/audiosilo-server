@@ -263,6 +263,45 @@ func TestUndoRestoresUnchangedProgress(t *testing.T) {
 	}
 }
 
+// An import that moves on an Audible account's place (the importer clears
+// its device: importer.mergeProgress) stores it under no device and no device
+// name, so GET /bridge/progress carries it to Audible; an undo puts Audible's
+// row back as it was, its device and name too (import_progress_prior).
+func TestImportOverAudiblePlace(t *testing.T) {
+	t.Parallel()
+	f := newImportFixture(t)
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
+		UpdatedAt: day(2, 12).Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE progress SET device_id = 'audible:acct0001', device_name = 'Audible (US)'
+		WHERE user_id = ? AND rel_path = ?`, f.user, f.other.Path); err != nil {
+		t.Fatal(err)
+	}
+	id := f.newImport(t, time.Time{})
+	if _, err := f.c.ApplyImport(f.ctx, id, func(st ImportState) (*ImportWrite, error) {
+		have := st.Progress[f.other]
+		if have.DeviceID != "audible:acct0001" || have.DeviceName != "Audible (US)" {
+			t.Errorf("the import's prior = %+v", have)
+		}
+		up := have
+		up.Position, up.Version, up.UpdatedAt, up.DeviceID, up.DeviceName = 3000, have.Version+1, FormatStamp(day(3, 22)), "", ""
+		return &ImportWrite{Progress: []ImportProgress{{Prior: &have, Wrote: up}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := f.c.GetProgress(f.ctx, f.user, f.other); p.Position != 3000 || p.DeviceID != "" || p.DeviceName != "" {
+		t.Fatalf("imported = %+v", p)
+	}
+	if _, err := f.c.UndoImport(f.ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := f.c.GetProgress(f.ctx, f.user, f.other); p.Position != 600 || p.DeviceID != "audible:acct0001" ||
+		p.DeviceName != "Audible (US)" {
+		t.Fatalf("restored = %+v", p)
+	}
+}
+
 // TestReimportReplaces: applying a second import takes the first back out in
 // the same transaction, so nothing is counted twice.
 func TestReimportReplaces(t *testing.T) {

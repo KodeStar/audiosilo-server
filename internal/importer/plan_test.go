@@ -174,6 +174,12 @@ func TestPlanSessions(t *testing.T) {
 	}
 }
 
+// audibleRow is p as an Audible account's place (Bridge Phase 4c).
+func audibleRow(p *catalog.Progress) *catalog.Progress {
+	p.DeviceID, p.DeviceName = catalog.AudibleDevicePrefix+"acct0001", "Audible (US)"
+	return p
+}
+
 func TestMergeProgress(t *testing.T) {
 	stamp := catalog.FormatStamp
 	old := t0.Add(-30 * 24 * time.Hour)
@@ -209,6 +215,14 @@ func TestMergeProgress(t *testing.T) {
 				return p.Position == 3000 && p.Version == 5 && p.UpdatedAt == stamp(t0) && p.PlaybackSpeed == 1.5 &&
 					p.DeviceID == "phone" && p.StartedAt == old.Format(time.RFC3339)
 			}, "moved on, speed and device kept"},
+		{"ABS moves on Audible's place: no longer Audible's", audibleRow(row(1000, false, t0.Add(-time.Hour), "")), abs,
+			mergeResult{true, true, false}, func(p catalog.Progress) bool {
+				return p.Position == 3000 && p.DeviceID == "" && p.DeviceName == ""
+			}, "the Audible device cleared, so the place reaches Audible"},
+		{"only the start fills on Audible's place: still Audible's", audibleRow(row(100, false, t0.Add(time.Hour), "2026-03-01T00:00:00Z")), abs,
+			mergeResult{true, false, false}, func(p catalog.Progress) bool {
+				return p.Position == 100 && p.DeviceID == "audible:acct0001" && p.DeviceName == "Audible (US)"
+			}, "the place and its device kept"},
 		{"ABS newer but behind: never rewinds", row(5000, false, t0.Add(-time.Hour), "2020-01-01T00:00:00Z"), abs,
 			mergeResult{}, nil, ""},
 		{"listening here is newer: only the start fills", row(100, false, t0.Add(time.Hour), "2026-03-01T00:00:00Z"), abs,
