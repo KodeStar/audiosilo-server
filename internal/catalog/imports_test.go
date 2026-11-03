@@ -266,7 +266,8 @@ func TestUndoRestoresUnchangedProgress(t *testing.T) {
 // An import that moves on an Audible account's place (the importer clears
 // its device: importer.mergeProgress) stores it under no device and no device
 // name, so GET /bridge/progress carries it to Audible; an undo puts Audible's
-// row back as it was, its device and name too (import_progress_prior).
+// place back (import_progress_prior) under no device either, so the feed
+// carries the undo to Audible too (it may hold the import's place by then).
 func TestImportOverAudiblePlace(t *testing.T) {
 	t.Parallel()
 	f := newImportFixture(t)
@@ -296,8 +297,7 @@ func TestImportOverAudiblePlace(t *testing.T) {
 	if _, err := f.c.UndoImport(f.ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := f.c.GetProgress(f.ctx, f.user, f.other); p.Position != 600 || p.DeviceID != "audible:acct0001" ||
-		p.DeviceName != "Audible (US)" {
+	if p, _ := f.c.GetProgress(f.ctx, f.user, f.other); p.Position != 600 || p.DeviceID != "" || p.DeviceName != "" {
 		t.Fatalf("restored = %+v", p)
 	}
 }

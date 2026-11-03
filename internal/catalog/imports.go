@@ -793,10 +793,17 @@ type progressPrior struct {
 }
 
 // restored is the row an undo puts back for pr (prior must be set): the prior
-// row as it was, under a version above the one the import wrote.
+// row as it was, under a version above the one the import wrote. A row the
+// import had moved on (rewound) that was an Audible account's place comes back
+// under no device (Bridge Phase 4c): GET /bridge/progress may already have
+// carried the import's place to Audible, and it leaves the account's own rows
+// out, so restored as Audible's the undo would never reach it.
 func (pr progressPrior) restored() Progress {
 	back := *pr.prior
 	back.Version = pr.wrote.Version + 1
+	if pr.rewound() && IsAudibleDevice(back.DeviceID) {
+		back.DeviceID, back.DeviceName = "", ""
+	}
 	return back
 }
 
