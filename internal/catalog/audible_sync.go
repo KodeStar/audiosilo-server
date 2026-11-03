@@ -207,7 +207,8 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // (defaultAudibleProgress for none, never past MaxAudibleProgress). next is
 // where the next page starts (the last row read, or since when none was: a
 // feed's cursor, kept for the next poll) and more whether a full page was read
-// (ask again with next now). ErrAudibleInvalid for a cursor not made here.
+// (ask again with next now; a page may carry fewer rows than it read, a book
+// whose length no title agrees with left out: AudibleSyncBooks). ErrAudibleInvalid for a cursor not made here.
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
 	from, err := decodeProgressCursor(since)
@@ -240,13 +241,22 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	if err != nil {
 		return nil, "", false, err
 	}
-	rows = make([]AudibleProgressRow, len(got))
+	// A book no title on it agrees with (duration_mismatch: another edition or
+	// volume) is never pushed, as its places are never taken (the listening
+	// route's rule, AudibleSyncBooks), so the Bridge needs no check of its own.
+	books, err := c.AudibleSyncBooks(ctx, a.Account)
+	if err != nil {
+		return nil, "", false, err
+	}
+	rows = make([]AudibleProgressRow, 0, len(got))
 	next = since
-	for i, x := range got {
-		rows[i] = x.AudibleProgressRow
+	for _, x := range got {
+		if books[Ref{LibraryID: x.LibraryID, Path: x.Path}] == "" {
+			rows = append(rows, x.AudibleProgressRow)
+		}
 		next = progressCursor{Seq: x.seq, ASIN: x.ASIN}.encode()
 	}
-	return rows, next, len(rows) == limit, nil
+	return rows, next, len(got) == limit, nil
 }
 
 // syncQueueableSQL is an account (aliased a, its person u) whose sync may be

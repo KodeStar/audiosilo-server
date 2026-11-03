@@ -59,6 +59,9 @@ var userStateTables = map[string]tableRule{
 		"updated_at", "started_at", "finished_at", "device_name", "finish_changed_at", "other_position",
 		"other_device_id", "other_device_name", "other_at", "other_version", "span_at", "span_version",
 		"change_seq"}},
+	// The one-row counter progress.change_seq is drawn from (migration 0066):
+	// bumped by the progress and audible_titles triggers, read by no cache.
+	"progress_change_counter": {free: []string{"seq"}},
 	// Sync v2's event log (catalog.SyncListening, migration 0061): read only by
 	// the sync itself, never by a content cache.
 	"listening_events":   {rows: true},

@@ -3200,12 +3200,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   at most 500; the same 403s and 404, 400 `invalid_request` for no account, a bad limit or cursor) answers
   `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more}`:
   the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
-  are two rows), rows whose `device_id` is the account's left out (no echo), keyset by `(change_seq, asin)` after
-  the opaque cursor `since` (base64url JSON); `next` is the last row read (since again when none), a feed cursor the
-  Bridge keeps between polls; `more` a full page. `progress.change_seq` (`0066`, `idx_progress_user_change`) is the
-  order this server wrote the person's rows in: per person, one more than their highest, set by two triggers on
-  every insert and every UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path
-  can miss it; free in the user-state rule), existing rows numbered in updated_at order. A row written late with
+  are two rows), rows whose `device_id` is the account's left out (no echo), rows on a book no title agrees with
+  in length left out (`AudibleSyncBooks`' `duration_mismatch`, the listening route's rule: the Bridge checks no
+  length of its own), keyset by `(change_seq, asin)` after the opaque cursor `since` (base64url JSON); `next` is
+  the last row read, one left out too (since again when none), a feed cursor the Bridge keeps between polls; `more`
+  a full page read (its rows may be fewer). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
+  this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
+  reused, so a deleted row can't hand its number to the next write), set by two triggers on every insert and every
+  UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in
+  the user-state rule, the counter's `seq` too), existing rows numbered in updated_at order. Two triggers on
+  `audible_titles` (a title inserted with a match, or its match changed) move the person's row on that book to the
+  next number, so a newly matched book's existing place is offered to Audible. A row written late with
   an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
   clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the

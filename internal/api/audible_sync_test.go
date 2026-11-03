@@ -980,3 +980,92 @@ func TestAudibleSyncSignInIsTransient(t *testing.T) {
 		t.Fatalf("due after it = %v, %v", due, err)
 	}
 }
+
+// change_seq is drawn from one counter and never reused: with the row holding
+// the highest number deleted (a reset), the next write still comes after a
+// cursor that had read it.
+func TestBridgeProgressFeedSeqNeverReused(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 2 || end.Rows[1].ASIN != cradleASIN {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM progress WHERE user_id = ? AND rel_path = ?`,
+		s.patID, cradleBook); err != nil {
+		t.Fatal(err)
+	}
+	p := s.patProgress(t, mistbornBook)
+	wantSync(t, s.patListens(t, "pat-m2", mistbornBook, p.Position, p.Position+40, strconv.FormatInt(p.Version, 10)), "applied", "")
+	f := s.feed(t, "&since="+url.QueryEscape(end.Next))
+	if len(f.Rows) != 1 || f.Rows[0].ASIN != mistbornASIN || f.Rows[0].Position != p.Position+40 {
+		t.Fatalf("feed after the highest row was deleted = %+v", f.Rows)
+	}
+}
+
+// The feed leaves out a book no title on it agrees with in length (the
+// listening route's duration_mismatch: another edition or volume), so the
+// Bridge never pushes it; a second title that agrees brings it back. The
+// cursor still moves past a row left out.
+func TestBridgeProgressFeedRuntimeMismatch(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `UPDATE books SET duration = 20000 WHERE library_id = ? AND rel_path = ?`,
+		s.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	f := s.feed(t, "&limit=1")
+	if len(f.Rows) != 0 || !f.More || f.Next == "" {
+		t.Fatalf("a mismatched book's page = %+v", f)
+	}
+	if rest := s.feed(t, "&since="+url.QueryEscape(f.Next)); len(rest.Rows) != 0 {
+		t.Fatalf("after it = %+v", rest.Rows)
+	}
+	const second = "B000000009"
+	if code, out := s.putTitles(t, testAccount, "p2", true,
+		title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook),
+		title(second, "The Final Empire (abridged)", "available", s.lib.ID, mistbornBook),
+		title(cradleASIN, "Unsouled", "available", s.lib.ID, cradleBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET runtime_s = 20000 WHERE asin = ?`, second); err != nil {
+		t.Fatal(err)
+	}
+	if all := s.feed(t, ""); len(all.Rows) != 2 || all.Rows[0].Path != mistbornBook || all.Rows[1].Path != mistbornBook {
+		t.Fatalf("with a title that agrees = %+v", all.Rows)
+	}
+}
+
+// A title newly matched to a book offers the book's existing place again (its
+// row moves past the cursor); a poll that changes no match offers nothing.
+func TestBridgeProgressFeedRematch(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 1 {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	// Mistborn's title moves to Cradle's book.
+	if code, out := s.putTitles(t, testAccount, "p2", true,
+		title(mistbornASIN, "The Final Empire", "available", s.lib.ID, cradleBook),
+		title(cradleASIN, "Unsouled", "available", s.lib.ID, cradleBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	f := s.feed(t, "&since="+url.QueryEscape(end.Next))
+	if len(f.Rows) != 2 || f.Rows[0].Path != cradleBook || f.Rows[1].Path != cradleBook {
+		t.Fatalf("feed after a re-match = %+v", f.Rows)
+	}
+	if code, out := s.putTitles(t, testAccount, "p3", true,
+		title(mistbornASIN, "The Final Empire", "available", s.lib.ID, cradleBook),
+		title(cradleASIN, "Unsouled", "available", s.lib.ID, cradleBook)); code != http.StatusOK {
+		t.Fatalf("titles: %d %s", code, out)
+	}
+	if again := s.feed(t, "&since="+url.QueryEscape(f.Next)); len(again.Rows) != 0 {
+		t.Fatalf("feed after a poll with no new match = %+v", again.Rows)
+	}
+}

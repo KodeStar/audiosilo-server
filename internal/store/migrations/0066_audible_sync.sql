@@ -30,29 +30,61 @@ ALTER TABLE audible_titles ADD COLUMN no_sync INTEGER NOT NULL DEFAULT 0;
 -- them (GET /bridge/progress pages on it), not by their updated_at, which is the
 -- listening's time: an offline backlog uploaded late, a diverged apply or late
 -- finish keeping the later time, or a client's clock behind would otherwise
--- land behind the Bridge's cursor and never reach Audible. It is per person,
--- one more than their highest on every insert and every change of a row's
--- place, length, finish, version, device or time (the triggers below, so no
--- write path can miss it); the triggers' own UPDATE sets only change_seq,
--- which no UPDATE OF list names, so it never fires them again. Existing rows
--- are numbered in their updated_at order.
+-- land behind the Bridge's cursor and never reach Audible. It comes from one
+-- server-wide counter (progress_change_counter), bumped on every insert and
+-- every change of a row's place, length, finish, version, device or time (the
+-- triggers below, so no write path can miss it): strictly increasing and never
+-- reused, so a deleted row can't hand its number to the next write (which a
+-- cursor already past it would skip). The triggers' own UPDATE of progress sets
+-- only change_seq, which no UPDATE OF list names, so it never fires them again.
+-- Existing rows are numbered in their updated_at order.
 ALTER TABLE progress ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
 UPDATE progress SET change_seq = (
     SELECT n FROM (
-        SELECT rowid AS rid, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at, library_id, rel_path) AS n
+        SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY updated_at, user_id, library_id, rel_path) AS n
           FROM progress) ranked
      WHERE ranked.rid = progress.rowid);
 CREATE INDEX idx_progress_user_change ON progress(user_id, change_seq);
 
+CREATE TABLE progress_change_counter (
+    id  INTEGER PRIMARY KEY CHECK (id = 1),
+    seq INTEGER NOT NULL
+);
+INSERT INTO progress_change_counter(id, seq) SELECT 1, COALESCE(MAX(change_seq), 0) FROM progress;
+
 CREATE TRIGGER progress_change_seq_insert AFTER INSERT ON progress
 BEGIN
-    UPDATE progress SET change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM progress WHERE user_id = NEW.user_id)
+    UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
+    UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)
      WHERE rowid = NEW.rowid;
 END;
 
 CREATE TRIGGER progress_change_seq_update
 AFTER UPDATE OF position, duration, finished, version, device_id, updated_at ON progress
 BEGIN
-    UPDATE progress SET change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM progress WHERE user_id = NEW.user_id)
+    UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
+    UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)
      WHERE rowid = NEW.rowid;
+END;
+
+-- A title matched to a book (a new title, or one matched to another book) offers
+-- that book's existing place to Audible again: its person's row there moves to
+-- the counter's next number, so a cursor already past it reads it again.
+CREATE TRIGGER audible_title_match_insert AFTER INSERT ON audible_titles
+WHEN NEW.match_path IS NOT NULL
+BEGIN
+    UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
+    UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)
+     WHERE library_id = NEW.match_library_id AND rel_path = NEW.match_path
+       AND user_id = (SELECT user_id FROM audible_accounts WHERE account = NEW.account);
+END;
+
+CREATE TRIGGER audible_title_match_update AFTER UPDATE OF match_library_id, match_path ON audible_titles
+WHEN NEW.match_path IS NOT NULL
+ AND (OLD.match_path IS NULL OR OLD.match_path <> NEW.match_path OR OLD.match_library_id IS NOT NEW.match_library_id)
+BEGIN
+    UPDATE progress_change_counter SET seq = seq + 1 WHERE id = 1;
+    UPDATE progress SET change_seq = (SELECT seq FROM progress_change_counter WHERE id = 1)
+     WHERE library_id = NEW.match_library_id AND rel_path = NEW.match_path
+       AND user_id = (SELECT user_id FROM audible_accounts WHERE account = NEW.account);
 END;
