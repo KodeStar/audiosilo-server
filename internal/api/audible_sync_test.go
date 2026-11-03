@@ -1005,10 +1005,11 @@ func TestBridgeProgressFeedSeqNeverReused(t *testing.T) {
 	}
 }
 
-// The feed leaves out a book no title on it agrees with in length (the
+// The feed leaves out a row whose title disagrees with the book in length (the
 // listening route's duration_mismatch: another edition or volume), so the
-// Bridge never pushes it; a second title that agrees brings it back. The
-// cursor still moves past a row left out.
+// Bridge never pushes it; a second title on the book that agrees gets its own
+// row and the one that disagrees still none. The cursor still moves past a
+// row left out.
 func TestBridgeProgressFeedRuntimeMismatch(t *testing.T) {
 	t.Parallel()
 	s := newAudibleSyncEnv(t)
@@ -1035,8 +1036,31 @@ func TestBridgeProgressFeedRuntimeMismatch(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE audible_titles SET runtime_s = 20000 WHERE asin = ?`, second); err != nil {
 		t.Fatal(err)
 	}
-	if all := s.feed(t, ""); len(all.Rows) != 2 || all.Rows[0].Path != mistbornBook || all.Rows[1].Path != mistbornBook {
+	if all := s.feed(t, ""); len(all.Rows) != 1 || all.Rows[0].ASIN != second || all.Rows[0].Path != mistbornBook {
 		t.Fatalf("with a title that agrees = %+v", all.Rows)
+	}
+}
+
+// With the book's indexed duration unknown (a failed probe) the row's own
+// stored duration is the length a title is checked against; both unknown
+// agree.
+func TestBridgeProgressFeedRuntimeUnknownBook(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `UPDATE books SET duration = 0 WHERE library_id = ?`, s.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	for path, d := range map[string]float64{mistbornBook: 20000, cradleBook: 0} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE progress SET duration = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+			d, s.patID, s.lib.ID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := s.feed(t, ""); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("feed with the books' durations unknown = %+v", f.Rows)
 	}
 }
 

@@ -207,8 +207,8 @@ func decodeProgressCursor(s string) (progressCursor, error) {
 // (defaultAudibleProgress for none, never past MaxAudibleProgress). next is
 // where the next page starts (the last row read, or since when none was: a
 // feed's cursor, kept for the next poll) and more whether a full page was read
-// (ask again with next now; a page may carry fewer rows than it read, a book
-// whose length no title agrees with left out: AudibleSyncBooks).
+// (ask again with next now; a page may carry fewer rows than it read, a row
+// whose title's runtime disagrees with the book's length left out).
 // ErrAudibleInvalid for a cursor not made here.
 func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, scopes []Scope, since string, limit int) (
 	rows []AudibleProgressRow, next string, more bool, err error) {
@@ -222,16 +222,19 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	limit = min(limit, MaxAudibleProgress)
 	type read struct {
 		AudibleProgressRow
-		seq int64
+		seq      int64
+		runtimeS int64
+		length   float64
 	}
 	scoped, scopeArgs := scopesFilterSQL("p.library_id", "p.rel_path", scopes)
 	args := append([]any{a.Account, a.UserID, a.DeviceID(), from.Seq, from.Seq, from.ASIN}, scopeArgs...)
 	got, err := queryRows(ctx, c.db, func(r *sql.Rows, x *read) error {
 		return r.Scan(&x.LibraryID, &x.Path, &x.ASIN, &x.Position, &x.Duration, &x.Finished, &x.UpdatedAt, &x.DeviceID,
-			&x.Version, &x.seq)
+			&x.Version, &x.seq, &x.runtimeS, &x.length)
 	}, `SELECT p.library_id, p.rel_path, t.asin, p.position,
 	           CASE WHEN p.duration > 0 THEN p.duration ELSE COALESCE(b.duration, 0) END,
-	           p.finished, p.updated_at, p.device_id, p.version, p.change_seq
+	           p.finished, p.updated_at, p.device_id, p.version, p.change_seq, t.runtime_s,
+	           CASE WHEN COALESCE(b.duration, 0) > 0 THEN b.duration ELSE p.duration END
 	      FROM progress p
 	      JOIN audible_titles t ON t.account = ? AND t.match_library_id = p.library_id AND t.match_path = p.rel_path
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
@@ -245,17 +248,14 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	if len(got) == 0 {
 		return []AudibleProgressRow{}, since, false, nil
 	}
-	// A book no title on it agrees with (duration_mismatch: another edition or
-	// volume) is never pushed, as its places are never taken (the listening
-	// route's rule, AudibleSyncBooks), so the Bridge needs no check of its own.
-	books, err := c.AudibleSyncBooks(ctx, a.Account)
-	if err != nil {
-		return nil, "", false, err
-	}
+	// A row whose title's runtime disagrees with the book's length (the
+	// indexed duration, else the row's own: audibleRuntimeAgrees, the listening
+	// route's duration_mismatch) is another edition or volume's, so it is never
+	// pushed to that ASIN; the Bridge needs no check of its own.
 	rows = make([]AudibleProgressRow, 0, len(got))
 	next = since
 	for _, x := range got {
-		if books[Ref{LibraryID: x.LibraryID, Path: x.Path}] == "" {
+		if audibleRuntimeAgrees(x.runtimeS, x.length) {
 			rows = append(rows, x.AudibleProgressRow)
 		}
 		next = progressCursor{Seq: x.seq, ASIN: x.ASIN}.encode()
