@@ -77,10 +77,16 @@ type AudibleEstimate struct {
 // openImportSQL is a title (aliased t) whose backup job is open.
 const openImportSQL = `EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id = t.import_job_id AND j.state IN ` + bridge.OpenStatesSQL + `)`
 
+// contestedSQL is a title (aliased t) the Bridge left unmatched because
+// another title claimed the same book (AudibleReasonContested).
+const contestedSQL = `t.reason = '` + AudibleReasonContested + `'`
+
 // backupAllSQL is a title (aliased t) "Back up everything" queues: available,
-// not on this server, not marked "Not this book" or ignored, and no backup
-// open (a failed one is tried again).
-const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0 AND NOT ` + openImportSQL
+// not on this server, not marked "Not this book" or ignored, not contested
+// (on this server under another title), and no backup open (a failed one is
+// tried again).
+const backupAllSQL = `t.state = 'available' AND t.match_path IS NULL AND t.rejected = 0 AND t.ignored = 0
+	AND NOT ` + contestedSQL + ` AND NOT ` + openImportSQL
 
 // preorderWaitingSQL is a title (aliased t) that keeps its account checked
 // hourly: a preorder released by the UTC date ?1 but not before ?2 (?1 less
@@ -310,6 +316,7 @@ type autoImport struct {
 	State       string
 	Matched     bool // on this server
 	Rejected    bool // "Not this book"
+	Contested   bool // left unmatched: another title claimed the same book
 	Ignored     bool
 	Pending     bool // a console request waiting for the preorder
 	Attempted   bool // a backup was queued before (whatever became of it)
@@ -320,9 +327,9 @@ type autoImport struct {
 // wants reports whether a poll queues the title's backup: an available title
 // not on this server, with no backup open, that a console request waits for,
 // or that the account's automatic policy covers: a new purchase (first seen
-// after policy_since) never marked "Not this book" or ignored and never tried,
-// under "all", or under "series" when the person already has a book of its
-// series.
+// after policy_since) never marked "Not this book", ignored, contested or
+// tried, under "all", or under "series" when the person already has a book of
+// its series.
 func (a autoImport) wants() bool {
 	if a.State != AudibleAvailable || a.Matched || a.Open || a.Ignored {
 		return false
@@ -330,7 +337,7 @@ func (a autoImport) wants() bool {
 	if a.Pending {
 		return true
 	}
-	if a.Rejected || a.Attempted || !a.FirstSeen.After(a.PolicySince) {
+	if a.Rejected || a.Contested || a.Attempted || !a.FirstSeen.After(a.PolicySince) {
 		return false
 	}
 	switch a.Policy {
@@ -379,18 +386,18 @@ func (c *Catalog) AudiblePolicyImports(ctx context.Context, account string) ([]b
 	}
 	cands, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *cand) error {
 		var first, series string
-		if err := rows.Scan(&x.asin, &x.dest, &first, &series, &x.Rejected, &x.Ignored, &x.Pending, &x.Attempted); err != nil {
+		if err := rows.Scan(&x.asin, &x.dest, &first, &series, &x.Rejected, &x.Contested, &x.Ignored, &x.Pending, &x.Attempted); err != nil {
 			return err
 		}
 		x.FirstSeen, _ = time.Parse(time.RFC3339Nano, first)
 		x.series = decodeSeries(series)
 		x.State, x.Policy, x.PolicySince = AudibleAvailable, acct.Policy, since
 		return nil
-	}, `SELECT t.asin, t.dest_path, t.first_seen, t.series, t.rejected, t.ignored, t.import_pending,
+	}, `SELECT t.asin, t.dest_path, t.first_seen, t.series, t.rejected, `+contestedSQL+`, t.ignored, t.import_pending,
 		    t.import_job_id IS NOT NULL
 		  FROM audible_titles t
 		 WHERE t.account = ? AND t.state = 'available' AND t.match_path IS NULL AND t.ignored = 0 AND NOT `+openImportSQL+`
-		   AND (t.import_pending = 1 OR (? <> 'manual' AND t.rejected = 0 AND t.import_job_id IS NULL))
+		   AND (t.import_pending = 1 OR (? <> 'manual' AND t.rejected = 0 AND NOT `+contestedSQL+` AND t.import_job_id IS NULL))
 		 ORDER BY t.title COLLATE NOCASE, t.asin`, account, acct.Policy)
 	if err != nil {
 		return nil, err

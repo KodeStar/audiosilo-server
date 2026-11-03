@@ -2663,7 +2663,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`import {job_id, state, code}`, `state` a job state or `pending`). **Policy** (`AudiblePolicyImports`,
   after each final titles PUT while the module is on and a Bridge offers the kind; `autoImport.wants`, a
   table test): available, not matched, not ignored, nothing open; a pending request always; otherwise not
-  rejected, never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
+  rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
+  claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
   its series the account's person can see (`seriesOwner`, by series key, `book_more_series` too).
   `policy_since` moves to now when the console turns on `all` or `series` and at the account's first
   complete poll, so the library it already had is never a flood: that is Back up everything's.
@@ -2675,8 +2676,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
   `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
   `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
-  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected or ignored, nothing open, a failed one
-  again), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
+  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, a
+  failed one again; a console Back up of one contested title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
   `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
   `invalid_policy` / `invalid_template`), audited `bridge.audible.backup` / `backup_all` / `account`. The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's

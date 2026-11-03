@@ -40,6 +40,9 @@ func TestAudibleAutoImportWants(t *testing.T) {
 		{"a pending request, now on this server", func(a *autoImport) { a.Pending, a.Matched = true, true }, false},
 		{"Not this book", func(a *autoImport) { a.Rejected = true }, false},
 		{"ignored", func(a *autoImport) { a.Ignored = true }, false},
+		{"contested", func(a *autoImport) { a.Contested = true }, false},
+		{"series, contested in a series they have", func(a *autoImport) { a.Policy, a.SeriesOwned, a.Contested = "series", true, true }, false},
+		{"contested with a request", func(a *autoImport) { a.Contested, a.Pending = true, true }, true},
 		{"ignored with a request", func(a *autoImport) { a.Ignored, a.Pending = true, true }, false},
 		{"tried before", func(a *autoImport) { a.Attempted = true }, false},
 		{"a backup open", func(a *autoImport) { a.Open = true }, false},
@@ -454,5 +457,80 @@ func TestAudibleBackupRequests(t *testing.T) {
 	}
 	if got := f.policyImports(t); len(got) != 0 {
 		t.Fatalf("paused policy: %v", got)
+	}
+}
+
+func contested(asin, series string) AudibleTitleInput {
+	t := avail(asin, series)
+	t.Reason = AudibleReasonContested
+	t.RuntimeS = 7200
+	return t
+}
+
+// A contested title (left unmatched because another title claimed the same
+// book) is on this server under that other title: neither "Back up
+// everything", its estimate nor a policy backs it up, but the console's Back
+// up of the one title does, and so does its pending request.
+func TestAudibleContestedSkipped(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "all")
+	if err := f.c.GrantWholeLibrary(f.ctx, f.user, f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.UpsertBook(f.ctx, &Book{LibraryID: f.lib.ID, RelPath: "A/Saga 1", Title: "Saga 1",
+		Series: "Saga", SeriesIndex: 1}); err != nil {
+		t.Fatal(err)
+	}
+	plain := avail("B000000001", "")
+	plain.RuntimeS = 3600
+	other := avail("B000000003", "")
+	other.Reason = "no_candidate"
+	other.RuntimeS = 60
+	f.poll(t, "p1", plain, contested("B000000002", ""), other)
+
+	// Back up everything and its estimate: the existing library, contested left out.
+	all, err := f.c.AudibleBackupAll(f.ctx, "acct0001")
+	if err != nil || !slices.Equal(asins(all), []string{"B000000001", "B000000003"}) {
+		t.Fatalf("everything = %v, %v, want the contested title left out", asins(all), err)
+	}
+	accts, err := f.c.AudibleAccounts(f.ctx)
+	if err != nil || accts[0].BackupEstimate == nil ||
+		*accts[0].BackupEstimate != (AudibleEstimate{Count: 2, Bytes: 3660 * audibleBytesPerSecond}) {
+		t.Fatalf("estimate = %+v, %v, want the contested title left out", accts[0].BackupEstimate, err)
+	}
+
+	// Policies: a contested new purchase is never queued, under all or series.
+	f.tick(time.Hour)
+	f.poll(t, "p2", plain, contested("B000000002", ""), other, avail("B000000004", "Saga"), contested("B000000005", "Saga"))
+	if got := f.policyImports(t); !slices.Equal(got, []string{"B000000004"}) {
+		t.Fatalf("all queues %v, want the new uncontested purchase only", got)
+	}
+	if _, err := f.c.PatchAudibleAccount(f.ctx, "acct0001", AudibleAccountPatch{Policy: new("series")}); err != nil {
+		t.Fatal(err)
+	}
+	f.tick(time.Hour)
+	f.poll(t, "p3", plain, contested("B000000002", ""), other, avail("B000000004", "Saga"), contested("B000000005", "Saga"),
+		avail("B000000006", "Saga"), contested("B000000007", "Saga"))
+	if got := f.policyImports(t); !slices.Equal(got, []string{"B000000006"}) {
+		t.Fatalf("series queues %v, want the new uncontested title of a series they have", got)
+	}
+
+	// The console's Back up of the one contested title is allowed.
+	p, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000002")
+	if err != nil || pending || p == nil || p.ASIN != "B000000002" {
+		t.Fatalf("back up a contested title = %+v, %t, %v", p, pending, err)
+	}
+
+	// And a pending request for a contested preorder is queued once available.
+	pre := contested("B000000008", "")
+	pre.State, pre.ReleaseDate = AudiblePreorder, "2026-11-10"
+	f.poll(t, "p4", plain, contested("B000000002", ""), other, pre)
+	if _, pending, err := f.c.RequestAudibleBackup(f.ctx, "acct0001", "B000000008"); err != nil || !pending {
+		t.Fatalf("back up a contested preorder: pending %t, %v", pending, err)
+	}
+	pre.State = AudibleAvailable
+	f.poll(t, "p5", plain, contested("B000000002", ""), other, pre)
+	if got := f.policyImports(t); !slices.Equal(got, []string{"B000000008"}) {
+		t.Fatalf("available now: %v, want the pending contested request", got)
 	}
 }

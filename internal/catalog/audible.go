@@ -41,6 +41,13 @@ const (
 	AudibleGone        = "gone"
 )
 
+// AudibleReasonContested is the reason a Bridge stores a title unmatched with
+// when another title of the account claimed the same book (a different work
+// tied for it). The book is on this server under the other title's match, so
+// neither "Back up everything" nor a policy backs it up; a console Back up of
+// the one title still may (the admin decides).
+const AudibleReasonContested = "contested"
+
 // AudibleStates are the states a title may be in, as the console filters them.
 var AudibleStates = []string{AudibleAvailable, AudiblePreorder, AudibleUnavailable, AudibleGone}
 

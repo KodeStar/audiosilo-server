@@ -234,8 +234,15 @@ func (b *bridgeEnv) finish(t *testing.T, j bridge.Job, state, result, errText st
 	}
 }
 
-// Back up everything: every title available, not here, not marked and with no
-// backup open, once; the estimate counts the same titles.
+// contestedTitle is title's unmatched title the Bridge stored with reason
+// contested (another title claimed the same book).
+func contestedTitle(asin, name string) string {
+	return strings.Replace(title(asin, name, "available", 0, ""), `"reason":""`, `"reason":"contested"`, 1)
+}
+
+// Back up everything: every title available, not here, not marked, not
+// contested and with no backup open, once; the estimate counts the same
+// titles. A contested title can still be backed up on its own.
 func TestAudibleBackupAll(t *testing.T) {
 	t.Parallel()
 	b := backupEnv(t,
@@ -243,7 +250,8 @@ func TestAudibleBackupAll(t *testing.T) {
 		title("B000000002", "Two", "available", 0, ""),
 		title("B000000003", "Here", "available", 0, cradleBook),
 		title("B000000004", "Soon", "preorder", 0, ""),
-		title("B000000005", "Skip", "available", 0, ""))
+		title("B000000005", "Skip", "available", 0, ""),
+		contestedTitle("B000000006", "Tied"))
 	if resp, out := b.do(t, "PATCH", "/api/v1/admin/audible/titles/"+testAccount+"/B000000005", b.adminTok, `{"rejected":true}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"rejected":true`) {
 		t.Fatalf("Not this book: %d %s", resp.StatusCode, out)
 	}
@@ -268,6 +276,12 @@ func TestAudibleBackupAll(t *testing.T) {
 	}
 	if x := b.audibleTitle(t, "B000000005"); x.ImportJobID != nil {
 		t.Fatal("Not this book was backed up")
+	}
+	if x := b.audibleTitle(t, "B000000006"); x.ImportJobID != nil || x.Reason != "contested" {
+		t.Fatalf("contested title = %+v: backed up by everything", x)
+	}
+	if resp, out := b.do(t, "POST", backupPath("B000000006"), b.adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("back up the contested title on its own: %d %s", resp.StatusCode, out)
 	}
 	if resp, out := b.do(t, "POST", "/api/v1/admin/audible/accounts/unknown01/backup-all", b.adminTok, ""); resp.StatusCode != http.StatusNotFound || codeOf(out) != "unknown_account" {
 		t.Fatalf("unknown account: %d %s", resp.StatusCode, out)
@@ -294,7 +308,7 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	}
 	// A non-final call queues nothing; the final call does.
 	if code, out := b.putTitles(t, testAccount, "p2", false, title("B000000001", "Old", "available", 0, ""),
-		title("B000000002", "New", "available", 0, "")); code != http.StatusOK {
+		title("B000000002", "New", "available", 0, ""), contestedTitle("B000000009", "Tied")); code != http.StatusOK {
 		t.Fatalf("p2a: %d %s", code, out)
 	}
 	if x := b.audibleTitle(t, "B000000002"); x.ImportJobID != nil {
@@ -306,6 +320,9 @@ func TestAudiblePolicyAfterPoll(t *testing.T) {
 	x := b.audibleTitle(t, "B000000002")
 	if x.ImportJobID == nil {
 		t.Fatal("the new purchase wasn't backed up")
+	}
+	if c := b.audibleTitle(t, "B000000009"); c.ImportJobID != nil {
+		t.Fatal("the policy backed up a contested new purchase")
 	}
 	job, _ := b.api.bridge.Job(context.Background(), *x.ImportJobID)
 	if job.Priority != -10 || job.RequestedBy != nil {
