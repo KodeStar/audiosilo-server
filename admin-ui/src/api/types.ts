@@ -2968,6 +2968,35 @@ export interface AudibleTitle {
   import: AudibleImport | null;
   /** A preorder still not available 14 days after its release date. */
   needs_attention: boolean;
+  /** Where a backup would go, as the Bridge planned it at its last check; null when matched or not planned. */
+  planned: AudiblePlan | null;
+  /** For a title left unmatched as contested: the book it tied for and the account's other titles on it. */
+  contested: AudibleContest | null;
+}
+
+/** catalog.AudiblePlan: where the Bridge would place a title's backup (planned at its last check). */
+export interface AudiblePlan {
+  library_id: number;
+  /** The file's library-relative path ("" only when state is error). */
+  path: string;
+  file: string;
+  /** Beside the series' books already here, a new series folder, or a book of its own. */
+  kind: 'series_existing' | 'series_new' | 'standalone' | '';
+  /** How many books of its series are there already. */
+  siblings: number;
+  /** A new place, one joining a folder already there, one already taken, or a plan that failed. */
+  state: 'new' | 'joins' | 'exists' | 'error';
+  /** What is in the way ('file' | 'book' | 'audio') when exists; why the plan failed when error. */
+  conflict: string;
+  /** The account template the plan used ("" = the automatic placement). */
+  template: string;
+}
+
+/** catalog.AudibleContest: a contested title's book and the account's other titles on it. */
+export interface AudibleContest {
+  library_id: number;
+  path: string;
+  with: { asin: string; title: string }[];
 }
 
 /** PATCH /admin/audible/titles/{account}/{asin}: "Not this book" and a destination. */

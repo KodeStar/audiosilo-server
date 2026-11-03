@@ -144,3 +144,73 @@ export function importStatus(
 export function cleanDest(dest: string): string {
   return dest.trim().replace(/^\/+|\/+$/g, '');
 }
+
+// What the console says of a title the Bridge left unmatched (4b owner fixes):
+// where its backup would go, and why it isn't shown as here.
+
+/** How a title's planned destination reads: its i18n key and values, and whether it warns. */
+export interface PlannedLine {
+  key: string;
+  values: Record<string, string | number>;
+  warn: boolean;
+  /** The plan used another template than the account has now: it changes at the next check. */
+  stale: boolean;
+}
+
+const PLAN_CONFLICTS = ['file', 'book', 'audio'];
+
+/**
+ * A title's planned destination as one line, null when there is none or the
+ * admin set a destination of their own (checked when the backup starts).
+ * template is the account's current one (undefined when unknown).
+ */
+export function plannedLine(
+  x: Pick<AudibleTitle, 'planned' | 'dest_path'>,
+  template: string | undefined,
+): PlannedLine | null {
+  const p = x.planned;
+  if (!p || x.dest_path) return null;
+  const stale = template !== undefined && p.template !== template;
+  const line = (key: string, values: Record<string, string | number> = {}, warn = false) => ({
+    key,
+    values: { path: p.path, ...values },
+    warn,
+    stale,
+  });
+  if (p.state === 'error')
+    return p.conflict
+      ? line('audible.planned.error', { message: p.conflict }, true)
+      : line('audible.planned.errorBare', {}, true);
+  if (p.state === 'exists')
+    return line(
+      `audible.planned.exists.${PLAN_CONFLICTS.includes(p.conflict) ? p.conflict : 'file'}`,
+      {},
+      true,
+    );
+  if (p.kind === 'series_existing' && p.siblings > 0)
+    return line('audible.planned.seriesExisting', { count: p.siblings });
+  if (p.kind === 'series_new') return line('audible.planned.seriesNew');
+  return line(p.state === 'joins' ? 'audible.planned.joins' : 'audible.planned.standalone');
+}
+
+/** The reason the Bridge sends for a title it left unmatched because another claimed the same book. */
+export const REASON_CONTESTED = 'contested';
+
+/**
+ * The i18n key a title's reason reads as, null to show it as sent: a machine
+ * code the console has no words for reads as a plain sentence, and Audible's
+ * own words stay. Contested is null too: the row explains it with its book.
+ */
+export function reasonKey(reason: string): string | null {
+  if (!reason || reason === REASON_CONTESTED) return null;
+  return /^[a-z][a-z0-9_]*$/.test(reason) ? 'audible.reason.other' : null;
+}
+
+/**
+ * The destination field's placeholder: where the Bridge planned the backup at
+ * its last check, else an example. Never the field's value: a saved value
+ * would freeze a destination of the admin's own.
+ */
+export function plannedPlaceholder(x: Pick<AudibleTitle, 'planned'>): string {
+  return x.planned?.path || 'Author/Series/Title.m4b';
+}

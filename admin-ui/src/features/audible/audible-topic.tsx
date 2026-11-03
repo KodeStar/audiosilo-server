@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { BookCheck, Headphones } from 'lucide-react';
 import { AUDIBLE_TITLE_STATES, type AudibleTitle, type AudibleTitleState } from '@/api/types';
 import { LoadMore } from '@/components/load-more';
@@ -17,7 +17,10 @@ import {
   accountName,
   chosenAccount,
   importStatus,
+  plannedLine,
   pollTarget,
+  REASON_CONTESTED,
+  reasonKey,
   TITLE_STATE_TONE,
   titleByline,
   titleName,
@@ -60,6 +63,7 @@ export function AudibleTopic() {
   const backups = useBackups();
   const target = pollTarget(list, account);
   const names = new Map(list.map((a) => [a.id, accountName(t, a)] as const));
+  const templates = new Map(list.map((a) => [a.id, a.template] as const));
   const paused = new Set(list.filter((a) => a.paused).map((a) => a.id));
   const filtered = Boolean(account || state || matched || q);
 
@@ -180,6 +184,7 @@ export function AudibleTopic() {
               key={`${x.account}/${x.asin}`}
               title={x}
               account={list.length > 1 ? names.get(x.account) : undefined}
+              template={templates.get(x.account)}
               paused={paused.has(x.account)}
               backups={backups}
             />
@@ -202,11 +207,14 @@ export function AudibleTopic() {
 function TitleRow({
   title: x,
   account,
+  template,
   paused,
   backups,
 }: {
   title: AudibleTitle;
   account?: string;
+  /** The account's placement template now (the plan notes when it used another). */
+  template?: string;
   /** The title's account is paused (its library was deleted): nothing can be backed up. */
   paused: boolean;
   backups: Backups;
@@ -236,7 +244,8 @@ function TitleRow({
         <b className="font-semibold [overflow-wrap:anywhere]">{titleName(x)}</b>
         {byline ? <span className="text-[13px] text-muted-foreground">{byline}</span> : null}
         <span className="font-mono text-[12px] text-muted-foreground">{details.join(' · ')}</span>
-        {x.reason ? <span className="text-[12.5px] text-muted-foreground">{x.reason}</span> : null}
+        <PlannedNote title={x} template={template} />
+        <ReasonNote title={x} />
         {backup?.code ? (
           <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
         ) : null}
@@ -276,4 +285,75 @@ function TitleRow({
       </div>
     </li>
   );
+}
+
+/**
+ * Where an unmatched title's backup would go, as the Bridge planned it at its
+ * last check: a warning when the place is taken or the plan failed, a note
+ * when the account's template changed since. With a destination of the
+ * admin's own, that is checked when the backup starts instead.
+ */
+function PlannedNote({ title: x, template }: { title: AudibleTitle; template?: string }) {
+  const { t } = useTranslation();
+  if (x.dest_path && (!x.match || x.rejected))
+    return (
+      <span className="text-[12.5px] text-muted-foreground">{t('audible.planned.override')}</span>
+    );
+  const line = plannedLine(x, template);
+  if (!line) return null;
+  const text = (
+    <span className="[overflow-wrap:anywhere]">
+      {t(line.key, line.values)}{' '}
+      <span className="text-muted-foreground">({t('audible.planned.when')})</span>
+    </span>
+  );
+  return (
+    <span className="flex flex-col gap-0.5 text-[12.5px]">
+      {line.warn ? (
+        <StatusText tone="warn" colored>
+          {text}
+        </StatusText>
+      ) : (
+        <span className="text-muted-foreground">{text}</span>
+      )}
+      {line.stale ? (
+        <span className="text-muted-foreground">{t('audible.planned.staleTemplate')}</span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Why a title isn't shown as here, in words: contested names the book it tied
+ * for and the account's other titles on it (or says so plainly without them),
+ * an unknown code reads as a sentence, and Audible's own words stay.
+ */
+function ReasonNote({ title: x }: { title: AudibleTitle }) {
+  const { t, i18n } = useTranslation();
+  if (!x.reason) return null;
+  const cls = 'text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]';
+  if (x.reason === REASON_CONTESTED) {
+    const c = x.contested;
+    if (!c || c.with.length === 0)
+      return <span className={cls}>{t('audible.reason.contestedUnknown')}</span>;
+    const list = new Intl.ListFormat(i18n.resolvedLanguage ?? 'en', { type: 'conjunction' });
+    return (
+      <span className={cls}>
+        <Trans
+          i18nKey="audible.reason.contested"
+          values={{ with: list.format(c.with.map((w) => w.title || w.asin)), path: c.path }}
+          components={{
+            book: (
+              <Link
+                {...bookRoute(c.library_id, c.path)}
+                className="font-semibold text-primary hover:underline"
+              />
+            ),
+          }}
+        />
+      </span>
+    );
+  }
+  const key = reasonKey(x.reason);
+  return <span className={cls}>{key ? t(key) : x.reason}</span>;
 }
