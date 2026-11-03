@@ -37,7 +37,8 @@ RUN npm run build
 # and glibc's static libraries; a cross leg adds the target's cross compiler.
 # netgo and osusergo keep the static binary off glibc's NSS, and
 # sqlite_omit_load_extension off dlopen. SQLITE_ENGINE=modernc builds the
-# pure-Go engine without cgo, as before.
+# pure-Go engine without cgo, as before. Keep the tags and the static link in
+# step with .goreleaser.yml's audiosilo-linux build (the native tarballs).
 FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin
@@ -86,6 +87,8 @@ RUN apk add --no-cache ca-certificates ffmpeg su-exec
 COPY --from=build /out/audiosilo /usr/local/bin/audiosilo
 COPY --from=web   /web           /app/web
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The server statically links glibc (LGPL-2.1-or-later): its notice ships with it.
+COPY NOTICE /usr/share/doc/audiosilo/NOTICE
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Default to uid/gid 1000; override with PUID/PGID to match your data dir's owner
 # (Unraid: 99/100). The entrypoint chowns /data and drops to that user.

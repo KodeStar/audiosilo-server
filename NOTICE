@@ -1,0 +1,34 @@
+AudioSilo server - third-party notice
+
+AudioSilo itself is MIT licensed (see LICENSE).
+
+GNU C Library (glibc)
+---------------------
+The Linux release binaries (linux_amd64, linux_arm64, and the .deb/.rpm
+packages built from them) and the server in the Docker image
+(ghcr.io/kodestar/audiosilo-server) are statically linked against the GNU C
+Library, which is licensed under the GNU Lesser General Public License,
+version 2.1 or later (https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html).
+macOS and Windows binaries do not contain glibc.
+
+- The release binaries are built on GitHub's ubuntu-latest runner with
+  Ubuntu's glibc packages (libc6-dev, and libc6-dev-arm64-cross for arm64).
+  Source: https://launchpad.net/ubuntu/+source/glibc and
+  https://launchpad.net/ubuntu/+source/cross-toolchain-base
+- The Docker image's server is built in the golang:1.26 (Debian) image with
+  Debian's glibc packages. Source: https://sources.debian.org/src/glibc/
+- Upstream source: https://sourceware.org/glibc/
+
+To relink AudioSilo against a modified glibc: the complete source of AudioSilo
+and its build recipe are public at https://github.com/KodeStar/audiosilo-server
+(the Linux build settings are the audiosilo-linux build in .goreleaser.yml and
+the build stage of the Dockerfile). Build it with your glibc in place of the
+distribution's.
+
+On request we will provide the glibc source used for any published release:
+kode@audiosilo.app.
+
+SQLite
+------
+The same builds compile in SQLite (public domain, https://sqlite.org/copyright.html)
+through github.com/mattn/go-sqlite3 (MIT).
