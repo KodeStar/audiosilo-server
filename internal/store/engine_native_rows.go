@@ -52,10 +52,8 @@ static const char as_empty[1] = {0};
 
 typedef struct { int32_t type; int32_t n; int64_t i; double d; const void *p; } as_col;
 
-// as_step_read steps s and, on a row, reads every column into out.
-static int as_step_read(sqlite3_stmt *s, as_col *out, int ncol) {
-	int rc = sqlite3_step(s);
-	if (rc != 100) return rc; // SQLITE_ROW
+// as_read reads every column of s's current row into out.
+static void as_read(sqlite3_stmt *s, as_col *out, int ncol) {
 	for (int i = 0; i < ncol; i++) {
 		int t = sqlite3_column_type(s, i);
 		out[i].type = t;
@@ -67,6 +65,12 @@ static int as_step_read(sqlite3_stmt *s, as_col *out, int ncol) {
 		default: out[i].p = NULL; out[i].n = 0; break;
 		}
 	}
+}
+
+// as_step_read steps s and, on a row, reads every column into out.
+static int as_step_read(sqlite3_stmt *s, as_col *out, int ncol) {
+	int rc = sqlite3_step(s);
+	if (rc == 100) as_read(s, out, ncol); // SQLITE_ROW
 	return rc;
 }
 
@@ -87,6 +91,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -146,6 +151,9 @@ func nativeQuery(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (
 			return nil, false, nil
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err // as modernc's: an interrupt before the first step is lost
+	}
 	C.sqlite3_reset(h)
 	C.sqlite3_clear_bindings(h)
 	for _, a := range args {
@@ -154,16 +162,48 @@ func nativeQuery(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (
 			return nil, true, err
 		}
 	}
+	r := &nativeRows{h: h, ctx: ctx}
+	if ctx.Done() != nil {
+		db := C.sqlite3_db_handle(h)
+		r.stop = context.AfterFunc(ctx, func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if !r.closed {
+				C.sqlite3_interrupt(db)
+			}
+		})
+	}
+	// The first step runs here, as modernc's query runs it: SQLite re-prepares a
+	// statement whose schema changed (another connection's DDL) at its step, so
+	// only then are its columns the ones its rows have. Its error is the query's.
+	rc := C.sqlite3_step(h)
+	if rc != 100 && rc != 101 { // SQLITE_ROW, SQLITE_DONE
+		err := r.stepError(rc)
+		_ = r.Close()
+		return nil, true, err
+	}
 	n := int(C.sqlite3_column_count(h))
-	r := &nativeRows{h: h, ctx: ctx, cols: make([]string, n), buf: make([]C.as_col, max(n, 1))}
+	r.cols, r.buf = make([]string, n), make([]C.as_col, max(n, 1))
 	for i := range n {
 		r.cols[i] = C.GoString(C.sqlite3_column_name(h, C.int(i)))
 	}
-	if ctx.Done() != nil {
-		db := C.sqlite3_db_handle(h)
-		r.stop = context.AfterFunc(ctx, func() { C.sqlite3_interrupt(db) })
+	if rc == 100 {
+		C.as_read(h, &r.buf[0], C.int(n))
+		r.pending = true
+	} else {
+		r.done = true
 	}
 	return r, true, nil
+}
+
+// nativeAfterExec resets a cached statement mattn's Exec ran and clears its
+// bindings, as modernc's Exec does: mattn leaves both until the statement's
+// next run, holding copies of its last arguments (a cover's bytes) meanwhile.
+func nativeAfterExec(s driver.Stmt) {
+	if h := stmtHandle(s); h != nil {
+		C.sqlite3_reset(h)
+		C.sqlite3_clear_bindings(h)
+	}
 }
 
 // bindArg binds one argument as mattn would: by its ordinal, or a named one at
@@ -221,29 +261,44 @@ type nativeRows struct {
 	h    *C.sqlite3_stmt
 	ctx  context.Context
 	stop func() bool
-	cols []string
-	buf  []C.as_col
-	done bool
+	// mu and closed keep the context's interrupt off the connection once the
+	// rows are closed: a late one would end the connection's next statement,
+	// another request's (modernc's interruptOnDone guards the same way), or
+	// reach a connection closed meanwhile.
+	mu      sync.Mutex
+	closed  bool
+	cols    []string
+	buf     []C.as_col
+	pending bool // buf holds the first row, read by the query's step
+	done    bool
 }
 
 func (r *nativeRows) Columns() []string { return r.cols }
 
-func (r *nativeRows) Next(dest []driver.Value) error {
-	if r.done {
-		return io.EOF
+// stepError is a failed step's error: the context's when it interrupted it.
+func (r *nativeRows) stepError(rc C.int) error {
+	if rc&0xff == 9 && r.ctx.Err() != nil { // SQLITE_INTERRUPT by the context
+		return r.ctx.Err()
 	}
-	rc := C.as_step_read(r.h, &r.buf[0], C.int(len(r.cols)))
-	switch rc {
-	case 100: // SQLITE_ROW
-	case 101: // SQLITE_DONE
-		r.done = true
-		return io.EOF
-	default:
-		r.done = true
-		if rc&0xff == 9 && r.ctx.Err() != nil { // SQLITE_INTERRUPT by the context
-			return r.ctx.Err()
+	return lastError(r.h, rc)
+}
+
+func (r *nativeRows) Next(dest []driver.Value) error {
+	if r.pending {
+		r.pending = false
+	} else {
+		if r.done {
+			return io.EOF
 		}
-		return lastError(r.h, rc)
+		switch rc := C.as_step_read(r.h, &r.buf[0], C.int(len(r.cols))); rc {
+		case 100: // SQLITE_ROW
+		case 101: // SQLITE_DONE
+			r.done = true
+			return io.EOF
+		default:
+			r.done = true
+			return r.stepError(rc)
+		}
 	}
 	for i := range dest {
 		c := &r.buf[i]
@@ -266,8 +321,11 @@ func (r *nativeRows) Next(dest []driver.Value) error {
 }
 
 func (r *nativeRows) Close() error {
-	if r.stop != nil {
-		r.stop()
+	if r.stop != nil && !r.stop() {
+		// The interrupt has started: wait for it, or keep it from coming.
+		r.mu.Lock()
+		r.closed = true
+		r.mu.Unlock()
 	}
 	C.sqlite3_reset(r.h)
 	C.sqlite3_clear_bindings(r.h)

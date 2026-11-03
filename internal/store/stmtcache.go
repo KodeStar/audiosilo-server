@@ -49,6 +49,9 @@ type cacheDriver struct {
 	// query, when set, runs a cached statement's query instead of the library's
 	// own rows (the native engine's one-C-call-a-row path); ok false: it can't.
 	query func(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (r driver.Rows, ok bool, err error)
+	// afterExec, when set, runs after a cached statement's Exec (the native
+	// engine resets it and clears its bindings, which mattn leaves to its next run).
+	afterExec func(s driver.Stmt)
 }
 
 func (c cacheDriver) Open(name string) (driver.Conn, error) {
@@ -246,7 +249,11 @@ func (c *cacheConn) ExecContext(ctx context.Context, q string, args []driver.Nam
 	if cs == nil {
 		return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
 	}
-	return cs.s.(driver.StmtExecContext).ExecContext(ctx, argsFor(cs.s, args))
+	res, err := cs.s.(driver.StmtExecContext).ExecContext(ctx, argsFor(cs.s, args))
+	if c.drv.afterExec != nil {
+		c.drv.afterExec(cs.s)
+	}
+	return res, err
 }
 
 // argsFor is args without the positional ones past s's parameters: one argument

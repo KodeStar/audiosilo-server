@@ -5,7 +5,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -107,5 +111,127 @@ func TestNativeFastRows(t *testing.T) {
 		if !IsUniqueViolation(err) {
 			t.Errorf("duplicate key through RETURNING: %v, not a unique violation", err)
 		}
+	}
+}
+
+// A cached query on one connection, after another connection changed its
+// table, reads the new columns on its first run (SQLite re-prepares it at the
+// query's first step, before its columns are read).
+func TestNativeRowsSeeAnotherConnectionsSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "x.db")
+	open := func() *sql.DB {
+		db, err := sql.Open(driverName(), dsnPragmas(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.SetMaxOpenConns(1)
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	reader, writer := open(), open()
+	mustExec(t, writer, `CREATE TABLE t (a INTEGER)`)
+	mustExec(t, writer, `INSERT INTO t VALUES (1)`)
+	cols := func() int {
+		rows, err := reader.QueryContext(ctx, `SELECT * FROM t`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		c, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return len(c)
+	}
+	for range 2 { // the second run is the cached statement's
+		if n := cols(); n != 1 {
+			t.Fatalf("columns before: %d", n)
+		}
+	}
+	mustExec(t, writer, `ALTER TABLE t ADD COLUMN b TEXT`)
+	if n := cols(); n != 2 {
+		t.Fatalf("columns after another connection's ALTER: %d, want 2", n)
+	}
+}
+
+// Rows closed after their context ended leave no interrupt behind: the
+// connection's next statement runs.
+func TestNativeRowsLeaveNoInterrupt(t *testing.T) {
+	if activeEngine() != nativeEngine {
+		t.Skip("AUDIOSILO_SQLITE picked modernc")
+	}
+	db := openCached(t)
+	mustExec(t, db, `CREATE TABLE t (k INTEGER)`)
+	mustExec(t, db, `INSERT INTO t VALUES (1), (2)`)
+	const long = `WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < ?) SELECT count(*) FROM c`
+	const q = `SELECT k FROM t ORDER BY k`
+	for i := range 200 {
+		func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			rows, err := db.QueryContext(ctx, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close() // right after the cancel: the interrupt races it
+			cancel()
+			_ = rows.Err()
+		}()
+		var n int
+		if err := db.QueryRowContext(context.Background(), long, 20_000).Scan(&n); err != nil || n != 20_000 {
+			t.Fatalf("run %d: the next statement after cancelled rows: %d, %v", i, n, err)
+		}
+	}
+	// A context already ended fails the query at once, as on modernc.
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = conn.Raw(func(dc any) error {
+		e := dc.(*cacheConn).stmts[q]
+		if e == nil {
+			return errors.New("the query isn't cached")
+		}
+		_, _, err := nativeQuery(cctx, e.Value.(*cachedStmt).s, nil)
+		return err
+	})
+	_ = conn.Close()
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a query on an ended context: %v, want context.Canceled", err)
+	}
+}
+
+// RegisterFunction's functions take their arity on the native engine too, and
+// see NULL as nil.
+func TestNativeFunctionArity(t *testing.T) {
+	if activeEngine() != nativeEngine {
+		t.Skip("AUDIOSILO_SQLITE picked modernc")
+	}
+	f := sqlFunc{name: "as_test_kind", nArg: 1, fn: func(args []driver.Value) (driver.Value, error) {
+		if args[0] == nil {
+			return "nil", nil
+		}
+		return fmt.Sprintf("%T", args[0]), nil
+	}}
+	old := sqlFuncs
+	sqlFuncs = append(slices.Clone(sqlFuncs), f)
+	defer func() { sqlFuncs = old }()
+	db := openCached(t)
+	var got string
+	if err := db.QueryRow(`SELECT as_test_kind(NULL) || ',' || as_test_kind(X'') || ',' || as_test_kind('a') || ',' || as_test_kind(1)`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "nil,[]uint8,string,int64" {
+		t.Errorf("argument types %q", got)
+	}
+	if _, err := db.Exec(`SELECT as_test_kind(1, 2)`); err == nil {
+		t.Error("a call with two arguments to a one-argument function prepared")
 	}
 }

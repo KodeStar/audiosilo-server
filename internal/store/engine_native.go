@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 
 	mattn "github.com/mattn/go-sqlite3"
@@ -32,20 +33,62 @@ const nativeDriver = "sqlite-native-stmtcache"
 func init() {
 	d := &mattn.SQLiteDriver{ConnectHook: func(c *mattn.SQLiteConn) error {
 		for _, f := range sqlFuncs {
-			fn := f.fn
-			if err := c.RegisterFunc(f.name, func(args ...any) (any, error) {
-				vals := make([]driver.Value, len(args))
-				for i, a := range args {
-					vals[i] = a
-				}
-				return fn(vals)
-			}, true); err != nil {
+			if err := c.RegisterFunc(f.name, mattnFunc(f), true); err != nil {
 				return err
 			}
 		}
 		return nil
 	}}
-	sql.Register(nativeDriver, cacheDriver{d: pragmaDriver{d}, execCacheable: plainDML, query: nativeQuery})
+	sql.Register(nativeDriver, cacheDriver{d: pragmaDriver{d}, execCacheable: plainDML, query: nativeQuery,
+		afterExec: nativeAfterExec})
+}
+
+var (
+	anyType   = reflect.TypeFor[any]()
+	errorType = reflect.TypeFor[error]()
+)
+
+// mattnFunc is f as mattn registers a function: a Go function of f.nArg any
+// parameters (mattn takes the arity from the signature, so a call with another
+// number of arguments fails to prepare, as on modernc, rather than reaching fn),
+// handing fn its arguments as modernc does (mattn's NULL, a nil []byte, as nil).
+func mattnFunc(f sqlFunc) any {
+	call := func(args []reflect.Value) []reflect.Value {
+		vals := make([]driver.Value, len(args))
+		for i, a := range args {
+			v := a.Interface()
+			if b, ok := v.([]byte); ok && b == nil {
+				v = nil
+			}
+			vals[i] = v
+		}
+		out, err := f.fn(vals)
+		res, errV := reflect.New(anyType).Elem(), reflect.New(errorType).Elem()
+		if out != nil {
+			res.Set(reflect.ValueOf(out))
+		}
+		if err != nil {
+			errV.Set(reflect.ValueOf(err))
+		}
+		return []reflect.Value{res, errV}
+	}
+	in, variadic := make([]reflect.Type, max(f.nArg, 1)), f.nArg < 0
+	for i := range in {
+		in[i] = anyType
+	}
+	if variadic {
+		in[0] = reflect.TypeFor[[]any]()
+		inner := call
+		call = func(args []reflect.Value) []reflect.Value { // the one []any: spread it
+			rest := args[0]
+			spread := make([]reflect.Value, rest.Len())
+			for i := range spread {
+				spread[i] = rest.Index(i)
+			}
+			return inner(spread)
+		}
+	}
+	return reflect.MakeFunc(reflect.FuncOf(in, []reflect.Type{anyType, errorType}, variadic), call).Interface()
 }
 
 func chooseEngine() *engine {
@@ -105,9 +148,9 @@ var nativeEngine = &engine{
 
 // plainDML reports whether q is an INSERT, UPDATE, DELETE or REPLACE without
 // RETURNING: the statements the statement cache may run again for Exec on
-// mattn. mattn's Exec steps a statement once and resets it only at its next
-// run, so a statement that returns a row (a SELECT, RETURNING) would stay
-// active, holding its transaction open; plain DML is done in one step.
+// mattn. mattn's Exec steps a statement once, so one that returns rows (a
+// SELECT) would stop after its first; plain DML is done in that step, after
+// which the cache resets it (nativeAfterExec).
 func plainDML(q string) bool {
 	if containsFold(q, "RETURNING") {
 		return false
@@ -123,7 +166,9 @@ func plainDML(q string) bool {
 
 // pragmaDriver opens mattn connections from the store's DSNs, whose PRAGMAs
 // are modernc's _pragma parameters (dsnPragmas): it takes them out of the DSN
-// and runs each, in order, as the connection opens, as modernc does.
+// and runs each, in the DSN's order, as the connection opens. (modernc runs
+// busy_timeout first and the rest sorted by name; mattn has set a 5 s
+// busy_timeout before any of them runs, so the order changes nothing here.)
 type pragmaDriver struct{ d *mattn.SQLiteDriver }
 
 func (p pragmaDriver) Open(name string) (driver.Conn, error) {

@@ -69,7 +69,7 @@ in-process, can open a browser).
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push in three parallel jobs (Go tests, lint with govet, admin console),
+gates all of them on every PR/push in four parallel jobs (Go tests, the same on the native SQLite engine (`test-native`: vet, race tests and lint with the native tags), lint with govet, admin console),
 the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The `probe-drift` workflow compares the in-process probe

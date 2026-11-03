@@ -680,7 +680,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   reads a query's columns before SQLite re-prepares it for a new schema). On the native engine a
   cached query is read a row a C call (`engine_native_rows.go`), its values as modernc's (int64,
   float64, string, []byte, nil; no time or bool conversion by declared type): mattn's own rows
-  cross into C two or three times a column. It reads mattn's unexported `SQLiteStmt.s`;
+  cross into C two or three times a column. As modernc's, its first step runs in the query (its
+  columns are then the statement's as SQLite re-prepared it after another connection's DDL, and a
+  failure is the query's error), and its context's interrupt never outlives its rows (a late
+  `sqlite3_interrupt` would end the connection's next statement, another request's). It reads mattn's unexported `SQLiteStmt.s`;
   `TestNativeFastRows` fails if a mattn upgrade drops it (queries would quietly fall back).
   Both pools open the engine's library behind a per-connection prepared-statement cache
   (`store/stmtcache.go`): a statement's SQL text is its key, so SQL
@@ -688,7 +691,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and churns the cache (256 statements per connection, least recently used out); bind values as
   parameters instead. SQL holding several statements, and a statement whose rows are still open,
   take the library's own path, and on mattn so does an Exec of anything but plain DML (its Exec
-  leaves a statement unreset until its next run: one that returned a row would stay active). A
+  steps a statement once: one that returns rows would be left mid-run); after a cached Exec the
+  native engine resets the statement and clears its bindings, as modernc does, so no copy of the
+  last arguments (a cover's bytes) stays held. SQL functions take their arity on both engines. A
   `conn.Raw` gets the cache's connection: the engine's hooks unwrap it; anything else of the
   library's connection is `Unwrap()`'s. A hot join (one run per book or per row: the
   scan's, `catalog/communitychapters.go`, `catalog/overrides.go`) takes

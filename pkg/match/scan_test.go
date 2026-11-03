@@ -24,7 +24,10 @@ func refNumber(re *regexp.Regexp, s string) (float64, bool) {
 		return 0, false
 	}
 	v, err := strconv.ParseFloat(m[1], 64)
-	return v, err == nil
+	if err != nil {
+		return 0, false // as the regexp-era callers answered an overflow
+	}
+	return v, true
 }
 
 // checkScanners fails t where a scanner and its regexp disagree on s. The
@@ -92,6 +95,18 @@ func TestScannersMatchRegexps(t *testing.T) {
 		checkScanners(t, s)
 		checkRemove(t, s, pieces[r.IntN(len(pieces))])
 		checkRemove(t, s, "land")
+	}
+}
+
+// A number too large for a float64 is no number, (0, false), as SeqFromTitle
+// answered with its regexp.
+func TestScannersOverflow(t *testing.T) {
+	huge := strings.Repeat("9", 400)
+	for _, s := range []string{huge, "Book " + huge} {
+		checkScanners(t, s)
+		if v, ok := SeqFromTitle(s, ""); v != 0 || ok {
+			t.Errorf("SeqFromTitle(%q...) = %v, %v; want 0, false", s[:10], v, ok)
+		}
 	}
 }
 

@@ -169,8 +169,7 @@ func findMarker(s string) (float64, bool) {
 	for i := 0; i < len(s); i++ {
 		if markerStartByte(s[i]) {
 			if e, n, ok := markerAt(s, i); ok {
-				v, err := strconv.ParseFloat(s[n:e], 64)
-				return v, err == nil
+				return parseNumber(s[n:e])
 			}
 		}
 	}
@@ -182,12 +181,21 @@ func findFirstNumber(s string) (float64, bool) {
 	for i := 0; i < len(s); i++ {
 		if isDigitByte(s[i]) && boundaryAt(s, i) {
 			if e, ok := numberAt(s, i); ok {
-				v, err := strconv.ParseFloat(s[i:e], 64)
-				return v, err == nil
+				return parseNumber(s[i:e])
 			}
 		}
 	}
 	return 0, false
+}
+
+// parseNumber is a matched number as a float, (0, false) when it overflows one,
+// as the regexp-era callers answered.
+func parseNumber(s string) (float64, bool) {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 var fluffList = [...]string{"series", "unabridged", "abridged", "audiobook", "dramatized", "adaptation"}
