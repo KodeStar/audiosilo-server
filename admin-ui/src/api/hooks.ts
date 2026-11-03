@@ -67,6 +67,12 @@ export const keys = {
   setupPreview: (root: string) => ['admin', 'setup', 'preview', root] as const,
   /** The setup flow's phone pairing token: outside `setup`, so refreshing the state never mints another. */
   setupPair: ['admin', 'setup-pair'] as const,
+  /** The Audible accounts (Check now refreshes them: the queued time). */
+  audibleAccounts: ['admin', 'audible', 'accounts'] as const,
+  /** Every loaded Audible titles list (a prefix: a landed poll refreshes them). */
+  audibleTitleLists: ['admin', 'audible', 'titles'] as const,
+  audibleTitles: (account: string, state: string, matched: string, q: string) =>
+    ['admin', 'audible', 'titles', account, state, matched, q] as const,
   /** Settings > Modules (a settings save or a Bridge status change moves it). */
   modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */

@@ -172,6 +172,8 @@ modules:
     enabled: false # Following feeds and scheduled checks need a paired Bridge.
   contributions:
     enabled: false # send corrections and generated sidecars to the community database through the Bridge (needs a Bridge signed in to GitHub) [AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED]
+  audible:
+    enabled: false # back up the Audible books you own through the Bridge, which holds the sign-in; the server queues its library checks (needs a Bridge with Audible) [AUDIOSILO_MODULES_AUDIBLE_ENABLED]
 
 # Podcast directory search and OPML transfer (while the podcasts module is on).
 # Search asks Apple's podcast directory by default (it receives the search text

@@ -216,6 +216,7 @@ type DatabaseConfig struct {
 type ModulesConfig struct {
 	Contributions ModuleConfig `yaml:"contributions"`
 	Podcasts      ModuleConfig `yaml:"podcasts"`
+	Audible       ModuleConfig `yaml:"audible"`
 }
 
 // ModuleConfig is one module's toggle.

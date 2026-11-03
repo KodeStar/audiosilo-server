@@ -6,6 +6,7 @@
 package builtin
 
 import (
+	"github.com/kodestar/audiosilo-server/internal/audible"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/podcast"
@@ -22,5 +23,11 @@ func Modules() []modules.Module {
 		// while it is off (bridge.ModuleFor names it).
 		{ID: bridge.ModuleContributions, RequiresBridge: bridge.FeatureContribute},
 		{ID: bridge.ModulePodcasts, RequiresBridge: bridge.FeaturePodcast, Start: podcast.RunScheduler},
+		// Audible (BRIDGE-PLAN.md Phase 4): the Bridge signs in to Audible
+		// accounts and backs up what they own. Its console routes are mounted
+		// in api.go behind its toggle (as podcasts' are); its Start queues each
+		// account's scheduled poll; its jobs are held while it is off
+		// (bridge.ModuleFor).
+		{ID: bridge.ModuleAudible, RequiresBridge: bridge.FeatureAudible, Start: audible.RunScheduler},
 	}
 }

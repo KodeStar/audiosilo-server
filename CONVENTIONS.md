@@ -715,6 +715,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
+  the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`) and the
+  scheduler's `MarkAudibleQueued` (`last_queued_at`),
   `PutMetaCache`, the upcoming releases job's tables
   (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
@@ -2572,11 +2574,67 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   status and refetched after every settings save) shows a card per module (switch, blurb, docs link,
   Bridge state line, the "hidden from listeners" note while enabled but not active); a page a module
   brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
-  on (a `?topic=` for it opens General). Two modules ship: `contributions` (needs `contribute`, its actions are Bridge community jobs)
-  and `podcasts` (needs `podcast`, its Start schedules feed checks; see Podcasts above). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
+  on (a `?topic=` for it opens General). Three modules ship: `contributions` (needs `contribute`, its actions are Bridge community jobs),
+  `podcasts` (needs `podcast`, its Start schedules feed checks; see Podcasts above) and `audible` (needs `audible`, its
+  Start schedules account polls, its page is Settings > Audible; see Audible accounts below). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
   or clashing route pattern fails the tests, not a start.
   `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
   runtime on/off).
+- **Audible accounts (BRIDGE-PLAN.md Phase 4a, module `audible`, `catalog/audible.go`, `internal/audible`,
+  `bridge/audible.go`, `api/handlers_audible.go`)**: the Bridge signs in to Audible and holds every credential; the
+  server only keeps what it reports. `0063`: `audible_accounts` (`account` = the Bridge's id
+  `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE, `library_id` ->
+  libraries SET NULL, policy `all`|`series`|`manual`, sync, `poll_hours` default 6, `last_poll_at`,
+  `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
+  runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /
+  `match_path` / `match_how` (`asin`|`fuzzy`): path-keyed, **no FK**, nulled by `DeleteLibrary` (in the
+  library's own delete transaction, so no titles call matches into it between), moved by `moveBookState`
+  and by a join (`joinBookState`, onto the joined book); plus the console's later columns rejected,
+  ignored, dest_path, import_job_id, which a titles PUT never overwrites). **Paused** = `library_id` NULL
+  (the library was deleted, its open poll cancelled with `bridge.CancelAudiblePaused`): the scheduler
+  skips it and Check now is 409 `account_paused` until the Bridge maps it again. **Bridge routes** (bridge
+  token only, header only, not module-gated, like podcasts'): `GET /bridge/users` (`{users:[{id, username,
+  display_name, admin}]}`: `catalog.BridgeUsers`, never a kid member, a demo or a disabled account, and a
+  PUT naming one is 404 `unknown_user`); `PUT`/`DELETE /bridge/audible/accounts/{account}` (an upsert in one
+  transaction, the library must be a books library (400 `not_books`, 404 `unknown_library`); DELETE cancels
+  the account's open poll (`bridge.CancelAudibleRemoved`; both reasons are `IsCancelReason`'s and the
+  console's `SERVER_CANCEL_REASONS`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
+  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call, a call without its `titles` array 400, never
+  "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
+  and 10 are dropped; a match path is clean, or `.` for a `book` override on the library root, as the books
+  list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
+  this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
+  (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
+  500); `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
+  same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
+  another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
+  since the Bridge asks again for such a book after every poll).
+  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/accounts` (with title
+  counts), `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
+  as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
+  asin, `after` cursor), `POST /admin/audible/accounts/{account}/poll` (Check now: 201 a new `audible.poll`
+  job, 200 the open one, raised to a person's priority (the kind `promotes`), audited as `bridge.job`).
+  `DELETE /admin/audible/accounts/{account}` is admin only (`requireAdmin`, the bridge token refused) and
+  **not** behind the toggle: it removes an account the Bridge can no longer remove (unpaired, paired again, a
+  DELETE that failed), which the scheduler would otherwise poll for good, so it must work after the module is
+  turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
+  known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
+  `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
+  **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
+  per account (`audiblePollSuffix`), only the newest ended one kept, gated by
+  `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
+  with an online Bridge that offers the kind, it queues the accounts due (`DueAudiblePolls`: not paused,
+  mapped to a person an account may still be mapped to (`bridgeUserSQL`: not one disabled or made a kid
+  since), `last_queued_at` older than `poll_hours`) at priority -10 and marks them queued, so a failed poll
+  waits its interval.
+  **Console**: Settings > Bridge's Audible accounts card (`features/audible/audible-accounts-card.tsx`,
+  read-only mapping, links to the Bridge's Accounts tab, Check now and Remove per account) while the module
+  is on, and Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
+  and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
+  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
+  the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  A scheduled poll reads "Scheduled by the server" in the job list (`serverScheduled`), and the Bridge's
+  optional `audible` setup step links its Accounts tab.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
