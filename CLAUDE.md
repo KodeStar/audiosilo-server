@@ -304,7 +304,7 @@ stale version = the old rule; see Listening sync in CONVENTIONS.md). Bridge Phas
 path-keyed with no FK, nulled with its library and moved with its book; user-state writes; see Audible accounts
 in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `policy_since` and
 `audible_titles.import_pending` (see Audible backups in CONVENTIONS.md). `0065` adds `audible_titles.planned` /
-`contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md).
+`contest_library_id` / `contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

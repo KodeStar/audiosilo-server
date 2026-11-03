@@ -2747,8 +2747,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   everything... with a confirm "N books, ~X GB" (`backup-all-button.tsx`), and the legal line on the
   titles page and both dialogs.
 - **Audible unmatched titles (4b owner fixes, `0065`, `catalog/audible.go`)**: what the console says of a title the
-  Bridge left unmatched. `0065` adds `audible_titles.planned` (JSON, `''` none) and `contest_path` (`''` none), both
-  the poll's: each titles PUT writes them and a stored match (the poll's, a kept `import` match, `FoldAudibleImport`)
+  Bridge left unmatched. `0065` adds `audible_titles.planned` (JSON, `''` none) and `contest_library_id` + `contest_path`
+  (NULL and `''` none; the library is the account's at the PUT), all the poll's: each titles PUT writes them and a stored match (the poll's, a kept `import` match, `FoldAudibleImport`)
   clears them. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
   conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
   are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean
@@ -2759,10 +2759,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it only while the account is mapped to the plan's library (a paused or remapped account shows none until its next
   poll). **Contested**: `contested_path` (input only, omitempty: a clean book path or `.`, `bridgeBookPath`) is the
   book a title tied for; `GET /admin/audible/titles` (and a single title, the PATCH answer) shows `contested
-  {library_id, path, with:[{asin, title}]}` or null: the library is the account's (none while paused), `with` the
-  account's other titles whose `contest_path` equals it or whose match is that book in that library, by title, at
-  most 10 (`fillContests`, one query a page). A move or a join carries `contest_path` (`moveAudibleContestSQL`, by the
-  accounts mapped to the library). **Poll params**: `audible.poll` carries the account's `template` (omitempty;
+  {library_id, path, with:[{asin, title}]}` or null: shown only while the account is still mapped to the contest's
+  library, `with` the account's other titles contested over that book or matched to it, by title, at most 10
+  (`fillContests`, one query a page). A move or a join carries `contest_path` like a match's path, and a library's
+  delete clears its contests (`DeleteLibrary`). **Poll params**: `audible.poll` carries the account's `template` (omitempty;
   `AudiblePoll(account, template, prio)`, from `DueAudiblePolls` and Check now), bounded, never parsed: a template
   the grammar later refuses never stops the polls (the Bridge reports such a plan as an `error`). **Console**:
   `PlannedNote` (`audible-topic.tsx`, `plannedLine`): "Will go to {path}, beside N books of its series" and the like,

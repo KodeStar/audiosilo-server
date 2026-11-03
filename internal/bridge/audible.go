@@ -58,7 +58,7 @@ func audiblePollParams(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	// Bounded, not parsed: a template the grammar later refuses must never
 	// stop the account's polls (the Bridge reports such a plan as an error).
-	if len(p.Template) > MaxAudibleTemplate || !utf8.ValidString(p.Template) {
+	if !AudibleTemplateBounded(p.Template) {
 		return nil, invalid("template must be at most %d bytes", MaxAudibleTemplate)
 	}
 	return json.Marshal(p)
@@ -177,6 +177,13 @@ const (
 	MaxAudibleDestPath = 1024
 	MaxAudibleTemplate = 500
 )
+
+// AudibleTemplateBounded reports whether s is a template within its bounds
+// (MaxAudibleTemplate bytes of UTF-8), not whether it parses: what a poll's
+// params and its planned destinations carry.
+func AudibleTemplateBounded(s string) bool {
+	return len(s) <= MaxAudibleTemplate && utf8.ValidString(s)
+}
 
 // ErrAudibleDestPath and ErrAudibleTemplate are a destination or template the
 // server refuses (400 invalid_dest_path, invalid_template).

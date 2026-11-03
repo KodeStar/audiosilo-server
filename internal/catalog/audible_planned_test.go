@@ -28,7 +28,7 @@ func (f *audibleFixture) title(t *testing.T, asin string) *AudibleTitle {
 // A title's planned destination is the poll's: stored, replaced by the next
 // poll, dropped by a poll that plans none, never stored beside a match (the
 // poll's or a backup's), and shown only while the account is mapped to the
-// plan's library.
+// plan's library (a contest likewise).
 func TestAudiblePlanned(t *testing.T) {
 	t.Parallel()
 	f := newAudibleFixture(t, "manual")
@@ -88,7 +88,8 @@ func TestAudiblePlanned(t *testing.T) {
 		t.Fatalf("the fold kept %q, %v", raw, err)
 	}
 
-	// Shown only while the account is mapped to the plan's library.
+	// Shown only while the account is mapped to the plan's (and the
+	// contest's) library: a contest is never read against another library.
 	third := avail("B000000003", "")
 	third.Planned = planned(f, "B/Third/Third.m4b")
 	third.ContestedPath = "B/Third"
@@ -101,7 +102,7 @@ func TestAudiblePlanned(t *testing.T) {
 		UserID: f.user, LibraryID: lib2.ID, Policy: "manual", Sync: true}); err != nil {
 		t.Fatal(err)
 	}
-	if tt := f.title(t, "B000000003"); tt.Planned != nil || tt.Contested == nil || tt.Contested.LibraryID != lib2.ID {
+	if tt := f.title(t, "B000000003"); tt.Planned != nil || tt.Contested != nil {
 		t.Fatalf("mapped elsewhere = planned %+v, contested %+v", tt.Planned, tt.Contested)
 	}
 	if err := f.c.DeleteLibrary(f.ctx, lib2.ID); err != nil {
@@ -224,5 +225,14 @@ func TestAudibleContestedWith(t *testing.T) {
 	if c := f.title(t, "B000000002").Contested; c == nil || c.Path != "Ben Aaronovitch/Rivers/2 - Moon over Soho" ||
 		len(c.With) != 2 {
 		t.Fatalf("after the move = %+v", c)
+	}
+	// The library goes: so does every contest over its books.
+	if err := f.c.DeleteLibrary(f.ctx, f.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM audible_titles
+		WHERE contest_library_id IS NOT NULL OR contest_path <> ''`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("contests left after the library's delete = %d, %v", left, err)
 	}
 }

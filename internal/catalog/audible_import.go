@@ -531,7 +531,8 @@ func (c *Catalog) FoldAudibleImport(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE audible_titles SET match_library_id = ?, match_path = ?, match_how = ?,
-			    rejected = 0, import_pending = 0, import_job_id = ?, planned = '', contest_path = '', updated_at = ?
+			    rejected = 0, import_pending = 0, import_job_id = ?, planned = '',
+			    contest_library_id = NULL, contest_path = '', updated_at = ?
 			  WHERE account = ? AND asin = ? AND (import_job_id IS NULL OR import_job_id = ?)`,
 			r.LibraryID, r.Path, AudibleMatchImport, j.ID, c.ts(), p.Account, p.ASIN, j.ID)
 		return err

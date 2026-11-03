@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
-import { formatDay, formatHours } from '@/lib/format';
+import { formatDay, formatHours, formatList } from '@/lib/format';
 import { CardEmpty } from '@/features/settings/card-empty';
 import {
   accountName,
@@ -336,12 +336,17 @@ function ReasonNote({ title: x }: { title: AudibleTitle }) {
     const c = x.contested;
     if (!c || c.with.length === 0)
       return <span className={cls}>{t('audible.reason.contestedUnknown')}</span>;
-    const list = new Intl.ListFormat(i18n.resolvedLanguage ?? 'en', { type: 'conjunction' });
     return (
       <span className={cls}>
         <Trans
           i18nKey="audible.reason.contested"
-          values={{ with: list.format(c.with.map((w) => w.title || w.asin)), path: c.path }}
+          values={{
+            with: formatList(
+              c.with.map((w) => w.title || w.asin),
+              i18n.resolvedLanguage ?? 'en',
+            ),
+            path: c.path,
+          }}
           components={{
             book: (
               <Link
