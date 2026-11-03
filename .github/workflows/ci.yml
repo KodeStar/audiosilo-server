@@ -1,5 +1,5 @@
-# Gates every pull request and push to main on tests + coverage, race tests and
-# lint on the native SQLite engine the image ships, lint (govet included), plus
+# Gates every pull request and push to main on tests + coverage, race tests +
+# lint on the native SQLite engine the image ships, lint (govet included) and
 # the admin console's own gate (admin-ui: typecheck, lint, prettier, vitest).
 # The four jobs run side by side; the image build (image.yml) stays separate
 # and runs on tags (releases) and pushes to main (:edge).
@@ -36,8 +36,6 @@ jobs:
       - name: Admin console (install, vite build)
         run: scripts/build-admin.sh --vite-only
 
-      # ffprobe powers the duration/embedded-chapter scanner tests; without it
-      # those tests t.Skip (the suite still passes), so install it to keep them live.
       - name: Install ffmpeg (ffprobe)
         uses: ./.github/actions/setup-ffmpeg
 
