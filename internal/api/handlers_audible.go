@@ -23,8 +23,9 @@ import (
 // mounted in api.go) show them read-only and ask for a poll now; removing an
 // account is admin only and outside the toggle.
 
-// maxAudibleTitlesBody bounds a titles call: 500 titles at their bounds.
-const maxAudibleTitlesBody = 4 << 20
+// maxAudibleTitlesBody bounds a titles call: 500 titles at their bounds,
+// each with a planned destination.
+const maxAudibleTitlesBody = 8 << 20
 
 // handleBridgeUsers serves GET /bridge/users: who an Audible account may be
 // mapped to (enabled adults and admins; never a kid, demo or disabled account).
@@ -329,7 +330,7 @@ func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
 		return
 	}
-	nj := bridge.AudiblePoll(id, 0)
+	nj := bridge.AudiblePoll(id, acct.Template, 0)
 	nj.RequestedBy = userFrom(r.Context()).ID
 	job, created, err := a.bridge.Enqueue(r.Context(), nj)
 	if !a.writeBridgeError(w, err, "audible poll failed") {

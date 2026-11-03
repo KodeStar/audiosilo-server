@@ -2737,7 +2737,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
   / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
   accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
-  titles, runtime at 8000 bytes a second); titles add `import` and `needs_attention`. The Bridge's account
+  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned` and `contested` (see Audible
+  unmatched titles below). The Bridge's account
   PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
   imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
   Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
@@ -2745,6 +2746,31 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `audible.import` by its ASIN, and its placed files are no verify check (`resultSummary`); per account Backup settings... (policy, template) and Back up
   everything... with a confirm "N books, ~X GB" (`backup-all-button.tsx`), and the legal line on the
   titles page and both dialogs.
+- **Audible unmatched titles (4b owner fixes, `0065`, `catalog/audible.go`)**: what the console says of a title the
+  Bridge left unmatched. `0065` adds `audible_titles.planned` (JSON, `''` none) and `contest_path` (`''` none), both
+  the poll's: each titles PUT writes them and a stored match (the poll's, a kept `import` match, `FoldAudibleImport`)
+  clears them. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
+  conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
+  are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean
+  relative file path within `MaxPathBytes` and `file` a name with no `/` (both `""` only when `state` is `error`),
+  `kind` `series_existing`|`series_new`|`standalone` (`""` only for `error`), `state` `new`|`joins`|`exists`|`error`,
+  `siblings` 0..100000, `template` within `bridge.MaxAudibleTemplate`, `conflict` `file`|`book`|`audio`|`""`, or for
+  `error` the reason (cleaned and bounded); anything else is 400 `invalid_request` for the whole call. The list shows
+  it only while the account is mapped to the plan's library (a paused or remapped account shows none until its next
+  poll). **Contested**: `contested_path` (input only, omitempty: a clean book path or `.`, `bridgeBookPath`) is the
+  book a title tied for; `GET /admin/audible/titles` (and a single title, the PATCH answer) shows `contested
+  {library_id, path, with:[{asin, title}]}` or null: the library is the account's (none while paused), `with` the
+  account's other titles whose `contest_path` equals it or whose match is that book in that library, by title, at
+  most 10 (`fillContests`, one query a page). A move or a join carries `contest_path` (`moveAudibleContestSQL`, by the
+  accounts mapped to the library). **Poll params**: `audible.poll` carries the account's `template` (omitempty;
+  `AudiblePoll(account, template, prio)`, from `DueAudiblePolls` and Check now), bounded, never parsed: a template
+  the grammar later refuses never stops the polls (the Bridge reports such a plan as an `error`). **Console**:
+  `PlannedNote` (`audible-topic.tsx`, `plannedLine`): "Will go to {path}, beside N books of its series" and the like,
+  "(planned at the last check)", warning tone on `exists` or `error`, a note when the plan's template differs from
+  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
+  Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
+  explained with the other titles and the book linked (`bookRoute`), a plain sentence without data; a reason that is
+  a machine code reads "The Bridge couldn't match it to a book on this server" (`reasonKey`); Audible's own words stay.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start

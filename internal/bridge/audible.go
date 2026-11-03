@@ -39,9 +39,12 @@ const (
 // opaque to the server.
 var AudibleAccountPattern = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 
-// AudiblePollParams are audible.poll's params: the account to poll.
+// AudiblePollParams are audible.poll's params: the account to poll and its
+// placement template at queue time ("" = the automatic placement, omitted),
+// which the Bridge plans each unmatched title's backup by.
 type AudiblePollParams struct {
-	Account string `json:"account"`
+	Account  string `json:"account"`
+	Template string `json:"template,omitempty"`
 }
 
 // audiblePollParams checks audible.poll's params strictly.
@@ -52,6 +55,11 @@ func audiblePollParams(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	if !AudibleAccountPattern.MatchString(p.Account) {
 		return nil, invalid("account must match %s", AudibleAccountPattern)
+	}
+	// Bounded, not parsed: a template the grammar later refuses must never
+	// stop the account's polls (the Bridge reports such a plan as an error).
+	if len(p.Template) > MaxAudibleTemplate || !utf8.ValidString(p.Template) {
+		return nil, invalid("template must be at most %d bytes", MaxAudibleTemplate)
 	}
 	return json.Marshal(p)
 }
@@ -64,9 +72,10 @@ func audiblePollSuffix(j NewJob) string {
 	return "|" + p.Account
 }
 
-// AudiblePoll is the NewJob that polls account.
-func AudiblePoll(account string, priority int) NewJob {
-	raw, _ := json.Marshal(AudiblePollParams{Account: account})
+// AudiblePoll is the NewJob that polls account, planning its unmatched
+// titles by template (the account's).
+func AudiblePoll(account, template string, priority int) NewJob {
+	raw, _ := json.Marshal(AudiblePollParams{Account: account, Template: template})
 	return NewJob{Kind: KindAudiblePoll, Params: raw, Priority: priority}
 }
 
@@ -95,7 +104,7 @@ const (
 // CancelAudibleRemoved or CancelAudiblePaused: at once when queued or parked,
 // else at the Bridge's next report.
 func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
-	return cancelOpenTx(ctx, tx, jobKey(AudiblePoll(account, 0)), at(now), reason)
+	return cancelOpenTx(ctx, tx, jobKey(AudiblePoll(account, "", 0)), at(now), reason)
 }
 
 // CancelAudibleImports cancels every open backup of account inside tx (the
