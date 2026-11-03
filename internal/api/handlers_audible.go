@@ -43,6 +43,21 @@ func audibleAccountID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return id, true
 }
 
+// positiveLimit is the ?limit= query value, 0 when absent; a value that is not
+// a positive number answers 400 and reports false.
+func positiveLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	v := r.URL.Query().Get("limit")
+	if v == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "limit must be a positive number")
+		return 0, false
+	}
+	return n, true
+}
+
 // writeAudibleError answers an Audible catalog error.
 func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 	switch {
@@ -52,7 +67,7 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_policy", err.Error())
 	case errors.Is(err, catalog.ErrAudibleMarketplace):
 		writeErrorCode(w, http.StatusBadRequest, "invalid_marketplace", err.Error())
-	case errors.Is(err, catalog.ErrNotBooks):
+	case errors.Is(err, catalog.ErrNotBookLibrary):
 		writeErrorCode(w, http.StatusBadRequest, "not_books", "not a books library")
 	case errors.Is(err, catalog.ErrAudibleUnknownUser):
 		writeErrorCode(w, http.StatusNotFound, "unknown_user", "no such user, or not one an account may be mapped to")
@@ -60,8 +75,6 @@ func (a *API) writeAudibleError(w http.ResponseWriter, err error, op string) {
 		writeErrorCode(w, http.StatusNotFound, "unknown_library", "no such library")
 	case errors.Is(err, catalog.ErrUnknownAccount):
 		writeErrorCode(w, http.StatusNotFound, "unknown_account", "no such Audible account")
-	case errors.Is(err, catalog.ErrAccountPaused):
-		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
 	case errors.Is(err, catalog.ErrASINSet):
 		writeErrorCode(w, http.StatusConflict, "asin_set", "the book already has an ASIN")
 	default:
@@ -125,12 +138,11 @@ func (a *API) handleBridgeAudibleTitles(w http.ResponseWriter, r *http.Request) 
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	n, err := a.cat.PutAudibleTitles(r.Context(), id, req.PollID, req.Final, req.Titles)
-	if err != nil {
+	if err := a.cat.PutAudibleTitles(r.Context(), id, req.PollID, req.Final, req.Titles); err != nil {
 		a.writeAudibleError(w, err, "put audible titles failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"stored": n})
+	writeJSON(w, http.StatusOK, map[string]int{"stored": len(req.Titles)})
 }
 
 // bridgeListBook is one book of GET /bridge/libraries/{id}/books: what the
@@ -149,10 +161,7 @@ type bridgeListBook struct {
 // bridgeSeries is every series a book is in, the main one first, each with its
 // position as stored ("3", "1-3", "" for none).
 func bridgeSeries(b *catalog.Book) []catalog.AudibleSeries {
-	list := b.SeriesList
-	if len(list) == 0 && b.Series != "" {
-		list = []catalog.SeriesRef{{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}}
-	}
+	list := b.AllSeries()
 	out := make([]catalog.AudibleSeries, 0, len(list))
 	for _, s := range list {
 		out = append(out, catalog.AudibleSeries{Name: s.Name, Position: catalog.FormatSeriesRange(s.Position, s.PositionEnd)})
@@ -169,14 +178,9 @@ func (a *API) handleBridgeBooks(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, "unknown_library", "no such library")
 		return
 	}
-	limit := 0
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			writeErrorCode(w, http.StatusBadRequest, "invalid_request", "limit must be a positive number")
-			return
-		}
-		limit = n
+	limit, ok := positiveLimit(w, r)
+	if !ok {
+		return
 	}
 	books, next, err := a.cat.BridgeBooks(r.Context(), id, r.URL.Query().Get("after"), limit)
 	switch {
@@ -251,6 +255,7 @@ func (a *API) handleAdminAudibleAccounts(w http.ResponseWriter, r *http.Request)
 // &matched=&q=&after=&limit=: the titles, by title, keyset-paged.
 // {"titles": [...], "next": cursor | ""}.
 func (a *API) handleAdminAudibleTitles(w http.ResponseWriter, r *http.Request) {
+	var ok bool
 	q := r.URL.Query()
 	f := catalog.AudibleTitleFilter{Account: q.Get("account"), State: q.Get("state"), Query: q.Get("q"), After: q.Get("after")}
 	switch q.Get("matched") {
@@ -263,13 +268,8 @@ func (a *API) handleAdminAudibleTitles(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_request", "matched must be 1 or 0")
 		return
 	}
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			writeErrorCode(w, http.StatusBadRequest, "invalid_request", "limit must be a positive number")
-			return
-		}
-		f.Limit = n
+	if f.Limit, ok = positiveLimit(w, r); !ok {
+		return
 	}
 	page, err := a.cat.AudibleTitles(r.Context(), f)
 	if err != nil {
@@ -288,11 +288,12 @@ func (a *API) handleAdminAudiblePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acct, err := a.cat.AudibleAccount(r.Context(), id)
-	if err == nil && acct.Paused {
-		err = catalog.ErrAccountPaused
-	}
 	if err != nil {
 		a.writeAudibleError(w, err, "audible poll failed")
+		return
+	}
+	if acct.Paused {
+		writeErrorCode(w, http.StatusConflict, "account_paused", "the account's library was deleted; map it again on the Bridge")
 		return
 	}
 	nj := bridge.AudiblePoll(id, 0)

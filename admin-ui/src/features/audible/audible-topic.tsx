@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookCheck, Headphones, LoaderCircle, RefreshCw } from 'lucide-react';
+import { BookCheck, Headphones } from 'lucide-react';
 import { AUDIBLE_TITLE_STATES, type AudibleTitle, type AudibleTitleState } from '@/api/types';
 import { LoadMore } from '@/components/load-more';
 import { QueryError } from '@/components/query-error';
 import { SearchBox } from '@/components/search-box';
 import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
@@ -21,6 +20,7 @@ import {
   titleByline,
   type MatchedFilter,
 } from './audible-model';
+import { CheckNowButton } from './check-now-button';
 import { useAudibleAccounts, useAudibleTitles, useCheckNow } from './use-audible';
 
 /**
@@ -32,7 +32,7 @@ import { useAudibleAccounts, useAudibleTitles, useCheckNow } from './use-audible
  */
 export function AudibleTopic() {
   const { t } = useTranslation();
-  const accounts = useAudibleAccounts(true);
+  const accounts = useAudibleAccounts();
   const list = accounts.data?.accounts ?? [];
   const [account, setAccount] = useState('');
   const [state, setState] = useState<AudibleTitleState | ''>('');
@@ -61,19 +61,11 @@ export function AudibleTopic() {
         description={t('audible.titles.description')}
         action={
           target ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy === target.id || target.paused}
-              onClick={() => void checkNow(target)}
-            >
-              {busy === target.id ? (
-                <LoaderCircle className="animate-spin" aria-hidden="true" />
-              ) : (
-                <RefreshCw aria-hidden="true" />
-              )}
-              {t('audible.check.action')}
-            </Button>
+            <CheckNowButton
+              busy={busy === target.id}
+              paused={target.paused}
+              onCheck={() => void checkNow(target)}
+            />
           ) : undefined
         }
       />

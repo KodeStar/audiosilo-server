@@ -57,11 +57,6 @@ func audiblePollSuffix(j NewJob) string {
 	return "|" + p.Account
 }
 
-// audiblePollKey is the dedupe key of account's audible.poll.
-func audiblePollKey(account string) string {
-	return DedupeKey(KindAudiblePoll, nil, nil) + "|" + account
-}
-
 // AudiblePoll is the NewJob that polls account.
 func AudiblePoll(account string, priority int) NewJob {
 	raw, _ := json.Marshal(AudiblePollParams{Account: account})
@@ -72,8 +67,11 @@ func AudiblePoll(account string, priority int) NewJob {
 // is queued for (its dedupe key), inside Enqueue's transaction: a poll every
 // few hours would otherwise pile up in the job list.
 func pruneAudiblePolls(ctx context.Context, tx *sql.Tx, key string) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE dedupe_key = ?1 AND state IN `+EndedStatesSQL+`
-		AND id <> (SELECT MAX(id) FROM bridge_jobs WHERE dedupe_key = ?1 AND state IN `+EndedStatesSQL+`)`, key)
+	// The kind lets idx_bridge_jobs_kind_finished serve both scans (the
+	// dedupe_key index holds only open jobs).
+	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`
+		AND id <> (SELECT MAX(id) FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`)`,
+		key, KindAudiblePoll)
 	return err
 }
 
@@ -81,7 +79,7 @@ func pruneAudiblePolls(ctx context.Context, tx *sql.Tx, key string) error {
 // being removed): at once when queued or parked, else at the Bridge's next
 // report.
 func CancelAudiblePolls(ctx context.Context, tx *sql.Tx, account string, now time.Time) error {
-	return cancelOpenTx(ctx, tx, audiblePollKey(account), at(now), "the Audible account was removed")
+	return cancelOpenTx(ctx, tx, jobKey(AudiblePoll(account, 0)), at(now), "the Audible account was removed")
 }
 
 // CleanText is v as printable bounded text on one line (cleanText): what the

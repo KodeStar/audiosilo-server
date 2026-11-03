@@ -1,11 +1,11 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, Headphones, LoaderCircle, RefreshCw } from 'lucide-react';
+import { ExternalLink, Headphones } from 'lucide-react';
 import type { AudibleAccount } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatNumber, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -13,6 +13,7 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import { bridgeTabLink } from '@/features/bridge/bridge-model';
 import { ACCOUNTS_TAB } from '@/features/bridge/setup-model';
 import { accountName } from './audible-model';
+import { CheckNowButton } from './check-now-button';
 import { useAudibleAccounts, useCheckNow } from './use-audible';
 
 /**
@@ -24,7 +25,7 @@ import { useAudibleAccounts, useCheckNow } from './use-audible';
  */
 export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
   const { t } = useTranslation();
-  const accounts = useAudibleAccounts(true);
+  const accounts = useAudibleAccounts();
   const { checkNow, busy } = useCheckNow();
   const accountsTab = bridgeTabLink(uiUrl, ACCOUNTS_TAB);
   const list = accounts.data?.accounts ?? [];
@@ -153,14 +154,7 @@ function AccountRow({
           ]}
         />
       </div>
-      <Button variant="outline" size="sm" disabled={busy || a.paused} onClick={onCheck}>
-        {busy ? (
-          <LoaderCircle className="animate-spin" aria-hidden="true" />
-        ) : (
-          <RefreshCw aria-hidden="true" />
-        )}
-        {t('audible.check.action')}
-      </Button>
+      <CheckNowButton busy={busy} paused={a.paused} onCheck={onCheck} />
     </li>
   );
 }

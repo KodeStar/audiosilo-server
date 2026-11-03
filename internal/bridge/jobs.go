@@ -494,6 +494,16 @@ func DedupeKey(kind string, libraryID *int64, path *string) string {
 	return b.String()
 }
 
+// jobKey is j's dedupe key: DedupeKey, extended by its kind's suffix when the
+// kind has one.
+func jobKey(j NewJob) string {
+	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
+	if suffix := kinds[j.Kind].suffix; suffix != nil {
+		key += suffix(j)
+	}
+	return key
+}
+
 // NewJob is a validated request for a job, after the transport resolved its target.
 type NewJob struct {
 	Kind      string
@@ -651,10 +661,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
 		refuse = ErrCannotContribute
 	}
-	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
-	if suffix := kinds[j.Kind].suffix; suffix != nil {
-		key += suffix(j)
-	}
+	key := jobKey(j)
 	var exp expiry
 	identityBusy, promoted := false, false
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {

@@ -57,3 +57,5 @@ CREATE TABLE audible_titles (
 ) WITHOUT ROWID;
 CREATE INDEX idx_audible_titles_match ON audible_titles(match_library_id, match_path);
 CREATE INDEX idx_audible_titles_title ON audible_titles(title COLLATE NOCASE, account, asin);
+-- One account's titles in the console's order (the account filter).
+CREATE INDEX idx_audible_titles_account_title ON audible_titles(account, title COLLATE NOCASE, asin);

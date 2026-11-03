@@ -18,12 +18,11 @@ const ACCOUNTS_POLL_MS = 30_000;
 
 const TITLES_PAGE = 50;
 
-/** The Audible accounts, while `enabled` (the module is on: 404 module_off otherwise). */
-export function useAudibleAccounts(enabled: boolean) {
+/** The Audible accounts (shown only while the module is on: 404 module_off otherwise). */
+export function useAudibleAccounts() {
   return useQuery({
     queryKey: keys.audibleAccounts,
     queryFn: api.audibleAccounts,
-    enabled,
     refetchInterval: ACCOUNTS_POLL_MS,
   });
 }
@@ -65,7 +64,8 @@ export function useAudibleTitles(f: {
 
 /**
  * Check now: queues an account's poll and says so (queued, or already waiting),
- * refreshing the Audible reads and the Bridge's jobs. A refusal is a toast.
+ * refreshing the accounts (the queued time) and the Bridge's jobs; the titles
+ * change only once the poll lands. A refusal is a toast.
  */
 export function useCheckNow() {
   const { t } = useTranslation();
@@ -92,7 +92,7 @@ export function useCheckNow() {
       toastError(t('audible.check.failed'), err);
     } finally {
       setBusy(null);
-      void qc.invalidateQueries({ queryKey: keys.audible });
+      void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
       void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
     }
   };

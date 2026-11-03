@@ -2599,7 +2599,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   JSON, up to `MaxAudibleTitles` a call; free text cleaned, not refused; a match naming a missing or
   non-books library is stored as none; `final` marks every title this `poll_id` did not send `gone` and sets
   `last_poll_at`); `GET /bridge/libraries/{id}/books` (`{books:[{path, title, authors, narrators, series,
-  asin, isbn, duration}], next}`, path cursor, up to `MaxBridgeBooks`); `PUT /bridge/libraries/{id}/enrichment`
+  asin, isbn, duration}], next}`, path cursor, up to 500); `PUT /bridge/libraries/{id}/enrichment`
   (`{path, asin}`: `catalog.BackfillASIN`, 204, the same ASIN again a no-op, 409 `asin_set` for another).
   **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/accounts` (with title
   counts), `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over title, authors and an
