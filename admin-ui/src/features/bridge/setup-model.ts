@@ -14,10 +14,10 @@ export const ACCOUNTS_TAB = 'accounts';
 
 /**
  * The steps this console has words for, in the Bridge's order, and the Bridge
- * page's tab that fixes each (its hash routes, lib/tabs.ts): sign-ins on
- * Accounts, the ASR choice and the budget in Settings. Paired has nothing to
- * fix there; an unknown step links nowhere. A Map, so an id like `constructor`
- * finds nothing.
+ * page's tab that fixes each (its hash routes, lib/tabs.ts): sign-ins (the
+ * agent, GitHub, Audible) on Accounts, the ASR choice and the budget in
+ * Settings. Paired has nothing to fix there; an unknown step links nowhere. A
+ * Map, so an id like `constructor` finds nothing.
  */
 const SETUP_TAB = new Map<string, string | undefined>([
   ['paired', undefined],
@@ -26,6 +26,7 @@ const SETUP_TAB = new Map<string, string | undefined>([
   ['agent', ACCOUNTS_TAB],
   ['budget', 'settings'],
   ['github', ACCOUNTS_TAB],
+  ['audible', ACCOUNTS_TAB],
 ]);
 
 /** The steps this console has words for, in the Bridge's order. */

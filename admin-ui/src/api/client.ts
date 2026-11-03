@@ -6,6 +6,9 @@ import type {
   AdminBookDetail,
   AdminBookPage,
   AdminBookSort,
+  AudibleAccounts,
+  AudibleTitlePage,
+  AudibleTitleQuery,
   AuditFilter,
   AuditPage,
   BackupsEnvelope,
@@ -454,6 +457,32 @@ export const api = {
     const res = await send('/admin/bridge/jobs', { method: 'POST', body: req });
     return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
   },
+
+  // Audible (Settings > Bridge's Audible accounts, Settings > Audible): read-only;
+  // the accounts are signed in and mapped on the Bridge's own page.
+  /** 404 module_off while the audible module is off. */
+  audibleAccounts: () => request<AudibleAccounts>('GET', '/admin/audible/accounts'),
+  /** Titles by title, a page at a time (`after` is the previous page's next). */
+  audibleTitles: (opts: AudibleTitleQuery = {}) =>
+    request<AudibleTitlePage>('GET', `/admin/audible/titles${bookQuery(opts)}`),
+  /**
+   * Check now: queues the account's poll (`created`), or returns the one already
+   * open. 409 account_paused (its library was deleted), 409 kind_unavailable.
+   */
+  pollAudible: async (account: string) => {
+    const res = await send(`/admin/audible/accounts/${encodeURIComponent(account)}/poll`, {
+      method: 'POST',
+    });
+    return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
+  },
+
+  /**
+   * Removes an account and its titles from this server (its open poll is
+   * cancelled); 204 known or not. Signs nothing out of Amazon: that is the
+   * Bridge's Accounts page. Not behind the module's toggle.
+   */
+  removeAudibleAccount: (account: string) =>
+    request<void>('DELETE', `/admin/audible/accounts/${encodeURIComponent(account)}`),
 
   // Listening import (Settings > Import). The Audiobookshelf token rides in the
   // request body only; the server never stores or returns it.

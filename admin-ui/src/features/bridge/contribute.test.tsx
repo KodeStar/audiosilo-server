@@ -353,7 +353,7 @@ describe('Settings > Bridge setup', () => {
         { id: 'paired', done: true, required: true },
         { id: 'libraries', done: false, required: true, detail: '1 of 2 libraries writable' },
         { id: 'agent', done: false, required: true },
-        { id: 'audible', done: false, required: false, detail: 'Coming later' },
+        { id: 'cloud_sync', done: false, required: false, detail: 'Coming later' },
         { id: 'github', done: false, required: false },
       ],
       can_contribute: false,
@@ -369,7 +369,7 @@ describe('Settings > Bridge setup', () => {
     expect(within(list).getByText('Libraries mapped and writable')).toBeInTheDocument();
     expect(within(list).getByText('1 of 2 libraries writable')).toBeInTheDocument();
     // A step this console doesn't know is still listed, with the Bridge's words.
-    expect(within(list).getByText('Audible')).toBeInTheDocument();
+    expect(within(list).getByText('Cloud sync')).toBeInTheDocument();
     expect(within(list).getByText('Coming later')).toBeInTheDocument();
     expect(
       within(list).getByRole('link', {

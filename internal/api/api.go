@@ -676,6 +676,26 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET "+bridgeClaimPath, a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
+	// Audible (Bridge Phase 4a, handlers_audible.go): the accounts the Bridge
+	// signed in to, their titles, who an account may be mapped to, a library's
+	// books for the matching and an ASIN backfill. Not behind the module's
+	// toggle (as podcasts' Bridge routes): the Bridge's own setup page signs in
+	// whether or not the console has turned the module on.
+	mux.Handle("GET /api/v1/bridge/users", a.requireBridge(a.handleBridgeUsers))
+	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccount))
+	mux.Handle("DELETE /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccountDelete))
+	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}/titles", a.requireBridge(a.handleBridgeAudibleTitles))
+	mux.Handle("GET /api/v1/bridge/libraries/{id}/books", a.requireBridge(a.handleBridgeBooks))
+	mux.Handle("PUT /api/v1/bridge/libraries/{id}/enrichment", a.requireBridge(a.handleBridgeEnrichment))
+	// The console's Audible routes: admin, 404 module_off while the module is off.
+	ar := moduleRoutes{a: a, mux: mux, id: bridge.ModuleAudible}
+	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))
+	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
+	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
+	// Removing an account is not behind the toggle: an account the Bridge can no
+	// longer remove (unpaired, re-paired, a failed DELETE) must be cleanable
+	// after the module is turned off.
+	mux.Handle("DELETE /api/v1/admin/audible/accounts/{account}", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccountDelete)))
 
 	// Managed modules (modules.go): Settings > Modules' list, and each module's
 	// own routes, always mounted and answering 404 module_off while it is off.

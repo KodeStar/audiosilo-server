@@ -216,10 +216,11 @@ describe('bridgeServerUrl', () => {
 });
 
 describe('serverScheduled', () => {
-  it('names the podcast jobs the server queues itself', () => {
+  it('names the jobs the server queues itself: podcasts, Audible polls', () => {
     expect(serverScheduled('podcast.poll')).toBe(true);
     expect(serverScheduled('podcast.fetch')).toBe(true);
     expect(serverScheduled('podcast.retain')).toBe(true);
+    expect(serverScheduled('audible.poll')).toBe(true);
   });
   it('leaves out a follow and the book jobs, which someone asks for', () => {
     expect(serverScheduled('podcast.subscribe')).toBe(false);
