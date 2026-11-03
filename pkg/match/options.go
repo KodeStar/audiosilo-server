@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Options turns on rules beyond Best's default, for a caller matching a store's
@@ -21,7 +23,9 @@ type Options struct {
 	// bracketed groups and edition words aside) by the same person as a match,
 	// even when the two sides file it under differently named series ("God's
 	// Eye: Awakening" in "God's Eye" and in "Labyrinth World"), unless a side's
-	// title is just its series name (and number), which every volume shares.
+	// title is just its series name (and number), which every volume shares. It
+	// adds to the pair's score, so an agreeing series and number still rank
+	// same-titled candidates.
 	ExactTitle bool
 	// WordlessFallback falls back to the uncleaned title when the cleaned one has
 	// no word left and no number ("The Mayor of Noobtown" in series "Mayor of
@@ -41,8 +45,9 @@ func ImportOptions() Options {
 // title rules can reach.
 const ScoreASIN = 10.0
 
-// scoreExactTitle is Options.ExactTitle's score: above every title-and-series
-// score (2.5 at most), so the identical title wins over a near one.
+// scoreExactTitle is Options.ExactTitle's bonus, added to the pair's own score:
+// enough on its own to clear the threshold, so the identical title wins over a
+// near one, while the series and number still rank two same-titled candidates.
 const scoreExactTitle = 3.0
 
 // unabridgedGroup is a bracketed "(Unabridged)" (Options.DropUnabridged).
@@ -56,8 +61,21 @@ func exactTitleKey(title string) string {
 }
 
 // afterSeriesBook is what Options.SeriesMarker reads right after a series name:
-// an optional " Series", one separator, then "Book N".
-var afterSeriesBook = regexp.MustCompile(`^(?:\s+series)?\s*[,:\-–(]?\s*book\s+(\d+(?:\.\d+)?)\b`)
+// an optional " Series", one separator, then "Book N". What follows N is
+// checked by numberEnds.
+var afterSeriesBook = regexp.MustCompile(`^(?:\s+series)?\s*[,:\-–(]?\s*book\s+(\d+(?:\.\d+)?)`)
+
+// numberEnds reports whether a number read greedily ends at s's start: no
+// letter or digit runs on ("Book 2.5x" is none), and no range follows ("Book
+// 1-3" is an omnibus, not volume 1).
+func numberEnds(s string) bool {
+	r, n := utf8.DecodeRuneInString(s)
+	if r == '-' || r == '–' {
+		next, _ := utf8.DecodeRuneInString(s[n:])
+		return !unicode.IsDigit(next)
+	}
+	return !isAlnumRune(r) && r != '_'
+}
 
 // seriesBookMarker is the "Book N" that follows a spelling of series (on word
 // boundaries) in title, if any.
@@ -67,7 +85,7 @@ func seriesBookMarker(title, series string) (float64, bool) {
 	for _, form := range seriesForms(series) {
 		if boundedMatch(lt, strings.ToLower(form), func(end int) bool {
 			m := afterSeriesBook.FindStringSubmatch(lt[end:])
-			if m == nil {
+			if m == nil || !numberEnds(lt[end+len(m[0]):]) {
 				return false
 			}
 			var err error

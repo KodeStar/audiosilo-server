@@ -766,6 +766,11 @@ func TestBridgeSeriesFolderCode(t *testing.T) {
 	if len(got) != 2 || got[0].Position != "6" || got[1].Position != "" {
 		t.Errorf("bridgeSeries = %+v", got)
 	}
+	// No main series: an other series' position is never filled.
+	more := &catalog.Book{RelPath: "A/Dragon Heart/DH06 - Land of Magic", SeriesList: []catalog.SeriesRef{{Name: "Dragon Heart"}}}
+	if got := bridgeSeries(more); len(got) != 1 || got[0].Position != "" {
+		t.Errorf("bridgeSeries without a main series = %+v", got)
+	}
 	r := &catalog.Book{RelPath: "A/Dragon Heart/DH06-07", Series: "Dragon Heart", SeriesIndex: 6, SeriesIndexEnd: 7}
 	if got := bridgeSeries(r); len(got) != 1 || got[0].Position != "6-7" {
 		t.Errorf("a range = %+v", got)

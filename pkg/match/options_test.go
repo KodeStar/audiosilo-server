@@ -50,6 +50,9 @@ func TestOptionsSeriesMarker(t *testing.T) {
 		5: {Author: "Shirtaloon", Series: "He Who Fights With Monsters", Title: "He Who Fights with Monsters: A LitRPG Adventure: He Who Fights with Monsters, Book 1"},
 		// A "Book N" that does not follow the series name is no marker.
 		6: {Author: "Ann Other", Series: "Moons", Title: "The Moons of Book 2 Island"},
+		// A range is an omnibus, and a number running into a word is none.
+		7: {Author: "Ann Other", Series: "Saga", Title: "Omnibus: Saga, Book 1-3"},
+		8: {Author: "Ann Other", Series: "Saga", Title: "Side Story: Saga, Book 2.5x"},
 	}
 	runOptCases(t, books, []optCase{
 		{"bare series title, marker after series", aud("Dragon Heart", who, "Dragon Heart Series", 2), -1, 1},
@@ -61,6 +64,8 @@ func TestOptionsSeriesMarker(t *testing.T) {
 		{"volume 1 of a wordy series", aud("Beneath the Dragoneye Moons", "Selkie Myth", "Beneath the Dragoneye Moons", 1), -1, 4},
 		{"genre tail is not the last segment", aud("He Who Fights with Monsters: A LitRPG Adventure", "Shirtaloon", "He Who Fights with Monsters", 1), -1, 5},
 		{"Book N not after the series", aud("Moons", "Ann Other", "Moons", 2), -1, -1},
+		{"a range marker", aud("Saga", "Ann Other", "Saga", 1), -1, -1},
+		{"a number running into a word", aud("Saga", "Ann Other", "Saga", 2), -1, -1},
 	})
 	// Confirm-grade only: a marker never vetoes a candidate the column agrees on.
 	withCol := []Book{{Author: who, Series: "Dragon Heart", SeriesIndex: 6, Title: "Land of Magic: Dragon Heart, Book 5"}}
@@ -90,6 +95,19 @@ func TestOptionsExactTitle(t *testing.T) {
 	if _, score, _ := BestWith(books, aud("1984", "George Orwell", "", 0), ImportOptions()); score != scoreExactTitle {
 		t.Errorf("exact title scored %v, want %v", score, scoreExactTitle)
 	}
+	// The exact title is a bonus, never the whole score: same-titled candidates
+	// (the key drops a bracketed group; one author's title in two series) are
+	// still told apart by their series and number.
+	twins := []Book{
+		0: {Author: "Lindsay Buroker", Series: "The Emperor's Edge", SeriesIndex: 6, Title: "Forged in Blood (Part 1)"},
+		1: {Author: "Lindsay Buroker", Series: "The Emperor's Edge", SeriesIndex: 7, Title: "Forged in Blood (Part 2)"},
+		2: {Author: "Ann Other", Series: "Saga B", SeriesIndex: 1, Title: "Awakening"},
+		3: {Author: "Ann Other", Series: "Saga A", SeriesIndex: 2, Title: "Awakening"},
+	}
+	runOptCases(t, twins, []optCase{
+		{"bracketed part, its number", aud("Forged in Blood (Part 2)", "Lindsay Buroker", "The Emperor's Edge", 7), 1, 1},
+		{"one title in two series", aud("Awakening", "Ann Other", "Saga A", 2), 3, 3},
+	})
 }
 
 // Options.WordlessFallback: a residual that is only a stopword falls back to
@@ -100,6 +118,9 @@ func TestOptionsWordlessFallback(t *testing.T) {
 	}
 	runOptCases(t, books, []optCase{
 		{"stopword residual", aud("The Mayor of Noobtown", "Ryan Rimmel", "Noobtown", 1), -1, 0},
+		// The fallback's words are the series': a later volume must not take the
+		// numberless first one on token overlap.
+		{"later volume", aud("The Mayor of Noobtown 2", "Ryan Rimmel", "Noobtown", 2), -1, -1},
 	})
 	o := Options{WordlessFallback: true}
 	if got := cleanTitle("The Mayor of Noobtown", "Mayor of Noobtown", o); got != "The Mayor of Noobtown" {

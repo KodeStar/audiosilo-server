@@ -217,11 +217,6 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 		}
 		score := 0.0
 		switch {
-		case qExact != "" && exactTitleKey(b.Title) == qExact && !candSeriesOnly(b, o):
-			// Options.ExactTitle: the same title by the same person is the book, even
-			// when the two sides file it under differently named series - unless a
-			// side is just its series name (and number), which every volume shares.
-			score = scoreExactTitle
 		case seriesLinked && (qn.bare || bBare):
 			// A bare title ("Series: Volume N", or just the series name - Audible
 			// lists whole series that way) carries no title evidence: token overlap
@@ -268,6 +263,19 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 				score = scoreBareVol1
 			}
 		default:
+			if o.WordlessFallback && qHasSeq && candSeriesOnly(b, o) {
+				// The fallback gave this series-named candidate its title's words
+				// back, so token overlap is the series matching itself: like a bare
+				// pair, only its number (1 when it states none) may agree, or one
+				// numberless volume would absorb every later one.
+				bSeq, ok := bookSeqRef(b, b.Series)
+				if !ok {
+					bSeq = 1
+				}
+				if !seqEqual(bSeq, qSeq) {
+					continue
+				}
+			}
 			bToks := titleTokens(b.Title, b.Series, o)
 			score = tokenScore(qToks, bToks)
 			if sameSeries {
@@ -291,6 +299,16 @@ func BestWith(books []Book, q Query, o Options) (int, float64, bool) {
 					score += scoreFullTitle
 				}
 			}
+		}
+		if qExact != "" && exactTitleKey(b.Title) == qExact && !candSeriesOnly(b, o) {
+			// Options.ExactTitle: the same title by the same person is the book, even
+			// when the two sides file it under differently named series - unless a
+			// side is just its series name (and number), which every volume shares.
+			// A bonus on the pair's own score, never in place of it: two volumes
+			// whose titles differ only in a bracketed group ("Forged in Blood (Part
+			// 1)", "(Part 2)") share the key, and the series and number still tell
+			// them apart.
+			score += scoreExactTitle
 		}
 		if score > bestScore {
 			bestScore, best = score, i

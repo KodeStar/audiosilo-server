@@ -177,7 +177,7 @@ func bridgeSeries(b *catalog.Book) []catalog.AudibleSeries {
 	out := make([]catalog.AudibleSeries, 0, len(list))
 	for i, s := range list {
 		pos := catalog.FormatSeriesRange(s.Position, s.PositionEnd)
-		if i == 0 && pos == "" {
+		if i == 0 && pos == "" && b.Series != "" {
 			if v, ok := metadata.FolderCodePosition(path.Base(b.RelPath), s.Name); ok {
 				pos = catalog.FormatSeriesPosition(v)
 			}
