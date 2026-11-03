@@ -1,6 +1,8 @@
 # Native binary release (GoReleaser). On each v* tag this builds self-contained,
 # cross-platform binaries for home users who don't want Docker: the web player is
-# embedded (-tags embedplayer, populated from the pinned web image). ffmpeg +
+# embedded (-tags embedplayer, populated from the pinned web image). The Linux
+# binaries build the native C SQLite engine in, static against glibc (as the
+# Docker image does); macOS and Windows stay pure Go (CGO_ENABLED=0). ffmpeg +
 # ffprobe are NOT bundled - the launcher finds a local copy or auto-downloads a
 # cached build on first use (internal/toolfetch). Outputs archives, .deb/.rpm and
 # checksums to a DRAFT GitHub Release for review before publishing.
@@ -42,6 +44,14 @@ jobs:
           cache: npm
           cache-dependency-path: admin-ui/package-lock.json
 
+      # The Linux builds link the native SQLite engine statically against glibc
+      # (.goreleaser.yml). The amd64 runner has gcc and glibc's static libraries;
+      # arm64 needs the cross compiler and the arm64 glibc.
+      - name: Install the arm64 C cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
       # GHCR refs must be lowercase; the owner login can be mixed-case.
       - name: Resolve owner (lowercase)
         id: owner
@@ -75,12 +85,32 @@ jobs:
           # Their Dockerfile fetches audiosilo_<tag without v>_linux_<arch>.tar.gz.
           version=$(jq -r .tag dist/metadata.json)
           version=${version#v}
+          # Linux: the native SQLite engine, static (no ELF interpreter), so their
+          # Alpine image runs it as it is.
           for arch in amd64 arm64; do
-            dir="$RUNNER_TEMP/smoke/$arch"
+            dir="$RUNNER_TEMP/smoke/linux_$arch"
             mkdir -p "$dir"
             tar xzf "dist/audiosilo_${version}_linux_${arch}.tar.gz" -C "$dir" audiosilo
             info=$(go version -m "$dir/audiosilo")
-            for want in -tags=embedplayer CGO_ENABLED=0 "GOARCH=$arch"; do
+            grep -qw -- "-tags=embedplayer,sqlite_native,sqlite_fts5,sqlite_preupdate_hook,sqlite_omit_load_extension,netgo,osusergo" <<<"$info"
+            for want in CGO_ENABLED=1 "GOARCH=$arch"; do
+              grep -qw -- "$want" <<<"$info"
+            done
+            if readelf -lW "$dir/audiosilo" | grep -q INTERP; then
+              echo "linux_$arch binary is dynamically linked" >&2
+              exit 1
+            fi
+          done
+          # macOS and Windows: pure Go.
+          for target in darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
+            dir="$RUNNER_TEMP/smoke/$target"
+            mkdir -p "$dir"
+            case "$target" in
+              windows_*) unzip -q "dist/audiosilo_${version}_${target}.zip" audiosilo.exe -d "$dir" ;;
+              *) tar xzf "dist/audiosilo_${version}_${target}.tar.gz" -C "$dir" audiosilo ;;
+            esac
+            info=$(go version -m "$dir"/audiosilo*)
+            for want in -tags=embedplayer CGO_ENABLED=0 "GOARCH=${target#*_}"; do
               grep -qw -- "$want" <<<"$info"
             done
           done
@@ -88,8 +118,11 @@ jobs:
           # and the self-signed TLS default. Its one-time credentials banner (stdout)
           # stays out of the log; ffmpeg/ffprobe are off so nothing downloads.
           AUDIOSILO_BIND=127.0.0.1:18080 AUDIOSILO_UPDATE_CHECK=false \
-            "$RUNNER_TEMP/smoke/amd64/audiosilo" --data "$RUNNER_TEMP/smoke/data" --ffprobe "" --ffmpeg "" > /dev/null &
+            "$RUNNER_TEMP/smoke/linux_amd64/audiosilo" --data "$RUNNER_TEMP/smoke/data" --ffprobe "" --ffmpeg "" \
+            > /dev/null 2> >(tee "$RUNNER_TEMP/smoke/server.log" >&2) &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
           curl -kfsS --retry 30 --retry-delay 1 --retry-connrefused https://127.0.0.1:18080/healthz
           curl -kfsSL https://127.0.0.1:18080/web/ | grep -i '<html' > /dev/null
+          # The start logs its engine (stderr, kept above).
+          grep -q 'database: sqlite.*engine=native' "$RUNNER_TEMP/smoke/server.log"

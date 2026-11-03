@@ -2,8 +2,14 @@
 #
 # Produces self-contained, cross-platform binaries on each `v*` tag (see
 # .github/workflows/release.yml) so non-Docker home users can download one file
-# and run it. The server is CGO-free (modernc SQLite), so all targets
-# cross-compile from a single Linux runner with no C toolchain.
+# and run it. The Linux binaries build the native C SQLite engine in (the store's
+# sqlite_native engine, see SQLite in CONVENTIONS.md), linked statically against
+# glibc exactly as the Docker image's build stage does: one static binary that
+# runs on any distro, Alpine included (the LinuxServer.io image downloads these
+# tarballs), with glibc's allocator rather than musl's. They need a C compiler
+# per architecture (release.yml installs the arm64 cross compiler on the amd64
+# runner). macOS and Windows stay CGO-free (modernc's pure-Go engine), so they
+# cross-compile from the same runner with no C toolchain.
 #
 # Self-contained where it's cheap: the admin console (admin-ui/) is always
 # embedded (built by a before-hook), and the web player is embedded via `-tags
@@ -17,6 +23,7 @@
 # the native-binary path. Validate locally with:
 #   goreleaser check
 #   goreleaser build --snapshot --clean --skip=before --single-target
+# (a Linux target needs its C compiler: x86_64-linux-gnu-gcc / aarch64-linux-gnu-gcc).
 version: 2
 
 project_name: audiosilo
@@ -32,6 +39,27 @@ before:
     - ./scripts/build-admin.sh --build-only
 
 builds:
+  # Linux: the native SQLite engine, static against glibc (the Dockerfile's
+  # recipe). netgo and osusergo keep the static binary off glibc's NSS, and
+  # sqlite_omit_load_extension off dlopen. CC names each target's compiler by its
+  # triplet, so either architecture can be the host (on Debian/Ubuntu the other
+  # one comes from gcc-<triplet> + libc6-dev-<arch>-cross).
+  - id: audiosilo-linux
+    main: ./cmd/audiosilo
+    binary: audiosilo
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}x86_64-linux-gnu-gcc{{ end }}'
+    flags:
+      - -trimpath
+      - -tags=embedplayer,sqlite_native,sqlite_fts5,sqlite_preupdate_hook,sqlite_omit_load_extension,netgo,osusergo
+    ldflags:
+      - -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
+      - -linkmode external -extldflags -static
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+  # macOS and Windows: pure Go (modernc's engine), no C toolchain.
   - id: audiosilo
     main: ./cmd/audiosilo
     binary: audiosilo
@@ -42,12 +70,12 @@ builds:
       - -tags=embedplayer
     ldflags:
       - -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
-    goos: [linux, darwin, windows]
+    goos: [darwin, windows]
     goarch: [amd64, arm64]
 
 archives:
   - id: native
-    ids: [audiosilo]
+    ids: [audiosilo-linux, audiosilo]
     name_template: "audiosilo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     # Windows users expect a .zip; everyone else a .tar.gz.
     format_overrides:
@@ -63,7 +91,7 @@ archives:
 # tarball above instead (ffmpeg is found locally or auto-downloaded on first use).
 nfpms:
   - id: linux-packages
-    ids: [audiosilo]
+    ids: [audiosilo-linux]
     package_name: audiosilo
     vendor: AudioSilo
     homepage: https://github.com/kodestar/audiosilo-server
