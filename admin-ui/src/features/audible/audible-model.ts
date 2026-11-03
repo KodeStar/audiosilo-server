@@ -190,7 +190,10 @@ export function plannedLine(
   if (p.kind === 'series_existing' && p.siblings > 0)
     return line('audible.planned.seriesExisting', { count: p.siblings });
   if (p.kind === 'series_new') return line('audible.planned.seriesNew');
-  return line(p.state === 'joins' ? 'audible.planned.joins' : 'audible.planned.standalone');
+  if (p.state !== 'joins') return line('audible.planned.standalone');
+  // With a template, joins only means the destination's top folder exists;
+  // the default placement puts a standalone title in the author's folder.
+  return line(p.template ? 'audible.planned.joinsFolder' : 'audible.planned.joinsAuthor');
 }
 
 /** The reason the Bridge sends for a title it left unmatched because another claimed the same book. */

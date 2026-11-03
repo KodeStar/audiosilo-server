@@ -649,7 +649,31 @@ describe('unmatched titles, explained', () => {
     ).toBe('audible.planned.seriesNew');
     expect(
       plannedLine({ planned: plan({ kind: 'standalone', siblings: 0 }), dest_path: '' }, '')?.key,
-    ).toBe('audible.planned.joins');
+    ).toBe('audible.planned.joinsAuthor');
+    // With a template, joins only says the top folder already exists.
+    expect(
+      plannedLine(
+        {
+          planned: plan({ kind: 'standalone', siblings: 0, template: '{Author}/{Title}' }),
+          dest_path: '',
+        },
+        '{Author}/{Title}',
+      )?.key,
+    ).toBe('audible.planned.joinsFolder');
+    expect(
+      plannedLine(
+        {
+          planned: plan({ kind: 'series_existing', siblings: 0, template: '{Narrator}/{Title}' }),
+          dest_path: '',
+        },
+        '{Narrator}/{Title}',
+      )?.key,
+    ).toBe('audible.planned.joinsFolder');
+    // Siblings still win over a template.
+    expect(
+      plannedLine({ planned: plan({ template: '{Author}/{Series}/{Title}' }), dest_path: '' }, '')
+        ?.key,
+    ).toBe('audible.planned.seriesExisting');
     expect(
       plannedLine(
         { planned: plan({ kind: 'standalone', siblings: 0, state: 'new' }), dest_path: '' },
