@@ -312,5 +312,9 @@ function hostFolder(root: string): string {
  * listener behind it.
  */
 export function serverScheduled(kind: string): boolean {
-  return (kind.startsWith('podcast.') && kind !== 'podcast.subscribe') || kind === 'audible.poll';
+  return (
+    (kind.startsWith('podcast.') && kind !== 'podcast.subscribe') ||
+    kind === 'audible.poll' ||
+    kind === 'audible.import'
+  );
 }

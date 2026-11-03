@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import type { AudibleAccount, AudibleTitle, AudibleTitleState } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
+import { isOpen } from '@/features/bridge/bridge-model';
 
 // Audible (Bridge Phase 4a): the accounts the Bridge signed in to and the titles
 // each owns, read-only in the console (accounts are signed in and mapped on the
@@ -59,4 +60,72 @@ export function titleByline(title: Pick<AudibleTitle, 'authors' | 'series'>): st
   const s = title.series[0];
   if (s) parts.push(s.position ? `${s.name} ${s.position}` : s.name);
   return parts.filter(Boolean).join(' · ');
+}
+
+// Backups (Bridge Phase 4b): "Back up", "Not this book", a destination, the
+// account's policy and template, "Back up everything".
+
+/** The codes a failed or parked backup may name, each worded as `audible.code.<code>`. */
+export const IMPORT_CODES = [
+  'not_released',
+  'no_rights',
+  'audible_refused',
+  'not_writable',
+  'exists',
+  'disk_full',
+  'offline_url_expired',
+  'unknown_account',
+] as const;
+
+/** Whether a title's backup is waiting or running (a pending request included). */
+export function importOpen(x: Pick<AudibleTitle, 'import'>): boolean {
+  const s = x.import?.state;
+  return s === 'pending' || (s !== undefined && isOpen(s));
+}
+
+/**
+ * Whether "Back up" is offered for a title: one the account can download (or a
+ * preorder, which waits for its release), not on this server (or marked "Not
+ * this book", whose match isn't it), with no backup waiting or running.
+ */
+export function canBackUp(x: AudibleTitle): boolean {
+  return (
+    (x.state === 'available' || x.state === 'preorder') &&
+    (!x.match || x.rejected) &&
+    !importOpen(x)
+  );
+}
+
+/** How a title's backup reads: its i18n key, the status dot, and its code's words. */
+export function importStatus(
+  x: AudibleTitle,
+): { key: string; tone: StatusTone; code?: string } | null {
+  if (x.needs_attention) return { key: 'audible.import.attention', tone: 'warn' };
+  const imp = x.import;
+  if (!imp) return null;
+  const code = (IMPORT_CODES as readonly string[]).includes(imp.code)
+    ? `audible.code.${imp.code}`
+    : undefined;
+  switch (imp.state) {
+    case 'pending':
+      return { key: 'audible.import.pending', tone: 'off' };
+    case 'queued':
+    case 'claimed':
+      return { key: 'audible.import.queued', tone: 'off' };
+    case 'running':
+      return { key: 'audible.import.running', tone: 'ok' };
+    case 'needs_attention':
+      return { key: 'audible.import.parked', tone: 'warn', code };
+    case 'done':
+      return { key: 'audible.import.done', tone: 'ok' };
+    case 'failed':
+      return { key: 'audible.import.failed', tone: 'bad', code };
+    case 'cancelled':
+      return { key: 'audible.import.cancelled', tone: 'off' };
+  }
+}
+
+/** A destination as typed: trimmed, without enclosing slashes ("" = the account's placement). */
+export function cleanDest(dest: string): string {
+  return dest.trim().replace(/^\/+|\/+$/g, '');
 }

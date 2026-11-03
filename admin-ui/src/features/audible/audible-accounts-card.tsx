@@ -13,9 +13,11 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import { bridgeTabLink } from '@/features/bridge/bridge-model';
 import { ACCOUNTS_TAB } from '@/features/bridge/setup-model';
 import { accountName } from './audible-model';
+import { AccountSettingsButton } from './account-settings-button';
+import { BackupAllButton } from './backup-all-button';
 import { CheckNowButton } from './check-now-button';
 import { RemoveAccountButton } from './remove-account-button';
-import { useAudibleAccounts, useCheckNow } from './use-audible';
+import { useAudibleAccounts, useBackups, useCheckNow } from './use-audible';
 
 /**
  * Settings > Bridge's Audible accounts (Bridge Phase 4a), while the audible
@@ -24,11 +26,14 @@ import { useAudibleAccounts, useCheckNow } from './use-audible';
  * mapping happen on the Bridge's own Accounts tab (the server never holds an
  * Audible credential), so the card links there; Remove only takes an account
  * the Bridge can no longer remove (unpaired, paired again) off this server.
+ * Phase 4b: the account's backup policy and template (Backup settings) and Back
+ * up everything.
  */
 export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
   const { t } = useTranslation();
   const accounts = useAudibleAccounts();
   const { checkNow, busy } = useCheckNow();
+  const backups = useBackups();
   const accountsTab = bridgeTabLink(uiUrl, ACCOUNTS_TAB);
   const list = accounts.data?.accounts ?? [];
 
@@ -90,6 +95,7 @@ export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
               account={a}
               busy={busy === a.id}
               onCheck={() => void checkNow(a)}
+              backups={backups}
             />
           ))}
         </ul>
@@ -102,10 +108,12 @@ function AccountRow({
   account: a,
   busy,
   onCheck,
+  backups,
 }: {
   account: AudibleAccount;
   busy: boolean;
   onCheck: () => void;
+  backups: ReturnType<typeof useBackups>;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -145,6 +153,16 @@ function AccountRow({
             [t('audible.account.store'), a.marketplace.toUpperCase()],
             [t('audible.account.policy'), t(`audible.policy.${a.policy}`)],
             [
+              t('audible.account.template'),
+              a.template ? (
+                <span className="font-mono text-[12.5px] [overflow-wrap:anywhere]">
+                  {a.template}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{t('audible.account.templateAuto')}</span>
+              ),
+            ],
+            [
               t('audible.account.titles'),
               counts
                 ? t('audible.account.counts', {
@@ -158,6 +176,8 @@ function AccountRow({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <CheckNowButton busy={busy} paused={a.paused} onCheck={onCheck} />
+        <AccountSettingsButton account={a} backups={backups} />
+        <BackupAllButton account={a} backups={backups} />
         <RemoveAccountButton account={a} />
       </div>
     </li>

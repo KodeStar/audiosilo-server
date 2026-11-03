@@ -16,16 +16,20 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import {
   accountName,
   chosenAccount,
+  importStatus,
   pollTarget,
   TITLE_STATE_TONE,
   titleByline,
   type MatchedFilter,
 } from './audible-model';
+import { BackupAllButton } from './backup-all-button';
 import { CheckNowButton } from './check-now-button';
 import { RemoveAccountButton } from './remove-account-button';
+import { TitleActions } from './title-actions';
 import {
   useAudibleAccounts,
   useAudibleTitles,
+  useBackups,
   useCheckNow,
   useTitlesAfterPolls,
 } from './use-audible';
@@ -34,9 +38,10 @@ import {
  * Settings > Audible (Bridge Phase 4a; a page of the audible module, listed
  * only while it is on): every title the Bridge's Audible accounts own, which are
  * on this server and which aren't, filtered by account, state and whether it is
- * here, searched by title, author or ASIN. Read-only, but for Check now, which
- * asks the Bridge to look at an account's library again, and Remove, which
- * takes an account the Bridge can no longer remove off this server.
+ * here, searched by title, author or ASIN. Check now asks the Bridge to look at
+ * an account's library again, and Remove takes an account the Bridge can no
+ * longer remove off this server. Phase 4b: each title's backup and its actions
+ * (Back up, Not this book, a destination), and Back up everything.
  */
 export function AudibleTopic() {
   const { t } = useTranslation();
@@ -50,6 +55,7 @@ export function AudibleTopic() {
   const titles = useAudibleTitles({ account, state, matched, q });
   useTitlesAfterPolls(accounts.data?.accounts);
   const { checkNow, busy } = useCheckNow();
+  const backups = useBackups();
   const target = pollTarget(list, account);
   const names = new Map(list.map((a) => [a.id, accountName(t, a)] as const));
   const filtered = Boolean(account || state || matched || q);
@@ -77,6 +83,7 @@ export function AudibleTopic() {
                 paused={target.paused}
                 onCheck={() => void checkNow(target)}
               />
+              <BackupAllButton account={target} backups={backups} />
               <RemoveAccountButton account={target} />
             </div>
           ) : undefined
@@ -130,6 +137,9 @@ export function AudibleTopic() {
           <option value="missing">{t('audible.titles.missing')}</option>
         </NativeSelect>
       </div>
+      <p className="border-t px-5 py-2.5 text-[12.5px] text-muted-foreground">
+        {t('audible.legal')}
+      </p>
       {titles.isError ? (
         <div className="p-5">
           <QueryError
@@ -167,6 +177,7 @@ export function AudibleTopic() {
               key={`${x.account}/${x.asin}`}
               title={x}
               account={list.length > 1 ? names.get(x.account) : undefined}
+              backups={backups}
             />
           ))}
         </ul>
@@ -184,8 +195,17 @@ export function AudibleTopic() {
   );
 }
 
-function TitleRow({ title: x, account }: { title: AudibleTitle; account?: string }) {
+function TitleRow({
+  title: x,
+  account,
+  backups,
+}: {
+  title: AudibleTitle;
+  account?: string;
+  backups: ReturnType<typeof useBackups>;
+}) {
   const { t, i18n } = useTranslation();
+  const backup = importStatus(x);
   const lang = i18n.resolvedLanguage ?? 'en';
   const byline = titleByline(x);
   const details = [
@@ -201,6 +221,7 @@ function TitleRow({ title: x, account }: { title: AudibleTitle; account?: string
       : '',
     x.asin,
     account ?? '',
+    x.dest_path && (!x.match || x.rejected) ? t('audible.dest.to', { path: x.dest_path }) : '',
   ].filter(Boolean);
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-1.5 px-5 py-3">
@@ -209,6 +230,10 @@ function TitleRow({ title: x, account }: { title: AudibleTitle; account?: string
         {byline ? <span className="text-[13px] text-muted-foreground">{byline}</span> : null}
         <span className="font-mono text-[12px] text-muted-foreground">{details.join(' · ')}</span>
         {x.reason ? <span className="text-[12.5px] text-muted-foreground">{x.reason}</span> : null}
+        {backup?.code ? (
+          <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
+        ) : null}
+        <TitleActions title={x} backups={backups} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <StatusText
@@ -231,6 +256,15 @@ function TitleRow({ title: x, account }: { title: AudibleTitle; account?: string
         )}
         {x.match?.how === 'fuzzy' ? (
           <Badge variant="outline">{t('audible.titles.fuzzy')}</Badge>
+        ) : null}
+        {x.match?.how === 'import' ? (
+          <Badge variant="outline">{t('audible.titles.backedUp')}</Badge>
+        ) : null}
+        {x.rejected ? <Badge variant="outline">{t('audible.titles.rejected')}</Badge> : null}
+        {backup ? (
+          <StatusText tone={backup.tone} colored className="text-[12.5px] font-semibold">
+            {t(backup.key)}
+          </StatusText>
         ) : null}
       </div>
     </li>

@@ -8,7 +8,12 @@ import {
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
-import type { AudibleAccount, AudibleTitleState } from '@/api/types';
+import type {
+  AudibleAccount,
+  AudibleAccountPatch,
+  AudibleTitle,
+  AudibleTitleState,
+} from '@/api/types';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { accountName, matchedParam, type MatchedFilter } from './audible-model';
@@ -123,4 +128,87 @@ export function useCheckNow() {
     }
   };
   return { checkNow, busy };
+}
+
+/**
+ * Backups (Phase 4b): "Back up", "Not this book", a destination, "Back up
+ * everything" and an account's settings. Each says how it went (a refusal is a
+ * toast, or the dialog's error when it throws) and refreshes the titles, the
+ * accounts (their estimate) and the Bridge's jobs.
+ */
+export function useBackups() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: keys.audibleTitleLists });
+    void qc.invalidateQueries({ queryKey: keys.audibleAccounts });
+    void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+  };
+  const titleKey = (x: AudibleTitle) => `${x.account}/${x.asin}`;
+  const name = (x: AudibleTitle) => x.title || x.asin;
+
+  const backUp = async (x: AudibleTitle) => {
+    setBusy(titleKey(x));
+    try {
+      const { pending } = await api.backupAudible(x.account, x.asin);
+      toast.add(
+        pending
+          ? {
+              title: t('audible.backup.pending', { name: name(x) }),
+              description: t('audible.backup.pendingBody'),
+            }
+          : {
+              title: t('audible.backup.queued', { name: name(x) }),
+              description: t('audible.backup.queuedBody'),
+              type: 'success',
+            },
+      );
+    } catch (err) {
+      toastError(t('audible.backup.failed'), err);
+    } finally {
+      setBusy(null);
+      refresh();
+    }
+  };
+
+  const setRejected = async (x: AudibleTitle, rejected: boolean) => {
+    setBusy(titleKey(x));
+    try {
+      await api.patchAudibleTitle(x.account, x.asin, { rejected });
+    } catch (err) {
+      toastError(t('audible.reject.failed'), err);
+    } finally {
+      setBusy(null);
+      refresh();
+    }
+  };
+
+  /** Throws for the dialog to show. */
+  const setDest = async (x: AudibleTitle, dest: string) => {
+    await api.patchAudibleTitle(x.account, x.asin, { dest_path: dest });
+    refresh();
+  };
+
+  /** Throws for the confirm to show. */
+  const backUpAll = async (account: AudibleAccount) => {
+    const { queued } = await api.backupAllAudible(account.id);
+    toast.add({
+      title: t('audible.backupAll.done', { count: queued, name: accountName(t, account) }),
+      type: 'success',
+    });
+    refresh();
+  };
+
+  /** Throws for the dialog to show. */
+  const saveAccount = async (account: AudibleAccount, patch: AudibleAccountPatch) => {
+    await api.patchAudibleAccount(account.id, patch);
+    toast.add({
+      title: t('audible.settings.saved', { name: accountName(t, account) }),
+      type: 'success',
+    });
+    refresh();
+  };
+
+  return { backUp, setRejected, setDest, backUpAll, saveAccount, busy, titleKey };
 }

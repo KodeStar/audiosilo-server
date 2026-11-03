@@ -97,6 +97,9 @@ const BY_CODE: Record<string, string> = {
   // community) while the contributions module is off; a share while one is
   // open for the book; a correction whose value isn't the book's edit any more.
   module_off: 'errors.moduleOff',
+  already_matched: 'errors.audibleMatched',
+  import_open: 'errors.audibleImportOpen',
+  not_available: 'errors.audibleNotAvailable',
   contribute_open: 'errors.contributeOpen',
   not_edited: 'errors.notEdited',
   // Bridge Phase 3c: a generate or detect job while the book's read-along job
