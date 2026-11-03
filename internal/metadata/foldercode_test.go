@@ -20,6 +20,8 @@ func TestFolderCodePosition(t *testing.T) {
 		{"LAM05-05", "Legend of the Arch Magus", 0, 0},
 		{"LAM05-06x", "Legend of the Arch Magus", 0, 0},
 		{"LAM05-0612", "Legend of the Arch Magus", 0, 0},
+		{"LAM05-06-07", "Legend of the Arch Magus", 0, 0},
+		{"LAM05-06 - 07 Omnibus", "Legend of the Arch Magus", 5, 6},
 		{"DH06 - 07 Land", "Dragon Heart", 6, 0},
 		{"DH06-Land", "Dragon Heart", 6, 0},
 		{"HALO 07-08", "Halo", 0, 0},

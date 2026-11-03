@@ -12,7 +12,8 @@ import (
 // maybe a decimal part ("DH06 - Land of Magic", "BDM01 - Oathbound Healer",
 // "DF15.5 Brief Cases", "HALO 07 - Evolutions"), or a range of them, the two
 // numbers joined by a hyphen or an en dash with no spaces ("LAM05-06", an
-// omnibus). The code must end where a word does ("PH15x" is none).
+// omnibus). The code must end where a word does ("PH15x" is none), and a
+// third number joined on ("LAM05-06-07") makes it none, not a shorter range.
 var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?(?:[-–]\d{1,3}(?:\.\d+)?)?)`)
 
 // FolderCodePosition reads a book's position in series from the code that
@@ -27,7 +28,10 @@ var folderCode = regexp.MustCompile(`^([A-Za-z]{1,5}) ?(\d{1,3}(?:\.\d+)?(?:[-�
 func FolderCodePosition(name, series string) (start, end float64, ok bool) {
 	name = strings.TrimSpace(name)
 	m := folderCode.FindStringSubmatch(name)
-	if m == nil || !wordEndsAt(name[len(m[0]):]) || !initialsOf(m[1], series) {
+	if m == nil {
+		return 0, 0, false
+	}
+	if rest := name[len(m[0]):]; !wordEndsAt(rest) || joinsNumber(rest) || !initialsOf(m[1], series) {
 		return 0, 0, false
 	}
 	start, end, ok = ParseSeriesPosition(m[2]) // the pattern caps each number at three digits
@@ -64,4 +68,15 @@ func initialsOf(code, series string) bool {
 func wordEndsAt(s string) bool {
 	r, _ := utf8.DecodeRuneInString(s)
 	return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+}
+
+// joinsNumber reports whether s starts with a hyphen or an en dash then a digit:
+// one more number joined onto a code's range ("LAM05-06-07").
+func joinsNumber(s string) bool {
+	r, n := utf8.DecodeRuneInString(s)
+	if r != '-' && r != '–' {
+		return false
+	}
+	d, _ := utf8.DecodeRuneInString(s[n:])
+	return unicode.IsDigit(d)
 }
