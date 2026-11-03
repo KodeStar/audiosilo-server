@@ -715,10 +715,7 @@ func removeFoldWith(s, sub string, bounded bool) string {
 
 // removeFoldRunes is removeFoldWith for any input.
 func removeFoldRunes(s, sub string, bounded bool) string {
-	lsub := strings.ToLower(sub)
-	if lsub == "" {
-		return s
-	}
+	lsub := strings.ToLower(sub) // non-empty: removeFoldWith returns on an empty sub
 	var b strings.Builder
 	// The rune already written, so a boundary test at the start of the REMAINING
 	// text still sees what preceded it in the original ("aLandLand" must reject
@@ -809,10 +806,6 @@ func removeFoldASCII(s, sub string, bounded bool) string {
 	}
 	b.WriteString(s[pos:])
 	return b.String()
-}
-
-func isAlnumByte(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words

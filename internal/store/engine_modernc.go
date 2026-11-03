@@ -84,8 +84,8 @@ func registerModerncFunction(name string, nArg int, fn func(args []driver.Value)
 
 // unwrapConn is the library's own connection under the statement cache's.
 func unwrapConn(dc any) any {
-	if c, ok := dc.(*cacheConn); ok {
-		return c.Conn
+	if c, ok := dc.(interface{ Unwrap() driver.Conn }); ok {
+		return c.Unwrap()
 	}
 	return dc
 }

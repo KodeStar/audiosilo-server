@@ -79,9 +79,10 @@ const (
 )
 
 // sqlFunc is a scalar SQL function every connection has (RegisterFunction).
+// The native engine registers it variadic (mattn takes the arity from the Go
+// function's signature), so only modernc's registration reads nArg.
 type sqlFunc struct {
 	name string
-	nArg int
 	fn   func(args []driver.Value) (driver.Value, error)
 }
 
@@ -94,6 +95,6 @@ var sqlFuncs []sqlFunc
 // opens it. Call it from an init function: a connection opened before it has
 // no such function. args hold nil, int64, float64, string or []byte.
 func RegisterFunction(name string, nArg int, fn func(args []driver.Value) (driver.Value, error)) {
-	sqlFuncs = append(sqlFuncs, sqlFunc{name: name, nArg: nArg, fn: fn})
+	sqlFuncs = append(sqlFuncs, sqlFunc{name: name, fn: fn})
 	registerModerncFunction(name, nArg, fn)
 }

@@ -20,7 +20,7 @@ package store
 //
 // A join whose parameters are bare ? gains little: SQLite 3.54 reads their
 // bound values to estimate the join's rows, so each new binding expires the
-// statement and SQLite re-parses it on its next run. Joins take +? instead
+// statement and SQLite re-parses it on its next run. Hot joins take +? instead
 // (see SQLite in CONVENTIONS.md).
 //
 // database/sql never uses one driver connection from two goroutines at once
@@ -56,7 +56,7 @@ func (c cacheDriver) Open(name string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &cacheConn{Conn: cn, execCacheable: c.execCacheable, query: c.query, stmts: map[string]*list.Element{}, lru: list.New()}, nil
+	return &cacheConn{Conn: cn, drv: c, stmts: map[string]*list.Element{}, lru: list.New()}, nil
 }
 
 // cachedStmt is one prepared statement and whether its rows are open.
@@ -69,13 +69,12 @@ type cachedStmt struct {
 // cacheConn is a library's connection with its statements kept prepared. It
 // forwards the optional interfaces database/sql uses, where the library's
 // connection has them; a conn.Raw that needs the library's own gets it from
-// Unwrap (the engine's hooks do).
+// Unwrap (the engine's hooks do, through unwrapConn).
 type cacheConn struct {
 	driver.Conn
-	execCacheable func(q string) bool
-	query         func(ctx context.Context, s driver.Stmt, args []driver.NamedValue) (driver.Rows, bool, error)
-	stmts         map[string]*list.Element // query -> element of lru, Value *cachedStmt
-	lru           *list.List               // front: most recently used
+	drv   cacheDriver
+	stmts map[string]*list.Element // query -> element of lru, Value *cachedStmt
+	lru   *list.List               // front: most recently used
 	// prepared and hits count the cache's outcomes (tests).
 	prepared, hits int
 }
@@ -138,10 +137,7 @@ func multiStatement(q string) bool {
 
 // get is q's prepared statement, nil when q takes the uncached path.
 func (c *cacheConn) get(ctx context.Context, q string) (*cachedStmt, error) {
-	if multiStatement(q) {
-		return nil, nil
-	}
-	if e, ok := c.stmts[q]; ok {
+	if e, ok := c.stmts[q]; ok { // never SQL of several statements (checked below)
 		cs := e.Value.(*cachedStmt)
 		if cs.busy {
 			return nil, nil
@@ -149,6 +145,9 @@ func (c *cacheConn) get(ctx context.Context, q string) (*cachedStmt, error) {
 		c.lru.MoveToFront(e)
 		c.hits++
 		return cs, nil
+	}
+	if multiStatement(q) {
+		return nil, nil
 	}
 	if len(c.stmts) >= maxCachedStmts && !c.evict() {
 		return nil, nil // every cached statement is in use
@@ -166,18 +165,53 @@ func (c *cacheConn) get(ctx context.Context, q string) (*cachedStmt, error) {
 // schemaChange reports whether q may change the schema (CREATE, ALTER or DROP
 // anywhere in it: a migration's SQL starts with its comments).
 func schemaChange(q string) bool {
-	u := strings.ToUpper(q)
-	return strings.Contains(u, "CREATE ") || strings.Contains(u, "ALTER ") || strings.Contains(u, "DROP ")
+	return containsFold(q, "CREATE ") || containsFold(q, "ALTER ") || containsFold(q, "DROP ")
+}
+
+// containsFold reports whether s holds kw, upper-case ASCII, in any ASCII case:
+// strings.Contains(strings.ToUpper(s), kw) without the copy, which every Exec
+// would otherwise make.
+func containsFold(s, kw string) bool {
+	for i := 0; i+len(kw) <= len(s); i++ {
+		if hasPrefixFold(s[i:], kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPrefixFold reports whether s starts with kw, upper-case ASCII, in any
+// ASCII case.
+func hasPrefixFold(s, kw string) bool {
+	if len(s) < len(kw) {
+		return false
+	}
+	for j := 0; j < len(kw); j++ {
+		c := s[j]
+		if 'a' <= c && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		if c != kw[j] {
+			return false
+		}
+	}
+	return true
+}
+
+// drop removes e's statement from the cache and closes it.
+func (c *cacheConn) drop(e *list.Element) {
+	cs := e.Value.(*cachedStmt)
+	c.lru.Remove(e)
+	delete(c.stmts, cs.query)
+	_ = cs.s.Close()
 }
 
 // clear closes every cached statement not in use.
 func (c *cacheConn) clear() {
 	for e := c.lru.Back(); e != nil; {
 		prev := e.Prev()
-		if cs := e.Value.(*cachedStmt); !cs.busy {
-			c.lru.Remove(e)
-			delete(c.stmts, cs.query)
-			_ = cs.s.Close()
+		if !e.Value.(*cachedStmt).busy {
+			c.drop(e)
 		}
 		e = prev
 	}
@@ -187,14 +221,10 @@ func (c *cacheConn) clear() {
 // one is.
 func (c *cacheConn) evict() bool {
 	for e := c.lru.Back(); e != nil; e = e.Prev() {
-		cs := e.Value.(*cachedStmt)
-		if cs.busy {
-			continue
+		if !e.Value.(*cachedStmt).busy {
+			c.drop(e)
+			return true
 		}
-		c.lru.Remove(e)
-		delete(c.stmts, cs.query)
-		_ = cs.s.Close()
-		return true
 	}
 	return false
 }
@@ -206,7 +236,7 @@ func (c *cacheConn) ExecContext(ctx context.Context, q string, args []driver.Nam
 		// connection's. Only migrations change the schema, on the writer, at Open.
 		defer c.clear()
 	}
-	if !c.execCacheable(q) {
+	if !c.drv.execCacheable(q) {
 		return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
 	}
 	cs, err := c.get(ctx, q)
@@ -246,17 +276,15 @@ func (c *cacheConn) QueryContext(ctx context.Context, q string, args []driver.Na
 	if cs == nil {
 		return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
 	}
-	if c.query != nil {
-		r, ok, err := c.query(ctx, cs.s, argsFor(cs.s, args))
-		if ok {
-			if err != nil {
-				return nil, err
-			}
-			cs.busy = true
-			return &cacheRows{rows: r, cs: cs}, nil
-		}
+	args = argsFor(cs.s, args)
+	var r driver.Rows
+	ok := false
+	if c.drv.query != nil {
+		r, ok, err = c.drv.query(ctx, cs.s, args)
 	}
-	r, err := cs.s.(driver.StmtQueryContext).QueryContext(ctx, argsFor(cs.s, args))
+	if !ok {
+		r, err = cs.s.(driver.StmtQueryContext).QueryContext(ctx, args)
+	}
 	if err != nil {
 		return nil, err
 	}

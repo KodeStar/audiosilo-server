@@ -52,7 +52,7 @@ func TestNativeFastRows(t *testing.T) {
 		if e == nil {
 			return nil
 		}
-		r, ok, err := c.query(ctx, e.Value.(*cachedStmt).s, nil)
+		r, ok, err := c.drv.query(ctx, e.Value.(*cachedStmt).s, nil)
 		if ok && err == nil {
 			_, fast = r.(*nativeRows)
 			_ = r.Close()

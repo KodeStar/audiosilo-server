@@ -31,6 +31,10 @@ func isWordByte(c byte) bool {
 
 func isDigitByte(c byte) bool { return c >= '0' && c <= '9' }
 
+func isAlnumByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigitByte(c)
+}
+
 func isSpaceByte(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
 }

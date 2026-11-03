@@ -229,6 +229,24 @@ func TestStmtCacheMultiStatement(t *testing.T) {
 	}
 }
 
+// schemaChange reads the SQL text in any ASCII case without copying it.
+func TestSchemaChange(t *testing.T) {
+	for q, want := range map[string]bool{
+		"-- 0001\nCREATE TABLE a (x INTEGER)": true,
+		"create index i on a(x)":              true,
+		"Alter Table a ADD y":                 true,
+		"drop TABLE a":                        true,
+		"INSERT INTO a VALUES (1)":            false,
+		"SELECT created_at FROM a":            false,
+		"UPDATE a SET dropped = 1":            false,
+		"":                                    false,
+	} {
+		if got := schemaChange(q); got != want {
+			t.Errorf("schemaChange(%q) = %v, want %v", q, got, want)
+		}
+	}
+}
+
 // A statement that fails (a constraint) answers its error and runs again
 // cleanly; SQL that doesn't prepare is not cached.
 func TestStmtCacheErrors(t *testing.T) {

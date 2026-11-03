@@ -109,12 +109,12 @@ var nativeEngine = &engine{
 // run, so a statement that returns a row (a SELECT, RETURNING) would stay
 // active, holding its transaction open; plain DML is done in one step.
 func plainDML(q string) bool {
-	head := strings.ToUpper(strings.TrimSpace(q))
-	if strings.Contains(head, "RETURNING") {
+	if containsFold(q, "RETURNING") {
 		return false
 	}
+	head := strings.TrimSpace(q)
 	for _, kw := range []string{"INSERT", "UPDATE", "DELETE", "REPLACE"} {
-		if strings.HasPrefix(head, kw) {
+		if hasPrefixFold(head, kw) {
 			return true
 		}
 	}

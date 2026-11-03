@@ -690,7 +690,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   take the library's own path, and on mattn so does an Exec of anything but plain DML (its Exec
   leaves a statement unreset until its next run: one that returned a row would stay active). A
   `conn.Raw` gets the cache's connection: the engine's hooks unwrap it; anything else of the
-  library's connection is `Unwrap()`'s. A join takes
+  library's connection is `Unwrap()`'s. A hot join (one run per book or per row: the
+  scan's, `catalog/communitychapters.go`, `catalog/overrides.go`) takes
   its parameters as `+?` (`+?1`): SQLite 3.54's estimate of a join loop's rows
   (`whereLoopOutputAdjust`) reads a bare `?`'s bound value, which marks the statement to be
   re-parsed whenever a new value is bound, so every run (the scan's per-book joins: 40-80 µs a
