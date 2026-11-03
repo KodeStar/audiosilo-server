@@ -8,28 +8,27 @@ import (
 	"sync/atomic"
 	"unicode"
 
-	"modernc.org/sqlite"
-
 	"github.com/kodestar/audiosilo-server/internal/names"
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-// SQL functions the catalogue's queries call, registered once on the driver so
-// every connection has them. They order and filter results only: never use one
+// SQL functions the catalogue's queries call, registered once through the store
+// so every connection has them, whichever SQLite library opens it. They order and filter results only: never use one
 // in a migration, view, index or generated column, or a database could no longer
 // be opened by a plain sqlite3 shell (or an older AudioSilo build).
 func init() {
 	// name_sort(credit): the surname-first sort key of an Author/Narrator credit,
 	// so a query orders by exactly what a keyset cursor holds (keySurname).
-	sqlite.MustRegisterDeterministicScalarFunction("name_sort", 1,
-		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+	store.RegisterFunction("name_sort", 1,
+		func(args []driver.Value) (driver.Value, error) {
 			return nameSortKey(sqlText(args[0])), nil
 		})
 	// credit_has(credit, name): whether name is the whole credit or exactly one
 	// of the people it names (creditNames), so "Kate Reading" finds "Michael
 	// Kramer, Kate Reading" (creditFilter). Exact: a spelling differing in case is
 	// another name, which a merge fixes.
-	sqlite.MustRegisterDeterministicScalarFunction("credit_has", 2,
-		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+	store.RegisterFunction("credit_has", 2,
+		func(args []driver.Value) (driver.Value, error) {
 			credit, name := sqlText(args[0]), sqlText(args[1])
 			if credit == name || slices.Contains(creditNames(credit), name) {
 				return int64(1), nil

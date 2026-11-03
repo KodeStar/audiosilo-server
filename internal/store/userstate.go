@@ -8,9 +8,6 @@ import (
 	"slices"
 	"testing"
 	"time"
-
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // User-state writes (server#258). Listening writes all the time: a progress
@@ -233,10 +230,7 @@ type userStateWatch struct {
 func (w *userStateWatch) set(conn *sql.Conn) bool {
 	set := false
 	_ = conn.Raw(func(dc any) error {
-		if h, ok := dc.(sqlite.HookRegisterer); ok {
-			h.RegisterPreUpdateHook(w.change)
-			set = true
-		}
+		set = activeEngine().setPreUpdateHook(dc, w.change)
 		return nil
 	})
 	return set
@@ -245,28 +239,28 @@ func (w *userStateWatch) set(conn *sql.Conn) bool {
 // unset removes w's hook from conn (a connection closed meanwhile dropped it).
 func (w *userStateWatch) unset(conn *sql.Conn) {
 	_ = conn.Raw(func(dc any) error {
-		dc.(sqlite.HookRegisterer).RegisterPreUpdateHook(nil)
+		activeEngine().setPreUpdateHook(dc, nil)
 		return nil
 	})
 }
 
 // change is the pre-update hook: one row about to be inserted, updated or
 // deleted.
-func (w *userStateWatch) change(d sqlite.SQLitePreUpdateData) {
-	rule, ok := w.rules[d.TableName]
+func (w *userStateWatch) change(d *preUpdate) {
+	rule, ok := w.rules[d.table]
 	switch {
 	case !ok:
 		w.content = true
 		if w.misfiled == "" {
-			w.misfiled = d.TableName
+			w.misfiled = d.table
 		}
 	case w.content: // decided: only a misfiling is still worth seeing
-	case d.Op != sqlite3.SQLITE_UPDATE:
+	case d.op != opUpdate:
 		w.content = !rule.rows
-	case d.OldRowID != d.NewRowID:
+	case d.oldRowID != d.newRowID:
 		w.content = true
 	case rule.watched != nil:
-		w.content = watchedChanged(&d, rule.watched)
+		w.content = watchedChanged(d, rule.watched)
 	}
 }
 
@@ -275,12 +269,12 @@ func (w *userStateWatch) change(d sqlite.SQLitePreUpdateData) {
 // watched column (watched is in the table's order, never empty), so a freed
 // column after every watched one (bridge_status.status, up to 64 KiB a
 // heartbeat) is never copied.
-func watchedChanged(d *sqlite.SQLitePreUpdateData, watched []int) bool {
-	n := min(d.Count(), watched[len(watched)-1]+1)
+func watchedChanged(d *preUpdate, watched []int) bool {
+	n := min(d.count(), watched[len(watched)-1]+1)
 	// Old and New store each value in the slice they are handed (they assign
 	// through &dest[i]), so the slices themselves end up holding the row.
 	before, after := make([]any, n), make([]any, n)
-	if d.Old(before...) != nil || d.New(after...) != nil {
+	if d.old(before...) != nil || d.new(after...) != nil {
 		return true
 	}
 	for _, i := range watched {

@@ -9,15 +9,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"modernc.org/sqlite"
 )
 
-// openCached opens a one-connection pool on the statement cache's driver over a
-// fresh file, so every call runs on the same cacheConn.
+// openCached opens a one-connection pool on the engine's driver (the statement
+// cache in front of its library) over a fresh file, so every call runs on the
+// same cacheConn.
 func openCached(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open(driverName, filepath.Join(t.TempDir(), "c.db"))
+	db, err := sql.Open(driverName(), filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,9 +87,14 @@ func TestStmtCacheReusesStatements(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `SELECT ?`, nil).Scan(&n); err != nil || n.Valid {
 		t.Fatalf("SELECT NULL: %v, %v", n, err)
 	}
+	// The CREATE is cached only where any Exec may be (modernc; not mattn).
+	want := 3 // insert, select, select ?
+	if activeEngine().driver == moderncDriver {
+		want = 4
+	}
 	prepared, hits, _ := cacheStats(t, db)
-	if prepared != 4 || hits != 198 {
-		t.Errorf("prepared %d, hits %d; want 4 prepared (create, insert, select, select ?) and 198 hits", prepared, hits)
+	if prepared != want || hits != 198 {
+		t.Errorf("prepared %d, hits %d; want %d prepared and 198 hits", prepared, hits, want)
 	}
 }
 
@@ -297,7 +301,7 @@ func TestStmtCacheCancelledRun(t *testing.T) {
 }
 
 // The column types read the same through the cache, and the raw connection
-// still takes modernc's hooks (the user-state watch installs one).
+// still takes the engine's pre-update hook (the user-state watch installs one).
 func TestStmtCacheForwards(t *testing.T) {
 	db := openCached(t)
 	mustExec(t, db, `CREATE TABLE t (a INTEGER NOT NULL, b TEXT)`)
@@ -325,8 +329,8 @@ func TestStmtCacheForwards(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = conn.Raw(func(dc any) error {
-		if _, ok := dc.(sqlite.HookRegisterer); !ok {
-			return errors.New("connection takes no hooks")
+		if !activeEngine().setPreUpdateHook(dc, func(*preUpdate) {}) || !activeEngine().setPreUpdateHook(dc, nil) {
+			return errors.New("connection takes no pre-update hook")
 		}
 		if u, ok := dc.(interface{ Unwrap() driver.Conn }); !ok || u.Unwrap() == nil {
 			return errors.New("connection doesn't unwrap")

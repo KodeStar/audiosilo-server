@@ -24,6 +24,8 @@ go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
 
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
+CGO_ENABLED=1 go build -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook" -o bin/audiosilo ./cmd/audiosilo
+                                     # native C SQLite compiled in (opt-in; AUDIOSILO_SQLITE=modernc picks the pure-Go one; see SQLite in CONVENTIONS.md)
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
 scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
@@ -106,7 +108,7 @@ cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
 pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
-internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
+internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)

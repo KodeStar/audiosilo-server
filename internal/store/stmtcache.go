@@ -1,15 +1,18 @@
 package store
 
-// The prepared-statement cache. database/sql hands the driver SQL text on every
-// ExecContext/QueryContext, and modernc prepares it (SQLite parses and plans it)
-// each time, runs it once and finalizes it. A first scan of 1,000 books spent
-// 58% of the writer's time in that parse, against 27% running the statements.
-// Each connection here keeps its single-statement SQL prepared, by its text, and
-// runs the prepared statement again; modernc resets and clears its bindings
-// after each run, so a run sees nothing of the one before.
+// The prepared-statement cache, in front of either engine's library (engine.go).
+// database/sql hands the driver SQL text on every ExecContext/QueryContext, and
+// the library prepares it (SQLite parses and plans it) each time, runs it once
+// and finalizes it. A first scan of 1,000 books spent 58% of the writer's time
+// in that parse (modernc), against 27% running the statements. Each connection
+// here keeps its single-statement SQL prepared, by its text, and runs the
+// prepared statement again; a run binds every parameter afresh, so it sees
+// nothing of the one before.
 //
-// Not cached: SQL holding more than one statement (a migration; modernc runs it
-// statement by statement), a statement whose rows are still open (a query run
+// Not cached: SQL holding more than one statement (a migration; the library runs
+// it statement by statement), an Exec the engine can't run again safely
+// (execCacheable: on mattn, anything but plain DML), a statement whose rows are
+// still open (a query run
 // again inside its own rows loop gets a statement of its own), and nothing past
 // maxCachedStmts per connection, where the least recently used statement not in
 // use is closed to make room. A statement whose schema changes is re-prepared by
@@ -28,39 +31,29 @@ package store
 import (
 	"container/list"
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"reflect"
 	"strings"
-
-	"modernc.org/sqlite"
 )
-
-// driverName is the name store.Open opens its pools by: modernc's driver behind
-// the statement cache.
-const driverName = "sqlite-stmtcache"
 
 // maxCachedStmts bounds each connection's cache. The server has well under a
 // thousand distinct statements, few of them hot; a var so a test can shrink it.
 var maxCachedStmts = 256
 
-func init() {
-	db, err := sql.Open("sqlite", "")
-	if err != nil {
-		panic(err)
-	}
-	sql.Register(driverName, cacheDriver{db.Driver()})
-	_ = db.Close()
+// cacheDriver is a library's driver with its connections' statements kept
+// prepared. execCacheable says which SQL a cached statement may run again for
+// Exec (the library resets it after the run, or the run leaves it done).
+type cacheDriver struct {
+	d             driver.Driver
+	execCacheable func(q string) bool
 }
-
-type cacheDriver struct{ d driver.Driver }
 
 func (c cacheDriver) Open(name string) (driver.Conn, error) {
 	cn, err := c.d.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	return &cacheConn{Conn: cn, stmts: map[string]*list.Element{}, lru: list.New()}, nil
+	return &cacheConn{Conn: cn, execCacheable: c.execCacheable, stmts: map[string]*list.Element{}, lru: list.New()}, nil
 }
 
 // cachedStmt is one prepared statement and whether its rows are open.
@@ -70,19 +63,20 @@ type cachedStmt struct {
 	busy  bool
 }
 
-// cacheConn is modernc's connection with its statements kept prepared. It
-// forwards the optional interfaces modernc's connection has that database/sql
-// or this package use; a conn.Raw that needs any other gets modernc's
-// connection from Unwrap.
+// cacheConn is a library's connection with its statements kept prepared. It
+// forwards the optional interfaces database/sql uses, where the library's
+// connection has them; a conn.Raw that needs the library's own gets it from
+// Unwrap (the engine's hooks do).
 type cacheConn struct {
 	driver.Conn
-	stmts map[string]*list.Element // query -> element of lru, Value *cachedStmt
-	lru   *list.List               // front: most recently used
+	execCacheable func(q string) bool
+	stmts         map[string]*list.Element // query -> element of lru, Value *cachedStmt
+	lru           *list.List               // front: most recently used
 	// prepared and hits count the cache's outcomes (tests).
 	prepared, hits int
 }
 
-// Unwrap is modernc's own connection.
+// Unwrap is the library's own connection.
 func (c *cacheConn) Unwrap() driver.Conn { return c.Conn }
 
 func (c *cacheConn) Close() error {
@@ -101,24 +95,34 @@ func (c *cacheConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, 
 	return c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, q)
 }
 
-func (c *cacheConn) Ping(ctx context.Context) error { return c.Conn.(driver.Pinger).Ping(ctx) }
+func (c *cacheConn) Ping(ctx context.Context) error {
+	if p, ok := c.Conn.(driver.Pinger); ok {
+		return p.Ping(ctx)
+	}
+	return nil
+}
 
 func (c *cacheConn) ResetSession(ctx context.Context) error {
-	return c.Conn.(driver.SessionResetter).ResetSession(ctx)
+	if r, ok := c.Conn.(driver.SessionResetter); ok {
+		return r.ResetSession(ctx)
+	}
+	return nil
 }
 
-func (c *cacheConn) IsValid() bool { return c.Conn.(driver.Validator).IsValid() }
-
-func (c *cacheConn) RegisterPreUpdateHook(f sqlite.PreUpdateHookFn) {
-	c.Conn.(sqlite.HookRegisterer).RegisterPreUpdateHook(f)
+func (c *cacheConn) IsValid() bool {
+	if v, ok := c.Conn.(driver.Validator); ok {
+		return v.IsValid()
+	}
+	return true
 }
 
-func (c *cacheConn) RegisterCommitHook(f sqlite.CommitHookFn) {
-	c.Conn.(sqlite.HookRegisterer).RegisterCommitHook(f)
-}
-
-func (c *cacheConn) RegisterRollbackHook(f sqlite.RollbackHookFn) {
-	c.Conn.(sqlite.HookRegisterer).RegisterRollbackHook(f)
+// CheckNamedValue is the library's argument conversion where it has its own,
+// else database/sql's default (ErrSkip).
+func (c *cacheConn) CheckNamedValue(nv *driver.NamedValue) error {
+	if ch, ok := c.Conn.(driver.NamedValueChecker); ok {
+		return ch.CheckNamedValue(nv)
+	}
+	return driver.ErrSkip
 }
 
 // multiStatement reports whether q may hold more than one statement: a ';'
@@ -155,6 +159,26 @@ func (c *cacheConn) get(ctx context.Context, q string) (*cachedStmt, error) {
 	return cs, nil
 }
 
+// schemaChange reports whether q may change the schema (CREATE, ALTER or DROP
+// anywhere in it: a migration's SQL starts with its comments).
+func schemaChange(q string) bool {
+	u := strings.ToUpper(q)
+	return strings.Contains(u, "CREATE ") || strings.Contains(u, "ALTER ") || strings.Contains(u, "DROP ")
+}
+
+// clear closes every cached statement not in use.
+func (c *cacheConn) clear() {
+	for e := c.lru.Back(); e != nil; {
+		prev := e.Prev()
+		if cs := e.Value.(*cachedStmt); !cs.busy {
+			c.lru.Remove(e)
+			delete(c.stmts, cs.query)
+			_ = cs.s.Close()
+		}
+		e = prev
+	}
+}
+
 // evict closes the least recently used statement not in use, false when every
 // one is.
 func (c *cacheConn) evict() bool {
@@ -172,6 +196,15 @@ func (c *cacheConn) evict() bool {
 }
 
 func (c *cacheConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
+	if schemaChange(q) {
+		// A statement prepared before a schema change may answer from the old one
+		// (mattn reads a query's columns before SQLite re-prepares it): drop this
+		// connection's. Only migrations change the schema, on the writer, at Open.
+		defer c.clear()
+	}
+	if !c.execCacheable(q) {
+		return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
+	}
 	cs, err := c.get(ctx, q)
 	if err != nil {
 		return nil, err
@@ -179,7 +212,26 @@ func (c *cacheConn) ExecContext(ctx context.Context, q string, args []driver.Nam
 	if cs == nil {
 		return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
 	}
-	return cs.s.(driver.StmtExecContext).ExecContext(ctx, args)
+	return cs.s.(driver.StmtExecContext).ExecContext(ctx, argsFor(cs.s, args))
+}
+
+// argsFor is args without the positional ones past s's parameters: one argument
+// list may serve several statements, each using some of its numbered
+// parameters (carryListeningState), which modernc binds by number and ignores
+// past the last, but mattn binds each one given and fails on one with no
+// parameter (column index out of range). Named arguments are kept.
+func argsFor(s driver.Stmt, args []driver.NamedValue) []driver.NamedValue {
+	n := s.NumInput()
+	if n < 0 || len(args) <= n {
+		return args
+	}
+	out := make([]driver.NamedValue, 0, n)
+	for _, a := range args {
+		if a.Name != "" || a.Ordinal <= n {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (c *cacheConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
@@ -190,7 +242,7 @@ func (c *cacheConn) QueryContext(ctx context.Context, q string, args []driver.Na
 	if cs == nil {
 		return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
 	}
-	r, err := cs.s.(driver.StmtQueryContext).QueryContext(ctx, args)
+	r, err := cs.s.(driver.StmtQueryContext).QueryContext(ctx, argsFor(cs.s, args))
 	if err != nil {
 		return nil, err
 	}

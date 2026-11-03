@@ -6,8 +6,6 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-
-	"modernc.org/sqlite"
 )
 
 // TestGenerationMovesAfterEveryWrite: every default write path moves the content
@@ -77,10 +75,12 @@ func TestGenerationMovesAfterEveryWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := conn.Raw(func(dc any) error {
-		dc.(sqlite.HookRegisterer).RegisterCommitHook(func() int32 {
+		if !activeEngine().setCommitHook(dc, func() bool {
 			atCommit = append(atCommit, db.ContentGeneration())
-			return 0
-		})
+			return false
+		}) {
+			return errors.New("the writer connection takes no commit hook")
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

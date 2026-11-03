@@ -662,13 +662,31 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
-  Both pools open modernc's driver behind a per-connection prepared-statement cache
-  (`store/stmtcache.go`, driver `sqlite-stmtcache`): a statement's SQL text is its key, so SQL
+  The library is the build's **engine** (`store/engine*.go`): modernc's, pure Go, by default;
+  with `CGO_ENABLED=1 -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook"` the native C
+  SQLite (mattn/go-sqlite3's amalgamation, compiled in), where `AUDIOSILO_SQLITE=modernc` picks
+  modernc's for the process (A/B on one binary). A native build missing cgo or either mattn tag
+  doesn't compile (`engine_native_guard.go`: without `sqlite_preupdate_hook` mattn's pre-update
+  hook is a silent no-op, and the user-state watch with it). Every open of the database goes
+  through the engine's driver (`driverName()`: Open's pools, `VacuumFile`, `openReadOnly`), never
+  `sql.Open("sqlite", ...)`: two SQLite copies on one file in one process don't see each other's
+  POSIX locks. What else is a library's goes through the engine: the pre-update and commit hooks,
+  SQL functions (`store.RegisterFunction`, from an `init`), `IsUniqueViolation`. The start logs
+  which (`database: sqlite engine=... version=...`). SQL holding several statements takes no
+  parameters: modernc gives each statement the whole argument list, mattn hands them out statement
+  by statement (`not enough args to execute query`); run one statement an Exec. A statement is
+  handed only the numbered arguments it has (`argsFor`: one list may serve several statements, as
+  in `carryListeningState`), and a connection that runs DDL drops its cached statements (mattn
+  reads a query's columns before SQLite re-prepares it for a new schema).
+  Both pools open the engine's library behind a per-connection prepared-statement cache
+  (`store/stmtcache.go`): a statement's SQL text is its key, so SQL
   built per call (a value formatted into the text, an `IN` list sized to its arguments) misses
   and churns the cache (256 statements per connection, least recently used out); bind values as
   parameters instead. SQL holding several statements, and a statement whose rows are still open,
-  take modernc's own path. A `conn.Raw` gets the cache's connection: it takes modernc's hooks
-  (`sqlite.HookRegisterer`); anything else of modernc's connection is `Unwrap()`'s. A join takes
+  take the library's own path, and on mattn so does an Exec of anything but plain DML (its Exec
+  leaves a statement unreset until its next run: one that returned a row would stay active). A
+  `conn.Raw` gets the cache's connection: the engine's hooks unwrap it; anything else of the
+  library's connection is `Unwrap()`'s. A join takes
   its parameters as `+?` (`+?1`): SQLite 3.54's estimate of a join loop's rows
   (`whereLoopOutputAdjust`) reads a bare `?`'s bound value, which marks the statement to be
   re-parsed whenever a new value is bound, so every run (the scan's per-book joins: 40-80 µs a
