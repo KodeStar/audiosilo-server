@@ -221,8 +221,10 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 	planSeries(scope, st, p, &w)
 	// Fill also tidies a title the files clutter (tidyTitle): the community's
 	// title is the book's, less the series and "Book 2 (Unabridged)".
-	if t := tidyTitle(st, p); scope == ScopeFill && t != "" {
-		w.Set[catalog.FieldTitle] = t
+	if scope == ScopeFill {
+		if t := tidyTitle(st, p); t != "" {
+			w.Set[catalog.FieldTitle] = t
+		}
 	}
 	w.Cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
 	return w
@@ -403,14 +405,15 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 		runnerUp = cands[1].Score
 	}
 	identified := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
+	hit := identifierHit(cands[0])
 	confident := score >= AutoScore && score-runnerUp >= AutoLead
-	if identifierHit(cands[0]) {
+	if hit {
 		confident = len(cands) == 1 || !identifierHit(cands[1])
 	}
 	switch {
 	case confident && identified && lengthFits(p, seconds):
 		return catalog.OutcomeAuto, score, runnerUp
-	case score < ReviewFloor && !identifierHit(cands[0]):
+	case score < ReviewFloor && !hit:
 		return catalog.OutcomeNone, score, runnerUp
 	}
 	return catalog.OutcomeReview, score, runnerUp

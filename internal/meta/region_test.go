@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 func TestOrderASINs(t *testing.T) {
@@ -140,6 +142,12 @@ func TestRegionLanguage(t *testing.T) {
 	for region, want := range map[string]string{"us": "en", "uk": "en", "in": "en", "de": "de", "jp": "ja", "br": "pt", "": "", "xx": ""} {
 		if got := RegionLanguage(region); got != want {
 			t.Errorf("RegionLanguage(%q) = %q, want %q", region, got, want)
+		}
+	}
+	// Every marketplace metadata.region may name has a language.
+	for _, region := range config.Regions {
+		if RegionLanguage(region) == "" {
+			t.Errorf("config.Regions has %q, regionLanguages does not", region)
 		}
 	}
 }

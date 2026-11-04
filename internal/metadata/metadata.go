@@ -287,12 +287,10 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		// date): the same tags tag.Metadata.Year reads, but with month and day.
 		m.Released = firstReleaseDate(rawString(raw, "\xa9day"), rawString(raw, "TDRC"), rawString(raw, "TYER"),
 			rawString(raw, "TYE"), rawString(raw, "date"), rawString(raw, "year"))
+		m.setHints(rawHints(raw))
 	}
 	if md.Picture() != nil {
 		m.HasCover = true
-	}
-	if raw := md.Raw(); raw != nil {
-		m.setHints(rawHints(raw))
 	}
 }
 
@@ -303,6 +301,7 @@ var (
 	asinTags     = []string{"asin", "audible_asin"}
 	isbnTags     = []string{"isbn"}
 	languageTags = []string{"language"}
+	hintTags     = slices.Concat(asinTags, isbnTags, languageTags)
 )
 
 // maxHintBytes bounds a hint as stored: an identifier is far shorter, and a
@@ -326,14 +325,14 @@ func (m *Metadata) setHints(tags map[string]string) {
 	pick(&m.TagLanguage, languageTags)
 }
 
-// rawHints is dhowden's raw items as setHints reads them, by lowercased name: a
+// rawHints is dhowden's raw items naming a hint (hintTags), by lowercased name: a
 // plain item (Vorbis keys, an MP4 freeform item's name, an ID3 text frame) by
 // its key, an ID3 TXXX frame (dhowden's *tag.Comm, keyed TXXX, TXXX_0, ...) by
 // its description, and ID3's TLAN as the language.
 func rawHints(raw map[string]interface{}) map[string]string {
 	out := map[string]string{}
 	put := func(k, v string) {
-		if _, ok := out[k]; !ok && tagText(v) != "" {
+		if _, ok := out[k]; !ok && slices.Contains(hintTags, k) && tagText(v) != "" {
 			out[k] = v
 		}
 	}
@@ -348,7 +347,7 @@ func rawHints(raw map[string]interface{}) map[string]string {
 				put(key, v)
 			}
 		case *tag.Comm:
-			if strings.HasPrefix(k, "TXXX") || strings.HasPrefix(k, "TXX") {
+			if strings.HasPrefix(k, "TXX") { // ID3v2.2 TXX, v2.3/2.4 TXXX, TXXX_0, ...
 				put(strings.ToLower(strings.TrimSpace(v.Description)), v.Text)
 			}
 		}

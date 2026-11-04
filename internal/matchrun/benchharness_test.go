@@ -22,7 +22,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/kodestar/audiosilo-meta/pkg/query"
 
@@ -277,10 +276,9 @@ func sameBook(c *meta.MatchCandidate, title, author string) bool {
 func beforeColon(s string) string { before, _, _ := strings.Cut(s, ":"); return before }
 
 func normTitle(s string) string {
-	ws := strings.FieldsFunc(strings.ToLower(strings.NewReplacer("&", " and ", "'", "", "\u2019", "").Replace(s)),
-		func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-	if len(ws) > 1 && (ws[0] == "the" || ws[0] == "a" || ws[0] == "an") {
-		ws = ws[1:]
+	ws := titleWords(strings.ReplaceAll(s, "&", " and "))
+	if a := withoutArticle(ws); a != nil {
+		ws = a
 	}
 	return strings.Join(ws, " ")
 }

@@ -51,11 +51,10 @@ func tidyTitle(st *catalog.MatchState, p catalog.MatchProposal) string {
 	}
 	extras := []string{p.Values[catalog.FieldSubtitle], p.Values[catalog.FieldSeries],
 		st.Fields[catalog.FieldSeries].Value, st.Fields[catalog.FieldSeries].Scanned}
-	for _, s := range catalog.ParseMoreSeries(p.Values[catalog.FieldMoreSeries]) {
-		extras = append(extras, s.Name)
-	}
-	for _, s := range catalog.ParseMoreSeries(st.Fields[catalog.FieldMoreSeries].Value) {
-		extras = append(extras, s.Name)
+	for _, more := range []string{p.Values[catalog.FieldMoreSeries], st.Fields[catalog.FieldMoreSeries].Value} {
+		for _, s := range catalog.ParseMoreSeries(more) {
+			extras = append(extras, s.Name)
+		}
 	}
 	// The longest first, so a series named inside another ("Mystic Knight" in
 	// "The Mystic Knight Saga") is taken out whole.
@@ -81,9 +80,11 @@ func tidyTitle(st *catalog.MatchState, p catalog.MatchProposal) string {
 // titleWords is s's words, lowercased: runs of letters and digits in any
 // script, an apostrophe inside a word kept out ("Sharpe's" is "sharpes").
 func titleWords(s string) []string {
-	s = strings.NewReplacer("'", "", "’", "").Replace(strings.ToLower(s))
+	s = apostrophes.Replace(strings.ToLower(s))
 	return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }
+
+var apostrophes = strings.NewReplacer("'", "", "’", "")
 
 // withoutArticle is ws less a leading "the", "a" or "an" (nil when that leaves
 // nothing, or there is none).
