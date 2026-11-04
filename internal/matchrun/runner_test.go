@@ -880,7 +880,9 @@ func TestMatchSendsLanguageAndNarrators(t *testing.T) {
 	if len(e.matcher.queries) != 2 {
 		t.Fatalf("queries = %+v", e.matcher.queries)
 	}
+	queried := make([]string, 0, len(e.matcher.queries))
 	for _, q := range e.matcher.queries {
+		queried = append(queried, q.Title)
 		switch q.Title {
 		case "Dune":
 			if q.Language != "fr" || !slices.Equal(q.Narrators, []string{"Scott Brick", "Simon Vance"}) {
@@ -893,5 +895,9 @@ func TestMatchSendsLanguageAndNarrators(t *testing.T) {
 		default:
 			t.Fatalf("query for %q", q.Title)
 		}
+	}
+	slices.Sort(queried)
+	if !slices.Equal(queried, []string{"Dune", "Emma"}) {
+		t.Fatalf("queried %q, want each book once", queried)
 	}
 }

@@ -1489,11 +1489,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the book's only when nothing was typed; a book with neither sends its tag hints, below), which
   metaserve looks up itself, plus `language` (the book's, else its tags' (`meta.NormalizeLanguage`),
   else none. Never the marketplace's: `metadata.region` names the store whose ASIN a match takes, not
-  what language a library is in, and with it `de` on a mostly English library the benchmark's auto-right
-  halved and German works were auto-applied to English books. `NormalizeLanguage` cuts a tag to the
-  first of several and its primary subtag and reads a placeholder (`und`, `xxx`, `N/A`) as none, the
-  names and 639-2 codes are metaserve's to read) and up to 4 `narrator` (the narrator credit's `names.Split`, less a name that
-  is the author, mostly a composer tag: `matchParams`), both set by `matchrun.QueryFor` and ignored
+  what language a library is in, and with it `de` on a mostly English library the benchmark's
+  auto-right halved and German works were auto-applied to English books. `NormalizeLanguage` cuts a
+  tag to the first of several and its primary subtag and reads a placeholder (`und`, `xxx`, `N/A`) as
+  none, the names and 639-2 codes are metaserve's to read) and up to 4 `narrator` (the narrator
+  credit's `names.Split`, less a name that is the author, mostly a composer tag: `matchParams`), both
+  set by `matchrun.QueryFor` and ignored
   by an older metaserve; candidates carry metaserve's `score` and `reasons` (`narrator`, `language`
   passed through too), best first, an identifier hit first at one score (metaserve breaks a tie on
   the title). A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.

@@ -454,12 +454,19 @@ func TestAdminMatchLanguage(t *testing.T) {
 		{"its tags'", base + "/book/match?path=" + escape("Andy Weir/Tagged"), "fr"},
 		{"its tags', typed text", base + "/book/match?path=" + escape("Andy Weir/Tagged") + "&q=tagged", "fr"},
 	} {
+		// Each case's own request: the last one's language must not answer for it.
+		m.mu.Lock()
+		m.gotMatch = nil
+		m.mu.Unlock()
 		if resp, body := e.do(t, "GET", tc.url, adminTok, ""); resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s: %d %s", tc.name, resp.StatusCode, body)
 		}
 		m.mu.Lock()
 		got := m.gotMatch
 		m.mu.Unlock()
+		if got == nil {
+			t.Fatalf("%s: works/match not asked", tc.name)
+		}
 		if got.Get("language") != tc.want || got.Has("language") != (tc.want != "") {
 			t.Errorf("%s on a de server: works/match sent language %q", tc.name, got["language"])
 		}
