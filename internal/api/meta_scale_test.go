@@ -308,28 +308,33 @@ func TestMetaSpoilersHideUnknownOffsets(t *testing.T) {
 	seedZeroOffsets("A/Timed", 1000)
 	seedZeroOffsets("A/Untimed", 0)
 	saves := 0
-	save := func(path string, position float64) {
+	save := func(path string, position, duration float64) {
 		t.Helper()
-		saves++ // no Duration: the book's own, or none, is what's read
+		saves++
 		at := "2020-01-" + fmt.Sprintf("%02d", saves) + "T00:00:00Z"
-		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, Position: position, UpdatedAt: at}); err != nil {
+		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, Position: position, Duration: duration, UpdatedAt: at}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// The plain work's cast and recap sit at position 5.
-	save("A/Timed", 300) // 3 of 10 shares: denied
+	save("A/Timed", 300, 0) // 3 of 10 shares: denied
 	if b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
 		t.Fatalf("a place early in the book read as late: %+v", b.Work)
 	}
-	save("A/Untimed", 300) // no duration anywhere: not started, denied
+	save("A/Untimed", 300, 0) // no duration anywhere: not started, denied
 	if b := getScale(t, e, lib, "A/Untimed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
 		t.Fatalf("an unknown place read as the end: %+v", b.Work)
 	}
-	save("A/Timed", 650) // 6 of 10 shares passed: allowed, the count still reads a place
+	save("A/Timed", 650, 0) // 6 of 10 shares passed: allowed, the count still reads a place
 	b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok)
 	if len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
 		t.Fatalf("a place read by count = %+v", b.Work)
+	}
+	save("A/Untimed", 650, 1000) // none on the book: the one saved with the place reads it
+	b = getScale(t, e, lib, "A/Untimed", "&spoilers=hide", tok)
+	if len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
+		t.Fatalf("a place read by the saved duration = %+v", b.Work)
 	}
 }
 

@@ -70,7 +70,7 @@ type Unmatched struct {
 	Work    *MetaWork `json:"work,omitempty"`
 }
 
-// Place is where a listener is in a book, for ?spoilers=hide (ChapterAt).
+// Place is where a listener is in a book, for ?spoilers=hide (ListeningChapter).
 type Place struct {
 	Chapter  int
 	Finished bool

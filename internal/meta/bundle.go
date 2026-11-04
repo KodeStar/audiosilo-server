@@ -124,9 +124,11 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 // chapter whose start is at or before position. 0 when there are no chapters or
 // position <= 0, which gates a book nobody has started (or one without chapters)
 // to "the start only", and when the starts say nothing about a place (startsAllAlike:
-// all zero, say), which must not read as the last chapter. It mirrors the player's
-// meta-gating.ts chapterNumberAt exactly, so a server-gated envelope and a client-gated
-// one agree.
+// all zero, say), which must not read as the last chapter. Past the last start, a run of
+// starts alike at the end is one chapter's worth of place, the run's first: files of
+// unknown length after the last known one (0, 3600, 3600, 3600), or markers of no length.
+// It mirrors the player's meta-gating.ts chapterNumberAt exactly, so a server-gated
+// envelope and a client-gated one agree.
 func ChapterAt(starts []float64, position float64) int {
 	if len(starts) == 0 || position <= 0 || startsAllAlike(starts) {
 		return 0
@@ -137,6 +139,11 @@ func ChapterAt(starts []float64, position float64) int {
 			break
 		}
 		n = i + 1
+	}
+	if n == len(starts) {
+		for n > 1 && starts[n-1] == starts[n-2] {
+			n--
+		}
 	}
 	return n
 }
@@ -189,6 +196,10 @@ func gateWork(w *MetaWork, chapter int) *MetaWork {
 		}
 	}
 	c.RecapSummary = nil
+	if len(c.Characters) == 0 && len(c.Recaps) == 0 {
+		// Nothing left on it, and it is the community's too: it goes with the credit.
+		c.PositionScale = nil
+	}
 	if !carriesCommunityContent(&c) {
 		c.Attribution = nil
 	}

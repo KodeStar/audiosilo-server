@@ -17,7 +17,8 @@ import (
 // positions translated onto that book (OnRecording) and the gates stay as they are.
 //
 // One rule decides everything here: later is safe, early is not. A recording no finer
-// than the scale is left alone, since its gates already open late.
+// than the scale is left alone: track for track its gates already open late (only tracks
+// far from even can read early there, as they always have).
 
 // MetaPositionScale is the scale a work's characters and recaps are numbered on
 // (MetaWork.PositionScale). Partial says the sidecar stops short of Length on
@@ -84,10 +85,7 @@ type chapterPlacer struct {
 }
 
 func newChapterPlacer(chapters []metadata.Chapter, duration float64, length int) chapterPlacer {
-	starts, total, ok := chapterTimeline(chapters, duration)
-	if !ok {
-		starts = nil
-	}
+	starts, total := chapterTimeline(chapters, duration)
 	return chapterPlacer{starts: starts, total: total, n: len(chapters), length: length}
 }
 
@@ -139,23 +137,18 @@ func ceilDiv(a, b int) int {
 }
 
 // chapterTimeline is each chapter's whole-book start and the book's length in seconds,
-// ok only when they can be trusted: in order (two may share a start, a zero-length
-// marker), not all alike, and a total past the last start, from duration, else the last
-// chapter's own end.
-func chapterTimeline(chapters []metadata.Chapter, duration float64) (starts []float64, total float64, ok bool) {
+// nil starts when they can't be trusted: out of order (two may share a start, a
+// zero-length marker), all alike, or no length past the last start. The length is the
+// later of duration and the last chapter's own end, since one read short would bring
+// every fraction forward.
+func chapterTimeline(chapters []metadata.Chapter, duration float64) (starts []float64, total float64) {
 	starts = chapterStarts(chapters)
-	if !sort.Float64sAreSorted(starts) || startsAllAlike(starts) {
-		return nil, 0, false
+	last := chapters[len(chapters)-1]
+	total = max(duration, last.BookOffset+last.End-last.Start)
+	if !sort.Float64sAreSorted(starts) || startsAllAlike(starts) || total <= last.BookOffset {
+		return nil, 0
 	}
-	lastChapter := chapters[len(chapters)-1]
-	total = duration
-	if total <= lastChapter.BookOffset {
-		total = lastChapter.BookOffset + lastChapter.End - lastChapter.Start
-	}
-	if total <= lastChapter.BookOffset {
-		return nil, 0, false
-	}
-	return starts, total, true
+	return starts, total
 }
 
 func chapterStarts(chapters []metadata.Chapter) []float64 {
@@ -183,17 +176,15 @@ func startsAllAlike(starts []float64) bool {
 }
 
 // ListeningChapter is the chapter a saved position is in, for spoilers=hide: ChapterAt
-// over the book's chapter starts. Where those are all alike the position is read by
-// count, each chapter an equal share of duration, rounded DOWN to the chapters it has
-// certainly passed, since later is safe; with no duration either, 0: not started, never
-// "at the end".
+// over the book's chapter starts. Where those are all alike and there is a duration, the
+// position is read by count instead, each chapter an equal share of it, rounded DOWN: an
+// estimate, proportional like a translation's count (chapterPlacer), and one the player's
+// own gate doesn't make, which reads such a book as not started. With no duration either,
+// ChapterAt's answer stands: not started, never "at the end".
 func ListeningChapter(chapters []metadata.Chapter, duration, position float64) int {
 	starts := chapterStarts(chapters)
-	if !startsAllAlike(starts) {
+	if position <= 0 || duration <= 0 || !startsAllAlike(starts) {
 		return ChapterAt(starts, position)
-	}
-	if duration <= 0 || position <= 0 {
-		return 0
 	}
 	return min(int(position/duration*float64(len(chapters))), len(chapters))
 }

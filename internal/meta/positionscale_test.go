@@ -88,6 +88,9 @@ func TestOnRecordingTranslates(t *testing.T) {
 		// and 2, 3, 5, 6, but by time Act 2 starts on the fifth track's start and Act 1 ends
 		// on the fourth's end, and all the rest lie inside the last. Time is later here.
 		{"a long last track", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000, []int{1, 5, 6, 6}, []int{4, 6, 6, 6}},
+		// A duration read short of the last chapter's end: the later of the two is the
+		// length, so the fractions aren't brought forward.
+		{"a short duration", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 3000, []int{1, 5, 6, 6}, []int{4, 6, 6, 6}},
 		// Duration unknown: the last chapter's end stands in.
 		{"no duration", 5, []int{1, 5}, evenChapters(43), 0, []int{1, 36}, []int{9, 43}},
 		// Times that can't be trusted: every chapter at 0, so the count alone.
@@ -392,10 +395,31 @@ func TestChapterAtStartsAllAlike(t *testing.T) {
 		// A zero-length marker among good starts is still a timeline.
 		{[]float64{0, 100, 100, 200}, 3},
 		{[]float64{0}, 1},
+		// Past the last start, files of unknown length after the last known one are not
+		// the end either: the place is in the run's first.
+		{[]float64{0, 100, 100, 100}, 2},
+		{[]float64{0, 50, 100, 100}, 3},
+		{[]float64{0, 50, 100}, 3},
 	} {
 		if got := ChapterAt(tc.starts, 150); got != tc.want {
 			t.Errorf("ChapterAt(%v, 150) = %d, want %d", tc.starts, got, tc.want)
 		}
+	}
+}
+
+// A gate that leaves none of the positions leaves no scale either, which is the
+// community's like the credit that goes with it; one that leaves any keeps it.
+func TestGateWorkDropsTheScaleWithTheLastPosition(t *testing.T) {
+	gated := GateWork(scaledWork(5, 5), 1, false)
+	if gated.PositionScale != nil || gated.Attribution != nil {
+		t.Fatalf("nothing left, scale = %+v, attribution = %+v", gated.PositionScale, gated.Attribution)
+	}
+	gated = GateWork(scaledWork(5, 1, 5), 1, false)
+	if gated.PositionScale == nil || gated.Attribution == nil {
+		t.Fatalf("a position left, scale = %+v, attribution = %+v", gated.PositionScale, gated.Attribution)
+	}
+	if w := scaledWork(5, 5); GateWork(w, 1, true) != w {
+		t.Fatal("a finished book is kept whole")
 	}
 }
 
