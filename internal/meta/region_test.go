@@ -197,3 +197,14 @@ func TestCandidatesRegionAndLimit(t *testing.T) {
 		t.Fatalf("dialog query: limit=%s fetched=%d, want 6 and the 3 hits expanded", limit, fetched)
 	}
 }
+
+func TestNormalizeLanguage(t *testing.T) {
+	for in, want := range map[string]string{
+		"en": "en", " English ": "en", "eng": "en", "en-GB": "en", "en_US": "en", "ger": "de", "Deutsch": "de",
+		"fre": "fr", "spa": "es", "jpn": "ja", "pt-BR": "pt", "und": "", "zxx": "", "": "", "Klingon": "klingon",
+	} {
+		if got := NormalizeLanguage(in); got != want {
+			t.Errorf("NormalizeLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

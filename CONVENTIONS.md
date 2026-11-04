@@ -1486,9 +1486,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   metaserve judges each, the better counts), the tagged position (only when no
   DIFFERENT series folder goes up: one position applies to every series guess and
   replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
-  the book's only when nothing was typed), which metaserve looks up itself, plus `language` (the
-  book's, else the primary language of `metadata.region`: `meta.RegionLanguage`, us/uk/ca/au/in en,
-  de, fr, es, it, jp ja, br pt) and up to 4 `narrator` (the narrator credit's `names.Split`), both
+  the book's only when nothing was typed; a book with neither sends its tag hints, below), which
+  metaserve looks up itself, plus `language` (the book's, else its tags' (`meta.NormalizeLanguage`),
+  else the primary language of `metadata.region`: `meta.RegionLanguage`, us/uk/ca/au/in en, de, fr,
+  es, it, jp ja, br pt) and up to 4 `narrator` (the narrator credit's `names.Split`), both
   set by `matchrun.QueryFor` and ignored by an older metaserve; candidates carry metaserve's
   `score` and `reasons` (`narrator`, `language` passed through too). A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
@@ -1554,8 +1555,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   title that is not an admin edit (`matchrun.tidyTitle`): when the file title, less the community
   title, its subtitle, the series names (community's and the book's) and clutter (book/vol/part,
   numbers, roman numerals, unabridged, litrpg, ...), leaves nothing, the community title is
-  written; any other word keeps the file's. The review lists it like any planned change. The
-  matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
+  written; any other word keeps the file's. The review lists it like any planned change.
+  **Tag identifiers are hints** (`0067`: `books.tag_asin` / `tag_isbn` / `tag_language`, read from
+  `asin` / `audible_asin` / the iTunes freeform ASIN / an ID3 TXXX ASIN, `isbn`, `language` / TLAN in
+  both tag passes, `hints_checked` backfilled once like `released_checked`; never on the wire): a
+  book's own ASIN/ISBN is never set from its tags. Why: in the LibraForge benchmark 272 of 1,677
+  tagged books (16%) carry an ASIN that is not their confirmed listing (another store, another
+  edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
+  it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
+  off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
+  neither of its own: a hint the community knows whose length fits is an identifier hit (confident,
+  above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
+  Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
+  identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
   `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
   `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
   against a local artifact in mirror mode, counted per outcome (run line in its doc comment). A

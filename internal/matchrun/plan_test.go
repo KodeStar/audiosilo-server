@@ -619,14 +619,38 @@ func TestPlanTidiesOnlyUnderFill(t *testing.T) {
 // TestQueryForLanguage: the book's own language wins over the marketplace's,
 // and a marketplace with no known language sends none.
 func TestQueryForLanguage(t *testing.T) {
-	for _, tc := range []struct{ lang, region, want string }{
-		{"", "uk", "en"}, {"", "de", "de"}, {"fr", "uk", "fr"}, {" ", "jp", "ja"}, {"", "", ""}, {"", "zz", ""},
+	for _, tc := range []struct{ lang, tag, region, want string }{
+		{"", "", "uk", "en"}, {"", "", "de", "de"}, {"fr", "", "uk", "fr"}, {" ", "", "jp", "ja"}, {"", "", "", ""},
+		{"", "", "zz", ""},
+		// The tags' language comes after the book's own and before the region's.
+		{"", "German", "uk", "de"}, {"it", "German", "uk", "it"}, {"", "und", "uk", "en"},
 	} {
-		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang}, tc.region).Language; got != tc.want {
-			t.Errorf("language %q on %q: %q, want %q", tc.lang, tc.region, got, tc.want)
+		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang, TagLanguage: tc.tag}, tc.region).Language; got != tc.want {
+			t.Errorf("language %q, tag %q on %q: %q, want %q", tc.lang, tc.tag, tc.region, got, tc.want)
 		}
 	}
 	if got := QueryFor(&catalog.Book{Narrator: "Kate Reading & Michael Kramer"}, "").Narrators; !slices.Equal(got, []string{"Kate Reading", "Michael Kramer"}) {
 		t.Errorf("narrators = %q", got)
+	}
+}
+
+// TestQueryForTagHints: a book with no ASIN or ISBN of its own sends its tags'
+// as the book's identifiers (a hint metaserve looks up); one with either of
+// its own sends only its own, never a tag's beside it.
+func TestQueryForTagHints(t *testing.T) {
+	for name, tc := range []struct {
+		name               string
+		book               catalog.Book
+		wantASIN, wantISBN string
+	}{
+		{"hints alone", catalog.Book{TagASIN: "B0TAG00001", TagISBN: "9780000000005"}, "B0TAG00001", "9780000000005"},
+		{"its own ASIN", catalog.Book{ASIN: "B0OWN00001", TagASIN: "B0TAG00001", TagISBN: "9780000000005"}, "B0OWN00001", ""},
+		{"its own ISBN", catalog.Book{ISBN: "9780000000006", TagASIN: "B0TAG00001"}, "", "9780000000006"},
+		{"nothing", catalog.Book{}, "", ""},
+	} {
+		q := QueryFor(&tc.book, "")
+		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {
+			t.Errorf("%d %s: BookASIN %q BookISBN %q, want %q %q", name, tc.name, q.BookASIN, q.BookISBN, tc.wantASIN, tc.wantISBN)
+		}
 	}
 }

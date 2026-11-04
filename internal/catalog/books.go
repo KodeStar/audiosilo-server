@@ -137,11 +137,11 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 		     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
 		     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
-		     released, released_checked, genres_checked,
+		     released, released_checked, genres_checked, tag_asin, tag_isbn, tag_language, hints_checked,
 		     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 		     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at,
 		     file_order, file_order_indexed_at, ebook_path, ebook_sig, ebook_size)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,1,?,?,'','',?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -155,6 +155,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     scan_error_detail=excluded.scan_error_detail,
 		     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
 		     released=excluded.released, released_checked=1, genres_checked=1,
+		     tag_asin=excluded.tag_asin, tag_isbn=excluded.tag_isbn, tag_language=excluded.tag_language,
+		     hints_checked=1,
 		     -- The rows below are the scan's: refreshEffective puts a community
 		     -- list back over them when it should.
 		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
@@ -177,7 +179,7 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 		b.Published, b.Description, hasCover, scanned,
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
-		b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
+		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
 		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
 		b.EbookFile.Unread).Scan(&id); err != nil {
@@ -343,6 +345,10 @@ type Signature struct {
 	// migration 0049; see books.genres_checked), which the next scan reads
 	// (SetGenres).
 	GenresUnchecked bool
+	// HintsUnchecked: a book whose ASIN, ISBN and language tags haven't been read
+	// (indexed before migration 0067; see books.hints_checked), which the next
+	// scan reads (SetTagHints).
+	HintsUnchecked bool
 	// PathCheck: what a book's snapshot needs from the next scan now that the path
 	// baseline reads a lone folder as the author (pathCheckExpr; SetPathReading).
 	PathCheck PathCheck
@@ -426,7 +432,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
-		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
+		        released_checked = 0, genres_checked = 0, hints_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
@@ -445,7 +451,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
-			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
+			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
 			&stored, &files, &sig.EbookSig, &sig.IndexedAt); err != nil {
 			return nil, err
 		}
@@ -591,6 +597,30 @@ func (c *Catalog) SetReleased(ctx context.Context, libraryID int64, dates map[st
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE books SET released = ?, released_checked = 1 WHERE library_id = ? AND rel_path = ?`,
 				date, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// TagHints is what a book's file tags say of its identifiers and language
+// (Book.TagASIN, TagISBN, TagLanguage).
+type TagHints struct{ ASIN, ISBN, Language string }
+
+// SetTagHints records, by path, the hints a read of each book's primary file
+// found (the scanner's backfill for rows indexed before migration 0067),
+// marking them checked, in one transaction.
+func (c *Catalog) SetTagHints(ctx context.Context, libraryID int64, hints map[string]TagHints) error {
+	if len(hints) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetTagHints", func(tx *sql.Tx) error {
+		for relPath, h := range hints {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET tag_asin = ?, tag_isbn = ?, tag_language = ?, hints_checked = 1
+				  WHERE library_id = ? AND rel_path = ?`,
+				h.ASIN, h.ISBN, h.Language, libraryID, relPath); err != nil {
 				return err
 			}
 		}
@@ -771,7 +801,7 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
-	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
+	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size, tag_asin, tag_isbn, tag_language`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
@@ -784,7 +814,8 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color, &attachments,
-			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
+			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize,
+			&b.TagASIN, &b.TagISBN, &b.TagLanguage},
 		func() {
 			b.Ebook = ebookOf(ebookPath, ebookSize)
 			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)

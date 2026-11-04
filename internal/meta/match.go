@@ -301,6 +301,37 @@ var regionLanguages = map[string]string{
 // region, "" for none or one it doesn't know.
 func RegionLanguage(region string) string { return regionLanguages[region] }
 
+// languageNames are the spellings language tags use most for the languages a
+// marketplace speaks: English names and ISO 639-2 codes (bibliographic and
+// terminology), as files carry them ("English", "eng", "ger").
+var languageNames = map[string]string{
+	"english": "en", "eng": "en", "german": "de", "deutsch": "de", "deu": "de", "ger": "de",
+	"french": "fr", "francais": "fr", "français": "fr", "fra": "fr", "fre": "fr",
+	"spanish": "es", "espanol": "es", "español": "es", "spa": "es", "italian": "it", "italiano": "it", "ita": "it",
+	"japanese": "ja", "jpn": "ja", "portuguese": "pt", "português": "pt", "por": "pt",
+	"dutch": "nl", "nederlands": "nl", "nld": "nl", "dut": "nl",
+}
+
+// NormalizeLanguage reads a language tag as works/match takes it: a BCP-47
+// tag's primary subtag ("en-GB" -> "en"), a name or 639-2 code languageNames
+// knows as its tag, anything else lowercased as it is (metaserve reads more
+// names). "" for none: blank, or one that says no language ("und", "zxx",
+// "mul", "unknown").
+func NormalizeLanguage(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if primary, _, ok := strings.Cut(strings.ReplaceAll(s, "_", "-"), "-"); ok && len(primary) >= 2 && len(primary) <= 3 {
+		s = primary
+	}
+	switch s {
+	case "", "und", "zxx", "mul", "unknown", "none":
+		return ""
+	}
+	if tag, ok := languageNames[s]; ok {
+		return tag
+	}
+	return s
+}
+
 // maxMatchNarrators is how many of a book's narrators a works/match request
 // names: a full cast's credit adds nothing past the first few.
 const maxMatchNarrators = 4

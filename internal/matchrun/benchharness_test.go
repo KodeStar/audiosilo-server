@@ -88,7 +88,7 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 
 // TestLibraForge runs the benchmark:
 //
-//	LF_DATA=<data.json> LF_ARTIFACT=<meta.sqlite> [LF_REGION=us] [LF_TAG_IDS=1] \
+//	LF_DATA=<data.json> LF_ARTIFACT=<meta.sqlite> [LF_REGION=us] \
 //	  [LF_OUT=<results.json>] [LF_WORKERS=8] [LF_LIMIT=n] \
 //	  go test -tags benchharness -run TestLibraForge -timeout 0 -v ./internal/matchrun
 //
@@ -96,16 +96,13 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 // names from the path layout and the probe's tags: library.setNames,
 // metadata.applyProbe), runtime = min*60, then matched by the run's own
 // matchBook (QueryFor, Candidates, Propose/DefaultRecording, Classify). The
-// scanner reads no ASIN, ISBN or language tag, so by default a book has none;
-// LF_TAG_IDS=1 gives it the tags' (asin/audible_asin, isbn, language), as a
-// scanner that read them would.
+// tags' ASIN, ISBN and language are the book's hints, as a scan reads them.
 func TestLibraForge(t *testing.T) {
 	dataPath, artifact := os.Getenv("LF_DATA"), os.Getenv("LF_ARTIFACT")
 	if dataPath == "" || artifact == "" {
 		t.Skip("set LF_DATA and LF_ARTIFACT")
 	}
 	region := cmp.Or(os.Getenv("LF_REGION"), "us")
-	tagIDs := os.Getenv("LF_TAG_IDS") == "1"
 	workers, _ := strconv.Atoi(os.Getenv("LF_WORKERS"))
 	workers = cmp.Or(workers, 8)
 
@@ -137,7 +134,7 @@ func TestLibraForge(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for i := range next {
-				results[i] = runBook(t, svc, &books[i], region, tagIDs)
+				results[i] = runBook(t, svc, &books[i], region)
 			}
 		})
 	}
@@ -151,7 +148,7 @@ func TestLibraForge(t *testing.T) {
 	close(next)
 	wg.Wait()
 
-	printTable(results, region, tagIDs)
+	printTable(results, region)
 	if out := os.Getenv("LF_OUT"); out != "" {
 		b, _ := json.MarshalIndent(results, "", " ")
 		if err := os.WriteFile(out, b, 0o644); err != nil {
@@ -164,26 +161,19 @@ func TestLibraForge(t *testing.T) {
 var lfLibrary int64 = 1
 
 // scanBook is b as a scan indexes it.
-func scanBook(b *lfBook, tagIDs bool) *catalog.Book {
+func scanBook(b *lfBook) *catalog.Book {
 	seconds := b.Min * 60
 	book := &catalog.Book{LibraryID: lfLibrary, RelPath: b.F, IsFolder: true, Duration: seconds}
 	if b.F == "" {
 		book.RelPath, book.IsFolder = b.File, false
 	}
 	library.SetNamesForBench(book, metadata.ProbeTagsForBench(b.Tags, seconds))
-	if tagIDs {
-		book.ASIN = match.NormalizeASIN(cmp.Or(b.Tags["asin"], b.Tags["audible_asin"]))
-		book.ISBN = match.NormalizeISBN(b.Tags["isbn"])
-		if l := strings.ToLower(strings.TrimSpace(b.Tags["language"])); l != "und" {
-			book.Language = l
-		}
-	}
 	return book
 }
 
-func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string, tagIDs bool) lfResult {
+func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string) lfResult {
 	ctx := context.Background()
-	book := scanBook(b, tagIDs)
+	book := scanBook(b)
 	c := &capture{svc: svc}
 	r := &Runner{matcher: c}
 	item, err := r.matchBook(ctx, StartOptions{Mode: catalog.MatchModeMatch, Region: region}, book)
@@ -311,7 +301,7 @@ func matchStateOf(b *catalog.Book) *catalog.MatchState {
 	return st
 }
 
-func printTable(rs []lfResult, region string, tagIDs bool) {
+func printTable(rs []lfResult, region string) {
 	count := map[string]int{}
 	for _, r := range rs {
 		key := r.Outcome
@@ -340,7 +330,7 @@ func printTable(rs []lfResult, region string, tagIDs bool) {
 			}
 		}
 	}
-	fmt.Printf("\nLibraForge harness: %d books, region %q, tag ids %v\n", len(rs), region, tagIDs)
+	fmt.Printf("\nLibraForge harness: %d books, region %q\n", len(rs), region)
 	keys := []string{"auto-right", "auto-right, recording right", "auto-wrong", "auto-unjudged", "review-right", "review-wrong", "review-unjudged",
 		"none", "none: weak_match", "none: weak_match, top was right", "error", "auto: title tidied", "auto: title tidied to the reference"}
 	for _, k := range keys {

@@ -8,9 +8,11 @@ package metadata
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +72,14 @@ type Metadata struct {
 	// make Extract fail; the scanner records them for the Health page.
 	OpenErr  error `json:"-"` // the file couldn't be opened
 	ProbeErr error `json:"-"` // ffprobe was configured and couldn't read it
+
+	// TagASIN, TagISBN and TagLanguage are what the tags say of the book's
+	// identifiers and language (readHints: asin / audible_asin, the iTunes
+	// freeform ASIN item, an ID3 TXXX ASIN; isbn; language, ID3 TLAN): hints for
+	// a community match, never the book's identifiers (catalog.Book.TagASIN).
+	TagASIN     string `json:"-"`
+	TagISBN     string `json:"-"`
+	TagLanguage string `json:"-"`
 
 	// narratorExplicit: Narrator came from a narrator tag (\xa9nrt, a NARRATOR
 	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
@@ -281,6 +291,69 @@ func applyTags(m *Metadata, md tag.Metadata) {
 	if md.Picture() != nil {
 		m.HasCover = true
 	}
+	if raw := md.Raw(); raw != nil {
+		m.setHints(rawHints(raw))
+	}
+}
+
+// Tag names of the hints, lowercased as applyProbe's tags and rawHints' keys
+// are: the ASIN under Audible's names (asin, an MP4 freeform "ASIN" item, an
+// ID3 TXXX "ASIN"; audible_asin, as some tools write it), the ISBN, the language.
+var (
+	asinTags     = []string{"asin", "audible_asin"}
+	isbnTags     = []string{"isbn"}
+	languageTags = []string{"language"}
+)
+
+// maxHintBytes bounds a hint as stored: an identifier is far shorter, and a
+// longer value is a garbage tag, not one.
+const maxHintBytes = 64
+
+// setHints takes the hints tags gives (lowercased tag name -> value): each the
+// first of its names with a value, trimmed, a garbage-long one dropped. A tag
+// pass without one leaves what an earlier pass read.
+func (m *Metadata) setHints(tags map[string]string) {
+	pick := func(dst *string, names []string) {
+		for _, n := range names {
+			if v := tagText(tags[n]); v != "" && len(v) <= maxHintBytes {
+				*dst = v
+				return
+			}
+		}
+	}
+	pick(&m.TagASIN, asinTags)
+	pick(&m.TagISBN, isbnTags)
+	pick(&m.TagLanguage, languageTags)
+}
+
+// rawHints is dhowden's raw items as setHints reads them, by lowercased name: a
+// plain item (Vorbis keys, an MP4 freeform item's name, an ID3 text frame) by
+// its key, an ID3 TXXX frame (dhowden's *tag.Comm, keyed TXXX, TXXX_0, ...) by
+// its description, and ID3's TLAN as the language.
+func rawHints(raw map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	put := func(k, v string) {
+		if _, ok := out[k]; !ok && tagText(v) != "" {
+			out[k] = v
+		}
+	}
+	// In key order, so of two items naming one hint the same one always wins.
+	for _, k := range slices.Sorted(maps.Keys(raw)) {
+		switch v := raw[k].(type) {
+		case string:
+			switch key := strings.ToLower(k); key {
+			case "tlan", "tla":
+				put("language", v)
+			default:
+				put(key, v)
+			}
+		case *tag.Comm:
+			if strings.HasPrefix(k, "TXXX") || strings.HasPrefix(k, "TXX") {
+				put(strings.ToLower(strings.TrimSpace(v.Description)), v.Text)
+			}
+		}
+	}
+	return out
 }
 
 // bookTitle picks the book title from an album/title tag pair. The album tag

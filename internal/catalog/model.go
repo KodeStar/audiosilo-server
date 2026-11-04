@@ -117,6 +117,13 @@ type Book struct {
 	Abridged  *bool    `json:"abridged,omitempty"`
 	Genres    []string `json:"genres,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
+	// TagASIN, TagISBN and TagLanguage are what the file's tags say (books.tag_*,
+	// migration 0067): HINTS a community match sends (matchrun.QueryFor), never
+	// the book's identifiers, so a tagged book is not matched by them. Scanned,
+	// never edited, never on the wire.
+	TagASIN     string `json:"-"`
+	TagISBN     string `json:"-"`
+	TagLanguage string `json:"-"`
 	// Released is the date the file's tags give (metadata.ReleaseDate), usually
 	// the recording's: scanned, never edited, and only the admin list's
 	// release-date sort reads it (where a book has no Published).
