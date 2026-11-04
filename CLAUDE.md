@@ -62,8 +62,7 @@ before. The token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (404 when never enabled).
 `API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL and reports it
-via `Options.OnURL` (so a program embedding the server in-process can open a browser,
-as the archived audiosilo-manager desktop app did; its jobs moved to the Bridge).
+via `Options.OnURL` (so an embedding launcher can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
@@ -107,7 +106,7 @@ admin/connect UI changes. Mapping table:
 
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
-pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so another module can embed the server in-process (Run/Options; the archived audiosilo-manager did)
+pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so an embedding launcher (another module) can run the server in-process (Run/Options; the archived audiosilo-manager did)
 pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
@@ -180,10 +179,10 @@ FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK 
 books): `progress`/`bookmarks`/`notes`/`listening_history` on `(user_id,
 library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
 pins a folder's book/collection classification, and `book_enrichment`
-(`library_id, path, asin, isbn`) which attaches metadata to a book (set when a book is
-matched to an external source: the Bridge's Audible backfill, formerly the manager) - both durable, path-keyed, no FK to
-the index. The admin console's metadata edits are likewise durable and path-keyed
-(`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
+(`library_id, path, asin, isbn`) which attaches metadata to a book (set when the
+Bridge's Audible backfill matches a book to an external source) - both durable,
+path-keyed, no FK to the index. The admin console's metadata edits are likewise
+durable and path-keyed (`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
 `chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
 index, so a shifted chapter list can't move a rename; the API still sends indexes) and
 `book_covers` (custom cover blobs; `0036` adds `source`, `edited` for an upload or `community` for a

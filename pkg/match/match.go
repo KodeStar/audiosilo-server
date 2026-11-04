@@ -1,8 +1,8 @@
 // Package match identifies whether two book records refer to the same audiobook,
 // across the wildly inconsistent ways titles are stored. It is the shared, reusable
 // matcher used by the Bridge's Audible backup (to map an Audible library onto a
-// server's books, as the archived audiosilo-manager did) and by the server itself
-// (the listening import, enrichment, dedup, smarter lookup).
+// server's books) and by the server itself (the listening import, enrichment,
+// dedup, smarter lookup).
 //
 // Real libraries rarely carry an ASIN or a series index on every book, and titles
 // appear every which way: "Diary of a Wimpy Kid: The Ugly Truth (Book 5)",
@@ -1116,7 +1116,7 @@ func seqEqual(a, b float64) bool { return a-b > -0.001 && a-b < 0.001 }
 
 // NormalizeSeries normalizes a series name for tolerant matching, dropping a leading
 // article so "The Primal Hunter" and "Primal Hunter" compare equal. Exported so the
-// manager identifies series identically to the server (shared matcher).
+// Bridge identifies series identically to the server (shared matcher).
 func NormalizeSeries(s string) string {
 	t := dropLeadingArticle(strings.ToLower(s))
 	// A trailing " series" is catalog decoration, not part of the name: Audible
@@ -1126,8 +1126,8 @@ func NormalizeSeries(s string) string {
 }
 
 // Normalize lowercases and strips non-alphanumeric runes for tolerant matching (so
-// "L. A. McBride" and "L.A. McBride" compare equal). Exported so another module
-// (the Bridge) normalizes authors/titles identically to the server (shared matcher).
+// "L. A. McBride" and "L.A. McBride" compare equal). Exported so the Bridge
+// normalizes authors/titles identically to the server (shared matcher).
 func Normalize(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {

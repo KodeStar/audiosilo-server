@@ -1,10 +1,9 @@
 // Package launcher holds the AudioSilo server's run loop: load config, open the
 // database, wire the services, bootstrap first-run state, and serve until the
 // context is cancelled. The headless `audiosilo` command is a thin wrapper over
-// it. The package is public (under pkg/) so another program (a separate module)
-// can embed the server in-process through Run/Options and behave identically;
-// the audiosilo-manager desktop app did, and is archived (its jobs moved to the
-// Bridge).
+// it. The package is public (under pkg/) so an embedding launcher (another
+// program, a separate module) can run the server in-process through Run/Options
+// and behave identically; the archived audiosilo-manager desktop app was one.
 package launcher
 
 import (
@@ -63,10 +62,10 @@ type Options struct {
 	OnURL func(url string)
 
 	// Optional config overrides, applied on top of the loaded config.yaml for an
-	// embedding launcher (a program running the server in-process) that controls the
-	// server in-process without hand-writing YAML. Empty/zero fields are ignored,
-	// so the headless `audiosilo` command (which sets none) is unaffected. When the
-	// config is first created these are persisted to config.yaml.
+	// embedding launcher that controls the server in-process without
+	// hand-writing YAML. Empty/zero fields are ignored, so the headless
+	// `audiosilo` command (which sets none) is unaffected. When the config is
+	// first created these are persisted to config.yaml.
 	Bind      string    // host:port to listen on, e.g. "127.0.0.1:8080"
 	TLSMode   string    // "off" | "selfsigned" | "autocert"
 	PublicURL string    // externally reachable base URL (e.g. a Cloudflare Tunnel URL)

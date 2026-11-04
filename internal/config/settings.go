@@ -195,9 +195,9 @@ func (c *Config) Clone() *Config {
 	return &out
 }
 
-// Pin marks a key as set by an embedding launcher (a program running the server
-// in-process through pkg/launcher's Options), so the admin console shows it as
-// set there instead of offering to change it. Call it while starting, before any Clone.
+// Pin marks a key as set by an embedding launcher (pkg/launcher's Options), so
+// the admin console shows it as set there instead of offering to change it.
+// Call it while starting, before any Clone.
 func (c *Config) Pin(key string) {
 	if c.pinned == nil {
 		c.pinned = map[string]bool{}
