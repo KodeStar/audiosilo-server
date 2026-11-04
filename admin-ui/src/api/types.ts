@@ -1967,6 +1967,10 @@ export interface MatchReasons {
   /** Relative runtime difference of the closest recording (0.02 = 2%). */
   runtime?: number;
   identifier?: 'asin' | 'isbn';
+  /** How well the book's narrators name the best-agreeing recording's (only when the server sent narrators). */
+  narrator?: 'full' | 'surname' | 'none';
+  /** The book's language against the work's, when both are known. */
+  language?: 'same' | 'other';
 }
 
 /** One entry of POST /admin/covers (handlers_covers.go coverThumb), in request order. */
@@ -2224,7 +2228,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length. */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };

@@ -181,6 +181,39 @@ describe('bulk matching', () => {
     );
   });
 
+  it('says when a book had only weak matches, with the best score', async () => {
+    const weak: MatchRunItem = {
+      ...confident,
+      id: 13,
+      path: 'Someone/Garbage',
+      outcome: 'none',
+      score: 42,
+      detail: 'weak_match',
+      book: { title: 'Garbage', author: 'Someone' },
+      changes: {},
+    };
+    mockFetch(
+      routes([run({ counts: { ...run().counts, none: 1 } })], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'none' ? [weak] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /Not found/ }));
+    expect(
+      await within(dialog).findByText(
+        'Only weak community matches (the best scored 42 of 100): find it by hand from the book page',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows the series a scope replaces, old to new', async () => {
     const polluted: MatchRunItem = {
       ...confident,
