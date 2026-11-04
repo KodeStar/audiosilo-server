@@ -36,8 +36,8 @@ import (
 // meta.Answer, per request, after the cache and `local`, never cached.
 //
 // A work's community positions are numbered on its own scale (position_scale); on a
-// book whose chapters are on another, they are answered translated onto this book's
-// chapters (meta.OnRecording), per request and never cached, so every client's gate
+// book split finer than that, they are answered translated onto this book's chapters
+// (meta.OnRecording), per request and never cached, so every client's gate
 // and spoilers=hide below compare like with like. The cache is keyed by identifier,
 // and two books sharing an ASIN can differ in their chapters.
 //
@@ -212,7 +212,7 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the
-// chapter number holding their saved position (meta.ChapterAt over the book's
+// chapter number holding their saved position (meta.ListeningChapter over the book's
 // chapter offsets) and whether they finished it. Read from the CALLER's own
 // progress only; no saved progress is chapter 0, not finished.
 func (a *API) listeningChapter(ctx context.Context, libraryID int64, book *catalog.Book) (chapter int, finished bool, err error) {
@@ -220,11 +220,11 @@ func (a *API) listeningChapter(ctx context.Context, libraryID int64, book *catal
 	if err != nil || p == nil {
 		return 0, false, err
 	}
-	starts := make([]float64, len(book.Chapters))
-	for i, ch := range book.Chapters {
-		starts[i] = ch.BookOffset
+	duration := book.Duration
+	if duration <= 0 {
+		duration = p.Duration
 	}
-	return meta.ChapterAt(starts, p.Position), p.Finished, nil
+	return meta.ListeningChapter(book.Chapters, duration, p.Position), p.Finished, nil
 }
 
 // queryHas reports whether a list-valued query param (repeated, or

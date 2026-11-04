@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -129,10 +130,11 @@ func getScale(t *testing.T, e *testEnv, lib *catalog.Library, path, query, tok s
 	return b
 }
 
-// Finer than the scale: the numbers answered are the recording's, with position 0
-// untouched and the last act on the last track, and no scale beside them. A book
-// sharing the ASIN with chapters on the scale gets the numbers as published, whichever
-// asked first, because the envelope cached by the ASIN is never written to.
+// Finer than the scale: the numbers answered are the recording's, a reveal at its act's
+// start and a through at its act's end, with position 0 untouched, and no scale beside
+// them. Books sharing the ASIN with chapters on the scale, or coarser, get the numbers as
+// published, whichever asked first, because the envelope cached by the ASIN is never
+// written to.
 func TestMetaTranslatesPositionsOntoTheBook(t *testing.T) {
 	t.Parallel()
 	e, lib, tok := scaleEnv(t)
@@ -142,10 +144,10 @@ func TestMetaTranslatesPositionsOntoTheBook(t *testing.T) {
 
 	wantFine := func(b scaleBody) {
 		t.Helper()
-		if got := b.reveals(); !slices.Equal(got, []int{0, 10, 43}) {
+		if got := b.reveals(); !slices.Equal(got, []int{0, 1, 36}) {
 			t.Errorf("fine reveals = %v", got)
 		}
-		if got := b.throughs(); !slices.Equal(got, []int{0, 10, 43}) {
+		if got := b.throughs(); !slices.Equal(got, []int{0, 9, 43}) {
 			t.Errorf("fine throughs = %v", got)
 		}
 		if b.Work.PositionScale != nil {
@@ -157,20 +159,17 @@ func TestMetaTranslatesPositionsOntoTheBook(t *testing.T) {
 	}
 	wantFine(getScale(t, e, lib, "A/Fine", "", tok))
 
-	acts := getScale(t, e, lib, "A/Acts", "", tok)
-	if got := acts.reveals(); !slices.Equal(got, []int{0, 1, 5}) {
-		t.Errorf("equal count reveals = %v", got)
-	}
-	if got := acts.throughs(); !slices.Equal(got, []int{0, 1, 5}) {
-		t.Errorf("equal count throughs = %v", got)
-	}
-	if p := acts.Work.PositionScale; p == nil || p.Length != 5 || p.Unit != "act" {
-		t.Errorf("equal count position_scale = %+v", p)
-	}
-
-	coarse := getScale(t, e, lib, "A/Coarse", "", tok)
-	if got := coarse.throughs(); !slices.Equal(got, []int{0, 2, 3}) {
-		t.Errorf("coarse throughs = %v", got)
+	for _, path := range []string{"A/Acts", "A/Coarse"} {
+		b := getScale(t, e, lib, path, "", tok)
+		if got := b.reveals(); !slices.Equal(got, []int{0, 1, 5}) {
+			t.Errorf("%s reveals = %v", path, got)
+		}
+		if got := b.throughs(); !slices.Equal(got, []int{0, 1, 5}) {
+			t.Errorf("%s throughs = %v", path, got)
+		}
+		if p := b.Work.PositionScale; p == nil || p.Length != 5 || p.Unit != "act" {
+			t.Errorf("%s position_scale = %+v", path, p)
+		}
 	}
 
 	// And the first again, off the now-cached envelope.
@@ -214,67 +213,128 @@ func TestMetaPositionsPassThrough(t *testing.T) {
 	}
 }
 
-// The defect by name: track 6 of the 43-track Hamlet. spoilers=hide gates on the
-// translated numbers, and what comes back carries those same numbers, so a client
-// gating again agrees. The caller's own progress decides, as ever.
-func TestMetaHamletSpoilersHideOnTranslatedPositions(t *testing.T) {
-	t.Parallel()
-	e, lib, tok := scaleEnv(t)
-	ctx := context.Background()
-	seedTracks(t, e, lib, "A/Fine", "B0HAMLET", 43)
-	ref := catalog.Ref{LibraryID: lib.ID, Path: "A/Fine"}
+// progressSaver saves the admin's place in a book, each save newer than the last, the
+// only kind a save may replace.
+func progressSaver(t *testing.T, e *testEnv, ref catalog.Ref) func(position float64, finished bool) {
+	t.Helper()
 	saves := 0
-	save := func(position float64, finished bool) {
+	return func(position float64, finished bool) {
 		t.Helper()
-		saves++ // each newer than the last, the only one a save may replace
-		at := "2020-01-0" + strconv.Itoa(saves) + "T00:00:00Z"
-		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: ref, Position: position, Duration: 4300, Finished: finished, UpdatedAt: at}); err != nil {
+		saves++
+		at := "2020-01-" + fmt.Sprintf("%02d", saves) + "T00:00:00Z"
+		if _, err := e.cat.SaveProgress(context.Background(), e.adminID, catalog.Progress{Ref: ref, Position: position, Duration: 4300, Finished: finished, UpdatedAt: at}); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
 
-	save(550, false) // inside track 6
-	b := getScale(t, e, lib, "A/Fine", "&spoilers=hide", tok)
-	// Denied: neither act's recap, nor Act 1's lead yet (Act 1 ends in track 9, and no
-	// track but the tenth starts past it).
+// The defect by name: the 43-track Hamlet on 5 acts, through spoilers=hide, which gates
+// on the translated numbers and returns those same numbers, so a client gating again
+// agrees.
+func TestMetaHamletSpoilersHideOnTranslatedPositions(t *testing.T) {
+	t.Parallel()
+	e, lib, tok := scaleEnv(t)
+	seedTracks(t, e, lib, "A/Fine", "B0HAMLET", 43)
+	save := progressSaver(t, e, catalog.Ref{LibraryID: lib.ID, Path: "A/Fine"})
+	hide := func() scaleBody { t.Helper(); return getScale(t, e, lib, "A/Fine", "&spoilers=hide", tok) }
+
+	// Not started: the opening cast shows, Act 1's lead included.
+	if got := hide().reveals(); !slices.Equal(got, []int{0, 1}) {
+		t.Fatalf("not started: reveals = %v", got)
+	}
+
+	save(550, false) // inside track 6: denied, Act 5's recap, and everything past Act 1's cast
+	b := hide()
 	if got := b.recapTexts(); !slices.Equal(got, []string{"Before."}) {
 		t.Fatalf("recaps at track 6 = %v", got)
 	}
-	if got := b.reveals(); !slices.Equal(got, []int{0}) || b.Work.RecapSummary != nil {
+	if got := b.reveals(); !slices.Equal(got, []int{0, 1}) || b.Work.RecapSummary != nil {
 		t.Fatalf("at track 6: reveals = %v, summary = %s", got, b.Work.RecapSummary)
 	}
 
-	save(1050, false) // inside track 11, past Act 1
-	b = getScale(t, e, lib, "A/Fine", "&spoilers=hide", tok)
-	if got := b.recapTexts(); !slices.Equal(got, []string{"Before.", "Act 1."}) {
-		t.Fatalf("recaps at track 11 = %v", got)
-	}
-	if got := b.throughs(); !slices.Equal(got, []int{0, 10}) {
-		t.Fatalf("the numbers kept must be the translated ones: %v", got)
-	}
-	if got := b.reveals(); !slices.Equal(got, []int{0, 10}) {
-		t.Fatalf("reveals at track 11 = %v", got)
+	save(850, false) // inside track 9, with Act 1 (to 860 s) still playing: denied
+	if got := hide().recapTexts(); !slices.Equal(got, []string{"Before."}) {
+		t.Fatalf("recaps at track 9 = %v", got)
 	}
 
-	save(4250, false) // inside the last track: Act 5's cast, not yet its recap
-	b = getScale(t, e, lib, "A/Fine", "&spoilers=hide", tok)
-	if got := b.reveals(); !slices.Equal(got, []int{0, 10, 43}) {
-		t.Fatalf("reveals at the last track = %v", got)
+	save(950, false) // inside track 10, Act 1 over: allowed, on the translated number
+	b = hide()
+	if got := b.recapTexts(); !slices.Equal(got, []string{"Before.", "Act 1."}) {
+		t.Fatalf("recaps at track 10 = %v", got)
 	}
-	if got := b.recapTexts(); slices.Contains(got, "Act 5.") {
+	if got := b.throughs(); !slices.Equal(got, []int{0, 9}) {
+		t.Fatalf("the numbers kept must be the translated ones: %v", got)
+	}
+
+	save(3450, false) // inside track 35, Act 5 (from 3440 s) begun but no track starting it
+	if got := hide().reveals(); !slices.Equal(got, []int{0, 1}) {
+		t.Fatalf("reveals at track 35 = %v", got)
+	}
+
+	save(3550, false) // track 36, the first starting past Act 5's start
+	if got := hide().reveals(); !slices.Equal(got, []int{0, 1, 36}) {
+		t.Fatalf("reveals at track 36 = %v", got)
+	}
+
+	save(4250, false) // inside the last track: still not Act 5's recap
+	if got := hide().recapTexts(); slices.Contains(got, "Act 5.") {
 		t.Fatalf("recaps at the last track = %v", got)
 	}
 
 	save(100, true) // finished, wherever the place: everything, still translated
-	b = getScale(t, e, lib, "A/Fine", "&spoilers=hide", tok)
-	if got := b.throughs(); !slices.Equal(got, []int{0, 10, 43}) || b.Work.RecapSummary == nil {
+	b = hide()
+	if got := b.throughs(); !slices.Equal(got, []int{0, 9, 43}) || b.Work.RecapSummary == nil {
 		t.Fatalf("finished: throughs = %v, summary = %s", got, b.Work.RecapSummary)
 	}
 }
 
+// The older bug: every chapter's book_offset 0 walked as a timeline put any place in the
+// last chapter, so spoilers=hide showed everything. It reads by count now, rounded down,
+// and with no duration to read it against, as not started.
+func TestMetaSpoilersHideUnknownOffsets(t *testing.T) {
+	t.Parallel()
+	e, lib, tok := scaleEnv(t)
+	ctx := context.Background()
+	seedZeroOffsets := func(path string, duration float64) {
+		t.Helper()
+		book := &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "T", Author: "A", ASIN: "B0PLAIN", AddedAt: "2020-01-01", Duration: duration}
+		for i := range 10 {
+			book.Chapters = append(book.Chapters, metadata.Chapter{Index: i, Title: "Ch", FilePath: path})
+		}
+		if _, err := e.cat.UpsertBook(ctx, book); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedZeroOffsets("A/Timed", 1000)
+	seedZeroOffsets("A/Untimed", 0)
+	saves := 0
+	save := func(path string, position float64) {
+		t.Helper()
+		saves++ // no Duration: the book's own, or none, is what's read
+		at := "2020-01-" + fmt.Sprintf("%02d", saves) + "T00:00:00Z"
+		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, Position: position, UpdatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The plain work's cast and recap sit at position 5.
+	save("A/Timed", 300) // 3 of 10 shares: denied
+	if b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
+		t.Fatalf("a place early in the book read as late: %+v", b.Work)
+	}
+	save("A/Untimed", 300) // no duration anywhere: not started, denied
+	if b := getScale(t, e, lib, "A/Untimed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
+		t.Fatalf("an unknown place read as the end: %+v", b.Work)
+	}
+	save("A/Timed", 650) // 6 of 10 shares passed: allowed, the count still reads a place
+	b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok)
+	if len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
+		t.Fatalf("a place read by count = %+v", b.Work)
+	}
+}
+
 // Generated content carries no scale and is numbered on the book already: a recap a
-// Bridge generated keeps its number beside community characters translated onto the
-// same chapters.
+// Bridge generated keeps its number beside community characters on the same chapters.
 func TestMetaGeneratedPositionsUntouched(t *testing.T) {
 	t.Parallel()
 	e := generatedMetaEnv(t, `{"id":"w","title":"T","authors":[],"language":"en",
@@ -287,7 +347,7 @@ func TestMetaGeneratedPositionsUntouched(t *testing.T) {
 	seedTracks(t, e, lib, "A/Fine", "B0HAMLET", 43)
 	setGenerated(t, e, lib.ID, "A/Fine")
 	b := getScale(t, e, lib, "A/Fine", "", tok)
-	if got := b.reveals(); !slices.Equal(got, []int{10}) {
+	if got := b.reveals(); !slices.Equal(got, []int{1}) {
 		t.Fatalf("community reveals = %v", got)
 	}
 	if got := b.throughs(); !slices.Equal(got, []int{0, 3}) {

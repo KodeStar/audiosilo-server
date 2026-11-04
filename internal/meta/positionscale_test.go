@@ -64,49 +64,79 @@ func throughs(w *MetaWork) []int {
 
 func TestOnRecordingTranslates(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		length    int
-		positions []int
-		chapters  []metadata.Chapter
-		duration  float64
-		want      []int
+		name         string
+		length       int
+		positions    []int
+		chapters     []metadata.Chapter
+		duration     float64
+		wantReveals  []int
+		wantThroughs []int
 	}{
-		// Finer: 43 tracks of 100 s on 5 acts. Act 1 ends at 860 s and the first track
-		// starting at or past it is the tenth (900 s).
-		{"finer", 5, []int{1, 2, 3, 4, 5}, evenChapters(43), 4300, []int{10, 19, 27, 36, 43}},
-		{"p=0 stays before this book", 5, []int{0}, evenChapters(43), 4300, []int{0}},
-		{"p at the length is the last chapter", 5, []int{5}, evenChapters(43), 4300, []int{43}},
-		{"p past the length is the last chapter", 5, []int{6, 99}, evenChapters(43), 4300, []int{43, 43}},
-		// A start exactly on the fraction is at it.
-		{"a chapter starting on the fraction", 2, []int{1}, evenChapters(4), 400, []int{3}},
-		// Uneven: the first track holds three quarters of the book, so by time the first
-		// three acts all end inside it or on its end and land on the second. A count would
-		// say 3, 4, 6.
-		{"uneven tracks go by time", 4, []int{1, 2, 3, 4}, chaptersAt(4000, 0, 3000, 3200, 3400, 3600, 3800), 4000, []int{2, 2, 2, 6}},
-		// The other way round, a long last track: Act 1 ends on the fifth track's start and
-		// the rest inside the last (a count would again say 3, 4, 6).
-		{"a long last track", 4, []int{1, 2, 3}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000, []int{5, 6, 6}},
-		// Coarser: 3 tracks on 5 acts. No track starts past 2/3, so the rest are the last.
-		{"coarser", 5, []int{1, 2, 3, 4, 5}, evenChapters(3), 300, []int{2, 3, 3, 3, 3}},
+		// 43 tracks of 100 s on 5 acts, each act 860 s. A reveal is the first track
+		// starting at or past its act's start, a through the track holding its act's end.
+		{"finer", 5, []int{1, 2, 3, 4, 5}, evenChapters(43), 4300, []int{1, 10, 19, 27, 36}, []int{9, 18, 26, 35, 43}},
+		{"p=0 stays before this book", 5, []int{0}, evenChapters(43), 4300, []int{0}, []int{0}},
+		{"p past the length is the last chapter", 5, []int{6, 99}, evenChapters(43), 4300, []int{43, 43}, []int{43, 43}},
+		// A boundary exactly on the fraction: the second act starts on the third chapter,
+		// and the first act's recap is chapter 2, opening as the third starts.
+		{"a chapter boundary on the fraction", 2, []int{1, 2}, evenChapters(4), 400, []int{1, 3}, []int{2, 4}},
+		// A long opening track, three quarters of the book. By time every act but the last
+		// ends inside it; the count (reveals 1, 3, 4, 6, throughs 2, 3, 5, 6) is later, and
+		// later wins.
+		{"a long first track", 4, []int{1, 2, 3, 4}, chaptersAt(4000, 0, 3000, 3200, 3400, 3600, 3800), 4000, []int{1, 3, 4, 6}, []int{2, 3, 5, 6}},
+		// A long last track, over two thirds of the book. By count these would read 1, 3, 4, 6
+		// and 2, 3, 5, 6, but by time Act 2 starts on the fifth track's start and Act 1 ends
+		// on the fourth's end, and all the rest lie inside the last. Time is later here.
+		{"a long last track", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000, []int{1, 5, 6, 6}, []int{4, 6, 6, 6}},
 		// Duration unknown: the last chapter's end stands in.
-		{"no duration", 5, []int{1}, evenChapters(43), 0, []int{10}},
-		// Times that can't be trusted: every chapter at 0 (an on-demand index), so by
-		// count, equal shares (43/5 = 8.6, up to 9, the tenth starting after it).
-		{"all offsets zero go by count", 5, []int{1, 2, 3, 4, 5}, make([]metadata.Chapter, 43), 4300, []int{10, 19, 27, 36, 43}},
-		{"count, exact fraction", 2, []int{1}, make([]metadata.Chapter, 4), 0, []int{3}},
+		{"no duration", 5, []int{1, 5}, evenChapters(43), 0, []int{1, 36}, []int{9, 43}},
+		// Times that can't be trusted: every chapter at 0, so the count alone.
+		{"all offsets zero go by count", 5, []int{1, 2, 3, 4, 5}, make([]metadata.Chapter, 43), 4300, []int{1, 10, 19, 27, 36}, []int{9, 18, 26, 35, 43}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := OnRecording(scaledWork(tc.length, tc.positions...), tc.chapters, tc.duration)
-			if r := reveals(got); !slices.Equal(r, tc.want) {
-				t.Errorf("reveals = %v, want %v", r, tc.want)
+			if r := reveals(got); !slices.Equal(r, tc.wantReveals) {
+				t.Errorf("reveals = %v, want %v", r, tc.wantReveals)
 			}
-			if r := throughs(got); !slices.Equal(r, tc.want) {
-				t.Errorf("throughs = %v, want %v", r, tc.want)
+			if r := throughs(got); !slices.Equal(r, tc.wantThroughs) {
+				t.Errorf("throughs = %v, want %v", r, tc.wantThroughs)
 			}
 			if got.PositionScale != nil {
 				t.Errorf("position_scale = %+v beside translated numbers", got.PositionScale)
 			}
 		})
+	}
+}
+
+// 41 tracks on 40 chapters, the usual credits track or a split chapter. Whatever the
+// tracks' lengths, the count keeps a position from reading early: with an opening track
+// a fifth of the book, time alone would put chapter 9's end (and so its recap's opening)
+// on the second track.
+func TestOnRecordingNearEqualCounts(t *testing.T) {
+	positions := []int{1, 10, 20, 39}
+	wantReveals, wantThroughs := []int{1, 11, 21, 40}, []int{2, 11, 21, 40}
+
+	even := OnRecording(scaledWork(40, positions...), evenChapters(41), 4100)
+	if got := reveals(even); !slices.Equal(got, wantReveals) {
+		t.Errorf("even reveals = %v, want %v", got, wantReveals)
+	}
+	if got := throughs(even); !slices.Equal(got, wantThroughs) {
+		t.Errorf("even throughs = %v, want %v", got, wantThroughs)
+	}
+
+	// The opening track holds a fifth of the book, the other 40 share the rest evenly.
+	starts := []float64{0}
+	for i := range 40 {
+		starts = append(starts, 1000+float64(i)*100)
+	}
+	uneven := OnRecording(scaledWork(40, positions...), chaptersAt(5000, starts...), 5000)
+	for i, p := range positions {
+		if r, c := uneven.Characters[i].Reveal.Chapter, even.Characters[i].Reveal.Chapter; r < c {
+			t.Errorf("position %d: reveal %d reads before the count's %d", p, r, c)
+		}
+		if r, c := uneven.Recaps[i].Through.Chapter, even.Recaps[i].Through.Chapter; r < c {
+			t.Errorf("position %d: through %d reads before the count's %d", p, r, c)
+		}
 	}
 }
 
@@ -121,10 +151,12 @@ func TestOnRecordingPassesThrough(t *testing.T) {
 		chapters []metadata.Chapter
 	}{
 		{"equal count", scaled, evenChapters(5)},
-		{"no chapters", scaled, nil},
-		// One chapter says nothing about a place: on it every position would land on
-		// the only chapter there is, and the whole cast would show from the start.
+		// Coarser than the scale: positions past the last chapter wait for the finish,
+		// which is late and so safe; translating could only bring them forward.
+		{"coarser", scaled, evenChapters(3)},
+		{"one short", scaled, evenChapters(4)},
 		{"a lone chapter", scaled, evenChapters(1)},
+		{"no chapters", scaled, nil},
 		{"no scale", noScale, evenChapters(43)},
 		{"no work", nil, evenChapters(43)},
 	} {
@@ -155,46 +187,58 @@ func TestOnRecordingKeepsOtherFields(t *testing.T) {
 func TestOnRecordingPartial(t *testing.T) {
 	w := scaledWork(5, 1, 2)
 	w.PositionScale.Partial = true
-	if got := reveals(OnRecording(w, evenChapters(43), 4300)); !slices.Equal(got, []int{10, 19}) {
-		t.Fatalf("reveals = %v", got)
+	got := OnRecording(w, evenChapters(43), 4300)
+	if r, th := reveals(got), throughs(got); !slices.Equal(r, []int{1, 10}) || !slices.Equal(th, []int{9, 18}) {
+		t.Fatalf("reveals = %v, throughs = %v", r, th)
 	}
 }
 
-// The promise itself, over every position of several shapes of book: a translated
-// position's chapter starts at or past the position's fraction (a reveal is never
-// early) unless it is the last chapter, the chapter before it starts before the
-// fraction (it is the FIRST such), and positions never go down.
+// The promise itself, over every position of several shapes of book. A reveal's chapter
+// starts at or past its unit's start, and the chapter a recap opens in (the one after
+// its through) starts at or past its unit's end, unless the recap only opens with a
+// finished book. Neither is ever before the count, and neither goes down with p.
 func TestOnRecordingNeverEarly(t *testing.T) {
 	books := [][]metadata.Chapter{
 		evenChapters(43),
+		evenChapters(41),
 		evenChapters(6),
 		chaptersAt(4000, 0, 3000, 3200, 3400, 3600, 3800),
 		chaptersAt(9000, 0, 10, 20, 8000, 8500),
 		chaptersAt(1000, 30, 40, 900),
 	}
 	for _, chapters := range books {
-		total := chapters[len(chapters)-1].End
-		for _, length := range []int{2, 5, 7, 44, 100} {
-			if length == len(chapters) {
+		n, total := len(chapters), chapters[len(chapters)-1].End
+		for _, length := range []int{2, 4, 5, 40} {
+			if length >= n {
 				continue
 			}
 			var positions []int
 			for p := 1; p <= length; p++ {
 				positions = append(positions, p)
 			}
-			got := reveals(OnRecording(scaledWork(length, positions...), chapters, total))
-			if !slices.IsSorted(got) {
-				t.Errorf("%d chapters on %d: not ascending: %v", len(chapters), length, got)
+			got := OnRecording(scaledWork(length, positions...), chapters, total)
+			revealed, through := reveals(got), throughs(got)
+			if !slices.IsSorted(revealed) || !slices.IsSorted(through) {
+				t.Errorf("%d chapters on %d: not ascending: %v %v", n, length, revealed, through)
 			}
-			for i, r := range got {
-				fraction := float64(i+1) * total / float64(length)
-				if r < len(chapters) && chapters[r-1].BookOffset < fraction {
-					t.Errorf("%d chapters on %d: position %d lands on chapter %d, starting at %v before %v",
-						len(chapters), length, i+1, r, chapters[r-1].BookOffset, fraction)
+			for i, r := range revealed {
+				unitStart := float64(i) * total / float64(length)
+				if r < n && chapters[r-1].BookOffset < unitStart {
+					t.Errorf("%d chapters on %d: reveal %d lands on chapter %d, starting at %v before %v",
+						n, length, i+1, r, chapters[r-1].BookOffset, unitStart)
 				}
-				if r > 1 && chapters[r-2].BookOffset >= fraction {
-					t.Errorf("%d chapters on %d: position %d lands on chapter %d, past chapter %d at %v",
-						len(chapters), length, i+1, r, r-1, chapters[r-2].BookOffset)
+				if r < ceilDiv(i*n, length)+1 {
+					t.Errorf("%d chapters on %d: reveal %d lands on %d, before the count", n, length, i+1, r)
+				}
+			}
+			for i, r := range through {
+				unitEnd := float64(i+1) * total / float64(length)
+				if r < n && chapters[r].BookOffset < unitEnd {
+					t.Errorf("%d chapters on %d: recap %d opens in chapter %d, starting at %v before %v",
+						n, length, i+1, r+1, chapters[r].BookOffset, unitEnd)
+				}
+				if r < ceilDiv((i+1)*n, length) {
+					t.Errorf("%d chapters on %d: through %d lands on %d, before the count", n, length, i+1, r)
 				}
 			}
 		}
@@ -202,7 +246,7 @@ func TestOnRecordingNeverEarly(t *testing.T) {
 }
 
 // hamlet is a 43-track Hamlet whose sidecar is on 5 acts, a recap through each act
-// and a character revealed in each.
+// and a character revealed in each. Each act runs 860 s of 4300, each track 100 s.
 func hamlet() (*MetaWork, []metadata.Chapter) {
 	w := scaledWork(5)
 	for act, name := range []string{"Act 1", "Act 2", "Act 3", "Act 4", "Act 5"} {
@@ -212,44 +256,70 @@ func hamlet() (*MetaWork, []metadata.Chapter) {
 	return w, evenChapters(43)
 }
 
-// The defect: at track 6 the numbers compared raw had Act 5's recap (through 5) behind
-// the listener. Translated, nothing past where the listener is shows.
-func TestHamletActFiveHiddenAtTrackSix(t *testing.T) {
+// hamletAt is the translated Hamlet gated for a listener in that track.
+func hamletAt(track int, finished bool) *MetaWork {
 	w, chapters := hamlet()
+	return HideSpoilers(&Enrichment{Work: OnRecording(w, chapters, 4300)}, track, finished).Work
+}
 
+// The defect: at track 6 the numbers compared raw had Act 5's recap (through 5) behind
+// the listener.
+func TestHamletActFiveRecapHiddenAtTrackSix(t *testing.T) {
+	w, _ := hamlet()
 	// Denied, the way it was: the raw numbers leak four acts' recaps.
-	raw := HideSpoilers(&Enrichment{Work: w}, 6, false).Work
-	if got := recapTexts(raw); !slices.Contains(got, "Act 5") {
+	if got := recapTexts(HideSpoilers(&Enrichment{Work: w}, 6, false).Work); !slices.Contains(got, "Act 5") {
 		t.Fatalf("the raw numbers no longer show the defect: %v", got)
 	}
-
-	translated := OnRecording(w, chapters, 4300)
-	at := func(track int) *MetaWork { return HideSpoilers(&Enrichment{Work: translated}, track, false).Work }
-	if got := recapTexts(at(6)); len(got) != 0 {
+	if got := recapTexts(hamletAt(6, false)); len(got) != 0 {
 		t.Fatalf("recaps at track 6 = %v, want none", got)
 	}
-	if got := characterIDs(at(6)); len(got) != 0 {
-		t.Fatalf("characters at track 6 = %v, want none", got)
+	if got := characterIDs(hamletAt(6, false)); !slices.Equal(got, []string{"Act 1"}) {
+		t.Fatalf("characters at track 6 = %v, want the opening cast", got)
 	}
-	// Allowed: Act 1 ended at 860 s, inside track 9. Its cast shows from track 10, the
-	// first starting past it, and its recap once that track is behind the listener.
-	if got := characterIDs(at(10)); !slices.Equal(got, []string{"Act 1"}) {
-		t.Fatalf("characters at track 10 = %v", got)
+}
+
+// The opening cast shows from the start, "From the start" included (the player's
+// revealFromStart reads reveal <= 1), before anything has been played.
+func TestHamletActOneCastShowsAtTrackOne(t *testing.T) {
+	for _, track := range []int{0, 1} {
+		if got := characterIDs(hamletAt(track, false)); !slices.Equal(got, []string{"Act 1"}) {
+			t.Fatalf("characters at track %d = %v", track, got)
+		}
 	}
-	if got := recapTexts(at(11)); !slices.Equal(got, []string{"Act 1"}) {
-		t.Fatalf("recaps at track 11 = %v", got)
+	w, chapters := hamlet()
+	if got := OnRecording(w, chapters, 4300).Characters[0].Reveal.Chapter; got != 1 {
+		t.Fatalf("Act 1's reveal = %d, want 1", got)
 	}
-	// In the last track: Act 5's cast has come, its recap only with a finished book.
-	last := at(43)
-	if got := characterIDs(last); len(got) != 5 {
-		t.Fatalf("characters at track 43 = %v", got)
+}
+
+// Act 5 starts at 3440 s, inside track 35; track 36 is the first starting past it.
+func TestHamletActFiveCharacterOnlyFromTheTrackStartingActFive(t *testing.T) {
+	if got := characterIDs(hamletAt(35, false)); slices.Contains(got, "Act 5") {
+		t.Fatalf("characters at track 35 = %v", got)
 	}
-	if got := recapTexts(last); slices.Contains(got, "Act 5") || len(got) != 4 {
+	if got := characterIDs(hamletAt(36, false)); !slices.Contains(got, "Act 5") {
+		t.Fatalf("characters at track 36 = %v", got)
+	}
+}
+
+// Nothing but a finished book opens the last act's recap, the last track included.
+func TestHamletActFiveRecapOnlyWhenFinished(t *testing.T) {
+	if got := recapTexts(hamletAt(43, false)); slices.Contains(got, "Act 5") || len(got) != 4 {
 		t.Fatalf("recaps at track 43 = %v", got)
 	}
-	whole := HideSpoilers(&Enrichment{Work: translated}, 6, true).Work
-	if got := recapTexts(whole); len(got) != 5 {
+	if got := recapTexts(hamletAt(43, true)); !slices.Contains(got, "Act 5") {
 		t.Fatalf("finished recaps = %v", got)
+	}
+}
+
+// Act 1 ends at 860 s, inside track 9 (800 to 900). Track 9 is still Act 1, so the recap
+// opens on entering track 10, not a chapter later and not a chapter sooner.
+func TestHamletActOneRecapOnceActOneIsOver(t *testing.T) {
+	if got := recapTexts(hamletAt(9, false)); slices.Contains(got, "Act 1") {
+		t.Fatalf("recaps at track 9, with Act 1 still playing = %v", got)
+	}
+	if got := recapTexts(hamletAt(10, false)); !slices.Equal(got, []string{"Act 1"}) {
+		t.Fatalf("recaps at track 10 = %v", got)
 	}
 }
 
@@ -280,6 +350,65 @@ func TestHideSpoilersAgreesWithAClientGate(t *testing.T) {
 	}
 }
 
+// Unknown offsets must not read as "at the end", which showed everything: a saved place
+// is read by count, rounded down, or as not started when there is no duration to read
+// it against.
+func TestListeningChapter(t *testing.T) {
+	zero := make([]metadata.Chapter, 10)
+	for _, tc := range []struct {
+		name     string
+		chapters []metadata.Chapter
+		duration float64
+		position float64
+		want     int
+	}{
+		{"usable starts", evenChapters(10), 1000, 550, 6},
+		{"zero offsets by count, rounded down", zero, 1000, 550, 5},
+		{"zero offsets inside the first share", zero, 1000, 50, 0},
+		{"zero offsets, late in the book, never past it", zero, 1000, 5000, 10},
+		{"zero offsets and no duration: not started", zero, 0, 550, 0},
+		{"zero offsets and no place", zero, 1000, 0, 0},
+		{"no chapters", nil, 1000, 550, 0},
+		{"a lone chapter holds every place", evenChapters(1), 100, 50, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ListeningChapter(tc.chapters, tc.duration, tc.position); got != tc.want {
+				t.Fatalf("ListeningChapter = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// ChapterAt alone has no duration to fall back on: starts all alike are not started.
+// Out of order is not that: the walk stops at the first start past the place.
+func TestChapterAtStartsAllAlike(t *testing.T) {
+	for _, tc := range []struct {
+		starts []float64
+		want   int
+	}{
+		{[]float64{0, 0, 0}, 0},
+		{[]float64{100, 100}, 0},
+		{[]float64{0, 200, 100}, 1},
+		// A zero-length marker among good starts is still a timeline.
+		{[]float64{0, 100, 100, 200}, 3},
+		{[]float64{0}, 1},
+	} {
+		if got := ChapterAt(tc.starts, 150); got != tc.want {
+			t.Errorf("ChapterAt(%v, 150) = %d, want %d", tc.starts, got, tc.want)
+		}
+	}
+}
+
+// Times out of order can't be searched, so a translation goes by count.
+func TestOnRecordingOutOfOrderOffsetsGoByCount(t *testing.T) {
+	chapters := evenChapters(43)
+	chapters[20].BookOffset = 0
+	got := OnRecording(scaledWork(5, 1, 2, 5), chapters, 4300)
+	if r, th := reveals(got), throughs(got); !slices.Equal(r, []int{1, 10, 36}) || !slices.Equal(th, []int{9, 18, 43}) {
+		t.Fatalf("reveals = %v, throughs = %v", r, th)
+	}
+}
+
 // The work Enrich returns is shared with the cache and every other caller.
 func TestOnRecordingNeverMutates(t *testing.T) {
 	w := scaledWork(5, 1, 3, 5)
@@ -294,7 +423,7 @@ func TestOnRecordingNeverMutates(t *testing.T) {
 		t.Fatal("the translated parts must be copies")
 	}
 	// Two books sharing the work each get their own answer.
-	if a, b := reveals(OnRecording(w, evenChapters(43), 4300)), reveals(OnRecording(w, evenChapters(10), 1000)); slices.Equal(a, b) {
+	if a, b := throughs(OnRecording(w, evenChapters(43), 4300)), throughs(OnRecording(w, evenChapters(10), 1000)); slices.Equal(a, b) {
 		t.Fatalf("two recordings answered alike: %v", a)
 	}
 }

@@ -123,10 +123,12 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 // chapter's whole-book start offset (book_offset) in ascending order: the last
 // chapter whose start is at or before position. 0 when there are no chapters or
 // position <= 0, which gates a book nobody has started (or one without chapters)
-// to "the start only". It mirrors the player's meta-gating.ts chapterNumberAt
-// exactly, so a server-gated envelope and a client-gated one agree.
+// to "the start only", and when the starts say nothing about a place (startsAllAlike:
+// all zero, say), which must not read as the last chapter. It mirrors the player's
+// meta-gating.ts chapterNumberAt exactly, so a server-gated envelope and a client-gated
+// one agree.
 func ChapterAt(starts []float64, position float64) int {
-	if len(starts) == 0 || position <= 0 {
+	if len(starts) == 0 || position <= 0 || startsAllAlike(starts) {
 		return 0
 	}
 	n := 0
