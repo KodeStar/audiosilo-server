@@ -943,9 +943,10 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
 }
 
-// handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book. The
-// manager calls this after matching an external source (e.g. an Audible library) to
-// an indexed book, so a book scanned without an ASIN gains one - making future
+// handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book. An
+// admin client calls this after matching an external source (e.g. an Audible
+// library) to an indexed book (the archived audiosilo-manager did; the Bridge
+// backfills through its own route, handleBridgeEnrichment), so a book scanned without an ASIN gains one - making future
 // matches exact. The enrichment is durable and survives a re-scan (UpsertBook
 // re-applies it); no file on disk is modified, so the network API stays
 // non-destructive.

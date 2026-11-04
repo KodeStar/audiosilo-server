@@ -801,7 +801,7 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, r
 // trusting metaserve to list memberships primary-first: a variant leading the
 // rail would hand a shipped player the chronological order's earlier books as
 // "previous" (the reading-order spoiler), and nothing here could see it happen.
-// audiosilo-sidecars' readingSeries chooses by the same rule.
+// The Bridge's readingSeries (internal/metaops) chooses by the same rule.
 func familyMains(refs []upstreamSeriesRef) []upstreamSeriesRef {
 	index := make(map[string]int, len(refs)) // family key -> slot in mains
 	var mains []upstreamSeriesRef

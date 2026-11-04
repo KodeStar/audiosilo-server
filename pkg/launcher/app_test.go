@@ -168,7 +168,7 @@ func TestApplyOverrides(t *testing.T) {
 }
 
 // Run re-validates after applying overrides, so a malformed override (e.g. a
-// library with an empty root, which an embedder like the manager can pass when no
+// library with an empty root, which an embedder can pass when no
 // folder is chosen) is rejected instead of scanning the process cwd or persisting
 // an unbootable config.yaml.
 func TestApplyOverridesRejectedByValidate(t *testing.T) {

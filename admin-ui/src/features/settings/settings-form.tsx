@@ -34,7 +34,7 @@ import {
   type SettingId,
 } from './settings-model';
 
-/** "Set by AUDIOSILO_X" / "Managed by the desktop app", and "Restart to apply". */
+/** "Set by AUDIOSILO_X" / "Set by the program that started the server", and "Restart to apply". */
 export function SettingBadges({ settings, id }: { settings: AdminSettings; id: SettingId }) {
   const { t } = useTranslation();
   const lock = lockOf(settings, id);
@@ -183,7 +183,7 @@ export function SettingsForm<S extends SettingsSection>({
     });
   }
 
-  // Every shown field set elsewhere (the environment, the desktop app): nothing to save here.
+  // Every shown field set elsewhere (the environment, an embedding launcher): nothing to save here.
   const shown = fields.filter((f) => !visible || visible(f.name, draft));
   const editable = shown.some((f) => !lockOf(settings, `${section}.${f.name}` as SettingId));
   // Only the shown fields: an edit to one hidden since (TLS hosts after leaving

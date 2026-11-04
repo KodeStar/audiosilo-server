@@ -59,7 +59,7 @@ func (a *API) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 // handleSetup completes first-run setup: it creates the first admin account,
 // 201 {user}. The page asks only for the account and hands over to the console's
 // setup flow, which adds the library. A caller that still sends library_name and
-// library_root (an older page, the manager) gets the library too, as before:
+// library_root (an older page, the archived manager) gets the library too, as before:
 // created with the defaults and a background scan started, 201 {user, library},
 // and the console flow's folder step recorded as done;
 // the folder is checked before the admin is made, and sending only one of the two

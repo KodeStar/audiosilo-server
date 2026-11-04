@@ -84,8 +84,8 @@ type Metadata struct {
 // Audible DRM formats (.aax/.aaxc) are intentionally excluded: the server can never
 // stream them (they need per-account decryption), and indexing an .aax that sits
 // next to its converted .m4b would lump both into one book with duplicated chapters
-// and an unplayable track. The manager converts .aax/.aaxc to .m4b before content
-// enters a library, so a library should only ever hold the playable .m4b.
+// and an unplayable track. The Bridge's Audible backup converts .aax/.aaxc to .m4b
+// before content enters a library, so a library should only ever hold the playable .m4b.
 //
 // .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
 // is in the library too, though no browser or iOS player opens the container:

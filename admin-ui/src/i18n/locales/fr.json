@@ -1943,7 +1943,7 @@
   "settings.savedNow": "Appliqué immédiatement. Aucun redémarrage nécessaire.",
   "settings.savedRestart": "Enregistré. Une partie ne prend effet qu'au redémarrage du serveur.",
   "settings.locked.env": "Défini par {{name}}",
-  "settings.locked.launcher": "Géré par l'application de bureau",
+  "settings.locked.launcher": "Défini par le programme qui a démarré le serveur",
   "settings.locked.hint": "Modifiez-le là où il est défini : une variable d'environnement l'emporte sur cette page.",
   "settings.restart.needed": "Redémarrer pour appliquer",
   "settings.restart.pending": "En attente d'un redémarrage",

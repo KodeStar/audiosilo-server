@@ -65,7 +65,7 @@ export function StepFooter({
 }
 
 /**
- * What sets a setting the environment or the desktop app sets ("Set by
+ * What sets a setting the environment or an embedding launcher sets ("Set by
  * AUDIOSILO_X", as Settings says), shown, not asked.
  */
 export function LockedNote({ settings, id }: { settings: AdminSettings; id: SettingId }) {

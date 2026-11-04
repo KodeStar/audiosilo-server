@@ -1,9 +1,10 @@
 // Package launcher holds the AudioSilo server's run loop: load config, open the
 // database, wire the services, bootstrap first-run state, and serve until the
-// context is cancelled. It is shared by the headless `audiosilo` command and the
-// audiosilo-manager desktop app, which runs it in-process, so both behave
-// identically. This package is public (under pkg/) precisely so the manager (a
-// separate module) can import Run/Options.
+// context is cancelled. The headless `audiosilo` command is a thin wrapper over
+// it. The package is public (under pkg/) so another program (a separate module)
+// can embed the server in-process through Run/Options and behave identically;
+// the audiosilo-manager desktop app did, and is archived (its jobs moved to the
+// Bridge).
 package launcher
 
 import (
@@ -62,7 +63,7 @@ type Options struct {
 	OnURL func(url string)
 
 	// Optional config overrides, applied on top of the loaded config.yaml for an
-	// embedding launcher (the audiosilo-manager desktop app) that controls the
+	// embedding launcher (a program running the server in-process) that controls the
 	// server in-process without hand-writing YAML. Empty/zero fields are ignored,
 	// so the headless `audiosilo` command (which sets none) is unaffected. When the
 	// config is first created these are persisted to config.yaml.
@@ -284,7 +285,7 @@ func Run(ctx context.Context, opts Options) error {
 		setupBanner(cfg, setupToken)
 	}
 
-	// Tell the caller (the audiosilo-manager desktop app) which URL to open: the
+	// Tell the caller (an embedding launcher) which URL to open: the
 	// setup wizard while first-run setup is pending, otherwise the player (or admin
 	// console).
 	if opts.OnURL != nil {
