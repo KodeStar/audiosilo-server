@@ -61,7 +61,7 @@ func TestDefaultRecording(t *testing.T) {
 		{ID: "unknown"},
 	}}
 	pick := func(seconds float64, region string) string {
-		if r := DefaultRecording(c, seconds, region); r != nil {
+		if r := DefaultRecording(c, seconds, region, nil); r != nil {
 			return r.ID
 		}
 		return ""
@@ -79,8 +79,68 @@ func TestDefaultRecording(t *testing.T) {
 	if got := pick(600*60, "uk"); got != "unknown" {
 		t.Errorf("an identifier's recording wins, got %s", got)
 	}
-	if DefaultRecording(&MatchCandidate{}, 60, "uk") != nil {
+	if DefaultRecording(&MatchCandidate{}, 60, "uk", []string{"Ray Porter"}) != nil {
 		t.Error("no recordings, no pick")
+	}
+}
+
+// TestDefaultRecordingPrefersTheNarrator: The Martian read by Wil Wheaton (the
+// newer recording) and by R. C. Bray. The book's narrator picks the recording
+// before the runtime does, after an identifier's; a narrator no recording
+// names, or none, leaves the runtime to choose.
+func TestDefaultRecordingPrefersTheNarrator(t *testing.T) {
+	people := func(names ...string) []MetaPersonRef {
+		out := []MetaPersonRef{}
+		for _, n := range names {
+			out = append(out, MetaPersonRef{Name: n})
+		}
+		return out
+	}
+	c := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "bray", RuntimeMin: 653, Narrators: people("R. C. Bray")},
+		{ID: "wheaton", RuntimeMin: 660, Narrators: people("Wil Wheaton")},
+		{ID: "cast", RuntimeMin: 700, Narrators: people("Ann Example", "R C Bray")},
+	}}
+	pick := func(narrators ...string) string {
+		if r := DefaultRecording(c, 653*60, "", narrators); r != nil {
+			return r.ID
+		}
+		return ""
+	}
+	for want, narrators := range map[string][]string{
+		"wheaton": {"Wil Wheaton"},
+		"bray":    {"RC Bray"}, // folds alike; of the two he reads, the closer runtime
+		"cast":    {"Ann Example"},
+	} {
+		if got := pick(narrators...); got != want {
+			t.Errorf("narrated by %v: %s, want %s", narrators, got, want)
+		}
+	}
+	if got := pick("Somebody Else"); got != "bray" {
+		t.Errorf("a narrator no recording names: %s, want the runtime's bray", got)
+	}
+	if got := pick(); got != "bray" {
+		t.Errorf("no narrator: %s, want the runtime's bray", got)
+	}
+	// His recording of another length is another edition: the runtime decides.
+	short := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "abridged-wheaton", RuntimeMin: 300, Narrators: people("Wil Wheaton")},
+		{ID: "bray", RuntimeMin: 650, Narrators: people("R. C. Bray")},
+	}}
+	if r := DefaultRecording(short, 653*60, "", []string{"Wil Wheaton"}); r == nil || r.ID != "bray" {
+		t.Errorf("a narrator's recording of another length: %v, want bray", r)
+	}
+	c.RecordingID = "cast"
+	if got := pick("Wil Wheaton"); got != "cast" {
+		t.Errorf("an identifier's recording beats the narrator: %s", got)
+	}
+}
+
+func TestRegionLanguage(t *testing.T) {
+	for region, want := range map[string]string{"us": "en", "uk": "en", "in": "en", "de": "de", "jp": "ja", "br": "pt", "": "", "xx": ""} {
+		if got := RegionLanguage(region); got != want {
+			t.Errorf("RegionLanguage(%q) = %q, want %q", region, got, want)
+		}
 	}
 }
 

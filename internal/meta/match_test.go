@@ -291,7 +291,8 @@ var sharpeBook = MatchQuery{
 }
 
 const sharpeMatch = `{"results":[{"kind":"work","id":"sharpes-eagle","title":"Sharpe’s Eagle","score":97,
-	"recording_id":"rupert-farley-2014","reasons":{"title":1,"author":"full","series":"position","runtime":0.01}}]}`
+	"recording_id":"rupert-farley-2014","reasons":{"title":1,"author":"full","series":"position","runtime":0.01,
+	"narrator":"surname","language":"same"}}]}`
 
 // TestCandidatesUsesTheStructuredMatch: the book's tag AND path facts go to
 // works/match, path guesses first and numbering left on for metaserve to read,
@@ -323,7 +324,8 @@ func TestCandidatesUsesTheStructuredMatch(t *testing.T) {
 	}
 	c := cands[0]
 	if c.WorkID != "sharpes-eagle" || c.Score != 97 || c.Reasons == nil || c.Reasons.Series != "position" ||
-		c.Reasons.Author != "full" || *c.Reasons.Title != 1 || c.RecordingID != "" || len(c.Recordings) != 1 {
+		c.Reasons.Author != "full" || *c.Reasons.Title != 1 || c.Reasons.Narrator != "surname" || c.Reasons.Language != "same" ||
+		c.RecordingID != "" || len(c.Recordings) != 1 {
 		t.Fatalf("candidate = %+v (reasons %+v)", c, c.Reasons)
 	}
 }
@@ -512,6 +514,28 @@ func TestMatchParamsPairsThePositionWithItsSeries(t *testing.T) {
 		if got := matchParams(c.q, "", "", "").Get("position"); got != c.position {
 			t.Errorf("%s: position = %q, want %q", c.name, got, c.position)
 		}
+	}
+}
+
+// TestMatchParamsSendsLanguageAndNarrators: the book's language and its
+// narrators go up for metaserve to weigh (an older one ignores them), the
+// narrators one each and at most maxMatchNarrators; neither is a fact a
+// request can be made of on its own.
+func TestMatchParamsSendsLanguageAndNarrators(t *testing.T) {
+	cast := []string{"A One", "B Two", "C Three", "D Four", "E Five", "A One"}
+	v := matchParams(MatchQuery{Title: "Dune", Language: " en ", Narrators: cast}, "", "", "")
+	if got := v.Get("language"); got != "en" {
+		t.Errorf("language = %q, want en", got)
+	}
+	if got := v["narrator"]; !slices.Equal(got, cast[:maxMatchNarrators]) {
+		t.Errorf("narrators = %q, want the first %d", got, maxMatchNarrators)
+	}
+	v = matchParams(MatchQuery{Title: "Dune"}, "", "", "")
+	if v.Has("language") || v.Has("narrator") {
+		t.Errorf("a book with neither sends %v", v)
+	}
+	if hasMatchFacts(matchParams(MatchQuery{Path: "Track 01.mp3", Language: "en", Narrators: []string{"Scott Brick"}}, "", "", "")) {
+		t.Error("a language and a narrator alone make a request metaserve would refuse")
 	}
 }
 

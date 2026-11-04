@@ -10,6 +10,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -40,6 +41,11 @@ const DetailIdentifierUnknown = "identifier_unknown"
 // for that, however confident the match (#134). The review words it with both
 // lengths (ItemBook.Duration, the proposal's runtime_min).
 const DetailLengthDiffers = "length_differs"
+
+// DetailWeakMatch is a match item's detail when its best candidate scored
+// below ReviewFloor: recorded as no match (the community most likely doesn't
+// have the book), its score kept for the review's wording.
+const DetailWeakMatch = "weak_match"
 
 // DetailCoverPending is a match item's detail while its fields went in but a stop
 // cut its cover short: still to apply, so the next apply takes the cover, the
@@ -264,11 +270,15 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 		return item, err
 	}
 	if len(cands) > 0 {
-		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region))
+		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators))
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
-	if item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration) {
+	switch {
+	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration):
 		item.Detail = DetailLengthDiffers
+	case item.Outcome == catalog.OutcomeNone && len(cands) > 0:
+		// A weak fit is no proposal: the review offers nothing to apply.
+		item.Detail, item.Proposal = DetailWeakMatch, catalog.MatchProposal{Values: map[string]string{}}
 	}
 	return item, nil
 }
@@ -295,7 +305,7 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 		return nil, nil
 	}
 	c := &cands[0]
-	rec := meta.DefaultRecording(c, b.Duration, region)
+	rec := meta.DefaultRecording(c, b.Duration, region, nil)
 	if rec == nil || rec.ID != c.RecordingID {
 		return nil, nil
 	}
@@ -337,7 +347,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	}
 	c := &cands[0]
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
-	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
+	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region, names.Split(b.Narrator)))
 	// The record the book's own identifier names, but another edition by length
 	// (an unabridged book holding its dramatization's ASIN): its details are not
 	// written unasked.

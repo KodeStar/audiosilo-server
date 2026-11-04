@@ -800,3 +800,56 @@ func TestMatchHoldsAnotherLength(t *testing.T) {
 		t.Fatalf("review = %+v, want length_differs", review)
 	}
 }
+
+// TestMatchRecordsAWeakMatchAsNone: a best candidate under ReviewFloor is no
+// match (detail weak_match, its score kept, nothing proposed); an apply never
+// takes it, even when the admin names it.
+func TestMatchRecordsAWeakMatchAsNone(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Weak", "Weak", "", nil)
+	e.book(t, "A/Fair", "Fair", "", nil)
+	e.matcher.byTitle["Weak"] = []meta.MatchCandidate{cand("the-martian", ReviewFloor-1, "")}
+	e.matcher.byTitle["Fair"] = []meta.MatchCandidate{cand("the-martian", ReviewFloor, "")}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	none := e.items(t, run, catalog.OutcomeNone)
+	if len(none) != 1 || none[0].Path != "A/Weak" || none[0].Detail != DetailWeakMatch || none[0].Score != ReviewFloor-1 ||
+		len(none[0].Proposal.Values) != 0 || none[0].Proposal.WorkID != "" {
+		t.Fatalf("none = %+v, want the weak match with no proposal", none)
+	}
+	if review := e.items(t, run, catalog.OutcomeReview); len(review) != 1 || review[0].Path != "A/Fair" {
+		t.Fatalf("review = %+v, want the match at the floor", review)
+	}
+	if _, err := e.runner.Apply(context.Background(), context.Background(), run.ID,
+		ApplyOptions{Scope: ScopeOverwrite, Include: []int64{none[0].ID}, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	st, err := e.cat.BookMatchState(context.Background(), e.lib, "A/Weak")
+	if err != nil || st.Fields[catalog.FieldASIN].Value != "" || st.Title != "Weak" {
+		t.Fatalf("the weak match was applied: %+v %v", st, err)
+	}
+}
+
+// TestMatchSendsLanguageAndNarrators: a run's query carries the book's
+// narrators and its language, else the preferred marketplace's.
+func TestMatchSendsLanguageAndNarrators(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	b := &catalog.Book{LibraryID: e.lib, RelPath: "A/Dune", IsFolder: true, Title: "Dune", Author: "Frank Herbert",
+		Narrator: "Scott Brick; Simon Vance", Duration: 600, AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	e.start(t, catalog.MatchModeMatch, "de")
+	e.matcher.mu.Lock()
+	defer e.matcher.mu.Unlock()
+	if len(e.matcher.queries) != 1 {
+		t.Fatalf("queries = %+v", e.matcher.queries)
+	}
+	q := e.matcher.queries[0]
+	if q.Language != "de" || !slices.Equal(q.Narrators, []string{"Scott Brick", "Simon Vance"}) {
+		t.Fatalf("query language %q narrators %q", q.Language, q.Narrators)
+	}
+}

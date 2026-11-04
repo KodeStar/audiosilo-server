@@ -66,6 +66,17 @@ type MatchQuery struct {
 	// NoSeries says the caller reads no candidate's series (a repick), so the
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
+	// Language is the language the book is in, as the book or the server says
+	// it (QueryFor: the book's language, else RegionLanguage), "" for unknown.
+	// metaserve reads a language tag or name ("en", "eng", "English") and
+	// scores a work it knows to be in another language lower; an older
+	// metaserve ignores it.
+	Language string
+	// Narrators are the book's narrators, one name each (names.Split of its
+	// narrator credit). metaserve counts a recording they narrated in the
+	// work's favour, and DefaultRecording prefers one; an older metaserve
+	// ignores them.
+	Narrators []string
 }
 
 // limit is how many works the query expands.
@@ -120,6 +131,12 @@ type MatchReasons struct {
 	Runtime *float64 `json:"runtime,omitempty"`
 	// Identifier is "asin" or "isbn" when the work was found by it.
 	Identifier string `json:"identifier,omitempty"`
+	// Narrator is "full", "surname" or "none": how well the book's narrators
+	// name one of the best-agreeing recording's (sent narrators only).
+	Narrator string `json:"narrator,omitempty"`
+	// Language is "same" or "other" when the book's language and the work's
+	// are both known.
+	Language string `json:"language,omitempty"`
 }
 
 // MatchSeries is a series the work belongs to, with its position and its
@@ -222,10 +239,14 @@ func (r MatchRecording) HasRegion(region string) bool {
 
 // DefaultRecording is the recording of c a book most likely is, as the match
 // dialog picks it (admin-ui match-model.ts defaultRecording): the one an
-// identifier lookup resolved to, else the one whose runtime is closest to the
-// book's (seconds), a recording selling in the preferred region winning a tie;
-// recordings without a runtime come last. nil when c has none.
-func DefaultRecording(c *MatchCandidate, seconds float64, region string) *MatchRecording {
+// identifier lookup resolved to, else, among the recordings one of the book's
+// narrators narrated that may be its edition by length (PlausibleRuntimeOff,
+// or a length unknown; all of them when there is none such, or the book names
+// no narrator), the one whose runtime is closest to the book's (seconds), a
+// recording selling in the preferred region winning a tie; recordings without
+// a runtime come last. A narrator's recording of another length is another
+// edition: the closest runtime then decides. nil when c has none.
+func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
 	var best *MatchRecording
 	bestGap := math.Inf(1)
 	for i := range c.Recordings {
@@ -234,8 +255,16 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string) *MatchR
 			return r
 		}
 	}
+	theirs := func(r *MatchRecording) bool {
+		off, known := RuntimeOff(r.RuntimeMin, seconds)
+		return readBy(r, narrators) && (!known || off <= PlausibleRuntimeOff)
+	}
+	byNarrator := slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return theirs(&r) })
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
+		if byNarrator && !theirs(r) {
+			continue
+		}
 		gap := math.Inf(1)
 		if r.RuntimeMin > 0 {
 			gap = math.Abs(float64(r.RuntimeMin)*60 - seconds)
@@ -246,6 +275,35 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string) *MatchR
 	}
 	return best
 }
+
+// readBy reports whether one of the book's narrators narrated r: a name
+// that folds like one of r's narrators, or a multi-word one whose every word
+// the book's credit holds (authorSimilarity, as an author agrees).
+func readBy(r *MatchRecording, narrators []string) bool {
+	for _, n := range narrators {
+		for _, rn := range r.Narrators {
+			if authorSimilarity(n, rn.Name) == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// regionLanguages is the primary language of each Audible marketplace
+// (config.Regions): what a book on a server preferring it is most likely in.
+var regionLanguages = map[string]string{
+	"us": "en", "uk": "en", "ca": "en", "au": "en", "in": "en",
+	"de": "de", "fr": "fr", "es": "es", "it": "it", "jp": "ja", "br": "pt",
+}
+
+// RegionLanguage is the primary language (a BCP-47 tag) of the marketplace
+// region, "" for none or one it doesn't know.
+func RegionLanguage(region string) string { return regionLanguages[region] }
+
+// maxMatchNarrators is how many of a book's narrators a works/match request
+// names: a full cast's credit adds nothing past the first few.
+const maxMatchNarrators = 4
 
 // matchHit is one work to expand into a candidate. A hit whose score is known
 // carries its reasons (an identifier hit, metaserve's match); one without them
@@ -360,7 +418,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		if detail := details[i]; detail != nil {
 			c := s.toCandidate(detail, facts, h.cover, q.Region)
 			c.RecordingID = h.recordingID
-			if rec := DefaultRecording(c, q.Duration, q.Region); rec != nil {
+			if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
 				c.DefaultRecordingID = rec.ID
 			}
 			if h.reasons != nil {
@@ -529,6 +587,10 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	}
 	if q.Duration >= 1 {
 		v.Set("runtime", strconv.Itoa(int(math.Round(q.Duration))))
+	}
+	add("language", q.Language)
+	for _, n := range q.Narrators[:min(len(q.Narrators), maxMatchNarrators)] {
+		add("narrator", n)
 	}
 	v.Set("limit", strconv.Itoa(q.limit()))
 	return v
