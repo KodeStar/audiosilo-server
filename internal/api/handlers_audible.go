@@ -376,6 +376,19 @@ func (a *API) handleAdminAudibleAccountDelete(w http.ResponseWriter, r *http.Req
 // audibleQueues are the API's backup queues.
 func (a *API) audibleQueues() audible.Queues { return audible.Queues{Catalog: a.cat, Bridge: a.bridge} }
 
+// audibleSyncNow queues account's audible.sync at once after the console
+// changed which titles take part in it or turned it on (audible.SyncNow),
+// while the module is on; a failure is logged, the change stands and the next
+// scheduled sync carries it.
+func (a *API) audibleSyncNow(r *http.Request, account string, titlesChanged bool) {
+	if a.bridge == nil || !a.moduleOn(bridge.ModuleAudible) {
+		return
+	}
+	if err := a.audibleQueues().SyncNow(r.Context(), a.log, account, titlesChanged); err != nil {
+		a.log.Warn("audible: queue a sync after a console change failed", "account", account, "err", err)
+	}
+}
+
 // afterAudiblePollTimeout bounds the backups a poll's final call queues: well
 // inside the 30 s the Bridge (and the request timeout) give the whole call, so
 // a slow pass still leaves the stored poll time to answer; what it didn't
@@ -487,9 +500,9 @@ func (a *API) handleAdminAudibleBackupAll(w http.ResponseWriter, r *http.Request
 }
 
 // handleAdminAudibleTitle serves PATCH /admin/audible/titles/{account}/{asin}
-// {"rejected"?, "dest_path"?}: "Not this book" and a backup's destination,
-// audited. 200 the title; 400 invalid_dest_path; 404 unknown_account,
-// unknown_title.
+// {"rejected"?, "dest_path"?, "no_sync"?}: "Not this book", a backup's
+// destination and "Don't sync this book" (Phase 4c), audited. 200 the title;
+// 400 invalid_dest_path; 404 unknown_account, unknown_title.
 func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	account, asin, ok := audibleTitleID(w, r)
 	if !ok {
@@ -512,12 +525,20 @@ func (a *API) handleAdminAudibleTitle(w http.ResponseWriter, r *http.Request) {
 	if p.DestPath != nil {
 		details["dest_path"] = *p.DestPath
 	}
+	if p.NoSync != nil {
+		details["no_sync"] = *p.NoSync
+	}
 	a.audit(r, "bridge.audible.title", "", details)
+	if p.Rejected != nil || p.NoSync != nil {
+		a.audibleSyncNow(r, account, true)
+	}
 	writeJSON(w, http.StatusOK, t)
 }
 
 // handleAdminAudibleAccount serves PATCH /admin/audible/accounts/{account}
-// {"policy"?, "template"?}: what the account backs up by itself and where. 200
+// {"policy"?, "template"?, "sync"?}: what the account backs up by itself and
+// where, and whether its places sync with Audible (Phase 4c; off cancels its
+// open sync). 200
 // the account; 400 invalid_policy, invalid_template; 404 unknown_account.
 func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) {
 	id, ok := audibleAccountID(w, r)
@@ -541,6 +562,12 @@ func (a *API) handleAdminAudibleAccount(w http.ResponseWriter, r *http.Request) 
 	if p.Template != nil {
 		details["template"] = *p.Template
 	}
+	if p.Sync != nil {
+		details["sync"] = *p.Sync
+	}
 	a.audit(r, "bridge.audible.account", "", details)
+	if p.Sync != nil && *p.Sync {
+		a.audibleSyncNow(r, id, false)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"account": acct})
 }

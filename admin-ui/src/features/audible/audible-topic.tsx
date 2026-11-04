@@ -277,6 +277,7 @@ function TitleRow({
           <Badge variant="outline">{t('audible.titles.backedUp')}</Badge>
         ) : null}
         {x.rejected ? <Badge variant="outline">{t('audible.titles.rejected')}</Badge> : null}
+        {x.no_sync ? <Badge variant="outline">{t('audible.titles.notSynced')}</Badge> : null}
         {backup ? (
           <StatusText tone={backup.tone} colored className="text-[12.5px] font-semibold">
             {t(backup.key)}

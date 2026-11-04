@@ -26,8 +26,8 @@ import { useAudibleAccounts, useBackups, useCheckNow, type Backups } from './use
  * mapping happen on the Bridge's own Accounts tab (the server never holds an
  * Audible credential), so the card links there; Remove only takes an account
  * the Bridge can no longer remove (unpaired, paired again) off this server.
- * Phase 4b: the account's backup policy and template (Backup settings) and Back
- * up everything.
+ * Phase 4b: the account's backup policy and template (Account settings) and Back
+ * up everything; Phase 4c: whether its places sync (set there too).
  */
 export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
   const { t } = useTranslation();
@@ -162,6 +162,7 @@ function AccountRow({
                 <span className="text-muted-foreground">{t('audible.account.templateAuto')}</span>
               ),
             ],
+            [t('audible.account.sync'), <SyncState account={a} lang={lang} />],
             [
               t('audible.account.titles'),
               counts
@@ -181,5 +182,30 @@ function AccountRow({
         <RemoveAccountButton account={a} />
       </div>
     </li>
+  );
+}
+
+/**
+ * Whether an account's places sync with Audible (Phase 4c): off, on with its
+ * last sync, or stopped because Audible refused the account (a sign-in again on
+ * the Bridge starts it again).
+ */
+function SyncState({ account: a, lang }: { account: AudibleAccount; lang: string }) {
+  const { t } = useTranslation();
+  if (!a.sync) return <span className="text-muted-foreground">{t('audible.account.syncOff')}</span>;
+  if (a.paused)
+    return <span className="text-muted-foreground">{t('audible.account.syncPaused')}</span>;
+  if (a.refused_at)
+    return (
+      <StatusText tone="warn" colored>
+        {t('audible.account.syncRefused')}
+      </StatusText>
+    );
+  return (
+    <>
+      {a.last_sync_at
+        ? t('audible.account.synced', { when: formatRelative(a.last_sync_at, lang) })
+        : t('audible.account.syncOn')}
+    </>
   );
 }

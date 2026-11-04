@@ -687,6 +687,12 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}/titles", a.requireBridge(a.handleBridgeAudibleTitles))
 	mux.Handle("GET /api/v1/bridge/libraries/{id}/books", a.requireBridge(a.handleBridgeBooks))
 	mux.Handle("PUT /api/v1/bridge/libraries/{id}/enrichment", a.requireBridge(a.handleBridgeEnrichment))
+	// Position sync (Phase 4c, handlers_audible_sync.go): an account's places
+	// on Audible for its person, and the person's places to push back. Acting
+	// for a person, both answer 403 sync_off while the module or the account's
+	// sync is off.
+	mux.Handle("POST /api/v1/bridge/audible/accounts/{account}/listening", a.requireBridge(a.handleBridgeAudibleListening))
+	mux.Handle("GET /api/v1/bridge/progress", a.requireBridge(a.handleBridgeProgress))
 	// The console's Audible routes: admin, 404 module_off while the module is off.
 	ar := moduleRoutes{a: a, mux: mux, id: bridge.ModuleAudible}
 	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))

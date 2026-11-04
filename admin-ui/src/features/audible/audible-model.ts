@@ -75,6 +75,7 @@ export const IMPORT_CODES = [
   'not_released',
   'no_rights',
   'audible_refused',
+  'audible_sign_in',
   'not_writable',
   'exists',
   'disk_full',
@@ -109,6 +110,16 @@ export function canBackUp(x: AudibleTitle): boolean {
     (!x.match || x.rejected) &&
     !importOpen(x)
   );
+}
+
+/**
+ * Whether a title's place can sync with Audible (Phase 4c): it is on this
+ * server (a match not marked "Not this book") and still the account's, not
+ * ignored, and not marked "Don't sync this book". The account's own sync
+ * switch is separate.
+ */
+export function canSync(x: AudibleTitle): boolean {
+  return x.match !== null && !x.rejected && x.state !== 'gone' && !x.ignored && !x.no_sync;
 }
 
 /** How a title's backup reads: its i18n key, the status dot, and its code's words. */

@@ -2906,7 +2906,7 @@ export interface AudibleAccount {
   library: { id: number; name: string } | null;
   paused: boolean;
   policy: AudiblePolicy;
-  /** Keep the place in step with Audible (Phase 4c). */
+  /** Keep the listening place in step with Audible (Phase 4c): the console's, off for a new account. */
   sync: boolean;
   poll_hours: number;
   created_at: string;
@@ -2917,6 +2917,10 @@ export interface AudibleAccount {
   template: string;
   /** When its automatic policy began: only titles first seen after it are backed up by it. */
   policy_since: string;
+  /** When its last sync with Audible finished (Phase 4c). */
+  last_sync_at: string | null;
+  /** When Audible refused it during a sync: none is queued until the Bridge signs in again. */
+  refused_at: string | null;
   titles?: AudibleCounts;
   /** What "Back up everything" would queue (the accounts list only). */
   backup_estimate?: AudibleEstimate;
@@ -2960,6 +2964,8 @@ export interface AudibleTitle {
   match: { library_id: number; path: string; how: 'asin' | 'fuzzy' | 'import' } | null;
   rejected: boolean;
   ignored: boolean;
+  /** "Don't sync this book" (Phase 4c): its place never syncs with Audible either way; backups don't read it. */
+  no_sync: boolean;
   dest_path: string;
   first_seen: string;
   updated_at: string;
@@ -2999,17 +3005,19 @@ export interface AudibleContest {
   with: { asin: string; title: string }[];
 }
 
-/** PATCH /admin/audible/titles/{account}/{asin}: "Not this book" and a destination. */
+/** PATCH /admin/audible/titles/{account}/{asin}: "Not this book", a destination, "Don't sync this book". */
 export interface AudibleTitlePatch {
   rejected?: boolean;
   /** Folders and file name in the library ("Author/Series/Title.m4b"); "" for the account's placement. */
   dest_path?: string;
+  no_sync?: boolean;
 }
 
-/** PATCH /admin/audible/accounts/{account}: what it backs up by itself, and where. */
+/** PATCH /admin/audible/accounts/{account}: what it backs up by itself, where, and whether its places sync. */
 export interface AudibleAccountPatch {
   policy?: AudiblePolicy;
   template?: string;
+  sync?: boolean;
 }
 
 /** GET /admin/audible/titles: a page, and the next page's cursor ("" at the end). */

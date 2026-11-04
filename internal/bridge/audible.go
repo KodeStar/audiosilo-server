@@ -64,10 +64,13 @@ func audiblePollParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
-// audiblePollSuffix extends an audible.poll's dedupe key with its account, so
-// each account has at most one open poll.
-func audiblePollSuffix(j NewJob) string {
-	var p AudiblePollParams
+// audibleAccountSuffix extends an audible.poll's or audible.sync's dedupe key
+// with its params' account, so each account has at most one open job of the
+// kind.
+func audibleAccountSuffix(j NewJob) string {
+	var p struct {
+		Account string `json:"account"`
+	}
 	_ = json.Unmarshal(j.Params, &p)
 	return "|" + p.Account
 }
@@ -79,15 +82,16 @@ func AudiblePoll(account, template string, priority int) NewJob {
 	return NewJob{Kind: KindAudiblePoll, Params: raw, Priority: priority}
 }
 
-// pruneAudiblePolls keeps only the newest ended poll of the account a new poll
-// is queued for (its dedupe key), inside Enqueue's transaction: a poll every
-// few hours would otherwise pile up in the job list.
-func pruneAudiblePolls(ctx context.Context, tx *sql.Tx, key string) error {
+// pruneAudibleEnded keeps only the newest ended poll (or sync, kind) of the
+// account a new one is queued for (its dedupe key), inside Enqueue's
+// transaction: a poll every few hours, or a sync every 15 minutes, would
+// otherwise pile up in the job list.
+func pruneAudibleEnded(ctx context.Context, tx *sql.Tx, kind, key string) error {
 	// The kind lets idx_bridge_jobs_kind_finished serve both scans (the
 	// dedupe_key index holds only open jobs).
 	_, err := tx.ExecContext(ctx, `DELETE FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`
 		AND id <> (SELECT MAX(id) FROM bridge_jobs WHERE kind = ?2 AND dedupe_key = ?1 AND state IN `+EndedStatesSQL+`)`,
-		key, KindAudiblePoll)
+		key, kind)
 	return err
 }
 
@@ -98,6 +102,9 @@ const (
 	CancelAudibleRemoved = "the Audible account was removed"
 	// CancelAudiblePaused: the account's library was deleted (it is paused).
 	CancelAudiblePaused = "the Audible account's library was deleted"
+	// CancelAudibleSyncOff: the console turned the account's sync off (an open
+	// audible.sync, Phase 4c).
+	CancelAudibleSyncOff = "sync with Audible was turned off for the account"
 )
 
 // CancelAudiblePolls cancels account's open poll inside tx, reason one of
@@ -155,9 +162,14 @@ type AudibleImportParams struct {
 // The audible.import result's and failure's codes the console names (the
 // Bridge's; a failed job's code is AudibleImportCode's reading).
 const (
-	ImportNotReleased       = "not_released"
-	ImportNoRights          = "no_rights"
-	ImportAudibleRefused    = "audible_refused"
+	ImportNotReleased    = "not_released"
+	ImportNoRights       = "no_rights"
+	ImportAudibleRefused = "audible_refused"
+	// ImportAudibleSignIn: Audible refused the account's sign-in for now
+	// (transient: the Bridge tries again), not the device (audible_refused). An
+	// audible.sync failing with it is an ordinary failure: the account is not
+	// marked refused.
+	ImportAudibleSignIn     = "audible_sign_in"
 	ImportNotWritable       = "not_writable"
 	ImportExists            = "exists"
 	ImportDiskFull          = "disk_full"
@@ -166,8 +178,8 @@ const (
 )
 
 // AudibleImportCodes are the codes an audible.import failure may name.
-var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportNotWritable,
-	ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
+var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportAudibleSignIn,
+	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
 
 var asinPattern = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 
@@ -408,16 +420,158 @@ func AudibleImportCode(j Job) string {
 	default:
 		return ""
 	}
+	return failureCode(j, AudibleImportCodes)
+}
+
+// failureCode is the code an ended audible job failed with, "" for none: the
+// result's "code" (the Bridge reports a failure as {"code","message"}),
+// cleaned and bounded, else one of codes its error starts with ("exists: ...").
+func failureCode(j Job, codes []string) string {
 	var r struct {
 		Code string `json:"code"`
 	}
 	if json.Unmarshal(j.Result, &r) == nil && r.Code != "" {
 		return cleanText(r.Code, maxShortText, false)
 	}
-	for _, c := range AudibleImportCodes {
+	for _, c := range codes {
 		if j.Error == c || strings.HasPrefix(j.Error, c+":") {
 			return c
 		}
 	}
 	return ""
+}
+
+// Bridge Phase 4c: keeping an account's places in step with Audible.
+
+// KindAudibleSync reads an account's places on Audible (lastpositions) for the
+// titles its params name and posts the ones ahead of this server's for the
+// account's person (POST /bridge/audible/accounts/{account}/listening,
+// furthest only); the other direction is the Bridge's push loop over GET
+// /bridge/progress, not a job. Params AudibleSyncParams; the server queues it
+// (internal, quiet) every AudibleSyncEvery per synced account, one open per
+// account (audibleAccountSuffix).
+const KindAudibleSync = "audible.sync"
+
+// AudibleSyncEvery is how often the scheduler queues a synced account's
+// audible.sync.
+const AudibleSyncEvery = 15 * time.Minute
+
+// The audible.sync failure code the server reads (AudibleSyncCode): Audible
+// refused the account (the Bridge's "Sign in again" state), so no sync is
+// queued until the Bridge maps the account again.
+const SyncAudibleRefused = ImportAudibleRefused
+
+// AudibleSyncTitle is one title an audible.sync reads: its ASIN, the book on
+// this server it is matched to (library and book path, the progress key the
+// Bridge's events name) and Audible's runtime in seconds (0 unknown), which
+// the Bridge's runtime guards read.
+type AudibleSyncTitle struct {
+	ASIN      string `json:"asin"`
+	LibraryID int64  `json:"library_id"`
+	Path      string `json:"path"`
+	RuntimeS  int64  `json:"runtime_s"`
+}
+
+// AudibleSyncParams are audible.sync's params, built by the server when it
+// queues the job: the account and every title to sync (matched to a book on
+// this server, not marked "Not this book" or "Don't sync this book", not gone
+// from the account), by ASIN.
+type AudibleSyncParams struct {
+	Account string             `json:"account"`
+	Titles  []AudibleSyncTitle `json:"titles"`
+}
+
+const (
+	// maxAudibleSyncParamsBytes bounds audible.sync's params: thousands of
+	// titles (about 120 bytes each); AudibleSync leaves out the last titles of
+	// a list that would be longer.
+	maxAudibleSyncParamsBytes = 1 << 20
+	// maxSyncPathBytes is the longest book path a title may name (the
+	// catalog's MaxPathBytes).
+	maxSyncPathBytes = 4096
+)
+
+// audibleSyncParams checks audible.sync's params strictly: an account id, and
+// titles each with an ASIN, a library and a clean book path (once each ASIN).
+func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p AudibleSyncParams
+	if err := decodeStrict(raw, &p); err != nil {
+		return nil, invalid("params: %v", err)
+	}
+	if !AudibleAccountPattern.MatchString(p.Account) {
+		return nil, invalid("account must match %s", AudibleAccountPattern)
+	}
+	if p.Titles == nil {
+		p.Titles = []AudibleSyncTitle{}
+	}
+	seen := make(map[string]bool, len(p.Titles))
+	for _, t := range p.Titles {
+		switch {
+		case !asinPattern.MatchString(t.ASIN) || seen[t.ASIN]:
+			return nil, invalid("titles: each asin must be an ASIN, once")
+		case t.LibraryID <= 0:
+			return nil, invalid("titles: library_id is required")
+		case t.Path == "" || len(t.Path) > maxSyncPathBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
+			return nil, invalid("titles: path must be a clean book path")
+		case t.RuntimeS < 0:
+			return nil, invalid("titles: runtime_s must not be negative")
+		}
+		seen[t.ASIN] = true
+	}
+	return json.Marshal(p)
+}
+
+// AudibleSync is the NewJob that syncs account's titles (in the order given),
+// leaving out the last ones when their params would pass
+// maxAudibleSyncParamsBytes (dropped reports how many).
+func AudibleSync(account string, titles []AudibleSyncTitle, priority int) (job NewJob, dropped int) {
+	if titles == nil {
+		titles = []AudibleSyncTitle{}
+	}
+	keep := titles
+	raw, _ := json.Marshal(AudibleSyncParams{Account: account, Titles: keep})
+	for len(raw) > maxAudibleSyncParamsBytes && len(keep) > 0 {
+		keep = keep[:len(keep)*9/10]
+		raw, _ = json.Marshal(AudibleSyncParams{Account: account, Titles: keep})
+	}
+	return NewJob{Kind: KindAudibleSync, Params: raw, Priority: priority}, len(titles) - len(keep)
+}
+
+// AudibleSyncOf reads an audible.sync's account.
+func AudibleSyncOf(j Job) (account string, err error) {
+	var p AudibleSyncParams
+	err = json.Unmarshal(j.Params, &p)
+	return p.Account, err
+}
+
+// AudibleSyncCode is the code an ended audible.sync failed with, "" for none:
+// the result's "code", else an error starting with SyncAudibleRefused.
+func AudibleSyncCode(j Job) string {
+	if j.State != StateFailed {
+		return ""
+	}
+	return failureCode(j, []string{SyncAudibleRefused})
+}
+
+// AudibleSynced reports whether an ended audible.sync read Audible's places:
+// done, and its result says neither waiting (Audible asked the Bridge to wait,
+// so it called nothing) nor sync_off (the server's sync was off by the time it
+// ran). The Bridge's result fields, hand-mirrored like the failure code.
+func AudibleSynced(j Job) bool {
+	if j.State != StateDone {
+		return false
+	}
+	var r struct {
+		Waiting bool `json:"waiting"`
+		SyncOff bool `json:"sync_off"`
+	}
+	_ = json.Unmarshal(j.Result, &r) // a result that isn't one of these is a sync's
+	return !r.Waiting && !r.SyncOff
+}
+
+// CancelAudibleSyncs cancels account's open sync inside tx (removed or paused,
+// as CancelAudiblePolls).
+func CancelAudibleSyncs(ctx context.Context, tx *sql.Tx, account, reason string, now time.Time) error {
+	job, _ := AudibleSync(account, nil, 0)
+	return cancelOpenTx(ctx, tx, jobKey(job), at(now), reason)
 }

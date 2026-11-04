@@ -145,11 +145,13 @@ func (c *Catalog) AudibleTitle(ctx context.Context, account, asin string) (*Audi
 }
 
 // AudibleTitlePatch is the console's change to a title: "Not this book"
-// (rejected) and the backup's destination (dest_path, "" for the account's
-// placement). A nil field is left as it is.
+// (rejected), the backup's destination (dest_path, "" for the account's
+// placement) and "Don't sync this book" (no_sync, Phase 4c: the sync only,
+// never a backup). A nil field is left as it is.
 type AudibleTitlePatch struct {
 	Rejected *bool   `json:"rejected"`
 	DestPath *string `json:"dest_path"`
+	NoSync   *bool   `json:"no_sync"`
 }
 
 // PatchAudibleTitle applies the console's change to a title and returns it:
@@ -187,6 +189,12 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 				return err
 			}
 		}
+		if p.NoSync != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE audible_titles SET no_sync = ?, updated_at = ? WHERE account = ? AND asin = ?`,
+				*p.NoSync, now, account, asin); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -195,11 +203,13 @@ func (c *Catalog) PatchAudibleTitle(ctx context.Context, account, asin string, p
 	return c.AudibleTitle(ctx, account, asin)
 }
 
-// AudibleAccountPatch is the console's change to an account: its policy and
-// its placement template. A nil field is left as it is.
+// AudibleAccountPatch is the console's change to an account: its policy, its
+// placement template and whether its places sync with Audible (Phase 4c). A
+// nil field is left as it is.
 type AudibleAccountPatch struct {
 	Policy   *string `json:"policy"`
 	Template *string `json:"template"`
+	Sync     *bool   `json:"sync"`
 }
 
 // PatchAudibleAccount applies the console's change to account id and returns
@@ -237,6 +247,20 @@ func (c *Catalog) PatchAudibleAccount(ctx context.Context, id string, p AudibleA
 			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET template = ?, updated_at = ? WHERE account = ?`,
 				*p.Template, now, id); err != nil {
 				return err
+			}
+		}
+		// Turned on, the account's first sync is due at the scheduler's next
+		// pass; turned off, its open sync is cancelled (a running one posts
+		// nothing more: the listening route answers sync_off).
+		if p.Sync != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE audible_accounts SET sync = ?1, sync_queued_at = NULL, updated_at = ?2
+				  WHERE account = ?3 AND sync <> ?1`, *p.Sync, now, id); err != nil {
+				return err
+			}
+			if !*p.Sync {
+				if err := bridge.CancelAudibleSyncs(ctx, tx, id, bridge.CancelAudibleSyncOff, c.now()); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

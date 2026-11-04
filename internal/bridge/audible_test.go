@@ -146,7 +146,7 @@ func TestAudiblePollParams(t *testing.T) {
 		t.Fatalf("AudiblePoll params = %s", raw)
 	}
 	// One open poll an account, whatever its template.
-	if audiblePollSuffix(AudiblePoll("acct0001", "a", 0)) != audiblePollSuffix(AudiblePoll("acct0001", "", 0)) {
+	if audibleAccountSuffix(AudiblePoll("acct0001", "a", 0)) != audibleAccountSuffix(AudiblePoll("acct0001", "", 0)) {
 		t.Fatal("the dedupe key depends on the template")
 	}
 }

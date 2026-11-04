@@ -314,7 +314,8 @@ function hostFolder(root: string): string {
 
 /**
  * Whether a job of this kind is one the server queues itself (a podcast's feed
- * checks, episode fetches and retention, an Audible account's scheduled poll),
+ * checks, episode fetches and retention, an Audible account's scheduled poll,
+ * backup and sync),
  * so a job with no requester reads "Scheduled by the server" rather than a
  * deleted account's (BRIDGE-03). A follow (podcast.subscribe) always has a
  * listener behind it.
@@ -323,6 +324,7 @@ export function serverScheduled(kind: string): boolean {
   return (
     (kind.startsWith('podcast.') && kind !== 'podcast.subscribe') ||
     kind === 'audible.poll' ||
-    kind === 'audible.import'
+    kind === 'audible.import' ||
+    kind === 'audible.sync'
   );
 }

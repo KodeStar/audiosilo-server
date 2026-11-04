@@ -17,6 +17,7 @@ import {
   accountName,
   backupRunning,
   canBackUp,
+  canSync,
   chosenAccount,
   cleanDest,
   importStatus,
@@ -52,6 +53,8 @@ function account(over: Partial<AudibleAccount> = {}): AudibleAccount {
     template: '',
     policy_since: '2026-11-01T09:00:00Z',
     backup_estimate: { count: 13, bytes: 9_400_000_000 },
+    last_sync_at: null,
+    refused_at: null,
     ...over,
   };
 }
@@ -70,6 +73,7 @@ function title(over: Partial<AudibleTitle> = {}): AudibleTitle {
     match: { library_id: 1, path: 'Brandon Sanderson/Mistborn', how: 'asin' },
     rejected: false,
     ignored: false,
+    no_sync: false,
     dest_path: '',
     first_seen: '2026-11-01T09:00:00Z',
     updated_at: '2026-11-01T09:00:00Z',
@@ -603,7 +607,7 @@ describe('audible backups', () => {
     for (const b of buttons) expect(b).toBeDisabled();
   });
 
-  it("saves an account's policy and template", async () => {
+  it("saves an account's policy, template and sync", async () => {
     const calls = mockFetch(
       routes(true, {
         'PATCH /admin/audible/accounts/acct0001': (req) => ({
@@ -616,8 +620,8 @@ describe('audible backups', () => {
     const card = heading.closest('section') as HTMLElement;
     expect(await within(card).findByText("Beside the series' other books")).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(within(card).getByRole('button', { name: 'Backup settings...' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Backups for Chris (US)' });
+    await user.click(within(card).getByRole('button', { name: 'Account settings...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings for Chris (US)' });
     await user.selectOptions(
       within(dialog).getByRole('combobox', { name: 'Back up by itself' }),
       'series',
@@ -626,12 +630,15 @@ describe('audible backups', () => {
       within(dialog).getByRole('textbox', { name: 'Placement template' }),
       '{{Author}/{{Title}',
     );
+    const sync = within(dialog).getByRole('switch', { name: 'Sync listening places with Audible' });
+    expect(sync).toBeChecked();
+    await user.click(sync);
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       const patch = calls.find((c) => c.method === 'PATCH');
-      expect(patch?.body).toEqual({ policy: 'series', template: '{Author}/{Title}' });
+      expect(patch?.body).toEqual({ policy: 'series', template: '{Author}/{Title}', sync: false });
     });
-    expect(await screen.findByText('Backups for Chris (US) saved')).toBeInTheDocument();
+    expect(await screen.findByText('Settings for Chris (US) saved')).toBeInTheDocument();
   });
 });
 
@@ -844,5 +851,99 @@ describe('unmatched titles, explained', () => {
       within(rows[2]).getByText("The Bridge couldn't match it to a book on this server."),
     ).toBeInTheDocument();
     expect(within(rows[2]).queryByText('no_candidate')).not.toBeInTheDocument();
+  });
+});
+
+describe('audible sync', () => {
+  it('lets a title sync only while it is on this server and not left out', () => {
+    expect(canSync(title())).toBe(true);
+    expect(canSync(title({ match: null }))).toBe(false);
+    expect(canSync(title({ rejected: true }))).toBe(false);
+    expect(canSync(title({ state: 'gone' }))).toBe(false);
+    expect(canSync(title({ ignored: true }))).toBe(false);
+    expect(canSync(title({ no_sync: true }))).toBe(false);
+  });
+
+  it("says whether each account's places sync, paused or refused", async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/audible/accounts': {
+          body: {
+            accounts: [
+              account({ id: 'acct0001', label: 'On', last_sync_at: new Date().toISOString() }),
+              account({ id: 'acct0002', label: 'Second', sync: false }),
+              account({ id: 'acct0003', label: 'Refused', refused_at: new Date().toISOString() }),
+              account({ id: 'acct0004', label: 'New' }),
+              account({
+                id: 'acct0005',
+                label: 'Paused',
+                paused: true,
+                library_id: null,
+                library: null,
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const heading = await screen.findByRole('heading', { name: 'Audible accounts' });
+    const card = heading.closest('section') as HTMLElement;
+    expect(await within(card).findByText(/^On, synced /)).toBeInTheDocument();
+    expect(within(card).getByText('Off')).toBeInTheDocument();
+    expect(
+      within(card).getByText('Stopped: Audible refused the account. Sign in again on the Bridge.'),
+    ).toBeInTheDocument();
+    expect(within(card).getByText('On, not synced yet')).toBeInTheDocument();
+    expect(within(card).getByText('On, paused with the account')).toBeInTheDocument();
+  });
+
+  it("marks a title Don't sync, shows it, and undoes it", async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/audible/titles': {
+          body: {
+            titles: [
+              title(),
+              title({ asin: 'B000000002', title: 'Left Out', no_sync: true }),
+              title({ asin: 'B000000003', title: 'Not Here', match: null }),
+            ],
+            next: '',
+          },
+        },
+        'PATCH /admin/audible/titles/acct0001/B000000001': { body: title({ no_sync: true }) },
+        'PATCH /admin/audible/titles/acct0001/B000000002': { body: title({ no_sync: false }) },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole('button', { name: "Don't sync this book: The Final Empire" }),
+    );
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === 'PATCH' &&
+            c.path.endsWith('/B000000001') &&
+            (c.body as { no_sync?: boolean }).no_sync === true,
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText('Not synced')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Sync this book again: Left Out' }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === 'PATCH' &&
+            c.path.endsWith('/B000000002') &&
+            (c.body as { no_sync?: boolean }).no_sync === false,
+        ),
+      ).toBe(true),
+    );
+    expect(
+      screen.queryByRole('button', { name: "Don't sync this book: Not Here" }),
+    ).not.toBeInTheDocument();
   });
 });

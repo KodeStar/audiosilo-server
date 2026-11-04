@@ -715,3 +715,36 @@ func TestAudibleBackupAllSkipsDone(t *testing.T) {
 		t.Fatalf("back up the refused title on its own = %+v, %t, %v", p, pending, err)
 	}
 }
+
+// ignored (the manager registry's Ignored, 4a) keeps a title out of an
+// automatic policy's backups and Back up everything; "Don't sync this book"
+// (no_sync, Phase 4c) is the sync's alone and keeps it in both.
+func TestAudibleIgnoredAndNoSyncBackups(t *testing.T) {
+	t.Parallel()
+	f := newAudibleFixture(t, "all")
+	f.poll(t, "p1") // the library the account had: none
+	f.tick(time.Hour)
+	f.poll(t, "p2", avail("B000000001", ""), avail("B000000002", ""), avail("B000000003", ""))
+	if _, err := f.c.db.ExecContext(f.ctx, `UPDATE audible_titles SET ignored = 1 WHERE asin = 'B000000002'`); err != nil {
+		t.Fatal(err)
+	}
+	if x, err := f.c.PatchAudibleTitle(f.ctx, "acct0001", "B000000003", AudibleTitlePatch{NoSync: new(true)}); err != nil || !x.NoSync || x.Ignored {
+		t.Fatalf("don't sync = %+v, %v", x, err)
+	}
+	want := []string{"B000000001", "B000000003"}
+	if got := f.policyImports(t); !slices.Equal(got, want) {
+		t.Fatalf("policy queues %v, want %v", got, want)
+	}
+	all, err := f.c.AudibleBackupAll(f.ctx, "acct0001")
+	if err != nil || !slices.Equal(asins(all), want) {
+		t.Fatalf("everything = %v, %v, want %v", asins(all), err, want)
+	}
+	// A poll keeps no_sync (and ignored).
+	f.poll(t, "p3", avail("B000000001", ""), avail("B000000002", ""), avail("B000000003", ""))
+	if x := f.title(t, "B000000003"); !x.NoSync {
+		t.Fatalf("a poll dropped no_sync: %+v", x)
+	}
+	if x := f.title(t, "B000000002"); !x.Ignored {
+		t.Fatalf("a poll dropped ignored: %+v", x)
+	}
+}

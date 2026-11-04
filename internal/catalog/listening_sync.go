@@ -45,6 +45,9 @@ const (
 const (
 	reasonOlder        = "older"
 	reasonResumeBehind = "resume_behind"
+	// reasonBehind: a furthest-only batch's (SyncBatch.FurthestOnly) place not
+	// ahead of the stored one, or its unfinish: never applied, never offered.
+	reasonBehind = "behind"
 	// SyncInvalid, SyncNoAccess and SyncNotFound are also a SyncTarget's
 	// reason: the handler decides them while resolving an event's path.
 	SyncInvalid            = "invalid"
@@ -53,6 +56,10 @@ const (
 	reasonDurationMismatch = "duration_mismatch"
 	SyncNoAccess           = "no_access"
 	SyncNotFound           = "not_found"
+	// SyncNotSynced is a target's reason for an Audible account's batch (Bridge
+	// Phase 4c): the book is none of the account's synced titles (unmatched,
+	// "Not this book", "Don't sync this book", or gone from the account).
+	SyncNotSynced = "not_synced"
 )
 
 // Sync limits and tolerances.
@@ -83,6 +90,17 @@ const (
 	resumeBehindSlack = 60.0
 	// otherPlaceMin: a place within this of the kept one is not offered.
 	otherPlaceMin = 30.0
+	// furthestSlack: a furthest-only listen must be more than this ahead of
+	// the stored place to apply (an Audible place the Bridge pushed there,
+	// read back, is the same place, not a move).
+	furthestSlack = 1.0
+	// furthestPastEndRatio and furthestPastEndSlack: a furthest-only place past
+	// the book's end by more than 5% of it plus 2 minutes (the manager's
+	// wrong-match guard, serverPastRuntime) is another book's place (a title
+	// matched to the wrong volume or edition), rejected duration_mismatch; one
+	// past the end by less is the end.
+	furthestPastEndRatio = 1.05
+	furthestPastEndSlack = 120.0
 	// historyJoinGap and historyJoinOverlap: a span starting up to historyJoinGap
 	// after a history row on the book ended (or up to historyJoinOverlap before
 	// it: two batches' clock shifts differ by their latency) and within
@@ -235,6 +253,18 @@ type SyncBatch struct {
 	ClockOffset *float64
 	Events      []SyncEvent
 	Targets     map[Ref]SyncTarget
+	// FurthestOnly is an Audible account's batch (Bridge Phase 4c), set only by
+	// the Bridge's route, never from a request body: a listen applies only
+	// ahead of the stored place (furthestSlack), over any device's row and
+	// whatever its time, keeping the row's playback speed (Audible sends none),
+	// else it is not_applied "behind" with no offer (a finished row is at its
+	// end; a place heard at or before the row's finish_changed_at is from
+	// before a finish or restart here); a place far past the book's end (furthestPastEndRatio) is rejected
+	// duration_mismatch, one just past it is the end; an unfinish is "behind"
+	// too; a finish applies as any finish. Its spans are a place only: no
+	// listening session, daily roll-up or history is recorded (owner decision
+	// 2), and TokenID is 0.
+	FurthestOnly bool
 }
 
 // SyncResult is one event's answer.
@@ -360,6 +390,15 @@ func (c *Catalog) SyncListening(ctx context.Context, b SyncBatch) (*SyncAnswer, 
 		if ev.Kind == EventListen {
 			p.from = remapEnd(target.Book, ev.FromPos, ev.FromFile, ev.FromFilePos)
 			p.to = remapEnd(target.Book, ev.ToPos, ev.ToFile, ev.ToFilePos)
+			// An Audible place past the book's end: far past it, the title is
+			// matched to another book; just past it, it is the end.
+			if book := target.Book; b.FurthestOnly && book != nil && book.Duration > 0 && p.to > book.Duration {
+				if p.to > book.Duration*furthestPastEndRatio+furthestPastEndSlack {
+					reject(reasonDurationMismatch)
+					continue
+				}
+				p.from, p.to = min(p.from, book.Duration), book.Duration
+			}
 		}
 		seen[ev.ID] = true
 		prepared = append(prepared, p)
@@ -609,12 +648,38 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 		return SyncResult{}, err
 	}
 	at := formatSessionTime(p.ended)
+	if s.b.FurthestOnly {
+		return s.furthestListen(ctx, p, stored, at)
+	}
 	mine := &ListeningOtherPlace{Position: p.to, DeviceID: s.b.DeviceID, DeviceName: s.b.DeviceName, UpdatedAt: at}
 	res, err := s.resolveListen(ctx, p, stored, mine)
 	if err != nil {
 		return res, err
 	}
 	return res, s.recordListening(ctx, p)
+}
+
+// furthestListen is a furthest-only batch's listen (SyncBatch.FurthestOnly):
+// behind (or at) the stored place, on a finished row, or heard at or before
+// the row's last finish or unfinish (finish_changed_at: a place from before a
+// restart here is the old reading's, not this one's), it is not applied and
+// offers nothing; ahead it is written whatever device or time the row has
+// (the player's own reconcile then moves or offers), the row's time never
+// moving back, its speed and its offered place kept. No listening is recorded.
+func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *syncRow, at string) (SyncResult, error) {
+	version := int64(1)
+	if stored != nil {
+		beforeRestart := stored.finishChangedAt.Valid && !p.ended.After(parseSessionTime(stored.finishChangedAt.String))
+		if stored.finished || beforeRestart || p.to <= stored.position+furthestSlack {
+			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+		}
+		version = stored.version + 1
+		at = laterStamp(at, stored.updatedAt)
+	}
+	if err := s.writePlace(ctx, p, version, false, at); err != nil {
+		return SyncResult{}, err
+	}
+	return SyncResult{Status: statusApplied}, nil
 }
 
 // resolveListen is a span's place: ResolvePlace, with the backstop, and the
@@ -715,9 +780,9 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 }
 
 // writePlace stores a span's place at version: position, length (the span's,
-// else the book's, else kept), speed, device, updatedAt and version, a start
-// when none; never the finish state. clear also drops the offered place. The
-// span's end is the newest link of the device's chain, kept on the row at
+// else the book's, else kept), speed (a furthest-only batch's keeps the
+// row's), device, updatedAt and version, a start when none; never the finish
+// state. clear also drops the offered place. The span's end is the newest link of the device's chain, kept on the row at
 // version (span_at, span_version: chainOf) for its next span, in this POST or a
 // later one.
 func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool, updatedAt string) error {
@@ -730,7 +795,8 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 		     position=excluded.position,
 		     duration=CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE progress.duration END,
-		     playback_speed=excluded.playback_speed, version=excluded.version, device_id=excluded.device_id,
+		     playback_speed=CASE WHEN ?15 THEN progress.playback_speed ELSE excluded.playback_speed END,
+		     version=excluded.version, device_id=excluded.device_id,
 		     device_name=excluded.device_name, updated_at=excluded.updated_at,
 		     started_at=COALESCE(progress.started_at, excluded.started_at),
 		     other_position=CASE WHEN ?12 THEN NULL ELSE progress.other_position END,
@@ -740,7 +806,7 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END,
 		     span_at=excluded.span_at, span_version=excluded.span_version`,
 		s.b.UserID, key.LibraryID, key.Path, p.to, p.length(), p.speed, version, s.b.DeviceID, s.b.DeviceName,
-		updatedAt, p.started.UTC().Format(time.RFC3339), clear, spanAt, version); err != nil {
+		updatedAt, p.started.UTC().Format(time.RFC3339), clear, spanAt, version, s.b.FurthestOnly); err != nil {
 		return err
 	}
 	s.written[key] = version
@@ -815,6 +881,9 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // change (applied, nothing written).
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
+	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
+		return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+	}
 	stored, err := s.row(ctx, key)
 	if err != nil {
 		return SyncResult{}, err
