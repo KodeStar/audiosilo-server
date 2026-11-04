@@ -1486,8 +1486,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   metaserve judges each, the better counts), the tagged position (only when no
   DIFFERENT series folder goes up: one position applies to every series guess and
   replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
-  the book's only when nothing was typed), which metaserve looks up itself; candidates carry metaserve's
-  `score` and `reasons`. A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
+  the book's only when nothing was typed), which metaserve looks up itself, plus `language` (the
+  book's, else the primary language of `metadata.region`: `meta.RegionLanguage`, us/uk/ca/au/in en,
+  de, fr, es, it, jp ja, br pt) and up to 4 `narrator` (the narrator credit's `names.Split`), both
+  set by `matchrun.QueryFor` and ignored by an older metaserve; candidates carry metaserve's
+  `score` and `reasons` (`narrator`, `language` passed through too). A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
   it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
   `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
@@ -1498,8 +1501,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
   (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
   them by region, so without it `au` beat `uk`), `asin_region` names the first's;
-  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
-  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  `meta.DefaultRecording` (identifier's, else among the recordings one of the book's narrators
+  reads that fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
+  preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
   the dialog starts from (the console has no copy of the rule). **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
@@ -1543,7 +1547,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
-  both lengths). A
+  both lengths). An identifier hit (`reasons.identifier`: the book's own ASIN/ISBN found it) needs
+  no lead unless the runner-up is one too (a community duplicate: review). A match run's best
+  candidate under `matchrun.ReviewFloor` (60) is no match, detail `weak_match`, its score kept and
+  its proposal empty (the dialog still lists everything). Fill (the default apply) also tidies a
+  title that is not an admin edit (`matchrun.tidyTitle`): when the file title, less the community
+  title, its subtitle, the series names (community's and the book's) and clutter (book/vol/part,
+  numbers, roman numerals, unabridged, litrpg, ...), leaves nothing, the community title is
+  written; any other word keeps the file's. The review lists it like any planned change. The
+  matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
+  `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
+  `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
+  against a local artifact in mirror mode, counted per outcome (run line in its doc comment). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
