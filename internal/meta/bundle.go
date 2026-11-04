@@ -140,7 +140,8 @@ func ChapterAt(starts []float64, position float64) int {
 }
 
 // HideSpoilers returns a copy of env gated for a listener at chapter (see
-// ChapterAt) of the current work, finished or not:
+// ChapterAt) of the current work, finished or not, on that book's chapters (env's
+// positions already translated onto them, OnRecording):
 //   - finished: the current work is kept whole;
 //   - a character is kept iff it is revealed by max(chapter, 1);
 //   - a recap is kept iff it covers chapter 0 (before this book) or a chapter

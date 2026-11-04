@@ -80,8 +80,10 @@ type MetaPersonRef struct {
 	Name string `json:"name"`
 }
 
-// MetaPosition is a spoiler position on a work's own (edition-independent)
-// timeline. Chapter is the logical work chapter; 0 = front matter / prior-book.
+// MetaPosition is a spoiler position. Chapter is the logical work chapter (the
+// work's own, edition-independent timeline; MetaWork.PositionScale says how long it
+// is), or in a /meta answer about a book of another length that book's chapter
+// (OnRecording); 0 = front matter / prior-book, on either.
 type MetaPosition struct {
 	Chapter int `json:"chapter"`
 }
@@ -163,6 +165,11 @@ type MetaWork struct {
 	// CommunityDescription is the CC BY-SA description, separate from
 	// Description (see MetaCommunityDescription).
 	CommunityDescription *MetaCommunityDescription `json:"community_description,omitempty"`
+	// PositionScale is the scale the Characters' and Recaps' positions are numbered
+	// on, when the work states one and they still are: a /meta answer about a book
+	// whose chapters are on another scale has them translated onto that book
+	// (OnRecording) and omits it.
+	PositionScale *MetaPositionScale `json:"position_scale,omitempty"`
 	// Attribution is present iff the work carries any CC BY-SA content (see
 	// carriesCommunityContent), so a client shows the credit exactly when it
 	// shows content that needs it.
@@ -635,6 +642,7 @@ func (s *Service) toWork(detail *upstreamWorkDetail) *MetaWork {
 		Recaps:               toRecaps(detail.Recaps),
 		RecapSummary:         toRecapSummary(detail.RecapSummary),
 		CommunityDescription: toCommunityDescription(detail.CommunityDescription),
+		PositionScale:        toPositionScale(detail.PositionScale),
 	}
 	if carriesCommunityContent(w) {
 		w.Attribution = s.attribution(w.ID)

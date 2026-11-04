@@ -35,6 +35,12 @@ import (
 // match but generated content answers {"matched": false, "work": {...}}:
 // meta.Answer, per request, after the cache and `local`, never cached.
 //
+// A work's community positions are numbered on its own scale (position_scale); on a
+// book whose chapters are on another, they are answered translated onto this book's
+// chapters (meta.OnRecording), per request and never cached, so every client's gate
+// and spoilers=hide below compare like with like. The cache is keyed by identifier,
+// and two books sharing an ASIN can differ in their chapters.
+//
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
 // newer client degrades to the full envelope rather than a 400:
@@ -85,6 +91,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if env != nil {
 		cp := *env
 		out = &cp
+		out.Work = meta.OnRecording(env.Work, book.Chapters, book.Duration)
 		// `local` is an extra like `previous`: when the caller's books can't be
 		// placed, the envelope goes out without it (the shared rails, unannotated)
 		// rather than failing a lookup that succeeded - and that a client which never
