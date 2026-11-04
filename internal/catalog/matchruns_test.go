@@ -102,7 +102,7 @@ func TestListMatchRunItemsBestFirst(t *testing.T) {
 
 // TestClearCommunityMatches: clearing one library removes its community overrides
 // and covers and rebuilds its books (the scanned values back, an admin's own edit,
-// upload and the manager's enrichment kept), drops its match runs and its books'
+// upload and an enrichment kept), drops its match runs and its books'
 // items in a run over every library, and leaves the other library alone; clearing
 // every library then takes the rest.
 func TestClearCommunityMatches(t *testing.T) {
@@ -179,7 +179,7 @@ func TestClearCommunityMatches(t *testing.T) {
 		t.Errorf("uploaded cover = %v, want kept", err)
 	}
 	if b := mustBook(t, c, ctx, one.ID, "A/Enriched"); b.ASIN != "B000000003" {
-		t.Errorf("enriched asin = %q, want the manager's kept", b.ASIN)
+		t.Errorf("enriched asin = %q, want the enrichment's kept", b.ASIN)
 	}
 	if b := mustBook(t, c, ctx, two.ID, "B/Other"); b.ASIN != "B000000004" {
 		t.Errorf("other library's asin = %q, want untouched", b.ASIN)

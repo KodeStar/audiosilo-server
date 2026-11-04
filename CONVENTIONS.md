@@ -2785,7 +2785,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
   config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (an
-  embedding launcher's bind/TLS/public URL, via `pkg/launcher.Options`) are `Pin`ned and locked as `"launcher"`
+  embedding launcher's bind/TLS/public URL/libraries, via `pkg/launcher.Options`) are `Pin`ned and locked as `"launcher"`
   (the console says "Set by the program that started the server"). `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
   id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/

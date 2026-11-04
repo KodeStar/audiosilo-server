@@ -52,8 +52,8 @@ type Options struct {
 	// Log is the logger to use; if nil a default stderr text logger is created.
 	Log *slog.Logger
 	// Setup selects the first-run flow. false (default, headless): auto-create the
-	// admin and print the one-time credentials banner. true (CLI --setup, or a
-	// future GUI launcher): leave the admin to the browser setup wizard - when no
+	// admin and print the one-time credentials banner. true (CLI --setup, or any
+	// GUI launcher): leave the admin to the browser setup wizard - when no
 	// admin exists yet a token-guarded /setup is enabled instead.
 	Setup bool
 	// OnURL, if set, is called once at startup with the URL the user should open:

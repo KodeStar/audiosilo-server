@@ -1,8 +1,8 @@
 // Package match identifies whether two book records refer to the same audiobook,
 // across the wildly inconsistent ways titles are stored. It is the shared, reusable
-// matcher used by the Bridge's Audible backup (to map an Audible library onto a
-// server's books) and by the server itself (the listening import, enrichment,
-// dedup, smarter lookup).
+// matcher used by the Bridge (its Audible backup, to map an Audible library onto a
+// server's books, and its metaops identification) and by the server itself (the
+// listening import, enrichment, dedup, smarter lookup).
 //
 // Real libraries rarely carry an ASIN or a series index on every book, and titles
 // appear every which way: "Diary of a Wimpy Kid: The Ugly Truth (Book 5)",

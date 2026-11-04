@@ -49,7 +49,8 @@ the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
 path → next to the binary → `$PATH`) and, only if none is found, auto-downloads a
 cached static build into `<data>/tools` (`internal/toolfetch`, HTTPS, self-checked
 by running `-version`; degrades gracefully offline and retries next start). Native
-GUI installers + a system-tray launcher are a deferred idea (see DISTRIBUTION.md).
+GUI installers + a system-tray launcher are not planned (DISTRIBUTION.md: no desktop
+installers).
 
 **First-run setup wizard** (`--setup`, also the natural default for any GUI launcher):
 instead of auto-creating the admin and printing credentials, the server mints a
@@ -107,7 +108,7 @@ admin/connect UI changes. Mapping table:
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so an embedding launcher (another module) can run the server in-process (Run/Options; the archived audiosilo-manager did)
-pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto

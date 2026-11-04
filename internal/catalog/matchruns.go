@@ -28,8 +28,8 @@ const (
 	// the same recording's ASIN in the preferred marketplace.
 	MatchModeRepick = "repick"
 	// MatchModeRefresh looks the books with an ASIN or ISBN up by it, to fill in
-	// the details an identifier alone didn't bring (the manager's enrichment, an
-	// apply of ids only).
+	// the details an identifier alone didn't bring (an enrichment, an apply of
+	// ids only).
 	MatchModeRefresh = "refresh"
 )
 
@@ -390,8 +390,8 @@ func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, er
 
 // CommunityASINBooks lists the books whose ASIN an admin accepted from a community
 // match (a book_overrides row of source community): what a repick run reconsiders.
-// An ASIN from the tags, an admin's own edit or the manager's enrichment is never
-// one.
+// An ASIN from the tags, an admin's own edit or an enrichment (the Bridge's
+// Audible backfill) is never one.
 func (c *Catalog) CommunityASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
 	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND b.asin <> '' AND EXISTS(SELECT 1 FROM book_overrides o
@@ -468,8 +468,8 @@ type ClearedMatches struct {
 
 // ClearCommunityMatches undoes the community matches of one library (0 = every
 // library), so its books can be matched from fresh: its community overrides and
-// covers go (an admin's own edits and uploads, the tags and the manager's
-// enrichment stay), each book's effective metadata and cover art are rebuilt, and
+// covers go (an admin's own edits and uploads, the tags and an enrichment
+// stay), each book's effective metadata and cover art are rebuilt, and
 // the match runs go with their reviews (a run over every library loses only this
 // library's books). One transaction. The caller makes sure no match run is
 // working meanwhile (matchrun.Runner.Clear).

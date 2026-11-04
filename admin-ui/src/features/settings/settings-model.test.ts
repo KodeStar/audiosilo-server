@@ -1,6 +1,6 @@
 import i18n from '@/i18n';
 import { settingsWith } from '@/test/fixtures';
-import { outOfRange, restartList, SETTINGS_PAGES, visiblePages } from './settings-model';
+import { lockLabel, outOfRange, restartList, SETTINGS_PAGES, visiblePages } from './settings-model';
 
 describe('outOfRange', () => {
   it('refuses what is not a whole number inside the range, and blank', () => {
@@ -56,5 +56,13 @@ describe('restartList', () => {
     const t = i18n.getFixedT('en');
     expect(restartList(t, one, 'en')).toBe('Metadata source');
     expect(restartList(t, two, 'en')).toBe('Metadata source and HTTPS mode');
+  });
+});
+
+describe('lockLabel', () => {
+  it('names the variable, or the program that started the server for a launcher pin', () => {
+    const t = i18n.getFixedT('en');
+    expect(lockLabel(t, 'AUDIOSILO_PUBLIC_URL')).toBe('Set by AUDIOSILO_PUBLIC_URL');
+    expect(lockLabel(t, 'launcher')).toBe('Set by the program that started the server');
   });
 });

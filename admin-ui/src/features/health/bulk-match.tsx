@@ -87,7 +87,7 @@ import {
  * how much it may write, and applies it. A repick run switches books matched
  * earlier to the preferred marketplace's ASIN, and a refresh run looks the books
  * that already have an ASIN or ISBN up by it to fill in their details (an
- * identifier alone, from the manager or an ids-only apply, brought none). Runs
+ * identifier alone, from an enrichment or an ids-only apply, brought none). Runs
  * work on the server, so the
  * card follows the newest one by polling, whoever started it.
  */
