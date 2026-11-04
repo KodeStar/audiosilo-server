@@ -73,7 +73,7 @@ export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
   return s.locked[id];
 }
 
-/** What a lock says: "Set by AUDIOSILO_X" or "Managed by the desktop app". */
+/** What a lock says: "Set by AUDIOSILO_X" or "Set by the program that started the server". */
 export function lockLabel(t: TFunction, lock: string): string {
   return lock === 'launcher'
     ? t('settings.locked.launcher')

@@ -15,8 +15,8 @@ import (
 // JSON compression (PERF-SPIKE S5). A 200-book page is ~71 KB of JSON and
 // ~10 KB gzipped: away from home that is the difference between several round
 // trips and one. Every client sends Accept-Encoding: gzip and decodes it
-// transparently (browsers, the apps' fetch, Go's http.Transport in the Bridge
-// and the manager), so the wire format is unchanged.
+// transparently (browsers, the apps' fetch, Go's http.Transport in the
+// Bridge), so the wire format is unchanged.
 //
 // What is compressed is decided twice, and both must say yes:
 //

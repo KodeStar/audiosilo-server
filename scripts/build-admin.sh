@@ -2,8 +2,8 @@
 #
 # Builds the admin console (admin-ui/, React + Vite) into
 # internal/web/adminui/dist, which `go build` then embeds. This is the one build
-# recipe: server CI, GoReleaser, the manager's workflows and the docs screenshot
-# pipeline all call it (only the Dockerfile inlines it, for layer caching).
+# recipe: server CI, GoReleaser and the docs screenshot pipeline all call it
+# (only the Dockerfile inlines it, for layer caching).
 #
 # Usage:
 #   scripts/build-admin.sh              # npm ci + check + build

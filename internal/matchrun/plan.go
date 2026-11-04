@@ -311,8 +311,8 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // matchedSince reports whether a match run's book has an ASIN or ISBN now. The
 // run took only books with neither (UnmatchedBooks), so one has been matched
 // since: by hand (from the review or the book page), by another admin or the
-// manager, or by a rescan reading one from the tags. The run's match never
-// writes over it, whatever the scope. An item whose own apply a stop cut short
+// Bridge's Audible backfill, or by a rescan reading one from the tags. The
+// run's match never writes over it, whatever the scope. An item whose own apply a stop cut short
 // after its fields went in (DetailCoverPending) holds the run's identifier, not
 // one matched since.
 func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {

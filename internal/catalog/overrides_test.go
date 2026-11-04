@@ -299,8 +299,8 @@ func TestNormalizeOverride(t *testing.T) {
 	}
 }
 
-// TestOverrideBeatsEnrichment: an admin's ASIN edit wins over one the manager
-// attached, before and after the enrichment is (re)set, and survives a rescan.
+// TestOverrideBeatsEnrichment: an admin's ASIN edit wins over an enrichment's
+// ASIN, before and after the enrichment is (re)set, and survives a rescan.
 func TestOverrideBeatsEnrichment(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)

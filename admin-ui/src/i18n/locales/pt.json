@@ -1943,7 +1943,7 @@
   "settings.savedNow": "Aplicado agora. Não é preciso reiniciar.",
   "settings.savedRestart": "Guardado. Parte das alterações só tem efeito quando o servidor reiniciar.",
   "settings.locked.env": "Definido por {{name}}",
-  "settings.locked.launcher": "Gerido pela aplicação de ambiente de trabalho",
+  "settings.locked.launcher": "Definido pelo programa que iniciou o servidor",
   "settings.locked.hint": "Altere-o onde está definido: uma variável de ambiente tem prioridade sobre esta página.",
   "settings.restart.needed": "Reiniciar para aplicar",
   "settings.restart.pending": "A aguardar um reinício",
