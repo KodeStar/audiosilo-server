@@ -89,9 +89,9 @@ func ScopesFor(mode string) []string {
 // or ISBN of its own sends its tags' (Book.TagASIN, TagISBN) as hints: metaserve
 // looks them up like the book's own, and an identifier hit whose length fits is
 // confident (Classify), but the book is matched only by what an apply writes.
-// Its language is the book's, else its tags' (meta.NormalizeLanguage), else the
-// region's (meta.RegionLanguage: a UK server's books are most likely in
-// English); its narrators are its narrator credit's names.
+// Its language is the book's, else its tags' (meta.NormalizeLanguage), else none:
+// never the region's, as a marketplace doesn't say what language a library is in.
+// Its narrators are its narrator credit's names.
 func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
 	asin, isbn := b.ASIN, b.ISBN
 	if asin == "" && isbn == "" {
@@ -101,8 +101,7 @@ func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
 		Author: b.Author, Duration: b.Duration,
 		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: asin, BookISBN: isbn, Region: region,
-		Language: cmp.Or(meta.NormalizeLanguage(b.Language), meta.NormalizeLanguage(b.TagLanguage),
-			meta.RegionLanguage(region)),
+		Language:  cmp.Or(meta.NormalizeLanguage(b.Language), meta.NormalizeLanguage(b.TagLanguage)),
 		Narrators: names.Split(b.Narrator),
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -426,6 +428,41 @@ func TestAdminMatchSendsTheBookFacts(t *testing.T) {
 	if got.Get("q") != "artemis" || strings.Join(got["author"], "|") != "Andy Weir|Weir, Andy" ||
 		strings.Join(got["title"], "|") != "Artemis" || got.Get("runtime") != "32400" {
 		t.Fatalf("works/match sent %v", got)
+	}
+}
+
+// TestAdminMatchLanguage: the match dialog sends a book's own language, typed
+// text or not, and a book that says none sends none: metadata.region names a
+// store, not what language a library is in.
+func TestAdminMatchLanguage(t *testing.T) {
+	t.Parallel()
+	m := &mockMetaserve{lookupCode: http.StatusNotFound, match: true}
+	mock := httptest.NewServer(m.handler())
+	t.Cleanup(mock.Close)
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.Metadata.Enabled, c.Metadata.BaseURL, c.Metadata.Region = true, mock.URL, "de"
+	})
+	adminTok, _, _ := adminAndMember(t, e)
+	lib, base := seedCatalog(t, e)
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: lib, RelPath: "Andy Weir/Tagged", IsFolder: true,
+		Title: "Tagged", Author: "Andy Weir", Duration: 600, Format: "m4b", AddedAt: "2024-03-01T00:00:00Z", TagLanguage: "fr"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, url, want string }{
+		{"no language", base + "/book/match?path=" + escape("Andy Weir/Artemis"), ""},
+		{"no language, typed text", base + "/book/match?path=" + escape("Andy Weir/Artemis") + "&q=artemis", ""},
+		{"its tags'", base + "/book/match?path=" + escape("Andy Weir/Tagged"), "fr"},
+		{"its tags', typed text", base + "/book/match?path=" + escape("Andy Weir/Tagged") + "&q=tagged", "fr"},
+	} {
+		if resp, body := e.do(t, "GET", tc.url, adminTok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+		m.mu.Lock()
+		got := m.gotMatch
+		m.mu.Unlock()
+		if got.Get("language") != tc.want || got.Has("language") != (tc.want != "") {
+			t.Errorf("%s on a de server: works/match sent language %q", tc.name, got["language"])
+		}
 	}
 }
 

@@ -67,9 +67,8 @@ type MatchQuery struct {
 	// NoSeries says the caller reads no candidate's series (a repick), so the
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
-	// Language is the language the book is in, as the book or the server says
-	// it (QueryFor: the book's language, else its tags', else RegionLanguage),
-	// "" for unknown.
+	// Language is the language the book says it is in (QueryFor: the book's
+	// language, else its tags'), "" for unknown.
 	// metaserve reads a language tag or name ("en", "eng", "English") and
 	// scores a work it knows to be in another language lower; an older
 	// metaserve ignores it.
@@ -294,17 +293,6 @@ func readBy(r *MatchRecording, narrators []string) bool {
 	}
 	return false
 }
-
-// regionLanguages is the primary language of each Audible marketplace
-// (config.Regions): what a book on a server preferring it is most likely in.
-var regionLanguages = map[string]string{
-	"us": "en", "uk": "en", "ca": "en", "au": "en", "in": "en",
-	"de": "de", "fr": "fr", "es": "es", "it": "it", "jp": "ja", "br": "pt",
-}
-
-// RegionLanguage is the primary language (a BCP-47 tag) of the marketplace
-// region, "" for none or one it doesn't know.
-func RegionLanguage(region string) string { return regionLanguages[region] }
 
 // NormalizeLanguage reads a language tag as works/match takes it: the first of
 // several ("eng;fre", "en/de") without a note ("English (US)"), a BCP-47 tag's

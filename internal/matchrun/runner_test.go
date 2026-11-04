@@ -858,24 +858,40 @@ func TestMatchRecordsAWeakMatchAsNone(t *testing.T) {
 	}
 }
 
-// TestMatchSendsLanguageAndNarrators: a run's query carries the book's
-// narrators and its language, else the preferred marketplace's.
+// TestMatchSendsLanguageAndNarrators: a run's query carries the book's narrators
+// and its tags' language, and a book that says no language sends none, never the
+// preferred marketplace's.
 func TestMatchSendsLanguageAndNarrators(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	b := &catalog.Book{LibraryID: e.lib, RelPath: "A/Dune", IsFolder: true, Title: "Dune", Author: "Frank Herbert",
-		Narrator: "Scott Brick; Simon Vance", Duration: 600, AddedAt: "2020-01-01"}
-	if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
-		t.Fatal(err)
+	for _, b := range []*catalog.Book{
+		{LibraryID: e.lib, RelPath: "A/Dune", IsFolder: true, Title: "Dune", Author: "Frank Herbert",
+			Narrator: "Scott Brick; Simon Vance", Duration: 600, AddedAt: "2020-01-01", TagLanguage: "fr"},
+		{LibraryID: e.lib, RelPath: "A/Emma", IsFolder: true, Title: "Emma", Author: "Jane Austen",
+			Duration: 600, AddedAt: "2020-01-01"},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
 	}
 	e.start(t, catalog.MatchModeMatch, "de")
 	e.matcher.mu.Lock()
 	defer e.matcher.mu.Unlock()
-	if len(e.matcher.queries) != 1 {
+	if len(e.matcher.queries) != 2 {
 		t.Fatalf("queries = %+v", e.matcher.queries)
 	}
-	q := e.matcher.queries[0]
-	if q.Language != "de" || !slices.Equal(q.Narrators, []string{"Scott Brick", "Simon Vance"}) {
-		t.Fatalf("query language %q narrators %q", q.Language, q.Narrators)
+	for _, q := range e.matcher.queries {
+		switch q.Title {
+		case "Dune":
+			if q.Language != "fr" || !slices.Equal(q.Narrators, []string{"Scott Brick", "Simon Vance"}) {
+				t.Fatalf("Dune: query language %q narrators %q", q.Language, q.Narrators)
+			}
+		case "Emma":
+			if q.Language != "" {
+				t.Fatalf("Emma says no language, on a de server it sent %q", q.Language)
+			}
+		default:
+			t.Fatalf("query for %q", q.Title)
+		}
 	}
 }

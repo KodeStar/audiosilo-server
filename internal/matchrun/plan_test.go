@@ -671,17 +671,21 @@ func TestPlanTidiesOnlyUnderFill(t *testing.T) {
 	}
 }
 
-// TestQueryForLanguage: the book's own language wins over the marketplace's,
-// and a marketplace with no known language sends none.
+// TestQueryForLanguage: a query sends the book's own language, else its tags',
+// and never the marketplace's: a book that says none sends none in any region.
 func TestQueryForLanguage(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ lang, tag, region, want string }{
-		{"", "", "uk", "en"}, {"", "", "de", "de"}, {"fr", "", "uk", "fr"}, {" ", "", "jp", "ja"}, {"", "", "", ""},
+		// A book with no language sends none, whatever the region.
+		{"", "", "de", ""}, {"", "", "uk", ""}, {"", "", "jp", ""}, {" ", "", "jp", ""}, {"", "", "", ""},
 		{"", "", "zz", ""},
-		// The tags' language comes after the book's own and before the region's.
-		{"", "German", "uk", "german"}, {"it", "German", "uk", "it"}, {"", "und", "uk", "en"},
-		// A placeholder says nothing, so the region's still counts.
-		{"", "N/A", "uk", "en"}, {"", "XXX", "de", "de"},
+		// The book's own language, in any region.
+		{"fr", "", "uk", "fr"}, {"en-GB", "", "de", "en"},
+		// The tags' language comes after the book's own.
+		{"", "German", "uk", "german"}, {"it", "German", "uk", "it"},
+		// A placeholder says nothing, and falls back to nothing.
+		{"", "N/A", "uk", ""}, {"", "XXX", "de", ""}, {"", "mis", "de", ""}, {"", "und", "uk", ""},
+		{"XXX", "German", "uk", "german"},
 	} {
 		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang, TagLanguage: tc.tag}, tc.region).Language; got != tc.want {
 			t.Errorf("language %q, tag %q on %q: %q, want %q", tc.lang, tc.tag, tc.region, got, tc.want)
