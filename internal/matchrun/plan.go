@@ -32,18 +32,22 @@ import (
 // when both lengths are known, a recording within meta.PlausibleRuntimeOff of the book's
 // length (the closest recording of a work can still be another edition: the
 // unabridged book of a work that holds only its dramatization).
-// An identifier hit (the book's own ASIN or ISBN named the work) needs no lead:
-// it is the book, unless the runner-up is one too (two works holding one
-// identifier: a duplicate in the community data, the admin's choice).
+// An identifier hit (the ASIN or ISBN the query sent named the work: in a run
+// always a tag hint, a book with its own being no run's subject) needs no lead:
+// it is the book. A runner-up that is one too would be two works holding one
+// identifier, the admin's choice; metaserve names one work per request today, so
+// that is a guard, not a case a run meets.
 const (
 	AutoScore = 90
 	AutoLead  = 10
 )
 
-// ReviewFloor is the score a match run's best candidate needs to be held for
-// review: below it the community most likely doesn't have the book (a weak
-// fit is almost always another book), so the item records no match, detail
-// DetailWeakMatch. The match dialog still lists every candidate.
+// ReviewFloor is the metaserve score a match run's best candidate needs to be
+// held for review: below it the community most likely doesn't have the book (a
+// weak fit is almost always another book), so the item records no match, detail
+// DetailWeakMatch. An older metaserve's fallback search scores on another scale
+// (scoreCandidate), where the floor says nothing: such a candidate stays for
+// review. The match dialog still lists every candidate.
 const ReviewFloor = 60
 
 // How much applying a run may write.
@@ -52,7 +56,8 @@ const (
 	// community enrichment finds it; everything the files say stays.
 	ScopeIDs = "ids"
 	// ScopeFill also fills every field the book has empty, and its cover when it
-	// has none; nothing it has is replaced.
+	// has none; nothing it has is replaced, except a cluttered title it tidies
+	// (tidyTitle).
 	ScopeFill = "fill"
 	// ScopeOverwrite takes every community value that differs, as accepting the
 	// match dialog with its default ticks does. An admin's own edit stays either way.
@@ -343,10 +348,10 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // matchedSince reports whether a match run's book has an ASIN or ISBN now. The
 // run took only books with neither (UnmatchedBooks), so one has been matched
 // since: by hand (from the review or the book page), by another admin or the
-// Bridge's Audible backfill, or by a rescan reading one from the tags. The
-// run's match never writes over it, whatever the scope. An item whose own apply a stop cut short
-// after its fields went in (DetailCoverPending) holds the run's identifier, not
-// one matched since.
+// Bridge's Audible backfill, or by a rescan reading one from an Audiobookshelf
+// metadata.json. The run's match never writes over it, whatever the scope. An
+// item whose own apply a stop cut short after its fields went in
+// (DetailCoverPending) holds the run's identifier, not one matched since.
 func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
 		return false
@@ -394,7 +399,8 @@ func lengthFits(p catalog.MatchProposal, seconds float64) bool {
 
 // Classify sorts a book's candidates (best first) into an outcome: confident
 // (OutcomeAuto), worth a look (OutcomeReview) or none (no candidate, or none
-// scoring ReviewFloor), with the best score and the next one's. p is the
+// scoring ReviewFloor on metaserve's scale, which only a candidate with Reasons
+// is), with the best score and the next one's. p is the
 // proposal of the best and seconds the book's length (0 = unknown).
 func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64) (outcome string, score, runnerUp int) {
 	if len(cands) == 0 {
@@ -405,21 +411,15 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 		runnerUp = cands[1].Score
 	}
 	identified := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
-	hit := identifierHit(cands[0])
-	confident := score >= AutoScore && score-runnerUp >= AutoLead
-	if hit {
-		confident = len(cands) == 1 || !identifierHit(cands[1])
+	lead := score-runnerUp >= AutoLead
+	if cands[0].IdentifierHit() {
+		lead = len(cands) == 1 || !cands[1].IdentifierHit()
 	}
 	switch {
-	case confident && identified && lengthFits(p, seconds):
+	case score >= AutoScore && lead && identified && lengthFits(p, seconds):
 		return catalog.OutcomeAuto, score, runnerUp
-	case score < ReviewFloor && !hit:
+	case score < ReviewFloor && cands[0].Reasons != nil:
 		return catalog.OutcomeNone, score, runnerUp
 	}
 	return catalog.OutcomeReview, score, runnerUp
-}
-
-// identifierHit reports whether the book's own ASIN or ISBN found c.
-func identifierHit(c meta.MatchCandidate) bool {
-	return c.Reasons != nil && c.Reasons.Identifier != ""
 }

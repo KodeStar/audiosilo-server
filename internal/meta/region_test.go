@@ -91,6 +91,7 @@ func TestDefaultRecording(t *testing.T) {
 // before the runtime does, after an identifier's; a narrator no recording
 // names, or none, leaves the runtime to choose.
 func TestDefaultRecordingPrefersTheNarrator(t *testing.T) {
+	t.Parallel()
 	people := func(names ...string) []MetaPersonRef {
 		out := []MetaPersonRef{}
 		for _, n := range names {
@@ -132,6 +133,17 @@ func TestDefaultRecordingPrefersTheNarrator(t *testing.T) {
 	if r := DefaultRecording(short, 653*60, "", []string{"Wil Wheaton"}); r == nil || r.ID != "bray" {
 		t.Errorf("a narrator's recording of another length: %v, want bray", r)
 	}
+	// A middle initial on either side is the same narrator.
+	initials := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "dietz", RuntimeMin: 653, Narrators: people("Norman Dietz")},
+		{ID: "wilson", RuntimeMin: 660, Narrators: people("George K. Wilson")},
+		{ID: "harding", RuntimeMin: 670, Narrators: people("Michael Harding")},
+	}}
+	for want, narrator := range map[string]string{"wilson": "George Wilson", "harding": "Michael A. Harding"} {
+		if r := DefaultRecording(initials, 653*60, "", []string{narrator}); r == nil || r.ID != want {
+			t.Errorf("narrated by %s: %v, want %s", narrator, r, want)
+		}
+	}
 	c.RecordingID = "cast"
 	if got := pick("Wil Wheaton"); got != "cast" {
 		t.Errorf("an identifier's recording beats the narrator: %s", got)
@@ -139,6 +151,7 @@ func TestDefaultRecordingPrefersTheNarrator(t *testing.T) {
 }
 
 func TestRegionLanguage(t *testing.T) {
+	t.Parallel()
 	for region, want := range map[string]string{"us": "en", "uk": "en", "in": "en", "de": "de", "jp": "ja", "br": "pt", "": "", "xx": ""} {
 		if got := RegionLanguage(region); got != want {
 			t.Errorf("RegionLanguage(%q) = %q, want %q", region, got, want)
@@ -149,6 +162,42 @@ func TestRegionLanguage(t *testing.T) {
 		if RegionLanguage(region) == "" {
 			t.Errorf("config.Regions has %q, regionLanguages does not", region)
 		}
+	}
+}
+
+// TestCandidatesIdentifierHitLeads: at one score the work an identifier named
+// comes first (metaserve breaks a tie on the title), and the ASIN that found it
+// leads its marketplace's, so a book the store lists under two keeps its tags'
+// when that store is the preferred one; another store's still comes first there.
+func TestCandidatesIdentifierHitLeads(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"other","score":100,"reasons":{"title":1}},
+			{"id":"found","score":100,"recording_id":"r","reasons":{"identifier":"asin"}}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"` + r.PathValue("id") + `","title":"T","recordings":[{"id":"r","runtime_min":600,
+			"asin":[{"region":"uk","asin":"B0UK000001"},{"region":"us","asin":"B0US000001"},{"region":"us","asin":"B0US000002"}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+
+	cands, err := s.Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "b0us000002", Region: "us"})
+	if err != nil || len(cands) != 2 || cands[0].WorkID != "found" {
+		t.Fatalf("candidates = %+v, %v; want the identifier's work first", cands, err)
+	}
+	rec := cands[0].Recordings[0]
+	if strings.Join(rec.ASINs, ",") != "B0US000002,B0US000001,B0UK000001" || rec.ASINRegion != "us" || rec.RegionASIN("us") != "B0US000002" {
+		t.Errorf("found recording = %+v, want the ASIN that found it first", rec)
+	}
+	if other := cands[1].Recordings[0]; other.ASINs[0] != "B0US000001" {
+		t.Errorf("the other work's recording = %+v, want metaserve's order", other)
+	}
+	cands, err = s.Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "B0US000002", Region: "uk"})
+	if err != nil || strings.Join(cands[0].Recordings[0].ASINs, ",") != "B0UK000001,B0US000002,B0US000001" {
+		t.Errorf("preferring uk: %+v, %v; want its ASIN first, then the one that found it", cands, err)
 	}
 }
 
@@ -207,9 +256,15 @@ func TestCandidatesRegionAndLimit(t *testing.T) {
 }
 
 func TestNormalizeLanguage(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
-		"en": "en", " English ": "en", "eng": "en", "en-GB": "en", "en_US": "en", "ger": "de", "Deutsch": "de",
-		"fre": "fr", "spa": "es", "jpn": "ja", "pt-BR": "pt", "und": "", "zxx": "", "": "", "Klingon": "klingon",
+		"en": "en", " English ": "english", "eng": "eng", "en-GB": "en", "en_US": "en", "Deutsch": "deutsch",
+		"pt-BR": "pt", "Klingon": "klingon", "français": "français",
+		// The first of several, without a note.
+		"eng;fre": "eng", "en/de": "en", "English (US)": "english", "en, de": "en",
+		// Says no language.
+		"und": "", "zxx": "", "mul": "", "mis": "", "XXX": "", "unknown": "", "None": "", "N/A": "", "NA": "",
+		"": "", "e": "", "123": "", "?": "",
 	} {
 		if got := NormalizeLanguage(in); got != want {
 			t.Errorf("NormalizeLanguage(%q) = %q, want %q", in, got, want)

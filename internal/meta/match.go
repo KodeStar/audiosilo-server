@@ -37,8 +37,9 @@ import (
 const maxMatchCandidates = 6
 
 // MatchQuery describes the book being matched. Text is what the admin typed and
-// ASIN/ISBN an identifier they gave; when all three are empty the book's own
-// identifiers are looked up. Title, Series, SeriesIndex and Author are the book's
+// ASIN/ISBN an identifier they gave; when all three are empty BookASIN/BookISBN
+// are looked up (the book's own identifiers, else its tag hints: matchrun.QueryFor).
+// Title, Series, SeriesIndex and Author are the book's
 // (tagged or edited) facts, Path and IsFolder its library path, which is read for
 // facts of its own (metadata.ReadPathLayout); all of them, with Duration, find and score
 // the candidates. Region is the server's preferred Audible marketplace (config
@@ -67,15 +68,16 @@ type MatchQuery struct {
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
 	// Language is the language the book is in, as the book or the server says
-	// it (QueryFor: the book's language, else RegionLanguage), "" for unknown.
+	// it (QueryFor: the book's language, else its tags', else RegionLanguage),
+	// "" for unknown.
 	// metaserve reads a language tag or name ("en", "eng", "English") and
 	// scores a work it knows to be in another language lower; an older
 	// metaserve ignores it.
 	Language string
 	// Narrators are the book's narrators, one name each (names.Split of its
 	// narrator credit). metaserve counts a recording they narrated in the
-	// work's favour, and DefaultRecording prefers one; an older metaserve
-	// ignores them.
+	// work's favour (a name that is also the author isn't sent: matchParams),
+	// and DefaultRecording prefers one; an older metaserve ignores them.
 	Narrators []string
 }
 
@@ -115,6 +117,12 @@ type MatchCandidate struct {
 	Reasons *MatchReasons `json:"reasons,omitempty"`
 }
 
+// IdentifierHit reports whether the identifier the query sent (the book's own
+// ASIN or ISBN, or a tag hint) found the work.
+func (c MatchCandidate) IdentifierHit() bool {
+	return c.Reasons != nil && c.Reasons.Identifier != ""
+}
+
 // MatchReasons is metaserve's account of a match score (works/match `reasons`),
 // passed through unchanged. Each field is omitted when the request did not let
 // it be judged.
@@ -150,7 +158,8 @@ type MatchSeries struct {
 // MatchRecording is one recording (narration/edition) of a candidate work.
 // ASINs are best first for this server (orderASINs): the preferred marketplace's,
 // then the US store's, then the rest. ASINRefs keeps each with its marketplace, as
-// metaserve lists them, and ASINRegion names the first one's.
+// metaserve lists them (an ASIN the work was found by first: toCandidate), and
+// ASINRegion names the first one's.
 type MatchRecording struct {
 	ID          string          `json:"id"`
 	Narrators   []MetaPersonRef `json:"narrators"`
@@ -247,42 +256,38 @@ func (r MatchRecording) HasRegion(region string) bool {
 // a runtime come last. A narrator's recording of another length is another
 // edition: the closest runtime then decides. nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
-	var best *MatchRecording
-	bestGap := math.Inf(1)
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
 		if c.RecordingID != "" && r.ID == c.RecordingID {
 			return r
 		}
 	}
-	theirs := func(r *MatchRecording) bool {
-		off, known := RuntimeOff(r.RuntimeMin, seconds)
-		return readBy(r, narrators) && (!known || off <= PlausibleRuntimeOff)
-	}
-	byNarrator := slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return theirs(&r) })
+	var best *MatchRecording
+	bestGap, bestTheirs := math.Inf(1), false
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if byNarrator && !theirs(r) {
-			continue
-		}
+		off, known := RuntimeOff(r.RuntimeMin, seconds)
+		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
 		gap := math.Inf(1)
 		if r.RuntimeMin > 0 {
 			gap = math.Abs(float64(r.RuntimeMin)*60 - seconds)
 		}
-		if best == nil || gap < bestGap || (gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)) {
-			best, bestGap = r, gap
+		if best == nil || (theirs && !bestTheirs) || (theirs == bestTheirs && (gap < bestGap ||
+			(gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)))) {
+			best, bestGap, bestTheirs = r, gap, theirs
 		}
 	}
 	return best
 }
 
-// readBy reports whether one of the book's narrators narrated r: a name
-// that folds like one of r's narrators, or a multi-word one whose every word
-// the book's credit holds (authorSimilarity, as an author agrees).
+// readBy reports whether one of the book's narrators narrated r: a name that
+// folds like one of r's narrators, or a multi-word one whose every word the
+// other holds, either way round: a credit and the community's list spell a
+// middle initial as they please ("George Wilson", "George K. Wilson").
 func readBy(r *MatchRecording, narrators []string) bool {
 	for _, n := range narrators {
 		for _, rn := range r.Narrators {
-			if authorSimilarity(n, rn.Name) == 1 {
+			if authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1 {
 				return true
 			}
 		}
@@ -301,33 +306,26 @@ var regionLanguages = map[string]string{
 // region, "" for none or one it doesn't know.
 func RegionLanguage(region string) string { return regionLanguages[region] }
 
-// languageNames are the spellings language tags use most for the languages a
-// marketplace speaks: English names and ISO 639-2 codes (bibliographic and
-// terminology), as files carry them ("English", "eng", "ger").
-var languageNames = map[string]string{
-	"english": "en", "eng": "en", "german": "de", "deutsch": "de", "deu": "de", "ger": "de",
-	"french": "fr", "francais": "fr", "français": "fr", "fra": "fr", "fre": "fr",
-	"spanish": "es", "espanol": "es", "español": "es", "spa": "es", "italian": "it", "italiano": "it", "ita": "it",
-	"japanese": "ja", "jpn": "ja", "portuguese": "pt", "português": "pt", "por": "pt",
-	"dutch": "nl", "nederlands": "nl", "nld": "nl", "dut": "nl",
-}
-
-// NormalizeLanguage reads a language tag as works/match takes it: a BCP-47
-// tag's primary subtag ("en-GB" -> "en"), a name or 639-2 code languageNames
-// knows as its tag, anything else lowercased as it is (metaserve reads more
-// names). "" for none: blank, or one that says no language ("und", "zxx",
-// "mul", "unknown").
+// NormalizeLanguage reads a language tag as works/match takes it: the first of
+// several ("eng;fre", "en/de") without a note ("English (US)"), a BCP-47 tag's
+// primary subtag ("en-GB" -> "en"), lowercased (metaserve reads the names and
+// 639-2 codes, "English", "eng"). "" for none, so a book's language falls back to
+// the next that says one: blank, not a word, or a placeholder for no language
+// ("und", "zxx", "mul", "mis", "xxx", "unknown", "N/A").
 func NormalizeLanguage(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
+	if i := strings.IndexAny(s, ";,/|("); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
 	if primary, _, ok := strings.Cut(strings.ReplaceAll(s, "_", "-"), "-"); ok && len(primary) >= 2 && len(primary) <= 3 {
 		s = primary
 	}
 	switch s {
-	case "", "und", "zxx", "mul", "unknown", "none":
+	case "und", "zxx", "mul", "mis", "xxx", "unknown", "none", "na":
 		return ""
 	}
-	if tag, ok := languageNames[s]; ok {
-		return tag
+	if len(s) < 2 || strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsMark(r) }) {
+		return ""
 	}
 	return s
 }
@@ -447,7 +445,11 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	out := make([]*MatchCandidate, len(hits))
 	for i, h := range hits {
 		if detail := details[i]; detail != nil {
-			c := s.toCandidate(detail, facts, h.cover, q.Region)
+			foundBy := ""
+			if h.reasons != nil && h.reasons.Identifier == "asin" {
+				foundBy = asin
+			}
+			c := s.toCandidate(detail, facts, h.cover, q.Region, foundBy)
 			c.RecordingID = h.recordingID
 			if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
 				c.DefaultRecordingID = rec.ID
@@ -482,7 +484,14 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 		}
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Score > cands[j].Score })
+	// At one score the work the identifier named comes first: it is the book,
+	// whatever else scores as well (metaserve breaks a tie on the title).
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].Score != cands[j].Score {
+			return cands[i].Score > cands[j].Score
+		}
+		return cands[i].IdentifierHit() && !cands[j].IdentifierHit()
+	})
 	return cands, nil
 }
 
@@ -621,7 +630,13 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	}
 	add("language", q.Language)
 	for _, n := range q.Narrators[:min(len(q.Narrators), maxMatchNarrators)] {
-		add("narrator", n)
+		// A narrator credit naming the author is mostly a composer tag (the
+		// narrator's fallback, metadata.Extract) a tagger filled with the author:
+		// it says nothing of the recording, and would count against every work
+		// whose recordings a real narrator read.
+		if authorSimilarity(q.Author, n) != 1 {
+			add("narrator", n)
+		}
 	}
 	v.Set("limit", strconv.Itoa(q.limit()))
 	return v
@@ -643,13 +658,22 @@ func hasMatchFacts(v url.Values) bool {
 // a book of the work is in whatever its recording (seriesrules.go, with the
 // series' facts): never a variant reading order (it repeats a series at another
 // position), a translation or another language's series, nor an edition; each
-// recording carries its own, an edition named for it first.
-func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region string) *MatchCandidate {
+// recording carries its own, an edition named for it first. foundBy is the ASIN
+// that found the work ("" for none): where a recording sells under several (a
+// book the store splits in two, or lists twice), it leads its marketplace's, so
+// the book keeps the ASIN its tags gave when that store is the one preferred.
+func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region, foundBy string) *MatchCandidate {
 	series := newWorkSeries(d, facts)
 	c := &MatchCandidate{
 		WorkID: d.ID, Title: d.Title, Subtitle: d.Subtitle, Authors: toPersonRefs(d.Authors),
 		Language: d.Language, FirstPublished: d.FirstPublished, Description: d.Description,
 		Series: series.of(""), CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
+	}
+	rank := func(a ASINRef) int {
+		if a.ASIN == foundBy {
+			return 0
+		}
+		return 1
 	}
 	for _, r := range d.Recordings {
 		mr := MatchRecording{
@@ -662,6 +686,7 @@ func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFac
 				mr.ASINRefs = append(mr.ASINRefs, ref)
 			}
 		}
+		slices.SortStableFunc(mr.ASINRefs, func(a, b ASINRef) int { return rank(a) - rank(b) })
 		mr.ASINs = orderASINs(mr.ASINRefs, region)
 		if len(mr.ASINs) > 0 {
 			mr.ASINRegion = asinRegion(mr.ASINRefs, mr.ASINs[0], region)

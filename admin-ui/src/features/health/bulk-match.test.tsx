@@ -109,7 +109,9 @@ describe('bulk matching', () => {
       'section',
     )!;
     expect(
-      await within(card).findByText(/title, author, series and length go to the community/),
+      await within(card).findByText(
+        /narrators and language, and any ASIN or ISBN in its tags, go to the community/,
+      ),
     ).toBeInTheDocument();
     expect(within(card).getByText(/audible\.co\.uk ASIN/)).toBeInTheDocument();
     await user.click(within(card).getByRole('button', { name: 'Find matches' }));

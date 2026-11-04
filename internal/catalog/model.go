@@ -120,7 +120,8 @@ type Book struct {
 	// TagASIN, TagISBN and TagLanguage are what the file's tags say (books.tag_*,
 	// migration 0067): HINTS a community match sends (matchrun.QueryFor), never
 	// the book's identifiers, so a tagged book is not matched by them. Scanned,
-	// never edited, never on the wire.
+	// never edited, never on the wire; only GetBook and a match run's list of
+	// books read them.
 	TagASIN     string `json:"-"`
 	TagISBN     string `json:"-"`
 	TagLanguage string `json:"-"`

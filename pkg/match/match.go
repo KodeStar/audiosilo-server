@@ -291,7 +291,7 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 		qSeq        float64
 		qHasSeq     bool
 		qTitleLower string
-		qForms      []string // seriesForms(q.Series), made when first needed
+		qForms      []string // SeriesForms(q.Series), made when first needed
 		qFormsDone  bool
 		ownNums     qNums
 		qExact      string // Options.ExactTitle's key ("" = the rule is off for q)
@@ -398,7 +398,7 @@ func (x *Index) BestScore(q Query) (int, float64, bool) {
 			// nothing, and would then claim every numberless volume of the series
 			// by the same author.
 			if !qFormsDone {
-				qForms, qFormsDone = seriesForms(q.Series), true
+				qForms, qFormsDone = SeriesForms(q.Series), true
 			}
 			if _, ok := seriesRefInForms(x.lowerTitle(i), qForms); ok {
 				bBare = bareTitle(b.Title, bSeriesRef, o)
@@ -583,7 +583,7 @@ func bareTitle(title, series string, o Options) bool {
 	return len(tokenize(residualTitle(title, series, o))) == 0
 }
 
-// seriesForms enumerates the spellings one series name appears in, most specific
+// SeriesForms enumerates the spellings one series name appears in, most specific
 // first: as given, without a parenthetical ordering note ("Vorkosigan Saga
 // (chronological)"), without the catalog's trailing " Series" decoration
 // (Audible's "Dragon Heart Series" vs a title that says "Dragon Heart"), without a
@@ -591,7 +591,7 @@ func bareTitle(title, series string, o Options) bool {
 // series name in a title (seriesRefIn) and to REMOVE it (stripSeries), so the two
 // can never disagree about what the series is called - a form that links a pair
 // is by construction a form that strips.
-func seriesForms(series string) []string {
+func SeriesForms(series string) []string {
 	base := strings.TrimSpace(series)
 	if base == "" {
 		return nil
@@ -625,10 +625,10 @@ func seriesForms(series string) []string {
 // of every query would put a 2.0 on a bare number agreement between unrelated
 // books.
 func seriesRefIn(lowerTitle, series string) (string, bool) {
-	return seriesRefInForms(lowerTitle, seriesForms(series))
+	return seriesRefInForms(lowerTitle, SeriesForms(series))
 }
 
-// seriesRefInForms is seriesRefIn over a series' seriesForms, already made.
+// seriesRefInForms is seriesRefIn over a series' SeriesForms, already made.
 func seriesRefInForms(lowerTitle string, forms []string) (string, bool) {
 	for _, form := range forms {
 		if containsPhraseLower(lowerTitle, form) {
@@ -754,13 +754,13 @@ func bareSeq(title, series string) (float64, bool) {
 	return 0, false
 }
 
-// stripSeries removes every spelling of the series name (seriesForms) from a
+// stripSeries removes every spelling of the series name (SeriesForms) from a
 // title. Removal is WORD-BOUNDARY-aware: series "Land Series" contributes the form
 // "Land", and an unbounded removal turned the unrelated title "The Landlord" into
 // "The lord", destroying its exact-title match.
 func stripSeries(title, series string) string {
 	t := title
-	for _, form := range seriesForms(series) {
+	for _, form := range SeriesForms(series) {
 		t = removeFoldBounded(t, form)
 	}
 	return t
@@ -1111,6 +1111,19 @@ func NormalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s
 func NormalizeISBN(s string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
+
+var (
+	asinForm = regexp.MustCompile(`^[A-Z0-9]{10}$`)
+	isbnForm = regexp.MustCompile(`^(\d{9}[\dX]|\d{13})$`)
+)
+
+// ValidASIN reports whether s is an ASIN in NormalizeASIN's form: ten upper-case
+// letters and digits.
+func ValidASIN(s string) bool { return asinForm.MatchString(s) }
+
+// ValidISBN reports whether s is an ISBN in NormalizeISBN's form: an ISBN-10 (its
+// check digit may be X) or an ISBN-13.
+func ValidISBN(s string) bool { return isbnForm.MatchString(s) }
 
 func seqEqual(a, b float64) bool { return a-b > -0.001 && a-b < 0.001 }
 

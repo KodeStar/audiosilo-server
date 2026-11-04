@@ -358,10 +358,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// The path, genre, ABS, attachments, file order and ebook backfills are written as
-	// they go: a large one (most of a library laid out Author/Title, or every
-	// folder book of a library ABS has managed, read once after an upgrade) can
-	// take a while, and a scan stopped part way keeps what it read (written past
+	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
+	// written as they go: a large one (most of a library laid out Author/Title, or
+	// every folder book of a library ABS has managed, read once after an upgrade)
+	// can take a while, and a scan stopped part way keeps what it read (written past
 	// the Stop: at most pathFlushEvery books).
 	flushBackfills := func() {
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
@@ -372,6 +372,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record genres failed", "library", lib.Name, "err", err)
 		}
 		clear(genresBackfill)
+		if err := s.cat.SetTagHints(context.WithoutCancel(ctx), lib.ID, hintsBackfill); err != nil {
+			s.log.Warn("record tag hints failed", "library", lib.Name, "err", err)
+		}
+		clear(hintsBackfill)
 		if err := s.cat.SetABSFiles(context.WithoutCancel(ctx), lib.ID, absBackfill); err != nil {
 			s.log.Warn("record Audiobookshelf metadata failed", "library", lib.Name, "err", err)
 		}
@@ -587,13 +591,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 					pathBackfill[b.RelPath] = nil
 				}
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language
-				// tags read: the same read.
+				// tags read: the same read, and they wait with the names, as the
+				// hints only ffprobe reads (an M4B's mdta items) would be recorded as none.
 				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || old.PathCheck == catalog.PathRead {
 					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
 						if old.ReleasedUnchecked {
 							releasedBackfill[b.RelPath] = md.Released
 						}
-						if old.HintsUnchecked {
+						if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
 							hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
 						}
 						if old.GenresUnchecked {
@@ -634,8 +639,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						ebookBackfill[b.RelPath] = r
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill)+len(orderBackfill)+
-					len(ebookBackfill) >= pathFlushEvery {
+				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+
+					len(orderBackfill)+len(ebookBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
 				continue
@@ -676,9 +681,6 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
 		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
-	}
-	if err := s.cat.SetTagHints(ctx, lib.ID, hintsBackfill); err != nil {
-		s.log.Warn("record tag hints failed", "library", lib.Name, "err", err)
 	}
 	flushBackfills()
 

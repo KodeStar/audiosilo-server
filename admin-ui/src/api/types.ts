@@ -2134,7 +2134,7 @@ export type MatchRunMode = 'match' | 'repick' | 'refresh';
 export type MatchRunStatus =
   'matching' | 'ready' | 'applying' | 'applied' | 'cancelled' | 'failed' | 'interrupted';
 
-/** catalog.Outcome*: confident, worth a look, no candidate, or the service failed. */
+/** catalog.Outcome*: confident, worth a look, no candidate or only weak ones, or the service failed. */
 export type MatchOutcome = 'auto' | 'review' | 'none' | 'error';
 
 /** matchrun.Scopes: how much applying may write, narrowest first. */

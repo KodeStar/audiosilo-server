@@ -519,9 +519,11 @@ func TestMatchParamsPairsThePositionWithItsSeries(t *testing.T) {
 
 // TestMatchParamsSendsLanguageAndNarrators: the book's language and its
 // narrators go up for metaserve to weigh (an older one ignores them), the
-// narrators one each and at most maxMatchNarrators; neither is a fact a
+// narrators one each and at most maxMatchNarrators, none that is the author
+// (mostly a composer tag: it says nothing of the recording); neither is a fact a
 // request can be made of on its own.
 func TestMatchParamsSendsLanguageAndNarrators(t *testing.T) {
+	t.Parallel()
 	cast := []string{"A One", "B Two", "C Three", "D Four", "E Five", "A One"}
 	v := matchParams(MatchQuery{Title: "Dune", Language: " en ", Narrators: cast}, "", "", "")
 	if got := v.Get("language"); got != "en" {
@@ -529,6 +531,10 @@ func TestMatchParamsSendsLanguageAndNarrators(t *testing.T) {
 	}
 	if got := v["narrator"]; !slices.Equal(got, cast[:maxMatchNarrators]) {
 		t.Errorf("narrators = %q, want the first %d", got, maxMatchNarrators)
+	}
+	v = matchParams(MatchQuery{Title: "Dragon Emperor", Author: "Eric Vall", Narrators: []string{"Eric Vall", "Kate Reading"}}, "", "", "")
+	if got := v["narrator"]; !slices.Equal(got, []string{"Kate Reading"}) {
+		t.Errorf("narrators beside the same author = %q, want only the other", got)
 	}
 	v = matchParams(MatchQuery{Title: "Dune"}, "", "", "")
 	if v.Has("language") || v.Has("narrator") {

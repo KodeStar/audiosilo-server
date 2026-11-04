@@ -32,6 +32,26 @@ func TestProbeHints(t *testing.T) {
 	if m.TagASIN != "" {
 		t.Errorf("a garbage-long ASIN tag: %q", m.TagASIN)
 	}
+	// Only a value in an identifier's form counts, kept normalized; a tag holding
+	// several gives the first that reads as one.
+	for name, tc := range map[string]struct {
+		tags             map[string]string
+		asin, isbn, lang string
+	}{
+		"a placeholder beside a real tag": {map[string]string{"asin": "N/A", "audible_asin": "B0AUDIBLE1"}, "B0AUDIBLE1", "", ""},
+		"an ASIN of another shape":        {map[string]string{"asin": "RISEMINIONS2"}, "", "", ""},
+		"a repeated tag, joined":          {map[string]string{"asin": "B0ASIN0001;B0ASIN0002", "language": "eng;fre"}, "B0ASIN0001", "", "eng"},
+		"values NUL-separated":            {map[string]string{"asin": "B0ASIN0001\x00B0ASIN0002", "language": "eng\x00fre"}, "B0ASIN0001", "", "eng"},
+		"a blank value first":             {map[string]string{"asin": " ;B0ASIN0001", "isbn": ";9780441013593"}, "B0ASIN0001", "9780441013593", ""},
+		"an unusable value first":         {map[string]string{"isbn": "n/a;978-0-441-01359-3", "language": strings.Repeat("x", maxHintBytes+1) + ";de"}, "", "9780441013593", "de"},
+		"normalized":                      {map[string]string{"asin": " b0asin0001 ", "isbn": "0-441-01359-x"}, "B0ASIN0001", "044101359X", ""},
+	} {
+		m := &Metadata{}
+		applyProbe(m, &probeResult{Tags: tc.tags})
+		if m.TagASIN != tc.asin || m.TagISBN != tc.isbn || m.TagLanguage != tc.lang {
+			t.Errorf("%s: hints = %q %q %q, want %q %q %q", name, m.TagASIN, m.TagISBN, m.TagLanguage, tc.asin, tc.isbn, tc.lang)
+		}
+	}
 }
 
 // TestTagHints: the tag pass (dhowden, no ffprobe) reads the same hints from
@@ -56,6 +76,17 @@ func TestTagHints(t *testing.T) {
 		}, "B0ID3TXXX1", "9780000000002", "fre"},
 		"id3 audible_asin": {map[string]interface{}{"TXXX": &tag.Comm{Description: "AUDIBLE_ASIN", Text: "B0AUDIBLE2"}},
 			"B0AUDIBLE2", "", ""},
+		"id3v2.2 txx and tla": {map[string]interface{}{
+			"TXX": &tag.Comm{Description: "ASIN", Text: "B0ID3V22A1"},
+			"TLA": "ger",
+		}, "B0ID3V22A1", "", "ger"},
+		"two items naming one hint, the first blank": {map[string]interface{}{
+			"TXXX":   &tag.Comm{Description: "ASIN", Text: " "},
+			"TXXX_0": &tag.Comm{Description: "ASIN", Text: "B0ID3TXXX1"},
+		}, "B0ID3TXXX1", "", ""},
+		"two items naming one hint, the first no language": {map[string]interface{}{
+			"TLAN": strings.Repeat("x", maxHintBytes+1), "language": "de",
+		}, "", "", "de"},
 		"none": {map[string]interface{}{"title": "Dune"}, "", "", ""},
 	} {
 		m := &Metadata{}
@@ -90,9 +121,10 @@ func TestExtractReadsMP4FreeformASIN(t *testing.T) {
 }
 
 // TestExtractReadsHintTags: real files ffmpeg writes (an MP3's TXXX ASIN and
-// TLAN, a FLAC's and an Ogg's Vorbis comments, an M4B's freeform items) give
-// their hints in the tag pass alone and with ffprobe (the in-process probe, or
-// ffprobe itself for a release it doesn't know).
+// TLAN, a FLAC's and an Ogg's Vorbis comments, an M4B's mdta items, an MKA's
+// tags) give their hints in the tag pass alone and with ffprobe (the in-process
+// probe, or ffprobe itself for a release it doesn't know); only ffprobe's pass
+// reads an M4B's and an MKA's.
 func TestExtractReadsHintTags(t *testing.T) {
 	t.Parallel()
 	ffmpeg, err := exec.LookPath("ffmpeg")
@@ -112,6 +144,7 @@ func TestExtractReadsHintTags(t *testing.T) {
 		{"hints.flac", nil},
 		{"hints.ogg", []string{"-c:a", "libvorbis"}},
 		{"hints.m4b", []string{"-c:a", "aac", "-movflags", "+use_metadata_tags"}},
+		{"hints.mka", nil},
 	} {
 		p := filepath.Join(dir, tc.file)
 		args := []string{"-v", "error", "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono", "-t", "0.5",
@@ -127,9 +160,9 @@ func TestExtractReadsHintTags(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if probe == "" && tc.file == "hints.m4b" {
+			if probe == "" && (tc.file == "hints.m4b" || tc.file == "hints.mka") {
 				// ffmpeg writes an M4B's own keys as QuickTime mdta items, which
-				// only ffprobe's pass reads.
+				// only ffprobe's pass reads, as it alone reads Matroska's.
 				continue
 			}
 			if m.TagASIN != "B0FFMPEG01" || m.TagISBN != "9780000000004" || m.TagLanguage != "eng" {

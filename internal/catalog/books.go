@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -610,21 +611,15 @@ type TagHints struct{ ASIN, ISBN, Language string }
 
 // SetTagHints records, by path, the hints a read of each book's primary file
 // found (the scanner's backfill for rows indexed before migration 0067),
-// marking them checked, in one transaction.
+// marking them checked, a batch to a transaction.
 func (c *Catalog) SetTagHints(ctx context.Context, libraryID int64, hints map[string]TagHints) error {
-	if len(hints) == 0 {
-		return nil
-	}
-	return c.db.WithTx(ctx, "SetTagHints", func(tx *sql.Tx) error {
-		for relPath, h := range hints {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE books SET tag_asin = ?, tag_isbn = ?, tag_language = ?, hints_checked = 1
-				  WHERE library_id = ? AND rel_path = ?`,
-				h.ASIN, h.ISBN, h.Language, libraryID, relPath); err != nil {
-				return err
-			}
-		}
-		return nil
+	return c.eachPathBatch(ctx, "SetTagHints", slices.Collect(maps.Keys(hints)), func(tx *sql.Tx, relPath string) (bool, error) {
+		h := hints[relPath]
+		_, err := tx.ExecContext(ctx,
+			`UPDATE books SET tag_asin = ?, tag_isbn = ?, tag_language = ?, hints_checked = 1
+			  WHERE library_id = ? AND rel_path = ?`,
+			h.ASIN, h.ISBN, h.Language, libraryID, relPath)
+		return false, err
 	})
 }
 
@@ -801,7 +796,7 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
-	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size, tag_asin, tag_isbn, tag_language`
+	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
@@ -814,8 +809,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color, &attachments,
-			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize,
-			&b.TagASIN, &b.TagISBN, &b.TagLanguage},
+			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
 		func() {
 			b.Ebook = ebookOf(ebookPath, ebookSize)
 			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)
@@ -931,13 +925,14 @@ func (c *Catalog) bookPathAt(ctx context.Context, libraryID int64, relPath strin
 	return book, err
 }
 
-// GetBook returns a book by ID including its files, chapters and description
-// (which only this single-book read loads).
+// GetBook returns a book by ID including its files, chapters, description and tag
+// hints (which only this single-book read loads).
 func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 	var b Book
 	dest, finish := bookDest(&b)
-	err := c.db.QueryRowContext(ctx, `SELECT `+bookCols+`, description, chapters_source FROM books WHERE id = ?`, id).
-		Scan(append(dest, &b.Description, &b.ChaptersSource)...)
+	err := c.db.QueryRowContext(ctx,
+		`SELECT `+bookCols+`, description, chapters_source, tag_asin, tag_isbn, tag_language FROM books WHERE id = ?`, id).
+		Scan(append(dest, &b.Description, &b.ChaptersSource, &b.TagASIN, &b.TagISBN, &b.TagLanguage)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

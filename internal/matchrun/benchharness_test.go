@@ -41,7 +41,7 @@ type lfBook struct {
 	Min  float64           `json:"min"`
 	Tags map[string]string `json:"tags"`
 	Ref  struct {
-		ASIN, Title, Author, Narrator, Series, Sequence string
+		ASIN, Title, Author, Narrator string
 	} `json:"ref"`
 }
 
@@ -156,13 +156,10 @@ func TestLibraForge(t *testing.T) {
 	}
 }
 
-// lfLibrary is the library the books sit in: only its id is read.
-var lfLibrary int64 = 1
-
 // scanBook is b as a scan indexes it.
 func scanBook(b *lfBook) *catalog.Book {
 	seconds := b.Min * 60
-	book := &catalog.Book{LibraryID: lfLibrary, RelPath: b.F, IsFolder: true, Duration: seconds}
+	book := &catalog.Book{LibraryID: 1, RelPath: b.F, IsFolder: true, Duration: seconds}
 	if b.F == "" {
 		book.RelPath, book.IsFolder = b.File, false
 	}
@@ -205,12 +202,8 @@ func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string) lfResult
 		res.Right = sameBook(top, b.Ref.Title, b.Ref.Author)
 	}
 	if res.Right {
-		pick := item.Proposal.RecordingID
-		if pick == "" { // a weak match proposes nothing: the recording the run would pick
-			if rec := pickedRecording(top); rec != nil {
-				pick = rec.ID
-			}
-		}
+		// A weak match proposes nothing: then the recording the run would pick.
+		pick := cmp.Or(item.Proposal.RecordingID, top.DefaultRecordingID)
 		res.RecordingRight = (refRec != "" && pick == refRec) || (refRec == "" && narratedBy(top, pick, b.Ref.Narrator))
 	}
 	if item.Outcome == catalog.OutcomeAuto {
@@ -220,16 +213,6 @@ func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string) lfResult
 		}
 	}
 	return res
-}
-
-// pickedRecording is the recording a candidate names as the book's.
-func pickedRecording(c *meta.MatchCandidate) *meta.MatchRecording {
-	for i := range c.Recordings {
-		if c.Recordings[i].ID == c.DefaultRecordingID {
-			return &c.Recordings[i]
-		}
-	}
-	return nil
 }
 
 // narratedBy reports whether recording id of c is read by the reference
@@ -277,8 +260,8 @@ func beforeColon(s string) string { before, _, _ := strings.Cut(s, ":"); return 
 
 func normTitle(s string) string {
 	ws := titleWords(strings.ReplaceAll(s, "&", " and "))
-	if a := withoutArticle(ws); a != nil {
-		ws = a
+	if len(ws) > 1 && (ws[0] == "the" || ws[0] == "a" || ws[0] == "an") {
+		ws = ws[1:]
 	}
 	return strings.Join(ws, " ")
 }
@@ -313,7 +296,7 @@ func printTable(rs []lfResult, region string) {
 				count["auto-right, recording right"]++
 			}
 		case catalog.OutcomeNone:
-			if r.Detail == "weak_match" { // DetailWeakMatch, spelled out so the harness builds on main too
+			if r.Detail == DetailWeakMatch {
 				count["none: weak_match"]++
 				if r.Right {
 					count["none: weak_match, top was right"]++

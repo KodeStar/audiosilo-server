@@ -23,6 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/dhowden/tag"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Chapter is one playable unit, normalized so a client can treat embedded m4b
@@ -74,7 +76,7 @@ type Metadata struct {
 	ProbeErr error `json:"-"` // ffprobe was configured and couldn't read it
 
 	// TagASIN, TagISBN and TagLanguage are what the tags say of the book's
-	// identifiers and language (readHints: asin / audible_asin, the iTunes
+	// identifiers and language (setHints: asin / audible_asin, the iTunes
 	// freeform ASIN item, an ID3 TXXX ASIN; isbn; language, ID3 TLAN): hints for
 	// a community match, never the book's identifiers (catalog.Book.TagASIN).
 	TagASIN     string `json:"-"`
@@ -304,36 +306,58 @@ var (
 	hintTags     = slices.Concat(asinTags, isbnTags, languageTags)
 )
 
-// maxHintBytes bounds a hint as stored: an identifier is far shorter, and a
-// longer value is a garbage tag, not one.
+// maxHintBytes bounds a language hint as stored: a longer value is a garbage
+// tag, not one.
 const maxHintBytes = 64
 
 // setHints takes the hints tags gives (lowercased tag name -> value): each the
-// first of its names with a value, trimmed, a garbage-long one dropped. A tag
-// pass without one leaves what an earlier pass read.
+// first value of its names that reads as one. A tag can hold several (a repeated
+// tag comes joined with ";", a frame's values NUL-separated, an MP4 item's led by
+// NUL locale bytes) or a placeholder ("N/A" beside a real audible_asin), so an
+// ASIN or ISBN counts only in its proper form, kept normalized; a language need
+// only be short (meta.NormalizeLanguage reads it). A tag pass without one leaves
+// what an earlier pass read.
 func (m *Metadata) setHints(tags map[string]string) {
-	pick := func(dst *string, names []string) {
+	pick := func(dst *string, names []string, read func(string) string) {
 		for _, n := range names {
-			if v := tagText(tags[n]); v != "" && len(v) <= maxHintBytes {
-				*dst = v
-				return
+			for _, part := range strings.FieldsFunc(tags[n], func(r rune) bool { return r == ';' || r == 0 }) {
+				if v := read(strings.TrimSpace(part)); v != "" {
+					*dst = v
+					return
+				}
 			}
 		}
 	}
-	pick(&m.TagASIN, asinTags)
-	pick(&m.TagISBN, isbnTags)
-	pick(&m.TagLanguage, languageTags)
+	pick(&m.TagASIN, asinTags, func(s string) string {
+		if s = match.NormalizeASIN(s); match.ValidASIN(s) {
+			return s
+		}
+		return ""
+	})
+	pick(&m.TagISBN, isbnTags, func(s string) string {
+		if s = match.NormalizeISBN(s); match.ValidISBN(s) {
+			return s
+		}
+		return ""
+	})
+	pick(&m.TagLanguage, languageTags, func(s string) string {
+		if len(s) > maxHintBytes {
+			return ""
+		}
+		return s
+	})
 }
 
 // rawHints is dhowden's raw items naming a hint (hintTags), by lowercased name: a
 // plain item (Vorbis keys, an MP4 freeform item's name, an ID3 text frame) by
 // its key, an ID3 TXXX frame (dhowden's *tag.Comm, keyed TXXX, TXXX_0, ...) by
-// its description, and ID3's TLAN as the language.
+// its description, and ID3's TLAN as the language. Several items naming one
+// hint are joined with ";" (setHints takes the first that reads as one).
 func rawHints(raw map[string]interface{}) map[string]string {
 	out := map[string]string{}
 	put := func(k, v string) {
-		if _, ok := out[k]; !ok && slices.Contains(hintTags, k) && tagText(v) != "" {
-			out[k] = v
+		if slices.Contains(hintTags, k) {
+			out[k] += ";" + v
 		}
 	}
 	// In key order, so of two items naming one hint the same one always wins.

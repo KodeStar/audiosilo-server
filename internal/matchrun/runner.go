@@ -10,7 +10,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
-	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -347,7 +346,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	}
 	c := &cands[0]
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
-	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region, names.Split(b.Narrator)))
+	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region, nil))
 	// The record the book's own identifier names, but another edition by length
 	// (an unabridged book holding its dramatization's ASIN): its details are not
 	// written unasked.

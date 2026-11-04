@@ -801,6 +801,27 @@ func TestMatchHoldsAnotherLength(t *testing.T) {
 	}
 }
 
+// TestMatchPrefersTheNarratorsRecording: the book's narrator credit reaches the
+// run's choice of recording, ahead of a closer runtime.
+func TestMatchPrefersTheNarratorsRecording(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: "A/Read", IsFolder: true,
+		Title: "Martian", Author: "Andy Weir", Narrator: "Wil Wheaton", Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	hit := cand("the-martian", 95, "")
+	hit.Recordings = append(hit.Recordings, meta.MatchRecording{ID: "wheaton", RuntimeMin: 660,
+		Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}, ASINs: []string{"B0WHEATON1"}})
+	e.matcher.byTitle["Martian"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Proposal.RecordingID != "wheaton" || auto[0].Proposal.Values["asin"] != "B0WHEATON1" {
+		t.Fatalf("auto = %+v, want his recording", auto)
+	}
+}
+
 // TestMatchRecordsAWeakMatchAsNone: a best candidate under ReviewFloor is no
 // match (detail weak_match, its score kept, nothing proposed); an apply never
 // takes it, even when the admin names it.
@@ -809,8 +830,13 @@ func TestMatchRecordsAWeakMatchAsNone(t *testing.T) {
 	e := newEnv(t)
 	e.book(t, "A/Weak", "Weak", "", nil)
 	e.book(t, "A/Fair", "Fair", "", nil)
-	e.matcher.byTitle["Weak"] = []meta.MatchCandidate{cand("the-martian", ReviewFloor-1, "")}
-	e.matcher.byTitle["Fair"] = []meta.MatchCandidate{cand("the-martian", ReviewFloor, "")}
+	scored := func(score int) meta.MatchCandidate {
+		c := cand("the-martian", score, "")
+		c.Reasons = &meta.MatchReasons{} // metaserve's scale
+		return c
+	}
+	e.matcher.byTitle["Weak"] = []meta.MatchCandidate{scored(ReviewFloor - 1)}
+	e.matcher.byTitle["Fair"] = []meta.MatchCandidate{scored(ReviewFloor)}
 
 	run := e.start(t, catalog.MatchModeMatch, "")
 	none := e.items(t, run, catalog.OutcomeNone)
