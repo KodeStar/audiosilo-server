@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func TestRunStopsOnPersistent503(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return true
 	}}
-	const books = 60
+	const books = 120
 	run := runOver(t, e, m.service(t), books)
 	if run.Status != catalog.MatchFailed || run.Error != ErrCodeUnavailable {
 		t.Fatalf("run = %+v", run)
@@ -236,10 +237,35 @@ func TestRunStopsOnPersistent503(t *testing.T) {
 	if run.Done >= books {
 		t.Fatalf("run worked through all %d books: %+v", books, run)
 	}
-	// Each book asks four times at most, so a stop after five in a row leaves most
-	// books never asked about.
+	// Each book asks four times at most, so a stop after maxFailStreak in a row leaves
+	// most books never asked about.
 	if got := int(m.match.Load()); got >= books {
 		t.Fatalf("%d requests, want the run stopped well before %d", got, books)
+	}
+}
+
+// One moment's failure meets every worker at once. That isn't the service being down:
+// the books it failed record it, and the run goes on.
+func TestRunSurvivesAFailureEveryWorkerMeets(t *testing.T) {
+	e := newEnv(t)
+	var arrived sync.WaitGroup
+	arrived.Add(workers)
+	m := &speedMeta{answer: func(n int32, w http.ResponseWriter) bool {
+		if n > workers {
+			return false
+		}
+		arrived.Done()
+		arrived.Wait()
+		w.WriteHeader(http.StatusInternalServerError)
+		return true
+	}}
+	const books = 20
+	run := runOver(t, e, m.service(t), books)
+	if run.Status != catalog.MatchReady || run.Error != "" || run.Done != books {
+		t.Fatalf("run = %+v", run)
+	}
+	if failed := e.items(t, run, catalog.OutcomeError); len(failed) != workers {
+		t.Fatalf("%d books failed, want the %d in flight", len(failed), workers)
 	}
 }
 

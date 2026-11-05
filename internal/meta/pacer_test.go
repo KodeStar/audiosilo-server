@@ -142,6 +142,45 @@ func TestPacerOnlyPacesTheRemoteLeg(t *testing.T) {
 	}
 }
 
+// A run sitting out the service's Retry-After holds nothing a listener's read queues on.
+func TestRunWaitingHoldsNoWorkSlot(t *testing.T) {
+	var waiting atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/busy", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		waiting.Add(1)
+	})
+	mux.HandleFunc("GET /api/v1/works/free", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"free"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+
+	run, stop := context.WithCancel(WithPacer(context.Background(), quietPacer(1000)))
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer stop()
+	workers := int32(maxConcurrentWorkFetches + 2)
+	for range workers {
+		wg.Go(func() { _, _ = s.fetchWork(run, "busy") })
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for waiting.Load() < workers {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d workers waiting", waiting.Load(), workers)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	listener, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if d, err := s.fetchWork(listener, "free"); err != nil || d.ID != "free" {
+		t.Fatalf("a listener's read during a run's wait = %+v, %v", d, err)
+	}
+}
+
 // answerThen answers code (with Retry-After retryAfter) for the first bad requests,
 // then 200.
 func answerThen(t *testing.T, code int, bad int32, retryAfter string) (*client, *atomic.Int32, *[]time.Duration) {

@@ -19,7 +19,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +28,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -201,20 +201,11 @@ func scanBook(b *lfBook) *catalog.Book {
 
 // each runs fn on 0..count-1, n at a time.
 func each(n, count int, fn func(i int)) {
-	var wg sync.WaitGroup
-	next := make(chan int)
-	for range n {
-		wg.Go(func() {
-			for i := range next {
-				fn(i)
-			}
-		})
+	indexes := make([]int, count)
+	for i := range indexes {
+		indexes[i] = i
 	}
-	for i := range count {
-		next <- i
-	}
-	close(next)
-	wg.Wait()
+	pool.Each(context.Background(), n, indexes, func() bool { return true }, func(i *int) { fn(*i) })
 }
 
 // lfMatched is one book as the run left it, not yet judged.

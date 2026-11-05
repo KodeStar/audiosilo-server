@@ -294,6 +294,65 @@ func TestBestOnlyBestCantBeRead(t *testing.T) {
 	}
 }
 
+// A weak next stands in only by being read, as Candidates reads it: a stub asks nothing,
+// so it would answer for a service that is down, the book a weak match and no outage.
+func TestBestOnlyWeakNextDoesNotHideAnOutage(t *testing.T) {
+	body := matchBody(matchResult("colour", 97, ""), matchResult("light", 40, ""))
+	for name, tc := range map[string]struct {
+		failing   map[string]int
+		works     map[string]string
+		wantTitle string
+		wantErr   bool
+	}{
+		"both failing is an outage": {failing: map[string]int{"colour": 503, "light": 503}, wantErr: true},
+		"the next read stands in":   {failing: map[string]int{"colour": 500}, works: map[string]string{"light": otherWork}, wantTitle: "The Light Fantastic"},
+		"gone: no outage to hide":   {works: map[string]string{"light": otherWork}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &bestMeta{body: body, works: tc.works, failing: tc.failing}
+			cands, err := m.service(t).Candidates(context.Background(), bestQuery)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("candidates = %+v, err = %v, want error %v", cands, err, tc.wantErr)
+			}
+			if !tc.wantErr && (len(cands) != 1 || cands[0].WorkID != "light" || cands[0].Title != tc.wantTitle) {
+				t.Fatalf("candidates = %+v, want light titled %q", cands, tc.wantTitle)
+			}
+		})
+	}
+}
+
+// An inlined work is judged as a fetched one is: no facts where a fetch reads none (no
+// language and one series, here beside a variant order its record says it translates),
+// and nothing kept of a series the work doesn't list.
+func TestBestOnlyInlinedFactsRuleAsAFetchDoes(t *testing.T) {
+	const work = `{"id":"saga","title":"Die Saga","authors":[],
+		"series":[{"id":"die-saga","name":"Die Saga","position":"1"},{"id":"chrono","name":"Chrono","position":"1","ordering_of":"the-saga"}],"recordings":[]}`
+	const facts = `{"die-saga":{"translation_of":["chrono"]},"elsewhere":{"language":"de"}}`
+	series := map[string]string{"die-saga": `{"id":"die-saga","name":"Die Saga","translation_of":[{"id":"chrono","name":"Chrono"}]}`}
+	want := []MatchSeries{{ID: "die-saga", Name: "Die Saga", Position: "1"}}
+	for name, body := range map[string]string{
+		"fetched": matchBody(matchResult("saga", 97, "")),
+		"inlined": matchBody(matchResult("saga", 97, inlined(work, facts))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &bestMeta{body: body, works: map[string]string{"saga": work}, series: series}
+			s := m.service(t)
+			cands, err := s.Candidates(context.Background(), bestQuery)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cands) != 1 || !reflect.DeepEqual(cands[0].Series, want) {
+				t.Fatalf("candidates = %+v, want the series %+v", cands, want)
+			}
+			for _, id := range []string{"die-saga", "elsewhere"} {
+				if _, hit, _ := cacheGet[seriesFacts](s.cache, nsSeries.key(id)); hit {
+					t.Fatalf("the facts of %s were cached", id)
+				}
+			}
+		})
+	}
+}
+
 // The best candidate is the same whichever way it came, and of the runner-up the two
 // things a run reads are too: the dialog's full answer, the fetches and the inlined
 // work (the facts of a real answer included).

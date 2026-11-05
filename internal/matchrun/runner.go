@@ -30,8 +30,11 @@ const (
 	// database's and each cover's fetch, not the match's.
 	applyWorkers = 2
 	// maxFailStreak consecutive books the service failed for stop the run: it is
-	// down, and the rest would only record the same error.
-	maxFailStreak = 5
+	// down, and the rest would only record the same error. It stands above the
+	// workers, as one moment's failure meets them all at once (a lost connection takes
+	// every stream on it, a stall every request's timeout): some of the books it counts
+	// were asked after that moment, and failed too.
+	maxFailStreak = workers + 4
 )
 
 // Codes a run that stopped by itself records (catalog.MatchRun.Error).

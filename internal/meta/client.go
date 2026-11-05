@@ -80,8 +80,8 @@ func remoteTransport() http.RoundTripper {
 // bulk match makes slows down instead of failing books (server#247). A wait the
 // caller's deadline would cut short isn't started. A bulk run (a Pacer in the
 // context) waits out a 503 the same way: metaserve answers one past a match's budget,
-// and five books failing in a row stop a run. Anyone else's 503 is the outage it
-// reports at once: an admin or a listener is waiting on the answer.
+// and books failing in a row stop a run. Anyone else's 503 is the outage it reports at
+// once: an admin or a listener is waiting on the answer.
 const (
 	rateLimitRetries  = 3
 	maxRetryAfter     = 10 * time.Second

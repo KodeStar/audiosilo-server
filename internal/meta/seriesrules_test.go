@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // seriesNames renders series names in order, so a case reads at a glance.
@@ -435,5 +438,102 @@ func TestCandidatesBoundTheSeriesFacts(t *testing.T) {
 		if got := m.seriesHits.Load(); got != c.max {
 			t.Errorf("series GETs = %d, want %d", got, c.max)
 		}
+	}
+}
+
+// seriesFlightService serves one series' record through answer, counting the reads.
+func seriesFlightService(t *testing.T, answer func(n int32, w http.ResponseWriter)) (*Service, *atomic.Int32) {
+	t.Helper()
+	var reads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		answer(reads.Add(1), w)
+	}))
+	t.Cleanup(srv.Close)
+	return NewService(srv.URL, nil), &reads
+}
+
+// A run's workers at one series, as neighbouring books bring them: one read, one answer.
+func TestSeriesFactsConcurrentMissesShareOneRead(t *testing.T) {
+	release := make(chan struct{})
+	s, reads := seriesFlightService(t, func(_ int32, w http.ResponseWriter) {
+		<-release
+		_, _ = w.Write([]byte(`{"id":"discworld","language":"en"}`))
+	})
+	const workers = 6
+	got := make([]*seriesFacts, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Go(func() { got[i] = s.seriesFacts(context.Background(), "discworld") })
+	}
+	time.Sleep(20 * time.Millisecond) // a worker later than this finds the cache instead
+	close(release)
+	wg.Wait()
+	if reads.Load() != 1 {
+		t.Fatalf("%d reads, want one", reads.Load())
+	}
+	for i, f := range got {
+		if f == nil || f.Language != "en" {
+			t.Fatalf("worker %d got %+v", i, f)
+		}
+	}
+	if len(s.seriesFlights) != 0 {
+		t.Fatalf("flights left behind: %v", s.seriesFlights)
+	}
+}
+
+// A read that failed isn't cached, so whoever waited on it asks again.
+func TestSeriesFactsWaiterAsksAgainAfterAFailedRead(t *testing.T) {
+	first := make(chan struct{})
+	s, reads := seriesFlightService(t, func(n int32, w http.ResponseWriter) {
+		if n == 1 {
+			<-first
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"discworld","language":"en"}`))
+	})
+	failed := make(chan *seriesFacts, 1)
+	go func() { failed <- s.seriesFacts(context.Background(), "discworld") }()
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	waited := make(chan *seriesFacts, 1)
+	go func() { waited <- s.seriesFacts(context.Background(), "discworld") }()
+	time.Sleep(20 * time.Millisecond)
+	close(first)
+	if f := <-failed; f != nil {
+		t.Fatalf("the failed read answered %+v", f)
+	}
+	if f := <-waited; f == nil || f.Language != "en" {
+		t.Fatalf("the waiter got %+v, want its own read's answer", f)
+	}
+	if reads.Load() != 2 {
+		t.Fatalf("%d reads, want two", reads.Load())
+	}
+}
+
+// A waiter's own budget ends its wait, whatever the read it waits on is doing.
+func TestSeriesFactsWaiterLeavesWithItsContext(t *testing.T) {
+	release := make(chan struct{})
+	s, reads := seriesFlightService(t, func(_ int32, w http.ResponseWriter) {
+		<-release
+		_, _ = w.Write([]byte(`{"id":"discworld"}`))
+	})
+	defer close(release)
+	go s.seriesFacts(context.Background(), "discworld")
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *seriesFacts, 1)
+	go func() { done <- s.seriesFacts(ctx, "discworld") }()
+	cancel()
+	select {
+	case f := <-done:
+		if f != nil {
+			t.Fatalf("got %+v, want none", f)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait outlived its context")
 	}
 }

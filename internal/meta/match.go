@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"math"
@@ -357,8 +358,8 @@ func (h matchHit) stub() MatchCandidate {
 // score the work the identifier named, which is the book whatever else scores as
 // well (metaserve breaks a tie on the title, so it can rank that one second).
 func compareMatches(aScore int, aIdentified bool, bScore int, bIdentified bool) int {
-	if aScore != bScore {
-		return bScore - aScore
+	if c := cmp.Compare(bScore, aScore); c != 0 {
+		return c
 	}
 	switch {
 	case aIdentified && !bIdentified:
@@ -530,6 +531,8 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 // fewest requests. The hits are put in Candidates' order first, as the best is the
 // one the details are for. A best whose details can't be read gives way to the
 // next, and every one failing is the first outage, exactly as Candidates reads them.
+// So after an outage the next is read however weak: a stub asks nothing, and would
+// answer for a service that is down, the book a weak match and the run none the wiser.
 func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []matchHit, asin string) ([]MatchCandidate, error) {
 	slices.SortStableFunc(hits, func(a, b matchHit) int {
 		return compareMatches(a.score, a.reasons.Identifier != "", b.score, b.reasons.Identifier != "")
@@ -540,6 +543,7 @@ func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []match
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) && outage == nil {
 				outage = err
+				q.NoDetailsBelow = 0
 			}
 			continue
 		}
@@ -565,12 +569,7 @@ func (s *Service) bestCandidate(ctx context.Context, q MatchQuery, h matchHit, a
 		return &stub, nil
 	}
 	if h.work != nil && h.work.ID != "" {
-		for id, f := range h.facts {
-			if f != nil {
-				cachePut(s.cache, nsSeries.key(id), f, positiveTTL)
-			}
-		}
-		return s.hitCandidate(q, h, h.work, h.facts, asin), nil
+		return s.hitCandidate(q, h, h.work, s.inlinedFacts(h.work, h.facts), asin), nil
 	}
 	detail, err := s.fetchWork(ctx, h.id)
 	if err != nil {
