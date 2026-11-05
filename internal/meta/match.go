@@ -302,14 +302,24 @@ func titleSpeaksFor(title, subtitle, publisher string) bool {
 	return false
 }
 
-// isDramatization reports whether a recording of the work c says or is said to be a
-// dramatized production: GraphicAudio's imprint or a full-cast credit, else the work's
-// title speaking for it. Several named readers are not enough, as a volunteer reading
-// credits them too.
-func (r *MatchRecording) isDramatization(c *MatchCandidate) bool {
+// saysDramatization reports whether a recording says of itself it is a dramatized
+// production: GraphicAudio's imprint or a full-cast credit. Several named readers are
+// not enough, as a volunteer reading credits them too.
+func (r *MatchRecording) saysDramatization() bool {
 	return graphicAudioRE.MatchString(r.Publisher) ||
-		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) }) ||
-		titleSpeaksFor(c.Title, c.Subtitle, r.Publisher)
+		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) })
+}
+
+// isDramatization reports whether a recording of the work c is one: it says so, or the
+// work's title speaks for it. When no recording of the work says so, any statement on
+// the title is the work's only one and covers them all: metaserve's importer keeps the
+// label on such a work.
+func (r *MatchRecording) isDramatization(c *MatchCandidate) bool {
+	if r.saysDramatization() || titleSpeaksFor(c.Title, c.Subtitle, r.Publisher) {
+		return true
+	}
+	return titleSpeaksFor(c.Title, c.Subtitle, "") &&
+		!slices.ContainsFunc(c.Recordings, func(o MatchRecording) bool { return o.saysDramatization() })
 }
 
 // statesDramatization reports whether the book's own text says it is one: its title,
