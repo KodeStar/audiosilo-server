@@ -1458,6 +1458,7 @@
   "health.bulkMatch.item.identifierUnknown": "A comunidade não conhece o ASIN ou ISBN deste livro",
   "health.bulkMatch.item.weakMatch": "Só correspondências fracas na comunidade (a melhor obteve {{score}} de 100): procure-o à mão na página do livro",
   "health.bulkMatch.item.lengthDiffers": "Retido para revisão: o livro dura {{book}} e esta gravação {{recording}}",
+  "health.bulkMatch.item.dramatizationOnly": "Retido para revisão: a comunidade só tem uma dramatização deste livro, e este livro não indica que o seja",
   "health.bulkMatch.item.error": "O serviço da comunidade não respondeu para este livro",
   "health.bulkMatch.item.gone": "Já não está na biblioteca",
   "health.bulkMatch.item.matchedSince": "Associado depois desta pesquisa: aplicar deixa-o como está",

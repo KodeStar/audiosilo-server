@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -115,6 +116,9 @@ type MatchCandidate struct {
 	Recordings     []MatchRecording `json:"recordings"`
 	// RecordingID names the recording an ASIN/ISBN lookup resolved to.
 	RecordingID string `json:"recording_id,omitempty"`
+	// PlainBook says the book's own text doesn't state it is a dramatized production,
+	// which is what keeps DefaultRecording off a dramatization.
+	PlainBook bool `json:"-"`
 	// DefaultRecordingID is the recording the book most likely is
 	// (DefaultRecording): what the console's dialog and a bulk run start from.
 	DefaultRecordingID string `json:"default_recording_id,omitempty"`
@@ -257,6 +261,36 @@ func (r MatchRecording) HasRegion(region string) bool {
 	return region != "" && r.RegionASIN(region) != ""
 }
 
+// A dramatization is a recording of its book, so a plain library book rightly
+// matches a work holding one. What it must not do is take that recording: the work's
+// title says nothing about it (a labelled title is being retitled), so each
+// recording answers for itself, as metaserve's model.Recording.IsDramatization does.
+var (
+	// graphicAudioRE is GraphicAudio's imprint in every spelling the catalogue holds.
+	graphicAudioRE = regexp.MustCompile(`(?i)^\s*graphic\s?audio(\s+llc)?\s*$`)
+	// dramatizationTextRE is a book's own text, or a work's label, saying so.
+	// Narrower than fullCastRE: "Radio Free Albemuth" states nothing here.
+	dramatizationTextRE = regexp.MustCompile(`(?i)\b(?:full[- ]?cast|dramati[sz](?:ed|ations?))\b`)
+)
+
+// isDramatization reports whether a recording of the work titled workTitle states it
+// is a dramatized production: GraphicAudio's imprint or a full-cast credit, or, for
+// a recording stating no publisher, a work still carrying the label. Several named
+// readers are not enough, as a volunteer reading credits them too.
+func (r *MatchRecording) isDramatization(workTitle string) bool {
+	if graphicAudioRE.MatchString(r.Publisher) ||
+		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) }) {
+		return true
+	}
+	return r.Publisher == "" && dramatizationTextRE.MatchString(workTitle)
+}
+
+// statesDramatization reports whether the book's own text says it is one: its title,
+// series, folders, typed text or narrator credit.
+func (q MatchQuery) statesDramatization() bool {
+	return slices.ContainsFunc(slices.Concat([]string{q.Text, q.Title, q.Series, q.Path}, q.Narrators), dramatizationTextRE.MatchString)
+}
+
 // DefaultRecording is the recording of c a book most likely is, as the match
 // dialog picks it (admin-ui match-model.ts defaultRecording): the one an
 // identifier lookup resolved to, else, among the recordings one of the book's
@@ -265,11 +299,18 @@ func (r MatchRecording) HasRegion(region string) bool {
 // no narrator), the one whose runtime is closest to the book's (seconds), a
 // recording selling in the preferred region winning a tie; recordings without
 // a runtime come last. A narrator's recording of another length is another
-// edition: the closest runtime then decides. nil when c has none.
+// edition: the closest runtime then decides. A plain book (MatchCandidate.PlainBook)
+// takes a dramatization only when an identifier or one of its narrators names it, so
+// a work holding nothing else gives nil: the work still fits, but no recording does.
+// nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
+	identified := c.Reasons != nil && c.Reasons.Identifier != ""
+	notTheirs := func(r *MatchRecording) bool {
+		return c.PlainBook && !identified && r.isDramatization(c.Title) && !readBy(r, narrators)
+	}
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if c.RecordingID != "" && r.ID == c.RecordingID {
+		if c.RecordingID != "" && r.ID == c.RecordingID && !notTheirs(r) {
 			return r
 		}
 	}
@@ -277,6 +318,9 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 	bestGap, bestTheirs := math.Inf(1), false
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
+		if notTheirs(r) {
+			continue
+		}
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
 		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
 		gap := math.Inf(1)
@@ -515,13 +559,14 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 	}
 	c := s.toCandidate(detail, facts, h.cover, q.Region, foundBy)
 	c.RecordingID = h.recordingID
-	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
-		c.DefaultRecordingID = rec.ID
-	}
+	c.PlainBook = !q.statesDramatization()
 	if h.reasons != nil {
 		c.Score, c.Reasons = h.score, h.reasons
 	} else {
 		c.Score = scoreCandidate(q, c)
+	}
+	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
+		c.DefaultRecordingID = rec.ID
 	}
 	return c
 }

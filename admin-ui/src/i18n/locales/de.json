@@ -1362,6 +1362,7 @@
   "health.bulkMatch.item.identifierUnknown": "Die Community kennt die ASIN oder ISBN dieses Buchs nicht",
   "health.bulkMatch.item.weakMatch": "Nur schwache Community-Treffer (der beste erreichte {{score}} von 100): auf der Buchseite von Hand suchen",
   "health.bulkMatch.item.lengthDiffers": "Zur Prüfung zurückgehalten: Das Buch dauert {{book}}, diese Aufnahme {{recording}}",
+  "health.bulkMatch.item.dramatizationOnly": "Zur Prüfung zurückgehalten: Die Community führt von diesem Buch nur eine Hörspielfassung, und dieses Buch gibt sich nicht als eine aus",
   "health.bulkMatch.item.error": "Der Community-Dienst hat für dieses Buch nicht geantwortet",
   "health.bulkMatch.item.gone": "Nicht mehr in der Bibliothek",
   "health.bulkMatch.item.matchedSince": "Seit diesem Lauf zugeordnet: Das Übernehmen lässt es, wie es ist",

@@ -1458,6 +1458,7 @@
   "health.bulkMatch.item.identifierUnknown": "La communauté ne connaît pas l'ASIN ou l'ISBN de ce livre",
   "health.bulkMatch.item.weakMatch": "Seulement des correspondances faibles (la meilleure a obtenu {{score}} sur 100) : cherchez-le à la main depuis la page du livre",
   "health.bulkMatch.item.lengthDiffers": "Mis de côté pour vérification : le livre dure {{book}}, cet enregistrement {{recording}}",
+  "health.bulkMatch.item.dramatizationOnly": "En attente de vérification : la communauté ne propose qu'une dramatisation de ce livre, et ce livre n'indique pas en être une",
   "health.bulkMatch.item.error": "Le service communautaire n'a pas répondu pour ce livre",
   "health.bulkMatch.item.gone": "N'est plus dans la bibliothèque",
   "health.bulkMatch.item.matchedSince": "Associé depuis cette recherche : l'application le laisse tel quel",

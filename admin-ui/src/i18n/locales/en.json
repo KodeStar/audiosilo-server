@@ -1362,6 +1362,7 @@
   "health.bulkMatch.item.identifierUnknown": "The community doesn't know this book's ASIN or ISBN",
   "health.bulkMatch.item.weakMatch": "Only weak community matches (the best scored {{score}} of 100): find it by hand from the book page",
   "health.bulkMatch.item.lengthDiffers": "Held for review: the book is {{book}} long, this recording {{recording}}",
+  "health.bulkMatch.item.dramatizationOnly": "Held for review: the community holds only a dramatization of this book, and this book doesn't say it is one",
   "health.bulkMatch.item.error": "The community service didn't answer for this book",
   "health.bulkMatch.item.gone": "No longer in the library",
   "health.bulkMatch.item.matchedSince": "Matched since this run: an apply leaves it as it is",

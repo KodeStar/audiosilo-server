@@ -54,6 +54,11 @@ const DetailIdentifierUnknown = "identifier_unknown"
 // lengths (ItemBook.Duration, the proposal's runtime_min).
 const DetailLengthDiffers = "length_differs"
 
+// DetailDramatizationOnly is a review item's detail when the work fits the book but
+// holds only a dramatization, which the book doesn't state it is: meta.DefaultRecording
+// offers no recording, so there is no identifier to attach unasked.
+const DetailDramatizationOnly = "dramatization_only"
+
 // DetailWeakMatch is a match item's detail when its best candidate scored
 // below ReviewFloor: recorded as no match (the community most likely doesn't
 // have the book), its score kept for the review's wording.
@@ -285,11 +290,16 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	if err != nil {
 		return item, err
 	}
+	noRecording := false
 	if len(cands) > 0 {
-		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators))
+		rec := meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators)
+		item.Proposal = Propose(&cands[0], rec)
+		noRecording = rec == nil && len(cands[0].Recordings) > 0
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
 	switch {
+	case item.Outcome == catalog.OutcomeReview && noRecording:
+		item.Detail = DetailDramatizationOnly
 	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration):
 		item.Detail = DetailLengthDiffers
 	case item.Outcome == catalog.OutcomeNone && len(cands) > 0:

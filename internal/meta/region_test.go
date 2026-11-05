@@ -254,3 +254,60 @@ func TestNormalizeLanguage(t *testing.T) {
 		}
 	}
 }
+
+// A plain book matches a work holding a dramatization, but doesn't take its recording.
+func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
+	plain := MatchRecording{ID: "plain", RuntimeMin: 700, Publisher: "Tantor Audio", Narrators: []MetaPersonRef{{Name: "Bea Reader"}}}
+	ga := MatchRecording{ID: "ga", RuntimeMin: 400, Publisher: "Graphic Audio LLC", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	cast := MatchRecording{ID: "cast", RuntimeMin: 400, Publisher: "Corey Press", Narrators: []MetaPersonRef{{Name: "Full Cast"}}}
+	bare := MatchRecording{ID: "bare", RuntimeMin: 400, Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	many := MatchRecording{ID: "many", RuntimeMin: 400, Publisher: "Spoken Realms", Narrators: []MetaPersonRef{{Name: "A B"}, {Name: "C D"}, {Name: "E F"}, {Name: "G H"}}}
+	cases := []struct {
+		name      string
+		c         MatchCandidate
+		narrators []string
+		want      string
+	}{
+		{"denied: nearer by length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain"},
+		{"denied: a full-cast credit", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, cast}}, nil, "plain"},
+		{"denied: only the dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, ""},
+		{"denied: metaserve named it by length", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{plain, ga}}, nil, "plain"},
+		{"denied: no publisher on a labelled work", MatchCandidate{PlainBook: true, Title: "Dune [Dramatized Adaptation]", Recordings: []MatchRecording{bare}}, nil, ""},
+		{"allowed: no publisher on a plain title", MatchCandidate{PlainBook: true, Title: "Dune", Recordings: []MatchRecording{bare}}, nil, "bare"},
+		{"allowed: a plain reading on a labelled work", MatchCandidate{PlainBook: true, Title: "Dune [Dramatized Adaptation]", Recordings: []MatchRecording{plain}}, nil, "plain"},
+		{"allowed: several readers are no dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, many}}, nil, "many"},
+		{"allowed: the book states it", MatchCandidate{Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
+		{"allowed: an identifier named it", MatchCandidate{PlainBook: true, RecordingID: "ga", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
+		{"allowed: its narrator is the book's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, []string{"Alex Hill-Knight"}, "ga"},
+	}
+	for _, tc := range cases {
+		got := ""
+		if r := DefaultRecording(&tc.c, 400*60, "", tc.narrators); r != nil {
+			got = r.ID
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestMatchQueryStatesDramatization(t *testing.T) {
+	cases := []struct {
+		q    MatchQuery
+		want bool
+	}{
+		{MatchQuery{Title: "Dune [Dramatized Adaptation]"}, true},
+		{MatchQuery{Title: "Dune", Series: "Dune (Full Cast)"}, true},
+		{MatchQuery{Title: "Dune", Path: "Frank Herbert/Dune (Dramatised)"}, true},
+		{MatchQuery{Title: "Dune", Narrators: []string{"Full Cast"}}, true},
+		{MatchQuery{Text: "dune full-cast"}, true},
+		{MatchQuery{Title: "Dune", Narrators: []string{"Scott Brick"}, Path: "Frank Herbert/Dune"}, false},
+		{MatchQuery{Title: "Radio Free Albemuth"}, false},
+		{MatchQuery{ASIN: "B0DUNE0001"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.q.statesDramatization(); got != tc.want {
+			t.Errorf("%+v: states = %v, want %v", tc.q, got, tc.want)
+		}
+	}
+}
