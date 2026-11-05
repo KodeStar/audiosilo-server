@@ -13,15 +13,28 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
-// Bounds on what a run asks of the community service, which is shared: a few
-// books at a time (the match dialog asks for one), only the best two works
-// expanded per book (the second only tells how far ahead the first is).
+// Bounds on what a run asks of the community service, which is shared. Nearly all
+// of a run's time online is round trips (measured against meta.audiosilo.app: an
+// 81 ms round trip, a 20 ms median match, an idle host), so it asks for few of them:
+// the best two works per book, the second only telling how far ahead the first is, and
+// only the first with its details (MatchQuery.BestOnly). maxRequestsPerSecond, not the
+// worker count, is what holds a run under the service's per-client limit (100 a second,
+// audiosilo-meta's DefaultRateLimit); the workers only fill the round trips. Mirror
+// mode shares the workers, where they are simply how many of the server's cores a run
+// takes, and no pacing (the local copy answers before the Pacer's transport).
 const (
-	workers        = 2
-	bulkCandidates = 2
+	workers              = 6
+	maxRequestsPerSecond = 60
+	bulkCandidates       = 2
+	// applyWorkers is how many books an apply writes at a time: its waits are the
+	// database's and each cover's fetch, not the match's.
+	applyWorkers = 2
 	// maxFailStreak consecutive books the service failed for stop the run: it is
-	// down, and the rest would only record the same error.
-	maxFailStreak = 5
+	// down, and the rest would only record the same error. It stands above the
+	// workers, as one moment's failure meets them all at once (a lost connection takes
+	// every stream on it, a stall every request's timeout): some of the books it counts
+	// were asked after that moment, and failed too.
+	maxFailStreak = workers + 4
 )
 
 // Codes a run that stopped by itself records (catalog.MatchRun.Error).
@@ -201,7 +214,8 @@ func (r *Runner) Wait() { r.wg.Wait() }
 // match matches each book, a few at a time, recording an item per book, then
 // settles the run.
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
-	work, halt := context.WithCancel(ctx)
+	pacer := meta.NewPacer(maxRequestsPerSecond, r.log.With("run", runID))
+	work, halt := context.WithCancel(meta.WithPacer(ctx, pacer))
 	defer halt()
 	var (
 		once     sync.Once
@@ -236,6 +250,9 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 			stop(ErrCodeInternal, err)
 		}
 	})
+	if waits, waited := pacer.Waits(); waits > 0 {
+		r.log.Info("match run: the community service asked it to wait", "run", runID, "waits", waits, "waited", waited)
+	}
 
 	status := catalog.MatchReady
 	switch {
@@ -263,7 +280,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 		return r.refreshBook(ctx, o.Region, b, item)
 	}
 	q := QueryFor(b, o.Region)
-	q.Limit = bulkCandidates
+	q.Limit, q.BestOnly, q.NoDetailsBelow = bulkCandidates, true, ReviewFloor
 	cands, err := r.candidates(ctx, q, item)
 	if err != nil {
 		return item, err
@@ -435,7 +452,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		off = off || !r.enabled()
 		return !off
 	}
-	pool.Each(ctx, workers, items, enabled, func(it *catalog.MatchRunItem) {
+	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run.Mode, it, o)
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
 		// not taken) stays to apply, so the next apply takes it again; what went in

@@ -1,13 +1,13 @@
 package meta
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"math"
 	"net/http"
 	"net/url"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +78,18 @@ type MatchQuery struct {
 	// work's favour (a name that is also the author isn't sent: matchParams),
 	// and DefaultRecording prefers one; an older metaserve ignores them.
 	Narrators []string
+	// BestOnly says the caller reads the whole of the best candidate alone, and of
+	// the next only Score and IdentifierHit (a bulk run: matchrun's matchBook and
+	// Classify). So works/match is asked to inline the best's work and series facts
+	// (expand=work), and nothing else is read: every other candidate comes back a
+	// stub, its work id, cover, score and reasons. A metaserve that inlines nothing
+	// costs the fetches for the best. The dialog lists every candidate and leaves it
+	// off.
+	BestOnly bool
+	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
+	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
+	// details or none. 0 for no such score.
+	NoDetailsBelow int
 }
 
 // limit is how many works the query expands.
@@ -329,6 +341,33 @@ type matchHit struct {
 	id, recordingID, cover string
 	score                  int
 	reasons                *MatchReasons
+	// work and facts are the work document and series facts works/match inlined
+	// (expand=work; only ever on its best result), nil when it inlined none.
+	work  *upstreamWorkDetail
+	facts map[string]*seriesFacts
+}
+
+// stub is the candidate h is without its work's details: what a caller of
+// MatchQuery.BestOnly reads of a candidate other than the best.
+func (h matchHit) stub() MatchCandidate {
+	return MatchCandidate{WorkID: h.id, CoverURL: h.cover, RecordingID: h.recordingID, Score: h.score, Reasons: h.reasons,
+		Authors: []MetaPersonRef{}, Series: []MatchSeries{}, Recordings: []MatchRecording{}}
+}
+
+// compareMatches is Candidates' order, best first: the higher score, and at one
+// score the work the identifier named, which is the book whatever else scores as
+// well (metaserve breaks a tie on the title, so it can rank that one second).
+func compareMatches(aScore int, aIdentified bool, bScore int, bIdentified bool) int {
+	if c := cmp.Compare(bScore, aScore); c != 0 {
+		return c
+	}
+	switch {
+	case aIdentified && !bIdentified:
+		return -1
+	case bIdentified && !aIdentified:
+		return 1
+	}
+	return 0
 }
 
 // matchUnsupportedTTL is how long a metaserve that answered works/match as an
@@ -392,7 +431,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				if r.ID == "" {
 					continue
 				}
-				h := matchHit{id: r.ID, cover: deref(r.CoverURL), score: r.Score, reasons: r.Reasons}
+				h := matchHit{id: r.ID, cover: deref(r.CoverURL), score: r.Score, reasons: r.Reasons, work: r.Work, facts: r.SeriesFacts}
 				if h.reasons == nil {
 					h.reasons = &MatchReasons{}
 				}
@@ -416,6 +455,9 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	if len(hits) > q.limit() {
 		hits = hits[:q.limit()]
 	}
+	if q.BestOnly && matched {
+		return s.bestCandidates(ctx, q, hits, asin)
+	}
 
 	// Expand each hit into its full work document, a few at a time, then read the
 	// facts of their series once each (works often share one).
@@ -433,21 +475,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	out := make([]*MatchCandidate, len(hits))
 	for i, h := range hits {
 		if detail := details[i]; detail != nil {
-			foundBy := ""
-			if h.reasons != nil && h.reasons.Identifier == "asin" {
-				foundBy = asin
-			}
-			c := s.toCandidate(detail, facts, h.cover, q.Region, foundBy)
-			c.RecordingID = h.recordingID
-			if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
-				c.DefaultRecordingID = rec.ID
-			}
-			if h.reasons != nil {
-				c.Score, c.Reasons = h.score, h.reasons
-			} else {
-				c.Score = scoreCandidate(q, c)
-			}
-			out[i] = c
+			out[i] = s.hitCandidate(q, h, detail, facts, asin)
 		}
 	}
 
@@ -472,15 +500,86 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 		}
 	}
-	// At one score the work the identifier named comes first: it is the book,
-	// whatever else scores as well (metaserve breaks a tie on the title).
-	sort.SliceStable(cands, func(i, j int) bool {
-		if cands[i].Score != cands[j].Score {
-			return cands[i].Score > cands[j].Score
-		}
-		return cands[i].IdentifierHit() && !cands[j].IdentifierHit()
+	slices.SortStableFunc(cands, func(a, b MatchCandidate) int {
+		return compareMatches(a.Score, a.IdentifierHit(), b.Score, b.IdentifierHit())
 	})
 	return cands, nil
+}
+
+// hitCandidate is hit h as a candidate, from its work document and series facts.
+// asin is the identifier the query sent.
+func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDetail, facts map[string]*seriesFacts, asin string) *MatchCandidate {
+	foundBy := ""
+	if h.reasons != nil && h.reasons.Identifier == "asin" {
+		foundBy = asin
+	}
+	c := s.toCandidate(detail, facts, h.cover, q.Region, foundBy)
+	c.RecordingID = h.recordingID
+	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
+		c.DefaultRecordingID = rec.ID
+	}
+	if h.reasons != nil {
+		c.Score, c.Reasons = h.score, h.reasons
+	} else {
+		c.Score = scoreCandidate(q, c)
+	}
+	return c
+}
+
+// bestCandidates is Candidates' answer for MatchQuery.BestOnly, from works/match's
+// hits: what it answers without the flag, as far as the caller reads it, for the
+// fewest requests. The hits are put in Candidates' order first, as the best is the
+// one the details are for. A best whose details can't be read gives way to the
+// next, and every one failing is the first outage, exactly as Candidates reads them.
+// So after an outage the next is read however weak: a stub asks nothing, and would
+// answer for a service that is down, the book a weak match and the run none the wiser.
+func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []matchHit, asin string) ([]MatchCandidate, error) {
+	slices.SortStableFunc(hits, func(a, b matchHit) int {
+		return compareMatches(a.score, a.reasons.Identifier != "", b.score, b.reasons.Identifier != "")
+	})
+	var outage error
+	for i, h := range hits {
+		best, err := s.bestCandidate(ctx, q, h, asin)
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) && outage == nil {
+				outage = err
+				q.NoDetailsBelow = 0
+			}
+			continue
+		}
+		cands := make([]MatchCandidate, 0, len(hits)-i)
+		cands = append(cands, *best)
+		for _, rest := range hits[i+1:] {
+			cands = append(cands, rest.stub())
+		}
+		return cands, nil
+	}
+	if outage != nil {
+		return nil, outage
+	}
+	return []MatchCandidate{}, nil
+}
+
+// bestCandidate is the best hit with its details, as works/match inlined them, else
+// fetched; a stub when the caller would drop it anyway (MatchQuery.NoDetailsBelow). A
+// series with no facts is unknown and drops nothing, as a failed read does.
+func (s *Service) bestCandidate(ctx context.Context, q MatchQuery, h matchHit, asin string) (*MatchCandidate, error) {
+	if h.score < q.NoDetailsBelow && h.reasons.Identifier == "" {
+		stub := h.stub()
+		return &stub, nil
+	}
+	if h.work != nil && h.work.ID != "" {
+		return s.hitCandidate(q, h, h.work, s.inlinedFacts(h.work, h.facts), asin), nil
+	}
+	detail, err := s.fetchWork(ctx, h.id)
+	if err != nil {
+		return nil, err
+	}
+	var facts map[string]*seriesFacts
+	if !q.NoSeries {
+		facts = s.seriesFactsFor(ctx, []*upstreamWorkDetail{detail})
+	}
+	return s.hitCandidate(q, h, detail, facts, asin), nil
 }
 
 // routeMissing reports whether a works/match error says the route does not
@@ -627,6 +726,9 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 		}
 	}
 	v.Set("limit", strconv.Itoa(q.limit()))
+	if q.BestOnly {
+		v.Set("expand", "work")
+	}
 	return v
 }
 

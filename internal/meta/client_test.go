@@ -16,25 +16,7 @@ import (
 // requests, then 200 with {"recording_id":"r1"}; it counts the requests.
 func rateLimitedServer(t *testing.T, limited int32, retryAfter string) (*client, *atomic.Int32, *[]time.Duration) {
 	t.Helper()
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if n.Add(1) <= limited {
-			if retryAfter != "" {
-				w.Header().Set("Retry-After", retryAfter)
-			}
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(`{"recording_id":"r1"}`))
-	}))
-	t.Cleanup(srv.Close)
-	c := newClient(srv.URL)
-	waits := &[]time.Duration{}
-	c.sleep = func(_ context.Context, d time.Duration) error {
-		*waits = append(*waits, d)
-		return nil
-	}
-	return c, &n, waits
+	return answerThen(t, http.StatusTooManyRequests, limited, retryAfter)
 }
 
 // A 429 is waited out (its Retry-After) and asked again (server#247).
@@ -125,9 +107,16 @@ func TestOwnTransport(t *testing.T) {
 	t.Parallel()
 	shared := http.DefaultTransport.(*http.Transport)
 	rt := newClient("http://meta.test").http.Transport
-	got, ok := rt.(*http.Transport)
+	paced, ok := rt.(pacedTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want a paced one", rt)
+	}
+	got, ok := paced.base.(*http.Transport)
 	if !ok || got == shared {
-		t.Fatalf("transport = %T (%p), want a copy of http.DefaultTransport", rt, rt)
+		t.Fatalf("paced base = %T (%p), want a copy of http.DefaultTransport", paced.base, paced.base)
+	}
+	if got.MaxIdleConnsPerHost != maxIdleConnsPerHost {
+		t.Fatalf("idle connections per host = %d, want %d", got.MaxIdleConnsPerHost, maxIdleConnsPerHost)
 	}
 	if got.Proxy == nil || got.DialContext == nil || !got.ForceAttemptHTTP2 ||
 		got.TLSHandshakeTimeout != shared.TLSHandshakeTimeout || got.IdleConnTimeout != shared.IdleConnTimeout {

@@ -1524,10 +1524,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
-  network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
-  expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
+  network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
+  stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once), metadata
   off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
-  included, 404s `metadata_off` then). A run only records (`match_run_items`: outcome auto/review/none/error,
+  included, 404s `metadata_off` then). What a run costs the service: a match sets
+  `MatchQuery.BestOnly` and `NoDetailsBelow` (`ReviewFloor`), which the dialog never does, for
+  `expand=work` on works/match (one wait a book: `bestCandidates` reads `work` and `series_facts`
+  off the result `compareMatches` calls best, an identifier hit winning a tie, so maybe `results[1]`;
+  the facts fill the `s:` cache). It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
+  `IdentifierHit()` (`Classify`), so every other candidate is a stub. `work` absent on the best (an
+  older metaserve, its budget spent) is the fetch path for the best alone, and nothing for a weak
+  best no identifier found; a best that can't be read gives way to the next, as in `Candidates` (after an
+  outage the next is read however weak, so a stub can't answer for a service that is down). The inlined
+  facts are read as a fetch's are (`factSeries`, `inlinedFacts`). A
+  `Limit: 2` still applies; refresh and repick are identifier lookups, never works/match. Each run
+  has a `meta.Pacer` in its context (`WithPacer`, `maxRequestsPerSecond` 60 against the service's
+  100, no saved-up burst), which `pacedTransport`, the remote leg's transport, spaces requests by,
+  so a mirror's answers take no slot and whatever fails over to the remote service does. A run takes no
+  `workSem` slot (`workSlot`): its Pacer and workers bound it, and a Retry-After it sits out must not hold up a
+  listener's read or the dialog. Concurrent misses of one series share one read (`seriesFacts`). In a run a
+  503 is waited out like a 429 (`getJSON`: Retry-After, `rateLimitRetries`, `maxRetryAfter`, not past
+  the deadline), each wait logged at INFO with the run's total; outside one a 503 is an outage at
+  once (the dialog's 502). `getJSONOnce` reads every answer to its end (`maxDrain`), and
+  `maxIdleConnsPerHost` keeps connections for the workers over HTTP/1.1. A run only records (`match_run_items`: outcome auto/review/none/error,
   the best candidate's `catalog.MatchProposal`); apply writes community overrides
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
@@ -1593,7 +1612,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
   `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
   `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
-  against a local artifact in mirror mode, counted per outcome (run line in its doc comment). A
+  against a local artifact in mirror mode, or through HTTP with `LF_BASE_URL` (the run's workers and
+  pacing, its time reported, the right answers read afterwards from the artifact so a proxy counts
+  only the run's requests), counted per outcome (run line in its doc comment). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes

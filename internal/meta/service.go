@@ -59,7 +59,7 @@ const composeTimeout = 15 * time.Second
 // community metadata service. This is the amplification bound: a burst of
 // distinct ids queues here rather than fanning straight out to metaserve. Not
 // configurable; it is a courtesy limit on a shared third party, matching the
-// api package's transcodeSem precedent.
+// api package's transcodeSem precedent. A bulk run takes no slot (workSlot).
 const maxConcurrentWorkFetches = 4
 
 // maxConcurrentLookups bounds how many uncached identifier lookups the admin
@@ -292,6 +292,9 @@ type Service struct {
 	// of one identifier share one upstream GET (see sharedLookup).
 	flightMu sync.Mutex
 	flights  map[string]*lookupFlight
+	// seriesFlights are the series records being read for their facts, by series id,
+	// each closed when its read ends (see seriesFacts). Guarded by flightMu.
+	seriesFlights map[string]chan struct{}
 	// health caches Ping's answer.
 	health healthCache
 	// covers fetches community cover images (FetchCover), at most
@@ -319,6 +322,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
+		seriesFlights: map[string]chan struct{}{},
 		covers:        newCoverClient(netguard.PublicAddrPort),
 		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
 		now:           now,
@@ -594,17 +598,33 @@ func keepStored[T any](s *Service, key string, stored *T, err error) bool {
 	return true
 }
 
-// fetchWork is one uncached works/{id} GET, bounded by workSem (only uncached
-// fetches queue there, and a caller that goes away while queued never issues its
-// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
-func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+// workSlot takes a workSem slot for one uncached read, or gives up with ctx (its
+// error then); release gives it back. A bulk run (a Pacer in ctx) takes none: its
+// workers and Pacer bound what it asks, and its reads sit out the service's Retry-After
+// for as long as its compose budget lasts, which must not hold up a listener's read or
+// the match dialog queued here.
+func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
+	if pacerOf(ctx) != nil {
+		return func() {}, nil
+	}
 	select {
 	case s.workSem <- struct{}{}:
+		return func() { <-s.workSem }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// fetchWork is one uncached works/{id} GET, bounded by workSlot (only uncached
+// fetches queue there, and a caller that goes away while queued never issues its
+// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+	release, err := s.workSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Deferred so a panic can never leak a slot.
-	defer func() { <-s.workSem }()
+	defer release()
 	detail, err := s.client.work(ctx, id)
 	if err != nil {
 		return nil, err
