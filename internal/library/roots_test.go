@@ -183,9 +183,10 @@ func TestRootsAvailableInParallel(t *testing.T) {
 	if !got[1] || got[2] || got[3] {
 		t.Fatalf("availability = %v, want only library 1", got)
 	}
-	// A root still stuck past the timeout answers at once on the next check.
+	// A root still stuck past the timeout answers at once on the next check: well
+	// inside a second probe timeout, which is what waiting on the probe would take.
 	start = time.Now()
-	if _, answered := s.roots.check("/dead-a"); answered || time.Since(start) > 100*time.Millisecond {
+	if _, answered := s.roots.check("/dead-a"); answered || time.Since(start) > rootProbeTimeout/2 {
 		t.Fatalf("a stuck probe made the next check wait (answered=%v, %v)", answered, time.Since(start))
 	}
 }
