@@ -115,6 +115,27 @@ type IssueCount struct {
 // maxIssueSamples is how many covers a category card fans out.
 const maxIssueSamples = 3
 
+// issueCountsSQL is the one pass over the books counting each of kinds (book
+// kinds, never duplicates): two columns a kind, its count and its ignored, with
+// the ignores pivoted once. The kinds are this file's constants, never request
+// input, so they can name columns.
+func issueCountsSQL(kinds []string) string {
+	var cols, flags []string
+	for _, k := range kinds {
+		pred := issuePredicates[k]
+		cols = append(cols,
+			// The ignore first: a costly predicate (series_spellings' seeks) then
+			// runs once per book, not twice.
+			`COALESCE(SUM(CASE WHEN ig.`+k+` IS NOT 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`,
+			`COALESCE(SUM(CASE WHEN ig.`+k+` IS 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`)
+		flags = append(flags, `MAX(kind = '`+k+`') AS `+k)
+	}
+	return `SELECT ` + strings.Join(cols, ", ") + ` FROM books b
+			LEFT JOIN (SELECT library_id, path, ` + strings.Join(flags, ", ") + `
+			             FROM issue_ignores GROUP BY library_id, path) ig
+			       ON ig.library_id = b.library_id AND ig.path = b.rel_path WHERE ` + inBookLibrary
+}
+
 // IssueCounts computes each of kinds, in that order. Every book kind is counted
 // in one pass over the books, with the ignores pivoted once; samples are only
 // looked up for a kind that has any.
@@ -130,27 +151,13 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 	}
 	counts := map[string]*IssueCount{}
 	if len(bookKinds) > 0 {
-		// The kinds are this file's constants, never request input, so they can name
-		// columns.
-		var cols, flags []string
 		dest := make([]any, 0, 2*len(bookKinds))
 		for _, k := range bookKinds {
 			ic := &IssueCount{Kind: k, Samples: []IssueSample{}}
 			counts[k] = ic
-			pred := issuePredicates[k]
-			cols = append(cols,
-				// The ignore first: a costly predicate (series_spellings' seeks) then
-				// runs once per book, not twice.
-				`COALESCE(SUM(CASE WHEN ig.`+k+` IS NOT 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`,
-				`COALESCE(SUM(CASE WHEN ig.`+k+` IS 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`)
-			flags = append(flags, `MAX(kind = '`+k+`') AS `+k)
 			dest = append(dest, &ic.Count, &ic.Ignored)
 		}
-		q := `SELECT ` + strings.Join(cols, ", ") + ` FROM books b
-			LEFT JOIN (SELECT library_id, path, ` + strings.Join(flags, ", ") + `
-			             FROM issue_ignores GROUP BY library_id, path) ig
-			       ON ig.library_id = b.library_id AND ig.path = b.rel_path WHERE ` + inBookLibrary
-		if err := c.db.QueryRowContext(ctx, q).Scan(dest...); err != nil {
+		if err := c.db.QueryRowContext(ctx, issueCountsSQL(bookKinds)).Scan(dest...); err != nil {
 			return nil, err
 		}
 		for _, k := range bookKinds {

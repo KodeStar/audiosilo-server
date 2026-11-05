@@ -28,6 +28,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`/`Clean`, `auth.castGrant.covers`,
   `ResolveCastRequest`, `api.authenticate`/`castOwnBook`), or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
+  A test never holds code to a time in milliseconds: CI's shared runners take several times as long as a laptop,
+  and more when busy. How a read grows is compared across sizes on the one machine (`TestSeriesKeyScale`) and
+  its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
@@ -1440,8 +1443,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with memberships a UNION ALL of the list rows too; the caller's library term narrows them),
   `seriesOrderKeys` (the key as a literal), `numberedSeriesMembers` (the next book),
   `SeriesBooks`/`seriesMembers` (the rails) and `positionIn` (Go, by key), so the SQL and a
-  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; under a millisecond for a
-  25-book series in 50,000 books, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
+  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; about a millisecond for a
+  25-book series in 50,000 books, no slower than in 5,000, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
   `Catalog.KeySeries`, which the launcher runs synchronously before the listener whenever the
   stored keys are missing or out of date (server_state `series_keys` holds `seriesKeysVersion`:
   the key rules' number, bumped when `seriesKey`/`match.SeriesKey` changes, plus Go's and
