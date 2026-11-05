@@ -101,6 +101,17 @@ type localCopy struct{ h http.Handler }
 func (c localCopy) Handler() http.Handler { return c.h }
 func (c localCopy) Ready() bool           { return true }
 
+// localHandler is the local copy's API over a fresh test database.
+func localHandler(t *testing.T) http.Handler {
+	t.Helper()
+	db, err := query.Open(querytest.Build(t, t.TempDir()), "data-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{})
+}
+
 // breakingCopy is a local copy that breaks after its first lookup: from then
 // on it answers 500 (drop false) or is no longer Ready (drop true, the copy
 // dropped mid-run).
@@ -135,24 +146,16 @@ func TestReportMirrorModeStaysLocal(t *testing.T) {
 	for _, drop := range []bool{false, true} {
 		t.Run(fmt.Sprintf("drop=%v", drop), func(t *testing.T) {
 			t.Parallel()
-			db, err := query.Open(querytest.Build(t, t.TempDir()), "data-test")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = db.Close() })
 			rs := newRemote(t, func(w http.ResponseWriter, _ *http.Request) {
 				// Were it asked, every ASIN would be known.
 				_, _ = w.Write([]byte(`{"work":{"id":"w1","title":"T"},"recording_id":"r1"}`))
 			})
 			svc := meta.NewService(rs.URL, nil)
-			cp := &breakingCopy{h: query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{}), drop: drop}
+			cp := &breakingCopy{h: localHandler(t), drop: drop}
 			svc.SetMirror(cp, nil)
 
 			e := newEnv(t)
-			unknown := []string{querytest.MissingASIN, "B0NOTINDB1", "B0NOTINDB2"}
-			for i, a := range unknown {
-				e.book(t, fmt.Sprintf("b%d", i), a, false)
-			}
+			unknown := e.unknowns(t, 3)
 			r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Ready: cp.Ready})
 			if err := r.RunOnce(context.Background()); err == nil {
 				t.Fatal("RunOnce = nil, want the failed lookup")
@@ -187,14 +190,9 @@ func TestReportMirrorModeStaysLocal(t *testing.T) {
 // remote service.
 func TestReportMirrorMode(t *testing.T) {
 	t.Parallel()
-	db, err := query.Open(querytest.Build(t, t.TempDir()), "data-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
 	rs := newRemote(t, nil)
 	svc := meta.NewService(rs.URL, nil)
-	svc.SetMirror(localCopy{query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{})}, nil)
+	svc.SetMirror(localCopy{localHandler(t)}, nil)
 
 	e := newEnv(t)
 	e.book(t, "known", querytest.ASIN, false)

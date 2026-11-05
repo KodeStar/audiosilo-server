@@ -97,8 +97,7 @@ func localOnly(ctx context.Context) context.Context {
 }
 
 func isLocalOnly(ctx context.Context) bool {
-	on, _ := ctx.Value(localOnlyKey{}).(bool)
-	return on
+	return ctx.Value(localOnlyKey{}) != nil
 }
 
 // errLocalOnly is a local-only request the local copy didn't answer (not
@@ -124,10 +123,8 @@ type fallbackTransport struct {
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	stayLocal := isLocalOnly(req.Context())
-	failed := "the local copy is not ready"
 	if t.ready() {
-		var resp *http.Response
-		resp, failed = serveLocal(t.local, req, t.timeout)
+		resp, failed := serveLocal(t.local, req, t.timeout)
 		if resp != nil {
 			if loc := resp.Header.Get("Location"); t.prefix != "" && strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
 				resp.Header.Set("Location", t.prefix+loc)
@@ -140,12 +137,12 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		if err := req.Context().Err(); err != nil {
 			return nil, err
 		}
-		if !stayLocal {
-			t.logFallback(req.URL.Path, failed)
+		if stayLocal {
+			return nil, fmt.Errorf("%w (%s)", errLocalOnly, failed)
 		}
-	}
-	if stayLocal {
-		return nil, fmt.Errorf("%w (%s)", errLocalOnly, failed)
+		t.logFallback(req.URL.Path, failed)
+	} else if stayLocal {
+		return nil, fmt.Errorf("%w (the local copy is not ready)", errLocalOnly)
 	}
 	resp, err := t.remote.Do(req)
 	var ue *url.Error

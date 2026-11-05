@@ -474,7 +474,7 @@ func TestKnownASINMirrorStaysLocal(t *testing.T) {
 			s.SetMirror(m, nil)
 			s.client.http.Transport.(*fallbackTransport).timeout = 50 * time.Millisecond
 			known, err := s.KnownASIN(context.Background(), "B0ABCDEFGH")
-			if known || err == nil || errors.Is(err, ErrNotFound) || !errors.Is(err, errLocalOnly) {
+			if known || !errors.Is(err, errLocalOnly) {
 				t.Fatalf("KnownASIN = %v, %v; want a local-only error", known, err)
 			}
 			if n := remote.Load() - before; n != 0 {
