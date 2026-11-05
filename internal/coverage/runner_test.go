@@ -299,6 +299,22 @@ func TestRunWaitsForTheMirror(t *testing.T) {
 	}
 }
 
+// Mirror mode with the copy ready: no Ping (it could fall back to the remote
+// service); the lookups and the POST still happen.
+func TestRunMirrorSkipsPing(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.unknowns(t, 3)
+	e.md.unreach = true // a Ping would fail the run
+	r := New(e.cat, e.md, Options{On: e.on.Load, Now: e.clock.now, Ready: func() bool { return true }})
+	if err := r.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p, l, s := e.md.calls(); p != 0 || l != 3 || s != 1 {
+		t.Fatalf("calls: %d pings, %d lookups, %d posts", p, l, s)
+	}
+}
+
 // The service down: failed, no lookups, tried again the next day.
 func TestRunServiceUnreachable(t *testing.T) {
 	t.Parallel()

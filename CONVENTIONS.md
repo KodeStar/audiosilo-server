@@ -646,11 +646,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or metadata on) runs at once unless one ran within 23 h. Mirror mode: no run until the local copy is `Ready`
   (rechecked hourly), and the lookups stay local in mirror mode: `KnownASIN` marks them `localOnly`, so
   `fallbackTransport` answers them from the copy or fails them (`errLocalOnly`: the copy failed one, or is no
-  longer `Ready`), never asking the remote service, unlike every other mirror-mode request (the Ping is one: a
-  `/healthz` the copy fails still goes remote, carrying no ASIN); the POST goes remote. **Candidates**
+  longer `Ready`), never asking the remote service, unlike every other mirror-mode request; mirror mode skips the
+  Ping (a `/healthz` the copy fails would go remote), so only the POST goes remote. **Candidates**
   (`UnknownASINCandidates`, books libraries only, upper-cased, `match.ValidASIN`): `books.asin` except an ASIN a community match gave a book
   (`book_overrides` asin `source='community'`), plus `tag_asin` only for a book with no ASIN or ISBN, no asin
-  override (a cleared one too) and a tag on exactly one book. **A run**: Ping (fails: `failed`, tried the next day);
+  override (a cleared one too) and a tag on exactly one book. **A run**: Ping, remote mode only (fails: `failed`, tried the next day);
   drop rows no candidate holds; look up (`meta.Service.KnownASIN`, local-only in mirror mode; a cached hit,
   memory or the persistent store (`CachedWorkID`), counts as known) the candidates never looked up or looked up 30+ days ago, shuffled, at most 500; only
   `ErrNotFound` is unknown, any other error stops the lookups (the rest wait; what was confirmed may still be

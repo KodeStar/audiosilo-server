@@ -14,9 +14,9 @@
 //  3. in mirror mode, nothing until the local copy is ready, and the lookups
 //     stay local: the copy answers them, and one it fails (or can't take, the
 //     copy dropped mid-run) is a failed lookup, never a question to the remote
-//     service (meta.Service.KnownASIN); the POST goes remote (and a Ping
-//     the copy fails, which carries no ASIN);
-//  4. Ping, then up to maxChecks lookups of the candidates never looked up or
+//     service (meta.Service.KnownASIN), and there is no Ping; only the POST
+//     goes remote;
+//  4. Ping (remote mode), then up to maxChecks lookups of the candidates never looked up or
 //     looked up over recheckAge ago, in a shuffled order; only a 404 is
 //     "unknown", any other failure stops the lookups (the rest wait);
 //  5. the unknown ones not sent within resendAge, shuffled, in chunks of
@@ -274,8 +274,12 @@ func (r *Runner) run(ctx context.Context, now time.Time) (catalog.UnknownASINRep
 		res.State = StateFailed
 		return res, err
 	}
-	if h := r.meta.Ping(); !h.Reachable {
-		return failed(fmt.Errorf("metadata service unreachable: %s", h.Error))
+	// In mirror mode the copy answers the lookups (Ready already held), so no
+	// Ping: a health check the copy fails would go to the remote service.
+	if r.opt.Ready == nil {
+		if h := r.meta.Ping(); !h.Reachable {
+			return failed(fmt.Errorf("metadata service unreachable: %s", h.Error))
+		}
 	}
 	candidates, err := r.cat.UnknownASINCandidates(ctx)
 	if err != nil {
