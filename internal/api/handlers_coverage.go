@@ -13,8 +13,8 @@ func (a *API) reportUnknownOn() bool {
 	return a.metadataOn() && cfg.Metadata.ReportUnknown && !cfg.Demo.Enabled
 }
 
-// mirrorReady reports whether lookups may be made without the remote service
-// in mirror mode: no mirror (remote mode), or its local copy loaded.
+// mirrorReady reports whether the report's lookups may start: no mirror
+// (remote mode), or its local copy loaded (mirror mode).
 func (a *API) mirrorReady() bool { return a.mirror == nil || a.mirror.Ready() }
 
 // reportStatus is the report's last run for the settings envelope

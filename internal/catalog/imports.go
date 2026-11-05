@@ -166,6 +166,13 @@ func cutoffOffset(cutoff time.Time, loc *time.Location) *int {
 // and a server-stamped progress updated_at are stored in (they compare as text).
 func FormatStamp(t time.Time) string { return formatSessionTime(t) }
 
+// ParseStamp reads a stamp FormatStamp wrote; ok is false for "" (never) and for
+// one that doesn't parse.
+func ParseStamp(s string) (t time.Time, ok bool) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	return t, err == nil && s != ""
+}
+
 // FormatCutoff is a cutoff as imports.cutoff stores it (RFC3339 UTC, to the
 // second, rounded down so a session in the cutoff's own second stays out).
 func FormatCutoff(t time.Time) *string {

@@ -11,8 +11,10 @@
 //     no reports (not_offered);
 //  2. a base_url the report may not go to (plain http off this machine:
 //     meta.Service.CanReport) is not_offered with no call;
-//  3. in mirror mode, nothing until the local copy is ready (so no lookup goes
-//     to the remote service a mirror server chose not to ask);
+//  3. in mirror mode, nothing until the local copy is ready (so the lookups are
+//     the copy's, not a burst at the remote service while it downloads; one the
+//     copy fails still goes to the remote service, as every mirror-mode lookup
+//     does: meta.Service.SetMirror);
 //  4. Ping, then up to maxChecks lookups of the candidates never looked up or
 //     looked up over recheckAge ago, in a shuffled order; only a 404 is
 //     "unknown", any other failure stops the lookups (the rest wait);
@@ -136,7 +138,10 @@ func (r *Runner) Run(ctx context.Context) {
 	for {
 		wait := next.Sub(r.opt.Now())
 		if !r.opt.On() {
-			wait = min(wait, offPoll)
+			// Looked at again in a minute (Wake runs it at once when it is
+			// switched on), never sooner: once next has passed, a wait capped
+			// with min would be negative and the loop would spin.
+			wait = offPoll
 		}
 		t := time.NewTimer(max(wait, 0))
 		select {
@@ -417,10 +422,8 @@ func within(at string, now time.Time, age time.Duration) bool {
 	return ok && now.Sub(t) < age
 }
 
-// stamp is the catalog's fixed-width UTC millisecond time.
-var stamp = catalog.FormatStamp
-
-func parseStamp(s string) (time.Time, bool) {
-	t, err := time.Parse(time.RFC3339Nano, s)
-	return t, err == nil && s != ""
-}
+// stamp and parseStamp are the catalog's fixed-width UTC millisecond time.
+var (
+	stamp      = catalog.FormatStamp
+	parseStamp = catalog.ParseStamp
+)

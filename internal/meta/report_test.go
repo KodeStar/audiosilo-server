@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestReportAllowed(t *testing.T) {
@@ -238,5 +239,21 @@ func TestKnownASIN(t *testing.T) {
 	n := lookups.Load()
 	if _, err := s.KnownASIN(ctx, "not-an-asin"); err == nil || lookups.Load() != n {
 		t.Fatalf("a malformed ASIN = %v and %d lookups, want an error and none", err, lookups.Load()-n)
+	}
+
+	// A positive answer in the persistent store, even a stale one, is known
+	// without a lookup; a stored "no match" is still asked.
+	store := newMemStore()
+	s = NewService(srv.URL, nil)
+	s.SetStore(store)
+	store.put(StoredEntry{Key: nsASIN.key("B0STORED01"), Version: storeVersion, Source: srv.URL,
+		Payload: []byte(`{"matched":true,"work":{"id":"w2"}}`), Expires: time.Now().Add(-time.Hour)})
+	store.put(StoredEntry{Key: nsASIN.key("B0UNKNOWN1"), Version: storeVersion, Source: srv.URL, Expires: time.Now().Add(time.Hour)})
+	n = lookups.Load()
+	if known, err := s.KnownASIN(ctx, "B0STORED01"); !known || err != nil || lookups.Load() != n {
+		t.Fatalf("stored = %v, %v and %d lookups, want known without one", known, err, lookups.Load()-n)
+	}
+	if known, err := s.KnownASIN(ctx, "B0UNKNOWN1"); known || err != nil || lookups.Load() != n+1 {
+		t.Fatalf("stored no match = %v, %v and %d lookups, want unknown after one", known, err, lookups.Load()-n)
 	}
 }

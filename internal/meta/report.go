@@ -78,13 +78,14 @@ func reportAllowed(base string) bool {
 // KnownASIN asks the community database whether any recording has asin (GET
 // /api/v1/lookup, through the client: the local copy in mirror mode). Only a
 // 404 is "unknown" (false, nil); any other failure is an error, never an
-// answer. A memory-cached hit counts as known without asking.
+// answer. A cached hit (CachedWorkID: memory, else the persistent store, fresh
+// or stale) counts as known without asking.
 func (s *Service) KnownASIN(ctx context.Context, asin string) (bool, error) {
 	asin = match.NormalizeASIN(asin)
 	if !match.ValidASIN(asin) {
 		return false, fmt.Errorf("meta: %q is not an ASIN", asin)
 	}
-	if w, hit := s.cachedWorkID(cacheKey(asin, "")); hit && !w.Failed && w.ID != "" {
+	if id, ok := s.CachedWorkID(ctx, asin, ""); ok && id != "" {
 		return true, nil
 	}
 	_, err := s.client.lookup(ctx, asin, "")

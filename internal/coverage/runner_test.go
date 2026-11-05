@@ -221,6 +221,28 @@ func TestRunOffMakesNoCalls(t *testing.T) {
 	}
 }
 
+// Off past the run's time (the switch ships off; an hour after the start next
+// has passed): the schedule waits offPoll between looks, never spins.
+func TestRunOffPastDueDoesNotSpin(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	var looks, nows atomic.Int64
+	start := e.clock.now()
+	r := New(e.cat, e.md, Options{On: func() bool { looks.Add(1); return false },
+		Now: func() time.Time {
+			if nows.Add(1) == 1 {
+				return start // firstRun: next = start + firstDelay
+			}
+			return start.Add(2 * firstDelay)
+		}})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	r.Run(ctx)
+	if n := looks.Load(); n > 5 {
+		t.Fatalf("the switch was looked at %d times in 100 ms: the schedule spins while off", n)
+	}
+}
+
 // Switched off mid-run: the lookups stop, nothing is sent, no status.
 func TestRunSwitchedOffMidRun(t *testing.T) {
 	t.Parallel()
