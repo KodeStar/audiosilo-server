@@ -8,7 +8,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
+
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 )
 
 // evenChapters is n chapters of 100 s each, on a whole-book timeline.
@@ -553,35 +556,29 @@ func jsonHas(t *testing.T, body []byte, key string) bool {
 	return ok
 }
 
-// Mirror mode needs nothing of its own: the copy's answer decodes as the remote
-// service's does, so the scale arrives the moment the pinned pkg/query's handler sends
-// it. This stands in for that handler; the pinned one sends none, which is a work with
-// no scale, passed through as before.
+// Mirror mode needs nothing of its own: the copy's answer decodes as the remote service's
+// does, so the scale comes through metaserve's real handler over a real artifact (the
+// fixture's community work states 12 sections, partial), and the remote is never asked.
 func TestMirrorCarriesPositionScale(t *testing.T) {
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("the remote service was asked")
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer remote.Close()
+	remote, remoteHits := mirrortest.Remote(t)
 	s := NewService(remote.URL, nil)
-	s.SetMirror(staticMirror{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/works/hamlet" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_, _ = w.Write([]byte(scaledWorkDoc))
-	})}, nil)
-	w, err := s.Work(context.Background(), "hamlet")
+	s.SetMirror(newFakeMirror(t), nil)
+	w, err := s.Work(context.Background(), querytest.CommunityWork)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.PositionScale == nil || w.PositionScale.Length != 5 || w.PositionScale.Unit != "act" {
+	if want := (MetaPositionScale{Length: 12, Unit: "section", Partial: true}); w.PositionScale == nil || *w.PositionScale != want {
 		t.Fatalf("position_scale = %+v", w.PositionScale)
 	}
+	if n := remoteHits.Load(); n != 0 {
+		t.Fatalf("the remote service was asked %d times", n)
+	}
+	// A work that states none carries none through the same path.
+	other, err := s.Work(context.Background(), querytest.ISBNWork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.PositionScale != nil {
+		t.Fatalf("a work stating no scale = %+v", other.PositionScale)
+	}
 }
-
-// staticMirror is a ready copy answering with h.
-type staticMirror struct{ h http.Handler }
-
-func (m staticMirror) Handler() http.Handler { return m.h }
-func (staticMirror) Ready() bool             { return true }

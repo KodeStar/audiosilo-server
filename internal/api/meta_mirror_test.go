@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/release"
 	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
@@ -36,6 +38,12 @@ type mirrorEnv struct {
 
 func newMirrorEnv(t *testing.T) *mirrorEnv {
 	t.Helper()
+	return newMirrorEnvOver(t, mirrortest.Fixture(t, 0))
+}
+
+// newMirrorEnvOver is newMirrorEnv with the data release carrying these assets.
+func newMirrorEnvOver(t *testing.T, assets map[string][]byte) *mirrorEnv {
+	t.Helper()
 	remote, hits := mirrortest.Remote(t)
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = true
@@ -43,7 +51,7 @@ func newMirrorEnv(t *testing.T) *mirrorEnv {
 		c.Metadata.Mode = config.MetadataMirror
 	})
 
-	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(assets, "data-v2026.10.09-ccccccc-ddddddd")...)
 	m, err := metamirror.New(filepath.Join(e.cfg.DataDir, metamirror.DirName), metamirror.Options{
 		Enabled:   e.api.MetadataOn,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -113,6 +121,56 @@ func TestMetaFromMirror(t *testing.T) {
 	}
 	if resp, body := e.do(t, "GET", "/api/v1/meta/work?id=no-such-work", tok, ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("an unknown work = %d %s", resp.StatusCode, body)
+	}
+	if n := e.remoteHits.Load(); n != 0 {
+		t.Fatalf("the remote service was asked %d times", n)
+	}
+}
+
+// The whole path for real, in mirror mode: a data release's artifact on a 5-act scale,
+// downloaded, served by metaserve's own handler and translated by /meta onto a 43-track
+// recording. Hamlet's numbers, gated at track 6 and with Act 1 over; the remote never asked.
+func TestMetaFromMirrorHamletPositions(t *testing.T) {
+	e := newMirrorEnvOver(t, mirrortest.FixtureRewritten(t, mirrortest.HamletScale()...))
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTracks(t, e.testEnv, lib, "A/Fine", querytest.ASIN, 43)
+	seedTracks(t, e.testEnv, lib, "A/Acts", querytest.ASIN, 5)
+
+	b := getScale(t, e.testEnv, lib, "A/Fine", "", e.adminTok)
+	if got := b.reveals(); !slices.Equal(got, []int{1, 10, 19, 27, 36}) {
+		t.Fatalf("reveals = %v", got)
+	}
+	if got := b.throughs(); !slices.Equal(got, []int{9, 18, 26, 35, 43}) {
+		t.Fatalf("throughs = %v", got)
+	}
+	if b.Work.PositionScale != nil {
+		t.Fatalf("position_scale beside translated numbers = %+v", b.Work.PositionScale)
+	}
+
+	// Equal count: as published, with the scale the copy states.
+	acts := getScale(t, e.testEnv, lib, "A/Acts", "", e.adminTok)
+	if got := acts.throughs(); !slices.Equal(got, []int{1, 2, 3, 4, 5}) {
+		t.Fatalf("equal count throughs = %v", got)
+	}
+	if p := acts.Work.PositionScale; p == nil || p.Length != 5 || p.Unit != "act" {
+		t.Fatalf("equal count position_scale = %+v", p)
+	}
+
+	save := progressSaver(t, e.testEnv, catalog.Ref{LibraryID: lib.ID, Path: "A/Fine"})
+	save(550, false) // inside track 6: denied, Act 5's recap and every recap
+	b = getScale(t, e.testEnv, lib, "A/Fine", "&spoilers=hide", e.adminTok)
+	if got := b.recapTexts(); len(got) != 0 {
+		t.Fatalf("recaps at track 6 = %v", got)
+	}
+	if got := b.reveals(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("reveals at track 6 = %v, want the opening cast", got)
+	}
+	save(950, false) // inside track 10, Act 1 over: allowed
+	if got := getScale(t, e.testEnv, lib, "A/Fine", "&spoilers=hide", e.adminTok).recapTexts(); !slices.Equal(got, []string{"Act 1."}) {
+		t.Fatalf("recaps at track 10 = %v", got)
 	}
 	if n := e.remoteHits.Load(); n != 0 {
 		t.Fatalf("the remote service was asked %d times", n)
