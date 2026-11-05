@@ -831,6 +831,7 @@
   "book.story.aliases": "Also known as {{names}}",
   "book.story.fromChapter": "From chapter {{n}}",
   "book.story.fromStart": "From the start",
+  "book.story.nearEnd": "Near the end",
   "book.story.recapsHint": "Recaps give the story away. Each stays closed until you open it.",
   "book.story.through": "Through chapter {{n}}",
   "book.story.previously": "Previously, in earlier books",

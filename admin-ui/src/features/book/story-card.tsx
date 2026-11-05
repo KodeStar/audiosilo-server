@@ -81,7 +81,7 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
           <TabsPanel value="characters">
             <SourceLine dimension={sources.characters} attribution={work?.attribution} />
             {sources.characters.source !== 'none' ? (
-              <CharacterList characters={characters} />
+              <CharacterList characters={characters} chapterCount={detail.chapters?.length ?? 0} />
             ) : (
               <Empty text={t('book.story.noCharacters')} />
             )}
@@ -183,7 +183,14 @@ function SourceLine({
   );
 }
 
-function CharacterList({ characters }: { characters: NonNullable<MetaWork['characters']> }) {
+function CharacterList({
+  characters,
+  chapterCount,
+}: {
+  characters: NonNullable<MetaWork['characters']>;
+  /** The book's chapters: a reveal past the last names no chapter (0: not known). */
+  chapterCount: number;
+}) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const [all, setAll] = useState(false);
@@ -212,9 +219,11 @@ function CharacterList({ characters }: { characters: NonNullable<MetaWork['chara
                 <p className="text-[13px] whitespace-pre-line">{c.description}</p>
               ) : null}
               <p className="text-[12px] text-subtle-foreground tabular-nums">
-                {c.reveal.chapter > 0
-                  ? t('book.story.fromChapter', { n: c.reveal.chapter })
-                  : t('book.story.fromStart')}
+                {c.reveal.chapter <= 0
+                  ? t('book.story.fromStart')
+                  : chapterCount > 0 && c.reveal.chapter > chapterCount
+                    ? t('book.story.nearEnd')
+                    : t('book.story.fromChapter', { n: c.reveal.chapter })}
               </p>
             </li>
           );
