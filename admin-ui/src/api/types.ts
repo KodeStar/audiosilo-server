@@ -1940,6 +1940,11 @@ export interface MatchCandidate {
   /** The recording the book most likely is (the server's meta.DefaultRecording). */
   default_recording_id?: string;
   /**
+   * The work holds only a dramatization, which this book doesn't state it is: no
+   * recording is preselected (see meta.DefaultRecording).
+   */
+  dramatization_only?: boolean;
+  /**
    * 0-100: how well the work fits the book - the community service's structured
    * match score, 100 for an identifier hit, or (older service) the title, author
    * and runtime agreement.
@@ -2228,7 +2233,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };

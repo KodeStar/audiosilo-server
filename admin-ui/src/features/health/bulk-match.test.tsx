@@ -216,6 +216,38 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
+  it('says when the community holds only a dramatization of a plain book', async () => {
+    const held: MatchRunItem = {
+      ...confident,
+      id: 14,
+      path: 'Someone/Plain',
+      outcome: 'review',
+      score: 95,
+      detail: 'dramatization_only',
+      book: { title: 'Plain', author: 'Someone' },
+    };
+    mockFetch(
+      routes([run({ counts: { ...run().counts, review: 1 } })], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [held] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    expect(
+      await within(dialog).findByText(
+        "Held for review: the community holds only a dramatization of this book, and this book doesn't say it is one",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows the series a scope replaces, old to new', async () => {
     const polluted: MatchRunItem = {
       ...confident,

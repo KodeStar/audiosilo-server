@@ -814,6 +814,11 @@ function ItemRow({
             })}
           </span>
         ) : null}
+        {candidate && item.detail === 'dramatization_only' ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.dramatizationOnly')}
+          </span>
+        ) : null}
         {candidate && (seriesText || series) ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             {seriesText || t('health.bulkMatch.inSeries', { series })}

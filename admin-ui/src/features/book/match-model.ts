@@ -32,9 +32,11 @@ export function parseMatchQuery(input: string): MatchBy {
  * The recording a candidate most likely is: the server's pick (the one an
  * identifier hit, else of the recordings the book's narrators read that fit its
  * length the closest runtime, the preferred marketplace breaking a tie:
- * meta.DefaultRecording), else the first.
+ * meta.DefaultRecording), else the first. None for a work that holds only a
+ * dramatization a plain book isn't: one click must not take it.
  */
 export function defaultRecording(c: MatchCandidate): MatchRecording | undefined {
+  if (c.dramatization_only) return undefined;
   const recs = c.recordings ?? [];
   const id = c.default_recording_id || c.recording_id;
   return recs.find((r) => r.id === id) ?? recs[0];

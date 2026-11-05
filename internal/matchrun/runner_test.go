@@ -901,3 +901,40 @@ func TestMatchSendsLanguageAndNarrators(t *testing.T) {
 		t.Fatalf("queried %q, want each book once", queried)
 	}
 }
+
+// TestMatchHoldsAPlainBookOffADramatization: a confident title match on a work holding
+// only a dramatization is held for review with no identifier to attach; beside a plain
+// reading the plain reading is the proposal, however close the dramatization's length.
+func TestMatchHoldsAPlainBookOffADramatization(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Only", "Only", "", nil)
+	e.book(t, "A/Both", "Both", "", nil)
+	drama := func() meta.MatchCandidate {
+		c := cand("the-martian", 95, "")
+		c.PlainBook = true
+		c.Recordings = c.Recordings[:1]
+		c.Recordings[0].ID, c.Recordings[0].Publisher = "ga", "GraphicAudio"
+		return c
+	}
+	e.matcher.byTitle["Only"] = []meta.MatchCandidate{drama()}
+	both := drama()
+	plain := both.Recordings[0]
+	plain.ID, plain.Publisher, plain.RuntimeMin = "plain", "Tantor Audio", 2000
+	both.Recordings = append(both.Recordings, plain)
+	e.matcher.byTitle["Both"] = []meta.MatchCandidate{both}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	found := map[string]ItemView{}
+	for _, it := range e.items(t, run, catalog.OutcomeReview) {
+		found[it.Book.Title] = it
+	}
+	only, ok := found["Only"]
+	if !ok || only.Detail != DetailDramatizationOnly || only.Proposal.RecordingID != "" || only.Proposal.Values[catalog.FieldASIN] != "" {
+		t.Errorf("Only = %+v, want held for review with no recording", only)
+	}
+	both2, ok := found["Both"]
+	if !ok || both2.Proposal.RecordingID != "plain" || both2.Detail == DetailDramatizationOnly {
+		t.Errorf("Both = %+v, want the plain reading proposed", both2)
+	}
+}

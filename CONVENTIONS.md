@@ -1515,7 +1515,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
   marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
   is the preferred one), `asin_region` names the first's;
-  `meta.DefaultRecording` (identifier's, else among the recordings one of the book's narrators
+  `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one, unless an identifier or a narrator names it: `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
   reads, `readBy`: a name folding alike or every word of one in the other, either way round, that
   fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
   preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which

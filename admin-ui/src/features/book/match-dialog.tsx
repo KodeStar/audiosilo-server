@@ -619,14 +619,15 @@ function CompareHeader({
       </span>
       <div className="flex min-w-0 flex-1 basis-60 flex-col gap-1">
         <b className="font-semibold [overflow-wrap:anywhere]">{c.title}</b>
-        {recs.length > 1 ? (
+        {recs.length > 1 || (recs.length === 1 && !recording) ? (
           <label className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
             {t('book.match.edition')}
             <NativeSelect
               className="max-w-full flex-1 basis-56"
-              value={recording?.id}
+              value={recording?.id ?? ''}
               onChange={(e) => onRecording(e.target.value)}
             >
+              {!recording ? <option value="">{t('book.match.pickEdition')}</option> : null}
               {recs.map((r) => (
                 <option key={r.id} value={r.id}>
                   {recordingLine(r, t, lang) || r.id}
@@ -639,6 +640,11 @@ function CompareHeader({
             {recordingLine(recording, t, lang)}
           </span>
         )}
+        {c.dramatization_only && !recording ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('book.match.dramatizationOnly')}
+          </span>
+        ) : null}
         {length ? (
           <span className="text-[12px] text-subtle-foreground">
             {length.kind === 'match'
