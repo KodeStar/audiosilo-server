@@ -86,6 +86,10 @@ var fields = []field{
 	// like base_url.
 	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},
+	// The daily report of unknown Audible ASINs (internal/coverage): opt-in,
+	// applied without a restart (the job reads it before each run).
+	{key: "metadata.report_unknown", env: "AUDIOSILO_METADATA_REPORT_UNKNOWN", setting: "metadata.report_unknown",
+		ptr: func(c *Config) any { return &c.Metadata.ReportUnknown }},
 
 	// Upcoming releases: the switch is in Settings > Metadata (the job asks the
 	// metadata service), applied without a restart; the window is config only.

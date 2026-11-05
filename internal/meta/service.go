@@ -273,7 +273,10 @@ type Enrichment struct {
 // cache in front so a repeated lookup (and a down upstream) is cheap. A nil
 // *Service means the feature is off; callers must guard on that.
 type Service struct {
-	client  *client
+	client *client
+	// report POSTs the unknown-ASIN report (report.go) to the remote service:
+	// its own client, never put behind the local copy by SetMirror.
+	report  *http.Client
 	baseURL string // metaserve base URL (no trailing slash) for building web_url
 	cache   *cache
 	// store is the persistent second level behind cache (see Store); nil keeps
@@ -316,6 +319,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 	base := strings.TrimRight(baseURL, "/")
 	return &Service{
 		client:        newClient(base),
+		report:        newReportClient(),
 		baseURL:       base,
 		cache:         newCache(now),
 		composeBudget: composeTimeout,
