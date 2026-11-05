@@ -202,7 +202,7 @@ func TestRunWeakBestFetchesNothing(t *testing.T) {
 func TestRunContinuesThrough503(t *testing.T) {
 	e := newEnv(t)
 	m := &speedMeta{answer: func(n int32, w http.ResponseWriter) bool {
-		if n > workers {
+		if n > 3 { // however they fall, one fewer than a book's four asks
 			return false
 		}
 		w.Header().Set("Retry-After", "0")

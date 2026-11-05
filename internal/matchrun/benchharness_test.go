@@ -154,20 +154,31 @@ func TestLibraForge(t *testing.T) {
 	})
 	elapsed := time.Since(start)
 
+	// A book that failed is asked again, off the clock, so the table compares matches
+	// rather than how busy the machine was (the local copy's own timeout, a metaserve
+	// past its budget). The line below says how many it was.
+	failed := []int{}
+	for i, m := range matched {
+		if m.err != nil {
+			failed = append(failed, i)
+		}
+	}
+	stillFailed := 0
+	for _, i := range failed {
+		matched[i] = matchOne(ctx, t, svc, &books[i], region)
+		if matched[i].err != nil {
+			stillFailed++
+		}
+	}
+
 	// Judged afterwards, from the local copy.
 	results := make([]lfResult, len(books))
 	each(8, len(books), func(i int) { results[i] = judge(local, &books[i], &matched[i], region) })
 
 	printTable(results, region)
-	failed := 0
-	for _, m := range matched {
-		if m.err != nil {
-			failed++
-		}
-	}
 	waited, waitedFor := waits()
-	fmt.Printf("  run: %s, %d workers, %d books failed, %d waits the service asked for (%s), %s\n",
-		elapsed.Round(100*time.Millisecond), n, failed, waited, waitedFor, cmp.Or(baseURL, "mirror mode"))
+	fmt.Printf("  run: %s, %d workers, %d books failed (%d still when asked again), %d waits the service asked for (%s), %s\n",
+		elapsed.Round(100*time.Millisecond), n, len(failed), stillFailed, waited, waitedFor, cmp.Or(baseURL, "mirror mode"))
 	if out := os.Getenv("LF_OUT"); out != "" {
 		b, _ := json.MarshalIndent(results, "", " ")
 		if err := os.WriteFile(out, b, 0o644); err != nil {
@@ -246,7 +257,14 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	// The right work: the one the reference ASIN names in this copy.
 	var refRec string
 	if b.Ref.ASIN != "" {
-		if hits, err := local.Candidates(ctx, meta.MatchQuery{ASIN: b.Ref.ASIN, Limit: 1, NoSeries: true}); err == nil && len(hits) > 0 {
+		var hits []meta.MatchCandidate
+		var err error
+		for range 3 { // a busy machine's timeout isn't an unknown ASIN
+			if hits, err = local.Candidates(ctx, meta.MatchQuery{ASIN: b.Ref.ASIN, Limit: 1, NoSeries: true}); err == nil {
+				break
+			}
+		}
+		if err == nil && len(hits) > 0 {
 			res.RefWork, refRec = hits[0].WorkID, hits[0].RecordingID
 		}
 	}
