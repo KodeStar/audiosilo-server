@@ -382,9 +382,15 @@ const (
 	scaleLimitRead = 5
 )
 
-// scaleRounds is how many times TestSeriesKeyScale asks before it fails. A real
-// change in how a read grows is there every round; a busy runner isn't.
-const scaleRounds = 7
+// scaleRounds is how many times TestSeriesKeyScale asks before it fails, and
+// scaleMinRounds before it may pass. A real change in how a read grows is there
+// every round; a busy runner isn't. That cuts both ways: one slow time for the small
+// library makes any growth look fine, and a read's first is the likeliest (it also
+// prepares its statements), so no single round can pass it.
+const (
+	scaleRounds    = 7
+	scaleMinRounds = 3
+)
 
 // TestSeriesKeyScale runs keying and the series reads on 50,000 books, checks
 // their answers, and compares their times with a tenth of the books on the same
@@ -392,9 +398,10 @@ const scaleRounds = 7
 // property, where a limit in milliseconds was one of the runner (a plain build
 // keys them in about half a second here and in about three on CI; the Health
 // count, 85 ms here, took 205-464 ms there). A read made slower at every size is
-// not seen here: the plan tests hold each read's shape (TestNextInSeriesPlan,
-// TestIssueCountsPlan). The race detector, about 40 times slower here, takes a
-// tenth of the books, one size, and only logs the times.
+// not seen here, which the plan tests answer for the next book and the Health count
+// (TestNextInSeriesPlan, TestIssueCountsPlan); the lists have only their growth.
+// The race detector, about 40 times slower here, takes a tenth of the books, one
+// size, and only logs the times.
 func TestSeriesKeyScale(t *testing.T) {
 	t.Parallel()
 	var sizes []*seriesScale
@@ -404,8 +411,8 @@ func TestSeriesKeyScale(t *testing.T) {
 		sizes = []*seriesScale{newSeriesScale(t, 5_000), newSeriesScale(t, 50_000)}
 	}
 	// timed runs f on each size in turn (before, untimed, ahead of it), so a busy
-	// moment falls on both, keeping each size's best until the large one's is
-	// within limit times the small one's.
+	// moment falls on both, keeping each size's best until, scaleMinRounds in, the
+	// large one's is within limit times the small one's.
 	timed := func(what string, limit float64, before func(*seriesScale) error, f func(*seriesScale) error) {
 		t.Helper()
 		best := make([]time.Duration, len(sizes))
@@ -428,7 +435,7 @@ func TestSeriesKeyScale(t *testing.T) {
 				t.Logf("%s: %v", what, best[0])
 				return
 			}
-			if float64(best[1]) <= limit*float64(best[0]) {
+			if round+1 >= scaleMinRounds && float64(best[1]) <= limit*float64(best[0]) {
 				t.Logf("%s: %v on %d books, %v on %d", what, best[0], sizes[0].books, best[1], sizes[1].books)
 				return
 			}
@@ -460,7 +467,7 @@ func TestSeriesKeyScale(t *testing.T) {
 	timed("admin list in series order, every library", scaleLimitRead, nil, func(s *seriesScale) error {
 		page, err := s.c.ListAdminBooks(s.ctx, AdminListOptions{Filter: BookFilter{Series: fmt.Sprint("series-", s.mid)}, Sort: "series", Limit: 60})
 		if err == nil && (len(page.Books) != 25 || page.Books[0].SeriesIndex != 1) {
-			err = fmt.Errorf("%d books, first at %v", len(page.Books), page.Books[0].SeriesIndex)
+			err = fmt.Errorf("%d books, want 25 from #1: %+v", len(page.Books), page.Books)
 		}
 		return err
 	})
@@ -478,11 +485,11 @@ func TestSeriesKeyScale(t *testing.T) {
 		}
 		return err
 	})
-	timed("next in series", scaleLimitRead, nil, func(s *seriesScale) error {
-		book, err := s.c.GetBookByPath(s.ctx, s.lib, fmt.Sprint("B/", s.mid*25+1)) // #2 in the middle series
-		if err != nil {
-			return err
-		}
+	var book *Book
+	timed("next in series", scaleLimitRead, func(s *seriesScale) (err error) {
+		book, err = s.c.GetBookByPath(s.ctx, s.lib, fmt.Sprint("B/", s.mid*25+1)) // #2 in the middle series
+		return err
+	}, func(s *seriesScale) error {
 		next, _, err := s.c.NextInSeries(s.ctx, s.lib, book, *s.scope)
 		if err == nil && (next == nil || next.SeriesIndex != 3) {
 			err = fmt.Errorf("next = %+v", next)

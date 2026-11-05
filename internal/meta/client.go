@@ -53,12 +53,20 @@ type client struct {
 func newClient(baseURL string) *client {
 	return &client{
 		baseURL: baseURL,
-		http: &http.Client{
-			Transport: http.DefaultTransport.(*http.Transport).Clone(),
-			Timeout:   clientTimeout,
-		},
-		sleep: sleepCtx,
+		http:    &http.Client{Transport: ownTransport(http.DefaultTransport), Timeout: clientTimeout},
+		sleep:   sleepCtx,
 	}
+}
+
+// ownTransport is base's settings (proxy, TLS, timeouts) on connections of their
+// own. A base that isn't a plain *http.Transport, a round tripper the program
+// embedding the server put in http.DefaultTransport, has nothing to copy and stays
+// what the client sends through.
+func ownTransport(base http.RoundTripper) http.RoundTripper {
+	if t, ok := base.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return base
 }
 
 // A 429 (metaserve's per-client rate limit, audiosilo-meta#2749) is waited out
