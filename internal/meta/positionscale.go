@@ -92,21 +92,28 @@ func newChapterPlacer(chapters []metadata.Chapter, duration float64, length int)
 // reveal places a character's position: the character appears somewhere in unit p, and
 // the gate shows it on REACHING the number, so p is the first chapter starting at or
 // past the START of that unit, fraction (p-1)/length. Position 1 is chapter 1, so the
-// opening cast shows from the start. 0 stays 0 (before this book); past the length,
-// which metacheck refuses, the last chapter.
+// opening cast shows from the start. 0 stays 0 (before this book).
+//
+// When no chapter starts that late (the unit begins inside a long last track), or p is
+// past the length, which metacheck refuses, the answer is one past the last chapter. The
+// last chapter itself would show the character when it starts, up to its whole length
+// early. A number past the last chapter is one no place reaches, so the gates hold it
+// until the book is finished, as they already do on a book coarser than the scale.
 func (c chapterPlacer) reveal(p int) int {
 	switch {
 	case p <= 0:
 		return p
 	case p > c.length:
-		return c.n
+		return c.n + 1
 	}
 	// Chapter k of n starts at (k-1)/n: the smallest k with (k-1)/n >= (p-1)/length.
+	// With more chapters than units that is never past the last.
 	at := ceilDiv((p-1)*c.n, c.length) + 1
 	if c.starts != nil {
+		// n+1 when no start is that late.
 		at = max(at, sort.SearchFloat64s(c.starts, float64(p-1)*c.total/float64(c.length))+1)
 	}
-	return min(at, c.n)
+	return at
 }
 
 // through places a recap's position: the recap covers up to the END of unit p, and the
@@ -176,15 +183,8 @@ func startsAllAlike(starts []float64) bool {
 }
 
 // ListeningChapter is the chapter a saved position is in, for spoilers=hide: ChapterAt
-// over the book's chapter starts. Where those are all alike and there is a duration, the
-// position is read by count instead, each chapter an equal share of it, rounded DOWN: an
-// estimate, proportional like a translation's count (chapterPlacer), and one the player's
-// own gate doesn't make, which reads such a book as not started. With no duration either,
-// ChapterAt's answer stands: not started, never "at the end".
-func ListeningChapter(chapters []metadata.Chapter, duration, position float64) int {
-	starts := chapterStarts(chapters)
-	if position <= 0 || duration <= 0 || !startsAllAlike(starts) {
-		return ChapterAt(starts, position)
-	}
-	return min(int(position/duration*float64(len(chapters))), len(chapters))
+// over the book's chapter starts, so a book whose starts say nothing about a place reads
+// as not started, as the player's own gate reads it.
+func ListeningChapter(chapters []metadata.Chapter, position float64) int {
+	return ChapterAt(chapterStarts(chapters), position)
 }

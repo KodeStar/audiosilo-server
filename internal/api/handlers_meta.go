@@ -220,11 +220,7 @@ func (a *API) listeningChapter(ctx context.Context, libraryID int64, book *catal
 	if err != nil || p == nil {
 		return 0, false, err
 	}
-	duration := book.Duration
-	if duration <= 0 {
-		duration = p.Duration
-	}
-	return meta.ListeningChapter(book.Chapters, duration, p.Position), p.Finished, nil
+	return meta.ListeningChapter(book.Chapters, p.Position), p.Finished, nil
 }
 
 // queryHas reports whether a list-valued query param (repeated, or

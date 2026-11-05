@@ -289,52 +289,40 @@ func TestMetaHamletSpoilersHideOnTranslatedPositions(t *testing.T) {
 }
 
 // The older bug: every chapter's book_offset 0 walked as a timeline put any place in the
-// last chapter, so spoilers=hide showed everything. It reads by count now, rounded down,
-// and with no duration to read it against, as not started.
+// last chapter, so spoilers=hide showed everything. Such a book reads as not started now,
+// however far along and whatever duration is known, and a finished one shows everything.
 func TestMetaSpoilersHideUnknownOffsets(t *testing.T) {
 	t.Parallel()
 	e, lib, tok := scaleEnv(t)
 	ctx := context.Background()
-	seedZeroOffsets := func(path string, duration float64) {
-		t.Helper()
-		book := &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "T", Author: "A", ASIN: "B0PLAIN", AddedAt: "2020-01-01", Duration: duration}
-		for i := range 10 {
-			book.Chapters = append(book.Chapters, metadata.Chapter{Index: i, Title: "Ch", FilePath: path})
-		}
-		if _, err := e.cat.UpsertBook(ctx, book); err != nil {
-			t.Fatal(err)
-		}
+	book := &catalog.Book{LibraryID: lib.ID, RelPath: "A/Zero", Title: "T", Author: "A", ASIN: "B0PLAIN", AddedAt: "2020-01-01", Duration: 1000}
+	for i := range 10 {
+		book.Chapters = append(book.Chapters, metadata.Chapter{Index: i, Title: "Ch", FilePath: "A/Zero"})
 	}
-	seedZeroOffsets("A/Timed", 1000)
-	seedZeroOffsets("A/Untimed", 0)
+	if _, err := e.cat.UpsertBook(ctx, book); err != nil {
+		t.Fatal(err)
+	}
 	saves := 0
-	save := func(path string, position, duration float64) {
+	save := func(position float64, finished bool) {
 		t.Helper()
 		saves++
 		at := "2020-01-" + fmt.Sprintf("%02d", saves) + "T00:00:00Z"
-		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: path}, Position: position, Duration: duration, UpdatedAt: at}); err != nil {
+		if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: "A/Zero"}, Position: position, Duration: 1000, Finished: finished, UpdatedAt: at}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// The plain work's cast and recap sit at position 5.
-	save("A/Timed", 300, 0) // 3 of 10 shares: denied
-	if b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
-		t.Fatalf("a place early in the book read as late: %+v", b.Work)
+	// The plain work's cast and recap sit at position 5. Denied, early and late alike.
+	for _, position := range []float64{300, 950} {
+		save(position, false)
+		if b := getScale(t, e, lib, "A/Zero", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
+			t.Fatalf("a place at %v read as past position 5: %+v", position, b.Work)
+		}
 	}
-	save("A/Untimed", 300, 0) // no duration anywhere: not started, denied
-	if b := getScale(t, e, lib, "A/Untimed", "&spoilers=hide", tok); len(b.Work.Characters) != 0 || len(b.Work.Recaps) != 0 {
-		t.Fatalf("an unknown place read as the end: %+v", b.Work)
-	}
-	save("A/Timed", 650, 0) // 6 of 10 shares passed: allowed, the count still reads a place
-	b := getScale(t, e, lib, "A/Timed", "&spoilers=hide", tok)
-	if len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
-		t.Fatalf("a place read by count = %+v", b.Work)
-	}
-	save("A/Untimed", 650, 1000) // none on the book: the one saved with the place reads it
-	b = getScale(t, e, lib, "A/Untimed", "&spoilers=hide", tok)
-	if len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
-		t.Fatalf("a place read by the saved duration = %+v", b.Work)
+	// Allowed, once finished.
+	save(950, true)
+	if b := getScale(t, e, lib, "A/Zero", "&spoilers=hide", tok); len(b.Work.Characters) != 1 || len(b.Work.Recaps) != 1 {
+		t.Fatalf("finished = %+v", b.Work)
 	}
 }
 

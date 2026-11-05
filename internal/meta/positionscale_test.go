@@ -76,7 +76,8 @@ func TestOnRecordingTranslates(t *testing.T) {
 		// starting at or past its act's start, a through the track holding its act's end.
 		{"finer", 5, []int{1, 2, 3, 4, 5}, evenChapters(43), 4300, []int{1, 10, 19, 27, 36}, []int{9, 18, 26, 35, 43}},
 		{"p=0 stays before this book", 5, []int{0}, evenChapters(43), 4300, []int{0}, []int{0}},
-		{"p past the length is the last chapter", 5, []int{6, 99}, evenChapters(43), 4300, []int{43, 43}, []int{43, 43}},
+		// Past the length: a recap waits on the last chapter, a character past it.
+		{"p past the length", 5, []int{6, 99}, evenChapters(43), 4300, []int{44, 44}, []int{43, 43}},
 		// A boundary exactly on the fraction: the second act starts on the third chapter,
 		// and the first act's recap is chapter 2, opening as the third starts.
 		{"a chapter boundary on the fraction", 2, []int{1, 2}, evenChapters(4), 400, []int{1, 3}, []int{2, 4}},
@@ -86,11 +87,12 @@ func TestOnRecordingTranslates(t *testing.T) {
 		{"a long first track", 4, []int{1, 2, 3, 4}, chaptersAt(4000, 0, 3000, 3200, 3400, 3600, 3800), 4000, []int{1, 3, 4, 6}, []int{2, 3, 5, 6}},
 		// A long last track, over two thirds of the book. By count these would read 1, 3, 4, 6
 		// and 2, 3, 5, 6, but by time Act 2 starts on the fifth track's start and Act 1 ends
-		// on the fourth's end, and all the rest lie inside the last. Time is later here.
-		{"a long last track", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000, []int{1, 5, 6, 6}, []int{4, 6, 6, 6}},
+		// on the fourth's end. Acts 3 and 4 start inside the last track, which opens at 2500 s,
+		// so no chapter starts at or past them and their cast waits for the finish.
+		{"a long last track", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000, []int{1, 5, 7, 7}, []int{4, 6, 6, 6}},
 		// A duration read short of the last chapter's end: the later of the two is the
 		// length, so the fractions aren't brought forward.
-		{"a short duration", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 3000, []int{1, 5, 6, 6}, []int{4, 6, 6, 6}},
+		{"a short duration", 4, []int{1, 2, 3, 4}, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 3000, []int{1, 5, 7, 7}, []int{4, 6, 6, 6}},
 		// Duration unknown: the last chapter's end stands in.
 		{"no duration", 5, []int{1, 5}, evenChapters(43), 0, []int{1, 36}, []int{9, 43}},
 		// Times that can't be trusted: every chapter at 0, so the count alone.
@@ -196,10 +198,35 @@ func TestOnRecordingPartial(t *testing.T) {
 	}
 }
 
+// A character whose unit starts inside a long last track must not answer that track: Acts
+// 3 and 4 start at 4000 s and 6000 s, the last track opens at 2500 s, and the last chapter
+// would show them up to 3500 s early. One past it stays hidden in every place the book has,
+// and a finished book shows everything.
+func TestOnRecordingRevealPastEveryStartWaitsForTheFinish(t *testing.T) {
+	w := scaledWork(4)
+	for act, name := range []string{"Act 1", "Act 2", "Act 3", "Act 4"} {
+		w.Characters = append(w.Characters, MetaCharacter{ID: name, Reveal: MetaPosition{Chapter: act + 1}})
+	}
+	translated := OnRecording(w, chaptersAt(8000, 0, 500, 1000, 1500, 2000, 2500), 8000)
+	if got := reveals(translated); !slices.Equal(got, []int{1, 5, 7, 7}) {
+		t.Fatalf("reveals = %v", got)
+	}
+	// Denied, at the last chapter there is.
+	last := HideSpoilers(&Enrichment{Work: translated}, 6, false).Work
+	if got := characterIDs(last); !slices.Equal(got, []string{"Act 1", "Act 2"}) {
+		t.Fatalf("characters in the last track = %v", got)
+	}
+	// Allowed, once finished.
+	if got := characterIDs(HideSpoilers(&Enrichment{Work: translated}, 6, true).Work); len(got) != 4 {
+		t.Fatalf("characters when finished = %v", got)
+	}
+}
+
 // The promise itself, over every position of several shapes of book. A reveal's chapter
-// starts at or past its unit's start, and the chapter a recap opens in (the one after
-// its through) starts at or past its unit's end, unless the recap only opens with a
-// finished book. Neither is ever before the count, and neither goes down with p.
+// starts at or past its unit's start, or it waits for the finish when none does, and the
+// chapter a recap opens in (the one after its through) starts at or past its unit's end,
+// unless the recap only opens with a finished book. Neither is ever before the count, and
+// neither goes down with p.
 func TestOnRecordingNeverEarly(t *testing.T) {
 	books := [][]metadata.Chapter{
 		evenChapters(43),
@@ -226,7 +253,16 @@ func TestOnRecordingNeverEarly(t *testing.T) {
 			}
 			for i, r := range revealed {
 				unitStart := float64(i) * total / float64(length)
-				if r < n && chapters[r-1].BookOffset < unitStart {
+				switch {
+				case r > n+1:
+					t.Errorf("%d chapters on %d: reveal %d lands on %d, further past the end than it need be", n, length, i+1, r)
+				case r == n+1:
+					// Waiting for the finish is right only when no chapter starts that late.
+					if chapters[n-1].BookOffset >= unitStart {
+						t.Errorf("%d chapters on %d: reveal %d waits for the finish, but chapter %d starts at %v, past %v",
+							n, length, i+1, n, chapters[n-1].BookOffset, unitStart)
+					}
+				case chapters[r-1].BookOffset < unitStart:
 					t.Errorf("%d chapters on %d: reveal %d lands on chapter %d, starting at %v before %v",
 						n, length, i+1, r, chapters[r-1].BookOffset, unitStart)
 				}
@@ -353,37 +389,32 @@ func TestHideSpoilersAgreesWithAClientGate(t *testing.T) {
 	}
 }
 
-// Unknown offsets must not read as "at the end", which showed everything: a saved place
-// is read by count, rounded down, or as not started when there is no duration to read
-// it against.
+// Unknown offsets must not read as "at the end", which showed everything: a saved place on
+// such a book reads as not started, however far along, as the player's gate reads it.
 func TestListeningChapter(t *testing.T) {
 	zero := make([]metadata.Chapter, 10)
 	for _, tc := range []struct {
 		name     string
 		chapters []metadata.Chapter
-		duration float64
 		position float64
 		want     int
 	}{
-		{"usable starts", evenChapters(10), 1000, 550, 6},
-		{"zero offsets by count, rounded down", zero, 1000, 550, 5},
-		{"zero offsets inside the first share", zero, 1000, 50, 0},
-		{"zero offsets, late in the book, never past it", zero, 1000, 5000, 10},
-		{"zero offsets and no duration: not started", zero, 0, 550, 0},
-		{"zero offsets and no place", zero, 1000, 0, 0},
-		{"no chapters", nil, 1000, 550, 0},
-		{"a lone chapter holds every place", evenChapters(1), 100, 50, 1},
+		{"usable starts", evenChapters(10), 550, 6},
+		{"zero offsets, a place early on", zero, 50, 0},
+		{"zero offsets, a place late on", zero, 950, 0},
+		{"zero offsets and no place", zero, 0, 0},
+		{"no chapters", nil, 550, 0},
+		{"a lone chapter holds every place", evenChapters(1), 50, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ListeningChapter(tc.chapters, tc.duration, tc.position); got != tc.want {
+			if got := ListeningChapter(tc.chapters, tc.position); got != tc.want {
 				t.Fatalf("ListeningChapter = %d, want %d", got, tc.want)
 			}
 		})
 	}
 }
 
-// ChapterAt alone has no duration to fall back on: starts all alike are not started.
-// Out of order is not that: the walk stops at the first start past the place.
+// Starts all alike are not started. Out of order is not that: the walk stops at the first start past the place.
 func TestChapterAtStartsAllAlike(t *testing.T) {
 	for _, tc := range []struct {
 		starts []float64
