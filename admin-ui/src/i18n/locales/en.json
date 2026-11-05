@@ -1295,7 +1295,7 @@
   "health.bulkMatch.repick": "Use {{country}} ASINs",
   "health.bulkMatch.refresh": "Fill in matched books",
   "health.bulkMatch.refreshHint": "Books that already have an ASIN or ISBN are looked up by it alone, to fill in their titles, series, narrators and covers. Choosing “Use community values” in the review also cleans up series an earlier match added.",
-  "health.bulkMatch.privacy": "Each book's title, author, series, length, narrators and language, and any ASIN or ISBN in its tags, go to the community metadata service.",
+  "health.bulkMatch.privacy": "Each book's title, author, series, length, narrators and language, any ASIN or ISBN in its tags, and up to three folder or file names go to the community metadata service.",
   "health.bulkMatch.regionSet": "Matches take the {{store}} ASIN where the community has one.",
   "health.bulkMatch.regionNone": "Matches take the US store's ASIN.",
   "health.bulkMatch.regionLink": "Set your Audible marketplace",

@@ -1387,7 +1387,7 @@
   "health.bulkMatch.repick": "Utiliser les ASIN {{country}}",
   "health.bulkMatch.refresh": "Compléter les livres associés",
   "health.bulkMatch.refreshHint": "Les livres qui ont déjà un ASIN ou un ISBN sont recherchés par celui-ci seul, pour compléter leurs titres, séries, narrateurs et couvertures. Choisir « Utiliser les valeurs communautaires » lors de la vérification nettoie aussi les séries ajoutées par une correspondance précédente.",
-  "health.bulkMatch.privacy": "Le titre, l'auteur, la série, la durée, les narrateurs et la langue de chaque livre, ainsi que tout ASIN ou ISBN de ses étiquettes, sont envoyés au service de métadonnées communautaires.",
+  "health.bulkMatch.privacy": "Le titre, l'auteur, la série, la durée, les narrateurs et la langue de chaque livre, tout ASIN ou ISBN de ses étiquettes, ainsi que jusqu'à trois noms de dossier ou de fichier, sont envoyés au service de métadonnées communautaires.",
   "health.bulkMatch.regionSet": "Les correspondances prennent l'ASIN de {{store}} quand la communauté l'a.",
   "health.bulkMatch.regionNone": "Les correspondances prennent l'ASIN de la boutique américaine.",
   "health.bulkMatch.regionLink": "Choisir votre boutique Audible",

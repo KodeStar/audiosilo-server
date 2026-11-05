@@ -1295,7 +1295,7 @@
   "health.bulkMatch.repick": "ASINs aus {{country}} verwenden",
   "health.bulkMatch.refresh": "Zugeordnete Bücher ergänzen",
   "health.bulkMatch.refreshHint": "Bücher, die schon eine ASIN oder ISBN haben, werden allein darüber nachgeschlagen, um Titel, Reihen, Sprecher und Cover zu ergänzen. Mit „Community-Werte verwenden“ in der Prüfung werden auch Reihen bereinigt, die ein früherer Abgleich hinzugefügt hat.",
-  "health.bulkMatch.privacy": "Titel, Autor, Reihe, Länge, Sprecher und Sprache jedes Buchs sowie eine ASIN oder ISBN aus seinen Tags gehen an den Community-Metadatendienst.",
+  "health.bulkMatch.privacy": "Titel, Autor, Reihe, Länge, Sprecher und Sprache jedes Buchs, eine ASIN oder ISBN aus seinen Tags sowie bis zu drei Ordner- oder Dateinamen gehen an den Community-Metadatendienst.",
   "health.bulkMatch.regionSet": "Treffer nehmen die ASIN von {{store}}, wo die Community sie kennt.",
   "health.bulkMatch.regionNone": "Treffer nehmen die ASIN des US-Shops.",
   "health.bulkMatch.regionLink": "Deinen Audible-Shop festlegen",

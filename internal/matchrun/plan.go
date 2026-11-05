@@ -47,7 +47,8 @@ const (
 // weak fit is almost always another book), so the item records no match, detail
 // DetailWeakMatch. An older metaserve's fallback search scores on another scale
 // (scoreCandidate), where the floor says nothing: such a candidate stays for
-// review. The match dialog still lists every candidate.
+// review. The match dialog has no floor: it lists up to meta's
+// maxMatchCandidates (6) whatever their scores.
 const ReviewFloor = 60
 
 // How much applying a run may write.

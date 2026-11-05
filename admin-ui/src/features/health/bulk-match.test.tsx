@@ -110,7 +110,7 @@ describe('bulk matching', () => {
     )!;
     expect(
       await within(card).findByText(
-        /narrators and language, and any ASIN or ISBN in its tags, go to the community/,
+        /any ASIN or ISBN in its tags, and up to three folder or file names go to the community/,
       ),
     ).toBeInTheDocument();
     expect(within(card).getByText(/audible\.co\.uk ASIN/)).toBeInTheDocument();
