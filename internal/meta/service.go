@@ -59,8 +59,9 @@ const composeTimeout = 15 * time.Second
 // community metadata service. This is the amplification bound: a burst of
 // distinct ids queues here rather than fanning straight out to metaserve. Not
 // configurable; it is a courtesy limit on a shared third party, matching the
-// api package's transcodeSem precedent.
-const maxConcurrentWorkFetches = 4
+// api package's transcodeSem precedent. It matches a bulk run's workers
+// (matchrun), which against a metaserve that inlines nothing fetch one work each.
+const maxConcurrentWorkFetches = 6
 
 // maxConcurrentLookups bounds how many uncached identifier lookups the admin
 // console's Series cards (WorkIDs) may have in flight upstream at once, across

@@ -38,10 +38,11 @@ import (
 
 // seriesFacts is what a series' own record says about it that a work's
 // membership doesn't: its derived language ("" where its members tie) and the
-// series it translates.
+// series it translates. works/match's expand=work inlines them under these names,
+// by series id (upstreamMatchResult.SeriesFacts).
 type seriesFacts struct {
-	Language      string
-	TranslationOf []string
+	Language      string   `json:"language"`
+	TranslationOf []string `json:"translation_of"`
 }
 
 // factsOf reads a series detail's facts.

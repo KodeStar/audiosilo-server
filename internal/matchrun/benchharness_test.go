@@ -88,8 +88,14 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 // TestLibraForge runs the benchmark:
 //
 //	LF_DATA=<data.json> LF_ARTIFACT=<meta.sqlite> [LF_REGION=us] \
-//	  [LF_OUT=<results.json>] [LF_WORKERS=8] [LF_LIMIT=n] \
+//	  [LF_OUT=<results.json>] [LF_WORKERS=8] [LF_LIMIT=n] [LF_BASE_URL=<metaserve>] \
 //	  go test -tags benchharness -run TestLibraForge -timeout 0 -v ./internal/matchrun
+//
+// With LF_BASE_URL the books are matched through HTTP against that metaserve, as a
+// run online is: the run's own worker count (LF_WORKERS overrides it) and pacing.
+// Their time is reported on its own: the right answers are read afterwards from
+// LF_ARTIFACT, in mirror mode, so nothing but the run reaches that URL and a proxy in
+// front of it counts the run's requests per book.
 //
 // Each book is built as a scan builds it (the folder is a folder book; its
 // names from the path layout and the probe's tags: library.setNames,
@@ -102,8 +108,12 @@ func TestLibraForge(t *testing.T) {
 		t.Skip("set LF_DATA and LF_ARTIFACT")
 	}
 	region := cmp.Or(os.Getenv("LF_REGION"), "us")
-	workers, _ := strconv.Atoi(os.Getenv("LF_WORKERS"))
-	workers = cmp.Or(workers, 8)
+	baseURL := os.Getenv("LF_BASE_URL")
+	n, _ := strconv.Atoi(os.Getenv("LF_WORKERS"))
+	if baseURL != "" {
+		n = cmp.Or(n, workers)
+	}
+	n = cmp.Or(n, 8)
 
 	raw, err := os.ReadFile(dataPath)
 	if err != nil {
@@ -124,30 +134,40 @@ func TestLibraForge(t *testing.T) {
 	defer db.Close()
 	quiet := log.New(os.Stderr, "query: ", 0)
 	h := query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{Logger: quiet})
-	svc := meta.NewService("http://127.0.0.1:9", time.Now) // never reached: the copy answers
-	svc.SetMirror(localCopy{h}, slog.Default())
+	local := meta.NewService("http://127.0.0.1:9", time.Now) // never reached: the copy answers
+	local.SetMirror(localCopy{h}, slog.Default())
 
-	results := make([]lfResult, len(books))
-	var wg sync.WaitGroup
-	next := make(chan int)
-	for range workers {
-		wg.Go(func() {
-			for i := range next {
-				results[i] = runBook(t, svc, &books[i], region)
-			}
-		})
+	svc, ctx, waits := local, context.Background(), func() (int, time.Duration) { return 0, 0 }
+	if baseURL != "" {
+		svc = meta.NewService(baseURL, time.Now)
+		ctx, waits = benchRunContext(ctx)
 	}
+
+	// The run, on its own clock.
+	matched := make([]lfMatched, len(books))
 	start := time.Now()
-	for i := range books {
-		next <- i
+	each(n, len(books), func(i int) {
 		if i > 0 && i%500 == 0 {
 			t.Logf("%d books, %s", i, time.Since(start).Round(time.Second))
 		}
-	}
-	close(next)
-	wg.Wait()
+		matched[i] = matchOne(ctx, t, svc, &books[i], region)
+	})
+	elapsed := time.Since(start)
+
+	// Judged afterwards, from the local copy.
+	results := make([]lfResult, len(books))
+	each(8, len(books), func(i int) { results[i] = judge(local, &books[i], &matched[i], region) })
 
 	printTable(results, region)
+	failed := 0
+	for _, m := range matched {
+		if m.err != nil {
+			failed++
+		}
+	}
+	waited, waitedFor := waits()
+	fmt.Printf("  run: %s, %d workers, %d books failed, %d waits the service asked for (%s), %s\n",
+		elapsed.Round(100*time.Millisecond), n, failed, waited, waitedFor, cmp.Or(baseURL, "mirror mode"))
 	if out := os.Getenv("LF_OUT"); out != "" {
 		b, _ := json.MarshalIndent(results, "", " ")
 		if err := os.WriteFile(out, b, 0o644); err != nil {
@@ -167,16 +187,58 @@ func scanBook(b *lfBook) *catalog.Book {
 	return book
 }
 
-func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string) lfResult {
-	ctx := context.Background()
+// each runs fn on 0..count-1, n at a time.
+func each(n, count int, fn func(i int)) {
+	var wg sync.WaitGroup
+	next := make(chan int)
+	for range n {
+		wg.Go(func() {
+			for i := range next {
+				fn(i)
+			}
+		})
+	}
+	for i := range count {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+}
+
+// benchRunContext is what a run's requests go under, and its count of the waits the
+// service asked for.
+func benchRunContext(ctx context.Context) (context.Context, func() (int, time.Duration)) {
+	p := meta.NewPacer(maxRequestsPerSecond, slog.Default())
+	return meta.WithPacer(ctx, p), p.Waits
+}
+
+// lfMatched is one book as the run left it, not yet judged.
+type lfMatched struct {
+	book  *catalog.Book
+	item  *catalog.MatchRunItem
+	cands []meta.MatchCandidate
+	err   error
+}
+
+// matchOne is the run's part of one book: matchBook against svc.
+func matchOne(ctx context.Context, t *testing.T, svc *meta.Service, b *lfBook, region string) lfMatched {
 	book := scanBook(b)
 	c := &capture{svc: svc}
 	r := &Runner{matcher: c}
 	item, err := r.matchBook(ctx, StartOptions{Mode: catalog.MatchModeMatch, Region: region}, book)
-	res := lfResult{Path: book.RelPath, Title: book.Title, RefTitle: b.Ref.Title}
-	if err != nil || item == nil {
-		res.Outcome = catalog.OutcomeError
+	if err != nil {
 		t.Logf("%s: %v", book.RelPath, err)
+	}
+	return lfMatched{book: book, item: item, cands: c.cands, err: err}
+}
+
+// judge scores a book's match against its right answer, from the local copy.
+func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult {
+	ctx := context.Background()
+	book, item := m.book, m.item
+	res := lfResult{Path: book.RelPath, Title: book.Title, RefTitle: b.Ref.Title}
+	if m.err != nil || item == nil {
+		res.Outcome = catalog.OutcomeError
 		return res
 	}
 	res.Outcome, res.Detail, res.Score, res.RunnerUp = item.Outcome, item.Detail, item.Score, item.RunnerUp
@@ -188,11 +250,22 @@ func runBook(t *testing.T, svc *meta.Service, b *lfBook, region string) lfResult
 			res.RefWork, refRec = hits[0].WorkID, hits[0].RecordingID
 		}
 	}
-	if len(c.cands) == 0 {
+	if len(m.cands) == 0 {
 		return res
 	}
-	top := &c.cands[0]
+	top := &m.cands[0]
 	res.Work = top.WorkID
+	if top.Title == "" {
+		// A weak best with no details (a metaserve that inlines nothing): the run
+		// reads none of them, but judging it does.
+		q := QueryFor(book, region)
+		q.Limit = bulkCandidates
+		if full, err := local.Candidates(ctx, q); err == nil {
+			if i := slices.IndexFunc(full, func(c meta.MatchCandidate) bool { return c.WorkID == top.WorkID }); i >= 0 {
+				top = &full[i]
+			}
+		}
+	}
 	switch {
 	case res.RefWork != "":
 		res.Right = top.WorkID == res.RefWork
