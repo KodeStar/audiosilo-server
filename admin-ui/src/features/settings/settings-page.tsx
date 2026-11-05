@@ -21,7 +21,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
-import type { AdminSettings, UpcomingStatus } from '@/api/types';
+import type { AdminSettings, ReportStatus, UpcomingStatus } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
@@ -421,6 +421,7 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
           </SettingRow>
           {m.enabled && m.available ? <MetadataStatusRow /> : null}
           {m.upcoming !== undefined && m.available ? <UpcomingRow settings={settings} /> : null}
+          {m.report_unknown !== undefined && m.available ? <ReportRow settings={settings} /> : null}
         </div>
         {!m.available ? (
           <Notice
@@ -515,6 +516,85 @@ function UpcomingRow({ settings }: { settings: AdminSettings }) {
         }
       />
     </SettingRow>
+  );
+}
+
+/**
+ * The opt-in daily report of unknown Audible ASINs (absent from an older
+ * server): its switch, which works only while the lookup is on, and how its
+ * last run went.
+ */
+function ReportRow({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const m = settings.metadata;
+  return (
+    <SettingRow
+      title={t('settings.metadata.report')}
+      badges={<SettingBadges settings={settings} id="metadata.report_unknown" />}
+      htmlFor="report-switch"
+      description={
+        <>
+          {t('settings.metadata.reportBody')}
+          {m.enabled && m.report_unknown ? <ReportRunText status={m.report_status} /> : null}
+        </>
+      }
+      descriptionId="report-switch-desc"
+    >
+      <InstantSwitch
+        id="report-switch"
+        checked={m.enabled && Boolean(m.report_unknown)}
+        disabled={!m.enabled || Boolean(lockOf(settings, 'metadata.report_unknown'))}
+        describedBy="report-switch-desc"
+        patch={(on) => ({ metadata: { report_unknown: on } })}
+        failedTitle={t('settings.metadata.reportFailed')}
+        onSaved={(on) =>
+          toast.add({
+            title: on ? t('settings.metadata.reportOn') : t('settings.metadata.reportOff'),
+            type: 'success',
+          })
+        }
+      />
+    </SettingRow>
+  );
+}
+
+/** The report's last run in words: not yet, sent, not taken, or failed. */
+function ReportRunText({ status }: { status?: ReportStatus }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const state = status?.last_run_at ? status.state : 'never';
+  const when = status?.last_run_at ? formatRelative(status.last_run_at, lang) : '';
+  let text: string;
+  switch (state) {
+    case 'ok':
+      text = status?.last_sent
+        ? t('settings.metadata.reportSent', {
+            when,
+            count: status.last_sent,
+            formatted: formatNumber(status.last_sent, lang),
+          })
+        : t('settings.metadata.reportNothing', { when });
+      break;
+    case 'not_offered':
+      text = t('settings.metadata.reportNotOffered', { when });
+      break;
+    case 'failed':
+      text = t('settings.metadata.reportLastFailed', { when });
+      break;
+    default:
+      text = t('settings.metadata.reportNever');
+  }
+  const tone = state === 'failed' ? 'bad' : state === 'not_offered' ? 'warn' : undefined;
+  return (
+    <span className="mt-1 block" data-testid="report-run">
+      {tone ? (
+        <StatusText tone={tone} colored>
+          {text}
+        </StatusText>
+      ) : (
+        text
+      )}
+    </span>
   );
 }
 

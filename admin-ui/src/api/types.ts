@@ -563,6 +563,10 @@ export interface AdminSettings {
     upcoming?: boolean;
     /** The check's last run (read-only; absent from an older server or without the service). */
     upcoming_status?: UpcomingStatus;
+    /** The opt-in daily report of unknown Audible ASINs (config metadata.report_unknown; absent from an older server). */
+    report_unknown?: boolean;
+    /** The report's last run (read-only; absent from an older server, without the service or on a demo server). */
+    report_status?: ReportStatus;
   };
   demo: {
     enabled: boolean;
@@ -820,6 +824,14 @@ export interface UpcomingStatus {
   next_run_at?: string;
   series: number;
   items: number;
+}
+
+/** coverage.Status: the unknown-ASIN report's last run. */
+export interface ReportStatus {
+  state: 'never' | 'ok' | 'not_offered' | 'failed';
+  last_run_at?: string;
+  /** How many ASINs the last run's accepted reports held. */
+  last_sent: number;
 }
 
 /** Event kinds a destination can be sent (notify.Kinds, in the server's order). */

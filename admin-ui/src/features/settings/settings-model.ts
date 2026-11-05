@@ -66,7 +66,8 @@ type ReadOnlyFact =
   | 'max_members_default'
   | 'max_members_min'
   | 'max_members_max'
-  | 'upcoming_status';
+  | 'upcoming_status'
+  | 'report_status';
 
 /** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
