@@ -634,6 +634,39 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   thumbnail cache, 502 `cover_unavailable`, 404 `no cover`). **Flags**: `upcoming_calendar` and
   `upcoming_covers` are exactly `upcoming` (false, never absent, while off); kids and demo accounts are
   refused by the routes, not the flags.
+- **Unknown ASIN report (LibraForge C3, `internal/coverage`, `catalog/coverage.go`, `meta/report.go`, `0068`)**:
+  an opt-in daily job sends the metadata service the Audible ASINs of this server's books the community
+  database doesn't know, so its lane can import them. **Setting** `metadata.report_unknown` (default false,
+  live, `AUDIOSILO_METADATA_REPORT_UNKNOWN` locks it; console Settings > Metadata "Help complete the community
+  database", disabled while metadata is off); the job runs only while `reportUnknownOn()` (metadata on AND the
+  switch, never demo) and a run in flight stops within a second when it goes off (`whileOn`, `errSwitchedOff`: no
+  status). It is never built on a demo server (`cfg.Demo.Enabled` at start), so a demo makes no call. **Schedule**:
+  the first run an hour after the start (or a day after the last run), then daily +-1 h; a run within 23 h of the
+  last is skipped (`server_state('unknown_asin_report')`, so a restart never re-runs); `Wake` (PATCH switching it
+  or metadata on) runs at once unless one ran within 23 h. Mirror mode: no run until the local copy is `Ready`
+  (rechecked hourly), so no lookup leaks to the remote service. **Candidates** (`UnknownASINCandidates`, books
+  libraries only, upper-cased, `match.ValidASIN`): `books.asin` except an ASIN a community match gave a book
+  (`book_overrides` asin `source='community'`), plus `tag_asin` only for a book with no ASIN or ISBN, no asin
+  override (a cleared one too) and a tag on exactly one book. **A run**: Ping (fails: `failed`, tried the next day);
+  drop rows no candidate holds; look up (`meta.Service.KnownASIN`, through the mirror-aware client; a memory-cached
+  hit counts as known) the candidates never looked up or looked up 30+ days ago, shuffled, at most 500; only
+  `ErrNotFound` is unknown, any other error stops the lookups (the rest wait; what was confirmed may still be
+  sent); then the unknown ones checked within 30 days and not sent within 30 days, shuffled, 200 a POST, at most 5
+  POSTs, and none while `MAX(sent_at)` is under 23 h old. **The POST** (`ReportUnknownASINs`, the `report` client
+  built in `NewService`, never behind `SetMirror`, so mirror mode still reports remotely): `POST
+  <base_url>/api/v1/intake/unknown-asins`, body exactly `{"asins":[...]}`, headers only `Content-Type:
+  application/json` and `User-Agent: AudioSilo` (plus Go's `Accept-Encoding`/`Content-Length`/`Host`): no
+  `X-AudioSilo-Client`, server id, auth or version (`TestReportUnknownASINsWire`). Only https, or plain http to a
+  loopback host (`CanReport`); any other base_url is `not_offered` with no call at all and one INFO line a process.
+  Redirects are never followed (`http.ErrUseLastResponse`). **Answers**: a 202 with `accepted` marks that chunk's
+  `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
+  INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
+  `unknown` row a recheck finds known forgets its `sent_at`. **Storage**: `unknown_asin_reports(asin PK, checked_at,
+  unknown, sent_at)`, no path or book (disposable; user-state writes). **Wire**: GET /admin/settings
+  `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
+  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). Trigger by hand: switch it
+  off and on in the console (runs when none ran within 23 h); to run again sooner, delete
+  `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the

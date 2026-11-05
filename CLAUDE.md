@@ -123,6 +123,7 @@ internal/chapteralign/ fits a community recording's chapter list onto a book's o
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
 internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); ics.go: ICS (Track U3, pure: the list as the calendar feed); see Upcoming releases in CONVENTIONS.md
+internal/coverage/    the opt-in daily report of unknown Audible ASINs (LibraForge C3, metadata.report_unknown): Runner (Run/Wake/RunOnce: candidates from catalog.UnknownASINCandidates, meta.Service.KnownASIN lookups (only a 404 is unknown), the POST via meta.Service.ReportUnknownASINs, quiet week on not_offered); see Unknown ASIN report in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
@@ -308,6 +309,9 @@ in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `
 CONVENTIONS.md). `0067` adds `books.tag_asin` / `tag_isbn` / `tag_language` /
 `hints_checked` (a book's tag ASIN/ISBN/language as match hints only, never `books.asin` and never on the wire,
 backfilled once like `released_checked`; see Admin catalog API (Tag identifiers are hints) in CONVENTIONS.md).
+LibraForge C3: `0068` adds `unknown_asin_reports` (`asin` PK, `checked_at`, `unknown`, `sent_at`: the
+unknown-ASIN report's memory, names no book or path, derived and disposable, user-state writes; the run
+status is `server_state('unknown_asin_report')`; see Unknown ASIN report in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -341,6 +345,7 @@ keep this index in step (one line per topic).
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
   - Upcoming releases (Track U1, `internal/upcoming`: the job, silent baseline, `upcoming_announced`, `book_released`; U3: the `feed` token, `releases.ics`, the Upcoming cover)
+  - Unknown ASIN report (LibraForge C3, `internal/coverage`, `0068`: opt-in `metadata.report_unknown`, candidates, lookups, the POST and what it carries, https only, no redirects, quiet week, demo skip)
   - Native deep-link association
   - SQLite (incl. the readers' mmap on shfs, `database.mmap`)
   - Pagination

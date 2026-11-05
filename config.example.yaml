@@ -212,6 +212,15 @@ metadata:
   #            deletes the copy at the next start.
   # [AUDIOSILO_METADATA_MODE]
   mode: remote
+  # Help complete the community database (Settings > Metadata; off by default,
+  # applies at once): once a day, send the metadata service the Audible ASINs of
+  # your books the community database doesn't know, and nothing else (no titles,
+  # paths, server name or listeners). Each ASIN is looked up first (in mirror
+  # mode in the local copy, once it is ready); only the unknown ones are sent,
+  # and only over https (or plain http to this machine). A service that takes
+  # no reports (an older one, or intake off) is left alone for a week. Never on
+  # a demo server. [AUDIOSILO_METADATA_REPORT_UNKNOWN]
+  report_unknown: false
 
 # Upcoming releases: once a day the server reads the community metadata for the
 # series it holds and works out, for each listener, the preorders, recent
