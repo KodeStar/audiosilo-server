@@ -246,7 +246,7 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	// The right work: the one the reference ASIN names in this copy.
 	var refRec string
 	if b.Ref.ASIN != "" {
-		if hits, err := svc.Candidates(ctx, meta.MatchQuery{ASIN: b.Ref.ASIN, Limit: 1, NoSeries: true}); err == nil && len(hits) > 0 {
+		if hits, err := local.Candidates(ctx, meta.MatchQuery{ASIN: b.Ref.ASIN, Limit: 1, NoSeries: true}); err == nil && len(hits) > 0 {
 			res.RefWork, refRec = hits[0].WorkID, hits[0].RecordingID
 		}
 	}
