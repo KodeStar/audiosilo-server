@@ -118,14 +118,11 @@ func TestPacerOnlyPacesTheRemoteLeg(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	s := NewService(srv.URL, nil)
-	var failing atomic.Bool
-	s.SetMirror(testMirror{http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if failing.Load() {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+	m := &fakeMirror{h: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"local"}`))
-	})}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	})}
+	m.ready.Store(true)
+	s.SetMirror(m, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p, _ := recordingPacer(10)
 	ctx := WithPacer(context.Background(), p)
 	for range 3 {
@@ -136,7 +133,7 @@ func TestPacerOnlyPacesTheRemoteLeg(t *testing.T) {
 	if !p.next.IsZero() {
 		t.Fatalf("the copy's answers took a slot: next = %v", p.next)
 	}
-	failing.Store(true)
+	m.fail.Store(true)
 	if d, err := s.client.work(ctx, "w"); err != nil || d.ID != "remote" {
 		t.Fatalf("work = %+v, %v", d, err)
 	}
@@ -144,11 +141,6 @@ func TestPacerOnlyPacesTheRemoteLeg(t *testing.T) {
 		t.Fatal("the remote leg took no slot")
 	}
 }
-
-type testMirror struct{ h http.Handler }
-
-func (m testMirror) Handler() http.Handler { return m.h }
-func (testMirror) Ready() bool             { return true }
 
 // answerThen answers code (with Retry-After retryAfter) for the first bad requests,
 // then 200.
@@ -313,8 +305,7 @@ func TestClientKeepsConnectionsForEveryWorker(t *testing.T) {
 		for inFlight.Load() < workers {
 			time.Sleep(time.Millisecond)
 		}
-		release <- struct{}{}
-		for range workers - 1 {
+		for range workers {
 			release <- struct{}{}
 		}
 		wg.Wait()

@@ -86,8 +86,8 @@ type MatchQuery struct {
 	// off.
 	BestOnly bool
 	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
-	// candidate no identifier found (matchrun.ReviewFloor): a stub too, unless its
-	// details came inlined anyway. 0 for no such score.
+	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
+	// details or none. 0 for no such score.
 	NoDetailsBelow int
 }
 
@@ -556,10 +556,14 @@ func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []match
 	return []MatchCandidate{}, nil
 }
 
-// bestCandidate is the best hit with its details: as works/match inlined them, else
-// fetched, unless the caller would drop it anyway (MatchQuery.NoDetailsBelow). A
+// bestCandidate is the best hit with its details, as works/match inlined them, else
+// fetched; a stub when the caller would drop it anyway (MatchQuery.NoDetailsBelow). A
 // series with no facts is unknown and drops nothing, as a failed read does.
 func (s *Service) bestCandidate(ctx context.Context, q MatchQuery, h matchHit, asin string) (*MatchCandidate, error) {
+	if h.score < q.NoDetailsBelow && h.reasons.Identifier == "" {
+		stub := h.stub()
+		return &stub, nil
+	}
 	if h.work != nil && h.work.ID != "" {
 		for id, f := range h.facts {
 			if f != nil {
@@ -567,10 +571,6 @@ func (s *Service) bestCandidate(ctx context.Context, q MatchQuery, h matchHit, a
 			}
 		}
 		return s.hitCandidate(q, h, h.work, h.facts, asin), nil
-	}
-	if h.score < q.NoDetailsBelow && h.reasons.Identifier == "" {
-		stub := h.stub()
-		return &stub, nil
 	}
 	detail, err := s.fetchWork(ctx, h.id)
 	if err != nil {

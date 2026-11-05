@@ -214,7 +214,7 @@ func TestBestOnlyWeakBest(t *testing.T) {
 		"weak, not read":      {matchResult("colour", 59, ""), 0, ""},
 		"at the floor, read":  {matchResult("colour", 60, ""), 1, "The Colour of Magic"},
 		"weak but identified": {`{"kind":"work","id":"colour","score":40,"reasons":{"identifier":"isbn"}}`, 1, "The Colour of Magic"},
-		"weak but inlined":    {matchResult("colour", 40, inlined(bestWork, bestFacts)), 0, "The Colour of Magic"},
+		"weak but inlined":    {matchResult("colour", 40, inlined(bestWork, bestFacts)), 0, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := &bestMeta{body: matchBody(tc.result), works: map[string]string{"colour": bestWork}, series: bestSeries}

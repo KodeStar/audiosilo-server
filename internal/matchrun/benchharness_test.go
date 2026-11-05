@@ -137,10 +137,11 @@ func TestLibraForge(t *testing.T) {
 	local := meta.NewService("http://127.0.0.1:9", time.Now) // never reached: the copy answers
 	local.SetMirror(localCopy{h}, slog.Default())
 
-	svc, ctx, waits := local, context.Background(), func() (int, time.Duration) { return 0, 0 }
+	svc, ctx := local, context.Background()
+	pacer := meta.NewPacer(maxRequestsPerSecond, slog.Default())
 	if baseURL != "" {
 		svc = meta.NewService(baseURL, time.Now)
-		ctx, waits = benchRunContext(ctx)
+		ctx = meta.WithPacer(ctx, pacer)
 	}
 
 	// The run, on its own clock.
@@ -176,7 +177,7 @@ func TestLibraForge(t *testing.T) {
 	each(8, len(books), func(i int) { results[i] = judge(local, &books[i], &matched[i], region) })
 
 	printTable(results, region)
-	waited, waitedFor := waits()
+	waited, waitedFor := pacer.Waits()
 	fmt.Printf("  run: %s, %d workers, %d books failed (%d still when asked again), %d waits the service asked for (%s), %s\n",
 		elapsed.Round(100*time.Millisecond), n, len(failed), stillFailed, waited, waitedFor, cmp.Or(baseURL, "mirror mode"))
 	if out := os.Getenv("LF_OUT"); out != "" {
@@ -214,13 +215,6 @@ func each(n, count int, fn func(i int)) {
 	}
 	close(next)
 	wg.Wait()
-}
-
-// benchRunContext is what a run's requests go under, and its count of the waits the
-// service asked for.
-func benchRunContext(ctx context.Context) (context.Context, func() (int, time.Duration)) {
-	p := meta.NewPacer(maxRequestsPerSecond, slog.Default())
-	return meta.WithPacer(ctx, p), p.Waits
 }
 
 // lfMatched is one book as the run left it, not yet judged.
@@ -274,8 +268,7 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	top := &m.cands[0]
 	res.Work = top.WorkID
 	if top.Title == "" {
-		// A weak best with no details (a metaserve that inlines nothing): the run
-		// reads none of them, but judging it does.
+		// A weak best has no details: the run reads none of them, but judging it does.
 		q := QueryFor(book, region)
 		q.Limit = bulkCandidates
 		if full, err := local.Candidates(ctx, q); err == nil {

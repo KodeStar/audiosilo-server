@@ -3,7 +3,6 @@ package meta
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,25 +13,7 @@ import (
 // requests, then 200 with {"recording_id":"r1"}; it counts the requests.
 func rateLimitedServer(t *testing.T, limited int32, retryAfter string) (*client, *atomic.Int32, *[]time.Duration) {
 	t.Helper()
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if n.Add(1) <= limited {
-			if retryAfter != "" {
-				w.Header().Set("Retry-After", retryAfter)
-			}
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(`{"recording_id":"r1"}`))
-	}))
-	t.Cleanup(srv.Close)
-	c := newClient(srv.URL)
-	waits := &[]time.Duration{}
-	c.sleep = func(_ context.Context, d time.Duration) error {
-		*waits = append(*waits, d)
-		return nil
-	}
-	return c, &n, waits
+	return answerThen(t, http.StatusTooManyRequests, limited, retryAfter)
 }
 
 // A 429 is waited out (its Retry-After) and asked again (server#247).

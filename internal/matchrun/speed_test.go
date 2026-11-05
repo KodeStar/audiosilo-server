@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,6 +77,14 @@ func speedResult(id string, score int, reasons, extra string) string {
 	return r + "}"
 }
 
+// answering is a speedMeta answer of these results, every time.
+func answering(results ...string) func(int32, http.ResponseWriter) bool {
+	return func(_ int32, w http.ResponseWriter) bool {
+		_, _ = w.Write([]byte(`{"results":[` + strings.Join(results, ",") + `]}`))
+		return true
+	}
+}
+
 // speedMeta is a metaserve for a real Service under a run: answer gives the works/match
 // response for the nth request, and works/{id} serves speedWork, counted.
 type speedMeta struct {
@@ -118,14 +127,9 @@ func runOver(t *testing.T, e *env, svc *meta.Service, count int) *catalog.MatchR
 // The same outcome through a metaserve that inlines and through one that doesn't, the
 // second paying one work per book and the first none.
 func TestRunThroughTheServiceFallsBackWithoutExpansion(t *testing.T) {
-	plain := func(_ int32, w http.ResponseWriter) bool {
-		_, _ = w.Write([]byte(`{"results":[` + speedResult("the-martian", 97, `"title":1`, "") + `,` + speedResult("other", 40, `"title":0.5`, "") + `]}`))
-		return true
-	}
-	inlined := func(_ int32, w http.ResponseWriter) bool {
-		_, _ = w.Write([]byte(`{"results":[` + speedResult("the-martian", 97, `"title":1`, `"work":`+speedWork) + `,` + speedResult("other", 40, `"title":0.5`, "") + `]}`))
-		return true
-	}
+	runnerUp := speedResult("other", 40, `"title":0.5`, "")
+	plain := answering(speedResult("the-martian", 97, `"title":1`, ""), runnerUp)
+	inlined := answering(speedResult("the-martian", 97, `"title":1`, `"work":`+speedWork), runnerUp)
 	outcome := func(answer func(int32, http.ResponseWriter) bool, wantWorks int32) []byte {
 		e := newEnv(t)
 		m := &speedMeta{answer: answer}
@@ -163,11 +167,10 @@ func TestRunnerUpIdentifierHitSendsToReview(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t)
-			m := &speedMeta{answer: func(_ int32, w http.ResponseWriter) bool {
-				_, _ = w.Write([]byte(`{"results":[` + speedResult("the-martian", 100, `"identifier":"asin"`, `"recording_id":"bray","work":`+speedWork) + `,` +
-					speedResult("other", 100, tc.reasons, "") + `]}`))
-				return true
-			}}
+			m := &speedMeta{answer: answering(
+				speedResult("the-martian", 100, `"identifier":"asin"`, `"recording_id":"bray","work":`+speedWork),
+				speedResult("other", 100, tc.reasons, ""),
+			)}
 			run := runOver(t, e, m.service(t), 1)
 			items := e.items(t, run, "")
 			if len(items) != 1 || items[0].Outcome != tc.want || items[0].Proposal.WorkID == "" {
@@ -183,10 +186,7 @@ func TestRunnerUpIdentifierHitSendsToReview(t *testing.T) {
 // A weak best costs no fetch without expansion, and records what it did with one.
 func TestRunWeakBestFetchesNothing(t *testing.T) {
 	e := newEnv(t)
-	m := &speedMeta{answer: func(_ int32, w http.ResponseWriter) bool {
-		_, _ = w.Write([]byte(`{"results":[` + speedResult("the-martian", 40, `"title":0.4`, "") + `]}`))
-		return true
-	}}
+	m := &speedMeta{answer: answering(speedResult("the-martian", 40, `"title":0.4`, ""))}
 	run := runOver(t, e, m.service(t), 2)
 	items := e.items(t, run, "")
 	if len(items) != 2 || items[0].Outcome != catalog.OutcomeNone || items[0].Detail != DetailWeakMatch || items[0].Score != 40 || len(items[0].Proposal.Values) != 0 {
