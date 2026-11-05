@@ -873,6 +873,7 @@
   "book.story.aliases": "Aussi appelé {{names}}",
   "book.story.fromChapter": "À partir du chapitre {{n}}",
   "book.story.fromStart": "Dès le début",
+  "book.story.nearEnd": "Vers la fin",
   "book.story.recapsHint": "Les résumés dévoilent l'histoire. Chacun reste fermé jusqu'à ce que vous l'ouvriez.",
   "book.story.through": "Jusqu'au chapitre {{n}}",
   "book.story.previously": "Précédemment, dans les livres antérieurs",

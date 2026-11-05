@@ -103,6 +103,38 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('the Characters and recaps card', () => {
+  // The server answers one past the last chapter when a character's unit starts inside a
+  // long last track, and a book coarser than the work's scale keeps numbers past its end.
+  it('reads a reveal past the last chapter as near the end, not a chapter the book lacks', async () => {
+    const chapters = bookDetail().chapters ?? [];
+    const late = { id: 'late', name: 'Late', reveal: { chapter: chapters.length + 1 } };
+    const last = { id: 'last', name: 'Last', reveal: { chapter: chapters.length } };
+    mockFetch(
+      routes({
+        'GET /libraries/1/meta': { body: meta(work({ attribution, characters: [late, last] })) },
+      }),
+    );
+    renderApp(URL);
+    const c = await card();
+    expect(within(c).getByText('Near the end')).toBeInTheDocument();
+    expect(within(c).getByText(`From chapter ${chapters.length}`)).toBeInTheDocument();
+    expect(within(c).queryByText(`From chapter ${chapters.length + 1}`)).toBeNull();
+  });
+
+  it('keeps the number on a book whose chapters are not known', async () => {
+    const late = { id: 'late', name: 'Late', reveal: { chapter: 99 } };
+    mockFetch(
+      routes({
+        'GET /admin/libraries/1/book': { body: { ...bookDetail(), chapters: [] } },
+        'GET /libraries/1/meta': { body: meta(work({ attribution, characters: [late] })) },
+      }),
+    );
+    renderApp(URL);
+    const c = await card();
+    expect(within(c).getByText('From chapter 99')).toBeInTheDocument();
+    expect(within(c).queryByText('Near the end')).toBeNull();
+  });
+
   it("lists the community's characters with their source and credit", async () => {
     mockFetch(routes());
     renderApp(URL);
