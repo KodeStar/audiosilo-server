@@ -174,7 +174,8 @@ func (t *fallbackTransport) logFallback(path, reason string) {
 
 // serveLocal answers req from the local copy. When the copy failed it (a 5xx,
 // an answer too large to buffer, a timeout, a panic) it returns a nil response
-// and why, so the caller asks the remote service instead.
+// and why, so the caller asks the remote service instead (or fails a
+// localOnly request).
 func serveLocal(h http.Handler, req *http.Request, timeout time.Duration) (resp *http.Response, failed string) {
 	ctx, cancel := context.WithTimeout(req.Context(), timeout)
 	defer cancel()
