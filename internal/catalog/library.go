@@ -350,7 +350,7 @@ const (
 // inBookLibrary keeps a books row (alias b) of a books-kind library only:
 // podcast episodes are out of every cross-library book aggregate and the admin
 // book tools. It stays a correlated EXISTS: an IN list lets the planner lead
-// with the library index and slows the Health counts (TestSeriesKeyScale).
+// with the library index and slows the Health counts (TestIssueCountsPlan).
 // bookLibraryIDs is the rule for a query over books unaliased.
 const (
 	inBookLibrary  = `EXISTS(SELECT 1 FROM libraries pl WHERE pl.id=b.library_id AND pl.kind='` + KindBooks + `')`

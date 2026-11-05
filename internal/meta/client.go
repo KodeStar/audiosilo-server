@@ -54,24 +54,31 @@ type client struct {
 }
 
 // newClient builds a client for the given metaserve base URL. baseURL is
-// expected already trimmed of a trailing slash (NewService does the trim).
+// expected already trimmed of a trailing slash (NewService does the trim). Its
+// connections are its own: on http.DefaultTransport, anything in the process
+// calling CloseIdleConnections (every httptest.Server's Close; pkg/launcher runs
+// inside other programs) can fail a request whose answer has just arrived, which
+// net/http doesn't retry and a lookup would report as an outage.
 func newClient(baseURL string) *client {
 	return &client{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: clientTimeout, Transport: pacedTransport{base: remoteTransport()}},
+		http:    &http.Client{Timeout: clientTimeout, Transport: pacedTransport{base: ownTransport(http.DefaultTransport)}},
 		sleep:   sleepCtx,
 	}
 }
 
-// remoteTransport is the default transport, keeping maxIdleConnsPerHost connections.
-func remoteTransport() http.RoundTripper {
-	t, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return http.DefaultTransport
+// ownTransport is base's settings (proxy, TLS, timeouts) on connections of their
+// own, keeping maxIdleConnsPerHost of them. A base that isn't a plain
+// *http.Transport, a round tripper the program embedding the server put in
+// http.DefaultTransport, has nothing to copy and stays what the client sends
+// through.
+func ownTransport(base http.RoundTripper) http.RoundTripper {
+	if t, ok := base.(*http.Transport); ok {
+		t = t.Clone()
+		t.MaxIdleConnsPerHost = maxIdleConnsPerHost
+		return t
 	}
-	t = t.Clone()
-	t.MaxIdleConnsPerHost = maxIdleConnsPerHost
-	return t
+	return base
 }
 
 // A 429 (metaserve's per-client rate limit, audiosilo-meta#2749) is waited out
