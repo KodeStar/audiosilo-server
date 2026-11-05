@@ -45,13 +45,13 @@ type Metadata interface {
 	Ping() meta.Health
 	CanReport() bool
 	KnownASIN(ctx context.Context, asin string) (bool, error)
-	ReportUnknownASINs(ctx context.Context, asins []string) (meta.ReportAnswer, error)
+	ReportUnknownASINs(ctx context.Context, asins []string) error
 }
 
 // Options configure a Runner.
 type Options struct {
 	// On reports whether the job may run now: metadata on AND
-	// metadata.report_unknown.
+	// metadata.report_unknown. Required.
 	On func() bool
 	// Ready reports whether lookups may be made: in mirror mode, the local
 	// copy is loaded. nil is always ready (remote mode).
@@ -116,9 +116,6 @@ func New(cat *catalog.Catalog, md Metadata, opt Options) *Runner {
 	}
 	if opt.Log == nil {
 		opt.Log = slog.Default()
-	}
-	if opt.On == nil {
-		opt.On = func() bool { return true }
 	}
 	return &Runner{cat: cat, meta: md, opt: opt, log: opt.Log, wake: make(chan struct{}, 1), offCheck: time.Second}
 }
@@ -216,8 +213,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 			r.httpsLogged = true
 			r.log.Info("unknown ASIN report: the report needs an https metadata URL; nothing is sent")
 		}
-		r.record(ctx, catalog.UnknownASINReport{State: StateNotOffered, LastRunAt: stamp(now),
-			LastError: meta.ErrReportNeedsHTTPS.Error()})
+		r.record(ctx, catalog.UnknownASINReport{State: StateNotOffered, LastRunAt: stamp(now)})
 		return nil
 	}
 	if r.opt.Ready != nil && !r.opt.Ready() {
@@ -225,16 +221,15 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	rctx, stop := r.whileOn(ctx)
 	defer stop()
-	res := r.run(rctx, now)
+	res, err := r.run(rctx, now)
 	if rctx.Err() != nil {
 		return context.Cause(rctx)
 	}
 	r.record(ctx, res)
-	if res.State == StateFailed {
-		r.log.Warn("unknown ASIN report: run failed", "err", res.LastError, "sent", res.LastSent)
-		return errors.New(res.LastError)
+	if err != nil {
+		r.log.Warn("unknown ASIN report: run failed", "err", err, "sent", res.LastSent)
 	}
-	return nil
+	return err
 }
 
 // whileOn is ctx, cancelled with errSwitchedOff once the report is switched
@@ -265,12 +260,13 @@ func (r *Runner) whileOn(ctx context.Context) (rctx context.Context, stop func()
 	}
 }
 
-// run is one run's work; its answer is the status to record.
-func (r *Runner) run(ctx context.Context, now time.Time) catalog.UnknownASINReport {
+// run is one run's work: the status to record, and the failure when its state
+// is failed.
+func (r *Runner) run(ctx context.Context, now time.Time) (catalog.UnknownASINReport, error) {
 	res := catalog.UnknownASINReport{State: StateOK, LastRunAt: stamp(now)}
-	failed := func(err error) catalog.UnknownASINReport {
-		res.State, res.LastError = StateFailed, err.Error()
-		return res
+	failed := func(err error) (catalog.UnknownASINReport, error) {
+		res.State = StateFailed
+		return res, err
 	}
 	if h := r.meta.Ping(); !h.Reachable {
 		return failed(fmt.Errorf("metadata service unreachable: %s", h.Error))
@@ -299,13 +295,12 @@ func (r *Runner) run(ctx context.Context, now time.Time) catalog.UnknownASINRepo
 		return failed(fmt.Errorf("dropping old rows: %w", err))
 	}
 
-	checkedAt := stamp(now)
-	lookupErr := r.check(ctx, candidates, rows, now, checkedAt)
+	lookupErr := r.check(ctx, candidates, rows, now)
 	if lookupErr != nil {
-		res.State, res.LastError = StateFailed, lookupErr.Error()
+		res.State = StateFailed
 	}
 	if ctx.Err() != nil {
-		return res
+		return res, lookupErr
 	}
 
 	// The unknown ones, freshly confirmed and not sent within resendAge.
@@ -318,25 +313,25 @@ func (r *Runner) run(ctx context.Context, now time.Time) catalog.UnknownASINRepo
 		send = append(send, a)
 	}
 	if len(send) == 0 {
-		return res
+		return res, lookupErr
 	}
 	last, err := r.cat.LastASINSentAt(ctx)
 	if err != nil {
 		return failed(fmt.Errorf("reading the last report: %w", err))
 	}
 	if within(last, now, minGap) {
-		return res // once a day, whatever restarted
+		return res, lookupErr // once a day, whatever restarted
 	}
 	rand.Shuffle(len(send), func(i, j int) { send[i], send[j] = send[j], send[i] })
 	for i := 0; i < len(send) && i/chunkSize < maxPosts; i += chunkSize {
 		chunk := send[i:min(i+chunkSize, len(send))]
-		_, err := r.meta.ReportUnknownASINs(ctx, chunk)
+		err := r.meta.ReportUnknownASINs(ctx, chunk)
 		switch {
 		case errors.Is(err, meta.ErrReportNotOffered):
 			r.log.Info("unknown ASIN report: the metadata service takes no reports; trying again in a week")
-			res.State, res.LastError = StateNotOffered, err.Error()
+			res.State = StateNotOffered
 			res.QuietUntil = stamp(now.Add(quietFor))
-			return res
+			return res, nil
 		case err != nil:
 			return failed(fmt.Errorf("sending the report: %w", err))
 		}
@@ -347,13 +342,14 @@ func (r *Runner) run(ctx context.Context, now time.Time) catalog.UnknownASINRepo
 		}
 		res.LastSent += len(chunk)
 	}
-	return res
+	return res, lookupErr
 }
 
 // check looks up the candidates due (never looked up, or over recheckAge ago),
 // at most maxChecks in a shuffled order, records the answers and updates rows
 // with them. The error is the first failed lookup, which ends the lookups.
-func (r *Runner) check(ctx context.Context, candidates []string, rows map[string]catalog.UnknownASINRow, now time.Time, at string) error {
+func (r *Runner) check(ctx context.Context, candidates []string, rows map[string]catalog.UnknownASINRow, now time.Time) error {
+	at := stamp(now)
 	var due []string
 	for _, a := range candidates {
 		if row, ok := rows[a]; !ok || !within(row.CheckedAt, now, recheckAge) {
@@ -380,7 +376,7 @@ func (r *Runner) check(ctx context.Context, candidates []string, rows map[string
 	}
 	for _, c := range checks {
 		row := rows[c.ASIN]
-		row.ASIN, row.CheckedAt, row.Unknown = c.ASIN, at, c.Unknown
+		row.CheckedAt, row.Unknown = at, c.Unknown
 		if !c.Unknown {
 			row.SentAt = ""
 		}

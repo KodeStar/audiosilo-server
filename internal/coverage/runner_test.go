@@ -61,17 +61,14 @@ func (f *fakeMeta) KnownASIN(ctx context.Context, asin string) (bool, error) {
 	return known, nil
 }
 
-func (f *fakeMeta) ReportUnknownASINs(ctx context.Context, asins []string) (meta.ReportAnswer, error) {
+func (f *fakeMeta) ReportUnknownASINs(ctx context.Context, asins []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return meta.ReportAnswer{}, err
+		return err
 	}
 	f.posts = append(f.posts, slices.Clone(asins))
-	if f.postErr != nil {
-		return meta.ReportAnswer{}, f.postErr
-	}
-	return meta.ReportAnswer{Accepted: len(asins)}, nil
+	return f.postErr
 }
 
 func (f *fakeMeta) calls() (pings, lookups, posts int) {

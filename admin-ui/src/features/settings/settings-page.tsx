@@ -1,4 +1,5 @@
 import { Link, useSearch } from '@tanstack/react-router';
+import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -420,8 +421,22 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
             />
           </SettingRow>
           {m.enabled && m.available ? <MetadataStatusRow /> : null}
-          {m.upcoming !== undefined && m.available ? <UpcomingRow settings={settings} /> : null}
-          {m.report_unknown !== undefined && m.available ? <ReportRow settings={settings} /> : null}
+          {m.upcoming !== undefined && m.available ? (
+            <JobRow
+              settings={settings}
+              field="upcoming"
+              name="upcoming"
+              runText={<UpcomingRunText status={m.upcoming_status} />}
+            />
+          ) : null}
+          {m.report_unknown !== undefined && m.available ? (
+            <JobRow
+              settings={settings}
+              field="report_unknown"
+              name="report"
+              runText={<ReportRunText status={m.report_status} />}
+            />
+          ) : null}
         </div>
         {!m.available ? (
           <Notice
@@ -482,74 +497,48 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
 }
 
 /**
- * The daily upcoming-releases check (absent from an older server): its switch,
- * which works only while the lookup is on, and how its last run went.
+ * A daily metadata job's switch (absent from an older server), which works
+ * only while the lookup is on, and how its last run went: the upcoming-releases
+ * check (`upcoming`) and the opt-in unknown-ASIN report (`report_unknown`).
  */
-function UpcomingRow({ settings }: { settings: AdminSettings }) {
+function JobRow({
+  settings,
+  field,
+  name,
+  runText,
+}: {
+  settings: AdminSettings;
+  field: 'upcoming' | 'report_unknown';
+  /** The i18n key and element id stem: settings.metadata.<name>, <name>-switch. */
+  name: 'upcoming' | 'report';
+  runText: ReactNode;
+}) {
   const { t } = useTranslation();
   const m = settings.metadata;
+  const on = m.enabled && Boolean(m[field]);
   return (
     <SettingRow
-      title={t('settings.metadata.upcoming')}
-      badges={<SettingBadges settings={settings} id="metadata.upcoming" />}
-      htmlFor="upcoming-switch"
+      title={t(`settings.metadata.${name}`)}
+      badges={<SettingBadges settings={settings} id={`metadata.${field}`} />}
+      htmlFor={`${name}-switch`}
       description={
         <>
-          {t('settings.metadata.upcomingBody')}
-          {m.enabled && m.upcoming ? <UpcomingRunText status={m.upcoming_status} /> : null}
+          {t(`settings.metadata.${name}Body`)}
+          {on ? runText : null}
         </>
       }
-      descriptionId="upcoming-switch-desc"
+      descriptionId={`${name}-switch-desc`}
     >
       <InstantSwitch
-        id="upcoming-switch"
-        checked={m.enabled && Boolean(m.upcoming)}
-        disabled={!m.enabled || Boolean(lockOf(settings, 'metadata.upcoming'))}
-        describedBy="upcoming-switch-desc"
-        patch={(on) => ({ metadata: { upcoming: on } })}
-        failedTitle={t('settings.metadata.upcomingFailed')}
-        onSaved={(on) =>
+        id={`${name}-switch`}
+        checked={on}
+        disabled={!m.enabled || Boolean(lockOf(settings, `metadata.${field}`))}
+        describedBy={`${name}-switch-desc`}
+        patch={(v) => ({ metadata: { [field]: v } })}
+        failedTitle={t(`settings.metadata.${name}Failed`)}
+        onSaved={(v) =>
           toast.add({
-            title: on ? t('settings.metadata.upcomingOn') : t('settings.metadata.upcomingOff'),
-            type: 'success',
-          })
-        }
-      />
-    </SettingRow>
-  );
-}
-
-/**
- * The opt-in daily report of unknown Audible ASINs (absent from an older
- * server): its switch, which works only while the lookup is on, and how its
- * last run went.
- */
-function ReportRow({ settings }: { settings: AdminSettings }) {
-  const { t } = useTranslation();
-  const m = settings.metadata;
-  return (
-    <SettingRow
-      title={t('settings.metadata.report')}
-      badges={<SettingBadges settings={settings} id="metadata.report_unknown" />}
-      htmlFor="report-switch"
-      description={
-        <>
-          {t('settings.metadata.reportBody')}
-          {m.enabled && m.report_unknown ? <ReportRunText status={m.report_status} /> : null}
-        </>
-      }
-      descriptionId="report-switch-desc"
-    >
-      <InstantSwitch
-        id="report-switch"
-        checked={m.enabled && Boolean(m.report_unknown)}
-        disabled={!m.enabled || Boolean(lockOf(settings, 'metadata.report_unknown'))}
-        describedBy="report-switch-desc"
-        patch={(on) => ({ metadata: { report_unknown: on } })}
-        failedTitle={t('settings.metadata.reportFailed')}
-        onSaved={(on) =>
-          toast.add({
-            title: on ? t('settings.metadata.reportOn') : t('settings.metadata.reportOff'),
+            title: v ? t(`settings.metadata.${name}On`) : t(`settings.metadata.${name}Off`),
             type: 'success',
           })
         }
@@ -562,7 +551,7 @@ function ReportRow({ settings }: { settings: AdminSettings }) {
 function ReportRunText({ status }: { status?: ReportStatus }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const state = status?.last_run_at ? status.state : 'never';
+  const state = status?.state ?? 'never';
   const when = status?.last_run_at ? formatRelative(status.last_run_at, lang) : '';
   let text: string;
   switch (state) {

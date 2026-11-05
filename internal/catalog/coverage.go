@@ -60,7 +60,6 @@ func (c *Catalog) UnknownASINCandidates(ctx context.Context) ([]string, error) {
 // it up (CheckedAt), whether the answer was "unknown", and when it last sent it
 // ("" for never). Times are fixed-width UTC milliseconds.
 type UnknownASINRow struct {
-	ASIN      string
 	CheckedAt string
 	Unknown   bool
 	SentAt    string
@@ -75,11 +74,12 @@ func (c *Catalog) UnknownASINRows(ctx context.Context) (map[string]UnknownASINRo
 	defer rows.Close()
 	out := map[string]UnknownASINRow{}
 	for rows.Next() {
+		var asin string
 		var r UnknownASINRow
-		if err := rows.Scan(&r.ASIN, &r.CheckedAt, &r.Unknown, &r.SentAt); err != nil {
+		if err := rows.Scan(&asin, &r.CheckedAt, &r.Unknown, &r.SentAt); err != nil {
 			return nil, err
 		}
-		out[r.ASIN] = r
+		out[asin] = r
 	}
 	return out, rows.Err()
 }
@@ -165,7 +165,6 @@ type UnknownASINReport struct {
 	// QuietUntil is when the report is tried again after the service said it
 	// takes none (not_offered); "" when it isn't waiting.
 	QuietUntil string `json:"quiet_until,omitempty"`
-	LastError  string `json:"last_error,omitempty"`
 }
 
 // UnknownASINReportState reads the report's run status (the zero value before

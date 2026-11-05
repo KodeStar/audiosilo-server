@@ -54,9 +54,8 @@ func TestReportUnknownASINsWire(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	s := NewService(srv.URL+"/", nil)
-	ans, err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH", "B0XXXXXXXX"})
-	if err != nil || ans != (ReportAnswer{Accepted: 1, Known: 1}) {
-		t.Fatalf("report = %+v, %v", ans, err)
+	if err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH", "B0XXXXXXXX"}); err != nil {
+		t.Fatalf("report: %v", err)
 	}
 	if got.Method != http.MethodPost || got.URL.Path != "/api/v1/intake/unknown-asins" || got.URL.RawQuery != "" {
 		t.Fatalf("request = %s %s", got.Method, got.URL)
@@ -104,7 +103,7 @@ func TestReportUnknownASINsAnswers(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			t.Cleanup(srv.Close)
-			_, err := NewService(srv.URL, nil).ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"})
+			err := NewService(srv.URL, nil).ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"})
 			var se *statusError
 			switch {
 			case tc.want == nil && err != nil, tc.want == errStatus && !errors.As(err, &se),
@@ -136,7 +135,7 @@ func TestReportUnknownASINsNoRedirect(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, other.URL+reportPath, code)
 		}))
-		_, err := NewService(srv.URL, nil).ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"})
+		err := NewService(srv.URL, nil).ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"})
 		srv.Close()
 		if !errors.Is(err, ErrReportNotOffered) {
 			t.Fatalf("%d: err = %v, want ErrReportNotOffered", code, err)
@@ -164,7 +163,7 @@ func TestReportUnknownASINsHTTPOffMachine(t *testing.T) {
 	if s.CanReport() {
 		t.Fatal("CanReport over plain http to another machine")
 	}
-	if _, err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"}); !errors.Is(err, ErrReportNeedsHTTPS) {
+	if err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"}); !errors.Is(err, ErrReportNeedsHTTPS) {
 		t.Fatalf("err = %v, want ErrReportNeedsHTTPS", err)
 	}
 	if rt.n.Load() != 0 {
@@ -201,7 +200,7 @@ func TestReportUnknownASINsMirrorGoesRemote(t *testing.T) {
 	var local atomic.Int32
 	s := NewService(srv.URL, nil)
 	s.SetMirror(countingMirror{&local}, nil)
-	if _, err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"}); err != nil {
+	if err := s.ReportUnknownASINs(context.Background(), []string{"B0ABCDEFGH"}); err != nil {
 		t.Fatal(err)
 	}
 	if remote.Load() != 1 || local.Load() != 0 {

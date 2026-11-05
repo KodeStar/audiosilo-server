@@ -40,14 +40,6 @@ const reportUserAgent = "AudioSilo"
 // maxReportAnswer bounds what is read of an intake answer.
 const maxReportAnswer = 64 << 10
 
-// ReportAnswer is metaserve's 202: how many of the ASINs it queued, how many it
-// already knew and how many it refused as malformed.
-type ReportAnswer struct {
-	Accepted int `json:"accepted"`
-	Known    int `json:"known"`
-	Invalid  int `json:"invalid"`
-}
-
 // newReportClient is the intake POST's client: its own connections (as
 // newClient's), the client's timeout, and no redirect followed (a 3xx is the
 // answer, read as ErrReportNotOffered), so a POST can never be turned into a
@@ -107,29 +99,30 @@ func (s *Service) KnownASIN(ctx context.Context, asin string) (bool, error) {
 
 // ReportUnknownASINs POSTs asins (already upper-cased and in the order to send)
 // to the remote service's intake: {"asins": [...]} with Content-Type
-// application/json and a bare User-Agent, nothing else of this server. A 202
-// with an intake answer is the answer; ErrReportNotOffered and
+// application/json and a bare User-Agent, nothing else of this server.
+// ErrReportNotOffered and
 // ErrReportNeedsHTTPS as above; anything else (429, 5xx, a transport failure)
-// is an error the caller retries another day.
-func (s *Service) ReportUnknownASINs(ctx context.Context, asins []string) (ReportAnswer, error) {
+// is an error the caller retries another day. A nil error is a 202 intake
+// answer: the chunk was taken.
+func (s *Service) ReportUnknownASINs(ctx context.Context, asins []string) error {
 	if !s.CanReport() {
-		return ReportAnswer{}, ErrReportNeedsHTTPS
+		return ErrReportNeedsHTTPS
 	}
 	body, err := json.Marshal(struct {
 		ASINs []string `json:"asins"`
 	}{asins})
 	if err != nil {
-		return ReportAnswer{}, err
+		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+reportPath, bytes.NewReader(body))
 	if err != nil {
-		return ReportAnswer{}, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", reportUserAgent)
 	resp, err := s.report.Do(req)
 	if err != nil {
-		return ReportAnswer{}, err
+		return err
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrain))
@@ -137,22 +130,20 @@ func (s *Service) ReportUnknownASINs(ctx context.Context, asins []string) (Repor
 	}()
 	switch code := resp.StatusCode; {
 	case code == http.StatusNotFound || code == http.StatusMethodNotAllowed || (code >= 300 && code < 400):
-		return ReportAnswer{}, ErrReportNotOffered
+		return ErrReportNotOffered
 	case code < 200 || code >= 300:
-		return ReportAnswer{}, &statusError{code: code, path: reportPath}
+		return &statusError{code: code, path: reportPath}
 	}
 	// A 2xx: an intake answer names "accepted"; anything else (a site's HTML,
 	// a proxy's page) is not the intake.
 	var ans struct {
 		Accepted *int `json:"accepted"`
-		Known    int  `json:"known"`
-		Invalid  int  `json:"invalid"`
 	}
 	if json.NewDecoder(io.LimitReader(resp.Body, maxReportAnswer)).Decode(&ans) != nil || ans.Accepted == nil {
-		return ReportAnswer{}, ErrReportNotOffered
+		return ErrReportNotOffered
 	}
 	if resp.StatusCode != http.StatusAccepted {
-		return ReportAnswer{}, &statusError{code: resp.StatusCode, path: reportPath}
+		return &statusError{code: resp.StatusCode, path: reportPath}
 	}
-	return ReportAnswer{Accepted: *ans.Accepted, Known: ans.Known, Invalid: ans.Invalid}, nil
+	return nil
 }
