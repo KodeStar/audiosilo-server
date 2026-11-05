@@ -107,9 +107,16 @@ func TestOwnTransport(t *testing.T) {
 	t.Parallel()
 	shared := http.DefaultTransport.(*http.Transport)
 	rt := newClient("http://meta.test").http.Transport
-	got, ok := rt.(*http.Transport)
+	paced, ok := rt.(pacedTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want a paced one", rt)
+	}
+	got, ok := paced.base.(*http.Transport)
 	if !ok || got == shared {
-		t.Fatalf("transport = %T (%p), want a copy of http.DefaultTransport", rt, rt)
+		t.Fatalf("paced base = %T (%p), want a copy of http.DefaultTransport", paced.base, paced.base)
+	}
+	if got.MaxIdleConnsPerHost != maxIdleConnsPerHost {
+		t.Fatalf("idle connections per host = %d, want %d", got.MaxIdleConnsPerHost, maxIdleConnsPerHost)
 	}
 	if got.Proxy == nil || got.DialContext == nil || !got.ForceAttemptHTTP2 ||
 		got.TLSHandshakeTimeout != shared.TLSHandshakeTimeout || got.IdleConnTimeout != shared.IdleConnTimeout {
