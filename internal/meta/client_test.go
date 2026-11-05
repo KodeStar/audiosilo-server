@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,14 +67,49 @@ func TestClientRateLimitGivesUp(t *testing.T) {
 		}
 	}
 
-	c, n, waits = rateLimitedServer(t, 100, "")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// A wait longer than the whole deadline, so the answer has all of the deadline
+	// to arrive however busy the machine is and the wait never fits.
+	c, n, waits = rateLimitedServer(t, 100, "10")
+	ctx, cancel := context.WithTimeout(context.Background(), clientTimeout)
 	defer cancel()
-	if _, err := c.lookup(ctx, "B00TEST", ""); err == nil {
-		t.Fatal("want an error")
+	if _, err := c.lookup(ctx, "B00TEST", ""); err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("lookup under a short deadline = %v, want a rate-limited error", err)
 	}
 	if n.Load() != 1 || len(*waits) != 0 {
 		t.Fatalf("requests %d waits %v under a short deadline, want one request and no wait", n.Load(), *waits)
+	}
+}
+
+// Another part of the process closing http.DefaultTransport's idle connections
+// (each httptest.Server's Close does) doesn't reach the client's: they are its
+// own, so its one connection outlives every close. On that transport a close can
+// fail a lookup: net/http puts the connection of a 429 with no body back in the
+// idle list a moment before it hands the caller the response, a close in that
+// moment fails the request instead, and it doesn't retry that failure. No body is
+// also what makes this exact: the connection is idle by the time lookup returns.
+func TestClientConnectionsAreItsOwn(t *testing.T) {
+	t.Parallel()
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	c := newClient(srv.URL)
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	for range 3 {
+		if _, err := c.lookup(context.Background(), "B00TEST", ""); err == nil || !strings.Contains(err.Error(), "rate limited") {
+			t.Fatalf("lookup = %v, want a rate-limited error", err)
+		}
+		http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	}
+	if n := conns.Load(); n != 1 {
+		t.Fatalf("%d connections, want the one kept through the closes", n)
 	}
 }
 
