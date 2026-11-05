@@ -261,6 +261,8 @@ func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
 	ga := MatchRecording{ID: "ga", RuntimeMin: 400, Publisher: "Graphic Audio LLC", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
 	cast := MatchRecording{ID: "cast", RuntimeMin: 400, Publisher: "Corey Press", Narrators: []MetaPersonRef{{Name: "Full Cast"}}}
 	bare := MatchRecording{ID: "bare", RuntimeMin: 400, Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	long := MatchRecording{ID: "long", RuntimeMin: 900, Publisher: "GraphicAudio", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	both := MatchRecording{ID: "both", RuntimeMin: 420, Publisher: "Tantor Audio", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
 	many := MatchRecording{ID: "many", RuntimeMin: 400, Publisher: "Spoken Realms", Narrators: []MetaPersonRef{{Name: "A B"}, {Name: "C D"}, {Name: "E F"}, {Name: "G H"}}}
 	cases := []struct {
 		name      string
@@ -279,6 +281,14 @@ func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
 		{"allowed: the book states it", MatchCandidate{Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
 		{"allowed: an identifier named it", MatchCandidate{PlainBook: true, RecordingID: "ga", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
 		{"allowed: its narrator is the book's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, []string{"Alex Hill-Knight"}, "ga"},
+		{"denied: its narrator, but another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, long}}, []string{"Alex Hill-Knight"}, "plain"},
+		{"denied: a narrator on both prefers the plain reading", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both"},
+		{"denied: metaserve named it, a narrator on both", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both"},
+		{"allowed: a narrator on both, the book states it", MatchCandidate{Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "ga"},
+		{"denied: a publisher under a title keeping (Dramatized)", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized)", Recordings: []MatchRecording{plain}}, nil, ""},
+		{"allowed: a publisher under the stripped label", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain}}, nil, "plain"},
+		{"denied: a publisher under a part's label", MatchCandidate{PlainBook: true, Title: "Warbreaker (1 of 3) [Dramatized Adaptation]", Recordings: []MatchRecording{plain}}, nil, ""},
+		{"denied: a subtitle keeping the statement", MatchCandidate{PlainBook: true, Title: "Dune", Subtitle: "A Full-Cast Dramatization", Recordings: []MatchRecording{plain}}, nil, ""},
 	}
 	for _, tc := range cases {
 		got := ""
@@ -301,6 +311,9 @@ func TestMatchQueryStatesDramatization(t *testing.T) {
 		{MatchQuery{Title: "Dune", Path: "Frank Herbert/Dune (Dramatised)"}, true},
 		{MatchQuery{Title: "Dune", Narrators: []string{"Full Cast"}}, true},
 		{MatchQuery{Text: "dune full-cast"}, true},
+		{MatchQuery{Title: "Dune (GraphicAudio)"}, true},
+		{MatchQuery{Title: "Dune", Path: "Graphic Audio/Dune"}, true},
+		{MatchQuery{Title: "Graphic Novels of Audio"}, false},
 		{MatchQuery{Title: "Dune", Narrators: []string{"Scott Brick"}, Path: "Frank Herbert/Dune"}, false},
 		{MatchQuery{Title: "Radio Free Albemuth"}, false},
 		{MatchQuery{ASIN: "B0DUNE0001"}, false},
@@ -339,6 +352,32 @@ func TestCandidatesFlagAWorkHoldingOnlyADramatization(t *testing.T) {
 		}
 		if c := cands[0]; c.DramatizationOnly != tc.only || c.DefaultRecordingID != tc.recording {
 			t.Errorf("%s: only = %v, default = %q; want %v, %q", tc.title, c.DramatizationOnly, c.DefaultRecordingID, tc.only, tc.recording)
+		}
+	}
+}
+
+// The same table as metaserve's TestTitleDramatizationCovers.
+func TestTitleSpeaksFor(t *testing.T) {
+	cases := []struct {
+		title, subtitle string
+		noPublisher     bool
+		publisher       bool
+	}{
+		{title: "The Idiot"},
+		{title: "Tracker (Dramatized Adaptation)", noPublisher: true},
+		{title: "The Idiot (Dramatized)", noPublisher: true, publisher: true},
+		{title: "The Wonderful Wizard of Oz: A Radio Dramatization", noPublisher: true, publisher: true},
+		{title: "Dirk Gently: Two BBC Radio Full-Cast Dramas", noPublisher: true, publisher: true},
+		{title: "Warbreaker (1 of 3) [Dramatized Adaptation]", noPublisher: true, publisher: true},
+		{title: "Dune", subtitle: "A Full-Cast Dramatization", noPublisher: true, publisher: true},
+		{title: "Dark Road Part Three (Dramatized Adaptation)", noPublisher: true, publisher: true},
+	}
+	for _, c := range cases {
+		if got := titleSpeaksFor(c.title, c.subtitle, ""); got != c.noPublisher {
+			t.Errorf("%q / %q: no publisher = %v, want %v", c.title, c.subtitle, got, c.noPublisher)
+		}
+		if got := titleSpeaksFor(c.title, c.subtitle, "Tantor Audio"); got != c.publisher {
+			t.Errorf("%q / %q: a publisher = %v, want %v", c.title, c.subtitle, got, c.publisher)
 		}
 	}
 }

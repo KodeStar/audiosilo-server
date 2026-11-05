@@ -265,27 +265,51 @@ func (r MatchRecording) HasRegion(region string) bool {
 }
 
 // A dramatization is a recording of its book, so a plain library book rightly
-// matches a work holding one. What it must not do is take that recording: the work's
-// title says nothing about it (a labelled title is being retitled), so each
-// recording answers for itself, as metaserve's model.Recording.IsDramatization does.
+// matches a work holding one. What it must not do is take that recording. This is
+// metaserve's rule by hand (model.Recording.IsDramatization, titlerule.DramatizationOf):
+// change one, change the other (CROSS-REPO.md).
 var (
 	// graphicAudioRE is GraphicAudio's imprint in every spelling the catalogue holds.
 	graphicAudioRE = regexp.MustCompile(`(?i)^\s*graphic\s?audio(\s+llc)?\s*$`)
-	// dramatizationTextRE is a book's own text, or a work's label, saying so.
-	// Narrower than fullCastRE: "Radio Free Albemuth" states nothing here.
-	dramatizationTextRE = regexp.MustCompile(`(?i)\b(?:full[- ]?cast|dramati[sz](?:ed|ations?))\b`)
+	// dramatizationTextRE is a text saying it is a dramatized production. Narrower
+	// than fullCastRE: "Radio Free Albemuth" states nothing here.
+	dramatizationTextRE = regexp.MustCompile(`(?i)\b(?:full[- ]?cast|graphic\s?audio|dramati[sz](?:ed|ations?))\b`)
+	// adaptationLabelRE is the label metaserve's importer takes off a title, as a whole
+	// bracketed group.
+	adaptationLabelRE = regexp.MustCompile(`(?i)[(\[]\s*(?:full[- ]cast\s+)?dramati[sz]ed\s+adaptation\s*[)\]]`)
+	// splitPartRE is a split-release part, whose title keeps the label.
+	splitPartRE = regexp.MustCompile(`(?i)[(\[]\s*(?:(?:part|pt\.?|teil)\s+)?[0-9]+\s+(?:of|von)\s+[0-9]+\s*[)\]]|,?\s*vol\.\s*[0-9]+\s+of\s+[0-9]+|\b(?:parts?|pts?\.?)\s*(?:[0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)\b`)
 )
 
-// isDramatization reports whether a recording of the work titled workTitle states it
-// is a dramatized production: GraphicAudio's imprint or a full-cast credit, or, for
-// a recording stating no publisher, a work still carrying the label. Several named
-// readers are not enough, as a volunteer reading credits them too.
-func (r *MatchRecording) isDramatization(workTitle string) bool {
-	if graphicAudioRE.MatchString(r.Publisher) ||
-		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) }) {
-		return true
+// titleSpeaksFor reports whether a work's title or subtitle speaks for a recording of
+// this publisher that says nothing of itself. A statement that stays on the title
+// ("(Dramatized)", a split part's label) names the production every recording is,
+// whoever published it. The adaptation label is coming off titles, and a plain
+// reading can sit under it until then, so it speaks only for a recording stating no
+// publisher.
+func titleSpeaksFor(title, subtitle, publisher string) bool {
+	for _, t := range []string{title, subtitle} {
+		if !dramatizationTextRE.MatchString(t) {
+			continue
+		}
+		if publisher == "" {
+			return true
+		}
+		if splitPartRE.MatchString(t) || dramatizationTextRE.MatchString(adaptationLabelRE.ReplaceAllString(t, " ")) {
+			return true
+		}
 	}
-	return r.Publisher == "" && dramatizationTextRE.MatchString(workTitle)
+	return false
+}
+
+// isDramatization reports whether a recording of the work c says or is said to be a
+// dramatized production: GraphicAudio's imprint or a full-cast credit, else the work's
+// title speaking for it. Several named readers are not enough, as a volunteer reading
+// credits them too.
+func (r *MatchRecording) isDramatization(c *MatchCandidate) bool {
+	return graphicAudioRE.MatchString(r.Publisher) ||
+		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) }) ||
+		titleSpeaksFor(c.Title, c.Subtitle, r.Publisher)
 }
 
 // statesDramatization reports whether the book's own text says it is one: its title,
@@ -303,36 +327,35 @@ func (q MatchQuery) statesDramatization() bool {
 // recording selling in the preferred region winning a tie; recordings without
 // a runtime come last. A narrator's recording of another length is another
 // edition: the closest runtime then decides. A plain book (MatchCandidate.PlainBook)
-// takes a dramatization only when an identifier or one of its narrators names it, so
-// a work holding nothing else gives nil: the work still fits, but no recording does.
+// takes a dramatization only when an identifier names it, or one of its narrators reads
+// it at a plausible length and reads no plain recording that fits as well, so a work
+// holding nothing else gives nil: the work still fits, but no recording does.
 // nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
-	identified := c.Reasons != nil && c.Reasons.Identifier != ""
-	notTheirs := func(r *MatchRecording) bool {
-		return c.PlainBook && !identified && r.isDramatization(c.Title) && !readBy(r, narrators)
-	}
+	guarded := c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == "")
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if c.RecordingID != "" && r.ID == c.RecordingID && !notTheirs(r) {
+		if c.RecordingID != "" && r.ID == c.RecordingID && !(guarded && r.isDramatization(c)) {
 			return r
 		}
 	}
 	var best *MatchRecording
-	bestGap, bestTheirs := math.Inf(1), false
+	bestGap, bestTheirs, bestDrama := math.Inf(1), false, false
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if notTheirs(r) {
-			continue
-		}
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
 		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
+		drama := guarded && r.isDramatization(c)
+		if drama && !theirs {
+			continue
+		}
 		gap := math.Inf(1)
 		if r.RuntimeMin > 0 {
 			gap = math.Abs(float64(r.RuntimeMin)*60 - seconds)
 		}
-		if best == nil || (theirs && !bestTheirs) || (theirs == bestTheirs && (gap < bestGap ||
-			(gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)))) {
-			best, bestGap, bestTheirs = r, gap, theirs
+		if best == nil || (theirs && !bestTheirs) || (theirs == bestTheirs && ((bestDrama && !drama) || (drama == bestDrama && (gap < bestGap ||
+			(gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)))))) {
+			best, bestGap, bestTheirs, bestDrama = r, gap, theirs, drama
 		}
 	}
 	return best
