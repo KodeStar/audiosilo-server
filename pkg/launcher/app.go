@@ -278,6 +278,9 @@ func Run(ctx context.Context, opts Options) error {
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	// Upcoming releases: after SetRuntime, as its announcements go to ntf.
 	a.StartUpcoming(ctx)
+	// The opt-in unknown-ASIN report, after SetMetaMirror (its lookups go to
+	// the local copy in mirror mode).
+	a.StartCoverage(ctx)
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
