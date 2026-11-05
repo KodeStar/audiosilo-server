@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -69,6 +70,11 @@ if [ "$1" = "-version" ]; then echo "ffprobe version ` + version + ` Copyright (
 for f; do :; done
 echo "$f" >> '` + log + `'
 ` + answer + "\n"
+	// Held so no exec another parallel test forks meanwhile inherits the file
+	// still open for writing; running it would otherwise fail with ETXTBSY
+	// ("text file busy", golang/go#22315) on Linux.
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
 	if err := os.WriteFile(probe, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the stand-in must be executable
 		t.Fatal(err)
 	}
@@ -138,7 +144,7 @@ func TestExtractLeavesUnknownReleasesToFFprobe(t *testing.T) {
 			}
 			md, _ := Extract(fixture("mp3-v23-chap.mp3"), probe)
 			if md.Duration != 1 || md.Codec != "fake" || len(md.Chapters) != 0 {
-				t.Errorf("duration %v codec %q chapters %d: want ffprobe's answer", md.Duration, md.Codec, len(md.Chapters))
+				t.Errorf("duration %v codec %q chapters %d, probe error %v: want ffprobe's answer", md.Duration, md.Codec, len(md.Chapters), md.ProbeErr)
 			}
 			if n := runs(t, log); n != 1 {
 				t.Errorf("ffprobe read %d files, want 1", n)
