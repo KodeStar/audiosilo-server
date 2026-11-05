@@ -30,8 +30,9 @@ export function parseMatchQuery(input: string): MatchBy {
 
 /**
  * The recording a candidate most likely is: the server's pick (the one an
- * identifier hit, else the closest runtime, the preferred marketplace breaking a
- * tie: meta.DefaultRecording), else the first.
+ * identifier hit, else of the recordings the book's narrators read that fit its
+ * length the closest runtime, the preferred marketplace breaking a tie:
+ * meta.DefaultRecording), else the first.
  */
 export function defaultRecording(c: MatchCandidate): MatchRecording | undefined {
   const recs = c.recordings ?? [];

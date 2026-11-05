@@ -83,7 +83,7 @@ func numberEnds(s string) bool {
 func seriesBookMarker(title, series string) (float64, bool) {
 	lt := strings.ToLower(title)
 	var v float64
-	for _, form := range seriesForms(series) {
+	for _, form := range SeriesForms(series) {
 		if boundedMatch(lt, strings.ToLower(form), func(end int) bool {
 			m := afterSeriesBook.FindStringSubmatch(lt[end:])
 			if m == nil || !numberEnds(lt[end+len(m[0]):]) {

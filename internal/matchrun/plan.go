@@ -15,12 +15,14 @@
 package matchrun
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -30,10 +32,24 @@ import (
 // when both lengths are known, a recording within meta.PlausibleRuntimeOff of the book's
 // length (the closest recording of a work can still be another edition: the
 // unabridged book of a work that holds only its dramatization).
+// An identifier hit (the ASIN or ISBN the query sent named the work: in a run
+// always a tag hint, a book with its own being no run's subject) needs no lead:
+// it is the book. A runner-up that is one too would be two works holding one
+// identifier, the admin's choice; metaserve names one work per request today, so
+// that is a guard, not a case a run meets.
 const (
 	AutoScore = 90
 	AutoLead  = 10
 )
+
+// ReviewFloor is the metaserve score a match run's best candidate needs to be
+// held for review: below it the community most likely doesn't have the book (a
+// weak fit is almost always another book), so the item records no match, detail
+// DetailWeakMatch. An older metaserve's fallback search scores on another scale
+// (scoreCandidate), where the floor says nothing: such a candidate stays for
+// review. The match dialog has no floor: it lists up to meta's
+// maxMatchCandidates (6) whatever their scores.
+const ReviewFloor = 60
 
 // How much applying a run may write.
 const (
@@ -41,7 +57,8 @@ const (
 	// community enrichment finds it; everything the files say stays.
 	ScopeIDs = "ids"
 	// ScopeFill also fills every field the book has empty, and its cover when it
-	// has none; nothing it has is replaced.
+	// has none; nothing it has is replaced, except a cluttered title it tidies
+	// (tidyTitle).
 	ScopeFill = "fill"
 	// ScopeOverwrite takes every community value that differs, as accepting the
 	// match dialog with its default ticks does. An admin's own edit stays either way.
@@ -69,12 +86,24 @@ func ScopesFor(mode string) []string {
 }
 
 // QueryFor is the match query for book b on a server preferring region: its own
-// facts, as both the match dialog and a bulk run send them.
+// facts, as both the match dialog and a bulk run send them. A book with no ASIN
+// or ISBN of its own sends its tags' (Book.TagASIN, TagISBN) as hints: metaserve
+// looks them up like the book's own, and an identifier hit whose length fits is
+// confident (Classify), but the book is matched only by what an apply writes.
+// Its language is the book's, else its tags' (meta.NormalizeLanguage), else none:
+// never the region's, as a marketplace doesn't say what language a library is in.
+// Its narrators are its narrator credit's names.
 func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
+	asin, isbn := b.ASIN, b.ISBN
+	if asin == "" && isbn == "" {
+		asin, isbn = b.TagASIN, b.TagISBN
+	}
 	return meta.MatchQuery{
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
 		Author: b.Author, Duration: b.Duration,
-		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: b.ASIN, BookISBN: b.ISBN, Region: region,
+		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: asin, BookISBN: isbn, Region: region,
+		Language:  cmp.Or(meta.NormalizeLanguage(b.Language), meta.NormalizeLanguage(b.TagLanguage)),
+		Narrators: names.Split(b.Narrator),
 	}
 }
 
@@ -92,7 +121,7 @@ var yearRE = regexp.MustCompile(`^\d{4}`)
 // offered (a match candidate carries none).
 func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProposal {
 	p := catalog.MatchProposal{
-		WorkID: c.WorkID, Title: c.Title, Authors: names(c.Authors), WebURL: c.WebURL,
+		WorkID: c.WorkID, Title: c.Title, Authors: joinNames(c.Authors), WebURL: c.WebURL,
 		CoverURL: c.CoverURL, Values: map[string]string{},
 	}
 	published := c.FirstPublished
@@ -116,7 +145,7 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 		raw[catalog.FieldMoreSeries] = catalog.EncodeMoreSeries(more)
 	}
 	if rec != nil {
-		p.RecordingID, p.Narrators, p.RuntimeMin = rec.ID, names(rec.Narrators), rec.RuntimeMin
+		p.RecordingID, p.Narrators, p.RuntimeMin = rec.ID, joinNames(rec.Narrators), rec.RuntimeMin
 		raw[catalog.FieldNarrator], raw[catalog.FieldPublisher] = p.Narrators, rec.Publisher
 		raw[catalog.FieldAbridged] = catalog.AbridgedClaim(rec.Abridged)
 		if published == "" {
@@ -144,7 +173,7 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	return p
 }
 
-func names(people []meta.MetaPersonRef) string {
+func joinNames(people []meta.MetaPersonRef) string {
 	out := make([]string, 0, len(people))
 	for _, p := range people {
 		out = append(out, p.Name)
@@ -179,7 +208,8 @@ func (w Writes) after(st *catalog.MatchState, field string) string {
 
 // Plan is what applying proposal p to a book in state st writes under scope. It is
 // the one statement of the scopes, so what the review shows and what an apply
-// writes can't disagree. Never: a value the book already has, an admin's own edit,
+// writes can't disagree. Fill fills empty fields, and replaces a title only to
+// tidy it (tidyTitle). Never: a value the book already has, an admin's own edit,
 // a series position for a series the book won't have, or a cover over any the
 // book has.
 func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
@@ -194,6 +224,13 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 		}
 	}
 	planSeries(scope, st, p, &w)
+	// Fill also tidies a title the files clutter (tidyTitle): the community's
+	// title is the book's, less the series and "Book 2 (Unabridged)".
+	if scope == ScopeFill {
+		if t := tidyTitle(st, p); t != "" {
+			w.Set[catalog.FieldTitle] = t
+		}
+	}
 	w.Cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
 	return w
 }
@@ -311,10 +348,10 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // matchedSince reports whether a match run's book has an ASIN or ISBN now. The
 // run took only books with neither (UnmatchedBooks), so one has been matched
 // since: by hand (from the review or the book page), by another admin or the
-// Bridge's Audible backfill, or by a rescan reading one from the tags. The
-// run's match never writes over it, whatever the scope. An item whose own apply a stop cut short
-// after its fields went in (DetailCoverPending) holds the run's identifier, not
-// one matched since.
+// Bridge's Audible backfill, or by a rescan reading one from an Audiobookshelf
+// metadata.json. The run's match never writes over it, whatever the scope. An
+// item whose own apply a stop cut short after its fields went in
+// (DetailCoverPending) holds the run's identifier, not one matched since.
 func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
 		return false
@@ -361,9 +398,10 @@ func lengthFits(p catalog.MatchProposal, seconds float64) bool {
 }
 
 // Classify sorts a book's candidates (best first) into an outcome: confident
-// (OutcomeAuto), worth a look (OutcomeReview) or none, with the best score and the
-// next one's. p is the proposal of the best and seconds the book's length (0 =
-// unknown).
+// (OutcomeAuto), worth a look (OutcomeReview) or none (no candidate, or none
+// scoring ReviewFloor on metaserve's scale, which only a candidate with Reasons
+// is), with the best score and the next one's. p is the
+// proposal of the best and seconds the book's length (0 = unknown).
 func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64) (outcome string, score, runnerUp int) {
 	if len(cands) == 0 {
 		return catalog.OutcomeNone, 0, 0
@@ -373,8 +411,15 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 		runnerUp = cands[1].Score
 	}
 	identified := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
-	if score >= AutoScore && score-runnerUp >= AutoLead && identified && lengthFits(p, seconds) {
+	lead := score-runnerUp >= AutoLead
+	if cands[0].IdentifierHit() {
+		lead = len(cands) == 1 || !cands[1].IdentifierHit()
+	}
+	switch {
+	case score >= AutoScore && lead && identified && lengthFits(p, seconds):
 		return catalog.OutcomeAuto, score, runnerUp
+	case score < ReviewFloor && cands[0].Reasons != nil:
+		return catalog.OutcomeNone, score, runnerUp
 	}
 	return catalog.OutcomeReview, score, runnerUp
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Bridge Phase 4a: Audible accounts (migration 0063). The Bridge signs in to an
@@ -102,7 +103,7 @@ var audiblePollPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // ValidASIN reports whether s is an ASIN as Audible spells one (ten upper-case
 // letters and digits).
-func ValidASIN(s string) bool { return asinRE.MatchString(s) }
+func ValidASIN(s string) bool { return match.ValidASIN(s) }
 
 // bridgeUserSQL is who an Audible account may be mapped to: an enabled adult
 // or admin, never a kid's account, a demo account or a disabled one.

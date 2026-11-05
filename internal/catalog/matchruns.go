@@ -48,7 +48,7 @@ const (
 const (
 	OutcomeAuto   = "auto"   // confident: applied unless the admin leaves it out
 	OutcomeReview = "review" // a candidate, not confident enough to apply unasked
-	OutcomeNone   = "none"   // no candidate
+	OutcomeNone   = "none"   // no candidate, or only weak ones
 	OutcomeError  = "error"  // the community service failed for this book
 )
 
@@ -362,11 +362,13 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, e
 
 // matchSubjectCols are the facts a match reads of a book.
 const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series,
-	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn`
+	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn, b.language,
+	b.tag_asin, b.tag_isbn, b.tag_language`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
 	return rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
-		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN)
+		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN, &b.Language,
+		&b.TagASIN, &b.TagISBN, &b.TagLanguage)
 }
 
 // UnmatchedBooks lists the books a match run works through: those with no ASIN
@@ -390,8 +392,8 @@ func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, er
 
 // CommunityASINBooks lists the books whose ASIN an admin accepted from a community
 // match (a book_overrides row of source community): what a repick run reconsiders.
-// An ASIN from the tags, an admin's own edit or an enrichment (the Bridge's
-// Audible backfill) is never one.
+// An ASIN from an Audiobookshelf metadata.json, an admin's own edit or an
+// enrichment (the Bridge's Audible backfill) is never one.
 func (c *Catalog) CommunityASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
 	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
 	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND b.asin <> '' AND EXISTS(SELECT 1 FROM book_overrides o
