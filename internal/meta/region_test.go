@@ -311,3 +311,34 @@ func TestMatchQueryStatesDramatization(t *testing.T) {
 		}
 	}
 }
+
+// Through Candidates: the flag the console reads for a book that holds no recording.
+func TestCandidatesFlagAWorkHoldingOnlyADramatization(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"dune"}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"dune","title":"Dune","authors":[{"id":"fh","name":"Frank Herbert"}],
+			"recordings":[{"id":"ga","narrators":[{"id":"a","name":"Alex Reader"}],"runtime_min":400,"publisher":"GraphicAudio"}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+	for _, tc := range []struct {
+		title     string
+		only      bool
+		recording string
+	}{
+		{"Dune", true, ""},
+		{"Dune [Dramatized Adaptation]", false, "ga"},
+	} {
+		cands, err := s.Candidates(context.Background(), MatchQuery{Text: "dune", Title: tc.title, Duration: 400 * 60})
+		if err != nil || len(cands) != 1 {
+			t.Fatalf("%s: candidates = %+v, %v", tc.title, cands, err)
+		}
+		if c := cands[0]; c.DramatizationOnly != tc.only || c.DefaultRecordingID != tc.recording {
+			t.Errorf("%s: only = %v, default = %q; want %v, %q", tc.title, c.DramatizationOnly, c.DefaultRecordingID, tc.only, tc.recording)
+		}
+	}
+}

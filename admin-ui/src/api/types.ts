@@ -1940,6 +1940,11 @@ export interface MatchCandidate {
   /** The recording the book most likely is (the server's meta.DefaultRecording). */
   default_recording_id?: string;
   /**
+   * The work holds only a dramatization, which this book doesn't state it is: no
+   * recording is preselected (see meta.DefaultRecording).
+   */
+  dramatization_only?: boolean;
+  /**
    * 0-100: how well the work fits the book - the community service's structured
    * match score, 100 for an identifier hit, or (older service) the title, author
    * and runtime agreement.

@@ -119,6 +119,9 @@ type MatchCandidate struct {
 	// PlainBook says the book's own text doesn't state it is a dramatized production,
 	// which is what keeps DefaultRecording off a dramatization.
 	PlainBook bool `json:"-"`
+	// DramatizationOnly says the work holds only a dramatization the book isn't, so
+	// DefaultRecording found none: the console's dialog preselects nothing for it.
+	DramatizationOnly bool `json:"dramatization_only,omitempty"`
 	// DefaultRecordingID is the recording the book most likely is
 	// (DefaultRecording): what the console's dialog and a bulk run start from.
 	DefaultRecordingID string `json:"default_recording_id,omitempty"`
@@ -567,6 +570,8 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 	}
 	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
 		c.DefaultRecordingID = rec.ID
+	} else {
+		c.DramatizationOnly = len(c.Recordings) > 0
 	}
 	return c
 }

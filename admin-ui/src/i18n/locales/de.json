@@ -856,6 +856,8 @@
   "book.match.unreachable": "meta.audiosilo.app antwortet nicht. Versuche es in einer Minute erneut.",
   "book.match.score": "{{score}} % Übereinstimmung",
   "book.match.readBy": "Gelesen von {{narrators}}",
+  "book.match.pickEdition": "Fassung wählen",
+  "book.match.dramatizationOnly": "Die Community führt von diesem Buch nur eine Hörspielfassung. Wähle sie nur, wenn deine Dateien diese Produktion sind.",
   "book.match.abridged": "Gekürzt",
   "book.match.lengthMatches": "Die Länge passt zu deinen Dateien",
   "book.match.longer": "{{length}} länger",

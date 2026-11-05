@@ -900,6 +900,8 @@
   "book.match.unreachable": "O meta.audiosilo.app não está a responder. Tente novamente dentro de um minuto.",
   "book.match.score": "{{score}}% de correspondência",
   "book.match.readBy": "Narrado por {{narrators}}",
+  "book.match.pickEdition": "Escolha uma edição",
+  "book.match.dramatizationOnly": "A comunidade só tem uma dramatização deste livro. Escolha-a apenas se os seus ficheiros forem essa produção.",
   "book.match.abridged": "Resumido",
   "book.match.lengthMatches": "A duração corresponde aos seus ficheiros",
   "book.match.longer": "{{length}} mais longo",

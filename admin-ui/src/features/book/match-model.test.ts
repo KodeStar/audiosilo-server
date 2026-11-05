@@ -66,6 +66,12 @@ describe('defaultRecording', () => {
     expect(defaultRecording(candidate({ recordings: [short, full] }))?.id).toBe('abridged');
     expect(defaultRecording(candidate({ recordings: [] }))).toBeUndefined();
   });
+
+  it('picks nothing for a work holding only a dramatization the book is not', () => {
+    const c = { recordings: [short, full], recording_id: 'full', dramatization_only: true };
+    expect(defaultRecording(candidate(c))).toBeUndefined();
+    expect(defaultRecording(candidate({ ...c, dramatization_only: false }))?.id).toBe('full');
+  });
 });
 
 describe('compare', () => {

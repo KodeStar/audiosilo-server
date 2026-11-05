@@ -856,6 +856,8 @@
   "book.match.unreachable": "meta.audiosilo.app isn't answering. Try again in a minute.",
   "book.match.score": "{{score}}% match",
   "book.match.readBy": "Read by {{narrators}}",
+  "book.match.pickEdition": "Choose an edition",
+  "book.match.dramatizationOnly": "The community holds only a dramatization of this book. Choose it only if your files are that production.",
   "book.match.abridged": "Abridged",
   "book.match.lengthMatches": "Length matches your files",
   "book.match.longer": "{{length}} longer",
