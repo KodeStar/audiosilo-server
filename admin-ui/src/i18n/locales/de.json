@@ -831,6 +831,7 @@
   "book.story.aliases": "Auch bekannt als {{names}}",
   "book.story.fromChapter": "Ab Kapitel {{n}}",
   "book.story.fromStart": "Von Anfang an",
+  "book.story.nearEnd": "Gegen Ende",
   "book.story.recapsHint": "Zusammenfassungen verraten die Handlung. Jede bleibt zu, bis du sie öffnest.",
   "book.story.through": "Bis Kapitel {{n}}",
   "book.story.previously": "Bisher, in früheren Büchern",

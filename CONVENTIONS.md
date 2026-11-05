@@ -241,7 +241,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (work + matched recording + series rails, each carrying its own `web_url`).
   The `work` also carries the community **characters** and **recaps** (the CC
   BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
-  are logical work-chapter positions) when metaserve has them, plus a
+  are logical work-chapter positions, on the scale the work states as `position_scale`, answered on
+  this book's chapters when it splits finer: `meta.OnRecording`, per request on a copy, a reveal
+  at its unit's start and a through at its unit's end, later of time and count, see CROSS-REPO section 17) when metaserve has them, plus a
   whole-book `recap_summary` (`{in_short, ending}` - both summarize the whole
   book, and `ending` is a full spoiler by construction); all three are additive/`omitempty`, mirrored on
   `upstreamWorkDetail` and `MetaWork` and passed through by

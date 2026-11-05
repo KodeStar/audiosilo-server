@@ -406,6 +406,14 @@ type upstreamCommunityDescription struct {
 	License string `json:"license"`
 }
 
+// upstreamPositionScale is the scale a work's characters and recaps are numbered on;
+// nil for a work that states none, and on a metaserve or a pkg/query that predates it.
+type upstreamPositionScale struct {
+	Length  int    `json:"length"`
+	Unit    string `json:"unit"`
+	Partial bool   `json:"partial"`
+}
+
 type upstreamWorkDetail struct {
 	ID             string                `json:"id"`
 	Title          string                `json:"title"`
@@ -422,6 +430,7 @@ type upstreamWorkDetail struct {
 	// CommunityDescription is the CC BY-SA description (see
 	// upstreamCommunityDescription); nil for most works.
 	CommunityDescription *upstreamCommunityDescription `json:"community_description"`
+	PositionScale        *upstreamPositionScale        `json:"position_scale"`
 }
 
 type upstreamSeriesEntry struct {
