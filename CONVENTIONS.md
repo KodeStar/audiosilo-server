@@ -644,12 +644,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the first run an hour after the start (or a day after the last run), then daily +-1 h; a run within 23 h of the
   last is skipped (`server_state('unknown_asin_report')`, so a restart never re-runs); `Wake` (PATCH switching it
   or metadata on) runs at once unless one ran within 23 h. Mirror mode: no run until the local copy is `Ready`
-  (rechecked hourly), so the lookups are the copy's (one the copy fails still goes to the remote service, as every
-  mirror-mode lookup does: `SetMirror`). **Candidates** (`UnknownASINCandidates`, books
+  (rechecked hourly), and the lookups stay local in mirror mode: `KnownASIN` marks them `localOnly`, so
+  `fallbackTransport` answers them from the copy or fails them (`errLocalOnly`: the copy failed one, or is no
+  longer `Ready`), never asking the remote service, unlike every other mirror-mode request; only the POST goes remote. **Candidates** (`UnknownASINCandidates`, books
   libraries only, upper-cased, `match.ValidASIN`): `books.asin` except an ASIN a community match gave a book
   (`book_overrides` asin `source='community'`), plus `tag_asin` only for a book with no ASIN or ISBN, no asin
   override (a cleared one too) and a tag on exactly one book. **A run**: Ping (fails: `failed`, tried the next day);
-  drop rows no candidate holds; look up (`meta.Service.KnownASIN`, through the mirror-aware client; a cached hit,
+  drop rows no candidate holds; look up (`meta.Service.KnownASIN`, local-only in mirror mode; a cached hit,
   memory or the persistent store (`CachedWorkID`), counts as known) the candidates never looked up or looked up 30+ days ago, shuffled, at most 500; only
   `ErrNotFound` is unknown, any other error stops the lookups (the rest wait; what was confirmed may still be
   sent); then the unknown ones checked within 30 days and not sent within 30 days, shuffled, 200 a POST, at most 5

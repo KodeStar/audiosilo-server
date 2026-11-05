@@ -3,6 +3,7 @@ package coverage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,6 +100,87 @@ type localCopy struct{ h http.Handler }
 
 func (c localCopy) Handler() http.Handler { return c.h }
 func (c localCopy) Ready() bool           { return true }
+
+// breakingCopy is a local copy that breaks after its first lookup: from then
+// on it answers 500 (drop false) or is no longer Ready (drop true, the copy
+// dropped mid-run).
+type breakingCopy struct {
+	h       http.Handler
+	drop    bool
+	lookups atomic.Int32
+	broken  atomic.Bool
+}
+
+func (c *breakingCopy) Ready() bool { return !c.drop || !c.broken.Load() }
+
+func (c *breakingCopy) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/lookup" {
+			c.lookups.Add(1)
+			if c.broken.Load() {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer c.broken.Store(true)
+		}
+		c.h.ServeHTTP(w, r)
+	})
+}
+
+// Mirror mode, the copy failing or dropped mid-run: the lookups never go to
+// the remote service; the first failed one stops the checking (failed, as any
+// failed lookup), and the one the copy confirmed unknown is still sent.
+func TestReportMirrorModeStaysLocal(t *testing.T) {
+	t.Parallel()
+	for _, drop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("drop=%v", drop), func(t *testing.T) {
+			t.Parallel()
+			db, err := query.Open(querytest.Build(t, t.TempDir()), "data-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			rs := newRemote(t, func(w http.ResponseWriter, _ *http.Request) {
+				// Were it asked, every ASIN would be known.
+				_, _ = w.Write([]byte(`{"work":{"id":"w1","title":"T"},"recording_id":"r1"}`))
+			})
+			svc := meta.NewService(rs.URL, nil)
+			cp := &breakingCopy{h: query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{}), drop: drop}
+			svc.SetMirror(cp, nil)
+
+			e := newEnv(t)
+			unknown := []string{querytest.MissingASIN, "B0NOTINDB1", "B0NOTINDB2"}
+			for i, a := range unknown {
+				e.book(t, fmt.Sprintf("b%d", i), a, false)
+			}
+			r := New(e.cat, svc, Options{On: e.on.Load, Now: e.clock.now, Ready: cp.Ready})
+			if err := r.RunOnce(context.Background()); err == nil {
+				t.Fatal("RunOnce = nil, want the failed lookup")
+			}
+			if n := rs.gets.Load(); n != 0 {
+				t.Fatalf("mirror mode asked the remote service %d GETs", n)
+			}
+			wantLookups := int32(2)
+			if drop {
+				wantLookups = 1 // the second never reaches a copy that is not Ready
+			}
+			if n := cp.lookups.Load(); n != wantLookups {
+				t.Fatalf("the copy was asked %d lookups, want %d (the checking stops at the failure)", n, wantLookups)
+			}
+			rows, _ := e.cat.UnknownASINRows(context.Background())
+			if len(rows) != 1 {
+				t.Fatalf("rows = %+v, want the one lookup the copy answered", rows)
+			}
+			posted := rs.posted()
+			if len(posted) != 1 || rows[posted[0]].CheckedAt == "" || !slices.Contains(unknown, posted[0]) {
+				t.Fatalf("posted %v, want the one ASIN the copy confirmed unknown", posted)
+			}
+			if st := e.status(t); st.State != StateFailed || st.LastSent != 1 {
+				t.Fatalf("status = %+v, want failed with 1 sent", st)
+			}
+		})
+	}
+}
 
 // Mirror mode: the health check and the lookups are answered by the local
 // copy (the remote service is never asked one), and the POST reaches the

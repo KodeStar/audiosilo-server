@@ -11,10 +11,10 @@
 //     no reports (not_offered);
 //  2. a base_url the report may not go to (plain http off this machine:
 //     meta.Service.CanReport) is not_offered with no call;
-//  3. in mirror mode, nothing until the local copy is ready (so the lookups are
-//     the copy's, not a burst at the remote service while it downloads; one the
-//     copy fails still goes to the remote service, as every mirror-mode lookup
-//     does: meta.Service.SetMirror);
+//  3. in mirror mode, nothing until the local copy is ready, and the lookups
+//     stay local: the copy answers them, and one it fails (or can't take, the
+//     copy dropped mid-run) is a failed lookup, never a question to the remote
+//     service (meta.Service.KnownASIN); only the POST goes remote;
 //  4. Ping, then up to maxChecks lookups of the candidates never looked up or
 //     looked up over recheckAge ago, in a shuffled order; only a 404 is
 //     "unknown", any other failure stops the lookups (the rest wait);

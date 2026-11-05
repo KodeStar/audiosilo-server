@@ -19,7 +19,8 @@ import (
 // lookup that tells "the community database doesn't know it" from "the lookup
 // failed", and the POST to metaserve's intake queue. The POST goes to the
 // remote service only (never the mirror's local copy, which has no intake) and
-// carries the ASINs and nothing else.
+// carries the ASINs and nothing else; in mirror mode the lookups never leave
+// this server.
 
 // ErrReportNotOffered is the service saying it takes no reports: 404 (an older
 // metaserve, or intake off), 405, a redirect (never followed), or a 2xx that is
@@ -76,10 +77,12 @@ func reportAllowed(base string) bool {
 }
 
 // KnownASIN asks the community database whether any recording has asin (GET
-// /api/v1/lookup, through the client: the local copy in mirror mode). Only a
-// 404 is "unknown" (false, nil); any other failure is an error, never an
-// answer. A cached hit (CachedWorkID: memory, else the persistent store, fresh
-// or stale) counts as known without asking.
+// /api/v1/lookup, through the client). In mirror mode the lookup stays on this
+// server (localOnly): the local copy answers it, and when the copy is not
+// Ready or fails it the lookup is an error, never a question to the remote
+// service. Only a 404 is "unknown" (false, nil); any other failure is an
+// error, never an answer. A cached hit (CachedWorkID: memory, else the
+// persistent store, fresh or stale) counts as known without asking.
 func (s *Service) KnownASIN(ctx context.Context, asin string) (bool, error) {
 	asin = match.NormalizeASIN(asin)
 	if !match.ValidASIN(asin) {
@@ -88,7 +91,7 @@ func (s *Service) KnownASIN(ctx context.Context, asin string) (bool, error) {
 	if id, ok := s.CachedWorkID(ctx, asin, ""); ok && id != "" {
 		return true, nil
 	}
-	_, err := s.client.lookup(ctx, asin, "")
+	_, err := s.client.lookup(localOnly(ctx), asin, "")
 	switch {
 	case err == nil:
 		return true, nil
