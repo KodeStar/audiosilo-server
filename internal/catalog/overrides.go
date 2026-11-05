@@ -101,8 +101,6 @@ const (
 )
 
 var (
-	asinRE      = regexp.MustCompile(`^[A-Z0-9]{10}$`)
-	isbnRE      = regexp.MustCompile(`^(\d{9}[\dX]|\d{13})$`)
 	publishedRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
 )
 
@@ -165,13 +163,13 @@ func normalizeOverride(field, value string) (string, error) {
 		return v, nil
 	case FieldASIN:
 		v = strings.ToUpper(v)
-		if v != "" && !asinRE.MatchString(v) {
+		if v != "" && !match.ValidASIN(v) {
 			return "", invalid(field, "must be 10 letters or digits")
 		}
 		return v, nil
 	case FieldISBN:
 		v = strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(v))
-		if v != "" && !isbnRE.MatchString(v) {
+		if v != "" && !match.ValidISBN(v) {
 			return "", invalid(field, "must be an ISBN-10 or ISBN-13")
 		}
 		return v, nil

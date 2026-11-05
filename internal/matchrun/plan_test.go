@@ -162,7 +162,8 @@ func TestPlan(t *testing.T) {
 		cover bool
 	}{
 		{ScopeIDs, []string{"asin", "isbn"}, false},
-		{ScopeFill, []string{"asin", "description", "isbn", "published", "series", "series_index"}, true},
+		// Fill tidies the cluttered tag title (tidyTitle).
+		{ScopeFill, []string{"asin", "description", "isbn", "published", "series", "series_index", "title"}, true},
 		// Overwrite replaces the tag title too, never the admin's narrator.
 		{ScopeOverwrite, []string{"asin", "description", "isbn", "published", "series", "series_index", "title"}, true},
 	} {
@@ -281,6 +282,24 @@ func TestClassify(t *testing.T) {
 	}
 	if _, score, runnerUp := Classify(cands(95, 85), ids, 0); score != 95 || runnerUp != 85 {
 		t.Fatalf("scores = %d %d", score, runnerUp)
+	}
+	// Below ReviewFloor metaserve's best candidate is no match, its scores kept.
+	scored := func(scores ...int) []meta.MatchCandidate {
+		out := cands(scores...)
+		for i := range out {
+			out[i].Reasons = &meta.MatchReasons{}
+		}
+		return out
+	}
+	if got, score, runnerUp := Classify(scored(59, 40), ids, 0); got != catalog.OutcomeNone || score != 59 || runnerUp != 40 {
+		t.Fatalf("a weak match: %s %d %d", got, score, runnerUp)
+	}
+	if got, _, _ := Classify(scored(ReviewFloor), ids, 0); got != catalog.OutcomeReview {
+		t.Fatalf("a match at the floor: %s, want review", got)
+	}
+	// An older metaserve's search scores on its own scale: the floor says nothing.
+	if got, _, _ := Classify(cands(59, 40), ids, 0); got != catalog.OutcomeReview {
+		t.Fatalf("a fallback's 59: %s, want review", got)
 	}
 	// A book of unknown length isn't held back by the recording's.
 	if got, _, _ := Classify(cands(90), withRuntime(357), 0); got != catalog.OutcomeAuto {
@@ -497,5 +516,204 @@ func TestPlanSeriesRange(t *testing.T) {
 	if set, _ := planSet(ScopeFill, st, p); set["series_index"] != "2-4" ||
 		set["more_series"] != `[{"name":"Saga","position":1,"position_end":3},{"name":"Huge","position":0}]` {
 		t.Fatalf("fill under Box Sets = %v", set)
+	}
+}
+
+// TestClassifyIdentifierHit: the ASIN or ISBN the query sent finding a work
+// makes it the book whatever the runner-up scores (Dune found by its ASIN beside
+// a 95 for another Dune), still within the length gate and with an identifier
+// to attach; a runner-up found by the identifier too would be a duplicate in the
+// community data, held for review.
+func TestClassifyIdentifierHit(t *testing.T) {
+	t.Parallel()
+	ids := catalog.MatchProposal{Values: map[string]string{"asin": "B0UK000001"}}
+	hit := func(score int, by string) meta.MatchCandidate {
+		return meta.MatchCandidate{Score: score, Reasons: &meta.MatchReasons{Identifier: by}}
+	}
+	plain := func(score int) meta.MatchCandidate {
+		return meta.MatchCandidate{Score: score, Reasons: &meta.MatchReasons{}}
+	}
+	for name, tc := range map[string]struct {
+		cands []meta.MatchCandidate
+		p     catalog.MatchProposal
+		want  string
+	}{
+		"an identifier hit, a close runner-up":  {[]meta.MatchCandidate{hit(100, "asin"), plain(95)}, ids, catalog.OutcomeAuto},
+		"an identifier hit alone":               {[]meta.MatchCandidate{hit(100, "isbn")}, ids, catalog.OutcomeAuto},
+		"two identifier hits":                   {[]meta.MatchCandidate{hit(100, "asin"), hit(100, "asin")}, ids, catalog.OutcomeReview},
+		"an identifier hit of another length":   {[]meta.MatchCandidate{hit(100, "asin"), plain(95)}, catalog.MatchProposal{Values: ids.Values, RuntimeMin: 300}, catalog.OutcomeReview},
+		"an identifier hit with nothing to set": {[]meta.MatchCandidate{hit(100, "asin")}, catalog.MatchProposal{Values: map[string]string{}}, catalog.OutcomeReview},
+		"no identifier, a close runner-up":      {[]meta.MatchCandidate{plain(100), plain(95)}, ids, catalog.OutcomeReview},
+		"a hit behind a best with no reasons":   {[]meta.MatchCandidate{{Score: 100}, hit(100, "asin")}, ids, catalog.OutcomeReview},
+		"a hit, a runner-up with no reasons":    {[]meta.MatchCandidate{hit(100, "asin"), {Score: 95}}, ids, catalog.OutcomeAuto},
+	} {
+		if got, _, _ := Classify(tc.cands, tc.p, 600*60); got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
+	}
+}
+
+// TestTidyTitle: fill replaces a title only when the files add nothing but
+// clutter to the community's; a real extra word, a number no position states, an
+// edited title or a title the community one isn't in stays.
+func TestTidyTitle(t *testing.T) {
+	t.Parallel()
+	prop := func(title, subtitle, series, index string, more ...catalog.SeriesRef) catalog.MatchProposal {
+		v := map[string]string{"title": title, "subtitle": subtitle, "series": series, "series_index": index}
+		if len(more) > 0 {
+			v["more_series"] = catalog.EncodeMoreSeries(more)
+		}
+		return catalog.MatchProposal{Values: v}
+	}
+	for _, tc := range []struct {
+		file string
+		p    catalog.MatchProposal
+		want string
+	}{
+		{"Mystic Knight: Emergence: (The Mystic Knight Book 1)", prop("Emergence", "", "The Mystic Knight", "1"), "Emergence"},
+		{"Primal Hunter 3: Book III: LitRPG/Epic Progression (Unabridged)", prop("Primal Hunter 3", "", "The Primal Hunter", "3"), "Primal Hunter 3"},
+		{"The Way of Kings: Book One of the Stormlight Archive", prop("The Way of Kings", "", "The Stormlight Archive", "1"), "The Way of Kings"},
+		{"Sharpe's Eagle - Sharpe, Book 8", prop("Sharpe's Eagle", "", "Richard Sharpe", "", catalog.SeriesAt("Sharpe", "8")), "Sharpe's Eagle"},
+		{"A Parade of Horribles - Dungeon Crawler Carl, Book 8", prop("A Parade of Horribles", "Dungeon Crawler Carl, Book 8", "", ""), "A Parade of Horribles"},
+		{"the martian", prop("The Martian", "", "", ""), "The Martian"},
+		{"THE MARTIAN", prop("The Martian", "", "", ""), "The Martian"},
+		{"Dune (Unabridged), Vol. 1st", prop("Dune", "", "", "1"), "Dune"},
+		// A position with a decimal point, and a range: each of its numbers is stated.
+		{"Secret History - Mistborn, Book 3.5", prop("Secret History", "", "Mistborn", "3.5"), "Secret History"},
+		{"The Bands of Mourning Vol 1-3", prop("The Bands of Mourning", "", "Mistborn", "1-3"), "The Bands of Mourning"},
+		// The series as the catalogue dresses it: a trailing Series, an ordering note.
+		{"Emergence: Dragon Heart, Book 1", prop("Emergence", "", "Dragon Heart Series", "1"), "Emergence"},
+		{"Memory: Vorkosigan Saga, Book 11", prop("Memory", "", "Vorkosigan Saga (Chronological)", "11"), "Memory"},
+		// Named twice, without its article; a series inside another comes out whole.
+		{"Sharpe: Sharpe's Eagle (Sharpe Book 8)", prop("Sharpe's Eagle", "", "The Sharpe", "8"), "Sharpe's Eagle"},
+		{"Emergence: The Mystic Knight Saga, Book 1", prop("Emergence", "", "Mystic Knight", "1", catalog.SeriesAt("The Mystic Knight Saga", "1")), "Emergence"},
+		{"Dune: Deluxe Edition", prop("Dune", "", "", ""), ""},
+		// A number no position states: another volume, or the book's own title.
+		{"Dune (Unabridged), Vol. 1st", prop("Dune", "", "", ""), ""},
+		{"Primal Hunter 3", prop("Primal Hunter", "", "The Primal Hunter", "1"), ""},
+		{"Divergent, Book 2", prop("Divergent", "", "Divergent", "1"), ""},
+		{"The Stand, Volume 2", prop("The Stand", "", "", ""), ""},
+		{"Fahrenheit 451", prop("Fahrenheit", "", "", ""), ""},
+		{"Blade Runner 2049", prop("Blade Runner", "", "", ""), ""},
+		{"Malcolm X", prop("Malcolm", "", "", ""), ""},
+		{"I, Robot", prop("Robot", "", "", ""), ""},
+		{"Alien³", prop("Alien", "", "", ""), ""},
+		// A real word left over: another book, another edition, a split of the
+		// book, a subtitle the community doesn't have.
+		{"Dune Messiah", prop("Dune", "", "Dune", ""), ""},
+		{"The Martian (Dramatized Adaptation)", prop("The Martian", "", "", ""), ""},
+		{"Dune (Abridged)", prop("Dune", "", "", ""), ""},
+		{"The Way of Kings, Part 1", prop("The Way of Kings", "", "The Stormlight Archive", "1"), ""},
+		{"Emergence: A Tale of Knights", prop("Emergence", "", "The Mystic Knight", ""), ""},
+		{"Dune Mix", prop("Dune", "", "", ""), ""},
+		// The community title isn't in it, or it is the title already, or only its
+		// style differs.
+		{"Harry Potter 1", prop("Harry Potter and the Philosopher's Stone", "", "Harry Potter", "1"), ""},
+		{"Emergence", prop("Emergence", "", "", ""), ""},
+		{"Emergence (Unabridged)", prop("", "", "", ""), ""},
+		{"Blood and Gold", prop("Blood And Gold", "", "", ""), ""},
+		{"Dune™", prop("Dune", "", "", ""), ""},
+		// Marks spell a word: these two are not the same word.
+		{"कोमा", prop("काम", "", "", ""), ""},
+	} {
+		st := state(map[string]string{"title": tc.file}, nil, false)
+		if got := tidyTitle(st, tc.p); got != tc.want {
+			t.Errorf("%q under %v: %q, want %q", tc.file, tc.p.Values, got, tc.want)
+		}
+	}
+	// A book's own series counts as clutter too, set or scanned, its position with
+	// it, in its main series or another.
+	const fool = "Golden Fool - Tawny Man 2"
+	st := state(map[string]string{"title": fool, "series": "Tawny Man", "series_index": "2"}, nil, false)
+	if got := tidyTitle(st, prop("Golden Fool", "", "", "")); got != "Golden Fool" {
+		t.Errorf("the book's own series: %q", got)
+	}
+	st = state(map[string]string{"title": fool, "series": "Elderlings", "series_index": "15"}, nil, false)
+	st.Fields[catalog.FieldSeries] = catalog.FieldValue{Value: "Elderlings", Scanned: "Tawny Man"}
+	st.Fields[catalog.FieldSeriesIndex] = catalog.FieldValue{Value: "15", Scanned: "2"}
+	if got := tidyTitle(st, prop("Golden Fool", "", "", "")); got != "Golden Fool" {
+		t.Errorf("the book's scanned series: %q", got)
+	}
+	st = state(map[string]string{"title": fool, "more_series": catalog.EncodeMoreSeries([]catalog.SeriesRef{catalog.SeriesAt("Tawny Man", "2")})}, nil, false)
+	if got := tidyTitle(st, prop("Golden Fool", "", "", "")); got != "Golden Fool" {
+		t.Errorf("the book's own other series: %q", got)
+	}
+	st = state(map[string]string{"title": fool, "series": "Tawny Man"}, nil, false)
+	if got := tidyTitle(st, prop("Golden Fool", "", "", "")); got != "" {
+		t.Errorf("its series, no position stating the 2: %q", got)
+	}
+}
+
+// TestPlanTidiesOnlyUnderFill: the tidy is fill's; ids writes no title, an
+// admin's edited title is never touched under any scope, and overwrite
+// replaces the title as it always did.
+func TestPlanTidiesOnlyUnderFill(t *testing.T) {
+	t.Parallel()
+	p := catalog.MatchProposal{Values: map[string]string{"title": "Emergence", "series": "The Mystic Knight", "series_index": "1", "asin": "B0EM000001"}}
+	cluttered := map[string]string{"title": "Emergence (The Mystic Knight Book 1)"}
+	if set, _ := planSet(ScopeFill, state(cluttered, nil, false), p); set["title"] != "Emergence" {
+		t.Errorf("fill: %v", set)
+	}
+	if set, _ := planSet(ScopeIDs, state(cluttered, nil, false), p); set["title"] != "" {
+		t.Errorf("ids tidied the title: %v", set)
+	}
+	for _, scope := range Scopes {
+		if set, _ := planSet(scope, state(cluttered, []string{"title"}, false), p); set["title"] != "" {
+			t.Errorf("%s replaced an edited title: %v", scope, set)
+		}
+	}
+	extra := map[string]string{"title": "Emergence: The Knight's Vigil"}
+	if set, _ := planSet(ScopeFill, state(extra, nil, false), p); set["title"] != "" {
+		t.Errorf("fill replaced a title with real extra words: %v", set)
+	}
+	if set, _ := planSet(ScopeOverwrite, state(extra, nil, false), p); set["title"] != "Emergence" {
+		t.Errorf("overwrite: %v", set)
+	}
+}
+
+// TestQueryForLanguage: a query sends the book's own language, else its tags',
+// and never the marketplace's: a book that says none sends none in any region.
+func TestQueryForLanguage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ lang, tag, region, want string }{
+		// A book with no language sends none, whatever the region.
+		{"", "", "de", ""}, {"", "", "uk", ""}, {"", "", "jp", ""}, {" ", "", "jp", ""}, {"", "", "", ""},
+		{"", "", "zz", ""},
+		// The book's own language, in any region.
+		{"fr", "", "uk", "fr"}, {"en-GB", "", "de", "en"},
+		// The tags' language comes after the book's own.
+		{"", "German", "uk", "german"}, {"it", "German", "uk", "it"},
+		// A placeholder says nothing, and falls back to nothing.
+		{"", "N/A", "uk", ""}, {"", "XXX", "de", ""}, {"", "mis", "de", ""}, {"", "und", "uk", ""},
+		{"XXX", "German", "uk", "german"},
+	} {
+		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang, TagLanguage: tc.tag}, tc.region).Language; got != tc.want {
+			t.Errorf("language %q, tag %q on %q: %q, want %q", tc.lang, tc.tag, tc.region, got, tc.want)
+		}
+	}
+	if got := QueryFor(&catalog.Book{Narrator: "Kate Reading & Michael Kramer"}, "").Narrators; !slices.Equal(got, []string{"Kate Reading", "Michael Kramer"}) {
+		t.Errorf("narrators = %q", got)
+	}
+}
+
+// TestQueryForTagHints: a book with no ASIN or ISBN of its own sends its tags'
+// as the book's identifiers (a hint metaserve looks up); one with either of
+// its own sends only its own, never a tag's beside it.
+func TestQueryForTagHints(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name               string
+		book               catalog.Book
+		wantASIN, wantISBN string
+	}{
+		{"hints alone", catalog.Book{TagASIN: "B0TAG00001", TagISBN: "9780000000005"}, "B0TAG00001", "9780000000005"},
+		{"its own ASIN", catalog.Book{ASIN: "B0OWN00001", TagASIN: "B0TAG00001", TagISBN: "9780000000005"}, "B0OWN00001", ""},
+		{"its own ISBN", catalog.Book{ISBN: "9780000000006", TagASIN: "B0TAG00001"}, "", "9780000000006"},
+		{"nothing", catalog.Book{}, "", ""},
+	} {
+		q := QueryFor(&tc.book, "")
+		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {
+			t.Errorf("%s: BookASIN %q BookISBN %q, want %q %q", tc.name, q.BookASIN, q.BookISBN, tc.wantASIN, tc.wantISBN)
+		}
 	}
 }

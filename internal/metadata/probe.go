@@ -200,6 +200,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 	if g := SplitGenres(t["genre"]); g != nil {
 		m.Genres = g // ffprobe reads every container's genre, as for the other tags
 	}
+	m.setHints(t) // ffprobe names a TXXX and an MP4 freeform item by its name
 	if v := t["series-part"]; v != "" {
 		if start, end, ok := ParseSeriesPosition(v); ok {
 			m.SeriesIndex, m.SeriesIndexEnd = start, end // a range: an omnibus, "1-3"

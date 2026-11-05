@@ -243,7 +243,7 @@ func TestBestFullTitleOutranksSequence(t *testing.T) {
 	runBestCases(t, books, cases)
 }
 
-// TestBestSeriesSpellingForms pins the ONE list of series spellings (seriesForms)
+// TestBestSeriesSpellingForms pins the ONE list of series spellings (SeriesForms)
 // that both finds a series name in a title and removes it. Each case failed before
 // the two sides shared it: a form that could link a pair could not strip it, and an
 // unbounded removal cut a series name out of the middle of an unrelated word.

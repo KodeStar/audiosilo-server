@@ -99,8 +99,8 @@ func ProbeFFprobe(ctx context.Context, path, ffprobePath string) (*ProbeView, er
 // the index, so the only ones the in-process probe must name as ffprobe does
 // (it reads others, such as an MP4's brands or creation_time, partly or not
 // at all). A key applyProbe starts reading joins this list.
-var probeTagKeys = []string{"album", "title", "album_artist", "artist", "author", "narrator", "composer",
-	"series", "show", "grouping", "date", "year", "genre", "series-part"}
+var probeTagKeys = slices.Concat([]string{"album", "title", "album_artist", "artist", "author", "narrator", "composer",
+	"series", "show", "grouping", "date", "year", "genre", "series-part"}, hintTags)
 
 // probedTags is tags cut to probeTagKeys; nil when none is set.
 func probedTags(tags map[string]string) map[string]string {

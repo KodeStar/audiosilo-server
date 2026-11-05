@@ -1488,8 +1488,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   metaserve judges each, the better counts), the tagged position (only when no
   DIFFERENT series folder goes up: one position applies to every series guess and
   replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
-  the book's only when nothing was typed), which metaserve looks up itself; candidates carry metaserve's
-  `score` and `reasons`. A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
+  the book's only when nothing was typed; a book with neither sends its tag hints, below), which
+  metaserve looks up itself, plus `language` (the book's, else its tags' (`meta.NormalizeLanguage`),
+  else none. Never the marketplace's: `metadata.region` names the store whose ASIN a match takes, not
+  what language a library is in, and with it `de` on a mostly English library the benchmark's
+  auto-right halved and German works were auto-applied to English books. `NormalizeLanguage` cuts a
+  tag to the first of several and its primary subtag and reads a placeholder (`und`, `xxx`, `N/A`) as
+  none, the names and 639-2 codes are metaserve's to read) and up to 4 `narrator` (the narrator
+  credit's `names.Split`, less a name that is the author, mostly a composer tag: `matchParams`), both
+  set by `matchrun.QueryFor` and ignored
+  by an older metaserve; candidates carry metaserve's `score` and `reasons` (`narrator`, `language`
+  passed through too), best first, an identifier hit first at one score (metaserve breaks a tie on
+  the title). A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
   it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
   `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
@@ -1499,9 +1509,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
   ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
   (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
-  them by region, so without it `au` beat `uk`), `asin_region` names the first's;
-  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
-  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
+  marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
+  is the preferred one), `asin_region` names the first's;
+  `meta.DefaultRecording` (identifier's, else among the recordings one of the book's narrators
+  reads, `readBy`: a name folding alike or every word of one in the other, either way round, that
+  fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
+  preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
   the dialog starts from (the console has no copy of the rule). **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
@@ -1545,7 +1559,38 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
-  both lengths). A
+  both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
+  a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
+  names one work per request today). A match run's best candidate under `matchrun.ReviewFloor` (60)
+  on metaserve's scale is no match, detail `weak_match`, its score kept and its proposal empty (the
+  dialog still lists everything; an older metaserve's `scoreCandidate` stays for review). Fill (the
+  default apply) also tidies a
+  title that is not an admin edit (`matchrun.tidyTitle`): when the file title, less the community
+  title, its subtitle, the series names (community's and the book's, as `match.SeriesForms` spells
+  them), clutter (book/vol, unabridged, litrpg, ...) and the numbers the book's positions or the
+  community title state (`statedNumbers`: digits, ordinals, words, roman numerals), leaves nothing,
+  the community title is written; any other word or number keeps the file's ("part" names a split
+  of the book, "abridged" another edition, "Book 2" of a work at position 1 another volume), and a
+  title of the community's words and nothing more only when it is in one case. The review lists it
+  like any planned change.
+  **Tag identifiers are hints** (`0067`: `books.tag_asin` / `tag_isbn` / `tag_language`, read from
+  `asin` / `audible_asin` / the iTunes freeform ASIN / an ID3 TXXX ASIN, `isbn`, `language` / TLAN in
+  both tag passes, an ASIN or ISBN only in its proper form (`match.ValidASIN`/`ValidISBN`: `N/A` beside
+  a real tag or a repeated tag's joined `A;A` still reads the real one), `hints_checked` backfilled
+  once like `genres_checked`, waiting while ffprobe fails; never on the wire, only `GetBook` and a
+  run's subjects read them): a
+  book's own ASIN/ISBN is never set from its tags. Why: in the LibraForge benchmark 272 of 1,677
+  tagged books (16%) carry an ASIN that is not their confirmed listing (another store, another
+  edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
+  it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
+  off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
+  neither of its own: a hint the community knows whose length fits is an identifier hit (confident,
+  above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
+  Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
+  identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
+  `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
+  `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
+  against a local artifact in mirror mode, counted per outcome (run line in its doc comment). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
@@ -3147,7 +3192,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
-  reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
+  sets no ASIN from tags (they are only hints; an Audiobookshelf metadata.json does set one): a book is checked once matched.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`

@@ -305,7 +305,9 @@ in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `
 `audible_titles.import_pending` (see Audible backups in CONVENTIONS.md). `0065` adds `audible_titles.planned` /
 `contest_library_id` / `contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md). Bridge Phase 4c: `0066` turns every account's `sync` off (the console's from now on) and adds
 `audible_accounts.sync_queued_at` / `last_sync_at` / `refused_at`; `progress.change_seq` from `progress_change_counter` (the feed's order) and `audible_titles.no_sync` (Don't sync this book; see Audible sync in
-CONVENTIONS.md).
+CONVENTIONS.md). `0067` adds `books.tag_asin` / `tag_isbn` / `tag_language` /
+`hints_checked` (a book's tag ASIN/ISBN/language as match hints only, never `books.asin` and never on the wire,
+backfilled once like `released_checked`; see Admin catalog API (Tag identifiers are hints) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

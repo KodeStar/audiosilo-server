@@ -159,7 +159,7 @@ func TestScannersCorpus(t *testing.T) {
 			checkScanners(t, s)
 		}
 		checkRemove(t, title, series)
-		for _, form := range seriesForms(series) {
+		for _, form := range SeriesForms(series) {
 			checkRemove(t, title, form)
 			checkRemove(t, series+" "+pos+": "+title, form)
 		}

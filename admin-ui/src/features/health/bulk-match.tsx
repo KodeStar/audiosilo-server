@@ -799,7 +799,10 @@ function ItemRow({
                 ? 'health.bulkMatch.item.error'
                 : item.detail === 'identifier_unknown'
                   ? 'health.bulkMatch.item.identifierUnknown'
-                  : 'health.bulkMatch.item.none',
+                  : item.detail === 'weak_match'
+                    ? 'health.bulkMatch.item.weakMatch'
+                    : 'health.bulkMatch.item.none',
+              { score: item.score },
             )}
           </span>
         )}
