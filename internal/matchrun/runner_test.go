@@ -3,7 +3,9 @@ package matchrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +24,8 @@ type fakeMatcher struct {
 	byTitle map[string][]meta.MatchCandidate
 	byASIN  map[string][]meta.MatchCandidate
 	byISBN  map[string][]meta.MatchCandidate
+	// answer, when set, answers every match-mode query (one with no ASIN or ISBN).
+	answer  func(q meta.MatchQuery) []meta.MatchCandidate
 	fail    bool          // every query fails
 	block   chan struct{} // when set, each query waits on it (or the context)
 	queries []meta.MatchQuery
@@ -47,6 +51,9 @@ func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta
 	}
 	if q.ISBN != "" {
 		return f.byISBN[q.ISBN], nil
+	}
+	if f.answer != nil {
+		return f.answer(q), nil
 	}
 	return f.byTitle[q.Title], nil
 }
@@ -903,8 +910,9 @@ func TestMatchSendsLanguageAndNarrators(t *testing.T) {
 }
 
 // TestMatchHoldsAPlainBookOffADramatization: a confident title match on a work holding
-// only a dramatization is held for review with no identifier to attach; beside a plain
-// reading the plain reading is the proposal, however close the dramatization's length.
+// only a dramatization of another length is held for review with no identifier to
+// attach; beside a plain reading the plain reading is the proposal, however close the
+// dramatization's length.
 func TestMatchHoldsAPlainBookOffADramatization(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -917,7 +925,9 @@ func TestMatchHoldsAPlainBookOffADramatization(t *testing.T) {
 		c.Recordings[0].ID, c.Recordings[0].Publisher = "ga", "GraphicAudio"
 		return c
 	}
-	e.matcher.byTitle["Only"] = []meta.MatchCandidate{drama()}
+	only := drama()
+	only.Recordings[0].RuntimeMin = 650 // 2.5% off: another production
+	e.matcher.byTitle["Only"] = []meta.MatchCandidate{only}
 	both := drama()
 	plain := both.Recordings[0]
 	plain.ID, plain.Publisher, plain.RuntimeMin = "plain", "Tantor Audio", 2000
@@ -929,12 +939,171 @@ func TestMatchHoldsAPlainBookOffADramatization(t *testing.T) {
 	for _, it := range e.items(t, run, catalog.OutcomeReview) {
 		found[it.Book.Title] = it
 	}
-	only, ok := found["Only"]
-	if !ok || only.Detail != DetailDramatizationOnly || only.Proposal.RecordingID != "" || only.Proposal.Values[catalog.FieldASIN] != "" {
-		t.Errorf("Only = %+v, want held for review with no recording", only)
+	held, ok := found["Only"]
+	if !ok || held.Detail != DetailDramatizationOnly || held.Proposal.RecordingID != "" || held.Proposal.Values[catalog.FieldASIN] != "" {
+		t.Errorf("Only = %+v, want held for review with no recording", held)
 	}
 	both2, ok := found["Both"]
 	if !ok || both2.Proposal.RecordingID != "plain" || both2.Detail == DetailDramatizationOnly {
 		t.Errorf("Both = %+v, want the plain reading proposed", both2)
+	}
+}
+
+// TestMatchTakesTheDramatizationItsLengthNames: a plain book of a work holding only a
+// dramatization takes it when the runtime is the book's (within 1%, or two minutes on
+// a short book), and auto-applies it; the BBC's 1984 collection, 1.9% off the work's
+// dramatization, stays for review with none.
+func TestMatchTakesTheDramatizationItsLengthNames(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for _, b := range []struct {
+		path    string
+		minutes float64
+	}{{"A/Riyria", 496.3}, {"A/Short", 13.7}, {"A/1984", 683}} {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: b.path, IsFolder: true,
+			Title: b.path[2:], Author: "Andy Weir", Duration: b.minutes * 60, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drama := func(runtime int) []meta.MatchCandidate {
+		c := cand("the-martian", 95, "")
+		c.PlainBook = true
+		c.Recordings[0].ID, c.Recordings[0].Publisher, c.Recordings[0].RuntimeMin = "ga", "GraphicAudio", runtime
+		return []meta.MatchCandidate{c}
+	}
+	e.matcher.byTitle["Riyria"] = drama(496)
+	e.matcher.byTitle["Short"] = drama(13) // 0.7 minutes, 5% off
+	e.matcher.byTitle["1984"] = drama(670) // 13 minutes, 1.9% off
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := map[string]ItemView{}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		auto[it.Path] = it
+	}
+	for _, path := range []string{"A/Riyria", "A/Short"} {
+		if it, ok := auto[path]; !ok || it.Proposal.RecordingID != "ga" || it.Proposal.Values[catalog.FieldASIN] == "" {
+			t.Errorf("%s = %+v, want the dramatization applied", path, it)
+		}
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 1 || review[0].Path != "A/1984" || review[0].Detail != DetailDramatizationOnly || review[0].Proposal.RecordingID != "" {
+		t.Fatalf("review = %+v, want 1984 held with no recording", review)
+	}
+}
+
+// TestMatchTakesTheRecordingTheLengthFits: a tag's ASIN naming a recording of another
+// length (the plain reading's on a GraphicAudio rip) gives way to the work's recording
+// the length fits; with none fitting, or the book's narrator reading the hint's, the
+// hint's recording stays and the book is held for its length.
+func TestMatchTakesTheRecordingTheLengthFits(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for title, narrator := range map[string]string{"Fits": "", "Neither": "", "Read": "Michael Kramer"} {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: "A/" + title, IsFolder: true,
+			Title: title, Author: "Andy Weir", Narrator: narrator, Duration: 563 * 60, TagASIN: "B0PLAIN001", AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hinted := func(other int) []meta.MatchCandidate {
+		c := cand("the-martian", 100, "")
+		c.Reasons = &meta.MatchReasons{Identifier: "asin"}
+		c.RecordingID = "plain"
+		c.Recordings = []meta.MatchRecording{
+			{ID: "plain", RuntimeMin: 758, ASINs: []string{"B0PLAIN001"}, Narrators: []meta.MetaPersonRef{{Name: "Michael Kramer"}}},
+			{ID: "ga", RuntimeMin: other, Publisher: "GraphicAudio", ASINs: []string{"B0GA000001"}},
+		}
+		return []meta.MatchCandidate{c}
+	}
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		if q.BookASIN != "B0PLAIN001" {
+			t.Errorf("%s: hint %q not sent", q.Title, q.BookASIN)
+		}
+		return hinted(map[string]int{"Fits": 564, "Neither": 400, "Read": 564}[q.Title])
+	}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Path != "A/Fits" || auto[0].Proposal.RecordingID != "ga" || auto[0].Proposal.Values[catalog.FieldASIN] != "B0GA000001" {
+		t.Fatalf("auto = %+v, want the fitting recording", auto)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 2 {
+		t.Fatalf("review = %+v, want Neither and Read", review)
+	}
+	for _, it := range review {
+		if (it.Path != "A/Neither" && it.Path != "A/Read") || it.Proposal.RecordingID != "plain" || it.Detail != DetailLengthDiffers {
+			t.Errorf("review %s = %+v, want the hint's recording held for its length", it.Path, it)
+		}
+	}
+}
+
+// TestMatchSendsTheLibraryLanguage: a book saying no language is matched in its
+// library's, so an untagged book of a German library keeps its German work over the
+// English edition it ties without one; a book saying its own keeps that, and a library
+// of two languages sends none.
+func TestMatchSendsTheLibraryLanguage(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	mixed, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Mixed", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := func(lib int64, path, title, tag string) {
+		t.Helper()
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib, RelPath: path, IsFolder: true, Title: title,
+			Author: "Andy Weir", Duration: 634 * 60, TagLanguage: tag, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range LanguageMinBooks {
+		add(e.lib, fmt.Sprintf("Tagged/%02d", i), fmt.Sprintf("Tagged %02d", i), "Deutsch")
+		add(mixed.ID, fmt.Sprintf("Tagged/%02d", i), fmt.Sprintf("Mixed %02d", i), map[bool]string{true: "ger", false: "eng"}[i%2 == 0])
+	}
+	add(e.lib, "A/Der Marsianer", "Der Marsianer", "")
+	add(e.lib, "A/The Martian", "The Martian", "en")
+	add(mixed.ID, "A/Untagged", "Untagged", "")
+	edition := func(work, language string, score int) meta.MatchCandidate {
+		c := cand(work, score, "")
+		c.Language = language
+		c.Recordings[0].ASINs = []string{"B0" + strings.ToUpper(language) + "0000001"}
+		return c
+	}
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		if !strings.HasPrefix(q.Title, "Der") && !strings.HasPrefix(q.Title, "The") {
+			return nil
+		}
+		// metaserve scores a work it knows to be in another language lower: told
+		// nothing, the two editions tie.
+		de, en := edition("der-marsianer", "de", 95), edition("the-martian", "en", 95)
+		switch meta.NormalizeLanguage(q.Language) {
+		case "de":
+			en.Score = 70
+			return []meta.MatchCandidate{de, en}
+		case "en":
+			de.Score = 70
+		}
+		return []meta.MatchCandidate{en, de}
+	}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := map[string]ItemView{}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		auto[it.Path] = it
+	}
+	if it := auto["A/Der Marsianer"]; it.Proposal.WorkID != "der-marsianer" {
+		t.Errorf("Der Marsianer = %+v, want its German work", it)
+	}
+	if it := auto["A/The Martian"]; it.Proposal.WorkID != "the-martian" {
+		t.Errorf("The Martian = %+v, want its own language's work", it)
+	}
+	e.matcher.mu.Lock()
+	defer e.matcher.mu.Unlock()
+	sent := map[string]string{}
+	for _, q := range e.matcher.queries {
+		sent[q.Path] = q.Language
+	}
+	if sent["A/Der Marsianer"] != "de" || sent["A/The Martian"] != "en" || sent["A/Untagged"] != "" {
+		t.Errorf("languages sent = %q, want de for the German library's untagged book, the tag's for a tagged one, none in a mixed library", sent)
 	}
 }

@@ -272,6 +272,17 @@ func TestLibraForge(t *testing.T) {
 		ctx = meta.WithPacer(ctx, pacer)
 	}
 
+	// The library, as a scan indexes it, and its language as a run derives it: the
+	// books counted by what each says (catalog.LanguageCounts' rows, one a book).
+	scanned := make([]*catalog.Book, len(books))
+	counts := make([]catalog.LanguageCount, len(books))
+	for i := range books {
+		scanned[i] = scanBook(&books[i])
+		counts[i] = catalog.LanguageCount{Language: scanned[i].Language, TagLanguage: scanned[i].TagLanguage, Books: 1}
+	}
+	language := LibraryLanguage(counts)
+	fmt.Printf("library language: %q\n", language)
+
 	// The run, on its own clock.
 	matched := make([]lfMatched, len(books))
 	start := time.Now()
@@ -279,7 +290,7 @@ func TestLibraForge(t *testing.T) {
 		if i > 0 && i%500 == 0 {
 			t.Logf("%d books, %s", i, time.Since(start).Round(time.Second))
 		}
-		matched[i] = matchOne(ctx, t, svc, &books[i], region)
+		matched[i] = matchOne(ctx, t, svc, scanned[i], region, language)
 	})
 	elapsed := time.Since(start)
 
@@ -294,7 +305,7 @@ func TestLibraForge(t *testing.T) {
 	}
 	stillFailed := 0
 	for _, i := range failed {
-		matched[i] = matchOne(ctx, t, svc, &books[i], region)
+		matched[i] = matchOne(ctx, t, svc, scanned[i], region, language)
 		if matched[i].err != nil {
 			stillFailed++
 		}
@@ -304,9 +315,9 @@ func TestLibraForge(t *testing.T) {
 	results := make([]lfResult, len(books))
 	diagOn := os.Getenv("LF_DIAG") == "1"
 	each(8, len(books), func(i int) {
-		results[i] = judge(local, &books[i], &matched[i], region)
+		results[i] = judge(local, &books[i], &matched[i], region, language)
 		if diagOn {
-			results[i].Diag = diagOf(local, &books[i], &matched[i], &results[i], region)
+			results[i].Diag = diagOf(local, &books[i], &matched[i], &results[i], region, language)
 		}
 	})
 
@@ -329,7 +340,9 @@ func scanBook(b *lfBook) *catalog.Book {
 	if b.F == "" {
 		book.RelPath, book.IsFolder = b.File, false
 	}
-	library.SetNamesForBench(book, metadata.ProbeTagsForBench(b.Tags, seconds))
+	md := metadata.ProbeTagsForBench(b.Tags, seconds)
+	library.SetNamesForBench(book, md)
+	book.Genres = md.Genres // as the scan sets them beside the names
 	return book
 }
 
@@ -350,12 +363,12 @@ type lfMatched struct {
 	err   error
 }
 
-// matchOne is the run's part of one book: matchBook against svc.
-func matchOne(ctx context.Context, t *testing.T, svc *meta.Service, b *lfBook, region string) lfMatched {
-	book := scanBook(b)
+// matchOne is the run's part of one scanned book of a library in language: matchBook
+// against svc.
+func matchOne(ctx context.Context, t *testing.T, svc *meta.Service, book *catalog.Book, region, language string) lfMatched {
 	c := &capture{svc: svc}
 	r := &Runner{matcher: c}
-	item, err := r.matchBook(ctx, StartOptions{Mode: catalog.MatchModeMatch, Region: region}, book)
+	item, err := r.matchBook(ctx, StartOptions{Mode: catalog.MatchModeMatch, Region: region}, book, language)
 	if err != nil {
 		t.Logf("%s: %v", book.RelPath, err)
 	}
@@ -363,7 +376,7 @@ func matchOne(ctx context.Context, t *testing.T, svc *meta.Service, b *lfBook, r
 }
 
 // judge scores a book's match against its right answer, from the local copy.
-func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult {
+func judge(local *meta.Service, b *lfBook, m *lfMatched, region, language string) lfResult {
 	ctx := context.Background()
 	book, item := m.book, m.item
 	res := lfResult{Path: book.RelPath, Title: book.Title, RefTitle: b.Ref.Title}
@@ -406,7 +419,7 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	res.Work = top.WorkID
 	if top.Title == "" {
 		// A weak best has no details: the run reads none of them, but judging it does.
-		q := QueryFor(book, region)
+		q := QueryFor(book, region, language)
 		q.Limit = bulkCandidates
 		if full, err := local.Candidates(ctx, q); err == nil {
 			if i := slices.IndexFunc(full, func(c meta.MatchCandidate) bool { return c.WorkID == top.WorkID }); i >= 0 {
@@ -690,8 +703,8 @@ func diagCandOf(c *meta.MatchCandidate) diagCand {
 }
 
 // diagOf is m's diagnostics, the top 10 asked of the local copy again.
-func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region string) *diag {
-	q := QueryFor(m.book, region)
+func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region, language string) *diag {
+	q := QueryFor(m.book, region, language)
 	d := &diag{
 		BookMin: m.book.Duration / 60, Tags: b.Tags,
 		QTitle: q.Title, QSeries: q.Series, QPos: q.SeriesIndex, QPosEnd: q.SeriesIndexEnd, QAuthor: q.Author,

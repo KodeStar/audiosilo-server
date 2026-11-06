@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -469,6 +471,29 @@ func TestAdminMatchLanguage(t *testing.T) {
 		}
 		if got.Get("language") != tc.want || got.Has("language") != (tc.want != "") {
 			t.Errorf("%s on a de server: works/match sent language %q", tc.name, got["language"])
+		}
+	}
+
+	// A library whose books say German (matchrun.LibraryLanguage) matches a book
+	// saying none in German, as a match run does; a book saying its own keeps it.
+	for i := range matchrun.LanguageMinBooks {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: lib, RelPath: fmt.Sprintf("Verfasser/%02d", i), IsFolder: true,
+			Title: "Buch", Author: "Ein Verfasser", Duration: 600, Format: "m4b", AddedAt: "2024-03-01T00:00:00Z", TagLanguage: "German"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, want := range map[string]string{"Andy Weir/Artemis": "de", "Andy Weir/Tagged": "fr"} {
+		m.mu.Lock()
+		m.gotMatch = nil
+		m.mu.Unlock()
+		if resp, body := e.do(t, "GET", base+"/book/match?path="+escape(path), adminTok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
+		}
+		m.mu.Lock()
+		got := m.gotMatch
+		m.mu.Unlock()
+		if got.Get("language") != want {
+			t.Errorf("%s in a German library: works/match sent language %q, want %q", path, got["language"], want)
 		}
 	}
 }

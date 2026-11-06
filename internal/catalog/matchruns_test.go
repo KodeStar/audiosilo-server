@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -332,5 +333,50 @@ func TestMatchStateEditedValue(t *testing.T) {
 		if got, ok := st.EditedValue(c.field, c.value); got != c.want || ok != c.ok {
 			t.Errorf("EditedValue(%s, %q) = %q, %t; want %q, %t", c.field, c.value, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// TestLanguageCounts: a library's books counted by the language each says (its own,
+// and its tags'), every book of the library asked for, matched or not, none of
+// another; and a match run's books carry their genres.
+func TestLanguageCounts(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	one, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	two, _ := c.CreateLibrary(ctx, Library{Name: "Two", Root: "/tmp/two"})
+	for _, b := range []*Book{
+		{LibraryID: one.ID, RelPath: "A/1", TagLanguage: "German", Genres: []string{"Radio Drama"}},
+		{LibraryID: one.ID, RelPath: "A/2", TagLanguage: "German", ASIN: "B000000001"},
+		{LibraryID: one.ID, RelPath: "A/3"},
+		{LibraryID: two.ID, RelPath: "B/1", TagLanguage: "English"},
+	} {
+		b.Title, b.IsFolder = b.RelPath, true
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET language = 'fr' WHERE rel_path = 'A/3'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.LanguageCounts(ctx, one.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(got, func(a, b LanguageCount) int {
+		return strings.Compare(a.Language+a.TagLanguage, b.Language+b.TagLanguage)
+	})
+	if want := []LanguageCount{{"", "German", 2}, {"fr", "", 1}}; !slices.Equal(got, want) {
+		t.Errorf("counts = %+v, want %+v", got, want)
+	}
+	books, err := c.UnmatchedBooks(ctx, one.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genres := map[string][]string{}
+	for _, b := range books {
+		genres[b.RelPath] = b.Genres
+	}
+	if !slices.Equal(genres["A/1"], []string{"Radio Drama"}) || len(genres["A/3"]) != 0 {
+		t.Errorf("genres = %q, want the book's", genres)
 	}
 }

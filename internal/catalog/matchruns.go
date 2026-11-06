@@ -363,12 +363,36 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, e
 // matchSubjectCols are the facts a match reads of a book.
 const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series,
 	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn, b.language,
-	b.tag_asin, b.tag_isbn, b.tag_language`
+	b.tag_asin, b.tag_isbn, b.tag_language, b.genres`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
-	return rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
+	var genres string
+	if err := rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
 		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN, &b.Language,
-		&b.TagASIN, &b.TagISBN, &b.TagLanguage)
+		&b.TagASIN, &b.TagISBN, &b.TagLanguage, &genres); err != nil {
+		return err
+	}
+	b.Genres = ParseLabels(genres)
+	return nil
+}
+
+// LanguageCount is how many books of a library say one language: their language
+// (Book.Language) and their tags' (Book.TagLanguage), as stored.
+type LanguageCount struct {
+	Language, TagLanguage string
+	Books                 int
+}
+
+// LanguageCounts counts the books of a library by the language each says, every
+// book of it, matched or not: what a match derives the library's language from
+// (matchrun.LibraryLanguage). One grouped read, so a run reads it once per library;
+// the values come raw, read the way a match reads a book's (meta.NormalizeLanguage).
+func (c *Catalog) LanguageCounts(ctx context.Context, libraryID int64) ([]LanguageCount, error) {
+	return queryRows(ctx, c.db, func(rows *sql.Rows, n *LanguageCount) error {
+		return rows.Scan(&n.Language, &n.TagLanguage, &n.Books)
+	}, `SELECT b.language, b.tag_language, COUNT(*) FROM books b
+	     WHERE b.library_id = ? AND `+inBookLibrary+`
+	     GROUP BY b.language, b.tag_language`, libraryID)
 }
 
 // UnmatchedBooks lists the books a match run works through: those with no ASIN

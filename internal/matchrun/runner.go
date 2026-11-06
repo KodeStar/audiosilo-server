@@ -144,6 +144,12 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 	if err != nil {
 		return nil, err
 	}
+	var languages map[int64]string
+	if o.Mode == catalog.MatchModeMatch {
+		if languages, err = r.libraryLanguages(ctx, books); err != nil {
+			return nil, err
+		}
+	}
 	run := catalog.MatchRun{Mode: o.Mode, Region: o.Region, Total: len(books)}
 	if o.LibraryID != 0 {
 		run.LibraryID = &o.LibraryID
@@ -158,9 +164,27 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 	work := r.begin(base, id)
 	r.wg.Go(func() {
 		defer r.end()
-		r.match(work, id, o, books)
+		r.match(work, id, o, books, languages)
 	})
 	return r.cat.GetMatchRun(ctx, id)
+}
+
+// libraryLanguages is the language of each library books are in (LibraryLanguage, ""
+// for none), read once a library for the run.
+func (r *Runner) libraryLanguages(ctx context.Context, books []catalog.Book) (map[int64]string, error) {
+	out := map[int64]string{}
+	for i := range books {
+		id := books[i].LibraryID
+		if _, ok := out[id]; ok {
+			continue
+		}
+		counts, err := r.cat.LanguageCounts(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = LibraryLanguage(counts)
+	}
+	return out, nil
 }
 
 // begin marks run id working (r.mu held) and returns the context it works under.
@@ -217,8 +241,9 @@ func (r *Runner) Clear(ctx context.Context, libraryID int64) (*catalog.ClearedMa
 func (r *Runner) Wait() { r.wg.Wait() }
 
 // match matches each book, a few at a time, recording an item per book, then
-// settles the run.
-func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
+// settles the run. languages holds each library's language (libraryLanguages; a
+// match run's only).
+func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book, languages map[int64]string) {
 	pacer := meta.NewPacer(maxRequestsPerSecond, r.log.With("run", runID))
 	work, halt := context.WithCancel(meta.WithPacer(ctx, pacer))
 	defer halt()
@@ -241,7 +266,7 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 		return false
 	}
 	pool.Each(work, workers, books, enabled, func(b *catalog.Book) {
-		item, err := r.matchBook(work, o, b)
+		item, err := r.matchBook(work, o, b, languages[b.LibraryID])
 		switch {
 		case work.Err() != nil:
 			return
@@ -274,9 +299,12 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 	}
 }
 
-// matchBook matches one book: its item (nil = nothing worth recording), and the
-// community service's failure, if that's what the item records.
-func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book) (*catalog.MatchRunItem, error) {
+// matchBook matches one book of a library in language (LibraryLanguage, "" for none):
+// its item (nil = nothing worth recording), and the community service's failure, if
+// that's what the item records. The recording proposed is DefaultRecording's, or the
+// one the length agrees with when that is another edition (meta.FitRecording: the
+// identifier a match sends is always a tag's hint).
+func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book, language string) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	switch o.Mode {
 	case catalog.MatchModeRepick:
@@ -284,7 +312,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	case catalog.MatchModeRefresh:
 		return r.refreshBook(ctx, o.Region, b, item)
 	}
-	q := QueryFor(b, o.Region)
+	q := QueryFor(b, o.Region, language)
 	q.Limit, q.BestOnly, q.NoDetailsBelow = bulkCandidates, true, ReviewFloor
 	cands, err := r.candidates(ctx, q, item)
 	if err != nil {
@@ -293,6 +321,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	noRecording := false
 	if len(cands) > 0 {
 		rec := meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators)
+		rec = meta.FitRecording(&cands[0], rec, b.Duration, o.Region, q.Narrators)
 		item.Proposal = Propose(&cands[0], rec)
 		noRecording = rec == nil && len(cands[0].Recordings) > 0
 	}
