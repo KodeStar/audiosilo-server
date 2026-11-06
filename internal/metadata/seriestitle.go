@@ -191,10 +191,10 @@ type Leaf struct {
 // XX" and "Book 00" state the series and no position. ok is false for any other
 // name; a title holding a semicolon is still read as the part after the volume.
 func LeafSeries(leaf string) (Leaf, bool) {
-	parts := strings.Split(leaf, ";")
-	if len(parts) < 3 {
+	if strings.Count(leaf, ";") < 2 { // most names: no split
 		return Leaf{}, false
 	}
+	parts := strings.Split(leaf, ";")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
@@ -211,11 +211,12 @@ func LeafSeries(leaf string) (Leaf, bool) {
 	return l, true
 }
 
-// PathLeafSeries is LeafSeries over a book's own leaf (its file's name without
-// the extension, or its folder's), as DeriveFromPath reads it.
-func PathLeafSeries(relPath string, isFolder bool) (Leaf, bool) {
+// PathLeafSeries reports whether a book's own leaf (its file's name without the
+// extension, or its folder's) is one LeafSeries reads, as DeriveFromPath reads it.
+func PathLeafSeries(relPath string, isFolder bool) bool {
 	segs := pathSegments(relPath, isFolder)
-	return LeafSeries(segs[len(segs)-1])
+	_, ok := LeafSeries(segs[len(segs)-1])
+	return ok
 }
 
 // leafVolume is LeafSeries' volume part: "Book" and a marker, the whole marker

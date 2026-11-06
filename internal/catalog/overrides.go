@@ -287,6 +287,9 @@ const scannedStampKey = "@indexed_at"
 const (
 	scannedRevKey = "@rev"
 	scannedRev    = "3"
+	// revTitleNotSeries is the revision that brought TitleNotSeries in: a
+	// snapshot of it needs no MaybeSeriesTitle read (Signature.NamesCheck).
+	revTitleNotSeries = "2"
 )
 
 // scannedJSON encodes what the scan found for b (its fields before anything is

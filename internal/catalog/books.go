@@ -474,8 +474,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 			return nil, err
 		}
 		if rev.String != scannedRev {
-			_, leaf := metadata.PathLeafSeries(rel, sig.IsFolder)
-			sig.NamesCheck = leaf || (rev.String != "2" && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series))
+			sig.NamesCheck = metadata.PathLeafSeries(rel, sig.IsFolder) ||
+				(rev.String != revTitleNotSeries && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series))
 			sig.RevStamp = !sig.NamesCheck && revOlder
 		}
 		switch {
