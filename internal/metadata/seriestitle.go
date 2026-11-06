@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"cmp"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,13 +43,13 @@ func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severa
 	if md == nil || title == "" || title != md.AlbumTag {
 		return title
 	}
-	p := readSeriesPath(relPath, isFolder)
-	series := append([]string{md.Series}, p.series...)
-	if !namesAny(title, series) || sameName(title, p.title) {
+	p := readSeriesPath(relPath, isFolder, md.Series)
+	if !p.namedForSeries(title) {
 		return title
 	}
+	series := p.series
 	valid := func(c string) bool {
-		return strings.TrimSpace(bracketed.ReplaceAllString(c, "")) != "" && !IsGenericTitle(c) &&
+		return canonTag(c) != "" && !IsGenericTitle(c) &&
 			!volumeMarker(c) && !namesAny(c, series) && !seriesFirst(c, series)
 	}
 	tag, path := md.TitleTag, p.title
@@ -80,14 +79,13 @@ func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool 
 	if strings.TrimSpace(title) == "" {
 		return false
 	}
-	p := readSeriesPath(relPath, isFolder)
-	return namesAny(title, append([]string{series}, p.series...)) && !sameName(title, p.title)
+	return readSeriesPath(relPath, isFolder, series).namedForSeries(title)
 }
 
-// seriesPath is what a book's path says of its series and title for
-// TitleNotSeries: the series it states (the folder holding the book, and a
-// LeafSeries leaf's series part) and its title (that leaf's title part, ""
-// without one; else DeriveFromPath's).
+// seriesPath is what a book's tags and path say of its series and title for
+// TitleNotSeries: the series (the series tag, the folder holding the book, and a
+// LeafSeries leaf's series part; any may be "", which names nothing) and its
+// title (that leaf's title part, "" without one; else DeriveFromPath's).
 type seriesPath struct {
 	series []string
 	title  string
@@ -96,27 +94,21 @@ type seriesPath struct {
 	position float64
 }
 
-func readSeriesPath(relPath string, isFolder bool) seriesPath {
+func readSeriesPath(relPath string, isFolder bool, tagSeries string) seriesPath {
 	n := DeriveFromPath(relPath, isFolder)
-	p := seriesPath{title: n.Title, position: n.SeriesIndex}
-	if n.Series != "" {
-		p.series = append(p.series, n.Series)
-	}
-	if s, t, v, ok := LeafSeries(leafName(relPath, isFolder)); ok {
+	p := seriesPath{series: []string{tagSeries, n.Series}, title: n.Title, position: n.SeriesIndex}
+	segs := pathSegments(relPath, isFolder)
+	if s, t, v, ok := LeafSeries(segs[len(segs)-1]); ok {
 		p.series = append(p.series, s)
 		p.title, p.position = t, v
 	}
 	return p
 }
 
-// leafName is a book's own name in its path: the folder's, or the file's
-// without its extension.
-func leafName(relPath string, isFolder bool) string {
-	name := filepath.Base(filepath.ToSlash(strings.Trim(relPath, "/")))
-	if !isFolder {
-		name = strings.TrimSuffix(name, filepath.Ext(name))
-	}
-	return name
+// namedForSeries reports whether title names one of the book's series and its
+// leaf doesn't name the book so too ("Frank Herbert/Dune/Dune").
+func (p seriesPath) namedForSeries(title string) bool {
+	return namesAny(title, p.series) && !sameName(title, p.title)
 }
 
 // LeafSeries reads a book's leaf named "Author; Series; Book NN; Title" (the
@@ -158,23 +150,20 @@ var volumeOnly = regexp.MustCompile(`^(?i:book|vol\.?|volume|#)\s*\d+(?:\.\d+)?$
 // Hill 03", "Indian Hill - Chapter 2 - Bran"), as bookTitle reads one: a file's
 // name in a book of several files.
 func trackTail(album, title string) bool {
-	ca, ct := canonTag(album), canonTag(title)
-	if len(ct) <= len(ca) || !strings.HasPrefix(ct, ca) || startsAlnum(ct[len(ca):]) {
-		return false
-	}
-	tail := strings.Trim(ct[len(ca):], " -:,;|.")
-	return tail != "" && (IsGenericTitle(tail) || trackMarkerLead(tail))
+	tail := albumTail(album, title)
+	return tail != "" && trackTailName(tail)
 }
 
 // seriesFirst reports whether a name is one of the series and the number 1,
 // either way round ("Arena Road 1", "Arena Road, Book 1", "01 Monster Core"):
 // the first book, named for its series.
 func seriesFirst(name string, series []string) bool {
+	before := firstBefore.FindStringSubmatch(name)
 	for _, s := range series {
 		if rest, ok := afterName(name, s); ok && firstAfter.MatchString(rest) {
 			return true
 		}
-		if m := firstBefore.FindStringSubmatch(name); m != nil && sameName(m[1], s) {
+		if before != nil && sameName(before[1], s) {
 			return true
 		}
 	}
@@ -198,10 +187,11 @@ func carriesName(name string, series []string) bool {
 	return false
 }
 
-// namesAny reports whether name is one of names (sameName).
+// namesAny reports whether name is one of names (sameName; a blank one names
+// nothing).
 func namesAny(name string, names []string) bool {
 	for _, n := range names {
-		if sameName(name, n) {
+		if n != "" && sameName(name, n) {
 			return true
 		}
 	}
@@ -212,6 +202,5 @@ func namesAny(name string, names []string) bool {
 // case, accents, punctuation and spacing aside), with bracketed groups such as
 // an edition note ("Warbreaker (Unabridged)") left out.
 func sameName(a, b string) bool {
-	return match.SameSeries(strings.TrimSpace(bracketed.ReplaceAllString(a, " ")),
-		strings.TrimSpace(bracketed.ReplaceAllString(b, " ")))
+	return match.SameSeries(canonTag(a), canonTag(b))
 }

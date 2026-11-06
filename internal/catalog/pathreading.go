@@ -54,9 +54,13 @@ const pathCheckExpr = `CASE
 // snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title
 // and series (the row's own where the snapshot has none, or isn't JSON), for
 // Signature.TitleCheck.
-const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
-	IFNULL(CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$.title') END, title),
-	IFNULL(CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$.series') END, series)`
+const snapshotNamesExpr = `json_extract(` + validSnapshot + `, '$."@rev"'),
+	IFNULL(json_extract(` + validSnapshot + `, '$.title'), title),
+	IFNULL(json_extract(` + validSnapshot + `, '$.series'), series)`
+
+// validSnapshot is a books row's `scanned` when it is JSON, else NULL (which
+// json_extract reads as NULL).
+const validSnapshot = `CASE WHEN json_valid(scanned) THEN scanned END`
 
 // pathReadingBatch is how many books one SetPathReading transaction rewrites, so
 // a large backfill never holds the writer for long.

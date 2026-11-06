@@ -407,14 +407,26 @@ func bookTitle(album, title string) string {
 	if a == "" || t == "" {
 		return firstNonEmpty(a, t)
 	}
-	ca, ct := canonTag(a), canonTag(t)
-	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !startsAlnum(ct[len(ca):]) {
-		if tail := strings.Trim(ct[len(ca):], " -:,;|."); tail != "" && !IsGenericTitle(tail) && !trackMarkerLead(tail) {
-			return t
-		}
+	if tail := albumTail(a, t); tail != "" && !trackTailName(tail) {
+		return t
 	}
 	return a
 }
+
+// albumTail is what a title tag adds to the album when it extends it at a word
+// boundary (both canonTag'd, the joining punctuation trimmed), "" when it
+// doesn't.
+func albumTail(album, title string) string {
+	ca, ct := canonTag(album), canonTag(title)
+	if len(ct) <= len(ca) || !strings.HasPrefix(ct, ca) || startsAlnum(ct[len(ca):]) {
+		return ""
+	}
+	return strings.Trim(ct[len(ca):], " -:,;|.")
+}
+
+// trackTailName reports whether albumTail's tail is a track marker or leads with
+// one: a file's name, not a book's.
+func trackTailName(tail string) bool { return IsGenericTitle(tail) || trackMarkerLead(tail) }
 
 // trackMarkerLead reports whether a tail STARTS with a track ordinal ("03 - Some
 // Chapter", "Chapter 1 - Bran", "CD2 The Escape"): its first one or two tokens
@@ -532,16 +544,8 @@ func firstNonEmpty(vals ...string) string {
 // hierarchy (the former "flat" layout falls out for free).
 func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	m := &Metadata{}
-	segments := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
-	if len(segments) == 0 {
-		return m
-	}
-
-	name := segments[len(segments)-1]
-	if !isFolder {
-		name = strings.TrimSuffix(name, filepath.Ext(name))
-	}
-	ancestors := segments[:len(segments)-1]
+	segments := pathSegments(relPath, isFolder)
+	name, ancestors := segments[len(segments)-1], segments[:len(segments)-1]
 
 	m.SeriesIndex, m.Title = splitSeriesIndex(name)
 	switch n := len(ancestors); {
@@ -551,6 +555,17 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 		m.Series, m.Author = ancestors[n-1], ancestors[n-2]
 	}
 	return m
+}
+
+// pathSegments is a book's path split into its folders and its own name last
+// (a file's without its extension): never empty.
+func pathSegments(relPath string, isFolder bool) []string {
+	segs := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
+	if !isFolder {
+		last := segs[len(segs)-1]
+		segs[len(segs)-1] = strings.TrimSuffix(last, filepath.Ext(last))
+	}
+	return segs
 }
 
 // SplitSeriesIndex parses a leading volume/track number out of a name like
