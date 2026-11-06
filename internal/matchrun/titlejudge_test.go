@@ -48,24 +48,27 @@ func sameTitle(c *meta.MatchCandidate, title string) bool {
 // sameNumbered: the reference title, its bracketed notes dropped, states a
 // number (its last) that is the work's position in one of its series, and the
 // two titles agree once that number is taken out, with a "Book" or "Vol."
-// before it, singular and plural alike; the work's title may stop at its
-// colon, as in sameTitle. So "Rise, My Minions 6! (Rise, My Minions!)" is
+// before it, singular and plural alike; either title may stop at its colon,
+// as in sameTitle. So "Rise, My Minions 6! (Rise, My Minions!)" is
 // "Rise, My Minions! Book 6" at position 6 and "Werepanther 2" is
 // "Werepanther: Paranormal Hunter 2" at position 2, never the same series'
 // book at another position.
 func sameNumbered(c *meta.MatchCandidate, title string) bool {
-	ref := titleWords(withAnd(dropBracketed(title)))
-	n, ok := lastNumber(ref)
-	if !ok || !atPosition(c, n) {
-		return false
-	}
-	stem := numberStem(ref, n)
-	if stem == "" {
-		return false
-	}
-	for _, w := range []string{c.Title, beforeColon(c.Title)} {
-		if numberStem(titleWords(withAnd(w)), n) == stem {
-			return true
+	plain := dropBracketed(title)
+	for _, r := range []string{plain, beforeColon(plain)} {
+		ref := titleWords(withAnd(r))
+		n, ok := lastNumber(ref)
+		if !ok || !atPosition(c, n) {
+			continue
+		}
+		stem := numberStem(ref, n)
+		if stem == "" {
+			continue
+		}
+		for _, w := range []string{c.Title, beforeColon(c.Title)} {
+			if numberStem(titleWords(withAnd(w)), n) == stem {
+				return true
+			}
 		}
 	}
 	return false
@@ -107,19 +110,24 @@ func atPosition(c *meta.MatchCandidate, n int) bool {
 	})
 }
 
-// numberStem is ws without the number n ("06" is 6) and a "book", "vol" or
-// "volume" just before it, a leading article dropped and each word's plural
-// "s" taken off, joined.
+// numberStem is ws without its last number n ("06" is 6) and a "book", "vol"
+// or "volume" just before it, a leading article dropped and each word's plural
+// "s" taken off, joined. An earlier n stays: "World War 2 Diaries 2" is not
+// "World War Diaries 2".
 func numberStem(ws []string, n int) string {
-	out := make([]string, 0, len(ws))
-	for _, w := range ws {
+	at := -1
+	for i, w := range ws {
 		if v, err := strconv.Atoi(w); err == nil && v == n {
-			if k := len(out) - 1; k >= 0 && (out[k] == "book" || out[k] == "vol" || out[k] == "volume") {
-				out = out[:k]
-			}
-			continue
+			at = i
 		}
-		out = append(out, w)
+	}
+	out := slices.Clone(ws)
+	if at >= 0 {
+		from := at
+		if k := at - 1; k >= 0 && (ws[k] == "book" || ws[k] == "vol" || ws[k] == "volume") {
+			from = k
+		}
+		out = slices.Delete(out, from, at+1)
 	}
 	out = dropArticle(out)
 	for i, w := range out {
@@ -145,9 +153,9 @@ func dropArticle(ws []string) []string {
 	return ws
 }
 
-// work is a candidate as the judge reads it: its title, author and series at
-// a position ("" for none).
-func work(title, author, series, position string) *meta.MatchCandidate {
+// candidateOf is a candidate as the judge reads it: its title, author and
+// series at a position ("" for none).
+func candidateOf(title, author, series, position string) *meta.MatchCandidate {
 	c := &meta.MatchCandidate{Title: title, Authors: []meta.MetaPersonRef{{Name: author}}}
 	if series != "" {
 		c.Series = []meta.MatchSeries{{Name: series, Position: position}}
@@ -163,48 +171,52 @@ func TestSameBook(t *testing.T) {
 		want        bool
 	}{
 		// The title alike, as before.
-		{"The Hobbit", "J.R.R. Tolkien", work("Hobbit", "J. R. R. Tolkien", "", ""), true},
-		{"Pride & Prejudice", "Jane Austen", work("Pride and Prejudice", "Jane Austen", "", ""), true},
-		{"Werepanther", lj, work("Werepanther: Paranormal Hunter", lj, "Werepanther", "1"), true},
-		{"The Hobbit", "Someone Else", work("The Hobbit", "J. R. R. Tolkien", "", ""), false},
+		{"The Hobbit", "J.R.R. Tolkien", candidateOf("Hobbit", "J. R. R. Tolkien", "", ""), true},
+		{"Pride & Prejudice", "Jane Austen", candidateOf("Pride and Prejudice", "Jane Austen", "", ""), true},
+		{"Werepanther", lj, candidateOf("Werepanther: Paranormal Hunter", lj, "Werepanther", "1"), true},
+		{"The Hobbit", "Someone Else", candidateOf("The Hobbit", "J. R. R. Tolkien", "", ""), false},
 
 		// The Audiobook Guild shapes: the reference states the position, the
 		// work's title says "Book N", a subtitle, or carries a bracketed note.
-		{"Backyard Dungeon 3", lj, work("Backyard Dungeon: UK Edition 3", lj, "Backyard Dungeon: UK Edition", "3"), true},
-		{"Rise, My Minions! 3", lj, work("Rise, My Minions! Book 3", lj, "Rise, My Minions!", "3"), true},
-		{"Rise, My Minions! 2", lj, work("Rise, My Minions! Book 2", lj, "Rise, My Minions!", "2"), true},
-		{"Rise, My Minions 6! (Rise, My Minions!)", lj, work("Rise, My Minions! Book 6", lj, "Rise, My Minions!", "6"), true},
-		{"Rise, My Minions 7! (Rise, My Minions!)", lj, work("Rise, My Minions! Book 7", lj, "Rise, My Minions!", "7"), true},
-		{"Rise, My Minions 8! (Rise, My Minions!)", lj, work("Rise, My Minions! Book 8", lj, "Rise, My Minions!", "8"), true},
-		{"Arena 7", lj, work("Arena Book 7", lj, "Arena", "7"), true},
-		{"Survive the Monster and Breed 2", lj, work("Survive the Monsters and Breed - Book 2", lj, "Survive the Monsters and Breed", "2"), true},
-		{"Survive the Monster and Breed 3", lj, work("Survive the Monsters and Breed - Book 3", lj, "Survive the Monsters and Breed", "3"), true},
-		{"Survive the Monsters and Breed 4", lj, work("Survive the Monsters and Breed - Book 4", lj, "Survive the Monsters and Breed", "4"), true},
-		{"Werepanther 2", lj, work("Werepanther: Paranormal Hunter 2", lj, "Werepanther", "2"), true},
-		{"Werepanther 3", lj, work("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3"), true},
-		{"Werepanther 4", lj, work("Werepanther: Paranormal Hunter 4", lj, "Werepanther", "4"), true},
-		{"Werepanther 5", lj, work("Werepanther: Paranormal Hunter 5", lj, "Werepanther", "5"), true},
-		{"Werepanther 6", lj, work("Werepanther: Paranormal Hunter 6", lj, "Werepanther", "6"), true},
-		{"Werepanther 7", lj, work("Werepanther: Paranormal Hunter 7", lj, "Werepanther", "7"), true},
-		{"Werepanther 8", lj, work("Werepanther: Paranormal Hunter 8", lj, "Werepanther", "8"), true},
-		{"Werepanther 9", lj, work("Werepanther: Paranormal Hunter 9", lj, "Werepanther", "9"), true},
-		{"Dragon Emperor 22 [Dragon Emperor, 22]", ev, work("Dragon Emperor 22", ev, "Dragon Emperor", "22"), true},
-		{"King of Superheroes 2", ev, work("King of Superheroes - Book 2", ev, "King of Superheroes", "2"), true},
-		{"The Duelist 12 (The Duelist (Completed Series))", ev, work("The Duelist 12", ev, "The Duelist", "12"), true},
-		{"Arena 7", lj, work("Arena Vol. 07", lj, "Arena", "7"), true},
+		{"Backyard Dungeon 3", lj, candidateOf("Backyard Dungeon: UK Edition 3", lj, "Backyard Dungeon: UK Edition", "3"), true},
+		{"Rise, My Minions! 3", lj, candidateOf("Rise, My Minions! Book 3", lj, "Rise, My Minions!", "3"), true},
+		{"Rise, My Minions! 2", lj, candidateOf("Rise, My Minions! Book 2", lj, "Rise, My Minions!", "2"), true},
+		{"Rise, My Minions 6! (Rise, My Minions!)", lj, candidateOf("Rise, My Minions! Book 6", lj, "Rise, My Minions!", "6"), true},
+		{"Rise, My Minions 7! (Rise, My Minions!)", lj, candidateOf("Rise, My Minions! Book 7", lj, "Rise, My Minions!", "7"), true},
+		{"Rise, My Minions 8! (Rise, My Minions!)", lj, candidateOf("Rise, My Minions! Book 8", lj, "Rise, My Minions!", "8"), true},
+		{"Arena 7", lj, candidateOf("Arena Book 7", lj, "Arena", "7"), true},
+		{"Survive the Monster and Breed 2", lj, candidateOf("Survive the Monsters and Breed - Book 2", lj, "Survive the Monsters and Breed", "2"), true},
+		{"Survive the Monster and Breed 3", lj, candidateOf("Survive the Monsters and Breed - Book 3", lj, "Survive the Monsters and Breed", "3"), true},
+		{"Survive the Monsters and Breed 4", lj, candidateOf("Survive the Monsters and Breed - Book 4", lj, "Survive the Monsters and Breed", "4"), true},
+		{"Werepanther 2", lj, candidateOf("Werepanther: Paranormal Hunter 2", lj, "Werepanther", "2"), true},
+		{"Werepanther 3", lj, candidateOf("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3"), true},
+		{"Werepanther 4", lj, candidateOf("Werepanther: Paranormal Hunter 4", lj, "Werepanther", "4"), true},
+		{"Werepanther 5", lj, candidateOf("Werepanther: Paranormal Hunter 5", lj, "Werepanther", "5"), true},
+		{"Werepanther 6", lj, candidateOf("Werepanther: Paranormal Hunter 6", lj, "Werepanther", "6"), true},
+		{"Werepanther 7", lj, candidateOf("Werepanther: Paranormal Hunter 7", lj, "Werepanther", "7"), true},
+		{"Werepanther 8", lj, candidateOf("Werepanther: Paranormal Hunter 8", lj, "Werepanther", "8"), true},
+		{"Werepanther 9", lj, candidateOf("Werepanther: Paranormal Hunter 9", lj, "Werepanther", "9"), true},
+		{"Dragon Emperor 22 [Dragon Emperor, 22]", ev, candidateOf("Dragon Emperor 22", ev, "Dragon Emperor", "22"), true},
+		{"King of Superheroes 2", ev, candidateOf("King of Superheroes - Book 2", ev, "King of Superheroes", "2"), true},
+		{"The Duelist 12 (The Duelist (Completed Series))", ev, candidateOf("The Duelist 12", ev, "The Duelist", "12"), true},
+		{"Arena 7", lj, candidateOf("Arena Vol. 07", lj, "Arena", "7"), true},
 
 		// A sibling at another position stays wrong, however alike the title.
-		{"Werepanther 2", lj, work("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3"), false},
-		{"Rise, My Minions! 3", lj, work("Rise, My Minions! Book 2", lj, "Rise, My Minions!", "2"), false},
+		{"Werepanther 2", lj, candidateOf("Werepanther: Paranormal Hunter 3", lj, "Werepanther", "3"), false},
+		{"Rise, My Minions! 3", lj, candidateOf("Rise, My Minions! Book 2", lj, "Rise, My Minions!", "2"), false},
 		// The position alone, or the stem alone, is not enough.
-		{"Arena 7", lj, work("Dragon Emperor 7", lj, "Dragon Emperor", "7"), false},
-		{"Arena 7", lj, work("Arena Book 7", lj, "", ""), false},
-		{"Arena 7", ev, work("Arena Book 7", lj, "Arena", "7"), false},
+		{"Arena 7", lj, candidateOf("Dragon Emperor 7", lj, "Dragon Emperor", "7"), false},
+		{"Arena 7", lj, candidateOf("Arena Book 7", lj, "", ""), false},
+		{"Arena 7", ev, candidateOf("Arena Book 7", lj, "Arena", "7"), false},
 		// No number stated, or the stem only after the work's colon.
-		{"Dragon Conjurer", ev, work("Dragon Conjurer 8", ev, "Dragon Conjurer", "8"), false},
-		{"King of Dinosaurs 2", "Michael-Scott Earle", work("Tamer: King of Dinosaurs 2", "Michael-Scott Earle", "Tamer", "2"), false},
+		{"Dragon Conjurer", ev, candidateOf("Dragon Conjurer 8", ev, "Dragon Conjurer", "8"), false},
+		{"King of Dinosaurs 2", "Michael-Scott Earle", candidateOf("Tamer: King of Dinosaurs 2", "Michael-Scott Earle", "Tamer", "2"), false},
 		// A number with nothing else is no title.
-		{"3", lj, work("Arena Book 3", lj, "Arena", "3"), false},
+		{"3", lj, candidateOf("Arena Book 3", lj, "Arena", "3"), false},
+		// The reference's colon cuts as the work's does; an earlier same
+		// number is part of the title.
+		{"Werepanther 2: Hunted", lj, candidateOf("Werepanther: Paranormal Hunter 2", lj, "Werepanther", "2"), true},
+		{"World War 2 Diaries 2", lj, candidateOf("World War Diaries 2", lj, "World War Diaries", "2"), false},
 	} {
 		if got := sameBook(tc.c, tc.ref, tc.author); got != tc.want {
 			t.Errorf("sameBook(%q, %q by %q) = %v, want %v", tc.c.Title, tc.ref, tc.author, got, tc.want)

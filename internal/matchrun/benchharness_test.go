@@ -647,10 +647,13 @@ type diag struct {
 	Cands    []diagCand        `json:"cands"`
 	RunCands []diagCand        `json:"run_cands"`
 	// RightRank is the right work's 1-based rank in cands (0 = absent or no
-	// right work known: the reference ASIN's, LibraForge's pick's, else v2.5.1's
-	// pick when the audit found it right), RightScore its score.
+	// right work known: the reference ASIN's, else, for a reference without
+	// one, LibraForge's pick's, else v2.5.1's pick when the audit found it
+	// right), RightScore its score.
 	RightRank  int `json:"right_rank"`
 	RightScore int `json:"right_score"`
+	// Err is why cands could not be asked of the local copy ("" when they were).
+	Err string `json:"err,omitempty"`
 }
 
 // diagCand is one candidate: its work, score, title, language, authors,
@@ -705,13 +708,25 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region 
 		d.RunCands = append(d.RunCands, diagCandOf(&m.cands[i]))
 	}
 	q.Limit = 10
-	full, err := local.Candidates(context.Background(), q)
+	var full []meta.MatchCandidate
+	var err error
+	for range 3 { // a busy machine's timeout, as in lookup
+		if full, err = local.Candidates(context.Background(), q); err == nil {
+			break
+		}
+	}
 	if err != nil {
+		d.Err = err.Error()
 		return d
 	}
-	right := cmp.Or(res.RefWork, res.LFWork)
-	if right == "" && res.HandRight {
-		right = res.HandWork
+	// The right work as verdictOf reads it: the reference ASIN's, else (no
+	// reference ASIN) LibraForge's pick's, else v2.5.1's when found right.
+	right := res.RefWork
+	if right == "" && !res.RefHasASIN {
+		right = res.LFWork
+		if right == "" && res.HandRight {
+			right = res.HandWork
+		}
 	}
 	for i := range full {
 		d.Cands = append(d.Cands, diagCandOf(&full[i]))
