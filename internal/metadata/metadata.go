@@ -542,6 +542,14 @@ func firstNonEmpty(vals ...string) string {
 // Derivation is purely structural now that libraries auto-detect their shape: a
 // book sitting at the library root simply has no ancestors and so carries no
 // hierarchy (the former "flat" layout falls out for free).
+//
+// The one name it reads inside is a leaf named "Author; Series; Book NN[;
+// Title]" (LeafSeries), which states the book's series and position (a range
+// for "Book 01-05", none for "Book XX" or "Book 00") over any folder's:
+//
+//	Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes   (series Indian Hill, #4)
+//
+// Its title stays the whole leaf; TitleNotSeries reads the title part.
 func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	m := &Metadata{}
 	segments := pathSegments(relPath, isFolder)
@@ -553,6 +561,9 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 		m.Author = ancestors[0]
 	case n >= 2:
 		m.Series, m.Author = ancestors[n-1], ancestors[n-2]
+	}
+	if l, ok := LeafSeries(name); ok {
+		m.Series, m.SeriesIndex, m.SeriesIndexEnd = l.Series, l.Position, l.PositionEnd
 	}
 	return m
 }

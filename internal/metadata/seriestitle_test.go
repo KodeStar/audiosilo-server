@@ -130,30 +130,43 @@ func TestTitleNotSeries(t *testing.T) {
 	}
 }
 
+// TestLeafSeries reads the leaf shapes of the LibraForge benchmark's library of
+// them: a position ("Book 01"), a range ("Book 01-05", "Book 10-12"), none
+// ("Book XX", "Book 00"), each with and without the title part.
 func TestLeafSeries(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		leaf, series, title string
-		volume              float64
-		ok                  bool
+		leaf string
+		want Leaf
+		ok   bool
 	}{
-		{"Mark Tufo; Indian Hill; Book 04; From The Ashes", "Indian Hill", "From The Ashes", 4, true},
-		{"Mark Tufo; Indian Hill; Book 01", "Indian Hill", "", 1, true},
-		{"Aaron Oster; The Rules; Book 01-03", "The Rules", "", 1, true},
-		{"B.V. Larson; Star Force; Book XX; Army of One", "Star Force", "Army of One", 0, true},
-		{"A. Writer; Series; Book 2.5; Title; With a Semicolon", "Series", "Title; With a Semicolon", 2.5, true},
-		{"Albert Camus; The Stranger", "", "", 0, false},
-		{"Amir Levine; Attached; The New Science of Adult Attachment", "", "", 0, false},
-		{"Codename; Freedom - Book 001 - Survive Week One", "", "", 0, false},
-		{"New Era Online; Life Reset - Book 001 - New Era Online; Life Reset", "", "", 0, false},
-		{"DESTINY;DIVINE", "", "", 0, false},
-		{"Plain Title", "", "", 0, false},
+		{"Mark Tufo; Indian Hill; Book 04; From The Ashes", Leaf{"Indian Hill", "From The Ashes", 4, 0}, true},
+		{"Alex Raizman; Dinosaur Dungeon; Book 01; Wrath", Leaf{"Dinosaur Dungeon", "Wrath", 1, 0}, true},
+		{"A.R. Wise; Deadlocked; Book 01", Leaf{"Deadlocked", "", 1, 0}, true},
+		{"Bruno Miller; Dark Road; Book 01-05", Leaf{"Dark Road", "", 1, 5}, true},
+		{"Aaron Oster; The Rules; Book 01-03", Leaf{"The Rules", "", 1, 3}, true},
+		{"Craig Robertson; Time Wars Last Forever; Book 03-04", Leaf{"Time Wars Last Forever", "", 3, 4}, true},
+		{"Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4", Leaf{"System Apocalypse", "Omnibus Volume 4", 10, 12}, true},
+		{"Adrian J. Smith; The Extinction; Book 01-03; New Zealand", Leaf{"The Extinction", "New Zealand", 1, 3}, true},
+		{"B.V. Larson; Star Force; Book XX; Army of One", Leaf{"Star Force", "Army of One", 0, 0}, true},
+		{"Isaac Asimov; Robot Dreams; Book XX", Leaf{"Robot Dreams", "", 0, 0}, true},
+		{"Christopher Ruocchio; Sun Eater; Book XX; The Lesser Devil 1.5", Leaf{"Sun Eater", "The Lesser Devil 1.5", 0, 0}, true},
+		{"Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider", Leaf{"Grimnoir Chronicles", "Tokyo Raider", 0, 0}, true},
+		{"A. Writer; Series; Book 00", Leaf{"Series", "", 0, 0}, true},
+		{"A. Writer; Series; Book 2.5; Title; With a Semicolon", Leaf{"Series", "Title; With a Semicolon", 2.5, 0}, true},
+		// Not a range a position may hold: the number it leads with, or none.
+		{"A. Writer; Series; Book 05-03", Leaf{"Series", "", 5, 0}, true},
+		{"A. Writer; Series; Book 00-03", Leaf{"Series", "", 0, 0}, true},
+		{"Albert Camus; The Stranger", Leaf{}, false},
+		{"Amir Levine; Attached; The New Science of Adult Attachment", Leaf{}, false},
+		{"Codename; Freedom - Book 001 - Survive Week One", Leaf{}, false},
+		{"New Era Online; Life Reset - Book 001 - New Era Online; Life Reset", Leaf{}, false},
+		{"DESTINY;DIVINE", Leaf{}, false},
+		{"Plain Title", Leaf{}, false},
 	}
 	for _, c := range cases {
-		s, title, volume, ok := LeafSeries(c.leaf)
-		if s != c.series || title != c.title || volume != c.volume || ok != c.ok {
-			t.Errorf("LeafSeries(%q) = %q, %q, %v, %v; want %q, %q, %v, %v", c.leaf, s, title, volume, ok,
-				c.series, c.title, c.volume, c.ok)
+		if got, ok := LeafSeries(c.leaf); got != c.want || ok != c.ok {
+			t.Errorf("LeafSeries(%q) = %+v, %v; want %+v, %v", c.leaf, got, ok, c.want, c.ok)
 		}
 	}
 }

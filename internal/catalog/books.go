@@ -353,15 +353,19 @@ type Signature struct {
 	// PathCheck: what a book's snapshot needs from the next scan now that the path
 	// baseline reads a lone folder as the author (pathCheckExpr; SetPathReading).
 	PathCheck PathCheck
-	// TitleCheck: a book read before revision 2 of the scan's reading (a title
-	// that is only the album naming the book's series gives way to its own:
-	// metadata.TitleNotSeries) whose title may be such a title
-	// (metadata.MaybeSeriesTitle), so the next scan reads its tags once to know
-	// (SetPathReading), with no re-index.
-	TitleCheck bool
-	// RevStamp: a book whose snapshot is its own and of revision 1 (so PathOK)
-	// that needs no title read (not TitleCheck), which the next scan stamps with
-	// today's revision (StampScannedRev), so it is never tested again.
+	// NamesCheck: a book read before today's revision of the scan's reading
+	// (scannedRev) that the newer revisions may read otherwise, so the next scan
+	// reads its tags once to know (SetPathReading), with no re-index: before
+	// revision 2 (a title that is only the album naming the book's series gives
+	// way to its own: metadata.TitleNotSeries), one whose title may be such a
+	// title (metadata.MaybeSeriesTitle); before revision 3 (a leaf named
+	// "Author; Series; Book NN[; Title]" states the series and position the tags
+	// leave out: metadata.DeriveFromPath), one whose leaf is so named
+	// (metadata.PathLeafSeries).
+	NamesCheck bool
+	// RevStamp: a book whose snapshot is its own and of revision 1 or 2 (so
+	// PathOK) that needs no read (not NamesCheck), which the next scan stamps
+	// with today's revision (StampScannedRev), so it is never tested again.
 	RevStamp bool
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
@@ -461,17 +465,18 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var stored sql.NullInt64
 		var files, rev sql.NullString
 		var title, series string
-		var revOne bool
+		var revOlder bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &revOne); err != nil {
+			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &revOlder); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {
-			sig.TitleCheck = metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series)
-			sig.RevStamp = !sig.TitleCheck && revOne
+			_, leaf := metadata.PathLeafSeries(rel, sig.IsFolder)
+			sig.NamesCheck = leaf || (rev.String != "2" && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series))
+			sig.RevStamp = !sig.NamesCheck && revOlder
 		}
 		switch {
 		case !sig.IsFolder:

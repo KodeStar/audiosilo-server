@@ -73,11 +73,16 @@ func ReadPathLayout(relPath string, isFolder bool) PathLayout {
 // tags takes from a book's path (ReadPathLayout): the leaf's leading volume
 // number ("03 - Abaddon's Gate") split off the title, a series folder's own
 // numbering ("03 - Tawny Man") off the series name, and the position only
-// alongside a series. A field left empty is one the path doesn't say, which
-// the tags then fill.
+// alongside a series. A leaf named "Author; Series; Book NN[; Title]"
+// (LeafSeries) gives its series, position and title part instead. A field left
+// empty is one the path doesn't say, which the tags then fill.
 func FromPathLayout(relPath string, isFolder bool) *Metadata {
 	l := ReadPathLayout(relPath, isFolder)
 	m := &Metadata{Author: strings.TrimSpace(l.Author)}
+	if leaf, ok := LeafSeries(l.Title); ok {
+		m.Title, m.Series, m.SeriesIndex, m.SeriesIndexEnd = leaf.Title, leaf.Series, leaf.Position, leaf.PositionEnd
+		return m
+	}
 	idx, title := splitSeriesIndex(l.Title)
 	m.Title = title
 	if l.Series != "" {

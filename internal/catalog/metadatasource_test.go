@@ -228,3 +228,44 @@ func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
 		})
 	}
 }
+
+// TestLeafSeriesSources: a leaf named "Author; Series; Book NN[; Title]" states
+// the series and position (metadata.DeriveFromPath, metadata.FromPathLayout),
+// so the scan's reading of them reads as the path's; a library that prefers its
+// folders keeps them (its layout reads the leaf too) and takes the title part
+// over the tags' title, and a range is the leaf's in both.
+func TestLeafSeriesSources(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	const (
+		tufo  = "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
+		rules = "Aaron Oster/Aaron Oster; The Rules; Book 01-03"
+	)
+	for _, src := range []string{MetadataFromTags, MetadataFromPath} {
+		lib, _ := c.CreateLibrary(ctx, Library{Name: src, Root: "/tmp/" + src, MetadataSource: src})
+		for _, b := range []*Book{
+			{RelPath: tufo, Title: "From The Ashes (Unabridged)", Author: "Mark Tufo", Series: "Indian Hill", SeriesIndex: 4},
+			{RelPath: rules, Title: "The Rules: The Complete Series", Author: "Aaron Oster", Series: "The Rules",
+				SeriesIndex: 1, SeriesIndexEnd: 3},
+		} {
+			b.LibraryID, b.IsFolder, b.AddedAt = lib.ID, true, "2020-01-01"
+			if _, err := c.UpsertBook(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		title := [2]string{"From The Ashes (Unabridged)", SourceTag}
+		if src == MetadataFromPath {
+			title = [2]string{"From The Ashes", SourcePath}
+		}
+		t.Run(src, func(t *testing.T) {
+			assertFields(t, fieldValues(t, c, ctx, lib.ID, tufo), map[string][2]string{
+				FieldTitle: title, FieldAuthor: {"Mark Tufo", SourcePath},
+				FieldSeries: {"Indian Hill", SourcePath}, FieldSeriesIndex: {"4", SourcePath},
+			})
+			assertFields(t, fieldValues(t, c, ctx, lib.ID, rules), map[string][2]string{
+				FieldTitle:  {"The Rules: The Complete Series", SourceTag},
+				FieldSeries: {"The Rules", SourcePath}, FieldSeriesIndex: {"1-3", SourcePath},
+			})
+		})
+	}
+}

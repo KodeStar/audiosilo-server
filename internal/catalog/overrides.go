@@ -279,10 +279,14 @@ const scannedStampKey = "@indexed_at"
 // without it predates revision 1, when a lone folder above the book was read as
 // its series rather than its author (see pathCheckExpr); one of revision 1
 // predates revision 2, when an album tag naming only the book's series became
-// its title (metadata.TitleNotSeries; Signature.TitleCheck).
+// its title (metadata.TitleNotSeries); one of revision 2 predates revision 3,
+// when a leaf named "Author; Series; Book NN[; Title]" came to state the
+// series and position the tags leave out (metadata.DeriveFromPath). The next
+// scan reads such a book again where a newer revision may read it otherwise
+// (Signature.NamesCheck) and stamps the rest (StampScannedRev).
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "2"
+	scannedRev    = "3"
 )
 
 // scannedJSON encodes what the scan found for b (its fields before anything is

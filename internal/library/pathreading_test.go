@@ -186,11 +186,11 @@ func TestScanTitleNotSeries(t *testing.T) {
 		}
 		revs = append(revs, r)
 	}
-	// Every book is at revision 2: the three read again and the book named for its
-	// series (read, unchanged) by their readings, and the one whose title isn't a
-	// series, never read, stamped (StampScannedRev), so no later scan tests it
-	// again.
-	wantRevs := []string{edited + "=2", vall + "=2", first + "=2", tufo + "=2", carl + "=2"}
+	// Every book is at today's revision: the three read again and the book named
+	// for its series (read, unchanged) by their readings, and the one whose title
+	// isn't a series, never read, stamped (StampScannedRev), so no later scan
+	// tests it again.
+	wantRevs := []string{edited + "=3", vall + "=3", first + "=3", tufo + "=3", carl + "=3"}
 	slices.Sort(wantRevs)
 	if !slices.Equal(revs, wantRevs) {
 		t.Errorf("revisions = %v, want %v", revs, wantRevs)
@@ -200,8 +200,8 @@ func TestScanTitleNotSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for rel, sig := range sigs {
-		if sig.TitleCheck || sig.RevStamp {
-			t.Errorf("%s after the backfill: TitleCheck %v, RevStamp %v, want neither", rel, sig.TitleCheck, sig.RevStamp)
+		if sig.NamesCheck || sig.RevStamp {
+			t.Errorf("%s after the backfill: NamesCheck %v, RevStamp %v, want neither", rel, sig.NamesCheck, sig.RevStamp)
 		}
 	}
 	// Stamping writes the revision alone: the snapshot's stamp still matches the
@@ -221,10 +221,10 @@ func TestScanTitleNotSeries(t *testing.T) {
 
 // A book one folder deep whose snapshot alone would settle its path reading
 // (catalog.PathFromSnapshot) but whose title may be the album naming its series
-// (catalog.Signature.TitleCheck) waits for a read of its tags: unreadable, it
+// (catalog.Signature.NamesCheck) waits for a read of its tags: unreadable, it
 // keeps its revision for the next scan rather than recording today's with the
 // title unread, and the next readable scan puts both right.
-func TestScanTitleCheckWaitsForRead(t *testing.T) {
+func TestScanNamesCheckWaitsForRead(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("root reads unreadable files")
@@ -274,5 +274,117 @@ func TestScanTitleCheckWaitsForRead(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	reading("readable again", "From The Ashes", "2")
+	reading("readable again", "From The Ashes", "3")
+}
+
+// A leaf named "Author; Series; Book NN[; Title]" states the book's series and
+// position (metadata.DeriveFromPath; a range for "Book 01-03", none for "Book
+// XX" or "Book 00") where the tags state no series, and a series tag still
+// wins. A book read before that (scanned revision 2, no series) is put right by
+// the next scan from one read of its tags, with no re-index; a book whose leaf
+// isn't so named is only stamped, and an edit stays on top.
+func TestScanLeafStatesSeries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// ffprobe reads the MP3's series tags (TXXX), which the tag library doesn't.
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	tufo := "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
+	rules := "Aaron Oster/Aaron Oster; The Rules; Book 01-03"
+	apoc := "Tao Wong/Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4"
+	army := "B.V. Larson/B.V. Larson; Star Force; Book XX; Army of One"
+	tokyo := "Larry Correia/Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider"
+	tagged := "A.G. Henley/A.G. Henley; Viridian Gate Online; Book 02"
+	edited := "A.R. Wise/A.R. Wise; Deadlocked; Book 01"
+	carl := "Matt Dinniman/Dungeon Crawler Carl/Book 8 - A Parade of Horribles"
+	silence(t, root, tufo+"/"+filepath.Base(tufo)+".mp3", 1, "album=Indian Hill", "title=From The Ashes", "artist=Mark Tufo")
+	silence(t, root, rules+"/"+filepath.Base(rules)+".mp3", 1, "album=The Rules: The Complete Series", "artist=Aaron Oster")
+	silence(t, root, apoc+"/01.mp3", 1, "album=The System Apocalypse, Books 10-12", "artist=Tao Wong")
+	silence(t, root, army+"/01.mp3", 1, "album=Army of One", "artist=B.V. Larson")
+	silence(t, root, tokyo+"/01.mp3", 1, "album=Tokyo Raider", "artist=Larry Correia")
+	silence(t, root, tagged+"/01.mp3", 1, "album=Cost of Power", "series=The Viridian Gate Archives", "series-part=2")
+	silence(t, root, edited+"/01.mp3", 1, "album=Deadlocked 1", "artist=A.R. Wise")
+	silence(t, root, carl+"/01.mp3", 1, "album=A Parade of Horribles", "artist=Matt Dinniman")
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	type reading struct {
+		series     string
+		start, end float64
+	}
+	want := map[string]reading{
+		tufo: {"Indian Hill", 4, 0}, rules: {"The Rules", 1, 3}, apoc: {"System Apocalypse", 10, 12},
+		army: {"Star Force", 0, 0}, tokyo: {"Grimnoir Chronicles", 0, 0}, tagged: {"The Viridian Gate Archives", 2, 0},
+		edited: {"Deadlocked", 1, 0}, carl: {"Dungeon Crawler Carl", 8, 0},
+	}
+	check := func(when string) {
+		t.Helper()
+		page, err := cat.ListAdminBooks(ctx, catalog.AdminListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Books) != len(want) {
+			t.Fatalf("%s: %d books, want %d", when, len(page.Books), len(want))
+		}
+		for _, b := range page.Books {
+			if got := (reading{b.Series, b.SeriesIndex, b.SeriesIndexEnd}); got != want[b.Path] {
+				t.Errorf("%s: %s = %+v, want %+v", when, b.Path, got, want[b.Path])
+			}
+		}
+	}
+	check("first scan")
+
+	// The snapshots a server before revision 3 wrote: no series or position from
+	// the leaf (a series tag's stays), every one at revision 2.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '2')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{tufo, rules, apoc, army, tokyo, edited} {
+		if _, err := db.ExecContext(ctx, `UPDATE books
+			SET scanned = json_remove(scanned, '$.series', '$.series_index'),
+			    series = '', series_key = '', series_index = 0, series_index_end = 0
+			WHERE rel_path = ?`, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cat.EditBook(ctx, lib.ID, edited, catalog.BookEdit{Set: map[string]string{catalog.FieldSeries: "Deadlocked Saga"}}); err != nil {
+		t.Fatal(err)
+	}
+	want[edited] = reading{"Deadlocked Saga", 1, 0}
+	// A book whose leaf states no series is never read: unreadable, it keeps its
+	// reading.
+	f := filepath.Join(root, filepath.FromSlash(carl+"/01.mp3"))
+	if err := os.Chmod(f, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f, 0o644) })
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v (err %v), want the series backfilled, nothing re-indexed", res.ScanCounts, err)
+	}
+	check("after the backfill")
+	var stale int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '3'`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, sig := range sigs {
+		if sig.NamesCheck || sig.RevStamp {
+			t.Errorf("%s after the backfill: NamesCheck %v, RevStamp %v, want neither", rel, sig.NamesCheck, sig.RevStamp)
+		}
+	}
+	// The edit reverted, the backfilled series is what shows.
+	if err := cat.EditBook(ctx, lib.ID, edited, catalog.BookEdit{Revert: []string{catalog.FieldSeries}}); err != nil {
+		t.Fatal(err)
+	}
+	want[edited] = reading{"Deadlocked", 1, 0}
+	check("after clearing the edit")
 }

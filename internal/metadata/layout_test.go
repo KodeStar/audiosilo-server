@@ -136,10 +136,24 @@ func TestFromPathLayout(t *testing.T) {
 		// A root file says only its title.
 		{path: "Dune.m4b", want: Metadata{Title: "Dune"}},
 		{path: "Track 01.mp3", want: Metadata{}},
+		// A leaf named "Author; Series; Book NN[; Title]" (LeafSeries) states its
+		// series, position (a range, or none) and title part, file or folder.
+		{
+			path: "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", isFolder: true,
+			want: Metadata{Author: "Mark Tufo", Series: "Indian Hill", SeriesIndex: 4, Title: "From The Ashes"},
+		},
+		{
+			path: "Bruno Miller/Bruno Miller; Dark Road; Book 01-05/Bruno Miller; Dark Road; Book 01-05.m4b",
+			want: Metadata{Author: "Bruno Miller", Series: "Dark Road", SeriesIndex: 1, SeriesIndexEnd: 5},
+		},
+		{
+			path: "B.V. Larson/B.V. Larson; Star Force; Book XX; Army of One", isFolder: true,
+			want: Metadata{Author: "B.V. Larson", Series: "Star Force", Title: "Army of One"},
+		},
 	} {
 		got := FromPathLayout(tc.path, tc.isFolder)
 		if got.Title != tc.want.Title || got.Author != tc.want.Author || got.Series != tc.want.Series ||
-			got.SeriesIndex != tc.want.SeriesIndex {
+			got.SeriesIndex != tc.want.SeriesIndex || got.SeriesIndexEnd != tc.want.SeriesIndexEnd {
 			t.Errorf("FromPathLayout(%q) = %+v, want %+v", tc.path, *got, tc.want)
 		}
 	}
