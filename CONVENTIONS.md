@@ -1410,7 +1410,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
   folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
   over a tag's wherever it says anything and replaces the baseline's own reading even with
-  nothing; the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
+  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads even when the title is the whole leaf, as an untagged book's is); the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
   and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
   transaction, no rescan (about 1 s per 5,000 books).
@@ -1447,18 +1447,30 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   title tag can be a chapter's, "End Credits"); else the title tag, except for a book of several files,
   whose lone first-file tag ("Prologue" in "Indian Hill/Book 3") counts only when it carries the
   series' name. It is the stored title, so the
-  player, search and the match's query (`matchrun.QueryFor`) all see the book's own. A snapshot of
-  `@rev` 1 or none whose title may be such a one (`metadata.MaybeSeriesTitle` over the snapshot's
-  title and series, `Signature.TitleCheck`) is read once by the next scan with the PathRead read and
-  rewritten by `SetPathReading` (which now skips only a snapshot already at `scannedRev`), no
-  re-index and no migration (a `PathFromSnapshot` one waits for that read too, so an unreadable file
-  never records revision 2 with its title unread). A current `@rev` 1 snapshot it doesn't flag
-  (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at revision 2 by that scan
-  (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1), so later
-  scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a snapshot of no revision stays
-  until its next re-index or path reading. A stamped book is never tested again, so a later change
-  that makes `TitleNotSeries` change more titles (or `MaybeSeriesTitle` flag more) needs a new
-  `scannedRev`, not a change within revision 2.
+  player, search and the match's query (`matchrun.QueryFor`) all see the book's own.
+  **A leaf that states a series** (`@rev` 3, server#319): a leaf named `Author; Series; Book NN[;
+  Title]` (`metadata.LeafSeries`, which returns a `Leaf`) states the book's series and position in
+  `DeriveFromPath`, over any folder's: "Book 04" is 4, "Book 01-05" / "Book 10-12" a range
+  (`ParseSeriesRange`, the start and `SeriesIndexEnd`), "Book XX" and "Book 00" the series with no
+  position. As the path baseline it fills only a series the tags leave out (a series tag still
+  wins, `readNames`), and it reads as the path's source; a path-first library's
+  `FromPathLayout` reads the leaf too (its series, position and title part). The leaf's title
+  stays the whole name in `DeriveFromPath` (`TitleNotSeries` reads the title part). The LibraForge
+  benchmark's library of these (about 600 books): +39 auto-right, auto-wrong 8 to 7.
+  **Backfill of revisions 2 and 3**: a snapshot older than today's that a newer revision may read
+  otherwise (`Signature.NamesCheck`: before revision 2 a title `metadata.MaybeSeriesTitle` flags,
+  over the snapshot's title and series; before revision 3 a leaf `metadata.PathLeafSeries` reads)
+  is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
+  skips only a snapshot already at `scannedRev`), no re-index and no migration (a
+  `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
+  revision with its names unread). A current `@rev` 1 or 2 snapshot it doesn't flag
+  (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 or 2,
+  `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
+  snapshot of no revision stays until its next re-index or path reading. A stamped book is never
+  tested again, so a later change that makes the reading change more books (`TitleNotSeries` more
+  titles, `MaybeSeriesTitle` or `LeafSeries` more flags) needs a new `scannedRev` and its own
+  `NamesCheck` term, not a change within a revision.
   **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
   value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
   label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,

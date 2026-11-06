@@ -77,12 +77,61 @@ func TestDeriveFromPath(t *testing.T) {
 			rel:  "01 - Unsouled.m4b",
 			want: Metadata{Title: "Unsouled", SeriesIndex: 1},
 		},
+		// A leaf named "Author; Series; Book NN[; Title]" states its series and
+		// position (LeafSeries), the shapes of the LibraForge benchmark; its
+		// title stays the whole leaf (TitleNotSeries reads the title part).
+		{
+			name:     "leaf series and position",
+			rel:      "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes",
+			isFolder: true,
+			want: Metadata{Title: "Mark Tufo; Indian Hill; Book 04; From The Ashes", Author: "Mark Tufo",
+				Series: "Indian Hill", SeriesIndex: 4},
+		},
+		{
+			name: "leaf file without a title part",
+			rel:  "A.R. Wise/A.R. Wise; Deadlocked; Book 01.m4b",
+			want: Metadata{Title: "A.R. Wise; Deadlocked; Book 01", Author: "A.R. Wise", Series: "Deadlocked", SeriesIndex: 1},
+		},
+		{
+			name:     "leaf range",
+			rel:      "Bruno Miller/Bruno Miller; Dark Road; Book 01-05",
+			isFolder: true,
+			want: Metadata{Title: "Bruno Miller; Dark Road; Book 01-05", Author: "Bruno Miller", Series: "Dark Road",
+				SeriesIndex: 1, SeriesIndexEnd: 5},
+		},
+		{
+			name:     "leaf range with a title part",
+			rel:      "Tao Wong/Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4",
+			isFolder: true,
+			want: Metadata{Title: "Tao Wong; System Apocalypse; Book 10-12; Omnibus Volume 4", Author: "Tao Wong",
+				Series: "System Apocalypse", SeriesIndex: 10, SeriesIndexEnd: 12},
+		},
+		{
+			name:     "leaf Book XX states no position",
+			rel:      "B.V. Larson/B.V. Larson; Star Force; Book XX; Army of One",
+			isFolder: true,
+			want:     Metadata{Title: "B.V. Larson; Star Force; Book XX; Army of One", Author: "B.V. Larson", Series: "Star Force"},
+		},
+		{
+			name:     "leaf Book 00 states no position",
+			rel:      "Larry Correia/Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider",
+			isFolder: true,
+			want: Metadata{Title: "Larry Correia; Grimnoir Chronicles; Book 00; Tokyo Raider", Author: "Larry Correia",
+				Series: "Grimnoir Chronicles"},
+		},
+		{
+			name:     "a leaf's series over the folder's",
+			rel:      "Mark Tufo/Zombies/Mark Tufo; Zombie Fallout; Book 02",
+			isFolder: true,
+			want: Metadata{Title: "Mark Tufo; Zombie Fallout; Book 02", Author: "Mark Tufo", Series: "Zombie Fallout",
+				SeriesIndex: 2},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := DeriveFromPath(c.rel, c.isFolder)
-			if got.Title != c.want.Title || got.Author != c.want.Author ||
-				got.Series != c.want.Series || got.SeriesIndex != c.want.SeriesIndex {
+			if got.Title != c.want.Title || got.Author != c.want.Author || got.Series != c.want.Series ||
+				got.SeriesIndex != c.want.SeriesIndex || got.SeriesIndexEnd != c.want.SeriesIndexEnd {
 				t.Errorf("DeriveFromPath = %+v want %+v", *got, c.want)
 			}
 		})

@@ -36,6 +36,30 @@ func TestSearchPrefill(t *testing.T) {
 		{"a book named like its author folder is not swapped", "Dune", "Frank Herbert", "", "Dune/Dune", true,
 			"Dune Frank Herbert"},
 		{"a title in another script is a title", "Пролог", "Автор", "", "Автор/Книга", true, "Пролог Автор"},
+		// A leaf named "Author; Series; Book NN[; Title]" gives its title part, else
+		// its series and position: a range, or none.
+		{"a leaf's title part", "Track 01", "Unknown", "",
+			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", true, "From The Ashes Mark Tufo"},
+		{"a leaf's range", "Track 01", "Bruno Miller", "",
+			"Bruno Miller/Bruno Miller; Dark Road; Book 01-05", true, "Dark Road 1-5 Bruno Miller"},
+		{"a leaf with no position", "Track 01", "Isaac Asimov", "",
+			"Isaac Asimov/Isaac Asimov; Robot Dreams; Book XX", true, "Robot Dreams Isaac Asimov"},
+		// An untagged book in such a leaf: the scan titles it by the whole leaf,
+		// which the path reads as its title part, else its series and position.
+		{"an untagged leaf's range", "Bruno Miller; Dark Road; Book 01-05", "Bruno Miller", "",
+			"Bruno Miller/Bruno Miller; Dark Road; Book 01-05", true, "Dark Road 1-5 Bruno Miller"},
+		{"an untagged leaf's position", "Bruno Miller; Dark Road; Book 03", "Bruno Miller", "",
+			"Bruno Miller/Bruno Miller; Dark Road; Book 03", true, "Dark Road 3 Bruno Miller"},
+		{"an untagged leaf's title part", "Mark Tufo; Indian Hill; Book 04; From The Ashes", "Mark Tufo", "",
+			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", true, "From The Ashes Mark Tufo"},
+		{"an untagged leaf file's title part", "Mark Tufo; Indian Hill; Book 04; From The Ashes", "", "",
+			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes.mp3", false, "From The Ashes Mark Tufo"},
+		{"a tagged title in a leaf stays", "From The Ashes (Unabridged)", "Mark Tufo", "",
+			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", true, "From The Ashes (Unabridged) Mark Tufo"},
+		{"a tagged title shaped like a leaf beside another leaf stays", "Mark Tufo; Indian Hill; Book 04; From The Ashes",
+			"Mark Tufo", "", "Mark Tufo/Downloads 2023", true, "Mark Tufo; Indian Hill; Book 04; From The Ashes Mark Tufo"},
+		{"a leaf-shaped title with a word marker is no leaf", "Oprah; Picks; Book Club", "Oprah", "",
+			"Oprah/Oprah; Picks; Book Club", true, "Oprah; Picks; Book Club Oprah"},
 	} {
 		if got := SearchPrefill(c.title, c.author, c.series, c.path, c.isFolder); got != c.want {
 			t.Errorf("%s: SearchPrefill(%q, %q) = %q, want %q", c.name, c.title, c.author, got, c.want)

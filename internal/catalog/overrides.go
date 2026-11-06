@@ -279,10 +279,18 @@ const scannedStampKey = "@indexed_at"
 // without it predates revision 1, when a lone folder above the book was read as
 // its series rather than its author (see pathCheckExpr); one of revision 1
 // predates revision 2, when an album tag naming only the book's series became
-// its title (metadata.TitleNotSeries; Signature.TitleCheck).
+// its title (metadata.TitleNotSeries); one of revision 2 predates revision 3,
+// when a leaf named "Author; Series; Book NN[; Title]" came to state the
+// series and position the tags leave out (metadata.DeriveFromPath). The next
+// scan reads such a book again where a newer revision may read it otherwise
+// (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
+// adds today's to revOlderOwn's list, so its snapshots are stamped too.
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "2"
+	scannedRev    = "3"
+	// revTitleNotSeries is the revision that brought TitleNotSeries in: a
+	// snapshot of it needs no MaybeSeriesTitle read (Signature.NamesCheck).
+	revTitleNotSeries = "2"
 )
 
 // scannedJSON encodes what the scan found for b (its fields before anything is
@@ -600,10 +608,13 @@ func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 		return l.scanned, baseline, nil
 	}
 	layout = pathFields(metadata.FromPathLayout(l.path, l.isFolder))
-	if raw := metadata.ReadPathLayout(l.path, l.isFolder); raw.Title != "" &&
+	raw := metadata.ReadPathLayout(l.path, l.isFolder)
+	if _, leaf := metadata.LeafSeries(raw.Title); !leaf && raw.Title != "" &&
 		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
 		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
 		// the number is part of the title, not a volume the layout can split off.
+		// A leaf named "Author; Series; Book NN[; Title]" is no such title (an
+		// untagged book's is the whole leaf): the layout reads its parts.
 		layout[FieldTitle], layout[FieldSeriesIndex] = l.scanned[FieldTitle], raw.Position
 	}
 	scanned = maps.Clone(l.scanned)

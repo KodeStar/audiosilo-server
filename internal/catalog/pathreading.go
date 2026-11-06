@@ -52,38 +52,39 @@ const pathCheckExpr = `CASE
 	ELSE 2 END`
 
 // snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title
-// and series, for Signature.TitleCheck: the snapshot's (a field it leaves out is
+// and series, for Signature.NamesCheck: the snapshot's (a field it leaves out is
 // blank, as encodeScanned writes it), else, with no snapshot that is JSON, the
 // row's own (as loadLayers reads it), never the row's effective values over a
 // snapshot.
 //
-// The fourth column is revOneCurrent, so a revision 1 snapshot a scan finds
-// needs no title read can be stamped with today's revision (StampScannedRev).
+// The fourth column is revOlderOwn, so a revision 1 or 2 snapshot a scan finds
+// needs no read can be stamped with today's revision (StampScannedRev).
 const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.title'), '') ELSE title END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.series'), '') ELSE series END,
-	` + revOneCurrent
+	` + revOlderOwn
 
-// revOneCurrent is whether a books row's snapshot is of revision 1 and its own
-// (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp, and
-// StampScannedRev's compare-and-set.
-const revOneCurrent = `CASE WHEN json_valid(scanned)
-	THEN json_extract(scanned, '$."` + scannedRevKey + `"') IS '1'
+// revOlderOwn is whether a books row's snapshot is of revision 1 or 2 (older
+// than today's, scannedRev, but read with a lone folder as the author) and its
+// own (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp,
+// and StampScannedRev's compare-and-set.
+const revOlderOwn = `CASE WHEN json_valid(scanned)
+	THEN IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') IN ('1', '2')
 	 AND json_extract(scanned, '$."` + scannedStampKey + `"') IS indexed_at
 	ELSE 0 END`
 
 // StampScannedRev records today's revision (scannedRev) on the snapshots of the
-// books at these paths, which a scan found need nothing of revision 2
-// (Signature.RevStamp: a title MaybeSeriesTitle doesn't flag), so later scans
-// don't test them again. Their values are unchanged, so nothing is re-resolved
-// or announced; a row re-indexed or re-read since the scan read its signature
-// (no longer a current revision 1 snapshot) is left as it is. It commits every
+// books at these paths, which a scan found need nothing of the newer revisions
+// (Signature.RevStamp: no NamesCheck), so later scans don't test them again.
+// Their values are unchanged, so nothing is re-resolved or announced; a row
+// re-indexed or re-read since the scan read its signature (no longer a current
+// revision 1 or 2 snapshot) is left as it is. It commits every
 // pathReadingBatch books.
 func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []string) error {
 	return c.eachPathBatch(ctx, "StampScannedRev", paths, func(tx *sql.Tx, relPath string) (bool, error) {
 		_, err := tx.ExecContext(ctx,
 			`UPDATE books SET scanned = json_set(scanned, '$."`+scannedRevKey+`"', ?)
-			  WHERE library_id = ? AND rel_path = ? AND `+revOneCurrent,
+			  WHERE library_id = ? AND rel_path = ? AND `+revOlderOwn,
 			scannedRev, libraryID, relPath)
 		return false, err
 	})
@@ -95,7 +96,7 @@ const pathReadingBatch = 250
 
 // SetPathReading rewrites the scanned title, author and series of the books at
 // these paths to today's reading (the scanner's backfill of PathCheck and
-// Signature.TitleCheck), and
+// Signature.NamesCheck), and
 // re-resolves their effective values. A reading is what a fresh read of the
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
 // (PathFromSnapshot). It commits every pathReadingBatch books.

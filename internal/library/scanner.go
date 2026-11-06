@@ -358,7 +358,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
-	// Books found unchanged whose revision 1 snapshot needs no title read
+	// Books found unchanged whose revision 1 or 2 snapshot needs no read
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
@@ -595,18 +595,19 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// part. Unopenable now, it waits for the next scan; and
 				// the names wait while ffprobe fails where it didn't before, as the
 				// series it alone reads (an MP3's TXXX) would be recorded as none.
-				// One whose title needs its tags too (TitleCheck, below) waits for
+				// One whose names need its tags too (NamesCheck, below) waits for
 				// that read: the snapshot alone would record today's revision with
-				// the title unread.
-				if old.PathCheck == catalog.PathFromSnapshot && !old.TitleCheck {
+				// the title or the leaf's series unread.
+				if old.PathCheck == catalog.PathFromSnapshot && !old.NamesCheck {
 					pathBackfill[b.RelPath] = nil
 				}
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language
 				// tags read: the same read, and they wait with the names, as the
 				// hints only ffprobe reads (an M4B's mdta items) would be recorded as none.
-				// A title that may be the album naming the series (before revision 2:
-				// catalog.Signature.TitleCheck) is the same read.
-				readPath := old.PathCheck == catalog.PathRead || old.TitleCheck
+				// A title that may be the album naming the series (before revision 2)
+				// or a leaf that states a series (before revision 3:
+				// catalog.Signature.NamesCheck) is the same read.
+				readPath := old.PathCheck == catalog.PathRead || old.NamesCheck
 				if old.RevStamp {
 					revBackfill = append(revBackfill, b.RelPath)
 				}
@@ -820,10 +821,12 @@ func (l *runLog) finish() []catalog.RunEvent {
 const pathFlushEvery = 500
 
 // readNames is book b's title, author and series: the path's reading
-// (metadata.DeriveFromPath) as the baseline, then md's tags, which are
-// authoritative when present (an unreadable file's md carries none; nil reads
-// the same), except an album tag that only names the book's series, which
-// gives way to the book's own title (metadata.TitleNotSeries).
+// (metadata.DeriveFromPath, the series and position a leaf named "Author;
+// Series; Book NN[; Title]" states included) as the baseline, then md's tags,
+// which are authoritative when present (an unreadable file's md carries none;
+// nil reads the same), except an album tag that only names the book's series,
+// which gives way to the book's own title (metadata.TitleNotSeries). So the
+// leaf's series fills only a series the tags leave out.
 func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {

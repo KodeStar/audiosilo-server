@@ -77,7 +77,7 @@ func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severa
 // MaybeSeriesTitle reports whether a stored title and series could be a book's
 // reading that TitleNotSeries would change (title names its series, or a series
 // its path states, and its leaf doesn't name it so): a scan reads such a book's
-// tags again to know (catalog.Signature.TitleCheck). It never reads the tags, so
+// tags again to know (catalog.Signature.NamesCheck). It never reads the tags, so
 // it says "maybe".
 func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool {
 	if strings.TrimSpace(title) == "" {
@@ -104,8 +104,8 @@ type seriesPath struct {
 	series  []string
 	title   string
 	authors []string
-	// position is the leaf's volume number (DeriveFromPath's, else a LeafSeries
-	// leaf's), 0 for none.
+	// position is the leaf's volume number (DeriveFromPath's: a LeafSeries
+	// leaf's included), 0 for none.
 	position float64
 }
 
@@ -117,9 +117,14 @@ func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor string) 
 	}
 	segs := pathSegments(relPath, isFolder)
 	leaf := segs[len(segs)-1]
-	if s, t, v, ok := LeafSeries(leaf); ok {
-		p.series = append(p.series, s)
-		p.title, p.position = t, v
+	if l, ok := LeafSeries(leaf); ok {
+		// DeriveFromPath took the leaf's series and position over the folder
+		// holding the book, which still names a series the book is in; the
+		// title is the leaf's title part.
+		p.title = l.Title
+		if len(segs) > 2 {
+			p.series = append(p.series, segs[len(segs)-2])
+		}
 	} else if len(segs) > 1 && isPartLabel(leaf) && plainVolume(leaf) == "" {
 		// A disc or part of a book ("J.K. Rowling/Bastion/CD1"): the folder
 		// holding it is the book, not its series, as ReadPathLayout reads it.
@@ -162,32 +167,63 @@ func (p seriesPath) leafNames(title string) bool {
 	return named
 }
 
+// Leaf is what a book's leaf named "Author; Series; Book NN[; Title]" states
+// (LeafSeries).
+type Leaf struct {
+	// Series is the series part ("Indian Hill").
+	Series string
+	// Title is the title part, "" with none.
+	Title string
+	// Position is the volume the marker states ("Book 04" is 4, "Book 01-05"
+	// starts at 1), 0 for none ("Book XX", "Book 00").
+	Position float64
+	// PositionEnd is the end of a range the marker states ("Book 10-12" ends
+	// at 12; ParseSeriesRange), else 0.
+	PositionEnd float64
+}
+
 // LeafSeries reads a book's leaf named "Author; Series; Book NN; Title" (the
-// title part optional, the volume any marker after "Book": "Book 01", "Book
+// title part optional, the volume a marker after "Book": "Book 01", "Book
 // 01-03", "Book XX"), as some library tools name a book's folder and file:
 // "Mark Tufo; Indian Hill; Book 04; From The Ashes" is the series "Indian Hill",
-// the title "From The Ashes" ("" with no title part) and the volume 4 (the
-// number the marker leads with, 0 for none). ok is false for any other name; a
-// title holding a semicolon is still read as the part after the volume.
-func LeafSeries(leaf string) (series, title string, volume float64, ok bool) {
-	parts := strings.Split(leaf, ";")
-	if len(parts) < 3 {
-		return "", "", 0, false
+// the title "From The Ashes" and the position 4; "Aaron Oster; The Rules; Book
+// 01-03" the series "The Rules", no title and the range 1-3 (an omnibus); "Book
+// XX" and "Book 00" state the series and no position. ok is false for any other
+// name; a title holding a semicolon is still read as the part after the volume.
+func LeafSeries(leaf string) (Leaf, bool) {
+	if strings.Count(leaf, ";") < 2 { // most names: no split
+		return Leaf{}, false
 	}
+	parts := strings.Split(leaf, ";")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	m := leafVolume.FindStringSubmatch(parts[2])
 	if parts[0] == "" || parts[1] == "" || m == nil {
-		return "", "", 0, false
+		return Leaf{}, false
 	}
-	volume, _ = strconv.ParseFloat(m[1], 64) // "" (Book XX): 0
-	return parts[1], strings.Join(parts[3:], "; "), volume, true
+	l := Leaf{Series: parts[1], Title: strings.Join(parts[3:], "; ")}
+	if start, end, ok := ParseSeriesRange(m[1]); ok {
+		l.Position, l.PositionEnd = start, end
+	} else {
+		l.Position, _ = strconv.ParseFloat(m[2], 64) // "" (Book XX): 0
+	}
+	return l, true
 }
 
-// leafVolume is LeafSeries' volume part: "Book" and a marker, the number it
-// leads with, if any, in submatch 1.
-var leafVolume = regexp.MustCompile(`^(?i:book)\s+(\d+(?:\.\d+)?)?\S*$`)
+// PathLeafSeries reports whether a book's own leaf (its file's name without the
+// extension, or its folder's) is one LeafSeries reads, as DeriveFromPath reads it.
+func PathLeafSeries(relPath string, isFolder bool) bool {
+	segs := pathSegments(relPath, isFolder)
+	_, ok := LeafSeries(segs[len(segs)-1])
+	return ok
+}
+
+// leafVolume is LeafSeries' volume part: "Book" and a marker, the whole marker
+// in submatch 1 and the number it leads with, if any, in submatch 2. A marker
+// is a number ("04", "01-05", "2.5") or the placeholder "XX" ("??"), never a
+// word, so "Oprah; Picks; Book Club" states no series.
+var leafVolume = regexp.MustCompile(`^(?i:book)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
 
 // volumeMarker reports whether a name is only a volume marker, "Book 10",
 // "Vol. 2", "C02", "#3" (splitSeriesIndex's prefixes and a number): no title.
