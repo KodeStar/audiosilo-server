@@ -687,12 +687,62 @@ func TestQueryForLanguage(t *testing.T) {
 		{"", "N/A", "uk", ""}, {"", "XXX", "de", ""}, {"", "mis", "de", ""}, {"", "und", "uk", ""},
 		{"XXX", "German", "uk", "german"},
 	} {
-		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang, TagLanguage: tc.tag}, tc.region).Language; got != tc.want {
+		if got := QueryFor(&catalog.Book{Title: "X", Language: tc.lang, TagLanguage: tc.tag}, tc.region, "").Language; got != tc.want {
 			t.Errorf("language %q, tag %q on %q: %q, want %q", tc.lang, tc.tag, tc.region, got, tc.want)
 		}
 	}
-	if got := QueryFor(&catalog.Book{Narrator: "Kate Reading & Michael Kramer"}, "").Narrators; !slices.Equal(got, []string{"Kate Reading", "Michael Kramer"}) {
+	if got := QueryFor(&catalog.Book{Narrator: "Kate Reading & Michael Kramer"}, "", "").Narrators; !slices.Equal(got, []string{"Kate Reading", "Michael Kramer"}) {
 		t.Errorf("narrators = %q", got)
+	}
+}
+
+// TestQueryForLibraryLanguage: a book saying no language sends its library's; one
+// saying its own (or its tags') keeps that, in a library of any language.
+func TestQueryForLibraryLanguage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ lang, tag, library, want string }{
+		{"", "", "de", "de"}, {"", "und", "de", "de"}, {"", "", "", ""},
+		{"", "English", "de", "english"}, {"fr", "", "de", "fr"},
+	} {
+		if got := QueryFor(&catalog.Book{Language: tc.lang, TagLanguage: tc.tag}, "us", tc.library).Language; got != tc.want {
+			t.Errorf("language %q, tag %q in a %q library: %q, want %q", tc.lang, tc.tag, tc.library, got, tc.want)
+		}
+	}
+	if got := QueryFor(&catalog.Book{Genres: []string{"Radio Drama"}}, "", "").Genres; !slices.Equal(got, []string{"Radio Drama"}) {
+		t.Errorf("genres = %q", got)
+	}
+}
+
+// TestLibraryLanguage: a library takes the language nearly all of its books that say
+// one agree on, its spellings read as one; too few books saying one, or two languages
+// side by side, take none.
+func TestLibraryLanguage(t *testing.T) {
+	t.Parallel()
+	n := func(lang, tag string, books int) catalog.LanguageCount {
+		return catalog.LanguageCount{Language: lang, TagLanguage: tag, Books: books}
+	}
+	for _, tc := range []struct {
+		name   string
+		counts []catalog.LanguageCount
+		want   string
+	}{
+		// The benchmark's shape: 1,188 "english", 374 "English", 31 "eng", 78 "und",
+		// the rest untagged.
+		{"the benchmark", []catalog.LanguageCount{n("", "english", 1188), n("", "English", 374), n("", "eng", 31), n("", "und", 78), n("", "", 2373)}, "en"},
+		{"a German library", []catalog.LanguageCount{n("", "Deutsch", 30), n("", "ger", 25), n("de", "", 10), n("", "", 400)}, "de"},
+		{"the book's own beats its tags", []catalog.LanguageCount{n("fr", "English", 25), n("", "", 5)}, "fr"},
+		{"an Arabic library, metaserve's spellings", []catalog.LanguageCount{n("", "Arabic", 12), n("", "ara", 10)}, "ar"},
+		{"untagged books say nothing", []catalog.LanguageCount{n("", "en", 20), n("", "", 5000)}, "en"},
+		{"one in ten another language", []catalog.LanguageCount{n("", "en", 90), n("", "de", 10)}, "en"},
+		{"denied: a fifth another language", []catalog.LanguageCount{n("", "en", 80), n("", "de", 20)}, ""},
+		{"denied: too few say one", []catalog.LanguageCount{n("", "en", 19), n("", "", 3)}, ""},
+		{"denied: placeholders say nothing", []catalog.LanguageCount{n("", "und", 100), n("xxx", "", 100)}, ""},
+		{"multilingual says nothing", []catalog.LanguageCount{n("", "English", 85), n("", "Multilingual", 15)}, "en"},
+		{"denied: none", nil, ""},
+	} {
+		if got := LibraryLanguage(tc.counts); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -711,7 +761,7 @@ func TestQueryForTagHints(t *testing.T) {
 		{"its own ISBN", catalog.Book{ISBN: "9780000000006", TagASIN: "B0TAG00001"}, "", "9780000000006"},
 		{"nothing", catalog.Book{}, "", ""},
 	} {
-		q := QueryFor(&tc.book, "")
+		q := QueryFor(&tc.book, "", "")
 		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {
 			t.Errorf("%s: BookASIN %q BookISBN %q, want %q %q", tc.name, q.BookASIN, q.BookISBN, tc.wantASIN, tc.wantISBN)
 		}

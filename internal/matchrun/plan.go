@@ -16,9 +16,13 @@ package matchrun
 
 import (
 	"cmp"
+	"context"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -90,10 +94,11 @@ func ScopesFor(mode string) []string {
 // or ISBN of its own sends its tags' (Book.TagASIN, TagISBN) as hints: metaserve
 // looks them up like the book's own, and an identifier hit whose length fits is
 // confident (Classify), but the book is matched only by what an apply writes.
-// Its language is the book's, else its tags' (meta.NormalizeLanguage), else none:
-// never the region's, as a marketplace doesn't say what language a library is in.
-// Its narrators are its narrator credit's names.
-func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
+// Its language is the book's, else its tags' (meta.NormalizeLanguage), else its
+// library's (libraryLanguage, LibraryLanguage's answer: "" for none): never the
+// region's, as a marketplace doesn't say what language a library is in.
+// Its narrators are its narrator credit's names, its genres the book's.
+func QueryFor(b *catalog.Book, region, libraryLanguage string) meta.MatchQuery {
 	asin, isbn := b.ASIN, b.ISBN
 	if asin == "" && isbn == "" {
 		asin, isbn = b.TagASIN, b.TagISBN
@@ -102,9 +107,100 @@ func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
 		Author: b.Author, Duration: b.Duration,
 		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: asin, BookISBN: isbn, Region: region,
-		Language:  cmp.Or(meta.NormalizeLanguage(b.Language), meta.NormalizeLanguage(b.TagLanguage)),
-		Narrators: names.Split(b.Narrator),
+		Language:  cmp.Or(bookLanguage(b.Language, b.TagLanguage), libraryLanguage),
+		Narrators: names.Split(b.Narrator), Genres: b.Genres,
 	}
+}
+
+// bookLanguage is the language a book says it is in: its own, else its tags'.
+func bookLanguage(language, tagLanguage string) string {
+	return cmp.Or(meta.NormalizeLanguage(language), meta.NormalizeLanguage(tagLanguage))
+}
+
+// What a library's books must say for a match to take their language as an untagged
+// book's (LibraryLanguage). A wrong guess scores the book's own work as another
+// language's, the very edition mix-up the language is sent to prevent, so the library
+// must all but speak one: LanguageMinShare of the books that say a language, and
+// LanguageMinBooks of them at least, as a handful says nothing of a library.
+// The benchmark library is the shape this is for: 1,593 of 4,044 books tagged, every
+// one English. A library of two languages, 80/20, takes none: a fifth of its
+// untagged books would be sent the wrong one.
+const (
+	LanguageMinBooks = 20
+	LanguageMinShare = 0.9
+)
+
+// LibraryLanguage is the language a library's books (counts, catalog.LanguageCounts)
+// all but agree on (LanguageMinShare of those saying one, at least LanguageMinBooks of
+// them), else "": what a book saying none is matched in (QueryFor). A book's own
+// language, else its tags' (bookLanguage), is what it says, its spellings read as one
+// language (languageCode: "English", "eng" and "en" are "en", the code sent).
+func LibraryLanguage(counts []catalog.LanguageCount) string {
+	by, said := map[string]int{}, 0
+	for _, n := range counts {
+		if l := languageCode(bookLanguage(n.Language, n.TagLanguage)); l != "" {
+			by[l] += n.Books
+			said += n.Books
+		}
+	}
+	if said < LanguageMinBooks {
+		return ""
+	}
+	for l, n := range by {
+		if float64(n) >= LanguageMinShare*float64(said) {
+			return l
+		}
+	}
+	return ""
+}
+
+// LibraryLanguageOf reads the language of library libraryID (LibraryLanguage over
+// catalog.LanguageCounts) for book b, "" without a read when b says its own
+// (bookLanguage), as QueryFor sends a library's only for a book saying none. b nil
+// always reads.
+func LibraryLanguageOf(ctx context.Context, cat *catalog.Catalog, libraryID int64, b *catalog.Book) (string, error) {
+	if b != nil && bookLanguage(b.Language, b.TagLanguage) != "" {
+		return "", nil
+	}
+	counts, err := cat.LanguageCounts(ctx, libraryID)
+	if err != nil {
+		return "", err
+	}
+	return LibraryLanguage(counts), nil
+}
+
+// languageWords are the language names and ISO 639-2 codes a tag spells a language
+// with, beyond the English names (model.LanguageWords, model.LibrivoxLanguages), each
+// as its 639-1 code: the table metaserve reads them by (audiosilo-meta pkg/query
+// matchLanguageWords, unexported). Of its "no single language" spellings, und, mul,
+// zxx and mis never get here (meta.NormalizeLanguage reads them as none); "multilingual"
+// does, and maps to "" as there: it says no language.
+var languageWords = func() map[string]string {
+	m := model.LanguageWords()
+	maps.Copy(m, model.LibrivoxLanguages())
+	maps.Copy(m, map[string]string{
+		"eng": "en", "ger": "de", "deu": "de", "fre": "fr", "fra": "fr", "spa": "es", "ita": "it",
+		"jpn": "ja", "por": "pt", "dut": "nl", "nld": "nl", "pol": "pl", "rus": "ru", "chi": "zh",
+		"zho": "zh", "dan": "da", "swe": "sv", "fin": "fi", "nor": "no", "nob": "no", "nno": "no",
+		"nb": "no", "nn": "no", "tur": "tr", "cze": "cs", "ces": "cs", "hun": "hu",
+		"ara": "ar", "hin": "hi", "heb": "he", "gre": "el", "ell": "el", "mar": "mr", "rum": "ro",
+		"ron": "ro", "mal": "ml",
+		"deutsch": "de", "français": "fr", "francais": "fr", "español": "es", "espanol": "es",
+		"castellano": "es", "italiano": "it", "nederlands": "nl", "português": "pt", "polski": "pl",
+		"svenska": "sv", "dansk": "da", "norsk": "no", "suomi": "fi", "multilingual": "",
+		"portugues": "pt", //nolint:misspell // Portuguese without its accent, as a tag spells it
+	})
+	return m
+}()
+
+// languageCode is a language as bookLanguage reads it ("english", "eng", "de"), as its
+// 639-1 code when languageWords knows the spelling ("" for one saying no language),
+// else as it is.
+func languageCode(l string) string {
+	if code, ok := languageWords[l]; ok {
+		return code
+	}
+	return l
 }
 
 var yearRE = regexp.MustCompile(`^\d{4}`)
