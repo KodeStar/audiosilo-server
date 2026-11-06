@@ -521,6 +521,7 @@ func TestNarratorReads(t *testing.T) {
 		return &meta.MatchCandidate{Reasons: &meta.MatchReasons{Narrator: narrator}, Recordings: []meta.MatchRecording{
 			{ID: "wheaton", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
 			{ID: "bray", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "R. C. Bray"}}},
+			{ID: "cast", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "Full Cast"}, {Name: "Various"}, {Name: "Wil Wheaton"}}},
 		}}
 	}
 	proposing := func(id string) catalog.MatchProposal { return catalog.MatchProposal{RecordingID: id, RuntimeMin: 540} }
@@ -540,6 +541,9 @@ func TestNarratorReads(t *testing.T) {
 		"denied: no reasons":                              {&meta.MatchCandidate{Recordings: work("full").Recordings}, proposing("wheaton"), wheaton, false},
 		"denied: no recording proposed":                   {work("full"), catalog.MatchProposal{}, wheaton, false},
 		"denied: a recording the work doesn't hold":       {work("full"), proposing("gone"), wheaton, false},
+		"denied: a full cast's credit":                    {work("full"), proposing("cast"), []string{"Full Cast"}, false},
+		"denied: a credit for nobody in particular":       {work("full"), proposing("cast"), []string{"Various"}, false},
+		"allowed: a reader beside a full cast":            {work("full"), proposing("cast"), []string{"Full Cast", "Wil Wheaton"}, true},
 	} {
 		if got := narratorReads(tc.c, tc.p, tc.narrators); got != tc.want {
 			t.Errorf("%s: %v, want %v", name, got, tc.want)

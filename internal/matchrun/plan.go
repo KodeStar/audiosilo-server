@@ -499,14 +499,21 @@ func lengthFits(p catalog.MatchProposal, seconds float64, narrated bool) bool {
 // narratorReads reports whether the book's narrators read p's recording, one of
 // c's: metaserve found one of them in full on a recording of the work (reasons
 // narrator "full"), and the proposed recording's credit names them
-// (meta.ReadBy), so it is that recording the narrator vouches for, not
+// (readsRecording), so it is that recording the narrator vouches for, not
 // another of the work's.
 func narratorReads(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []string) bool {
-	if c.Reasons == nil || c.Reasons.Narrator != "full" || p.RecordingID == "" {
+	return c.Reasons != nil && c.Reasons.Narrator == "full" && readsRecording(c, p, narrators)
+}
+
+// readsRecording reports whether p's recording, one of c's, credits one of the
+// book's narrators who is a reader (meta.PersonNarrator: a "Full Cast" or
+// "Various" credit agrees with any recording carrying it, so it vouches for none).
+func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []string) bool {
+	if p.RecordingID == "" {
 		return false
 	}
 	i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == p.RecordingID })
-	return i >= 0 && meta.ReadBy(&c.Recordings[i], narrators)
+	return i >= 0 && meta.ReadBy(&c.Recordings[i], slices.DeleteFunc(slices.Clone(narrators), func(n string) bool { return !meta.PersonNarrator(n) }))
 }
 
 // Classify sorts a book's candidates (best first) into an outcome: confident

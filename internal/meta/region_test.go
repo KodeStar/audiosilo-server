@@ -463,3 +463,21 @@ func TestTitleSpeaksFor(t *testing.T) {
 		}
 	}
 }
+
+// TestPersonNarrator: a credit naming a reader counts; a cast, a production or a
+// stand-in for nobody in particular does not.
+func TestPersonNarrator(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"Wil Wheaton", "R. C. Bray", "Ray Porter", "Castle Freeman", "Pam Castille", "Variously Jones"} {
+		if !PersonNarrator(name) {
+			t.Errorf("%q: not a reader, want one", name)
+		}
+	}
+	for _, name := range []string{"Full Cast", "full cast", "Full-Cast", "FullCast", "Full Cast Recording", "the Full Cast Family",
+		"GraphicAudio", "GraphicAudio [Dramatized Adaptation]", "Various", "Various Narrators", "various artists",
+		"Multiple Narrators", "Multiple Readers", "Unknown", "Anonymous", "cast", "Narrator", "N/A", "", "  "} {
+		if PersonNarrator(name) {
+			t.Errorf("%q: a reader, want none", name)
+		}
+	}
+}

@@ -454,6 +454,25 @@ func ReadBy(r *MatchRecording, narrators []string) bool {
 	return false
 }
 
+// PersonNarrator reports whether a narrator credit names a reader: not a cast or a
+// production ("Full Cast", "Full Cast Recording", "GraphicAudio [Dramatized
+// Adaptation]": dramatizationTextRE) and not a stand-in for nobody in particular
+// ("Various", "Multiple Narrators", "Unknown", "Anonymous", a bare "cast" a
+// co-credit splits off). Such a credit agrees with every recording that carries it,
+// so it says nothing about which edition a book is.
+func PersonNarrator(name string) bool {
+	if dramatizationTextRE.MatchString(name) {
+		return false
+	}
+	switch match.Fold(name) {
+	case "", "various", "variousnarrators", "variousreaders", "variousartists", "variousvoices",
+		"multiplenarrators", "multiplereaders", "multiplevoices", "unknown", "unknownnarrator",
+		"anonymous", "anon", "uncredited", "cast", "narrator", "narrators", "none", "na", "va":
+		return false
+	}
+	return true
+}
+
 // NormalizeLanguage reads a language tag as works/match takes it: the first of
 // several ("eng;fre", "en/de") without a note ("English (US)"), a BCP-47 tag's
 // primary subtag ("en-GB" -> "en"), lowercased (metaserve reads the names and

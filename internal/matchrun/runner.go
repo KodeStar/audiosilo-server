@@ -10,6 +10,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -404,9 +405,11 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region, nil))
 	// The record the book's own identifier names, but another edition by length
 	// (an unabridged book holding its dramatization's ASIN): its details are not
-	// written unasked. A lookup by identifier alone sends no narrator, so no
-	// narrator widens the guard.
-	if !lengthFits(item.Proposal, b.Duration, false) {
+	// written unasked. The lookup sends no narrator, so metaserve judges none: the
+	// book's own credit naming the recording's reader widens the guard as in a match
+	// run (readsRecording), so a book a run applied on its narrator's say-so stays
+	// up to date.
+	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
 	// The book keeps its own identifiers (switching marketplace is a repick's):
