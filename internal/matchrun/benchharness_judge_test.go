@@ -2,7 +2,10 @@
 
 package matchrun
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestLFSource(t *testing.T) {
 	for _, tc := range []struct {
@@ -67,16 +70,14 @@ func TestHandVerdict(t *testing.T) {
 		{nil, false, false},
 	} {
 		b := &lfBook{O: map[string][]string{"audiosilo": tc.o}}
-		_, _, right, ok := handVerdict(b)
-		if right != tc.right || ok != tc.ok {
+		_, class, ok := handVerdict(b)
+		if right := slices.Contains(rightBook, class); right != tc.right || ok != tc.ok {
 			t.Errorf("handVerdict(%q) = %v, %v, want %v, %v", tc.o, right, ok, tc.right, tc.ok)
 		}
 	}
 }
 
 func TestVerdictOf(t *testing.T) {
-	yes := func() bool { return true }
-	no := func() bool { return false }
 	for _, tc := range []struct {
 		name            string
 		top             string
@@ -84,17 +85,17 @@ func TestVerdictOf(t *testing.T) {
 		right, unjudged bool
 		by              string
 	}{
-		{"ref ASIN right", "w1", answers{refWork: "w1", refHasASIN: true, titleSame: no}, true, false, byRefASIN},
-		{"ref ASIN wrong, title alike", "w2", answers{refWork: "w1", refHasASIN: true, titleSame: yes}, false, false, byRefASIN},
+		{"ref ASIN right", "w1", answers{refWork: "w1", refHasASIN: true, hasTitle: true}, true, false, byRefASIN},
+		{"ref ASIN wrong, title alike", "w2", answers{refWork: "w1", refHasASIN: true, hasTitle: true, titleSame: true}, false, false, byRefASIN},
 		// A reference ASIN this copy doesn't know: no other pick is read.
-		{"unknown ref ASIN", "w2", answers{refHasASIN: true, lfWork: "w2", handWork: "w2", handRight: true, titleSame: no}, false, false, byTitle},
-		{"lf pick right, title differs", "w1", answers{lfWork: "w1", titleSame: no}, true, false, byLFPick},
+		{"unknown ref ASIN", "w2", answers{refHasASIN: true, lfWork: "w2", handWork: "w2", handRight: true, hasTitle: true}, false, false, byTitle},
+		{"lf pick right, title differs", "w1", answers{lfWork: "w1", hasTitle: true}, true, false, byLFPick},
 		// LibraForge's pick comes before the audit of the same work.
-		{"lf pick wrong, hand right", "w2", answers{lfWork: "w1", handWork: "w2", handRight: true, titleSame: yes}, false, false, byLFPick},
-		{"hand right, title differs", "w2", answers{handWork: "w2", handRight: true, titleSame: no}, true, false, byHand},
-		{"hand wrong, title alike", "w2", answers{handWork: "w2", titleSame: yes}, false, false, byHand},
-		{"hand on another work: title", "w3", answers{handWork: "w2", handRight: true, titleSame: yes}, true, false, byTitle},
-		{"no pick: title", "w2", answers{titleSame: yes}, true, false, byTitle},
+		{"lf pick wrong, hand right", "w2", answers{lfWork: "w1", handWork: "w2", handRight: true, hasTitle: true, titleSame: true}, false, false, byLFPick},
+		{"hand right, title differs", "w2", answers{handWork: "w2", handRight: true, hasTitle: true}, true, false, byHand},
+		{"hand wrong, title alike", "w2", answers{handWork: "w2", hasTitle: true, titleSame: true}, false, false, byHand},
+		{"hand on another work: title", "w3", answers{handWork: "w2", handRight: true, hasTitle: true, titleSame: true}, true, false, byTitle},
+		{"no pick: title", "w2", answers{hasTitle: true, titleSame: true}, true, false, byTitle},
 		{"no pick, no title", "w2", answers{}, false, true, ""},
 	} {
 		right, unjudged, by := verdictOf(tc.top, tc.a)

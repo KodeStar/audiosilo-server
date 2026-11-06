@@ -99,14 +99,14 @@ func lfSource(trace []string) string {
 }
 
 // handVerdict is the hand-audited AudioSilo v2.5.1 verdict on b: the listing
-// it picked and whether that was the right book; ok is false when v2.5.1
+// it picked and its class (right when in rightBook); ok is false when v2.5.1
 // picked nothing (or wasn't run).
-func handVerdict(b *lfBook) (asin, class string, right, ok bool) {
+func handVerdict(b *lfBook) (asin, class string, ok bool) {
 	v := b.O["audiosilo"]
 	if len(v) < 2 || v[1] == "" || v[0] == "none" || v[0] == "not run" {
-		return "", "", false, false
+		return "", "", false
 	}
-	return v[1], v[0], slices.Contains(rightBook, v[0]), true
+	return v[1], v[0], true
 }
 
 // answers are what a book's top work is judged against.
@@ -116,14 +116,15 @@ type answers struct {
 	lfWork     string // the work LibraForge's pick names
 	handWork   string // the work v2.5.1's hand-audited pick names
 	handRight  bool   // and whether the audit found it the right book
-	titleSame  func() bool
+	hasTitle   bool   // the reference has a title (else the title can't judge)
+	titleSame  bool   // the top work has the reference title and author
 }
 
 // verdictOf judges the top work: against the reference ASIN's work; for a
 // reference with no ASIN, else against the work LibraForge's pick names, else
 // by the audited v2.5.1 verdict when v2.5.1 picked the same work; else by the
-// reference title and author (titleSame; nil when the reference has no title,
-// and the book is unjudged).
+// reference title and author (titleSame; when the reference has no title, the
+// book is unjudged).
 func verdictOf(top string, a answers) (right, unjudged bool, by string) {
 	switch {
 	case a.refWork != "":
@@ -132,10 +133,10 @@ func verdictOf(top string, a answers) (right, unjudged bool, by string) {
 		return top == a.lfWork, false, byLFPick
 	case !a.refHasASIN && a.handWork != "" && top == a.handWork:
 		return a.handRight, false, byHand
-	case a.titleSame == nil:
+	case !a.hasTitle:
 		return false, true, ""
 	default:
-		return a.titleSame(), false, byTitle
+		return a.titleSame, false, byTitle
 	}
 }
 
@@ -374,9 +375,13 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 			refRec = rec
 		}
 	}
-	if asin, class, right, ok := handVerdict(b); ok {
-		res.Hand, res.HandRight = class, right
-		res.HandWork, _ = lookup(ctx, local, meta.MatchQuery{ASIN: asin})
+	if asin, class, ok := handVerdict(b); ok {
+		res.Hand, res.HandRight = class, slices.Contains(rightBook, class)
+		if asin == b.Ref.ASIN {
+			res.HandWork = res.RefWork // already looked up
+		} else {
+			res.HandWork, _ = lookup(ctx, local, meta.MatchQuery{ASIN: asin})
+		}
 	}
 	if len(m.cands) == 0 {
 		return res
@@ -393,15 +398,14 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 			}
 		}
 	}
-	var titleSame func() bool
-	if strings.TrimSpace(b.Ref.Title) != "" {
-		titleSame = func() bool { return sameBook(top, b.Ref.Title, b.Ref.Author) }
-	}
+	hasTitle := strings.TrimSpace(b.Ref.Title) != ""
+	titleSame := hasTitle && sameBook(top, b.Ref.Title, b.Ref.Author)
 	res.Right, res.Unjudged, res.JudgedBy = verdictOf(top.WorkID, answers{
 		refWork: res.RefWork, refHasASIN: res.RefHasASIN, lfWork: res.LFWork,
-		handWork: res.HandWork, handRight: res.HandRight, titleSame: titleSame,
+		handWork: res.HandWork, handRight: res.HandRight, hasTitle: hasTitle, titleSame: titleSame,
 	})
-	res.TitleRight, res.TitleUnjudged, _ = verdictOf(top.WorkID, answers{refWork: res.RefWork, refHasASIN: true, titleSame: titleSame})
+	// The older judging: no LibraForge or v2.5.1 pick to read.
+	res.TitleRight, res.TitleUnjudged, _ = verdictOf(top.WorkID, answers{refWork: res.RefWork, hasTitle: hasTitle, titleSame: titleSame})
 	if res.Right {
 		// A weak match proposes nothing: then the recording the run would pick.
 		pick := cmp.Or(item.Proposal.RecordingID, top.DefaultRecordingID)
@@ -602,22 +606,18 @@ func printTable(rs []lfResult, region string) {
 	judgedBy := func(by string) func(*lfResult) bool {
 		return func(r *lfResult) bool { return r.JudgedBy == by }
 	}
+	byRefASINOrNot := func(v verdict) []column {
+		return []column{{"all", all, v}, {"ref ASIN", withASIN, v}, {"no ref ASIN", noASIN, v}}
+	}
 	fmt.Printf("\nLibraForge harness: %d books, region %q\n", len(rs), region)
-	printColumns("Judged by the reference ASIN, else LibraForge's pick, else v2.5.1's audited pick, else title and author:", rs, []column{
-		{"all", all, newJudging}, {"ref ASIN", withASIN, newJudging}, {"no ref ASIN", noASIN, newJudging},
-	})
+	printColumns("Judged by the reference ASIN, else LibraForge's pick, else v2.5.1's audited pick, else title and author:", rs, byRefASINOrNot(newJudging))
 	printColumns("The same, by what each verdict was judged against (unjudged in none):", rs, []column{
 		{"ref ASIN", judgedBy(byRefASIN), newJudging}, {"LF pick", judgedBy(byLFPick), newJudging},
 		{"v2.5.1 hand", judgedBy(byHand), newJudging}, {"title only", judgedBy(byTitle), newJudging},
 	})
-	printColumns("Judged by the reference ASIN, else title and author (the older judging):", rs, []column{
-		{"all", all, titleJudging}, {"ref ASIN", withASIN, titleJudging}, {"no ref ASIN", noASIN, titleJudging},
-	})
+	printColumns("Judged by the reference ASIN, else title and author (the older judging):", rs, byRefASINOrNot(titleJudging))
 	fmt.Println("\nAgreement with the hand-audited v2.5.1 verdict where both judged the same pick (not by it):")
-	for _, c := range []column{
-		{"all", all, newJudging}, {"ref ASIN", withASIN, newJudging}, {"no ref ASIN", noASIN, newJudging},
-		{"no ref ASIN, older judging", noASIN, titleJudging},
-	} {
+	for _, c := range append(byRefASINOrNot(newJudging), column{"no ref ASIN, older judging", noASIN, titleJudging}) {
 		agree, shared := agreement(rs, c.keep, c.v)
 		pct := 0.0
 		if shared > 0 {
