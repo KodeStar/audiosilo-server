@@ -186,12 +186,30 @@ func TestScanTitleNotSeries(t *testing.T) {
 		}
 		revs = append(revs, r)
 	}
-	// The three read again are at revision 2, with the book named for its series
-	// (read, unchanged); the one whose title isn't a series stays at 1.
-	wantRevs := []string{edited + "=2", vall + "=2", first + "=2", tufo + "=2", carl + "=1"}
+	// Every book is at revision 2: the three read again and the book named for its
+	// series (read, unchanged) by their readings, and the one whose title isn't a
+	// series, never read, stamped (StampScannedRev), so no later scan tests it
+	// again.
+	wantRevs := []string{edited + "=2", vall + "=2", first + "=2", tufo + "=2", carl + "=2"}
 	slices.Sort(wantRevs)
 	if !slices.Equal(revs, wantRevs) {
 		t.Errorf("revisions = %v, want %v", revs, wantRevs)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, sig := range sigs {
+		if sig.TitleCheck || sig.RevStamp {
+			t.Errorf("%s after the backfill: TitleCheck %v, RevStamp %v, want neither", rel, sig.TitleCheck, sig.RevStamp)
+		}
+	}
+	// Stamping writes the revision alone: the snapshot's stamp still matches the
+	// row, and the title isn't touched.
+	var stale int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
+		WHERE json_extract(scanned, '$."@indexed_at"') IS NOT indexed_at`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("snapshots no longer the row's own = %d (err %v), want 0", stale, err)
 	}
 	// The edit reverted, the backfilled title is what shows.
 	if err := cat.EditBook(ctx, lib.ID, edited, catalog.BookEdit{Revert: []string{catalog.FieldTitle}}); err != nil {

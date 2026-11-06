@@ -1443,13 +1443,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the two agreeing; else the path's for a book of several files (and a title tag that is the album
   and a track marker never counts), with no title tag that counts, or beside a tag carrying the
   series' name; else a book at position 1 keeps the album (a series named for its first book, whose
-  title tag can be a chapter's, "End Credits"); else the title tag. It is the stored title, so the
+  title tag can be a chapter's, "End Credits"); else the title tag, except for a book of several files,
+  whose lone first-file tag ("Prologue" in "Indian Hill/Book 3") counts only when it carries the
+  series' name. It is the stored title, so the
   player, search and the match's query (`matchrun.QueryFor`) all see the book's own. A snapshot of
   `@rev` 1 or none whose title may be such a one (`metadata.MaybeSeriesTitle` over the snapshot's
   title and series, `Signature.TitleCheck`) is read once by the next scan with the PathRead read and
   rewritten by `SetPathReading` (which now skips only a snapshot already at `scannedRev`), no
   re-index and no migration (a `PathFromSnapshot` one waits for that read too, so an unreadable file
-  never records revision 2 with its title unread); the rest stay at their revision.
+  never records revision 2 with its title unread). A current `@rev` 1 snapshot it doesn't flag
+  (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at revision 2 by that scan
+  (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1), so later
+  scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a snapshot of no revision stays
+  until its next re-index or path reading.
   **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
   value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
   label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,

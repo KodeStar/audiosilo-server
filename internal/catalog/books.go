@@ -359,6 +359,10 @@ type Signature struct {
 	// (metadata.MaybeSeriesTitle), so the next scan reads its tags once to know
 	// (SetPathReading), with no re-index.
 	TitleCheck bool
+	// RevStamp: a book whose snapshot is its own and of revision 1 that needs no
+	// title read (not TitleCheck), which the next scan stamps with today's
+	// revision (StampScannedRev), so it is never tested again.
+	RevStamp bool
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
 	ScanError, ScanErrorFile string
@@ -457,14 +461,18 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var stored sql.NullInt64
 		var files, rev sql.NullString
 		var title, series string
+		var current bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series); err != nil {
+			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &current); err != nil {
 			return nil, err
 		}
-		sig.TitleCheck = rev.String != scannedRev && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series)
+		if rev.String != scannedRev {
+			sig.TitleCheck = metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series)
+			sig.RevStamp = !sig.TitleCheck && current && rev.String == "1"
+		}
 		switch {
 		case !sig.IsFolder:
 		case stored.Valid:

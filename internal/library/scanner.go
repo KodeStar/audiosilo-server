@@ -358,6 +358,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
+	// Books found unchanged whose revision 1 snapshot needs no title read
+	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
+	// later scans don't test them again.
+	var revBackfill []string
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
@@ -392,6 +396,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record ebooks failed", "library", lib.Name, "err", err)
 		}
 		clear(ebookBackfill)
+		if err := s.cat.StampScannedRev(context.WithoutCancel(ctx), lib.ID, revBackfill); err != nil {
+			s.log.Warn("record scanned revisions failed", "library", lib.Name, "err", err)
+		}
+		revBackfill = revBackfill[:0]
 	}
 	// The books to read are read a few files at a time (readFiles), each book on
 	// its own goroutine, up to a window of books ahead of the one written next; the
@@ -599,6 +607,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// A title that may be the album naming the series (before revision 2:
 				// catalog.Signature.TitleCheck) is the same read.
 				readPath := old.PathCheck == catalog.PathRead || old.TitleCheck
+				if old.RevStamp && old.PathCheck == catalog.PathOK {
+					revBackfill = append(revBackfill, b.RelPath)
+				}
 				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
 					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
 						if old.ReleasedUnchecked {
@@ -645,7 +656,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						ebookBackfill[b.RelPath] = r
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+
+				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+len(revBackfill)+
 					len(orderBackfill)+len(ebookBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}

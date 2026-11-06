@@ -35,7 +35,9 @@ import (
 // Spellmonger - Book 002 - Warmage" beside "Book 2 - Warmage"). Failing that, a
 // book at position 1 (the tags' position, else the leaf's volume number) keeps
 // the album: a series is often named for its first book, whose title tag may
-// then be a chapter's ("End Credits"); any other book takes the title tag. With
+// then be a chapter's ("End Credits"); any other book takes the title tag,
+// except a book of several files, whose lone first-file tag ("Prologue", in
+// "Indian Hill/Book 3") counts only when it carries the series' name. With
 // neither, title stays. A book whose own leaf names it as the album does
 // ("Frank Herbert/Dune/Dune": a series named for its first book), alone or
 // beside only its author, a year, a volume marker or the series and the number
@@ -66,7 +68,7 @@ func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severa
 		return path
 	case cmp.Or(md.SeriesIndex, p.position) == 1:
 		return title
-	case okTag:
+	case okTag && (!severalFiles || carriesName(tag, series)):
 		return tag
 	}
 	return title
