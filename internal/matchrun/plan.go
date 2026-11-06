@@ -507,13 +507,15 @@ func narratorReads(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []
 
 // readsRecording reports whether p's recording, one of c's, credits one of the
 // book's narrators who is a reader (meta.PersonNarrator: a "Full Cast" or
-// "Various" credit agrees with any recording carrying it, so it vouches for none).
+// "Various" credit agrees with any recording carrying it, so it vouches for none),
+// and is not a dramatization of a plain book (meta.DramatizesPlainBook: the reader
+// among its cast vouches for another production).
 func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []string) bool {
 	if p.RecordingID == "" {
 		return false
 	}
 	i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == p.RecordingID })
-	if i < 0 {
+	if i < 0 || meta.DramatizesPlainBook(c, &c.Recordings[i], narrators) {
 		return false
 	}
 	for _, n := range narrators {

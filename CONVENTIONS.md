@@ -1673,7 +1673,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   over `meta.ReadBy`; in a refresh, whose lookup sends no narrator, the credit check alone
   (`readsRecording` with the book's own narrator credit), so a book a run applied on its narrator's
   say-so stays up to date; a placeholder credit ("Full Cast", GraphicAudio, "Various", "Unknown":
-  `meta.PersonNarrator`) names no reader and never widens it; a review
+  `meta.PersonNarrator`) names no reader and never widens it, nor does a plain book's reader in a
+  dramatization's cast (`meta.DramatizesPlainBook`: another production); a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve

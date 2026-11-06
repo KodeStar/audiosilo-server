@@ -454,6 +454,17 @@ func ReadBy(r *MatchRecording, narrators []string) bool {
 	return false
 }
 
+// DramatizesPlainBook reports whether r, one of c's recordings, is a dramatized
+// production (isDramatization) while the book states none: neither its own text
+// (c.PlainBook) nor its narrator credit ("Full Cast", "GraphicAudio":
+// dramatizationTextRE; a lookup by identifier alone sends no text, so the credit is
+// all a refresh has). The book's reader among a cast's credits then says nothing
+// about its length: the unabridged reading and the dramatization are not one
+// production.
+func DramatizesPlainBook(c *MatchCandidate, r *MatchRecording, narrators []string) bool {
+	return c.PlainBook && !slices.ContainsFunc(narrators, dramatizationTextRE.MatchString) && r.isDramatization(c)
+}
+
 // PersonNarrator reports whether a narrator credit names a reader: not a cast or a
 // production ("Full Cast", "Full Cast Recording", "GraphicAudio [Dramatized
 // Adaptation]": dramatizationTextRE) and not a stand-in for nobody in particular

@@ -792,14 +792,19 @@ func TestRefreshHoldsAnotherEdition(t *testing.T) {
 // TestRefreshKeepsTheNarratorsLength: a book whose own ASIN names a recording 15%
 // off its length is refreshed as confidently as a match run applied it when the
 // book's narrator credit names that recording's reader; another narrator's book,
-// or a "Full Cast" credit (no reader), is held for its length.
+// a "Full Cast" credit (no reader), or a plain book whose ASIN names a dramatization
+// with its reader in the cast, is held for its length.
 func TestRefreshKeepsTheNarratorsLength(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	for i, tc := range []struct{ path, narrator, reader string }{
-		{"A/Wil", "Wil Wheaton", "Wil Wheaton"},
-		{"A/Ann", "Ann Reader", "Wil Wheaton"},
-		{"A/Full", "Full Cast", "Full Cast"},
+	for i, tc := range []struct {
+		path, narrator string
+		readers        []meta.MetaPersonRef
+	}{
+		{"A/Wil", "Wil Wheaton", []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
+		{"A/Ann", "Ann Reader", []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
+		{"A/Full", "Full Cast", []meta.MetaPersonRef{{Name: "Full Cast"}}},
+		{"A/Drama", "Wil Wheaton", []meta.MetaPersonRef{{Name: "Wil Wheaton"}, {Name: "Full Cast"}}},
 	} {
 		asin := fmt.Sprintf("B0US00000%d", i+1)
 		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: tc.path, IsFolder: true,
@@ -807,9 +812,10 @@ func TestRefreshKeepsTheNarratorsLength(t *testing.T) {
 			t.Fatal(err)
 		}
 		hit := cand("the-martian", 100, "")
-		hit.RecordingID = "rec"
+		// metaserve's answer to a lookup by identifier alone: found by it, stating no dramatization
+		hit.RecordingID, hit.PlainBook, hit.Reasons = "rec", true, &meta.MatchReasons{Identifier: "asin"}
 		hit.Recordings = []meta.MatchRecording{{ID: "rec", RuntimeMin: 540, // 15% short
-			Narrators: []meta.MetaPersonRef{{Name: tc.reader}}, ASINs: []string{asin}}}
+			Narrators: tc.readers, ASINs: []string{asin}}}
 		e.matcher.byASIN[asin] = []meta.MatchCandidate{hit}
 	}
 
@@ -819,11 +825,11 @@ func TestRefreshKeepsTheNarratorsLength(t *testing.T) {
 		t.Fatalf("auto = %+v, want the narrator's book", auto)
 	}
 	review := e.items(t, run, catalog.OutcomeReview)
-	if len(review) != 2 {
-		t.Fatalf("review = %+v, want Ann and Full", review)
+	if len(review) != 3 {
+		t.Fatalf("review = %+v, want Ann, Full and Drama", review)
 	}
 	for _, it := range review {
-		if (it.Path != "A/Ann" && it.Path != "A/Full") || it.Detail != DetailLengthDiffers {
+		if !slices.Contains([]string{"A/Ann", "A/Full", "A/Drama"}, it.Path) || it.Detail != DetailLengthDiffers {
 			t.Errorf("review %s = %+v, want held for its length", it.Path, it)
 		}
 	}

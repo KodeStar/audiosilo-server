@@ -524,6 +524,7 @@ func TestNarratorReads(t *testing.T) {
 			{ID: "cast", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "Full Cast"}, {Name: "Various"}, {Name: "Wil Wheaton"}}},
 		}}
 	}
+	plain := func(c *meta.MatchCandidate) *meta.MatchCandidate { c.PlainBook = true; return c }
 	proposing := func(id string) catalog.MatchProposal { return catalog.MatchProposal{RecordingID: id, RuntimeMin: 540} }
 	wheaton := []string{"Wil Wheaton"}
 	for name, tc := range map[string]struct {
@@ -544,6 +545,9 @@ func TestNarratorReads(t *testing.T) {
 		"denied: a full cast's credit":                    {work("full"), proposing("cast"), []string{"Full Cast"}, false},
 		"denied: a credit for nobody in particular":       {work("full"), proposing("cast"), []string{"Various"}, false},
 		"allowed: a reader beside a full cast":            {work("full"), proposing("cast"), []string{"Full Cast", "Wil Wheaton"}, true},
+		"denied: a plain book's reader in a full cast":    {plain(work("full")), proposing("cast"), wheaton, false},
+		"allowed: a plain book's reader on his own":       {plain(work("full")), proposing("wheaton"), wheaton, true},
+		"allowed: a book crediting the cast, its reader":  {plain(work("full")), proposing("cast"), []string{"Full Cast", "Wil Wheaton"}, true},
 	} {
 		if got := narratorReads(tc.c, tc.p, tc.narrators); got != tc.want {
 			t.Errorf("%s: %v, want %v", name, got, tc.want)
