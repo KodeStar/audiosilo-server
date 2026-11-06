@@ -36,6 +36,14 @@ func TestSearchPrefill(t *testing.T) {
 		{"a book named like its author folder is not swapped", "Dune", "Frank Herbert", "", "Dune/Dune", true,
 			"Dune Frank Herbert"},
 		{"a title in another script is a title", "Пролог", "Автор", "", "Автор/Книга", true, "Пролог Автор"},
+		// A leaf named "Author; Series; Book NN[; Title]" gives its title part, else
+		// its series and position: a range, or none.
+		{"a leaf's title part", "Track 01", "Unknown", "",
+			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", true, "From The Ashes Mark Tufo"},
+		{"a leaf's range", "Track 01", "Bruno Miller", "",
+			"Bruno Miller/Bruno Miller; Dark Road; Book 01-05", true, "Dark Road 1-5 Bruno Miller"},
+		{"a leaf with no position", "Track 01", "Isaac Asimov", "",
+			"Isaac Asimov/Isaac Asimov; Robot Dreams; Book XX", true, "Robot Dreams Isaac Asimov"},
 	} {
 		if got := SearchPrefill(c.title, c.author, c.series, c.path, c.isFolder); got != c.want {
 			t.Errorf("%s: SearchPrefill(%q, %q) = %q, want %q", c.name, c.title, c.author, got, c.want)

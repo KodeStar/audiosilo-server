@@ -233,13 +233,16 @@ func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
 // the series and position (metadata.DeriveFromPath, metadata.FromPathLayout),
 // so the scan's reading of them reads as the path's; a library that prefers its
 // folders keeps them (its layout reads the leaf too) and takes the title part
-// over the tags' title, and a range is the leaf's in both.
+// over the tags' title, and a range is the leaf's in both. An untagged book's
+// title is the whole leaf: the folders' library still takes its title part and
+// position, beside a series tag spelled another way.
 func TestLeafSeriesSources(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	const (
 		tufo  = "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
 		rules = "Aaron Oster/Aaron Oster; The Rules; Book 01-03"
+		spell = "Larry Correia/Larry Correia; Grimnoir Chronicles; Book 02; Spellbound"
 	)
 	for _, src := range []string{MetadataFromTags, MetadataFromPath} {
 		lib, _ := c.CreateLibrary(ctx, Library{Name: src, Root: "/tmp/" + src, MetadataSource: src})
@@ -247,6 +250,8 @@ func TestLeafSeriesSources(t *testing.T) {
 			{RelPath: tufo, Title: "From The Ashes (Unabridged)", Author: "Mark Tufo", Series: "Indian Hill", SeriesIndex: 4},
 			{RelPath: rules, Title: "The Rules: The Complete Series", Author: "Aaron Oster", Series: "The Rules",
 				SeriesIndex: 1, SeriesIndexEnd: 3},
+			{RelPath: spell, Title: "Larry Correia; Grimnoir Chronicles; Book 02; Spellbound", Author: "Larry Correia",
+				Series: "Grimnoir", SeriesIndex: 2},
 		} {
 			b.LibraryID, b.IsFolder, b.AddedAt = lib.ID, true, "2020-01-01"
 			if _, err := c.UpsertBook(ctx, b); err != nil {
@@ -254,8 +259,16 @@ func TestLeafSeriesSources(t *testing.T) {
 			}
 		}
 		title := [2]string{"From The Ashes (Unabridged)", SourceTag}
+		untagged := map[string][2]string{
+			FieldTitle:  {"Larry Correia; Grimnoir Chronicles; Book 02; Spellbound", SourcePath},
+			FieldSeries: {"Grimnoir", SourceTag}, FieldSeriesIndex: {"2", SourcePath},
+		}
 		if src == MetadataFromPath {
 			title = [2]string{"From The Ashes", SourcePath}
+			untagged = map[string][2]string{
+				FieldTitle:  {"Spellbound", SourcePath},
+				FieldSeries: {"Grimnoir Chronicles", SourcePath}, FieldSeriesIndex: {"2", SourcePath},
+			}
 		}
 		t.Run(src, func(t *testing.T) {
 			assertFields(t, fieldValues(t, c, ctx, lib.ID, tufo), map[string][2]string{
@@ -266,6 +279,7 @@ func TestLeafSeriesSources(t *testing.T) {
 				FieldTitle:  {"The Rules: The Complete Series", SourceTag},
 				FieldSeries: {"The Rules", SourcePath}, FieldSeriesIndex: {"1-3", SourcePath},
 			})
+			assertFields(t, fieldValues(t, c, ctx, lib.ID, spell), untagged)
 		})
 	}
 }

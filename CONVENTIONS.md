@@ -1410,7 +1410,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
   folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
   over a tag's wherever it says anything and replaces the baseline's own reading even with
-  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
+  nothing (a leaf named `Author; Series; Book NN[; Title]` says its series, position and title part, `LeafSeries`); the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it (never a `LeafSeries` leaf, whose parts the layout reads even when the title is the whole leaf, as an untagged book's is); the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
   and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
   transaction, no rescan (about 1 s per 5,000 books).

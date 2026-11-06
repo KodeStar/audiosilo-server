@@ -283,7 +283,8 @@ const scannedStampKey = "@indexed_at"
 // when a leaf named "Author; Series; Book NN[; Title]" came to state the
 // series and position the tags leave out (metadata.DeriveFromPath). The next
 // scan reads such a book again where a newer revision may read it otherwise
-// (Signature.NamesCheck) and stamps the rest (StampScannedRev).
+// (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
+// adds today's to revOlderOwn's list, so its snapshots are stamped too.
 const (
 	scannedRevKey = "@rev"
 	scannedRev    = "3"
@@ -607,10 +608,13 @@ func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 		return l.scanned, baseline, nil
 	}
 	layout = pathFields(metadata.FromPathLayout(l.path, l.isFolder))
-	if raw := metadata.ReadPathLayout(l.path, l.isFolder); raw.Title != "" &&
+	raw := metadata.ReadPathLayout(l.path, l.isFolder)
+	if _, leaf := metadata.LeafSeries(raw.Title); !leaf && raw.Title != "" &&
 		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
 		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
 		// the number is part of the title, not a volume the layout can split off.
+		// A leaf named "Author; Series; Book NN[; Title]" is no such title (an
+		// untagged book's is the whole leaf): the layout reads its parts.
 		layout[FieldTitle], layout[FieldSeriesIndex] = l.scanned[FieldTitle], raw.Position
 	}
 	scanned = maps.Clone(l.scanned)

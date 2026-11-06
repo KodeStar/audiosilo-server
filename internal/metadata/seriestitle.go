@@ -183,7 +183,7 @@ type Leaf struct {
 }
 
 // LeafSeries reads a book's leaf named "Author; Series; Book NN; Title" (the
-// title part optional, the volume any marker after "Book": "Book 01", "Book
+// title part optional, the volume a marker after "Book": "Book 01", "Book
 // 01-03", "Book XX"), as some library tools name a book's folder and file:
 // "Mark Tufo; Indian Hill; Book 04; From The Ashes" is the series "Indian Hill",
 // the title "From The Ashes" and the position 4; "Aaron Oster; The Rules; Book
@@ -220,8 +220,10 @@ func PathLeafSeries(relPath string, isFolder bool) bool {
 }
 
 // leafVolume is LeafSeries' volume part: "Book" and a marker, the whole marker
-// in submatch 1 and the number it leads with, if any, in submatch 2.
-var leafVolume = regexp.MustCompile(`^(?i:book)\s+((\d+(?:\.\d+)?)?\S*)$`)
+// in submatch 1 and the number it leads with, if any, in submatch 2. A marker
+// is a number ("04", "01-05", "2.5") or the placeholder "XX" ("??"), never a
+// word, so "Oprah; Picks; Book Club" states no series.
+var leafVolume = regexp.MustCompile(`^(?i:book)\s+((\d+(?:\.\d+)?)\S*|(?i:x+)|\?+)$`)
 
 // volumeMarker reports whether a name is only a volume marker, "Book 10",
 // "Vol. 2", "C02", "#3" (splitSeriesIndex's prefixes and a number): no title.

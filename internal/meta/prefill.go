@@ -33,9 +33,17 @@ func SearchPrefill(title, author, series, relPath string, isFolder bool) string 
 	title, author = strings.TrimSpace(title), strings.TrimSpace(author)
 	p := metadata.FromPathLayout(relPath, isFolder)
 	pathTitle := strings.TrimSpace(p.Title)
-	if pathTitle == "" && p.Series != "" && p.SeriesIndex > 0 {
-		// "Brandon Sanderson/Stormlight Archive/03": the series and its volume.
-		pathTitle = p.Series + " " + strconv.FormatFloat(p.SeriesIndex, 'f', -1, 64)
+	if pathTitle == "" && p.Series != "" {
+		// "Brandon Sanderson/Stormlight Archive/03": the series and its volume; a
+		// leaf named "Author; Series; Book NN" with no title part, the series and
+		// its position, a range ("Dark Road 1-5") or none ("Book XX").
+		pathTitle = p.Series
+		if p.SeriesIndex > 0 {
+			pathTitle += " " + strconv.FormatFloat(p.SeriesIndex, 'f', -1, 64)
+			if metadata.ValidSeriesRange(p.SeriesIndex, p.SeriesIndexEnd) {
+				pathTitle += "-" + strconv.FormatFloat(p.SeriesIndexEnd, 'f', -1, 64)
+			}
+		}
 	}
 	// A tag that matches its own path fact is never swapped: "Dune/Dune" by Frank
 	// Herbert has the title of its author folder because the folder is the book's.

@@ -162,6 +162,10 @@ func TestLeafSeries(t *testing.T) {
 		{"Codename; Freedom - Book 001 - Survive Week One", Leaf{}, false},
 		{"New Era Online; Life Reset - Book 001 - New Era Online; Life Reset", Leaf{}, false},
 		{"DESTINY;DIVINE", Leaf{}, false},
+		// A word after "Book" is no marker.
+		{"Oprah; Picks; Book Club", Leaf{}, false},
+		{"A. Writer; Series; Book One; Title", Leaf{}, false},
+		{"A. Writer; Series; Book ??", Leaf{"Series", "", 0, 0}, true},
 		{"Plain Title", Leaf{}, false},
 	}
 	for _, c := range cases {
