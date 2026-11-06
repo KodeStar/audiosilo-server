@@ -513,7 +513,15 @@ func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators [
 		return false
 	}
 	i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == p.RecordingID })
-	return i >= 0 && meta.ReadBy(&c.Recordings[i], slices.DeleteFunc(slices.Clone(narrators), func(n string) bool { return !meta.PersonNarrator(n) }))
+	if i < 0 {
+		return false
+	}
+	for _, n := range narrators {
+		if meta.PersonNarrator(n) && meta.ReadBy(&c.Recordings[i], []string{n}) {
+			return true
+		}
+	}
+	return false
 }
 
 // Classify sorts a book's candidates (best first) into an outcome: confident

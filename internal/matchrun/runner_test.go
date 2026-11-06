@@ -796,21 +796,20 @@ func TestRefreshHoldsAnotherEdition(t *testing.T) {
 func TestRefreshKeepsTheNarratorsLength(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	for i, narrator := range []string{"Wil Wheaton", "Ann Reader", "Full Cast"} {
+	for i, tc := range []struct{ path, narrator, reader string }{
+		{"A/Wil", "Wil Wheaton", "Wil Wheaton"},
+		{"A/Ann", "Ann Reader", "Wil Wheaton"},
+		{"A/Full", "Full Cast", "Full Cast"},
+	} {
 		asin := fmt.Sprintf("B0US00000%d", i+1)
-		path := "A/" + strings.Fields(narrator)[0]
-		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: path, IsFolder: true,
-			Title: "Martian", Author: "Andy Weir", Narrator: narrator, ASIN: asin, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: tc.path, IsFolder: true,
+			Title: "Martian", Author: "Andy Weir", Narrator: tc.narrator, ASIN: asin, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
 			t.Fatal(err)
 		}
 		hit := cand("the-martian", 100, "")
 		hit.RecordingID = "rec"
-		reader := narrator
-		if narrator == "Ann Reader" {
-			reader = "Wil Wheaton"
-		}
 		hit.Recordings = []meta.MatchRecording{{ID: "rec", RuntimeMin: 540, // 15% short
-			Narrators: []meta.MetaPersonRef{{Name: reader}}, ASINs: []string{asin}}}
+			Narrators: []meta.MetaPersonRef{{Name: tc.reader}}, ASINs: []string{asin}}}
 		e.matcher.byASIN[asin] = []meta.MatchCandidate{hit}
 	}
 

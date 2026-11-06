@@ -1669,8 +1669,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`), or within 20%
   when the book's narrator reads it (`meta.NarratedRuntimeOff`, `narratorReads`: metaserve's
-  `reasons.narrator` is `full` and the proposed recording's credit names them, `meta.ReadBy`; never
-  in a refresh, whose lookup sends no narrator; a review
+  `reasons.narrator` is `full` and the proposed recording's credit names them, `readsRecording`
+  over `meta.ReadBy`; in a refresh, whose lookup sends no narrator, the credit check alone
+  (`readsRecording` with the book's own narrator credit), so a book a run applied on its narrator's
+  say-so stays up to date; a placeholder credit ("Full Cast", GraphicAudio, "Various", "Unknown":
+  `meta.PersonNarrator`) names no reader and never widens it; a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
