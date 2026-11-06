@@ -107,7 +107,9 @@ func TestVerdictOf(t *testing.T) {
 
 func TestTallyAndAgreement(t *testing.T) {
 	rs := []lfResult{
-		{Outcome: "auto", Work: "w1", Right: true, RecordingRight: true, RefHasASIN: true, HandWork: "w1", HandRight: true},
+		{Outcome: "auto", Work: "w1", Right: true, RecordingRight: true, TitleRight: true, RefHasASIN: true, HandWork: "w1", HandRight: true},
+		// The older judging finds this one right, the new one doesn't: each counts its own recording.
+		{Outcome: "auto", Work: "w7", TitleRight: true, TitleRecordingRight: true, RefHasASIN: true},
 		{Outcome: "auto", Work: "w2", Right: true, TitleRight: false, HandWork: "w2", HandRight: true},
 		{Outcome: "review", Work: "w3", Right: false, TitleRight: true, HandWork: "w3", HandRight: false},
 		{Outcome: "review", Work: "w4", Unjudged: true, TitleUnjudged: true, HandWork: "w4"},
@@ -118,12 +120,15 @@ func TestTallyAndAgreement(t *testing.T) {
 	noASIN := func(r *lfResult) bool { return !r.RefHasASIN }
 
 	got := tally(rs, all, newJudging)
-	want := map[string]int{"auto-right": 2, "auto-right, recording right": 1, "review-wrong": 1, "review-unjudged": 1,
+	want := map[string]int{"auto-right": 2, "auto-right, recording right": 1, "auto-wrong": 1, "review-wrong": 1, "review-unjudged": 1,
 		"none": 2, "none: weak_match": 1, "none: weak_match, top was right": 1}
 	for _, k := range tableKeys {
 		if got[k] != want[k] {
 			t.Errorf("tally new [%s] = %d, want %d", k, got[k], want[k])
 		}
+	}
+	if got = tally(rs, all, titleJudging); got["auto-right, recording right"] != 1 || got["auto-right"] != 2 {
+		t.Errorf("tally title, all = %v", got)
 	}
 	got = tally(rs, noASIN, titleJudging)
 	if got["auto-wrong"] != 1 || got["review-right"] != 1 || got["auto-right"] != 0 {

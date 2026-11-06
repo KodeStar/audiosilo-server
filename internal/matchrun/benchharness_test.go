@@ -153,7 +153,8 @@ type lfResult struct {
 	// what). RecordingRight: and the recording the proposal picked is the
 	// reference's (its ASIN's, else LibraForge's pick's, else its narrator).
 	Right bool `json:"right"`
-	// Unjudged: the reference names no work this copy knows and no title.
+	// Unjudged: no reference ASIN work, LibraForge pick or v2.5.1 pick of the
+	// same work to judge by, and no reference title.
 	Unjudged bool   `json:"unjudged,omitempty"`
 	JudgedBy string `json:"judged_by,omitempty"`
 	// RefHasASIN: the reference has an ASIN (known to this copy or not).
@@ -162,9 +163,12 @@ type lfResult struct {
 	LFWork     string `json:"lf_work,omitempty"`
 	// TitleRight and TitleUnjudged are the verdict by the reference ASIN, else
 	// by title and author alone (the judging before LibraForge's pick was
-	// read), kept to compare with older results files.
-	TitleRight    bool `json:"title_right"`
-	TitleUnjudged bool `json:"title_unjudged,omitempty"`
+	// read), kept to compare with older results files; TitleRecordingRight is
+	// RecordingRight by that judging (the reference ASIN's recording, else the
+	// narrator).
+	TitleRight          bool `json:"title_right"`
+	TitleUnjudged       bool `json:"title_unjudged,omitempty"`
+	TitleRecordingRight bool `json:"title_recording_right"`
 	// Hand is the hand-audited v2.5.1 class (handVerdict), HandWork the work
 	// its listing names: where HandWork is Work, both judged the same pick.
 	Hand           string `json:"hand,omitempty"`
@@ -351,6 +355,7 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	ctx := context.Background()
 	book, item := m.book, m.item
 	res := lfResult{Path: book.RelPath, Title: book.Title, RefTitle: b.Ref.Title}
+	res.RefHasASIN = b.Ref.ASIN != ""
 	if m.err != nil || item == nil {
 		res.Outcome = catalog.OutcomeError
 		return res
@@ -360,7 +365,6 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	// The right work: the one the reference ASIN names in this copy, else (no
 	// reference ASIN) the one LibraForge's hand-checked pick names.
 	var refRec string
-	res.RefHasASIN = b.Ref.ASIN != ""
 	if res.RefHasASIN {
 		res.RefWork, refRec = lookup(ctx, local, meta.MatchQuery{ASIN: b.Ref.ASIN})
 	} else if asin, isbn, recording := lfPick(b); asin != "" || isbn != "" {
@@ -406,11 +410,18 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	})
 	// The older judging: no LibraForge or v2.5.1 pick to read.
 	res.TitleRight, res.TitleUnjudged, _ = verdictOf(top.WorkID, answers{refWork: res.RefWork, hasTitle: hasTitle, titleSame: titleSame})
-	if res.Right {
-		// A weak match proposes nothing: then the recording the run would pick.
-		pick := cmp.Or(item.Proposal.RecordingID, top.DefaultRecordingID)
-		res.RecordingRight = (refRec != "" && pick == refRec) || (refRec == "" && narratedBy(top, pick, b.Ref.Narrator))
+	// A weak match proposes nothing: then the recording the run would pick.
+	pick := cmp.Or(item.Proposal.RecordingID, top.DefaultRecordingID)
+	recordingIs := func(rec string) bool {
+		return (rec != "" && pick == rec) || (rec == "" && narratedBy(top, pick, b.Ref.Narrator))
 	}
+	res.RecordingRight = res.Right && recordingIs(refRec)
+	// The older judging read no LibraForge pick's recording.
+	oldRec := ""
+	if res.RefHasASIN {
+		oldRec = refRec
+	}
+	res.TitleRecordingRight = res.TitleRight && recordingIs(oldRec)
 	if item.Outcome == catalog.OutcomeAuto {
 		st := matchStateOf(book)
 		if w := Plan(ScopeFill, st, item.Proposal); w.Set[catalog.FieldTitle] != "" && st.Fields[catalog.FieldTitle].Value != "" {
@@ -504,12 +515,14 @@ func matchStateOf(b *catalog.Book) *catalog.MatchState {
 	return st
 }
 
-// verdict is a judging of one result: whether its top work is right, and
-// whether it could be judged at all.
-type verdict func(r *lfResult) (right, unjudged bool)
+// verdict is a judging of one result: whether its top work is right, whether
+// it could be judged at all, and whether the recording picked is right too.
+type verdict func(r *lfResult) (right, unjudged, recordingRight bool)
 
-func newJudging(r *lfResult) (bool, bool)   { return r.Right, r.Unjudged }
-func titleJudging(r *lfResult) (bool, bool) { return r.TitleRight, r.TitleUnjudged }
+func newJudging(r *lfResult) (bool, bool, bool) { return r.Right, r.Unjudged, r.RecordingRight }
+func titleJudging(r *lfResult) (bool, bool, bool) {
+	return r.TitleRight, r.TitleUnjudged, r.TitleRecordingRight
+}
 
 // tableKeys are the rows of a table, in order.
 var tableKeys = []string{"auto-right", "auto-right, recording right", "auto-wrong", "auto-unjudged", "review-right", "review-wrong", "review-unjudged",
@@ -523,7 +536,7 @@ func tally(rs []lfResult, keep func(*lfResult) bool, v verdict) map[string]int {
 		if !keep(r) {
 			continue
 		}
-		right, unjudged := v(r)
+		right, unjudged, recordingRight := v(r)
 		key := r.Outcome
 		switch r.Outcome {
 		case catalog.OutcomeAuto, catalog.OutcomeReview:
@@ -531,7 +544,7 @@ func tally(rs []lfResult, keep func(*lfResult) bool, v verdict) map[string]int {
 			if unjudged {
 				key = r.Outcome + "-unjudged"
 			}
-			if r.Outcome == catalog.OutcomeAuto && right && r.RecordingRight {
+			if r.Outcome == catalog.OutcomeAuto && right && recordingRight {
 				count["auto-right, recording right"]++
 			}
 		case catalog.OutcomeNone:
@@ -587,7 +600,7 @@ func agreement(rs []lfResult, keep func(*lfResult) bool, v verdict) (agree, shar
 		if !keep(r) || r.Work == "" || r.HandWork != r.Work || r.JudgedBy == byHand {
 			continue
 		}
-		right, unjudged := v(r)
+		right, unjudged, _ := v(r)
 		if unjudged {
 			continue
 		}
@@ -611,9 +624,11 @@ func printTable(rs []lfResult, region string) {
 	}
 	fmt.Printf("\nLibraForge harness: %d books, region %q\n", len(rs), region)
 	printColumns("Judged by the reference ASIN, else LibraForge's pick, else v2.5.1's audited pick, else title and author:", rs, byRefASINOrNot(newJudging))
-	printColumns("The same, by what each verdict was judged against (unjudged in none):", rs, []column{
+	// "not judged" holds the rest (no candidates, an error, or unjudged), so the columns sum to all.
+	printColumns("The same, by what each verdict was judged against:", rs, []column{
 		{"ref ASIN", judgedBy(byRefASIN), newJudging}, {"LF pick", judgedBy(byLFPick), newJudging},
 		{"v2.5.1 hand", judgedBy(byHand), newJudging}, {"title only", judgedBy(byTitle), newJudging},
+		{"not judged", judgedBy(""), newJudging},
 	})
 	printColumns("Judged by the reference ASIN, else title and author (the older judging):", rs, byRefASINOrNot(titleJudging))
 	fmt.Println("\nAgreement with the hand-audited v2.5.1 verdict where both judged the same pick (not by it):")
