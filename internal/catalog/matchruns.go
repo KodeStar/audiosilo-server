@@ -457,9 +457,12 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		st MatchState
 	)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+` FROM books b
+		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
+		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, '')
+		   FROM books b`+matchSubjectJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
-		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing)
+		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
+			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -471,13 +474,6 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		return nil, err
 	}
 	st.Fields = l.resolve()
-	anchor, err := bookAnchor(ctx, c.db, libraryID, CleanRelPath(relPath))
-	if err != nil {
-		return nil, err
-	}
-	if anchor != nil {
-		st.Anchor = MatchAnchor{WorkID: anchor.WorkID, RecordingID: anchor.RecordingID, How: anchor.How}
-	}
 	return &st, nil
 }
 
@@ -539,15 +535,12 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 		if err != nil {
 			return err
 		}
-		books, rebuilt := map[Ref]bool{}, map[Ref]bool{}
-		for _, ref := range anchors {
-			books[ref] = true // the row is all there is: nothing to rebuild
-		}
+		books := map[Ref]bool{}
 		for _, ref := range fields {
-			if rebuilt[ref] {
+			if books[ref] {
 				continue // one row per field
 			}
-			books[ref], rebuilt[ref] = true, true
+			books[ref] = true
 			id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
 			if errors.Is(err, ErrNotFound) {
 				continue // not indexed now: nothing to rebuild
@@ -564,6 +557,9 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 			if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
 				return err
 			}
+		}
+		for _, ref := range anchors {
+			books[ref] = true // the row is all there is: nothing to rebuild
 		}
 		out.Books, out.Covers = len(books), len(covers)
 

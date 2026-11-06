@@ -14,6 +14,7 @@ import {
   type OverrideField,
   type PairToken,
 } from '@/api/types';
+import { hasIdentifier } from '@/features/library/series/series-model';
 import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
 import type { Phrase } from '@/lib/phrase';
@@ -415,7 +416,7 @@ export interface CommunityState {
  * as it is (`book.matched`), so it has nothing to check.
  */
 export function canCheckChapters(d: Pick<AdminBookDetail, 'book'>): boolean {
-  return !!(d.book.asin || d.book.isbn);
+  return hasIdentifier(d.book);
 }
 
 /**

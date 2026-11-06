@@ -418,9 +418,6 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	case req.empty():
 		writeError(w, http.StatusBadRequest, "nothing to change")
 		return
-	case req.Match != nil:
-		writeError(w, http.StatusBadRequest, "a community match is recorded one book at a time")
-		return
 	}
 	if err := a.cat.EditBooks(r.Context(), req.Books, req.toEdit(userFrom(r.Context()).ID)); err != nil {
 		a.writeBookError(w, err, "bulk edit failed", "could not save the edit", "books", len(req.Books))

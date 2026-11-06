@@ -86,10 +86,10 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 //
 // The book's own config is COPIED, not moved, so the disc books keep theirs if the
 // override is removed: an admin's metadata edits, attached ASIN/ISBN, custom
-// cover and recorded community match field by field with the earliest part winning, and only where the joined
-// book has none of its own (so a first disc's edits carry over); chapter renames
-// all carry over (re-keyed to the file under the joined folder, so they never
-// collide). An Audible title's match to a part moves to the joined book (until
+// cover and recorded community match field by field with the earliest part
+// winning, and only where the joined book has none of its own (so a first disc's
+// edits carry over); chapter renames all carry over (re-keyed to the file under
+// the joined folder, so they never collide). An Audible title's match to a part moves to the joined book (until
 // the account's next poll matches it afresh). Ignored Health issues stay with
 // the parts: they were about those books.
 //

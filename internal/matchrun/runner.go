@@ -432,12 +432,11 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
-	switch {
-	case byWork:
+	if byWork {
 		// A book matched by its work alone has no identifier to keep: one its
 		// recording gained since fills in (every scope fills a missing identifier).
 		item.Proposal.FoundBy = "work:" + b.MatchWorkID
-	default:
+	} else {
 		// The book keeps its own identifiers (switching marketplace is a repick's):
 		// a proposal without them writes none, and the review shows none of the
 		// community's (another marketplace's ASIN, say) as if applying set them.

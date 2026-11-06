@@ -719,11 +719,7 @@ func (s *Service) workCandidates(ctx context.Context, q MatchQuery, id string) (
 		c.RecordingID = rid
 	}
 	c.PlainBook = c.RecordingID == "" && !q.statesDramatization()
-	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
-		c.DefaultRecordingID = rec.ID
-	} else {
-		c.DramatizationOnly = len(c.Recordings) > 0
-	}
+	setDefaultRecording(c, q)
 	return []MatchCandidate{*c}, nil
 }
 
@@ -742,12 +738,18 @@ func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDet
 	} else {
 		c.Score = scoreCandidate(q, c)
 	}
+	setDefaultRecording(c, q)
+	return c
+}
+
+// setDefaultRecording sets c's DefaultRecording for q (by length, marketplace and
+// narrators), or marks it DramatizationOnly when it has recordings but none fits.
+func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
 	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
 		c.DefaultRecordingID = rec.ID
 	} else {
 		c.DramatizationOnly = len(c.Recordings) > 0
 	}
-	return c
 }
 
 // bestCandidates is Candidates' answer for MatchQuery.BestOnly, from works/match's
