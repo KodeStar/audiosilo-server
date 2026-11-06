@@ -83,6 +83,10 @@ var userStateTables = map[string]tableRule{
 	"meta_series":        {rows: true},
 	"upcoming_items":     {rows: true},
 	"upcoming_announced": {rows: true},
+	// The daily report of unknown Audible ASINs (internal/coverage, migration
+	// 0068): the job's own memory of what it looked up and sent, read by no
+	// content cache.
+	"unknown_asin_reports": {rows: true},
 	// Audible (Bridge Phase 4a, migration 0063): a poll's titles
 	// (catalog.PutAudibleTitles) and an account's poll times, read only by the
 	// console's Audible routes and the scheduler, never by a content cache. An

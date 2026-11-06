@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +29,8 @@ type Mirror interface {
 // localTimeout bounds one request answered by the local copy. It is longer than
 // clientTimeout because the copy runs on the server's own hardware (a small home
 // box may need longer for a match than meta.audiosilo.app does), and a local
-// query that runs out of time still falls back to the remote service.
+// query that runs out of time still falls back to the remote service (a
+// localOnly one fails instead).
 const localTimeout = 15 * time.Second
 
 // maxLocalBody bounds what one local answer may buffer in memory (the in-memory
@@ -57,6 +59,10 @@ const fallbackLogEvery = 10 * time.Minute
 // is ready, else by the remote service. log receives a warning (at most every
 // ten minutes) when a request the copy failed goes to the remote service.
 //
+// The one exception is a local-only request (localOnly: the unknown ASIN
+// report's lookups, KnownASIN): it is answered by the copy or fails, never
+// going to the remote service, also while the copy is not Ready.
+//
 // Mirror mode also changes one thing above the client: the copy's "no match"
 // never replaces a stored positive answer (see Enrich, Work and keepStored). Call it once, right
 // after NewService and before the Service is used.
@@ -74,13 +80,34 @@ func (s *Service) SetMirror(m Mirror, log *slog.Logger) {
 	// covers the body too; only the local leg has its own bound (localTimeout),
 	// so the outer client has none.
 	s.client.http = &http.Client{Transport: &fallbackTransport{
-		local: local, prefix: prefix, ready: m.Ready, remote: s.client.http, log: log,
+		local: local, prefix: prefix, ready: m.Ready, remote: s.client.http, log: log, timeout: localTimeout,
 	}}
 }
 
+// localOnlyKey marks a request context whose requests the local copy must
+// answer (localOnly).
+type localOnlyKey struct{}
+
+// localOnly is ctx with its requests kept on this server in mirror mode: the
+// fallbackTransport answers them from the local copy or fails them with
+// errLocalOnly, never asking the remote service (not while the copy is not
+// Ready, nor when it fails one). In remote mode it changes nothing.
+func localOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localOnlyKey{}, true)
+}
+
+func isLocalOnly(ctx context.Context) bool {
+	return ctx.Value(localOnlyKey{}) != nil
+}
+
+// errLocalOnly is a local-only request the local copy didn't answer (not
+// Ready, or it failed it): an error, never ErrNotFound.
+var errLocalOnly = errors.New("meta: the local copy couldn't answer a lookup that stays on this server")
+
 // fallbackTransport answers from the local copy when it can and from the remote
 // service otherwise (no copy or a failed answer -> the remote service; a 404 is
-// the copy's answer). The copy's answers carry localAnswerHeader.
+// the copy's answer), except a localOnly request, which then fails. The copy's
+// answers carry localAnswerHeader.
 type fallbackTransport struct {
 	local http.Handler
 	// prefix is base_url's path ("" for none), put back on a local redirect.
@@ -88,13 +115,16 @@ type fallbackTransport struct {
 	ready  func() bool
 	remote *http.Client
 	log    *slog.Logger
+	// timeout bounds one local answer (localTimeout; a test shortens it).
+	timeout time.Duration
 	// logged is when (unix nanoseconds) the last fallback was logged.
 	logged atomic.Int64
 }
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	stayLocal := isLocalOnly(req.Context())
 	if t.ready() {
-		resp, failed := serveLocal(t.local, req)
+		resp, failed := serveLocal(t.local, req, t.timeout)
 		if resp != nil {
 			if loc := resp.Header.Get("Location"); t.prefix != "" && strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
 				resp.Header.Set("Location", t.prefix+loc)
@@ -107,7 +137,12 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		if err := req.Context().Err(); err != nil {
 			return nil, err
 		}
+		if stayLocal {
+			return nil, fmt.Errorf("%w (%s)", errLocalOnly, failed)
+		}
 		t.logFallback(req.URL.Path, failed)
+	} else if stayLocal {
+		return nil, fmt.Errorf("%w (the local copy is not ready)", errLocalOnly)
 	}
 	resp, err := t.remote.Do(req)
 	var ue *url.Error
@@ -139,9 +174,10 @@ func (t *fallbackTransport) logFallback(path, reason string) {
 
 // serveLocal answers req from the local copy. When the copy failed it (a 5xx,
 // an answer too large to buffer, a timeout, a panic) it returns a nil response
-// and why, so the caller asks the remote service instead.
-func serveLocal(h http.Handler, req *http.Request) (resp *http.Response, failed string) {
-	ctx, cancel := context.WithTimeout(req.Context(), localTimeout)
+// and why, so the caller asks the remote service instead (or fails a
+// localOnly request).
+func serveLocal(h http.Handler, req *http.Request, timeout time.Duration) (resp *http.Response, failed string) {
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
 	defer cancel()
 	lr := req.WithContext(ctx)
 	lr.RequestURI = req.URL.RequestURI()

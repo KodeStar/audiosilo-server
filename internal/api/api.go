@@ -17,6 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/chaptercheck"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/coverage"
 	"github.com/kodestar/audiosilo-server/internal/covercolors"
 	"github.com/kodestar/audiosilo-server/internal/importer"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -77,6 +78,9 @@ type API struct {
 	// upcoming is the upcoming releases job (Track U1), nil without a
 	// metadata service (StartUpcoming).
 	upcoming *upcoming.Runner
+	// coverage is the daily report of unknown Audible ASINs (LibraForge C3),
+	// nil without a metadata service and on a demo server (StartCoverage).
+	coverage *coverage.Runner
 	// coverColors reads books' cover colours in the background
 	// (StartCoverColors), so a book has one before anyone looks at its cover.
 	coverColors *covercolors.Runner
@@ -281,6 +285,11 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			Log:      log,
 		})
 		cat.OnBookChange(a.upcoming.Kick)
+		// The unknown-ASIN report: opt-in, daily, never on a demo server (its
+		// books are the demo's, not anyone's library).
+		if !cfg.Demo.Enabled {
+			a.coverage = coverage.New(cat, metaSvc, coverage.Options{On: a.reportUnknownOn, Ready: a.mirrorReady, Log: log})
+		}
 	}
 	// And a cover colour (a new book, a new cover).
 	a.coverColors = covercolors.New(cat, a.colorCover, log)
@@ -349,6 +358,14 @@ func (a *API) StartChapterChecks(ctx context.Context) {
 func (a *API) StartUpcoming(ctx context.Context) {
 	if a.upcoming != nil {
 		go a.upcoming.Run(ctx)
+	}
+}
+
+// StartCoverage starts the daily unknown-ASIN report (coverage.Runner.Run) for
+// ctx's lifetime; nothing without metadata or on a demo server.
+func (a *API) StartCoverage(ctx context.Context) {
+	if a.coverage != nil {
+		go a.coverage.Run(ctx)
 	}
 }
 

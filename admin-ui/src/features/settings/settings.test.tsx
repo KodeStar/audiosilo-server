@@ -297,6 +297,9 @@ describe('settings', () => {
     expect(await screen.findByText('Responding · 84 ms')).toBeInTheDocument();
     // An older server sends no upcoming switch: none is shown.
     expect(screen.queryByRole('switch', { name: 'Check for upcoming releases' })).toBeNull();
+    expect(
+      screen.queryByRole('switch', { name: 'Help complete the community database' }),
+    ).toBeNull();
     await userEvent.setup().click(toggle);
     expect(await screen.findByText('Community metadata is off')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ metadata: { enabled: false } });
@@ -391,6 +394,87 @@ describe('settings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Check for upcoming releases' });
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('switches the unknown-ASIN report off by default, and says how its last run went', async () => {
+    const base = settingsWith();
+    const off = settingsWith({
+      metadata: {
+        ...base.metadata,
+        report_unknown: false,
+        report_status: { state: 'never', last_sent: 0 },
+      },
+    });
+    const calls = mockFetch(
+      routes({ 'GET /admin/settings': { body: off }, 'PATCH /admin/settings': patchEcho(off) }),
+    );
+    renderApp('/server?topic=metadata');
+    const toggle = await screen.findByRole('switch', {
+      name: 'Help complete the community database',
+    });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByTestId('report-run')).not.toBeInTheDocument();
+    expect(screen.getByText(/stores only each ASIN, a count and the dates\.$/)).toBeInTheDocument();
+    await userEvent.setup().click(toggle);
+    expect(await screen.findByText('Reporting unknown ASINs is on')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      metadata: { report_unknown: true },
+    });
+    expect(toggle).toBeChecked();
+    expect(screen.getByTestId('report-run')).toHaveTextContent(
+      'Not sent yet: the first report goes out as soon as this is switched on, or about an hour after the server starts.',
+    );
+  });
+
+  it.each([
+    [{ state: 'ok', last_sent: 12 }, 'Last report 2 hr. ago: 12 unknown ASINs sent'],
+    [{ state: 'ok', last_sent: 1 }, 'Last report 2 hr. ago: 1 unknown ASIN sent'],
+    [{ state: 'ok', last_sent: 0 }, 'Last checked 2 hr. ago: nothing new to send'],
+    [
+      { state: 'not_offered', last_sent: 0 },
+      "Last tried 2 hr. ago: the metadata service doesn't take reports (it needs an https address and a service that accepts them).",
+    ],
+    [{ state: 'failed', last_sent: 0 }, "Last report failed 2 hr. ago; it's tried again tomorrow."],
+  ] as const)('says the report last ran %o', async (status, text) => {
+    const base = settingsWith();
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            metadata: {
+              ...base.metadata,
+              report_unknown: true,
+              report_status: {
+                ...status,
+                last_run_at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+              },
+            },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    expect(await screen.findByTestId('report-run')).toHaveTextContent(text);
+  });
+
+  it('holds the unknown-ASIN report off while the lookup is off, and hides it from an older server', async () => {
+    const base = settingsWith();
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            metadata: { ...base.metadata, enabled: false, report_unknown: true },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    const toggle = await screen.findByRole('switch', {
+      name: 'Help complete the community database',
+    });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByTestId('report-run')).not.toBeInTheDocument();
   });
 
   it('sets the preferred Audible marketplace', async () => {
