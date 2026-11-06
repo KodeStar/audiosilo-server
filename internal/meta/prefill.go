@@ -25,7 +25,11 @@ import (
 //     the author, cleaned of series and numbering (match.CleanTitle), is the
 //     path's title ("Bernard Cornwell" by "Sharpe's Eagle (Sharpe 08)");
 //   - a junk title ("Track 01", "03": metadata.IsGenericTitle; "Unknown",
-//     "Untitled") or a junk author ("Unknown", "Various Artists"), each alone.
+//     "Untitled") or a junk author ("Unknown", "Various Artists"), each alone;
+//   - a title that is a whole leaf named "Author; Series; Book NN[; Title]"
+//     (metadata.LeafSeries: an untagged book's, which the scan titles by its
+//     leaf), which the path reads as its title part, else its series and
+//     position ("Dark Road 1-5").
 //
 // A fact the path doesn't give keeps the tag's value (for swapped tags, the
 // other tag's).
@@ -57,7 +61,7 @@ func SearchPrefill(title, author, series, relPath string, isFolder bool) string 
 		// Eagle" folder is Sharpe's Eagle by Bernard Cornwell.
 		title, author = author, title
 	}
-	if pathTitle != "" && (swapped || junkTitle(title)) {
+	if pathTitle != "" && (swapped || junkTitle(title) || leafTitle(title)) {
 		title = pathTitle
 	}
 	if p.Author != "" && (swapped || junkAuthor(author)) {
@@ -73,6 +77,13 @@ func junkTitle(t string) bool {
 		return true
 	}
 	return metadata.IsGenericTitle(t)
+}
+
+// leafTitle reports whether a title is a whole leaf named "Author; Series; Book
+// NN[; Title]" (metadata.LeafSeries), as the scan titles an untagged book in one.
+func leafTitle(t string) bool {
+	_, ok := metadata.LeafSeries(t)
+	return ok
 }
 
 // junkAuthor reports whether an author tag names nobody.
