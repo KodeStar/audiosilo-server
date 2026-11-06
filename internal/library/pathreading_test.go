@@ -200,3 +200,61 @@ func TestScanTitleNotSeries(t *testing.T) {
 	want[edited] = "Emergence"
 	check("after clearing the edit")
 }
+
+// A book one folder deep whose snapshot alone would settle its path reading
+// (catalog.PathFromSnapshot) but whose title may be the album naming its series
+// (catalog.Signature.TitleCheck) waits for a read of its tags: unreadable, it
+// keeps its revision for the next scan rather than recording today's with the
+// title unread, and the next readable scan puts both right.
+func TestScanTitleCheckWaitsForRead(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	ctx := t.Context()
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	tufo := "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
+	silence(t, root, tufo+"/01.mp3", 1, "album=Indian Hill", "title=From The Ashes", "artist=Mark Tufo")
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	// An older server's snapshot: no revision, the folder as the series (and the
+	// author), the album as the title.
+	if _, err := db.ExecContext(ctx, `UPDATE books
+		SET scanned = json_set(json_remove(scanned, '$."@rev"'), '$.title', 'Indian Hill', '$.series', 'Mark Tufo'),
+		    title = 'Indian Hill', series = 'Mark Tufo'`); err != nil {
+		t.Fatal(err)
+	}
+	reading := func(when, wantTitle string, wantRev any) {
+		t.Helper()
+		var title string
+		var rev any
+		if err := db.QueryRowContext(ctx, `SELECT title, json_extract(scanned, '$."@rev"') FROM books`).Scan(&title, &rev); err != nil {
+			t.Fatal(err)
+		}
+		if title != wantTitle || rev != wantRev {
+			t.Errorf("%s: title %q, revision %v; want %q, %v", when, title, rev, wantTitle, wantRev)
+		}
+	}
+	f := filepath.Join(root, filepath.FromSlash(tufo+"/01.mp3"))
+	if err := os.Chmod(f, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f, 0o644) })
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	reading("unreadable", "Indian Hill", nil)
+	if err := os.Chmod(f, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	reading("readable again", "From The Ashes", "2")
+}

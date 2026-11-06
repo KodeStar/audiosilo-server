@@ -587,7 +587,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// part. Unopenable now, it waits for the next scan; and
 				// the names wait while ffprobe fails where it didn't before, as the
 				// series it alone reads (an MP3's TXXX) would be recorded as none.
-				if old.PathCheck == catalog.PathFromSnapshot {
+				// One whose title needs its tags too (TitleCheck, below) waits for
+				// that read: the snapshot alone would record today's revision with
+				// the title unread.
+				if old.PathCheck == catalog.PathFromSnapshot && !old.TitleCheck {
 					pathBackfill[b.RelPath] = nil
 				}
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language

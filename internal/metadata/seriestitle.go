@@ -37,13 +37,15 @@ import (
 // the album: a series is often named for its first book, whose title tag may
 // then be a chapter's ("End Credits"); any other book takes the title tag. With
 // neither, title stays. A book whose own leaf names it as the album does
-// ("Frank Herbert/Dune/Dune": a series named for its first book) keeps the
+// ("Frank Herbert/Dune/Dune": a series named for its first book), alone or
+// beside only its author, a year, a volume marker or the series and the number
+// 1 ("Frank Herbert/Frank Herbert - Dune.m4b", "Dune/1965 - Dune"), keeps the
 // album: it IS the title.
 func TitleNotSeries(title string, md *Metadata, relPath string, isFolder, severalFiles bool) string {
 	if md == nil || title == "" || title != md.AlbumTag {
 		return title
 	}
-	p := readSeriesPath(relPath, isFolder, md.Series)
+	p := readSeriesPath(relPath, isFolder, md.Series, md.Author)
 	if !p.namedForSeries(title) {
 		return title
 	}
@@ -79,36 +81,75 @@ func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool 
 	if strings.TrimSpace(title) == "" {
 		return false
 	}
-	return readSeriesPath(relPath, isFolder, series).namedForSeries(title)
+	return readSeriesPath(relPath, isFolder, series, "").namedForSeries(title)
 }
 
 // seriesPath is what a book's tags and path say of its series and title for
 // TitleNotSeries: the series (the series tag, the folder holding the book, and a
 // LeafSeries leaf's series part; any may be "", which names nothing) and its
-// title (that leaf's title part, "" without one; else DeriveFromPath's).
+// title (that leaf's title part, "" without one; else DeriveFromPath's), and
+// the authors they name (the author tag and the path's author), for
+// leafNames.
 type seriesPath struct {
-	series []string
-	title  string
+	series  []string
+	title   string
+	authors []string
 	// position is the leaf's volume number (DeriveFromPath's, else a LeafSeries
 	// leaf's), 0 for none.
 	position float64
 }
 
-func readSeriesPath(relPath string, isFolder bool, tagSeries string) seriesPath {
+func readSeriesPath(relPath string, isFolder bool, tagSeries, tagAuthor string) seriesPath {
 	n := DeriveFromPath(relPath, isFolder)
-	p := seriesPath{series: []string{tagSeries, n.Series}, title: n.Title, position: n.SeriesIndex}
+	p := seriesPath{
+		series: []string{tagSeries, n.Series}, title: n.Title, position: n.SeriesIndex,
+		authors: []string{tagAuthor, n.Author},
+	}
 	segs := pathSegments(relPath, isFolder)
-	if s, t, v, ok := LeafSeries(segs[len(segs)-1]); ok {
+	leaf := segs[len(segs)-1]
+	if s, t, v, ok := LeafSeries(leaf); ok {
 		p.series = append(p.series, s)
 		p.title, p.position = t, v
+	} else if len(segs) > 1 && isPartLabel(leaf) && plainVolume(leaf) == "" {
+		// A disc or part of a book ("J.K. Rowling/Bastion/CD1"): the folder
+		// holding it is the book, not its series, as ReadPathLayout reads it.
+		p.series[1] = ""
+		p.position, p.title = splitSeriesIndex(segs[len(segs)-2])
 	}
 	return p
 }
 
 // namedForSeries reports whether title names one of the book's series and its
-// leaf doesn't name the book so too ("Frank Herbert/Dune/Dune").
+// leaf doesn't name the book so too (leafNames).
 func (p seriesPath) namedForSeries(title string) bool {
-	return namesAny(title, p.series) && !sameName(title, p.title)
+	return namesAny(title, p.series) && !p.leafNames(title)
+}
+
+// leafNames reports whether the path's title names the book title: it is title
+// ("Frank Herbert/Dune/Dune"), or its " - " parts are title once and otherwise
+// only the author, a number such as a year, something bracketed, a volume marker
+// or the series and the number 1 ("Frank Herbert - Dune", "1965 - Dune", "Pierce
+// Brown - Red Rising 01 - Red Rising").
+func (p seriesPath) leafNames(title string) bool {
+	if sameName(title, p.title) {
+		return true
+	}
+	parts := strings.Split(p.title, " - ")
+	if len(parts) < 2 {
+		return false
+	}
+	named := false
+	for _, part := range parts {
+		switch c := canonTag(part); {
+		case !named && sameName(part, title):
+			named = true
+		case c == "" || strings.Trim(c, "0123456789") == "" || volumeMarker(part) ||
+			namesAny(part, p.authors) || seriesFirst(part, p.series):
+		default:
+			return false
+		}
+	}
+	return named
 }
 
 // LeafSeries reads a book's leaf named "Author; Series; Book NN; Title" (the
@@ -139,12 +180,12 @@ func LeafSeries(leaf string) (series, title string, volume float64, ok bool) {
 var leafVolume = regexp.MustCompile(`^(?i:book)\s+(\d+(?:\.\d+)?)?\S*$`)
 
 // volumeMarker reports whether a name is only a volume marker, "Book 10",
-// "Vol. 2", "#3" (splitSeriesIndex's prefixes and a number): no title.
+// "Vol. 2", "C02", "#3" (splitSeriesIndex's prefixes and a number): no title.
 func volumeMarker(name string) bool {
 	return volumeOnly.MatchString(strings.TrimSpace(name))
 }
 
-var volumeOnly = regexp.MustCompile(`^(?i:book|vol\.?|volume|#)\s*\d+(?:\.\d+)?$`)
+var volumeOnly = regexp.MustCompile(`^(?i:book|vol\.?|volume|c|#)\s*\d+(?:\.\d+)?$`)
 
 // trackTail reports whether a title tag is the album and a track marker ("Indian
 // Hill 03", "Indian Hill - Chapter 2 - Bran"), as bookTitle reads one: a file's

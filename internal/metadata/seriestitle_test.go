@@ -76,6 +76,25 @@ func TestTitleNotSeries(t *testing.T) {
 		{"album over a series tag of another name", "Brandon Sanderson/Mistborn/Book 1 - The Final Empire", false,
 			map[string]string{"title": "Chapter 1", "series": "Mistborn", "album": "The Final Empire"},
 			"The Final Empire"},
+		{"named for its series, the leaf beside the author", "Frank Herbert/Frank Herbert - Dune", false,
+			map[string]string{"title": "Dune", "series": "Dune", "series-part": "1", "album": "Dune", "artist": "Frank Herbert"},
+			"Dune"},
+		{"named for its series, the leaf after a year", "Frank Herbert/Dune/1965 - Dune", false,
+			map[string]string{"title": "Dune", "series": "Dune", "album": "Dune"},
+			"Dune"},
+		{"named for its series, the leaf beside the author and the series 1", "Pierce Brown/Pierce Brown - Red Rising 01 - Red Rising", false,
+			map[string]string{"title": "Red Rising", "series": "Red Rising", "album": "Red Rising", "artist": "Pierce Brown"},
+			"Red Rising"},
+		{"a leaf part beyond the author is the book's", "Dante King/Divine Arsenal/Book 1 - Divine Arsenal - Dual Weapon Cultivation", false,
+			map[string]string{"title": "Divine Arsenal", "album": "Divine Arsenal", "artist": "Dante King"},
+			"Divine Arsenal - Dual Weapon Cultivation"},
+		{"a disc's folder is the book, not its series", "J.K. Rowling/Bastion/CD1", true,
+			map[string]string{"title": "The Boy Who Lived", "album": "Bastion"},
+			"Bastion"},
+		// "C02" is a volume marker (splitSeriesIndex's "c" prefix), no title.
+		{"series folder: a C-numbered leaf", "Will Wight/Cradle/C02", false,
+			map[string]string{"title": "Cradle 2", "album": "Cradle"},
+			"Cradle 2"},
 	}
 	for _, c := range cases {
 		md := probed(c.tags)
@@ -146,6 +165,10 @@ func TestMaybeSeriesTitle(t *testing.T) {
 		{"Frank Herbert/Dune/Dune", "Dune", "Dune", false},
 		{"Matt Dinniman/Dungeon Crawler Carl/Book 8 - A Parade of Horribles", "A Parade of Horribles", "Dungeon Crawler Carl", false},
 		{"Eric Vall/Without Law/Book 17", "", "Without Law", false},
+		{"J.K. Rowling/Bastion/CD1", "Bastion", "", false},
+		{"Frank Herbert/Frank Herbert - Dune", "Dune", "Dune", false},
+		{"Frank Herbert/Dune/1965 - Dune", "Dune", "Dune", false},
+		{"Eric Vall/Without Law/Book 10 - Without Law 10", "Without Law", "Without Law", true},
 	}
 	for _, c := range cases {
 		if got := MaybeSeriesTitle(c.path, true, c.title, c.series); got != c.want {

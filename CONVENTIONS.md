@@ -1434,8 +1434,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   LibraForge benchmark: 305 of one library's 1,050, and wrong matches to book 1). `readNames` passes
   its title through `metadata.TitleNotSeries`: a title that is the album (`Metadata.AlbumTag` /
   `TitleTag`, the pair `bookTitle` chose from) and names a series the book is in (the series tag, the
-  folder holding it, or `LeafSeries`' part of a leaf named `Author; Series; Book NN[; Title]`; series
-  key, brackets out), unless the leaf names the book so too ("Frank Herbert/Dune/Dune"), takes the
+  folder holding it unless the book is a disc or part folder, "Bastion/CD1", whose folder is the book,
+  or `LeafSeries`' part of a leaf named `Author; Series; Book NN[; Title]`; series
+  key, brackets out), unless the leaf names the book so too ("Frank Herbert/Dune/Dune", also beside only
+  the author, a year, a volume marker or the series and 1: "Frank Herbert - Dune", `leafNames`), takes the
   title tag or the path's title (the leaf's title part, else `DeriveFromPath`'s; neither when a
   volume marker, a part label, only bracketed, or the series and the number 1, "Arena Road 1"):
   the two agreeing; else the path's for a book of several files (and a title tag that is the album
@@ -1446,7 +1448,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `@rev` 1 or none whose title may be such a one (`metadata.MaybeSeriesTitle` over the snapshot's
   title and series, `Signature.TitleCheck`) is read once by the next scan with the PathRead read and
   rewritten by `SetPathReading` (which now skips only a snapshot already at `scannedRev`), no
-  re-index and no migration; the rest stay at their revision.
+  re-index and no migration (a `PathFromSnapshot` one waits for that read too, so an unreadable file
+  never records revision 2 with its title unread); the rest stay at their revision.
   **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
   value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
   label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,
