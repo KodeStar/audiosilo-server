@@ -125,6 +125,11 @@ type Book struct {
 	TagASIN     string `json:"-"`
 	TagISBN     string `json:"-"`
 	TagLanguage string `json:"-"`
+	// MatchWorkID and MatchRecordingID are the book's recorded community match
+	// (book_matches, migration 0069), "" for none: only a match run's list of
+	// books reads them (a refresh looks an identifier-less book up by its work).
+	MatchWorkID      string `json:"-"`
+	MatchRecordingID string `json:"-"`
 	// Released is the date the file's tags give (metadata.ReleaseDate), usually
 	// the recording's: scanned, never edited, and only the admin list's
 	// release-date sort reads it (where a book has no Published).

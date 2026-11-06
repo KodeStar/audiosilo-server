@@ -781,8 +781,13 @@ type BookEdit struct {
 	// ChaptersFromCommunity, or ChapterSourceAuto to leave it to the default;
 	// "" changes nothing.
 	ChapterSource string
-	Source        string
-	UserID        int64
+	// Match records the book's community match (book_matches, migration 0069)
+	// with the edit, in its transaction: the work it is, matched or not by an
+	// ASIN or ISBN. Setting one takes Source community; an empty WorkID removes
+	// it. nil changes nothing. One book at a time (EditBooks refuses it).
+	Match  *MatchAnchor
+	Source string
+	UserID int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -845,7 +850,11 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	if err != nil {
 		return e, err
 	}
-	e.Set, e.ChapterSet, e.Add, e.Remove = set, chSet, add, remove
+	anchor, err := normalizeAnchor(e.Match, e.Source)
+	if err != nil {
+		return e, err
+	}
+	e.Set, e.ChapterSet, e.Add, e.Remove, e.Match = set, chSet, add, remove, anchor
 	return e, nil
 }
 
@@ -874,6 +883,9 @@ func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, ed
 func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) error {
 	if len(edit.ChapterSet) > 0 || len(edit.ChapterRevert) > 0 {
 		return invalid("chapters", "chapter titles can only be edited one book at a time")
+	}
+	if edit.Match != nil {
+		return invalid("match", "a community match is recorded one book at a time")
 	}
 	edit, err := edit.normalize()
 	if err != nil {
@@ -928,8 +940,13 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if len(swapRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert)
 	}
+	if edit.Match != nil {
+		if err := writeAnchor(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.Match, editor, now); err != nil {
+			return err
+		}
+	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
-		return nil // nothing for this book (a bulk add of a tag it already has): its row stays as it is
+		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is
 	}
 	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,

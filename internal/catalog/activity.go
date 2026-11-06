@@ -197,8 +197,9 @@ type StorageGroup struct {
 	Books int    `json:"books"`
 }
 
-// Coverage counts the books with an identifier (ASIN or ISBN, the matched= rule),
-// with chapters (more than one) and with a cover.
+// Coverage counts the matched books (Identified, the matched= rule: an ASIN or
+// ISBN, or a recorded community match without one; the wire name predates the
+// latter), with chapters (more than one) and with a cover.
 type Coverage struct {
 	Books        int `json:"books"`
 	Identified   int `json:"identified"`

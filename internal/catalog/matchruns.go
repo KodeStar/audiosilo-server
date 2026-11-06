@@ -108,9 +108,10 @@ type MatchProposal struct {
 	CoverURL    string `json:"cover_url,omitempty"`
 	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
 	// FoundBy is the book's own identifier a refresh found the record by, or
-	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>" ("" for a
-	// match run, and a repick recorded before 2.4.0): applying it is for a book
-	// that still has it.
+	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>", or for a
+	// refresh of a book matched with neither its recorded work, "work:<id>"
+	// ("" for a match run, and a repick recorded before 2.4.0): applying it is
+	// for a book that still has it.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }
@@ -361,15 +362,21 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, e
 }
 
 // matchSubjectCols are the facts a match reads of a book.
+// The book's recorded community match (book_matches) rides along by a LEFT
+// JOIN on its primary key, so every query naming these columns joins
+// matchSubjectJoin after `books b`.
 const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series,
 	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn, b.language,
-	b.tag_asin, b.tag_isbn, b.tag_language, b.genres`
+	b.tag_asin, b.tag_isbn, b.tag_language, b.genres, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, '')`
+
+// matchSubjectJoin is the join matchSubjectCols reads the match from.
+const matchSubjectJoin = ` LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
 	var genres string
 	if err := rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
 		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN, &b.Language,
-		&b.TagASIN, &b.TagISBN, &b.TagLanguage, &genres); err != nil {
+		&b.TagASIN, &b.TagISBN, &b.TagLanguage, &genres, &b.MatchWorkID, &b.MatchRecordingID); err != nil {
 		return err
 	}
 	b.Genres = ParseLabels(genres)
@@ -396,20 +403,22 @@ func (c *Catalog) LanguageCounts(ctx context.Context, libraryID int64) ([]Langua
 }
 
 // UnmatchedBooks lists the books a match run works through: those with no ASIN
-// or ISBN (the Health page's "Not matched", the same predicate) in one library
+// or ISBN and no recorded community match (the Health page's "Not matched", the
+// same predicate) in one library
 // (0 = every library), less the ones an admin ignored there, with the facts a
 // match reads.
 func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
-	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
+	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b`+matchSubjectJoin+`
 	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
 	       AND NOT `+ignoredExpr+`
 	     ORDER BY b.library_id, b.rel_path`, libraryID, IssueUnmatched)
 }
 
-// MatchedBooks lists the books with an ASIN or ISBN in one library (0 = every
-// library): what a refresh run looks up.
+// MatchedBooks lists the matched books in one library (0 = every library): an
+// ASIN or ISBN, or a recorded community match (book_matches) without one, which a
+// refresh looks up by its work. What a refresh run looks up.
 func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
-	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
+	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b`+matchSubjectJoin+`
 	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND `+matchedExpr+`
 	     ORDER BY b.library_id, b.rel_path`, libraryID)
 }
@@ -419,7 +428,7 @@ func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, er
 // An ASIN from an Audiobookshelf metadata.json, an admin's own edit or an
 // enrichment (the Bridge's Audible backfill) is never one.
 func (c *Catalog) CommunityASINBooks(ctx context.Context, libraryID int64) ([]Book, error) {
-	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
+	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b`+matchSubjectJoin+`
 	     WHERE `+inBookLibrary+` AND (?1 = 0 OR b.library_id = ?1) AND b.asin <> '' AND EXISTS(SELECT 1 FROM book_overrides o
 	           WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field = ?2 AND o.source = ?3)
 	     ORDER BY b.library_id, b.rel_path`, libraryID, FieldASIN, SourceCommunity)
@@ -435,6 +444,9 @@ type MatchState struct {
 	Duration     float64
 	Fields       map[string]FieldValue
 	CoverMissing bool
+	// Anchor is the book's recorded community match (book_matches), zero when
+	// it has none. How is MatchHowAuto or MatchHowAccepted.
+	Anchor MatchAnchor
 }
 
 // BookMatchState loads a book's MatchState (ErrNotFound when none is indexed at
@@ -459,6 +471,13 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		return nil, err
 	}
 	st.Fields = l.resolve()
+	anchor, err := bookAnchor(ctx, c.db, libraryID, CleanRelPath(relPath))
+	if err != nil {
+		return nil, err
+	}
+	if anchor != nil {
+		st.Anchor = MatchAnchor{WorkID: anchor.WorkID, RecordingID: anchor.RecordingID, How: anchor.How}
+	}
 	return &st, nil
 }
 
@@ -487,15 +506,15 @@ func CleanOverride(field, value string) string {
 
 // ClearedMatches is what ClearCommunityMatches removed.
 type ClearedMatches struct {
-	Books  int `json:"books"`  // books that had a community value or cover
+	Books  int `json:"books"`  // books that had a community value, cover or recorded match
 	Covers int `json:"covers"` // community covers
 	Runs   int `json:"runs"`   // match runs, with their reviews
 }
 
 // ClearCommunityMatches undoes the community matches of one library (0 = every
-// library), so its books can be matched from fresh: its community overrides and
-// covers go (an admin's own edits and uploads, the tags and an enrichment
-// stay), each book's effective metadata and cover art are rebuilt, and
+// library), so its books can be matched from fresh: its community overrides,
+// covers and recorded matches (book_matches) go (an admin's own edits and
+// uploads, the tags and an enrichment stay), each book's effective metadata and cover art are rebuilt, and
 // the match runs go with their reviews (a run over every library loses only this
 // library's books). One transaction. The caller makes sure no match run is
 // working meanwhile (matchrun.Runner.Clear).
@@ -515,12 +534,20 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 		if err != nil {
 			return err
 		}
-		books := map[Ref]bool{}
+		anchors, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_matches
+		     WHERE ?1 = 0 OR library_id = ?1 RETURNING library_id, path`, libraryID)
+		if err != nil {
+			return err
+		}
+		books, rebuilt := map[Ref]bool{}, map[Ref]bool{}
+		for _, ref := range anchors {
+			books[ref] = true // the row is all there is: nothing to rebuild
+		}
 		for _, ref := range fields {
-			if books[ref] {
+			if rebuilt[ref] {
 				continue // one row per field
 			}
-			books[ref] = true
+			books[ref], rebuilt[ref] = true, true
 			id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
 			if errors.Is(err, ErrNotFound) {
 				continue // not indexed now: nothing to rebuild
