@@ -1283,7 +1283,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Every player book (list,
   search and item alike, all `omitempty`) also carries `subtitle`, `publisher`, `language`,
   `abridged` (a bool, absent while unknown) and `genres` / `tags` (lists). Validation: `normalizeOverride`; sources: a scanned value is `path` when
-  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; one an ABS
+  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
+  `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
@@ -1427,6 +1428,37 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
   on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
   baseline it was read with, so a path-first library still drops the folder as a series.
+  **A title that is only the series** (`@rev` 2, `metadata/seriestitle.go`): many libraries tag
+  the series as the album and the book as the title ("Mark Tufo/Mark Tufo; Indian Hill; Book 04;
+  From The Ashes", album "Indian Hill"; "Eric Vall/Without Law/Book 10", album "Without Law", title
+  "Without Law 10"), so `bookTitle`'s album over the title named every book of the series alike (the
+  LibraForge benchmark: 305 of one library's 1,050, and wrong matches to book 1). `readNames` passes
+  its title through `metadata.TitleNotSeries`: a title that is the album (`Metadata.AlbumTag` /
+  `TitleTag`, the pair `bookTitle` chose from) and names a series the book is in (the series tag, the
+  folder holding it unless the book is a disc or part folder, "Bastion/CD1", whose folder is the book,
+  or `LeafSeries`' part of a leaf named `Author; Series; Book NN[; Title]`; series
+  key, brackets out), unless the leaf names the book so too ("Frank Herbert/Dune/Dune", also beside only
+  the author, a year, a volume marker or the series and 1: "Frank Herbert - Dune", `leafNames`), takes the
+  title tag or the path's title (the leaf's title part, else `DeriveFromPath`'s; neither when a
+  volume marker, a part label, only bracketed, or the series and the number 1, "Arena Road 1"):
+  the two agreeing; else the path's for a book of several files (and a title tag that is the album
+  and a track marker never counts), with no title tag that counts, or beside a tag carrying the
+  series' name; else a book at position 1 keeps the album (a series named for its first book, whose
+  title tag can be a chapter's, "End Credits"); else the title tag, except for a book of several files,
+  whose lone first-file tag ("Prologue" in "Indian Hill/Book 3") counts only when it carries the
+  series' name. It is the stored title, so the
+  player, search and the match's query (`matchrun.QueryFor`) all see the book's own. A snapshot of
+  `@rev` 1 or none whose title may be such a one (`metadata.MaybeSeriesTitle` over the snapshot's
+  title and series, `Signature.TitleCheck`) is read once by the next scan with the PathRead read and
+  rewritten by `SetPathReading` (which now skips only a snapshot already at `scannedRev`), no
+  re-index and no migration (a `PathFromSnapshot` one waits for that read too, so an unreadable file
+  never records revision 2 with its title unread). A current `@rev` 1 snapshot it doesn't flag
+  (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at revision 2 by that scan
+  (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1), so later
+  scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a snapshot of no revision stays
+  until its next re-index or path reading. A stamped book is never tested again, so a later change
+  that makes `TitleNotSeries` change more titles (or `MaybeSeriesTitle` flag more) needs a new
+  `scannedRev`, not a change within revision 2.
   **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
   value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
   label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,

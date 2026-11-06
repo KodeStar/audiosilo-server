@@ -358,6 +358,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books found unchanged whose ebook is new, changed or gone (or never looked
 	// for: indexed before 0056): recorded without a re-index (SetEbooks).
 	ebookBackfill := map[string]catalog.EbookReading{}
+	// Books found unchanged whose revision 1 snapshot needs no title read
+	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
+	// later scans don't test them again.
+	var revBackfill []string
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
@@ -392,6 +396,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record ebooks failed", "library", lib.Name, "err", err)
 		}
 		clear(ebookBackfill)
+		if err := s.cat.StampScannedRev(context.WithoutCancel(ctx), lib.ID, revBackfill); err != nil {
+			s.log.Warn("record scanned revisions failed", "library", lib.Name, "err", err)
+		}
+		revBackfill = revBackfill[:0]
 	}
 	// The books to read are read a few files at a time (readFiles), each book on
 	// its own goroutine, up to a window of books ahead of the one written next; the
@@ -587,13 +595,22 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// part. Unopenable now, it waits for the next scan; and
 				// the names wait while ffprobe fails where it didn't before, as the
 				// series it alone reads (an MP3's TXXX) would be recorded as none.
-				if old.PathCheck == catalog.PathFromSnapshot {
+				// One whose title needs its tags too (TitleCheck, below) waits for
+				// that read: the snapshot alone would record today's revision with
+				// the title unread.
+				if old.PathCheck == catalog.PathFromSnapshot && !old.TitleCheck {
 					pathBackfill[b.RelPath] = nil
 				}
 				// Rows indexed before 0067 haven't had their ASIN, ISBN and language
 				// tags read: the same read, and they wait with the names, as the
 				// hints only ffprobe reads (an M4B's mdta items) would be recorded as none.
-				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || old.PathCheck == catalog.PathRead {
+				// A title that may be the album naming the series (before revision 2:
+				// catalog.Signature.TitleCheck) is the same read.
+				readPath := old.PathCheck == catalog.PathRead || old.TitleCheck
+				if old.RevStamp {
+					revBackfill = append(revBackfill, b.RelPath)
+				}
+				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
 					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
 						if old.ReleasedUnchecked {
 							releasedBackfill[b.RelPath] = md.Released
@@ -604,8 +621,8 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						if old.GenresUnchecked {
 							genresBackfill[b.RelPath] = md.Genres
 						}
-						if old.PathCheck == catalog.PathRead && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-							pathBackfill[b.RelPath] = readNames(b.RelPath, b.IsFolder, md)
+						if readPath && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+							pathBackfill[b.RelPath] = readNames(b, md)
 						}
 					}
 				}
@@ -639,7 +656,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						ebookBackfill[b.RelPath] = r
 					}
 				}
-				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+
+				if len(pathBackfill)+len(genresBackfill)+len(hintsBackfill)+len(absBackfill)+len(attachBackfill)+len(revBackfill)+
 					len(orderBackfill)+len(ebookBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
@@ -802,12 +819,13 @@ func (l *runLog) finish() []catalog.RunEvent {
 // pathFlushEvery is how many path readings a scan gathers before writing them.
 const pathFlushEvery = 500
 
-// readNames is a book's title, author and series: the path's reading
+// readNames is book b's title, author and series: the path's reading
 // (metadata.DeriveFromPath) as the baseline, then md's tags, which are
 // authoritative when present (an unreadable file's md carries none; nil reads
-// the same).
-func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.Metadata {
-	n := metadata.DeriveFromPath(relPath, isFolder)
+// the same), except an album tag that only names the book's series, which
+// gives way to the book's own title (metadata.TitleNotSeries).
+func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
+	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
 		return n
 	}
@@ -821,6 +839,7 @@ func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.M
 	if md.SeriesIndex != 0 {
 		n.SeriesIndex, n.SeriesIndexEnd = md.SeriesIndex, md.SeriesIndexEnd
 	}
+	n.Title = metadata.TitleNotSeries(n.Title, md, b.RelPath, b.IsFolder, len(b.Files) > 1)
 	return n
 }
 
@@ -829,7 +848,7 @@ func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.M
 // its identifiers) from md, its primary file's tags (nil for none): the names a
 // scan reads, which enrich and the setup preview (Preview) share.
 func setNames(b *catalog.Book, md *metadata.Metadata) {
-	n := readNames(b.RelPath, b.IsFolder, md)
+	n := readNames(b, md)
 	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
 	if md != nil {
 		b.Narrator = md.Narrator

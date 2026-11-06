@@ -117,3 +117,63 @@ func TestPreferPathOlderSnapshot(t *testing.T) {
 		FieldSeries: {"", ""}, FieldSeriesIndex: {"", ""},
 	})
 }
+
+// TestStampScannedRev: a scan stamps today's revision on a current revision 1
+// snapshot that needs no title read (Signature.RevStamp), leaving its values;
+// a snapshot that is no longer the row's own, or already re-read, is left as it
+// is, and a book whose title may be its series is flagged for a read instead.
+func TestStampScannedRev(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const (
+		plain  = "Matt Dinniman/Dungeon Crawler Carl/Book 8 - A Parade of Horribles"
+		stale  = "Brandon Sanderson/Mistborn/01 - The Final Empire"
+		series = "Eric Vall/Without Law/Book 10"
+	)
+	for rel, title := range map[string]string{plain: "A Parade of Horribles", stale: "The Final Empire", series: "Without Law"} {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: rel, IsFolder: true, Title: title, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '1')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@indexed_at"', 'older') WHERE rel_path = ?`, stale); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := c.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]bool{plain: {false, true}, stale: {false, false}, series: {true, false}}
+	for rel, w := range want {
+		if got := [2]bool{sigs[rel].TitleCheck, sigs[rel].RevStamp}; got != w {
+			t.Errorf("%s: TitleCheck, RevStamp = %v, want %v", rel, got, w)
+		}
+	}
+	// The series book re-indexed by an older server after the signature was read
+	// (its indexed_at moved, the snapshot no longer its own): asked for anyway, the
+	// compare-and-set leaves it. Asked for the stale one too (a row re-indexed by
+	// an older server before the signature was read), it is left as it is.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET indexed_at = 'later' WHERE rel_path = ?`, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StampScannedRev(ctx, lib.ID, []string{plain, stale, series}); err != nil {
+		t.Fatal(err)
+	}
+	wantRevs := map[string]string{plain: "2|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law"}
+	for rel, w := range wantRevs {
+		var got string
+		if err := c.db.QueryRowContext(ctx, `SELECT IFNULL(json_extract(scanned, '$."@rev"'), '') || '|' || title
+			FROM books WHERE rel_path = ?`, rel).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != w {
+			t.Errorf("%s = %q, want %q", rel, got, w)
+		}
+	}
+	if sigs, err = c.Signatures(ctx, lib.ID); err != nil || sigs[plain].RevStamp || sigs[plain].TitleCheck {
+		t.Errorf("stamped book's signature = %+v (err %v), want nothing to do", sigs[plain], err)
+	}
+}

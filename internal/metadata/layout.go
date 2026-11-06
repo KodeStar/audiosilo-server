@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -47,11 +46,7 @@ type PathLayout struct {
 // position with no series; deeper, it takes the two folders nearest the book,
 // disc and track folders included.
 func ReadPathLayout(relPath string, isFolder bool) PathLayout {
-	segs := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
-	if !isFolder {
-		last := segs[len(segs)-1]
-		segs[len(segs)-1] = strings.TrimSuffix(last, filepath.Ext(last))
-	}
+	segs := pathSegments(relPath, isFolder)
 	dropped := ""
 	for len(segs) > 2 && isPartLabel(segs[len(segs)-1]) {
 		dropped = segs[len(segs)-1]

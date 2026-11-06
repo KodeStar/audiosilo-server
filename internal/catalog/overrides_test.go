@@ -388,6 +388,57 @@ func TestBookDetailProvenance(t *testing.T) {
 	}
 }
 
+// TestPathTitleProvenance: a title the scan took from the path in place of an
+// album naming only the series (metadata.TitleNotSeries: a LeafSeries leaf's
+// title part, or the book's folder above a disc folder) reads as the path's; a
+// title tag's stays the tag's, and the baseline's own reading stays the path's.
+func TestPathTitleProvenance(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, tc := range []struct {
+		path, title, want string
+		folder            bool
+	}{
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 05; Into the Fire", "Into the Fire", SourcePath, true},
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 06; Fire Within", "Into the Flames", SourceTag, true},
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 07; Monsters.mp3", "Monsters", SourcePath, false},
+		{"J.K. Rowling/Bastion/CD1", "Bastion", SourcePath, true},
+		{"J.K. Rowling/Bastion/CD2", "Bastion Rising", SourceTag, true},
+		{"Frank Herbert/Dune/Dune", "Dune", SourcePath, true},
+	} {
+		b := &Book{LibraryID: lib.ID, RelPath: tc.path, IsFolder: tc.folder, Title: tc.title,
+			Author: "Mark Tufo", Series: "Indian Hill", AddedAt: "2020-01-01"}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		d, err := c.AdminBookDetail(ctx, lib.ID, tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f := d.Fields[FieldTitle]; f.Value != tc.title || f.Source != tc.want {
+			t.Errorf("%s: title = %+v, want %q from %s", tc.path, f, tc.title, tc.want)
+		}
+	}
+	// The position such a title gives (titlePosition) reads as the path's too.
+	path := "Mark Tufo/Mark Tufo; Indian Hill; Book XX; Indian Hill 5: Into the Fire"
+	b := &Book{LibraryID: lib.ID, RelPath: path, IsFolder: true, Title: "Indian Hill 5: Into the Fire",
+		Author: "Mark Tufo", Series: "Indian Hill", AddedAt: "2020-01-01"}
+	if _, err := c.UpsertBook(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.AdminBookDetail(ctx, lib.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := d.Fields[FieldTitle]; f.Source != SourcePath {
+		t.Errorf("title = %+v, want from %s", f, SourcePath)
+	}
+	if f := d.Fields[FieldSeriesIndex]; f.Value != "5" || f.Source != SourcePath {
+		t.Errorf("position = %+v, want 5 from %s", f, SourcePath)
+	}
+}
+
 // TestLegacyRowProvenance: a row backfilled by migration 0016 reads the same way
 // as a fresh scan: a value the path yields is path, anything else tag.
 func TestLegacyRowProvenance(t *testing.T) {

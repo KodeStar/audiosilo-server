@@ -353,6 +353,16 @@ type Signature struct {
 	// PathCheck: what a book's snapshot needs from the next scan now that the path
 	// baseline reads a lone folder as the author (pathCheckExpr; SetPathReading).
 	PathCheck PathCheck
+	// TitleCheck: a book read before revision 2 of the scan's reading (a title
+	// that is only the album naming the book's series gives way to its own:
+	// metadata.TitleNotSeries) whose title may be such a title
+	// (metadata.MaybeSeriesTitle), so the next scan reads its tags once to know
+	// (SetPathReading), with no re-index.
+	TitleCheck bool
+	// RevStamp: a book whose snapshot is its own and of revision 1 (so PathOK)
+	// that needs no title read (not TitleCheck), which the next scan stamps with
+	// today's revision (StampScannedRev), so it is never tested again.
+	RevStamp bool
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
 	ScanError, ScanErrorFile string
@@ -437,7 +447,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
-		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at
+		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
+		        `+snapshotNamesExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -448,13 +459,19 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var rel string
 		var sig Signature
 		var stored sql.NullInt64
-		var files sql.NullString
+		var files, rev sql.NullString
+		var title, series string
+		var revOne bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig, &sig.IndexedAt); err != nil {
+			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &revOne); err != nil {
 			return nil, err
+		}
+		if rev.String != scannedRev {
+			sig.TitleCheck = metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series)
+			sig.RevStamp = !sig.TitleCheck && revOne
 		}
 		switch {
 		case !sig.IsFolder:

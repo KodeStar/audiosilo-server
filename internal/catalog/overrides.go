@@ -58,7 +58,8 @@ var OverrideFields = []string{
 
 // Where a field's value came from. A scanned value is SourcePath when it is what
 // the path yields (metadata.DeriveFromPath, or in a library that prefers its
-// folders metadata.FromPathLayout) and SourceTag otherwise; an override is
+// folders metadata.FromPathLayout; for the title also metadata.PathTitle) and
+// SourceTag otherwise; an override is
 // SourceEdited (typed by an admin) or SourceCommunity (accepted from a
 // community-metadata match); an ASIN/ISBN attached by enrichment reads as
 // SourceCommunity too (it was matched to an external record). A value an
@@ -272,13 +273,16 @@ func ParseSeriesPosition(s string) (start, end float64) {
 // stale. loadLayers then takes the snapshot from the row, as migration 0016 did.
 const scannedStampKey = "@indexed_at"
 
-// scannedRevKey is the `scanned` key holding the revision of the path baseline
-// (metadata.DeriveFromPath) the snapshot was read with, scannedRev today; a
-// snapshot without it predates revision 1, when a lone folder above the book was
-// read as its series rather than its author (see pathCheckExpr).
+// scannedRevKey is the `scanned` key holding the revision of the scan's reading
+// of the names (the path baseline, metadata.DeriveFromPath, and the tags over it:
+// library's readNames) the snapshot was read with, scannedRev today. A snapshot
+// without it predates revision 1, when a lone folder above the book was read as
+// its series rather than its author (see pathCheckExpr); one of revision 1
+// predates revision 2, when an album tag naming only the book's series became
+// its title (metadata.TitleNotSeries; Signature.TitleCheck).
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "1"
+	scannedRev    = "2"
 )
 
 // scannedJSON encodes what the scan found for b (its fields before anything is
@@ -533,7 +537,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 }
 
 // scannedFields is what the scan says for each field, with the path readings a
-// value is told apart by (one equal to either is SourcePath, else a tag's; layout
+// value is told apart by (one equal to any is SourcePath, else a tag's; layout
 // is nil outside a library that prefers its folders). The stored snapshot is the
 // tags over the scan's path baseline (metadata.DeriveFromPath). A library that
 // prefers its folders reads the path with the layout instead
@@ -548,12 +552,21 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // or dropped. An Audiobookshelf metadata.json's values then go over all of it
 // (overABS).
 //
+// The baseline also reads the title the way metadata.TitleNotSeries may take it
+// in place of an album that only names the series (metadata.PathTitle: "Mark
+// Tufo; Indian Hill; Book 05; Into the Fire"), which DeriveFromPath doesn't: a
+// scanned title equal to that one is the baseline's.
+//
 // A series with no position takes the one its title gives
 // (titlePosition), so the untagged copies of a numbered series still sit in it
 // by number.
 func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
 	scanned, baseline, layout = l.readScanned()
 	scanned = l.overABS(scanned)
+	if t := scanned[FieldTitle]; t != "" && t != baseline[FieldTitle] && t == metadata.PathTitle(l.path, l.isFolder) {
+		baseline = maps.Clone(baseline)
+		baseline[FieldTitle] = t
+	}
 	scanned, baseline = titlePosition(scanned, baseline, layout)
 	return scanned, baseline, layout
 }

@@ -51,12 +51,51 @@ const pathCheckExpr = `CASE
 	WHEN lower(json_extract(scanned, '$.author')) = lower(substr(rel_path, 1, instr(rel_path, '/') - 1)) THEN 1
 	ELSE 2 END`
 
+// snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title
+// and series, for Signature.TitleCheck: the snapshot's (a field it leaves out is
+// blank, as encodeScanned writes it), else, with no snapshot that is JSON, the
+// row's own (as loadLayers reads it), never the row's effective values over a
+// snapshot.
+//
+// The fourth column is revOneCurrent, so a revision 1 snapshot a scan finds
+// needs no title read can be stamped with today's revision (StampScannedRev).
+const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
+	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.title'), '') ELSE title END,
+	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.series'), '') ELSE series END,
+	` + revOneCurrent
+
+// revOneCurrent is whether a books row's snapshot is of revision 1 and its own
+// (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp, and
+// StampScannedRev's compare-and-set.
+const revOneCurrent = `CASE WHEN json_valid(scanned)
+	THEN json_extract(scanned, '$."` + scannedRevKey + `"') IS '1'
+	 AND json_extract(scanned, '$."` + scannedStampKey + `"') IS indexed_at
+	ELSE 0 END`
+
+// StampScannedRev records today's revision (scannedRev) on the snapshots of the
+// books at these paths, which a scan found need nothing of revision 2
+// (Signature.RevStamp: a title MaybeSeriesTitle doesn't flag), so later scans
+// don't test them again. Their values are unchanged, so nothing is re-resolved
+// or announced; a row re-indexed or re-read since the scan read its signature
+// (no longer a current revision 1 snapshot) is left as it is. It commits every
+// pathReadingBatch books.
+func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []string) error {
+	return c.eachPathBatch(ctx, "StampScannedRev", paths, func(tx *sql.Tx, relPath string) (bool, error) {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE books SET scanned = json_set(scanned, '$."`+scannedRevKey+`"', ?)
+			  WHERE library_id = ? AND rel_path = ? AND `+revOneCurrent,
+			scannedRev, libraryID, relPath)
+		return false, err
+	})
+}
+
 // pathReadingBatch is how many books one SetPathReading transaction rewrites, so
 // a large backfill never holds the writer for long.
 const pathReadingBatch = 250
 
 // SetPathReading rewrites the scanned title, author and series of the books at
-// these paths to today's path baseline (the scanner's backfill of PathCheck), and
+// these paths to today's reading (the scanner's backfill of PathCheck and
+// Signature.TitleCheck), and
 // re-resolves their effective values. A reading is what a fresh read of the
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
 // (PathFromSnapshot). It commits every pathReadingBatch books.
@@ -105,8 +144,8 @@ func setPathReading(ctx context.Context, tx *sql.Tx, libraryID int64, relPath st
 	if err != nil {
 		return err
 	}
-	if l.pathRev != "" {
-		// Re-indexed with today's baseline since the scan read its signature.
+	if l.pathRev == scannedRev {
+		// Re-indexed with today's reading since the scan read its signature.
 		return nil
 	}
 	snap := maps.Clone(l.scanned)
