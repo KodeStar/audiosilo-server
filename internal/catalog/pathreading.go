@@ -57,43 +57,36 @@ const pathCheckExpr = `CASE
 // row's own (as loadLayers reads it), never the row's effective values over a
 // snapshot.
 //
-// The fourth column is whether the snapshot is the row's own (its stamp the
-// row's indexed_at, scannedStampKey), so one a scan found needs no title read
-// can be stamped with today's revision (StampScannedRev).
+// The fourth column is revOneCurrent, so a revision 1 snapshot a scan finds
+// needs no title read can be stamped with today's revision (StampScannedRev).
 const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.title'), '') ELSE title END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.series'), '') ELSE series END,
-	CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@indexed_at"') IS indexed_at ELSE 0 END`
+	` + revOneCurrent
 
-// revOneCurrent is a books row whose snapshot is its own and of revision 1:
+// revOneCurrent is whether a books row's snapshot is of revision 1 and its own
+// (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp, and
 // StampScannedRev's compare-and-set.
-const revOneCurrent = `json_valid(scanned) AND json_extract(scanned, '$."@rev"') = '1'
-	AND json_extract(scanned, '$."@indexed_at"') IS indexed_at`
+const revOneCurrent = `CASE WHEN json_valid(scanned)
+	THEN json_extract(scanned, '$."` + scannedRevKey + `"') IS '1'
+	 AND json_extract(scanned, '$."` + scannedStampKey + `"') IS indexed_at
+	ELSE 0 END`
 
 // StampScannedRev records today's revision (scannedRev) on the snapshots of the
 // books at these paths, which a scan found need nothing of revision 2
 // (Signature.RevStamp: a title MaybeSeriesTitle doesn't flag), so later scans
-// don't test them again. Their values are unchanged, so nothing is re-resolved;
-// a row re-indexed or re-read since the scan read its signature (no longer a
-// current revision 1 snapshot) is left as it is. It commits every
+// don't test them again. Their values are unchanged, so nothing is re-resolved
+// or announced; a row re-indexed or re-read since the scan read its signature
+// (no longer a current revision 1 snapshot) is left as it is. It commits every
 // pathReadingBatch books.
 func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []string) error {
-	for batch := range slices.Chunk(paths, pathReadingBatch) {
-		if err := c.db.WithTx(ctx, "StampScannedRev", func(tx *sql.Tx) error {
-			for _, relPath := range batch {
-				if _, err := tx.ExecContext(ctx,
-					`UPDATE books SET scanned = json_set(scanned, '$."`+scannedRevKey+`"', ?)
-					  WHERE library_id = ? AND rel_path = ? AND `+revOneCurrent,
-					scannedRev, libraryID, relPath); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.eachPathBatch(ctx, "StampScannedRev", paths, func(tx *sql.Tx, relPath string) (bool, error) {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE books SET scanned = json_set(scanned, '$."`+scannedRevKey+`"', ?)
+			  WHERE library_id = ? AND rel_path = ? AND `+revOneCurrent,
+			scannedRev, libraryID, relPath)
+		return false, err
+	})
 }
 
 // pathReadingBatch is how many books one SetPathReading transaction rewrites, so

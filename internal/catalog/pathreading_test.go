@@ -157,26 +157,15 @@ func TestStampScannedRev(t *testing.T) {
 	if err := c.StampScannedRev(ctx, lib.ID, []string{plain, stale}); err != nil {
 		t.Fatal(err)
 	}
-	revs := map[string]string{}
-	rows, err := c.db.QueryContext(ctx, `SELECT rel_path, IFNULL(json_extract(scanned, '$."@rev"'), ''), title FROM books`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rel, rev, title string
-		if err := rows.Scan(&rel, &rev, &title); err != nil {
-			t.Fatal(err)
-		}
-		revs[rel] = rev + "|" + title
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
 	wantRevs := map[string]string{plain: "2|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law"}
 	for rel, w := range wantRevs {
-		if revs[rel] != w {
-			t.Errorf("%s = %q, want %q", rel, revs[rel], w)
+		var got string
+		if err := c.db.QueryRowContext(ctx, `SELECT IFNULL(json_extract(scanned, '$."@rev"'), '') || '|' || title
+			FROM books WHERE rel_path = ?`, rel).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != w {
+			t.Errorf("%s = %q, want %q", rel, got, w)
 		}
 	}
 	if sigs, err = c.Signatures(ctx, lib.ID); err != nil || sigs[plain].RevStamp || sigs[plain].TitleCheck {

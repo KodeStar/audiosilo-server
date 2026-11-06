@@ -607,7 +607,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				// A title that may be the album naming the series (before revision 2:
 				// catalog.Signature.TitleCheck) is the same read.
 				readPath := old.PathCheck == catalog.PathRead || old.TitleCheck
-				if old.RevStamp && old.PathCheck == catalog.PathOK {
+				if old.RevStamp {
 					revBackfill = append(revBackfill, b.RelPath)
 				}
 				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
