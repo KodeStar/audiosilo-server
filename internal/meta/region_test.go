@@ -339,6 +339,11 @@ func TestFitRecording(t *testing.T) {
 		{"kept: the book's length unknown", MatchCandidate{Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 0, "kramer"},
 		{"kept: a plain book, a dramatization 2% off", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 575 * 60, "kramer"},
 		{"kept: a plain book beside a plain reading, even the length the dramatization's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 564 * 60, "kramer"},
+		// A tag hint named rec (a match run's identifier hit): it vouches for rec alone.
+		{"kept: a hint's plain book, a dramatization the length fits", MatchCandidate{PlainBook: true, RecordingID: "kramer", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 564 * 60, "kramer"},
+		{"swapped: a hint's plain book, the plain reading over a closer dramatization", MatchCandidate{PlainBook: true, RecordingID: "kramer", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{kramer, ga, near}}, "kramer", nil, 564 * 60, "near"},
+		{"swapped: a hint's book stating a dramatization", MatchCandidate{RecordingID: "kramer", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 564 * 60, "ga"},
+		{"swapped: a hint's plain book, only dramatizations, the one the length names", MatchCandidate{PlainBook: true, RecordingID: "long", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{{ID: "long", RuntimeMin: 758, Publisher: "GraphicAudio"}, ga}}, "long", nil, 564 * 60, "ga"},
 	}
 	for _, tc := range cases {
 		var rec *MatchRecording
@@ -378,6 +383,9 @@ func TestMatchQueryStatesDramatization(t *testing.T) {
 		{MatchQuery{Title: "The Spaceship", Genres: []string{"Radio Drama"}}, true},
 		{MatchQuery{Title: "Paradise Lost", Genres: []string{"Comedy", "radio plays"}}, true},
 		{MatchQuery{Title: "Die drei ???", Genres: []string{"Hörspiel"}}, true},
+		{MatchQuery{Title: "Die drei ???", Genres: []string{"Kinderhörspiel"}}, true},
+		{MatchQuery{Title: "Die drei ???", Genres: []string{"Hoerspiel"}}, true},
+		{MatchQuery{Title: "The Spaceship", Genres: []string{"Audio-Drama"}}, true},
 		{MatchQuery{Title: "Dune", Genres: []string{"Graphic Audio"}}, true},
 		{MatchQuery{Title: "Riyria", Author: "Michael J. Sullivan - Graphic Audio"}, true},
 		{MatchQuery{Title: "Dune", Genres: []string{"Audiobook", "Science Fiction & Fantasy", "Radio"}}, false},

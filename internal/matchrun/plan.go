@@ -172,8 +172,9 @@ func LibraryLanguageOf(ctx context.Context, cat *catalog.Catalog, libraryID int6
 // languageWords are the language names and ISO 639-2 codes a tag spells a language
 // with, beyond the English names (model.LanguageWords, model.LibrivoxLanguages), each
 // as its 639-1 code: the table metaserve reads them by (audiosilo-meta pkg/query
-// matchLanguageWords, unexported), less its "no single language" codes (und, mul, zxx
-// and mis: meta.NormalizeLanguage reads them as none).
+// matchLanguageWords, unexported). Of its "no single language" spellings, und, mul,
+// zxx and mis never get here (meta.NormalizeLanguage reads them as none); "multilingual"
+// does, and maps to "" as there: it says no language.
 var languageWords = func() map[string]string {
 	m := model.LanguageWords()
 	maps.Copy(m, model.LibrivoxLanguages())
@@ -186,15 +187,21 @@ var languageWords = func() map[string]string {
 		"ron": "ro", "mal": "ml",
 		"deutsch": "de", "français": "fr", "francais": "fr", "español": "es", "espanol": "es",
 		"castellano": "es", "italiano": "it", "nederlands": "nl", "português": "pt", "polski": "pl",
-		"svenska": "sv", "dansk": "da", "norsk": "no", "suomi": "fi",
+		"svenska": "sv", "dansk": "da", "norsk": "no", "suomi": "fi", "multilingual": "",
 		"portugues": "pt", //nolint:misspell // Portuguese without its accent, as a tag spells it
 	})
 	return m
 }()
 
 // languageCode is a language as bookLanguage reads it ("english", "eng", "de"), as its
-// 639-1 code when languageWords knows the spelling, else as it is.
-func languageCode(l string) string { return cmp.Or(languageWords[l], l) }
+// 639-1 code when languageWords knows the spelling ("" for one saying no language),
+// else as it is.
+func languageCode(l string) string {
+	if code, ok := languageWords[l]; ok {
+		return code
+	}
+	return l
+}
 
 var yearRE = regexp.MustCompile(`^\d{4}`)
 

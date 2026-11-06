@@ -130,8 +130,9 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 		return nil, ErrBusy
 	}
 	var (
-		books []catalog.Book
-		err   error
+		books     []catalog.Book
+		languages map[int64]string // a match's only (matchBook's mode switch)
+		err       error
 	)
 	switch o.Mode {
 	case catalog.MatchModeRepick:
@@ -139,16 +140,12 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 	case catalog.MatchModeRefresh:
 		books, err = r.cat.MatchedBooks(ctx, o.LibraryID)
 	default:
-		books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID)
+		if books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID); err == nil {
+			languages, err = r.libraryLanguages(ctx, books)
+		}
 	}
 	if err != nil {
 		return nil, err
-	}
-	var languages map[int64]string
-	if o.Mode == catalog.MatchModeMatch {
-		if languages, err = r.libraryLanguages(ctx, books); err != nil {
-			return nil, err
-		}
 	}
 	run := catalog.MatchRun{Mode: o.Mode, Region: o.Region, Total: len(books)}
 	if o.LibraryID != 0 {

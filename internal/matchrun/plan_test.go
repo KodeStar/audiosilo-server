@@ -737,6 +737,7 @@ func TestLibraryLanguage(t *testing.T) {
 		{"denied: a fifth another language", []catalog.LanguageCount{n("", "en", 80), n("", "de", 20)}, ""},
 		{"denied: too few say one", []catalog.LanguageCount{n("", "en", 19), n("", "", 3)}, ""},
 		{"denied: placeholders say nothing", []catalog.LanguageCount{n("", "und", 100), n("xxx", "", 100)}, ""},
+		{"multilingual says nothing", []catalog.LanguageCount{n("", "English", 85), n("", "Multilingual", 15)}, "en"},
 		{"denied: none", nil, ""},
 	} {
 		if got := LibraryLanguage(tc.counts); got != tc.want {

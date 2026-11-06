@@ -336,8 +336,9 @@ func (q MatchQuery) statesDramatization() bool {
 
 // dramaGenreRE is a genre naming a dramatized form beyond what dramatizationTextRE
 // reads anywhere: a radio or audio drama or play (the BBC's own tags say "Radio
-// Drama") or a German Hörspiel.
-var dramaGenreRE = regexp.MustCompile(`(?i)\b(?:(?:radio|audio)\s?(?:drama|play)s?|hörspiele?)\b`)
+// Drama"; "Audio-Drama", "Audioplays") or a German Hörspiel, "Hoerspiel" in ASCII and
+// inside a compound ("Kinderhörspiel").
+var dramaGenreRE = regexp.MustCompile(`(?i)\b(?:radio|audio)[\s-]?(?:drama|play)s?\b|h(?:ö|oe)rspiel`)
 
 // lengthSays reports whether a dramatization's runtime is close enough to a plain
 // book's of seconds for its length alone to say the book is that production, when the
@@ -367,7 +368,7 @@ func lengthSays(r *MatchRecording, seconds float64) bool {
 // holding only dramatizations of other lengths gives nil: the work still fits, but no
 // recording does. nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
-	return chooseRecording(c, seconds, region, narrators, nil)
+	return chooseRecording(c, seconds, region, narrators, c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == ""), nil)
 }
 
 // FitRecording is rec, the recording DefaultRecording picked for a book of seconds
@@ -381,7 +382,9 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // production at another length), so it stays, and the length holds the book for
 // review. A match run calls it, where an identifier is always a tag's hint; never on
 // the book's own identifier (a refresh, a repick), which names the recording the book
-// is. rec nil (the work holds only a dramatization the book isn't) stays nil.
+// is. rec nil (the work holds only a dramatization the book isn't) stays nil. The
+// identifier vouched for rec alone, so a plain book (MatchCandidate.PlainBook) gives
+// way to a dramatization only as when nothing named one (DefaultRecording's rule).
 func FitRecording(c *MatchCandidate, rec *MatchRecording, seconds float64, region string, narrators []string) *MatchRecording {
 	fits := func(r *MatchRecording) bool {
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
@@ -390,16 +393,16 @@ func FitRecording(c *MatchCandidate, rec *MatchRecording, seconds float64, regio
 	if rec == nil || readBy(rec, narrators) || rec.RuntimeMin <= 0 || seconds <= 0 || fits(rec) {
 		return rec
 	}
-	return cmp.Or(chooseRecording(c, seconds, region, narrators, fits), rec)
+	return cmp.Or(chooseRecording(c, seconds, region, narrators, c.PlainBook, fits), rec)
 }
 
 // chooseRecording is DefaultRecording's choice among the recordings keep admits (nil:
-// all); an identifier's recording that keep refuses is passed over.
-func chooseRecording(c *MatchCandidate, seconds float64, region string, narrators []string, keep func(*MatchRecording) bool) *MatchRecording {
+// all); an identifier's recording that keep refuses is passed over. guarded keeps a
+// plain book off a dramatization nothing else names.
+func chooseRecording(c *MatchCandidate, seconds float64, region string, narrators []string, guarded bool, keep func(*MatchRecording) bool) *MatchRecording {
 	if keep == nil {
 		keep = func(*MatchRecording) bool { return true }
 	}
-	guarded := c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == "")
 	// A plain book whose work holds only dramatizations is one when its length
 	// names it (lengthSays).
 	dramaOnly := guarded && !slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return !r.isDramatization(c) })

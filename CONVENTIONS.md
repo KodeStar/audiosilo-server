@@ -1598,14 +1598,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
   marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
   is the preferred one), `asin_region` names the first's;
-  `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one (its text, folders, author or narrator credit, or a genre such as "Radio Drama": `statesDramatization`), unless an identifier or a narrator names it, or the work holds only dramatizations and one is within max(1%, 2 min) of the book's length (`lengthSays`): `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
+  `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one (its text, folders, author or narrator credit, or a genre such as "Radio Drama" or "Hörspiel": `statesDramatization`), unless an identifier or a narrator names it, or the work holds only dramatizations and one is within max(1%, 2 min) of the book's length (`lengthSays`): `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
   reads, `readBy`: a name folding alike or every word of one in the other, either way round, that
   fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
   preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
   the dialog starts from (the console has no copy of the rule). A match run then takes
   `meta.FitRecording`: a recording more than 10% off the length that none of the book's
-  narrators reads (a tag hint's, metaserve's guess) gives way to one of the work's that fits;
-  never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
+  narrators reads (a tag hint's, metaserve's guess) gives way to one of the work's that fits,
+  a plain book's never a dramatization DefaultRecording's rule refuses (the hint named only its
+  own recording); never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
