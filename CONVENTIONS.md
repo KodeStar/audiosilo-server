@@ -1684,7 +1684,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   pacing, its time reported, the right answers read afterwards from the artifact so a proxy counts
   only the run's requests), counted per outcome and judged by the reference ASIN, else (a reference
   with no ASIN) LibraForge's hand-checked pick, else v2.5.1's audited verdict on the same work, else
-  title and author, each its own bucket (run line in its doc comment). A
+  title and author, each its own bucket (run line in its doc comment); the title-only judge
+  (`sameBook`, in the untagged `titlejudge_test.go` so its tests run with every `go test`) also takes a
+  work at the position the reference title states whose title agrees without that number, "Book"/"Vol."
+  or bracketed notes ("Rise, My Minions! 3" = "Rise, My Minions! Book 3"). `LF_DIAG=1` adds each book's
+  diagnostics to `LF_OUT` (`diag`: identifier, `lengthFits`, the query, the run's candidates and the
+  copy's top 10 with reasons, series and runtimes, the right work's rank). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
