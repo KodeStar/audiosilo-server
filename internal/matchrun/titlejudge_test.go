@@ -121,9 +121,7 @@ func numberStem(ws []string, n int) string {
 		}
 		out = append(out, w)
 	}
-	if len(out) > 1 && (out[0] == "the" || out[0] == "a" || out[0] == "an") {
-		out = out[1:]
-	}
+	out = dropArticle(out)
 	for i, w := range out {
 		if len(w) > 3 {
 			out[i] = strings.TrimSuffix(w, "s")
@@ -136,12 +134,15 @@ func withAnd(s string) string { return strings.ReplaceAll(s, "&", " and ") }
 
 func beforeColon(s string) string { before, _, _ := strings.Cut(s, ":"); return before }
 
-func normTitle(s string) string {
-	ws := titleWords(withAnd(s))
+func normTitle(s string) string { return strings.Join(dropArticle(titleWords(withAnd(s))), " ") }
+
+// dropArticle is ws without a leading "the", "a" or "an", unless that is all
+// there is.
+func dropArticle(ws []string) []string {
 	if len(ws) > 1 && (ws[0] == "the" || ws[0] == "a" || ws[0] == "an") {
-		ws = ws[1:]
+		return ws[1:]
 	}
-	return strings.Join(ws, " ")
+	return ws
 }
 
 // work is a candidate as the judge reads it: its title, author and series at
