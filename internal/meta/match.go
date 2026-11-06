@@ -330,27 +330,25 @@ func (r *MatchRecording) isDramatization(c *MatchCandidate) bool {
 // series, folders, typed text, author or narrator credit ("Michael J. Sullivan -
 // Graphic Audio"), or a genre naming a dramatized form ("Radio Drama").
 func (q MatchQuery) statesDramatization() bool {
-	return slices.ContainsFunc(slices.Concat([]string{q.Text, q.Title, q.Series, q.Path, q.Author}, q.Narrators), dramatizationTextRE.MatchString) ||
-		slices.ContainsFunc(q.Genres, dramatizedGenreRE.MatchString)
+	return slices.ContainsFunc(slices.Concat([]string{q.Text, q.Title, q.Series, q.Path, q.Author}, q.Narrators, q.Genres), dramatizationTextRE.MatchString) ||
+		slices.ContainsFunc(q.Genres, dramaGenreRE.MatchString)
 }
 
-// dramatizedGenreRE is a genre naming a dramatized production: a radio or audio drama
-// or play (the BBC's own tags say "Radio Drama"), a German Hörspiel, or the
-// statements dramatizationTextRE reads anywhere.
-var dramatizedGenreRE = regexp.MustCompile(`(?i)\b(?:(?:radio|audio)\s?(?:drama|play)s?|hörspiele?|full[- ]?cast|dramati[sz](?:ed|ations?))\b`)
+// dramaGenreRE is a genre naming a dramatized form beyond what dramatizationTextRE
+// reads anywhere: a radio or audio drama or play (the BBC's own tags say "Radio
+// Drama") or a German Hörspiel.
+var dramaGenreRE = regexp.MustCompile(`(?i)\b(?:(?:radio|audio)\s?(?:drama|play)s?|hörspiele?)\b`)
 
-// dramatizationSlack is how close, in seconds, a dramatization's runtime must be to a
-// plain book's of seconds for its length alone to say the book is that production,
-// when the work holds nothing else (DefaultRecording): within 1% of the book's length,
-// or two minutes on a short one. A store rounds a runtime to the minute and a rip
-// trims a second or two, so a copy of the production lands inside it; another
-// production of the text hardly ever does (the BBC's 1984 collection, 1.9% off the
-// work's dramatization, is one of its own).
-func dramatizationSlack(seconds float64) float64 { return max(seconds*0.01, 120) }
-
-// lengthSays reports whether r's runtime is within dramatizationSlack of seconds.
+// lengthSays reports whether a dramatization's runtime is close enough to a plain
+// book's of seconds for its length alone to say the book is that production, when the
+// work holds nothing else (DefaultRecording): within 1% of the book's length, or two
+// minutes on a short one (the dramatization slack). A store rounds a runtime to the
+// minute and a rip trims a second or two, so a copy of the production lands inside
+// it; another production of the text hardly ever does (the BBC's 1984 collection, 1.9%
+// off the work's dramatization, is one of its own).
 func lengthSays(r *MatchRecording, seconds float64) bool {
-	return r.RuntimeMin > 0 && seconds > 0 && math.Abs(float64(r.RuntimeMin)*60-seconds) <= dramatizationSlack(seconds)
+	off, known := RuntimeOff(r.RuntimeMin, seconds)
+	return known && off <= max(0.01, 120/seconds)
 }
 
 // DefaultRecording is the recording of c a book most likely is, as the match
@@ -365,7 +363,7 @@ func lengthSays(r *MatchRecording, seconds float64) bool {
 // takes a dramatization only when an identifier names it, or one of its narrators reads
 // it at a plausible length and reads no plain recording that fits as well, or the work
 // holds nothing but dramatizations and this one's runtime is the book's
-// (dramatizationSlack: the length says the book is that production); so a work
+// (lengthSays: the length says the book is that production); so a work
 // holding only dramatizations of other lengths gives nil: the work still fits, but no
 // recording does. nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
@@ -385,34 +383,30 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // the book's own identifier (a refresh, a repick), which names the recording the book
 // is. rec nil (the work holds only a dramatization the book isn't) stays nil.
 func FitRecording(c *MatchCandidate, rec *MatchRecording, seconds float64, region string, narrators []string) *MatchRecording {
-	if rec == nil || readBy(rec, narrators) {
-		return rec
-	}
-	if off, known := RuntimeOff(rec.RuntimeMin, seconds); !known || off <= PlausibleRuntimeOff {
-		return rec
-	}
 	fits := func(r *MatchRecording) bool {
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
 		return known && off <= PlausibleRuntimeOff
 	}
-	if fit := chooseRecording(c, seconds, region, narrators, fits); fit != nil {
-		return fit
+	if rec == nil || readBy(rec, narrators) || rec.RuntimeMin <= 0 || seconds <= 0 || fits(rec) {
+		return rec
 	}
-	return rec
+	return cmp.Or(chooseRecording(c, seconds, region, narrators, fits), rec)
 }
 
 // chooseRecording is DefaultRecording's choice among the recordings keep admits (nil:
 // all); an identifier's recording that keep refuses is passed over.
 func chooseRecording(c *MatchCandidate, seconds float64, region string, narrators []string, keep func(*MatchRecording) bool) *MatchRecording {
+	if keep == nil {
+		keep = func(*MatchRecording) bool { return true }
+	}
 	guarded := c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == "")
 	// A plain book whose work holds only dramatizations is one when its length
 	// names it (lengthSays).
 	dramaOnly := guarded && !slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return !r.isDramatization(c) })
-	kept := func(r *MatchRecording) bool { return keep == nil || keep(r) }
 	lengthNames := func(r *MatchRecording) bool { return dramaOnly && lengthSays(r, seconds) }
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if c.RecordingID != "" && r.ID == c.RecordingID && kept(r) && !(guarded && r.isDramatization(c) && !lengthNames(r)) {
+		if c.RecordingID != "" && r.ID == c.RecordingID && keep(r) && !(guarded && r.isDramatization(c) && !lengthNames(r)) {
 			return r
 		}
 	}
@@ -423,7 +417,7 @@ func chooseRecording(c *MatchCandidate, seconds float64, region string, narrator
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
 		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
 		drama := guarded && r.isDramatization(c)
-		if !kept(r) || (drama && !theirs && !lengthNames(r)) {
+		if !keep(r) || (drama && !theirs && !lengthNames(r)) {
 			continue
 		}
 		gap := math.Inf(1)

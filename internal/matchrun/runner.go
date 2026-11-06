@@ -178,11 +178,11 @@ func (r *Runner) libraryLanguages(ctx context.Context, books []catalog.Book) (ma
 		if _, ok := out[id]; ok {
 			continue
 		}
-		counts, err := r.cat.LanguageCounts(ctx, id)
+		l, err := LibraryLanguageOf(ctx, r.cat, id, nil)
 		if err != nil {
 			return nil, err
 		}
-		out[id] = LibraryLanguage(counts)
+		out[id] = l
 	}
 	return out, nil
 }

@@ -16,6 +16,7 @@ package matchrun
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"regexp"
 	"slices"
@@ -142,25 +143,47 @@ func LibraryLanguage(counts []catalog.LanguageCount) string {
 			said += n.Books
 		}
 	}
+	if said < LanguageMinBooks {
+		return ""
+	}
 	for l, n := range by {
-		if said >= LanguageMinBooks && float64(n) >= LanguageMinShare*float64(said) {
+		if float64(n) >= LanguageMinShare*float64(said) {
 			return l
 		}
 	}
 	return ""
 }
 
+// LibraryLanguageOf reads the language of library libraryID (LibraryLanguage over
+// catalog.LanguageCounts) for book b, "" without a read when b says its own
+// (bookLanguage), as QueryFor sends a library's only for a book saying none. b nil
+// always reads.
+func LibraryLanguageOf(ctx context.Context, cat *catalog.Catalog, libraryID int64, b *catalog.Book) (string, error) {
+	if b != nil && bookLanguage(b.Language, b.TagLanguage) != "" {
+		return "", nil
+	}
+	counts, err := cat.LanguageCounts(ctx, libraryID)
+	if err != nil {
+		return "", err
+	}
+	return LibraryLanguage(counts), nil
+}
+
 // languageWords are the language names and ISO 639-2 codes a tag spells a language
-// with, beyond the English names (model.LanguageWords), each as its 639-1 code: the
-// commonest of the table metaserve reads them by (audiosilo-meta pkg/query
-// matchLanguageWords).
+// with, beyond the English names (model.LanguageWords, model.LibrivoxLanguages), each
+// as its 639-1 code: the table metaserve reads them by (audiosilo-meta pkg/query
+// matchLanguageWords, unexported), less its "no single language" codes (und, mul, zxx
+// and mis: meta.NormalizeLanguage reads them as none).
 var languageWords = func() map[string]string {
 	m := model.LanguageWords()
+	maps.Copy(m, model.LibrivoxLanguages())
 	maps.Copy(m, map[string]string{
 		"eng": "en", "ger": "de", "deu": "de", "fre": "fr", "fra": "fr", "spa": "es", "ita": "it",
 		"jpn": "ja", "por": "pt", "dut": "nl", "nld": "nl", "pol": "pl", "rus": "ru", "chi": "zh",
 		"zho": "zh", "dan": "da", "swe": "sv", "fin": "fi", "nor": "no", "nob": "no", "nno": "no",
 		"nb": "no", "nn": "no", "tur": "tr", "cze": "cs", "ces": "cs", "hun": "hu",
+		"ara": "ar", "hin": "hi", "heb": "he", "gre": "el", "ell": "el", "mar": "mr", "rum": "ro",
+		"ron": "ro", "mal": "ml",
 		"deutsch": "de", "français": "fr", "francais": "fr", "español": "es", "espanol": "es",
 		"castellano": "es", "italiano": "it", "nederlands": "nl", "português": "pt", "polski": "pl",
 		"svenska": "sv", "dansk": "da", "norsk": "no", "suomi": "fi",

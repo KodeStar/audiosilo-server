@@ -436,12 +436,13 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	// The library's language, as a match run sends it for a book saying none: one
-	// grouped read. Unreadable, the book is matched as saying none.
-	counts, err := a.cat.LanguageCounts(r.Context(), lib.ID)
+	// grouped read, none for a book saying its own. Unreadable, the book is matched as
+	// saying none.
+	libLanguage, err := matchrun.LibraryLanguageOf(r.Context(), a.cat, lib.ID, book)
 	if err != nil {
 		a.log.Warn("library languages for match failed", "err", err, "library", lib.ID)
 	}
-	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion(), matchrun.LibraryLanguage(counts))
+	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion(), libLanguage)
 	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
 	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {

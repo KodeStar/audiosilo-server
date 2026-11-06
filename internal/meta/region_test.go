@@ -269,46 +269,40 @@ func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
 		c         MatchCandidate
 		narrators []string
 		want      string
-		minutes   float64 // the book's length; 0 = 400
+		minutes   float64 // the book's length; 0 = unknown
 	}{
-		{"denied: nearer by length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain", 0},
-		{"denied: a full-cast credit", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, cast}}, nil, "plain", 0},
+		{"denied: nearer by length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain", 400},
+		{"denied: a full-cast credit", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, cast}}, nil, "plain", 400},
 		{"denied: only the dramatization, of another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "", 410},
-		{"allowed: only the dramatization, the book's length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "ga", 0},
+		{"allowed: only the dramatization, the book's length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "ga", 400},
 		{"allowed: only the dramatization, within 1%", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "ga", 403.9},
 		{"allowed: only the dramatization, within two minutes", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{{ID: "short", RuntimeMin: 13, Publisher: "GraphicAudio"}}}, nil, "short", 14.9},
 		{"denied: only the dramatization, past two minutes", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{{ID: "short", RuntimeMin: 13, Publisher: "GraphicAudio"}}}, nil, "", 15.1},
 		{"denied: only dramatizations, the 1984 collection 1.9% off", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{{ID: "bbc", RuntimeMin: 670, Publisher: "GraphicAudio"}}}, nil, "", 683},
-		{"allowed: only dramatizations, the one the length names", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{long, ga, cast}}, nil, "ga", 0},
-		{"allowed: metaserve named another, the length names this one", MatchCandidate{PlainBook: true, RecordingID: "long", Recordings: []MatchRecording{long, ga}}, nil, "ga", 0},
-		{"denied: beside a plain reading, the length names the dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain", 0},
-		{"denied: unknown length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "", -1},
-		{"denied: metaserve named it by length", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{plain, ga}}, nil, "plain", 0},
+		{"allowed: only dramatizations, the one the length names", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{long, ga, cast}}, nil, "ga", 400},
+		{"allowed: metaserve named another, the length names this one", MatchCandidate{PlainBook: true, RecordingID: "long", Recordings: []MatchRecording{long, ga}}, nil, "ga", 400},
+		{"denied: beside a plain reading, the length names the dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain", 400},
+		{"denied: unknown length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, "", 0},
+		{"denied: metaserve named it by length", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{plain, ga}}, nil, "plain", 400},
 		{"denied: no publisher on a labelled work", MatchCandidate{PlainBook: true, Title: "Dune [Dramatized Adaptation]", Recordings: []MatchRecording{bare}}, nil, "", 450},
-		{"allowed: no publisher on a plain title", MatchCandidate{PlainBook: true, Title: "Dune", Recordings: []MatchRecording{bare}}, nil, "bare", 0},
-		{"allowed: several readers are no dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, many}}, nil, "many", 0},
-		{"allowed: the book states it", MatchCandidate{Recordings: []MatchRecording{plain, ga}}, nil, "ga", 0},
-		{"allowed: an identifier named it", MatchCandidate{PlainBook: true, RecordingID: "ga", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{plain, ga}}, nil, "ga", 0},
-		{"allowed: its narrator is the book's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, []string{"Alex Hill-Knight"}, "ga", 0},
-		{"denied: its narrator, but another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, long}}, []string{"Alex Hill-Knight"}, "plain", 0},
-		{"denied: a narrator on both prefers the plain reading", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both", 0},
-		{"denied: metaserve named it, a narrator on both", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both", 0},
-		{"allowed: a narrator on both, the book states it", MatchCandidate{Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "ga", 0},
-		{"denied: a publisher under a title keeping (Dramatized)", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized)", Recordings: []MatchRecording{plain}}, nil, "", 0},
-		{"allowed: a publisher under the label, beside a dramatization", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain, ga}}, nil, "plain", 0},
-		{"denied: a publisher under the label, no recording saying so", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain}}, nil, "", 0},
-		{"denied: a publisher under a part's label", MatchCandidate{PlainBook: true, Title: "Warbreaker (1 of 3) [Dramatized Adaptation]", Recordings: []MatchRecording{plain}}, nil, "", 0},
-		{"denied: a subtitle keeping the statement", MatchCandidate{PlainBook: true, Title: "Dune", Subtitle: "A Full-Cast Dramatization", Recordings: []MatchRecording{plain}}, nil, "", 0},
+		{"allowed: no publisher on a plain title", MatchCandidate{PlainBook: true, Title: "Dune", Recordings: []MatchRecording{bare}}, nil, "bare", 400},
+		{"allowed: several readers are no dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, many}}, nil, "many", 400},
+		{"allowed: the book states it", MatchCandidate{Recordings: []MatchRecording{plain, ga}}, nil, "ga", 400},
+		{"allowed: an identifier named it", MatchCandidate{PlainBook: true, RecordingID: "ga", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{plain, ga}}, nil, "ga", 400},
+		{"allowed: its narrator is the book's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, []string{"Alex Hill-Knight"}, "ga", 400},
+		{"denied: its narrator, but another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, long}}, []string{"Alex Hill-Knight"}, "plain", 400},
+		{"denied: a narrator on both prefers the plain reading", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both", 400},
+		{"denied: metaserve named it, a narrator on both", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both", 400},
+		{"allowed: a narrator on both, the book states it", MatchCandidate{Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "ga", 400},
+		{"denied: a publisher under a title keeping (Dramatized)", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized)", Recordings: []MatchRecording{plain}}, nil, "", 400},
+		{"allowed: a publisher under the label, beside a dramatization", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain, ga}}, nil, "plain", 400},
+		{"denied: a publisher under the label, no recording saying so", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain}}, nil, "", 400},
+		{"denied: a publisher under a part's label", MatchCandidate{PlainBook: true, Title: "Warbreaker (1 of 3) [Dramatized Adaptation]", Recordings: []MatchRecording{plain}}, nil, "", 400},
+		{"denied: a subtitle keeping the statement", MatchCandidate{PlainBook: true, Title: "Dune", Subtitle: "A Full-Cast Dramatization", Recordings: []MatchRecording{plain}}, nil, "", 400},
 	}
 	for _, tc := range cases {
-		got, seconds := "", 400*60.0
-		switch {
-		case tc.minutes < 0:
-			seconds = 0
-		case tc.minutes > 0:
-			seconds = tc.minutes * 60
-		}
-		if r := DefaultRecording(&tc.c, seconds, "", tc.narrators); r != nil {
+		got := ""
+		if r := DefaultRecording(&tc.c, tc.minutes*60, "", tc.narrators); r != nil {
 			got = r.ID
 		}
 		if got != tc.want {
@@ -384,6 +378,7 @@ func TestMatchQueryStatesDramatization(t *testing.T) {
 		{MatchQuery{Title: "The Spaceship", Genres: []string{"Radio Drama"}}, true},
 		{MatchQuery{Title: "Paradise Lost", Genres: []string{"Comedy", "radio plays"}}, true},
 		{MatchQuery{Title: "Die drei ???", Genres: []string{"Hörspiel"}}, true},
+		{MatchQuery{Title: "Dune", Genres: []string{"Graphic Audio"}}, true},
 		{MatchQuery{Title: "Riyria", Author: "Michael J. Sullivan - Graphic Audio"}, true},
 		{MatchQuery{Title: "Dune", Genres: []string{"Audiobook", "Science Fiction & Fantasy", "Radio"}}, false},
 		{MatchQuery{Title: "Dune", Genres: []string{"Drama"}}, false},

@@ -731,6 +731,7 @@ func TestLibraryLanguage(t *testing.T) {
 		{"the benchmark", []catalog.LanguageCount{n("", "english", 1188), n("", "English", 374), n("", "eng", 31), n("", "und", 78), n("", "", 2373)}, "en"},
 		{"a German library", []catalog.LanguageCount{n("", "Deutsch", 30), n("", "ger", 25), n("de", "", 10), n("", "", 400)}, "de"},
 		{"the book's own beats its tags", []catalog.LanguageCount{n("fr", "English", 25), n("", "", 5)}, "fr"},
+		{"an Arabic library, metaserve's spellings", []catalog.LanguageCount{n("", "Arabic", 12), n("", "ara", 10)}, "ar"},
 		{"untagged books say nothing", []catalog.LanguageCount{n("", "en", 20), n("", "", 5000)}, "en"},
 		{"one in ten another language", []catalog.LanguageCount{n("", "en", 90), n("", "de", 10)}, "en"},
 		{"denied: a fifth another language", []catalog.LanguageCount{n("", "en", 80), n("", "de", 20)}, ""},
