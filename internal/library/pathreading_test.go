@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -94,4 +95,108 @@ func TestScanReadsLoneFolderAsAuthor(t *testing.T) {
 		`SELECT COUNT(*) FROM books WHERE json_extract(scanned, '$."@rev"') IS NULL`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots without a revision after the backfill = %d (err %v), want 0", stale, err)
 	}
+}
+
+// An album tag naming only the book's series gives way to the book's own title
+// (metadata.TitleNotSeries), and a book read before that (scanned revision 1,
+// its title the series) is put right by the next scan from one read of its
+// tags, with no re-index. A book whose album is its title, or whose title isn't
+// its series, keeps it; an edit stays on top.
+func TestScanTitleNotSeries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	tufo := "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
+	vall := "Eric Vall/Without Law/Book 10"
+	first := "Mark Tufo/Mark Tufo; Indian Hill; Book 01"
+	carl := "Matt Dinniman/Dungeon Crawler Carl/Book 8 - A Parade of Horribles"
+	edited := "John O'Brien/John O'Brien; Lifting the Veil; Book 03; Emergence"
+	silence(t, root, tufo+"/"+filepath.Base(tufo)+".mp3", 1, "album=Indian Hill", "title=From The Ashes", "artist=Mark Tufo")
+	silence(t, root, vall+"/Book 10 - Without Law.mp3", 1, "album=Without Law", "title=Without Law 10", "artist=Eric Vall")
+	silence(t, root, first+"/"+filepath.Base(first)+".mp3", 1, "album=Indian Hill", "title=Indian Hill", "artist=Mark Tufo")
+	silence(t, root, carl+"/01.mp3", 1, "album=A Parade of Horribles", "title=Chapter 1", "artist=Matt Dinniman")
+	silence(t, root, edited+"/"+filepath.Base(edited)+".mp3", 1, "album=Lifting the Veil", "title=Emergence", "artist=John O'Brien")
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		tufo: "From The Ashes", vall: "Without Law 10", first: "Indian Hill", carl: "A Parade of Horribles",
+		edited: "Emergence",
+	}
+	check := func(when string) {
+		t.Helper()
+		page, err := cat.ListAdminBooks(ctx, catalog.AdminListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Books) != len(want) {
+			t.Fatalf("%s: %d books, want %d", when, len(page.Books), len(want))
+		}
+		for _, b := range page.Books {
+			if b.Title != want[b.Path] {
+				t.Errorf("%s: %s title = %q, want %q", when, b.Path, b.Title, want[b.Path])
+			}
+		}
+	}
+	check("first scan")
+
+	// The snapshots a server before revision 2 wrote: the album as the title.
+	for rel, title := range map[string]string{tufo: "Indian Hill", vall: "Without Law", edited: "Lifting the Veil"} {
+		if _, err := db.ExecContext(ctx,
+			`UPDATE books SET scanned = json_set(scanned, '$.title', ?, '$."@rev"', '1'), title = ? WHERE rel_path = ?`,
+			title, title, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '1')
+		WHERE rel_path IN (?, ?)`, first, carl); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.EditBook(ctx, lib.ID, edited, catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: "Emergence (edited)"}}); err != nil {
+		t.Fatal(err)
+	}
+	want[edited] = "Emergence (edited)"
+	// A book whose stored title isn't its series is never read: unreadable, it
+	// keeps its reading.
+	f := filepath.Join(root, filepath.FromSlash(carl+"/01.mp3"))
+	if err := os.Chmod(f, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f, 0o644) })
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v (err %v), want the titles backfilled, nothing re-indexed", res.ScanCounts, err)
+	}
+	check("after the backfill")
+	var revs []string
+	rows, err := db.QueryContext(ctx, `SELECT rel_path || '=' || json_extract(scanned, '$."@rev"') FROM books ORDER BY rel_path`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		revs = append(revs, r)
+	}
+	// The three read again are at revision 2, with the book named for its series
+	// (read, unchanged); the one whose title isn't a series stays at 1.
+	wantRevs := []string{edited + "=2", vall + "=2", first + "=2", tufo + "=2", carl + "=1"}
+	slices.Sort(wantRevs)
+	if !slices.Equal(revs, wantRevs) {
+		t.Errorf("revisions = %v, want %v", revs, wantRevs)
+	}
+	// The edit reverted, the backfilled title is what shows.
+	if err := cat.EditBook(ctx, lib.ID, edited, catalog.BookEdit{Revert: []string{catalog.FieldTitle}}); err != nil {
+		t.Fatal(err)
+	}
+	want[edited] = "Emergence"
+	check("after clearing the edit")
 }

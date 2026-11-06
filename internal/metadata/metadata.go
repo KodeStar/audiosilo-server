@@ -83,6 +83,12 @@ type Metadata struct {
 	TagISBN     string `json:"-"`
 	TagLanguage string `json:"-"`
 
+	// AlbumTag and TitleTag are the album and title tags Title was chosen from
+	// (bookTitle; trimmed), so a scan can tell a Title that is the album naming
+	// the book's series from the book's own (TitleNotSeries).
+	AlbumTag string `json:"-"`
+	TitleTag string `json:"-"`
+
 	// narratorExplicit: Narrator came from a narrator tag (\xa9nrt, a NARRATOR
 	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
 	// when there is none, never replaces (applyProbe).
@@ -260,9 +266,7 @@ func ffprobeForced(ffprobePath string) bool {
 }
 
 func applyTags(m *Metadata, md tag.Metadata) {
-	if title := bookTitle(md.Album(), md.Title()); title != "" {
-		m.Title = title
-	}
+	m.setTitle(md.Album(), md.Title())
 	if a := firstNonEmpty(md.AlbumArtist(), md.Artist()); a != "" {
 		m.Author = a
 	}
@@ -377,6 +381,14 @@ func rawHints(raw map[string]interface{}) map[string]string {
 		}
 	}
 	return out
+}
+
+// setTitle sets Title from an album and title tag pair (bookTitle), with the
+// pair it was chosen from; a pair giving none leaves what an earlier pass read.
+func (m *Metadata) setTitle(album, title string) {
+	if t := bookTitle(album, title); t != "" {
+		m.Title, m.AlbumTag, m.TitleTag = t, strings.TrimSpace(album), strings.TrimSpace(title)
+	}
 }
 
 // bookTitle picks the book title from an album/title tag pair. The album tag

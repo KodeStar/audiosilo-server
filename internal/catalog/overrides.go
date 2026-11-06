@@ -272,13 +272,16 @@ func ParseSeriesPosition(s string) (start, end float64) {
 // stale. loadLayers then takes the snapshot from the row, as migration 0016 did.
 const scannedStampKey = "@indexed_at"
 
-// scannedRevKey is the `scanned` key holding the revision of the path baseline
-// (metadata.DeriveFromPath) the snapshot was read with, scannedRev today; a
-// snapshot without it predates revision 1, when a lone folder above the book was
-// read as its series rather than its author (see pathCheckExpr).
+// scannedRevKey is the `scanned` key holding the revision of the scan's reading
+// of the names (the path baseline, metadata.DeriveFromPath, and the tags over it:
+// library's readNames) the snapshot was read with, scannedRev today. A snapshot
+// without it predates revision 1, when a lone folder above the book was read as
+// its series rather than its author (see pathCheckExpr); one of revision 1
+// predates revision 2, when an album tag naming only the book's series became
+// its title (metadata.TitleNotSeries; Signature.TitleCheck).
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "1"
+	scannedRev    = "2"
 )
 
 // scannedJSON encodes what the scan found for b (its fields before anything is

@@ -51,12 +51,20 @@ const pathCheckExpr = `CASE
 	WHEN lower(json_extract(scanned, '$.author')) = lower(substr(rel_path, 1, instr(rel_path, '/') - 1)) THEN 1
 	ELSE 2 END`
 
+// snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title
+// and series (the row's own where the snapshot has none, or isn't JSON), for
+// Signature.TitleCheck.
+const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
+	IFNULL(CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$.title') END, title),
+	IFNULL(CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$.series') END, series)`
+
 // pathReadingBatch is how many books one SetPathReading transaction rewrites, so
 // a large backfill never holds the writer for long.
 const pathReadingBatch = 250
 
 // SetPathReading rewrites the scanned title, author and series of the books at
-// these paths to today's path baseline (the scanner's backfill of PathCheck), and
+// these paths to today's reading (the scanner's backfill of PathCheck and
+// Signature.TitleCheck), and
 // re-resolves their effective values. A reading is what a fresh read of the
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
 // (PathFromSnapshot). It commits every pathReadingBatch books.
@@ -105,8 +113,8 @@ func setPathReading(ctx context.Context, tx *sql.Tx, libraryID int64, relPath st
 	if err != nil {
 		return err
 	}
-	if l.pathRev != "" {
-		// Re-indexed with today's baseline since the scan read its signature.
+	if l.pathRev == scannedRev {
+		// Re-indexed with today's reading since the scan read its signature.
 		return nil
 	}
 	snap := maps.Clone(l.scanned)

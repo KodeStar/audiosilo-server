@@ -179,9 +179,7 @@ func applyProbe(m *Metadata, p *probeResult) {
 		m.Chapters = p.Chapters
 	}
 	t := p.Tags
-	if v := bookTitle(t["album"], t["title"]); v != "" {
-		m.Title = v
-	}
+	m.setTitle(t["album"], t["title"])
 	if v := firstNonEmpty(t["album_artist"], t["artist"], t["author"]); v != "" {
 		m.Author = v
 	}
