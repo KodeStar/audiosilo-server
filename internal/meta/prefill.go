@@ -26,10 +26,11 @@ import (
 //     path's title ("Bernard Cornwell" by "Sharpe's Eagle (Sharpe 08)");
 //   - a junk title ("Track 01", "03": metadata.IsGenericTitle; "Unknown",
 //     "Untitled") or a junk author ("Unknown", "Various Artists"), each alone;
-//   - a title that is a whole leaf named "Author; Series; Book NN[; Title]"
-//     (metadata.LeafSeries: an untagged book's, which the scan titles by its
-//     leaf), which the path reads as its title part, else its series and
-//     position ("Dark Road 1-5").
+//   - a title that is the book's own leaf named "Author; Series; Book NN[;
+//     Title]" (metadata.LeafSeries: an untagged book's, which the scan titles
+//     by its leaf), which the path reads as its title part, else its series
+//     and position ("Dark Road 1-5"); a tag that only looks like one, beside
+//     a leaf named otherwise, names its book and stays.
 //
 // A fact the path doesn't give keeps the tag's value (for swapped tags, the
 // other tag's).
@@ -61,7 +62,7 @@ func SearchPrefill(title, author, series, relPath string, isFolder bool) string 
 		// Eagle" folder is Sharpe's Eagle by Bernard Cornwell.
 		title, author = author, title
 	}
-	if pathTitle != "" && (swapped || junkTitle(title) || leafTitle(title)) {
+	if pathTitle != "" && (swapped || junkTitle(title) || leafTitle(title, relPath, isFolder)) {
 		title = pathTitle
 	}
 	if p.Author != "" && (swapped || junkAuthor(author)) {
@@ -79,11 +80,16 @@ func junkTitle(t string) bool {
 	return metadata.IsGenericTitle(t)
 }
 
-// leafTitle reports whether a title is a whole leaf named "Author; Series; Book
-// NN[; Title]" (metadata.LeafSeries), as the scan titles an untagged book in one.
-func leafTitle(t string) bool {
-	_, ok := metadata.LeafSeries(t)
-	return ok
+// leafTitle reports whether a title is the book's own leaf, named "Author;
+// Series; Book NN[; Title]" (metadata.LeafSeries), as the scan titles an
+// untagged book in one: the rule the layout's title follows (catalog's
+// readScanned), so a tag that is only shaped like one is never replaced.
+func leafTitle(title, relPath string, isFolder bool) bool {
+	leaf := metadata.ReadPathLayout(relPath, isFolder).Title
+	if _, ok := metadata.LeafSeries(leaf); !ok {
+		return false
+	}
+	return match.Fold(title) == match.Fold(leaf)
 }
 
 // junkAuthor reports whether an author tag names nobody.

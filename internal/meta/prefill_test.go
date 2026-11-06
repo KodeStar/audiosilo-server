@@ -56,6 +56,10 @@ func TestSearchPrefill(t *testing.T) {
 			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes.mp3", false, "From The Ashes Mark Tufo"},
 		{"a tagged title in a leaf stays", "From The Ashes (Unabridged)", "Mark Tufo", "",
 			"Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes", true, "From The Ashes (Unabridged) Mark Tufo"},
+		{"a tagged title shaped like a leaf beside another leaf stays", "Mark Tufo; Indian Hill; Book 04; From The Ashes",
+			"Mark Tufo", "", "Mark Tufo/Downloads 2023", true, "Mark Tufo; Indian Hill; Book 04; From The Ashes Mark Tufo"},
+		{"a leaf-shaped title with a word marker is no leaf", "Oprah; Picks; Book Club", "Oprah", "",
+			"Oprah/Oprah; Picks; Book Club", true, "Oprah; Picks; Book Club Oprah"},
 	} {
 		if got := SearchPrefill(c.title, c.author, c.series, c.path, c.isFolder); got != c.want {
 			t.Errorf("%s: SearchPrefill(%q, %q) = %q, want %q", c.name, c.title, c.author, got, c.want)
