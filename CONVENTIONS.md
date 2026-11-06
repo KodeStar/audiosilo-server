@@ -1654,8 +1654,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), as a
   repick's names the ASIN it looked up, and applying either is a no-op for a book that no
   longer has it (matched again since: `stillFoundBy`; a repick recorded before 2.4.0 has none).
-  Likewise a match run's book that has an ASIN or ISBN now (`matchedSince`: matched by hand
-  from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
+  Likewise a match run's book that is matched now (`matchedSince`: an ASIN or ISBN, or a recorded
+  community match; matched by hand from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
   in the review and is skipped with detail `matched_since`, under any scope; a match whose
   fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
   ASIN the run's own rather than one matched since, so the next apply takes the cover. The review's
@@ -1666,6 +1666,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is a redirect the client follows, so the names written are the merged record's.
   A community position that is a range ("1-3") is written as one (`series_index` "1-3", a
   `more_series` entry's `position_end`); one the field refuses (a span over 100) is none.
+  **Recorded community match** (LibraForge E6, server#320, `0069` `book_matches`: `library_id, path,
+  work_id, recording_id, how (auto|accepted), run_id, set_by, set_at`, PK `(library_id, path)`, no FK to
+  the index or the runs): the work (and recording) a book was matched to, whether or not the match gave
+  it an ASIN or ISBN. Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
+  `MatchAnchor`; an empty work id removes it, from any edit; `EditBooks` refuses it): the match dialog's
+  accept (`PATCH .../book` `match: {work_id, recording_id}`, how `accepted`; `{"work_id": ""}` is the book
+  aside's Unlink; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
+  scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
+  `accepted` for an included review item, a refresh's heal keeping the book's). A store listing the
+  community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
+  (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
+  facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
+  name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
+  asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
+  a repick (`CommunityASINBooks`), the Bridge's estimate, the player's `/meta` (identifier-keyed: a
+  store-listing book shows no community content in the player yet) and the console's chapter check,
+  Series rail and Suggest corrections. Path-keyed state: a move carries it with the book's edits as one
+  set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
+  (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
+  matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no
+  ASIN/ISBN is written beside it). No backfill: a book matched before E6 has none until matched again.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`), or within 20%
   when the book's narrator reads it (`meta.NarratedRuntimeOff`, `narratorReads`: metaserve's
@@ -1678,7 +1699,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
-  names one work per request today). A match run's best candidate under `matchrun.ReviewFloor` (60)
+  names one work per request today). With neither ASIN nor ISBN to attach (a store listing), confident
+  is firmer (`anchorFits`, LibraForge E6): score >= 90 and a plain 10-point lead (no identifier-hit
+  lead, no narrator widening), metaserve's `reasons.author` `full` and `reasons.series` `position`, and
+  both lengths known with the recording within `AnchorRuntimeOff` (2%); the apply records the match
+  (`how` auto). On the LibraForge benchmark this took 186 books from review to confident, none wrong.
+  A match run's best candidate under `matchrun.ReviewFloor` (60)
   on metaserve's scale is no match, detail `weak_match`, its score kept and its proposal empty (the
   dialog still lists everything; an older metaserve's `scoreCandidate` stays for review). Fill (the
   default apply) also tidies a
@@ -1718,12 +1744,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   diagnostics to `LF_OUT` (`diag`: identifier, `lengthFits`, the query, the run's candidates and the
   copy's top 10 with reasons, series and runtimes, the right work's rank). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
-  (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
+  (`mode: "refresh"`, `catalog.MatchedBooks`: every matched book) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
   that record as confident, unless its recording is over 10% off the book's length
   (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
-  fuzzy work); it fills or
-  overwrites the details but never writes an identifier (`planFor` drops them, the
+  fuzzy work); a book with neither is looked up by its recorded work (`meta.MatchQuery.WorkID`:
+  works/{id} alone, a retired slug's 301 followed online and in mirror mode, its recorded recording
+  kept while the work lists it, `found_by` `work:<id>`, `stillFoundBy` against the anchor; a 404 is
+  no match, detail `work_unknown`, the anchor KEPT), and may fill an ASIN/ISBN its recording gained.
+  The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
+  a book matched by its own identifier with no anchor never gets one. It fills or
+  overwrites the details but never writes an identifier for a book that has one (the
   proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
   `book.match_refresh`. `InterruptMatchRuns` (launcher, at
@@ -1731,7 +1762,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
-  overrides and covers, rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
+  overrides and covers and the recorded matches (`book_matches`), rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
   runs (a library's clear: its runs, and its items in runs over every library), one transaction;
   edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
@@ -1839,7 +1870,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
   from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows (list and book page) also carry
-  `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
+  `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule, `catalog.matchedExpr`: an
+  ASIN or ISBN, or a recorded community match, `book_matches`, see Bulk matching), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`, values from `config.rate_limit.*` read at start through
@@ -1912,8 +1944,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request (the summary is kept in the list cache until the next content write, see List cache); each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
-  chapters, see The Bridge), `unmatched` (left out of the summary
-  while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
+  out of the summary while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
   category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
