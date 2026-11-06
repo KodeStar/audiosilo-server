@@ -71,6 +71,12 @@ goreleaser check
 goreleaser build --snapshot --clean --skip=before --single-target
 ```
 
+A Linux target needs a C compiler named by its triplet (`x86_64-linux-gnu-gcc` or
+`aarch64-linux-gnu-gcc`): on Debian/Ubuntu `gcc` + `libc6-dev` give the host's own
+architecture its one, `gcc-<triplet>` + `libc6-dev-<arch>-cross` the other's.
+`--single-target` builds the host's target only (set `GOOS`/`GOARCH` for another);
+on a Mac, run it in a `golang:1.26` container with goreleaser installed.
+
 `--skip=before` also skips the admin console build (`scripts/build-admin.sh
 --build-only`, a before-hook); run `scripts/build-admin.sh`
 first if the snapshot should include the console rather than its "not built" page.
@@ -93,7 +99,9 @@ contract:
   `releases/download/v<version>/audiosilo_<version>_linux_{amd64,arm64}.tar.gz`
   (`<version>` is the tag without its `v`) and takes the `audiosilo` binary from the
   archive root, so keep the `v` tags, the names and the flat layout.
-- **A static binary** (`CGO_ENABLED=0`): the image is Alpine (musl).
+- **A static binary**: the image is Alpine (musl). The Linux binaries build the
+  native SQLite engine in (cgo) but link it statically against glibc, as the
+  Docker image does (`.goreleaser.yml`), so they need no libc at all.
 - **The web player stays embedded** (`-tags embedplayer`): the image sets no
   `AUDIOSILO_WEB_DIR`.
 - **How it runs:** `audiosilo --data /config` and nothing else, so it relies on the
@@ -102,9 +110,12 @@ contract:
   filesystem). Its readiness check reads `bind:` from `/config/config.yaml`.
 
 `release.yml`'s last step checks the archive side of this while the release is still
-a draft: both archives' exact names and layout, each binary's `embedplayer` tag,
-`CGO_ENABLED=0` and architecture, and an amd64 boot run the way the image runs it
-(`--data` only, self-signed TLS) serving `/healthz` and `/web/`.
+a draft: both archives' exact names and layout, each Linux binary's tags
+(`embedplayer` and the native engine's), `CGO_ENABLED=1`, architecture and static
+linking (no ELF interpreter), each Linux binary running (arm64 under qemu) and
+reporting the release's version, the macOS and Windows binaries' `CGO_ENABLED=0`, and
+an amd64 boot run the way the image runs it (`--data` only, self-signed TLS) serving
+`/healthz` and `/web/` and logging `engine=native`.
 
 ## 3 - end-to-end smoke test
 

@@ -52,7 +52,8 @@ const btbn = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
 // its "N-..." version names no release, and the in-process probe follows a
 // known release's rules only (metadata.rulesFor), so a master build turned it
 // off on every native Linux and Windows install (server#269). Move it only to
-// a branch metadata's knownRules has.
+// a branch metadata's knownRules has. CI pins a build of the same branch in
+// .github/actions/setup-ffmpeg: move both together.
 const btbnBranch = "8.1"
 
 // btbnAsset is the URL of BtbN's newest btbnBranch build for platform

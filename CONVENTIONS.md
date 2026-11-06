@@ -28,6 +28,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`/`Clean`, `auth.castGrant.covers`,
   `ResolveCastRequest`, `api.authenticate`/`castOwnBook`), or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
+  A test never holds code to a time in milliseconds: CI's shared runners take several times as long as a laptop,
+  and more when busy. How a read grows is compared across sizes on the one machine (`TestSeriesKeyScale`) and
+  its shape held by its plan (`queryPlan`: `TestNextInSeriesPlan`, `TestIssueCountsPlan`).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
   The executor sorts filenames and skips exact recorded names, allowing a missing lower-numbered
@@ -238,7 +241,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (work + matched recording + series rails, each carrying its own `web_url`).
   The `work` also carries the community **characters** and **recaps** (the CC
   BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
-  are logical work-chapter positions) when metaserve has them, plus a
+  are logical work-chapter positions, on the scale the work states as `position_scale`, answered on
+  this book's chapters when it splits finer: `meta.OnRecording`, per request on a copy, a reveal
+  at its unit's start and a through at its unit's end, later of time and count, see CROSS-REPO section 17) when metaserve has them, plus a
   whole-book `recap_summary` (`{in_short, ending}` - both summarize the whole
   book, and `ending` is a full spoiler by construction); all three are additive/`omitempty`, mirrored on
   `upstreamWorkDetail` and `MetaWork` and passed through by
@@ -629,6 +634,42 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   thumbnail cache, 502 `cover_unavailable`, 404 `no cover`). **Flags**: `upcoming_calendar` and
   `upcoming_covers` are exactly `upcoming` (false, never absent, while off); kids and demo accounts are
   refused by the routes, not the flags.
+- **Unknown ASIN report (LibraForge C3, `internal/coverage`, `catalog/coverage.go`, `meta/report.go`, `0068`)**:
+  an opt-in daily job sends the metadata service the Audible ASINs of this server's books the community
+  database doesn't know, so its lane can import them. **Setting** `metadata.report_unknown` (default false,
+  live, `AUDIOSILO_METADATA_REPORT_UNKNOWN` locks it; console Settings > Metadata "Help complete the community
+  database", disabled while metadata is off); the job runs only while `reportUnknownOn()` (metadata on AND the
+  switch, never demo) and a run in flight stops within a second when it goes off (`whileOn`, `errSwitchedOff`: no
+  status). It is never built on a demo server (`cfg.Demo.Enabled` at start), so a demo makes no call. **Schedule**:
+  the first run an hour after the start (or a day after the last run), then daily +-1 h; a run within 23 h of the
+  last is skipped (`server_state('unknown_asin_report')`, so a restart never re-runs); `Wake` (PATCH switching it
+  or metadata on) runs at once unless one ran within 23 h. Mirror mode: no run until the local copy is `Ready`
+  (rechecked hourly), and the lookups stay local in mirror mode: `KnownASIN` marks them `localOnly`, so
+  `fallbackTransport` answers them from the copy or fails them (`errLocalOnly`: the copy failed one, or is no
+  longer `Ready`), never asking the remote service, unlike every other mirror-mode request; mirror mode skips the
+  Ping (a `/healthz` the copy fails would go remote), so only the POST goes remote. **Candidates**
+  (`UnknownASINCandidates`, books libraries only, upper-cased, `match.ValidASIN`): `books.asin` except an ASIN a community match gave a book
+  (`book_overrides` asin `source='community'`), plus `tag_asin` only for a book with no ASIN or ISBN, no asin
+  override (a cleared one too) and a tag on exactly one book. **A run**: Ping, remote mode only (fails: `failed`, tried the next day);
+  drop rows no candidate holds; look up (`meta.Service.KnownASIN`, local-only in mirror mode; a cached hit,
+  memory or the persistent store (`CachedWorkID`), counts as known) the candidates never looked up or looked up 30+ days ago, shuffled, at most 500; only
+  `ErrNotFound` is unknown, any other error stops the lookups (the rest wait; what was confirmed may still be
+  sent); then the unknown ones checked within 30 days and not sent within 30 days, shuffled, 200 a POST, at most 5
+  POSTs, and none while `MAX(sent_at)` is under 23 h old. **The POST** (`ReportUnknownASINs`, the `report` client
+  built in `NewService`, never behind `SetMirror`, so mirror mode still reports remotely): `POST
+  <base_url>/api/v1/intake/unknown-asins`, body exactly `{"asins":[...]}`, headers only `Content-Type:
+  application/json` and `User-Agent: AudioSilo` (plus Go's `Accept-Encoding`/`Content-Length`/`Host`): no
+  `X-AudioSilo-Client`, server id, auth or version (`TestReportUnknownASINsWire`). Only https, or plain http to a
+  loopback host (`CanReport`); any other base_url is `not_offered` with no call at all and one INFO line a process.
+  Redirects are never followed (`http.ErrUseLastResponse`). **Answers**: a 202 with `accepted` marks that chunk's
+  `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
+  INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
+  `unknown` row a recheck finds known forgets its `sent_at`. **Storage**: `unknown_asin_reports(asin PK, checked_at,
+  unknown, sent_at)`, no path or book (disposable; user-state writes). **Wire**: GET /admin/settings
+  `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
+  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). Trigger by hand: switch it
+  off and on in the console (runs when none ran within 23 h); to run again sooner, delete
+  `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -662,6 +703,48 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rclone, s3fs, ntfs-3g) or NFS/SMB, where an I/O error under a mapping is a SIGBUS crash. The
   start logs which (`database readers: mmap`).
   Nothing may truncate the database file in place while it is open (backups are `VACUUM INTO`).
+  The library is the build's **engine** (`store/engine*.go`): modernc's, pure Go, by default;
+  with `CGO_ENABLED=1 -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook"` the native C
+  SQLite (mattn/go-sqlite3's amalgamation, compiled in), where `AUDIOSILO_SQLITE=modernc` picks
+  modernc's for the process (A/B on one binary). A native build missing cgo or either mattn tag
+  doesn't compile (`engine_native_guard.go`: without `sqlite_preupdate_hook` mattn's pre-update
+  hook is a silent no-op, and the user-state watch with it). Every open of the database goes
+  through the engine's driver (`driverName()`: Open's pools, `VacuumFile`, `openReadOnly`), never
+  `sql.Open("sqlite", ...)`: two SQLite copies on one file in one process don't see each other's
+  POSIX locks. What else is a library's goes through the engine: the pre-update and commit hooks,
+  SQL functions (`store.RegisterFunction`, from an `init`), `IsUniqueViolation`. The start logs
+  which (`database: sqlite engine=... version=...`). SQL holding several statements takes no
+  parameters: modernc gives each statement the whole argument list, mattn hands them out statement
+  by statement (`not enough args to execute query`); run one statement an Exec. A statement is
+  handed only the numbered arguments it has (`argsFor`: one list may serve several statements, as
+  in `carryListeningState`), and a connection that runs DDL drops its cached statements (mattn
+  reads a query's columns before SQLite re-prepares it for a new schema). On the native engine a
+  cached query is read a row a C call (`engine_native_rows.go`), its values as modernc's (int64,
+  float64, string, []byte, nil; no time or bool conversion by declared type): mattn's own rows
+  cross into C two or three times a column. As modernc's, its first step runs in the query (its
+  columns are then the statement's as SQLite re-prepared it after another connection's DDL, and a
+  failure is the query's error), and its context's interrupt never outlives its rows (a late
+  `sqlite3_interrupt` would end the connection's next statement, another request's). It reads mattn's unexported `SQLiteStmt.s`;
+  `TestNativeFastRows` fails if a mattn upgrade drops it (queries would quietly fall back).
+  Both pools open the engine's library behind a per-connection prepared-statement cache
+  (`store/stmtcache.go`): a statement's SQL text is its key, so SQL
+  built per call (a value formatted into the text, an `IN` list sized to its arguments) misses
+  and churns the cache (256 statements per connection, least recently used out); bind values as
+  parameters instead. SQL holding several statements, and a statement whose rows are still open,
+  take the library's own path, and on mattn so does an Exec of anything but plain DML (its Exec
+  steps a statement once: one that returns rows would be left mid-run); after a cached Exec the
+  native engine resets the statement and clears its bindings, as modernc does, so no copy of the
+  last arguments (a cover's bytes) stays held. SQL functions take their arity on both engines. A
+  `conn.Raw` gets the cache's connection: the engine's hooks unwrap it; anything else of the
+  library's connection is `Unwrap()`'s. A hot join (one run per book or per row: the
+  scan's, `catalog/communitychapters.go`, `catalog/overrides.go`) takes
+  its parameters as `+?` (`+?1`): SQLite 3.54's estimate of a join loop's rows
+  (`whereLoopOutputAdjust`) reads a bare `?`'s bound value, which marks the statement to be
+  re-parsed whenever a new value is bound, so every run (the scan's per-book joins: 40-80 µs a
+  run, 5 µs as `+?`). A unary plus on the value keeps the plan (an index still serves `col = +?`)
+  and the comparison (a parameter has no affinity or collation either way); it only hides the
+  value from the planner, which a statement whose plan must not follow its values wants anyway.
+  A single-table statement and a correlated subquery are not affected.
 - **JSON compression** (`api/compress.go`, PERF-SPIKE S5): `compress` wraps the mux, inside the
   timeout. A request is compressible only when it is a GET (or its HEAD, which so carries the GET's
   `Vary` and `Content-Encoding`, server#270) under `/api/v1/` without Range, outside
@@ -715,6 +798,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   bookmarks and notes (add, edit, delete), `AddHistory`,
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
+  the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`, a
+  complete poll's `refused_at` cleared), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
+  `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
   `PutMetaCache`, the upcoming releases job's tables
   (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
@@ -746,7 +832,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `library.SafeJoin`, which rejects traversal outside the library root.
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
-  is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
+  is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
+  `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
+  the admin folder-override and enrichment routes, which take their path on their own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
+  long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
@@ -759,7 +848,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   spelling, each name as its parent's listing has it (`resolveBook` via `dirPresent`): on a
   case-insensitive filesystem a case variant opens the same folder, and indexing it would add a
   duplicate book everyone sees, so it is a 404. `stream` serves an
-  audio file path directly, or transcodes it with `?transcode=1` (see below). The
+  audio file path directly, or transcodes it with `?transcode=1` (see below), or with
+  `?rendition=watch` serves its watch rendition whatever else the query says (see Watch renditions). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
   `.nfo` are filtered in `BrowseFS` so a click is always playable, and so is an `.mka` a book of
   the folder leaves out: `library.shadowedMKA`, shared with `folderAudio`; `ListDir`, the next
@@ -863,7 +953,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   format is its first file's; the SQL twin `directPlayableExpr`, the console's Playback column, stays
   "as stored"). **Remux (server#174)**: while ffmpeg is configured (`API.remuxOn`: `a.ffmpeg != ""`
   and the cache opened; no capability flag), `GET stream` of an `.mka` (with or without `download=1`,
-  not `transcode=1`) serves, at the SAME URL, its lossless copy to MP3 (`media.Remuxer`: `-f matroska`
+  not `transcode=1` or `rendition=`) serves, at the SAME URL, its lossless copy to MP3 (`media.NewRemuxer`, a `FileCache`: `-f matroska`
   forced, `-protocol_whitelist fd`, `-xerror` so a read error fails the run rather than leaving a short
   copy, `-c:a copy`, `+bitexact`, chapters as ID3 CHAP frames), as
   `audio/mpeg` with Range and its own validators (a strong ETag `"remux-<key>"`, Last-Modified the
@@ -874,10 +964,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `<data>/cache/remux/<sha256(abs, size, mtime)>.mp3` (0700, made again if it went; `.part` synced then
   renamed, never under the key when the source changed while read; `.part` swept at
   start; LRU by mtime, a hit (no lock) touches it at most every 10 min, 8 GiB cap swept after each remux, the new copy kept; skipped
-  under 1 GiB free after it and the other remux still writing, `internal/diskspace`); single-flight per key, 2 at once, run under
+  under 1 GiB free after it and the other runs still writing, the rendition cache's too (one reservation,
+  `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one) is remembered per key in memory and the stored bytes served,
+  failed partway, a full disk or a read error, is not one) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
+  environment's, an EIO at open, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
   as they are for no regular file at the path (a 404),
   so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
   running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
@@ -890,7 +982,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   60 s an idle answer gets from Android's downloader and a reverse proxy; past it they are
   transcoded after all (the busy 503 when no slot freed). The remux's own timeout (30 min) is a
   failure, logged, not this wait. `/item` and `/chapters` warm the book's MP3-in-MKA files (`API.warmRemux` ->
-  `Remuxer.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
+  `FileCache.WarmAll`: in the background under `baseCtx`, one file and one warm at a time across the
   server so warms hold at most one of the 2 slots, a book warmed once while queued, at most 16 queued
   (more dropped), the cached (not marked used) and known refusals skipped, never a podcast library;
   never blocks the answer; the launcher waits for them at shutdown), so the first
@@ -955,6 +1047,53 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   expose `direct_playable` (`Book.PlaysInBrowsers`: `media.DirectPlayable` of the book's format and
   codec, and every file's container) so a client knows when to
   transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
+- **Watch renditions (Track W2, capability `renditions`, `media/rendition.go`, `api/handlers_renditions.go`)**:
+  a small copy of each audio file of a book for a watch to download, made by ffmpeg into
+  `<data>/cache/renditions/watch/<key>.m4a`, never into the library (read-only). The encode (`renditionArgs`) is
+  AAC-LC (ffmpeg's own `aac`; HE-AAC needs the non-free libfdk_aac), mono, 48 kbps, 44.1 kHz, MP4 with
+  `+faststart`, no video, metadata or chapters, `+bitexact` (format and encoder), the input only the descriptor
+  (`-protocol_whitelist fd|pipe`, the demuxer ffmpeg's guess); no `-xerror` (it fails a whole encode on one damaged
+  MP3 frame, ffmpeg 7.1 tested). Its duration is the source's (within 0.1 s on MP3 and M4B), so positions and
+  chapters (CROSS-REPO §6) hold; since a read error partway still exits 0, a copy more than 1 s short of the
+  source's exact duration (`metadata.ExactDuration`, the in-process probe; skipped when it is unsure, as for a VBR
+  MP3 with no Xing/VBRI header, or can't measure the copy) is not cached and is remembered as a refusal (422
+  `rendition_failed`, state `failed`), since a source short itself (a truncated MP3 whose Xing header names the
+  whole length) would otherwise be encoded again on every request; like every refusal it is forgotten after an
+  hour (`cacheRefusalTTL`), so a read error partway is tried again then. The cache is the remux's `media.FileCache` over another `cacheSpec`: key
+  sha256(abs, size, mtime, `watch-v1`), so a new encode version (`renditionVersion`) is a new key; 10 GiB LRU
+  of its own `.m4a` files, one encode at a time, 2 h timeout from its slot, the same 1 GiB disk guard (one
+  reservation with the remux's: both under `<data>/cache`), `.part` synced then renamed, never cached when the
+  source changed while read, ffmpeg's refusal (an exit status before anything was written, or a copy with no
+  audio track: ffmpeg exits 0 with one for an M4B whose index is at its end read through `pipe:0`, an ffmpeg
+  without the fd protocol; `metadata.MP4HasTrack`; or a short copy) remembered for an hour or until the file
+  changes. A failed run's error carries the first and last
+  2 KiB of ffmpeg's log. The remux is unchanged (same dir, keys, ETags). `GET
+  /libraries/{id}/stream?path=<file>&rendition=watch[&download=1]` (same auth as the stream: session, API key,
+  `?token=`, a cast token for its book) is checked in this order: scope (403/404), kind (400 code `bad_rendition`
+  for anything but `watch`, and for a podcast library: the watch has no podcasts, and a watch client never
+  sees one anyway, `auth.SeesPodcasts`), `renditionsOn` (404 `rendition_unavailable`: no ffmpeg or no data dir),
+  audio and a regular file (404); then the copy, served with Range (`http.ServeContent`), `audio/mp4`, a strong
+  ETag `"rw1-<key>-<size>"` (If-Range resumes only the same encode), Last-Modified the copy's mtime,
+  `download=1` named `<stem>.m4a`. A cold encode is waited for up to `renditionWait` (45 s, the remux's
+  download wait), then 503 `rendition_pending` with `Retry-After: 15` while it goes on under `baseCtx`; never a
+  live transcode. 422 `rendition_failed` is a remembered refusal (ffmpeg's, or a short copy; for an hour), with
+  `Retry-After` the seconds it has left (`FileCache.RefusedFor`, server#289);
+  503 `rendition_error` (`Retry-After: 60`) a failure not the file's (disk guard, a run killed partway, the
+  source changed). `POST
+  /libraries/{id}/renditions?path=<book>` `{"kind":"watch"}` queues every file of the book whose copy is missing
+  (`FileCache.Queue`) and answers 202; at most 256 encodes wait or run across the server, a stream's included
+  (`cacheSpec.queueMax`): past it a prepared file stays `missing` for the client to ask again and a cold stream
+  answers 503 `rendition_error`; `GET .../renditions?path=<book>&kind=watch` queues nothing; both `{kind,
+  files: [{path, state: ready|pending|failed|missing, bytes (ready only), retry_after_seconds (a remembered
+  refusal only: not a failed file that isn't there)}]}` in the book's file order
+  (`Book.AudioFiles`: a single-file book, which has no `book_files` rows, is its own file), the book resolved as
+  `/item` does (a part path names its book; `requireAuth`, so no `?token=`). A download is not a
+  listen: none of it marks a session or a transcode. A watch client is `audiosilo-watch/<ver> (watchos|wearos)`
+  in `X-AudioSilo-Client`, shown as a watch in the console. Tests: `media/rendition_test.go` (args, keys,
+  a real encode's codec, channels, rate, bit rate, duration and moov-first, Range/If-Range, queue and status,
+  refusal, a trackless copy refused, the bound on Queue and Open, eviction per cache, the shared disk guard),
+  `api/renditions_test.go` (capability, stream, 503 pending, 503 rendition_error, refusals, scope allowed and
+  denied, the routes, a loose root file).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
@@ -1340,8 +1479,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with memberships a UNION ALL of the list rows too; the caller's library term narrows them),
   `seriesOrderKeys` (the key as a literal), `numberedSeriesMembers` (the next book),
   `SeriesBooks`/`seriesMembers` (the rails) and `positionIn` (Go, by key), so the SQL and a
-  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; under a millisecond for a
-  25-book series in 50,000 books, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
+  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; about a millisecond for a
+  25-book series in 50,000 books, no slower than in 5,000, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
   `Catalog.KeySeries`, which the launcher runs synchronously before the listener whenever the
   stored keys are missing or out of date (server_state `series_keys` holds `seriesKeysVersion`:
   the key rules' number, bumped when `seriesKey`/`match.SeriesKey` changes, plus Go's and
@@ -1388,8 +1527,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   metaserve judges each, the better counts), the tagged position (only when no
   DIFFERENT series folder goes up: one position applies to every series guess and
   replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
-  the book's only when nothing was typed), which metaserve looks up itself; candidates carry metaserve's
-  `score` and `reasons`. A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
+  the book's only when nothing was typed; a book with neither sends its tag hints, below), which
+  metaserve looks up itself, plus `language` (the book's, else its tags' (`meta.NormalizeLanguage`),
+  else none. Never the marketplace's: `metadata.region` names the store whose ASIN a match takes, not
+  what language a library is in, and with it `de` on a mostly English library the benchmark's
+  auto-right halved and German works were auto-applied to English books. `NormalizeLanguage` cuts a
+  tag to the first of several and its primary subtag and reads a placeholder (`und`, `xxx`, `N/A`) as
+  none, the names and 639-2 codes are metaserve's to read) and up to 4 `narrator` (the narrator
+  credit's `names.Split`, less a name that is the author, mostly a composer tag: `matchParams`), both
+  set by `matchrun.QueryFor` and ignored
+  by an older metaserve; candidates carry metaserve's `score` and `reasons` (`narrator`, `language`
+  passed through too), best first, an identifier hit first at one score (metaserve breaks a tie on
+  the title). A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
   it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
   `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
@@ -1399,18 +1548,41 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
   ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
   (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
-  them by region, so without it `au` beat `uk`), `asin_region` names the first's;
-  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
-  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  them by region, so without it `au` beat `uk`; the ASIN an identifier hit was found by leads its
+  marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
+  is the preferred one), `asin_region` names the first's;
+  `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one, unless an identifier or a narrator names it: `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
+  reads, `readBy`: a name folding alike or every word of one in the other, either way round, that
+  fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
+  preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
   the dialog starts from (the console has no copy of the rule). **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
-  network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
-  expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
+  network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
+  stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once), metadata
   off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
-  included, 404s `metadata_off` then). A run only records (`match_run_items`: outcome auto/review/none/error,
+  included, 404s `metadata_off` then). What a run costs the service: a match sets
+  `MatchQuery.BestOnly` and `NoDetailsBelow` (`ReviewFloor`), which the dialog never does, for
+  `expand=work` on works/match (one wait a book: `bestCandidates` reads `work` and `series_facts`
+  off the result `compareMatches` calls best, an identifier hit winning a tie, so maybe `results[1]`;
+  the facts fill the `s:` cache). It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
+  `IdentifierHit()` (`Classify`), so every other candidate is a stub. `work` absent on the best (an
+  older metaserve, its budget spent) is the fetch path for the best alone, and nothing for a weak
+  best no identifier found; a best that can't be read gives way to the next, as in `Candidates` (after an
+  outage the next is read however weak, so a stub can't answer for a service that is down). The inlined
+  facts are read as a fetch's are (`factSeries`, `inlinedFacts`). A
+  `Limit: 2` still applies; refresh and repick are identifier lookups, never works/match. Each run
+  has a `meta.Pacer` in its context (`WithPacer`, `maxRequestsPerSecond` 60 against the service's
+  100, no saved-up burst), which `pacedTransport`, the remote leg's transport, spaces requests by,
+  so a mirror's answers take no slot and whatever fails over to the remote service does. A run takes no
+  `workSem` slot (`workSlot`): its Pacer and workers bound it, and a Retry-After it sits out must not hold up a
+  listener's read or the dialog. Concurrent misses of one series share one read (`seriesFacts`). In a run a
+  503 is waited out like a 429 (`getJSON`: Retry-After, `rateLimitRetries`, `maxRetryAfter`, not past
+  the deadline), each wait logged at INFO with the run's total; outside one a 503 is an outage at
+  once (the dialog's 502). `getJSONOnce` reads every answer to its end (`maxDrain`), and
+  `maxIdleConnsPerHost` keeps connections for the workers over HTTP/1.1. A run only records (`match_run_items`: outcome auto/review/none/error,
   the best candidate's `catalog.MatchProposal`); apply writes community overrides
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
@@ -1445,7 +1617,40 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
-  both lengths). A
+  both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
+  a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
+  names one work per request today). A match run's best candidate under `matchrun.ReviewFloor` (60)
+  on metaserve's scale is no match, detail `weak_match`, its score kept and its proposal empty (the
+  dialog still lists everything; an older metaserve's `scoreCandidate` stays for review). Fill (the
+  default apply) also tidies a
+  title that is not an admin edit (`matchrun.tidyTitle`): when the file title, less the community
+  title, its subtitle, the series names (community's and the book's, as `match.SeriesForms` spells
+  them), clutter (book/vol, unabridged, litrpg, ...) and the numbers the book's positions or the
+  community title state (`statedNumbers`: digits, ordinals, words, roman numerals), leaves nothing,
+  the community title is written; any other word or number keeps the file's ("part" names a split
+  of the book, "abridged" another edition, "Book 2" of a work at position 1 another volume), and a
+  title of the community's words and nothing more only when it is in one case. The review lists it
+  like any planned change.
+  **Tag identifiers are hints** (`0067`: `books.tag_asin` / `tag_isbn` / `tag_language`, read from
+  `asin` / `audible_asin` / the iTunes freeform ASIN / an ID3 TXXX ASIN, `isbn`, `language` / TLAN in
+  both tag passes, an ASIN or ISBN only in its proper form (`match.ValidASIN`/`ValidISBN`: `N/A` beside
+  a real tag or a repeated tag's joined `A;A` still reads the real one), `hints_checked` backfilled
+  once like `genres_checked`, waiting while ffprobe fails; never on the wire, only `GetBook` and a
+  run's subjects read them): a
+  book's own ASIN/ISBN is never set from its tags. Why: in the LibraForge benchmark 272 of 1,677
+  tagged books (16%) carry an ASIN that is not their confirmed listing (another store, another
+  edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
+  it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
+  off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
+  neither of its own: a hint the community knows whose length fits is an identifier hit (confident,
+  above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
+  Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
+  identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
+  `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
+  `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
+  against a local artifact in mirror mode, or through HTTP with `LF_BASE_URL` (the run's workers and
+  pacing, its time reported, the right answers read afterwards from the artifact so a proxy counts
+  only the run's requests), counted per outcome (run line in its doc comment). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
@@ -1700,7 +1905,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   time is the position advance / speed, capped by the server time between saves (only server time is
   used for a save, so a wrong device clock or an offline replay can't inflate it; a span counts
   `listenedBetween`'s clip of its own corrected times); a session with nothing
-  listened yet (a single save: "Mark finished", the manager's stats sync) is shown nowhere
+  listened yet (a single save, such as "Mark finished") is shown nowhere
   (`listenedSQL`) and deleted by retention; a save's recording is best effort (a failure is logged, the
   save still succeeds), a span's is part of its batch's one transaction. `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
   so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
@@ -2519,18 +2724,176 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   status and refetched after every settings save) shows a card per module (switch, blurb, docs link,
   Bridge state line, the "hidden from listeners" note while enabled but not active); a page a module
   brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
-  on (a `?topic=` for it opens General). Two modules ship: `contributions` (needs `contribute`, its actions are Bridge community jobs)
-  and `podcasts` (needs `podcast`, its Start schedules feed checks; see Podcasts above). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
+  on (a `?topic=` for it opens General). Three modules ship: `contributions` (needs `contribute`, its actions are Bridge community jobs),
+  `podcasts` (needs `podcast`, its Start schedules feed checks; see Podcasts above) and `audible` (needs `audible`, its
+  Start schedules account polls, its page is Settings > Audible; see Audible accounts below). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
   or clashing route pattern fails the tests, not a start.
   `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
   runtime on/off).
+- **Audible accounts (BRIDGE-PLAN.md Phase 4a, module `audible`, `catalog/audible.go`, `internal/audible`,
+  `bridge/audible.go`, `api/handlers_audible.go`)**: the Bridge signs in to Audible and holds every credential; the
+  server only keeps what it reports. `0063`: `audible_accounts` (`account` = the Bridge's id
+  `^[a-z0-9]{8,32}$`, label, marketplace = one of `config.Regions`, `user_id` -> users CASCADE, `library_id` ->
+  libraries SET NULL, policy `all`|`series`|`manual`, sync, `poll_hours` default 6, `last_poll_at`,
+  `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
+  runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /
+  `match_path` / `match_how` (`asin`|`fuzzy`): path-keyed, **no FK**, nulled by `DeleteLibrary` (in the
+  library's own delete transaction, so no titles call matches into it between), moved by `moveBookState`
+  and by a join (`joinBookState`, onto the joined book); plus the console's later columns rejected,
+  ignored, dest_path, import_job_id, which a titles PUT never overwrites). **Paused** = `library_id` NULL
+  (the library was deleted, its open poll cancelled with `bridge.CancelAudiblePaused`): the scheduler
+  skips it and Check now is 409 `account_paused` until the Bridge maps it again. **Bridge routes** (bridge
+  token only, header only, not module-gated, like podcasts'): `GET /bridge/users` (`{users:[{id, username,
+  display_name, admin}]}`: `catalog.BridgeUsers`, never a kid member, a demo or a disabled account, and a
+  PUT naming one is 404 `unknown_user`); `PUT`/`DELETE /bridge/audible/accounts/{account}` (an upsert in one
+  transaction, the library must be a books library (400 `not_books`, 404 `unknown_library`); DELETE cancels
+  the account's open poll (`bridge.CancelAudibleRemoved`; both reasons are `IsCancelReason`'s and the
+  console's `SERVER_CANCEL_REASONS`), 204 even when unknown); `PUT .../titles` (`{poll_id, final,
+  titles:[...]}`, strict JSON, up to `MaxAudibleTitles` a call, a call without its `titles` array 400, never
+  "owns nothing"; free text cleaned and bounded, not refused: a title's authors and series past the first 20
+  and 10 are dropped; a match path is clean, or `.` for a `book` override on the library root, as the books
+  list gives it; a match naming a missing or non-books library is stored as none; `final` marks every title
+  this `poll_id` did not send `gone` and sets `last_poll_at`); `GET /bridge/libraries/{id}/books`
+  (`{books:[{path, title, authors, narrators, series, asin, isbn, duration}], next}`, path cursor, up to
+  500; a main series with no position takes the one the code leading the book's folder name gives,
+  `metadata.FolderCodePosition`: "DH06 - ..." is Dragon Heart 6, "LAM05-06" the range "5-6" (an omnibus
+  never reads as its first volume), only when the code's letters are the series' initials (all or some,
+  in order; "HALO 07" in "Halo" gives none), in this listing only, never the scan's position; the Bridge
+  matches under `match.ImportOptions`, see `pkg/match` `Options`);
+  `PUT /bridge/libraries/{id}/enrichment?path=` (body `{"asin"}`: `catalog.BackfillASIN`, 204; the
+  same ASIN again a no-op; 404 `book_not_found` for no book of a books library there; 409 `asin_set` for
+  another ASIN or an admin's ASIN override, a cleared one too; only a write moves the content generation,
+  since the Bridge asks again for such a book after every poll).
+  **Admin routes** (`moduleRoutes`, 404 `module_off` while off): `GET /admin/audible/accounts` (with title
+  counts), `GET /admin/audible/titles` (`account`, `state`, `matched=1|0`, `q` over the title, each author
+  as written (`json_each`, never the stored list's JSON) and an exact ASIN, keyset by title then account and
+  asin, `after` cursor), `POST /admin/audible/accounts/{account}/poll` (Check now: 201 a new `audible.poll`
+  job, 200 the open one, raised to a person's priority (the kind `promotes`), audited as `bridge.job`).
+  `DELETE /admin/audible/accounts/{account}` is admin only (`requireAdmin`, the bridge token refused) and
+  **not** behind the toggle: it removes an account the Bridge can no longer remove (unpaired, paired again, a
+  DELETE that failed), which the scheduler would otherwise poll for good, so it must work after the module is
+  turned off. It is the Bridge's delete (`DeleteAudibleAccount`: titles go, the open poll cancelled), 204
+  known or not (404 `unknown_account` only for an id the Bridge could never have made), audited as
+  `bridge.audible.remove` when there was one. It signs nothing out of Amazon: that stays the Bridge's.
+  **Polls**: `audible.poll` is an internal, quiet kind, params `{"account"}`, no library or path, deduped
+  per account (`audibleAccountSuffix`), only the newest ended one kept, gated by
+  `ModuleFor` (held while the module is off). `audible.RunScheduler` (the module's Start) ticks each minute:
+  with an online Bridge that offers the kind, it queues the accounts due (`DueAudiblePolls`: not paused,
+  mapped to a person an account may still be mapped to (`bridgeUserSQL`: not one disabled or made a kid
+  since), `last_queued_at` older than `poll_hours`) at priority -10 and marks them queued, so a failed poll
+  waits its interval.
+  **Console**: Settings > Bridge's Audible accounts card (`features/audible/audible-accounts-card.tsx`,
+  read-only mapping, links to the Bridge's Accounts tab, Check now and Remove per account) while the module
+  is on, and Settings > Audible (`audible-topic.tsx`, a `MODULE_PAGES` page: the titles with account, state
+  and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
+  (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
+  the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  A scheduled poll reads "Scheduled by the server" in the job list (`serverScheduled`), and the Bridge's
+  optional `audible` setup step links its Accounts tab.
+- **Audible backups (BRIDGE-PLAN.md Phase 4b, `audible.import`, `catalog/audible_import.go`,
+  `audible/imports.go`, `bridge/audible.go`)**: the server decides what to back up and when; the Bridge
+  downloads, decrypts for the account and places the book. `0064`: `audible_accounts.template` (the account's
+  placement template, `''` = the Bridge's placement beside the series' other books; checked by
+  `bridge.CheckAudibleTemplate`, a copy of the Bridge's `placement` grammar: keep `audibleTemplateVars` in
+  step with its `knownVars` and `templateMods` with its `parseMods`; no `..` or hidden, dot-led part, which
+  the scan would skip), `policy_since` (a free column; backfilled `COALESCE(last_poll_at, created_at)`)
+  and `audible_titles.import_pending` (a console Back up on a preorder). **The job**: `audible.import` is
+  internal, `writes` (a writable books mapping), not quiet (done and failed are notified, named by the title),
+  gated by `ModuleFor`; params `{account, asin, library_id, dest_path, template}` (strict here, read leniently
+  by the Bridge; `dest_path` is the title's library-relative file path, or a folder for it when the last
+  segment has no audio extension (a template's too), or `''`, `CheckAudibleDestPath`; library and template
+  are the account's at queue time), the row's `library_id` set, deduped per `|account|asin`. Priorities: a console Back up 0
+  (a preorder's pending request too, when a poll queues it, with no requester), a policy -10 with no
+  requester (as the podcast scheduler's fetches), Back up everything -20 (below new episodes: a bulk backup
+  in the Bridge's one download slot never holds them back). `SetAudibleImport` records the job on the title
+  (`import_job_id`); the open one comes back on a repeat. **On this server** is a match not marked Not this
+  book (rejected): Back up, the policy's pending drop, the titles' `matched` filter and the accounts'
+  `matched` count read it so. **Done** (`FoldAudibleImport` from `OnEnded`): the
+  result (`{library_id, path, files:[{path,size}], bytes, enriched}`; `enriched:false` is no ASIN added: one
+  already set, or a file that joined a book that isn't the title's) names the book path `POST /bridge/rescan`
+  answered for the placed file; it must be the job's library and an indexed book (`ErrImportNotIndexed`), and
+  the title's own (`importOwnBook`, else `ErrImportNotOwn`, logged): a book carrying the title's ASIN, or one
+  holding only the files the backup placed (a single-file book is its file), so a file placed into a folder
+  book already there (the scan makes it one book) never makes that book, nor another title's, the title's
+  match; and never the book the admin marked Not this book for the title. It sets the match
+  (`match_how:"import"`), clears rejected and pending, only while `import_job_id` is still this job. A poll
+  keeps an `import` match while its book is indexed and the poll names no other. A failure's code is the
+  result's `code` (or a `code:` error prefix, or a park's code): `AudibleImportCodes`, shown on the title
+  (`import {job_id, state, code}`, `state` a job state or `pending`). **Policy** (`AudiblePolicyImports`,
+  after each final titles PUT while the module is on and a Bridge offers the kind; `autoImport.wants`, a
+  table test): available, not on this server, not ignored, nothing open; a pending request always; otherwise not
+  rejected, not `contested` (`AudibleReasonContested`: the Bridge left it unmatched because another title
+  claimed the same book, so the book is here under that title), never attempted, first seen after `policy_since`, and `all`, or `series` with a book in one of
+  its series the account's person can see (`seriesOwner`, by series key, `book_more_series` too).
+  `policy_since` moves to now when the console turns on `all` or `series` and at the account's first
+  complete poll, so the library it already had is never a flood: that is Back up everything's.
+  **Preorders**: an account with a preorder a backup may wait for (`preorderWaitingSQL`: not on this server,
+  not rejected or ignored, or with a pending request while not here) released by today's UTC date, at most
+  14 days ago, is due every hour (`DueAudiblePolls`); past 14 days such a title reads `needs_attention`
+  (`preorderOverdue`, the same terms). A pending request survives a restart (a column) and is queued by the
+  first poll that reports the title available (a rejected match's too). **Admin routes**
+  (`moduleRoutes`, admin session or admin API key; cast, feed and bridge tokens 401):
+  `POST /admin/audible/titles/{account}/{asin}/backup` (202 `{pending:false, job_id}`, 200 `{pending:true,
+  job_id:null}` for a preorder; 404 `unknown_title`, 409 `already_matched` (matched, not rejected),
+  `import_open`, `not_available` (unavailable or gone), `account_paused`; the queue's
+  `kind_unavailable` / `library_not_writable`), `POST /admin/audible/accounts/{account}/backup-all`
+  (`{queued}`: `backupAllSQL`: available, unmatched, not rejected, ignored or contested, nothing open, the
+  latest import not a `done` one whose book is still indexed (a refused fold, `ErrImportNotOwn`, isn't
+  queued again; a done one whose book left the library is), a failed or cancelled one again; a console Back up of one contested or done title, and its pending request, still queue), `PATCH /admin/audible/titles/{account}/{asin}` (`{rejected?, dest_path?}`; 400
+  `invalid_dest_path`) and `PATCH /admin/audible/accounts/{account}` (`{policy?, template?}`, 400
+  `invalid_policy` / `invalid_template`), audited: a queued Back up `bridge.job` (kind `audible.import`; also
+  when recording it on the title failed), a pending one `bridge.audible.backup`, then `bridge.audible.backup_all`
+  / `title` / `account` (the audit guard reads `moduleRoutes.Admin` routes too). The
+  accounts list adds `template`, `policy_since` and `backup_estimate {count, bytes}` (Back up everything's
+  titles, runtime at 8000 bytes a second); titles add `import`, `needs_attention`, `planned` and `contested` (see Audible
+  unmatched titles below). The Bridge's account
+  PUT sets `policy` on create only (the console owns it after). Removing an account cancels its open
+  imports. **Console**: per title Back up (off while its account is paused), Not this book (and undo) and
+  Destination... (`title-actions.tsx`), the import state and code (`importStatus`; the loaded titles are asked
+  again every 5 s while one's backup is queued or running, `backupRunning`); the Bridge's job list names an
+  `audible.import` by its ASIN, and its placed files are no verify check (`resultSummary`); per account Account settings... (policy, template) and Back up
+  everything... with a confirm "N books, ~X GB" (`backup-all-button.tsx`), and the legal line on the
+  titles page and both dialogs.
+- **Audible unmatched titles (4b owner fixes, `0065`, `catalog/audible.go`)**: what the console says of a title the
+  Bridge left unmatched. `0065` adds `audible_titles.planned` (JSON, `''` none) and `contest_library_id` + `contest_path`
+  (NULL and `''` none; the library is the account's at the PUT, and no contest is stored when the title's plan names
+  another library: the account was mapped elsewhere while the poll ran), all the poll's: each titles PUT writes them and
+  a stored match (the poll's, a kept `import` match, `FoldAudibleImport`) clears them; a title the final call marks
+  `gone` loses its plan. **Planned**: each title of the PUT may carry `planned {library_id, path, file, kind, siblings, state,
+  conflict, template}` (the Bridge plans the backup's place during `audible.poll`; placement rules and the disk check
+  are its own, the server never previews one), checked strictly by `checkAudiblePlan`: library > 0, `path` a clean
+  relative file path within `MaxPathBytes` and `file` a name with no `/` (both `""` only when `state` is `error`),
+  `kind` `series_existing`|`series_new`|`standalone` (`""` only for `error`), `state` `new`|`joins`|`exists`|`error`,
+  `siblings` 0..100000, `template` within `bridge.MaxAudibleTemplate`, `conflict` `file`|`book`|`audio`|`""`, or for
+  `error` the reason (cleaned and bounded); anything else is 400 `invalid_request` for the whole call, bar a `path`
+  over `MaxPathBytes` (Audible's long text through a template; the Bridge bounds no length), stored as an `error` plan
+  instead. The list shows it only while the account is mapped to the plan's library (a paused or remapped account
+  shows none until its next poll). **Contested**: `contested_path` (input only, omitempty: a clean book path or `.`, `bridgeBookPath`) is the
+  book a title tied for; `GET /admin/audible/titles` (and a single title, the PATCH answer) shows `contested
+  {library_id, path, with:[{asin, title}]}` or null: shown only while the account is still mapped to the contest's
+  library, `with` the account's other titles (not `gone`) contested over that book or matched to it, by title, at most
+  10 (`fillContests`, one query a page). A move or a join carries `contest_path` like a match's path, and a library's
+  delete clears its contests (`DeleteLibrary`). **Poll params**: `audible.poll` carries the account's `template` (omitempty;
+  `AudiblePoll(account, template, prio)`, from `DueAudiblePolls` and Check now), bounded, never parsed: a template
+  the grammar later refuses never stops the polls (the Bridge reports such a plan as an `error`). A request that finds
+  the account's poll still queued gives it its params (`promotes`, `bridge.Enqueue`), so Check now after a template
+  change plans by the new one; a claimed poll runs as claimed. **Console**:
+  `PlannedNote` (`audible-topic.tsx`, `plannedLine`; none on an `unavailable` or `gone` title, which can't be backed
+  up): "Will go to {path}, beside N books of its series" and the like,
+  "(planned at the last check)", warning tone on `exists` or `error`, a note when the plan's template differs from
+  the account's now, and "Your destination is checked when the backup starts" instead while a `dest_path` is set;
+  Destination...'s placeholder is the planned path, never its value (`plannedPlaceholder`). `ReasonNote`: `contested`
+  explained with the other titles and the book linked (`bookRoute`), a plain sentence without data (this title isn't
+  shown as here: the other may well be, when the Bridge kept it as the better match); a reason that is
+  a machine code reads "The Bridge couldn't match it to a book on this server" (`reasonKey`); Audible's own words stay.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (the
-  desktop manager's bind/TLS/public URL) are `Pin`ned and locked as `"launcher"`. `WithSettings` returns a
+  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (an
+  embedding launcher's bind/TLS/public URL/libraries, via `pkg/launcher.Options`) are `Pin`ned and locked as `"launcher"`
+  (the console says "Set by the program that started the server"). `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
   id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
   `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
@@ -2741,21 +3104,28 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `api/handlers_listening_sync.go`, migration `0061`): `POST /me/listening/sync` (`requireAuth`: session or API
   key; kids and demo accounts too) takes `{device_id (1-200 bytes), sent_at | clock_offset (exactly one),
   events[0-500]}` and answers `{server_time, results[] (one per event, request order), progress[]}`. Envelope
-  400s: `invalid request` (JSON, an unknown top-level field, a body over 1 MiB), `device_id is required` / `is
-  too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`.
+  400s: `invalid request` (JSON, an unknown top-level field), `device_id is required` / `is
+  too long`, `send sent_at or clock_offset` (none, both, unparseable, |offset| > 1e9), code `too_many_events`;
+  a body over 1 MiB is 413 code `too_large` (server#284: the player halves its batch on it). A batch with nothing
+  to apply opens no writer transaction.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
-  event's `rejected` `invalid`. The handler resolves each distinct
+  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, server#289; every
+  path-addressed route answers one with 400 `path is too long`, `pathInScope`). The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
-  cleaning to nothing -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
+  cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
-  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate`), the clock (shift = now - sent_at, kept as
+  (`invalid`, `unknown_kind`, an id repeated in the batch `duplicate` of a copy that passed them: a copy rejected
+  leaves the next to be checked on its own, server#284), the clock (shift = now - sent_at, kept as
   a Duration, or clock_offset, added to every time; a corrected time past now pulled back with its span, keeping
   its length), `too_old` (older than
   90 days), the fingerprint (only for the exact book path, 10 s), the file remap (fe#188: a `*_file` of the book
   is its offset now + the seconds in it, clamped to its length; else the sent seconds); then each event in
-  corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: while
-  the row is still that device's, the device's later base-0 events chain on it); a listen runs `ResolvePlace`
+  corrected-time order: an id already stored for the user is `duplicate` (a replay whose answer was lost: when it
+  is the newest link of the device's chain on the row, `span_at` at the row's version equal to its stored `ended_at`
+  (a finish or unfinish: `finish_changed_at`, a late one keeping the chain's later end), the device's later base-0
+  events chain on it; a replay of a span that kept the stored place, or one an edit or
+  another writer has since overtaken, seeds nothing); a listen runs `ResolvePlace`
   (whole-book seconds as the progression; in-batch chaining: base 0 on a book this batch wrote resolves on
   that version) and the **backstop**: a `resume`/`continue` span ending more than 60 s before an unfinished
   row is `not_applied` `resume_behind` (with the span's place as `other_place`; one carrying on, within 5 s, from
@@ -2766,11 +3136,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the row's next one, since the row's own device acknowledged its current version before the offer existed)
   unless it is the kept row's device or within 30 s; it is cleared by a non-diverged apply whose base as sent
   (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
-  `updated_at` (the corrected end), version + 1, never the finish. finish/unfinish apply only when newer than
+  `updated_at` (the corrected end, or the row's own when that is later: a diverged apply never moves it back, so
+  an old app's PUT dated in between can't win, server#284; the device's later spans then compare with the end
+  of its own last span, or of a finish or unfinish of its own after it, `span_at`: the chain below), version + 1, never the finish. finish/unfinish apply only when newer than
   `finish_changed_at` (else `older`): finish marks finished (the position to the end when the length is known,
   `finished_at` kept when already finished, the offer dropped), unfinish clears it and keeps the position, taking
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
-  diverged from the device that finished it); both bump the version.
+  diverged from the device that finished it; an unfinish of another device's unfinished row takes nothing, so
+  that device's place stays and this device's next base-0 span still diverges from it); both bump the version.
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
   start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`; a
   span from before a household switch continues the session before it; `listenedBetween`'s clip of the span;
@@ -2780,12 +3153,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
-  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
+  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
+  fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, an import's apply and
   undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
-  carry `device_name` and `other_place` (omitempty).
+  carry `device_name` and `other_place` (omitempty). The chain lasts across POSTs (server#289, `0062`,
+  `chainOf`): `writePlace` keeps the span's end on the row as `span_at` at its version (`span_version`; a
+  finish or unfinish that leaves the row the device's moves it there, never back, and starts one only when it
+  is not older than the row's `updated_at` (a save elsewhere since stays newer), a finish with no row starts it,
+  one that leaves another device's row ends it), and while the row is still the device's at that version its next span,
+  in this POST or a later one, compares with `span_at`, not the kept `updated_at`. A base-0 span of a later POST
+  resolves on the row's version when it continues the chain (`continues`: from within 5 s of the place, or
+  starting 0-60 s after `span_at`, 2 s overlap), and so do the POST's base-0 spans after it (in-batch chaining);
+  until one does, each is judged on its own, so one that does not still diverges from its own place (a device signed out and
+  back in, but also a backlog that resumes after a pause and a seek: one POST would have chained it). Every
+  other writer ends the chain (`endSpanChain`: the PUT, which can keep the client's version, `EditProgress`, an
+  import's apply and undo, a move or join). An Audible account's batch is furthest only (`SyncBatch.FurthestOnly`, see Audible sync).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
@@ -2867,11 +3252,81 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
-  reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
+  sets no ASIN from tags (they are only hints; an Audiobookshelf metadata.json does set one): a book is checked once matched.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`
   defaults to true). ffmpeg is likewise optional (transcoding off without it).
+- **Audible sync (Bridge Phase 4c, `audible.sync`, `catalog/audible_sync.go`, `api/handlers_audible_sync.go`,
+  `0066`)**: an account's listening places kept in step with Audible both ways. The console owns the switch
+  (`PATCH /admin/audible/accounts/{account}` `{sync}`, audited; off cancels the open sync with
+  `bridge.CancelAudibleSyncOff`); `0066` sets every account off, a new account is created off and a Bridge PUT never
+  turns it on (its `sync` is read and ignored); a PUT mapping the account to another person turns it off, forgets
+  its `last_sync_at` and cancels its open sync (`CancelAudibleSyncOff`: the console turned it on for the person it
+  showed then). "Don't sync this book" is `audible_titles.no_sync`
+  (`0066`; `PATCH /admin/audible/titles/{account}/{asin}` `{no_sync}`, audited, kept by a poll like `rejected` and
+  `ignored`); it is the sync's alone, backups never read it (the registry's `ignored` still keeps a title out of
+  backups). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not no_sync, not `gone`. **Audible to
+  here**: `audible/scheduler.go` `queueSyncs` (while the Bridge offers the kind) queues one `audible.sync` per
+  `DueAudibleSyncs` account (sync on, not paused, `refused_at` NULL, `bridgeUserSQL`, `sync_queued_at` older than
+  `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title; params
+  `{account, titles:[{asin, library_id, path, runtime_s}]}` (strict, `audibleSyncParams`; ASIN once each, a clean
+  book path or `.`; at most 1 MiB, `AudibleSync` drops the last titles past it), internal, quiet, `ModuleFor`
+  audible, deduped per account, `promotes` (a queued one takes the newest titles), only the newest ended kept
+  (`pruneAudibleEnded`). A console change to which titles sync (`PATCH .../titles/...` `{rejected}` or `{no_sync}`)
+  or turning sync on queues the account's sync at once (`audible.SyncNow`, `catalog.AudibleSyncQueueable`: the same
+  rule bar the 15 min, an online Bridge offering the kind; a title change queues even an empty title list, so the
+  Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
+  `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
+  fields, hand-mirrored); failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
+  `AudibleSyncCode`; `audible_sign_in`, the Bridge's transient sign-in refusal, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
+  complete poll (`PutAudibleTitles` final: Audible answered the account). The Bridge posts the places to `POST
+  /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
+  `sent_at` required, the Sync v2 event shapes and limits): the batch is `SyncBatch{UserID: the account's person,
+  DeviceID: "audible:<account>", DeviceName: "Audible (<label or STORE>)", TokenID: 0, FurthestOnly: true}`, set by
+  the route alone (no body field reaches either; `/me/listening/sync` refuses an unknown field). Each event's book is
+  resolved under the PERSON's scopes (`userPathResolver`, `catalog.UserScopes`: no access is `no_access`), then must
+  be a synced title's match (`AudibleSyncBooks`, else `rejected` `not_synced`; `rejected` `duration_mismatch`, listen
+  and finish alike, when no title on the book has an Audible `runtime_s` within 5% of the longer plus 2 min of the
+  indexed book's duration, `audibleRuntimeAgrees`: matched to another recording; either unknown agrees). **FurthestOnly** (`furthestListen`): a
+  listen more than 1 s (`furthestSlack`) ahead of the stored place applies over any device's row whatever its time
+  (the row's `updated_at` never moves back, its playback speed and offer kept; the player's own reconcile then moves
+  or offers, and a device's diverged span offers Audible's place by name); at or behind it, or on a finished row,
+  `not_applied` `behind` (no offer, nothing stored on the row), and so is a listen heard at or before the row's
+  `finish_changed_at` (a place from before a finish or a restart here is the old reading's); a place past the book's end by more than 5% plus 2
+  min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
+  is the end; an unfinish is `behind`; a finish is any finish. The device id `audible:<account>` is this route's
+  alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
+  none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
+  undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
+  its undo restores Audible's place from `import_progress_prior` under no device either, `progressPrior.restored`, so
+  the feed carries the undo to Audible too). No listening session, `listening_daily` or history row is recorded
+  (owner decision 2); the
+  events are logged with token 0. 200 the Sync v2 answer; 403 `sync_off` (the module or the account's sync off, or
+  the account paused: no library), 403 `user_unavailable` (the person disabled, a kid or a demo since:
+  `ErrAudibleSyncUser`), 404 `unknown_account` (none, a bad id, or its person deleted: the account cascades). **Here to Audible**: `GET /bridge/progress?account=&since=&limit=` (default 200,
+  at most 500; the same 403s and 404, 400 `invalid_request` for no account, a bad limit or cursor) answers
+  `{rows:[{library_id, path, asin, position, duration, finished, updated_at, device_id, version}], next, more}`:
+  the person's progress rows on the synced titles' books inside their scopes, one per title (two titles on one book
+  are two rows), rows whose `device_id` is the account's left out (no echo), a row whose own title's `runtime_s` disagrees
+  with the book's length left out (`audibleRuntimeAgrees`, the listening route's `duration_mismatch` checked per
+  title: the indexed duration, else the row's stored one, both unknown agreeing; the Bridge checks no length of its
+  own), keyset by `(change_seq, asin)` after the opaque cursor `since` (base64url JSON); `next` is
+  the last row read, one left out too (since again when none), a feed cursor the Bridge keeps between polls; `more`
+  a full page read (its rows may be fewer). `progress.change_seq` (`0066`, `idx_progress_user_change`) is the order
+  this server wrote the rows in: drawn from the one-row `progress_change_counter` (strictly increasing, never
+  reused, so a deleted row can't hand its number to the next write), set by two triggers on every insert and every
+  UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in
+  the user-state rule, the counter's `seq` too), existing rows numbered in updated_at order. Two triggers on
+  `audible_titles` (a title inserted with a match; its match changed, synced again (`no_sync`, `rejected`, `ignored`
+  cleared, back from gone) or its `runtime_s` changed) move the person's row on that book to the next number, so a
+  newly matched or re-synced book's existing place (or one left out for a length that may agree now) is offered to Audible. A row written late with
+  an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
+  clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
+  Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the
+  account card's Sync row says off, on and when it last synced, paused with the account, or stopped since Audible
+  refused the account; a scheduled sync's job reads "Syncing places with Audible", scheduled by the server; a title
+  on this server has Don't sync / Sync again (`title-actions.tsx`, `canSync`) and a Not synced badge.
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
   zero audio files while books are still indexed. This protects the index - and

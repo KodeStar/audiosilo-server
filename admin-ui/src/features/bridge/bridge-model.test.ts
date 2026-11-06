@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BridgeJobState } from '@/api/types';
 import {
   BRIDGE_JOB_STATES,
+  backupAsin,
   bridgeCompose,
   bridgeServerUrl,
   COMPOSE_SERVER_URL,
@@ -172,6 +173,24 @@ describe('progress and results', () => {
     expect(resultSummary({ episodes: 4 })).toBeNull();
     expect(resultSummary({})).toBeNull();
     expect(resultSummary(null)).toBeNull();
+    // An audible.import's placed file is no check: not "1 file checked, it doesn't match".
+    expect(
+      resultSummary({
+        library_id: 1,
+        path: 'A/B',
+        files: [{ path: 'A/B/B.m4b', size: 10 }],
+        bytes: 10,
+        enriched: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('names the title an audible.import backs up, for no other kind', () => {
+    expect(
+      backupAsin({ kind: 'audible.import', params: { account: 'a', asin: 'B000000001' } }),
+    ).toBe('B000000001');
+    expect(backupAsin({ kind: 'bridge.verify', params: { asin: 'B000000001' } })).toBeUndefined();
+    expect(backupAsin({ kind: 'audible.import', params: {} })).toBeUndefined();
   });
 
   it('turns the hold field into params', () => {
@@ -216,10 +235,12 @@ describe('bridgeServerUrl', () => {
 });
 
 describe('serverScheduled', () => {
-  it('names the podcast jobs the server queues itself', () => {
+  it('names the jobs the server queues itself: podcasts, Audible polls and syncs', () => {
     expect(serverScheduled('podcast.poll')).toBe(true);
     expect(serverScheduled('podcast.fetch')).toBe(true);
     expect(serverScheduled('podcast.retain')).toBe(true);
+    expect(serverScheduled('audible.poll')).toBe(true);
+    expect(serverScheduled('audible.sync')).toBe(true);
   });
   it('leaves out a follow and the book jobs, which someone asks for', () => {
     expect(serverScheduled('podcast.subscribe')).toBe(false);

@@ -59,7 +59,7 @@ const composeTimeout = 15 * time.Second
 // community metadata service. This is the amplification bound: a burst of
 // distinct ids queues here rather than fanning straight out to metaserve. Not
 // configurable; it is a courtesy limit on a shared third party, matching the
-// api package's transcodeSem precedent.
+// api package's transcodeSem precedent. A bulk run takes no slot (workSlot).
 const maxConcurrentWorkFetches = 4
 
 // maxConcurrentLookups bounds how many uncached identifier lookups the admin
@@ -80,8 +80,10 @@ type MetaPersonRef struct {
 	Name string `json:"name"`
 }
 
-// MetaPosition is a spoiler position on a work's own (edition-independent)
-// timeline. Chapter is the logical work chapter; 0 = front matter / prior-book.
+// MetaPosition is a spoiler position. Chapter is the logical work chapter (the
+// work's own, edition-independent timeline; MetaWork.PositionScale says how long it
+// is), or in a /meta answer about a book split finer than that, that book's chapter
+// (OnRecording); 0 = front matter / prior-book, on either.
 type MetaPosition struct {
 	Chapter int `json:"chapter"`
 }
@@ -163,6 +165,11 @@ type MetaWork struct {
 	// CommunityDescription is the CC BY-SA description, separate from
 	// Description (see MetaCommunityDescription).
 	CommunityDescription *MetaCommunityDescription `json:"community_description,omitempty"`
+	// PositionScale is the scale the Characters' and Recaps' positions are numbered
+	// on, when the work states one and they still are: a /meta answer about a book
+	// split finer than it has them translated onto that book (OnRecording) and omits
+	// it. A part Generated names is numbered on the book whatever this says.
+	PositionScale *MetaPositionScale `json:"position_scale,omitempty"`
 	// Attribution is present iff the work carries any CC BY-SA content (see
 	// carriesCommunityContent), so a client shows the credit exactly when it
 	// shows content that needs it.
@@ -266,7 +273,10 @@ type Enrichment struct {
 // cache in front so a repeated lookup (and a down upstream) is cheap. A nil
 // *Service means the feature is off; callers must guard on that.
 type Service struct {
-	client  *client
+	client *client
+	// report POSTs the unknown-ASIN report (report.go) to the remote service:
+	// its own client, never put behind the local copy by SetMirror.
+	report  *http.Client
 	baseURL string // metaserve base URL (no trailing slash) for building web_url
 	cache   *cache
 	// store is the persistent second level behind cache (see Store); nil keeps
@@ -285,6 +295,9 @@ type Service struct {
 	// of one identifier share one upstream GET (see sharedLookup).
 	flightMu sync.Mutex
 	flights  map[string]*lookupFlight
+	// seriesFlights are the series records being read for their facts, by series id,
+	// each closed when its read ends (see seriesFacts). Guarded by flightMu.
+	seriesFlights map[string]chan struct{}
 	// health caches Ping's answer.
 	health healthCache
 	// covers fetches community cover images (FetchCover), at most
@@ -306,12 +319,14 @@ func NewService(baseURL string, now func() time.Time) *Service {
 	base := strings.TrimRight(baseURL, "/")
 	return &Service{
 		client:        newClient(base),
+		report:        newReportClient(),
 		baseURL:       base,
 		cache:         newCache(now),
 		composeBudget: composeTimeout,
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
+		seriesFlights: map[string]chan struct{}{},
 		covers:        newCoverClient(netguard.PublicAddrPort),
 		coverSem:      make(chan struct{}, maxConcurrentCoverFetches),
 		now:           now,
@@ -587,17 +602,33 @@ func keepStored[T any](s *Service, key string, stored *T, err error) bool {
 	return true
 }
 
-// fetchWork is one uncached works/{id} GET, bounded by workSem (only uncached
-// fetches queue there, and a caller that goes away while queued never issues its
-// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
-func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+// workSlot takes a workSem slot for one uncached read, or gives up with ctx (its
+// error then); release gives it back. A bulk run (a Pacer in ctx) takes none: its
+// workers and Pacer bound what it asks, and its reads sit out the service's Retry-After
+// for as long as its compose budget lasts, which must not hold up a listener's read or
+// the match dialog queued here.
+func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
+	if pacerOf(ctx) != nil {
+		return func() {}, nil
+	}
 	select {
 	case s.workSem <- struct{}{}:
+		return func() { <-s.workSem }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// fetchWork is one uncached works/{id} GET, bounded by workSlot (only uncached
+// fetches queue there, and a caller that goes away while queued never issues its
+// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+	release, err := s.workSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Deferred so a panic can never leak a slot.
-	defer func() { <-s.workSem }()
+	defer release()
 	detail, err := s.client.work(ctx, id)
 	if err != nil {
 		return nil, err
@@ -635,6 +666,7 @@ func (s *Service) toWork(detail *upstreamWorkDetail) *MetaWork {
 		Recaps:               toRecaps(detail.Recaps),
 		RecapSummary:         toRecapSummary(detail.RecapSummary),
 		CommunityDescription: toCommunityDescription(detail.CommunityDescription),
+		PositionScale:        toPositionScale(detail.PositionScale),
 	}
 	if carriesCommunityContent(w) {
 		w.Attribution = s.attribution(w.ID)
@@ -801,7 +833,7 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, r
 // trusting metaserve to list memberships primary-first: a variant leading the
 // rail would hand a shipped player the chronological order's earlier books as
 // "previous" (the reading-order spoiler), and nothing here could see it happen.
-// audiosilo-sidecars' readingSeries chooses by the same rule.
+// The Bridge's readingSeries (internal/metaops) chooses by the same rule.
 func familyMains(refs []upstreamSeriesRef) []upstreamSeriesRef {
 	index := make(map[string]int, len(refs)) // family key -> slot in mains
 	var mains []upstreamSeriesRef

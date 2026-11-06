@@ -71,12 +71,22 @@ type bookIndex struct {
 }
 
 // matcher matches ABS items for one person: the index, and which of its books
-// they can access.
+// they can access. One goroutine's: its author pools' match.Index fill as items
+// are matched.
 type matcher struct {
 	*bookIndex
 	ok []bool // the person can access the book
 	// byAuthor memoizes a query author's candidates.
-	byAuthor map[string][]int
+	byAuthor map[string]*authorPool
+}
+
+// authorPool is a query author's candidates (pkg/match's person gate over the
+// distinct authors, library order), split by whether the person can access
+// them, each half prepared for pkg/match once and reused by every item of the
+// author.
+type authorPool struct {
+	idxs [2][]int // [0]: books they can't access, [1]: books they can
+	ix   [2]*match.Index
 }
 
 type folderRef struct {
@@ -150,7 +160,7 @@ func newBookIndex(books []catalog.Book) *bookIndex {
 
 // matcher is the index for one person (allow: they can access the book).
 func (x *bookIndex) matcher(allow func(catalog.Ref) bool) *matcher {
-	m := &matcher{bookIndex: x, ok: make([]bool, len(x.books)), byAuthor: map[string][]int{}}
+	m := &matcher{bookIndex: x, ok: make([]bool, len(x.books)), byAuthor: map[string]*authorPool{}}
 	for i, b := range x.books {
 		m.ok[i] = allow(catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath})
 	}
@@ -281,16 +291,17 @@ func (m *matcher) matchIdentifier(index map[string][]int, key string) (idx int, 
 }
 
 // matchTitle is the fuzzy tier: pkg/match.Best among the books of a matching
-// author, then the length check.
+// author (the author's prepared pool), then the length check.
 func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 	na := match.Normalize(it.Author)
 	if na == "" || strings.TrimSpace(it.Title) == "" {
 		return -1, false
 	}
-	pool, seen := m.byAuthor[na]
+	ap, seen := m.byAuthor[na]
 	if !seen {
 		// pkg/match's person gate, over the distinct authors rather than every
 		// book.
+		var pool []int
 		for a, idxs := range m.authors {
 			if match.NamesMatch(a, na) {
 				pool = append(pool, idxs...)
@@ -299,25 +310,31 @@ func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 		// Library order, not the map's: Best keeps the first of equal scores, so
 		// the review and the apply (and every re-import) pick the same book.
 		slices.Sort(pool)
-		m.byAuthor[na] = pool
+		ap = &authorPool{}
+		for _, want := range []bool{false, true} {
+			var idxs []int
+			var cands []match.Book
+			for _, i := range pool {
+				if m.ok[i] == want {
+					b := m.books[i]
+					idxs = append(idxs, i)
+					cands = append(cands, match.Book{Title: b.Title, Author: b.Author, Series: b.Series,
+						SeriesIndex: b.SeriesIndex})
+				}
+			}
+			k := boolIndex(want)
+			ap.idxs[k], ap.ix[k] = idxs, match.NewIndex(cands)
+		}
+		m.byAuthor[na] = ap
 	}
 	q := match.Query{Title: it.Title, Author: it.Author, Series: it.Series}
 	if seq, err := strconv.ParseFloat(it.Sequence, 64); err == nil {
 		q.Sequence, q.HasSequence = seq, true
 	}
 	best := func(want bool) int {
-		var idxs []int
-		var cands []match.Book
-		for _, i := range pool {
-			if m.ok[i] == want {
-				b := m.books[i]
-				idxs = append(idxs, i)
-				cands = append(cands, match.Book{Title: b.Title, Author: b.Author, Series: b.Series,
-					SeriesIndex: b.SeriesIndex})
-			}
-		}
-		if j, ok := match.Best(cands, q); ok && lengthsAgree(it.Duration, m.books[idxs[j]].Duration) {
-			return idxs[j]
+		k := boolIndex(want)
+		if j, ok := ap.ix[k].Best(q); ok && lengthsAgree(it.Duration, m.books[ap.idxs[k][j]].Duration) {
+			return ap.idxs[k][j]
 		}
 		return -1
 	}
@@ -325,6 +342,13 @@ func (m *matcher) matchTitle(it Item) (idx int, denied bool) {
 		return i, false
 	}
 	return -1, best(false) >= 0
+}
+
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // match finds where one item's history goes (contested is settled by matchAll).

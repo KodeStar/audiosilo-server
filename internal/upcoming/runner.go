@@ -952,13 +952,11 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 		NextRunAt: st.NextRunAt, Series: st.Series, Items: st.Items}, nil
 }
 
-// stamp is the catalog's fixed-width UTC millisecond time.
-var stamp = catalog.FormatStamp
-
-func parseStamp(s string) (time.Time, bool) {
-	t, err := time.Parse(time.RFC3339Nano, s)
-	return t, err == nil && s != ""
-}
+// stamp and parseStamp are the catalog's fixed-width UTC millisecond time.
+var (
+	stamp      = catalog.FormatStamp
+	parseStamp = catalog.ParseStamp
+)
 
 func maxTime(a, b time.Time) time.Time {
 	if a.After(b) {

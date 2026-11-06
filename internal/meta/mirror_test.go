@@ -297,7 +297,7 @@ func TestServeLocal(t *testing.T) {
 		w.Header().Set("Location", "/api/v1/y")
 		w.WriteHeader(http.StatusMovedPermanently)
 		_, _ = w.Write([]byte(`{"redirect":"y"}`))
-	}), req)
+	}), req, localTimeout)
 	if resp == nil || failed != "" || resp.StatusCode != http.StatusMovedPermanently || resp.Status != "301 Moved Permanently" ||
 		resp.Header.Get("Location") != "/api/v1/y" {
 		t.Fatalf("serveLocal = %+v, %q", resp, failed)
@@ -314,13 +314,13 @@ func TestServeLocal(t *testing.T) {
 		},
 	}
 	for want, h := range failures {
-		if resp, failed := serveLocal(h, req); resp != nil || failed != want {
+		if resp, failed := serveLocal(h, req, localTimeout); resp != nil || failed != want {
 			t.Errorf("serveLocal = %v, %q; want nil, %q", resp, failed, want)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if resp, failed := serveLocal(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), req.WithContext(ctx)); resp != nil || failed != "timed out" {
+	if resp, failed := serveLocal(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), req.WithContext(ctx), localTimeout); resp != nil || failed != "timed out" {
 		t.Errorf("a request out of time = %v, %q", resp, failed)
 	}
 }
@@ -438,5 +438,60 @@ func TestMirrorCallerGoneSkipsRemote(t *testing.T) {
 	}
 	if remoteHits.Load() != 0 || logs.Len() != 0 {
 		t.Fatalf("remote hits %d, logs %q", remoteHits.Load(), logs.String())
+	}
+}
+
+// stuckMirror is a ready local copy whose every answer runs out of time.
+type stuckMirror struct{}
+
+func (stuckMirror) Ready() bool { return true }
+func (stuckMirror) Handler() http.Handler {
+	return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+}
+
+// The unknown ASIN report's lookups (KnownASIN) stay on this server in mirror
+// mode: a lookup the copy fails (500, a timeout) or can't take (not Ready) is
+// an error, not ErrNotFound, and the remote service is never asked. Any other
+// lookup the copy fails still goes to the remote service.
+func TestKnownASINMirrorStaysLocal(t *testing.T) {
+	t.Parallel()
+	var remote atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		remote.Add(1)
+		_, _ = w.Write([]byte(`{"work":{"id":"w1","title":"T"},"recording_id":"r1"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	failing := newFakeMirror(t)
+	failing.fail.Store(true)
+	notReady := newFakeMirror(t)
+	notReady.ready.Store(false)
+	cases := map[string]Mirror{"HTTP 500": failing, "timed out": stuckMirror{}, "not ready": notReady}
+	for name, m := range cases {
+		t.Run(name, func(t *testing.T) {
+			before := remote.Load()
+			s := NewService(srv.URL, nil)
+			s.SetMirror(m, nil)
+			s.client.http.Transport.(*fallbackTransport).timeout = 50 * time.Millisecond
+			known, err := s.KnownASIN(context.Background(), "B0ABCDEFGH")
+			if known || !errors.Is(err, errLocalOnly) {
+				t.Fatalf("KnownASIN = %v, %v; want a local-only error", known, err)
+			}
+			if n := remote.Load() - before; n != 0 {
+				t.Fatalf("the remote service was asked %d times", n)
+			}
+		})
+	}
+
+	// Unchanged for every other caller: the copy's 500 goes to the remote
+	// service.
+	s := NewService(srv.URL, nil)
+	s.SetMirror(failing, nil)
+	before := remote.Load()
+	if _, err := s.client.lookup(context.Background(), "B0ABCDEFGH", ""); err != nil {
+		t.Fatalf("lookup = %v, want the remote service's answer", err)
+	}
+	if remote.Load() == before {
+		t.Fatal("a lookup the copy failed was not asked of the remote service")
 	}
 }

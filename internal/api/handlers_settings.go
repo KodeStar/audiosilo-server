@@ -41,7 +41,8 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 //	 "restart_settings": ["network.bind", ...], "restart_pending": ["network.bind"]}
 //
 // Read-only facts ride along in their sections: metadata.available (the service
-// exists, so the switch can turn on), players.web_player (where /web is served
+// exists, so the switch can turn on), metadata.upcoming_status and
+// metadata.report_status (the two daily jobs' last runs, when the job exists), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
 // is null), household.max_members_default/_min/_max (the cap's default and
 // range). The modules section is each managed module's toggle (modules.go; GET
@@ -52,6 +53,9 @@ func (a *API) settingsEnvelope() map[string]any {
 	sections["metadata"]["available"] = a.meta != nil
 	if st := a.upcomingStatus(context.Background()); st != nil {
 		sections["metadata"]["upcoming_status"] = st
+	}
+	if st := a.reportStatus(context.Background()); st != nil {
+		sections["metadata"]["report_status"] = st
 	}
 	sections["players"]["web_player"] = a.playerSource
 	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers
@@ -129,6 +133,12 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.upcoming != nil && next.Metadata.Enabled && next.Upcoming.Enabled &&
 		(!cur.Metadata.Enabled || !cur.Upcoming.Enabled) {
 		a.upcoming.Wake()
+	}
+	// The unknown-ASIN report switched on (or metadata back on): run now unless
+	// it ran within the day.
+	if a.coverage != nil && next.Metadata.Enabled && next.Metadata.ReportUnknown &&
+		(!cur.Metadata.Enabled || !cur.Metadata.ReportUnknown) {
+		a.coverage.Wake()
 	}
 	if changes := config.ChangedSettings(cur, next); len(changes) > 0 {
 		a.audit(r, "settings.update", "", map[string]any{"changes": changes})

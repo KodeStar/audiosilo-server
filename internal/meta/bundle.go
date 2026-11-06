@@ -123,10 +123,14 @@ func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
 // chapter's whole-book start offset (book_offset) in ascending order: the last
 // chapter whose start is at or before position. 0 when there are no chapters or
 // position <= 0, which gates a book nobody has started (or one without chapters)
-// to "the start only". It mirrors the player's meta-gating.ts chapterNumberAt
-// exactly, so a server-gated envelope and a client-gated one agree.
+// to "the start only", and when the starts say nothing about a place (startsAllAlike:
+// all zero, say), which must not read as the last chapter. Past the last start, a run of
+// starts alike at the end is one chapter's worth of place, the run's first: files of
+// unknown length after the last known one (0, 3600, 3600, 3600), or markers of no length.
+// It mirrors the player's meta-gating.ts chapterNumberAt exactly, so a server-gated
+// envelope and a client-gated one agree.
 func ChapterAt(starts []float64, position float64) int {
-	if len(starts) == 0 || position <= 0 {
+	if len(starts) == 0 || position <= 0 || startsAllAlike(starts) {
 		return 0
 	}
 	n := 0
@@ -136,11 +140,17 @@ func ChapterAt(starts []float64, position float64) int {
 		}
 		n = i + 1
 	}
+	if n == len(starts) {
+		for n > 1 && starts[n-1] == starts[n-2] {
+			n--
+		}
+	}
 	return n
 }
 
 // HideSpoilers returns a copy of env gated for a listener at chapter (see
-// ChapterAt) of the current work, finished or not:
+// ChapterAt) of the current work, finished or not, on that book's chapters (env's
+// positions already translated onto them, OnRecording):
 //   - finished: the current work is kept whole;
 //   - a character is kept iff it is revealed by max(chapter, 1);
 //   - a recap is kept iff it covers chapter 0 (before this book) or a chapter
@@ -186,6 +196,10 @@ func gateWork(w *MetaWork, chapter int) *MetaWork {
 		}
 	}
 	c.RecapSummary = nil
+	if len(c.Characters) == 0 && len(c.Recaps) == 0 {
+		// Nothing left on it, and it is the community's too: it goes with the credit.
+		c.PositionScale = nil
+	}
 	if !carriesCommunityContent(&c) {
 		c.Attribution = nil
 	}

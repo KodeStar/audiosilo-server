@@ -112,11 +112,12 @@ func (l *limiter) LockedFor(key string) time.Duration {
 
 // setRetryAfter sets Retry-After to d in whole seconds, rounded up (at least 1).
 func setRetryAfter(w http.ResponseWriter, d time.Duration) {
-	secs := int64((d + time.Second - 1) / time.Second)
-	if secs < 1 {
-		secs = 1
-	}
-	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+	w.Header().Set("Retry-After", strconv.FormatInt(retrySeconds(d), 10))
+}
+
+// retrySeconds is d in whole seconds for a retry hint, rounded up, at least 1.
+func retrySeconds(d time.Duration) int64 {
+	return max(int64((d+time.Second-1)/time.Second), 1)
 }
 
 // Fail records a failed attempt and locks the key once over the threshold.

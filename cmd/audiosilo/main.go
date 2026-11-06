@@ -3,7 +3,7 @@
 //
 // On first run it generates an admin account and an auth code, printing both to
 // stdout exactly once. Configuration lives in <data>/config.yaml. The actual run
-// loop lives in pkg/launcher so the audiosilo-manager desktop app can share it.
+// loop lives in pkg/launcher, a public package an embedding launcher can share.
 package main
 
 import (

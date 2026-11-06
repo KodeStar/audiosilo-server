@@ -8,9 +8,11 @@ package metadata
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/dhowden/tag"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Chapter is one playable unit, normalized so a client can treat embedded m4b
@@ -71,6 +75,14 @@ type Metadata struct {
 	OpenErr  error `json:"-"` // the file couldn't be opened
 	ProbeErr error `json:"-"` // ffprobe was configured and couldn't read it
 
+	// TagASIN, TagISBN and TagLanguage are what the tags say of the book's
+	// identifiers and language (setHints: asin / audible_asin, the iTunes
+	// freeform ASIN item, an ID3 TXXX ASIN; isbn; language, ID3 TLAN): hints for
+	// a community match, never the book's identifiers (catalog.Book.TagASIN).
+	TagASIN     string `json:"-"`
+	TagISBN     string `json:"-"`
+	TagLanguage string `json:"-"`
+
 	// narratorExplicit: Narrator came from a narrator tag (\xa9nrt, a NARRATOR
 	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
 	// when there is none, never replaces (applyProbe).
@@ -84,13 +96,14 @@ type Metadata struct {
 // Audible DRM formats (.aax/.aaxc) are intentionally excluded: the server can never
 // stream them (they need per-account decryption), and indexing an .aax that sits
 // next to its converted .m4b would lump both into one book with duplicated chapters
-// and an unplayable track. The manager converts .aax/.aaxc to .m4b before content
-// enters a library, so a library should only ever hold the playable .m4b.
+// and an unplayable track. The Bridge's Audible backup decrypts each .aaxc it
+// downloads to an .m4b before the file enters a library; an .aax or .aaxc copied
+// in by hand is skipped here (nothing converts it yet: Phase B in CLAUDE.md).
 //
 // .mka (Matroska audio, often MP3 with its chapters, as Audiobookshelf reads it)
 // is in the library too, though no browser or iOS player opens the container:
 // with ffmpeg configured an .mka holding MP3 is served as its lossless remux to
-// MP3 at the same stream URL (media.Remuxer, server#174), so every client plays
+// MP3 at the same stream URL (media.NewRemuxer, server#174), so every client plays
 // it; one holding another codec plays only in the web player, through
 // ?transcode=1 (#161).
 // An .mka beside a file of the same name in another audio format is that file's
@@ -276,10 +289,94 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		// date): the same tags tag.Metadata.Year reads, but with month and day.
 		m.Released = firstReleaseDate(rawString(raw, "\xa9day"), rawString(raw, "TDRC"), rawString(raw, "TYER"),
 			rawString(raw, "TYE"), rawString(raw, "date"), rawString(raw, "year"))
+		m.setHints(rawHints(raw))
 	}
 	if md.Picture() != nil {
 		m.HasCover = true
 	}
+}
+
+// Tag names of the hints, lowercased as applyProbe's tags and rawHints' keys
+// are: the ASIN under Audible's names (asin, an MP4 freeform "ASIN" item, an
+// ID3 TXXX "ASIN"; audible_asin, as some tools write it), the ISBN, the language.
+var (
+	asinTags     = []string{"asin", "audible_asin"}
+	isbnTags     = []string{"isbn"}
+	languageTags = []string{"language"}
+	hintTags     = slices.Concat(asinTags, isbnTags, languageTags)
+)
+
+// maxHintBytes bounds a language hint as stored: a longer value is a garbage
+// tag, not one.
+const maxHintBytes = 64
+
+// setHints takes the hints tags gives (lowercased tag name -> value): each the
+// first value of its names that reads as one. A tag can hold several (a repeated
+// tag comes joined with ";", a frame's values NUL-separated, an MP4 item's led by
+// NUL locale bytes) or a placeholder ("N/A" beside a real audible_asin), so an
+// ASIN or ISBN counts only in its proper form, kept normalized; a language need
+// only be short (meta.NormalizeLanguage reads it). A tag pass without one leaves
+// what an earlier pass read.
+func (m *Metadata) setHints(tags map[string]string) {
+	pick := func(dst *string, names []string, read func(string) string) {
+		for _, n := range names {
+			for _, part := range strings.FieldsFunc(tags[n], func(r rune) bool { return r == ';' || r == 0 }) {
+				if v := read(strings.TrimSpace(part)); v != "" {
+					*dst = v
+					return
+				}
+			}
+		}
+	}
+	pick(&m.TagASIN, asinTags, func(s string) string {
+		if s = match.NormalizeASIN(s); match.ValidASIN(s) {
+			return s
+		}
+		return ""
+	})
+	pick(&m.TagISBN, isbnTags, func(s string) string {
+		if s = match.NormalizeISBN(s); match.ValidISBN(s) {
+			return s
+		}
+		return ""
+	})
+	pick(&m.TagLanguage, languageTags, func(s string) string {
+		if len(s) > maxHintBytes {
+			return ""
+		}
+		return s
+	})
+}
+
+// rawHints is dhowden's raw items naming a hint (hintTags), by lowercased name: a
+// plain item (Vorbis keys, an MP4 freeform item's name, an ID3 text frame) by
+// its key, an ID3 TXXX frame (dhowden's *tag.Comm, keyed TXXX, TXXX_0, ...) by
+// its description, and ID3's TLAN as the language. Several items naming one
+// hint are joined with ";" (setHints takes the first that reads as one).
+func rawHints(raw map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	put := func(k, v string) {
+		if slices.Contains(hintTags, k) {
+			out[k] += ";" + v
+		}
+	}
+	// In key order, so of two items naming one hint the same one always wins.
+	for _, k := range slices.Sorted(maps.Keys(raw)) {
+		switch v := raw[k].(type) {
+		case string:
+			switch key := strings.ToLower(k); key {
+			case "tlan", "tla":
+				put("language", v)
+			default:
+				put(key, v)
+			}
+		case *tag.Comm:
+			if strings.HasPrefix(k, "TXX") { // ID3v2.2 TXX, v2.3/2.4 TXXX, TXXX_0, ...
+				put(strings.ToLower(strings.TrimSpace(v.Description)), v.Text)
+			}
+		}
+	}
+	return out
 }
 
 // bookTitle picks the book title from an album/title tag pair. The album tag

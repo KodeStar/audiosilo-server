@@ -25,3 +25,21 @@ func TestRegistryValidates(t *testing.T) {
 		t.Fatal("contributions has routes or background work of its own")
 	}
 }
+
+// Audible (Phase 4a) needs a Bridge offering audible, and its background work
+// is the poll scheduler.
+func TestRegistryAudible(t *testing.T) {
+	t.Parallel()
+	for _, m := range Modules() {
+		if m.ID == bridge.ModuleAudible {
+			if m.RequiresBridge != bridge.FeatureAudible || m.Start == nil || m.Routes != nil {
+				t.Fatalf("audible = %+v", m)
+			}
+			if bridge.ModuleFor(bridge.KindAudiblePoll, nil) != m.ID {
+				t.Fatal("audible.poll jobs don't need the audible module")
+			}
+			return
+		}
+	}
+	t.Fatal("no audible module")
+}

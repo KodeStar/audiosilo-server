@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -340,91 +341,185 @@ func TestKeySeries(t *testing.T) {
 	}
 }
 
-// TestSeriesKeyScale times keying and the series reads on 50,000 books in 2,000
-// series of 25, each spelled three ways, a tenth of the books also in one of 100
-// shared series through a list. A plain build keys them all in about a second
-// and answers each read in a few milliseconds (the spellings each read used to
-// gather cost 9 ms in one library, 20 across all); the race detector, about 40
-// times slower here, takes a tenth of the books and only logs the times.
-func TestSeriesKeyScale(t *testing.T) {
-	t.Parallel()
+// seriesScale is a library of books in series of 25, each spelled three ways, a
+// tenth of the books also in a list series of 50 (one per 500 books, so a series
+// is the same size whatever the library's).
+type seriesScale struct {
+	c     *Catalog
+	ctx   context.Context
+	lib   int64
+	books int
+	mid   int // a series in the middle, as its three spellings
+	scope *Scope
+}
+
+func newSeriesScale(t *testing.T, books int) *seriesScale {
+	t.Helper()
 	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Big", Root: "/tmp/big"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	books := 50_000
-	if raceEnabled {
-		books = 5_000
-	}
-	mid := books / 25 / 2 // a series in the middle, as its three spellings
-	if _, err := c.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?)
+	if _, err := c.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?1)
 		INSERT INTO books(library_id, rel_path, title, author, series, series_index, more_series, indexed_at, added_at)
-		SELECT ?, 'B/' || i, 'Book ' || i, 'Author ' || (i % 3000),
+		SELECT ?2, 'B/' || i, 'Book ' || i, 'Author ' || (i % 3000),
 		       CASE i % 3 WHEN 0 THEN 'Series ' || (i / 25) WHEN 1 THEN 'series ' || (i / 25) ELSE 'SERIES-' || (i / 25) END,
 		       i % 25 + 1,
-		       CASE WHEN i % 10 = 0 THEN '[{"name":"Shared ' || (i % 100) || '","position":' || (i / 100 + 1) || '}]' ELSE '[]' END,
+		       CASE WHEN i % 10 = 0 THEN '[{"name":"Shared ' || (i / 10 % (?1 / 500)) || '","position":' || (i / 10 / (?1 / 500) + 1) || '}]' ELSE '[]' END,
 		       'x', '2024-01-01T00:00:00Z'
 		  FROM n`, books, lib.ID); err != nil {
 		t.Fatal(err)
 	}
-	timed := func(what string, limit time.Duration, f func() error) {
-		t.Helper()
-		start := time.Now()
-		if err := f(); err != nil {
-			t.Fatalf("%s: %v", what, err)
-		}
-		took := time.Since(start)
-		t.Logf("%s: %v", what, took)
-		if !raceEnabled && took > limit {
-			t.Errorf("%s took %v, want under %v", what, took, limit)
-		}
+	return &seriesScale{c: c, ctx: ctx, lib: lib.ID, books: books, mid: books / 25 / 2, scope: &Scope{LibraryID: lib.ID, AllowAll: true}}
+}
+
+// Limits on how much longer the large library in TestSeriesKeyScale may take than
+// the small one, ten times its size: a pass over the books grows about ten times
+// and would grow a hundred if it went quadratic; a read of one series stays about
+// the same and would grow ten times if it walked the library.
+const (
+	scaleLimitPass = 30
+	scaleLimitRead = 5
+)
+
+// scaleRounds is how many times TestSeriesKeyScale asks before it fails, and
+// scaleMinRounds before it may pass. A real change in how a read grows is there
+// every round; a busy runner isn't. That cuts both ways: one slow time for the small
+// library makes any growth look fine, and a read's first is the likeliest (it also
+// prepares its statements), so no single round can pass it.
+const (
+	scaleRounds    = 7
+	scaleMinRounds = 3
+)
+
+// TestSeriesKeyScale runs keying and the series reads on 50,000 books, checks
+// their answers, and compares their times with a tenth of the books on the same
+// machine at the same moment: how a read grows with the library is its own
+// property, where a limit in milliseconds was one of the runner (a plain build
+// keys them in about half a second here and in about three on CI; the Health
+// count, 85 ms here, took 205-464 ms there). A read made slower at every size is
+// not seen here, which the plan tests answer for the next book and the Health count
+// (TestNextInSeriesPlan, TestIssueCountsPlan); the lists have only their growth.
+// The race detector, about 40 times slower here, takes a tenth of the books, one
+// size, and only logs the times.
+func TestSeriesKeyScale(t *testing.T) {
+	t.Parallel()
+	var sizes []*seriesScale
+	if raceEnabled {
+		sizes = []*seriesScale{newSeriesScale(t, 5_000)}
+	} else {
+		sizes = []*seriesScale{newSeriesScale(t, 5_000), newSeriesScale(t, 50_000)}
 	}
-	timed("KeySeries", 5*time.Second, func() error {
-		n, err := c.KeySeries(ctx)
-		if err == nil && n != books {
-			err = fmt.Errorf("keyed %d books, want %d", n, books)
+	// timed runs f on each size in turn (before, untimed, ahead of it), so a busy
+	// moment falls on both, keeping each size's best until, scaleMinRounds in, the
+	// large one's is within limit times the small one's.
+	timed := func(what string, limit float64, before func(*seriesScale) error, f func(*seriesScale) error) {
+		t.Helper()
+		best := make([]time.Duration, len(sizes))
+		for round := range scaleRounds {
+			for i, s := range sizes {
+				if before != nil {
+					if err := before(s); err != nil {
+						t.Fatalf("%s, %d books: %v", what, s.books, err)
+					}
+				}
+				start := time.Now()
+				if err := f(s); err != nil {
+					t.Fatalf("%s, %d books: %v", what, s.books, err)
+				}
+				if took := time.Since(start); round == 0 || took < best[i] {
+					best[i] = took
+				}
+			}
+			if raceEnabled {
+				t.Logf("%s: %v", what, best[0])
+				return
+			}
+			if round+1 >= scaleMinRounds && float64(best[1]) <= limit*float64(best[0]) {
+				t.Logf("%s: %v on %d books, %v on %d", what, best[0], sizes[0].books, best[1], sizes[1].books)
+				return
+			}
+		}
+		t.Errorf("%s: %v on %d books but %v on %d, want at most %v times as long",
+			what, best[0], sizes[0].books, best[1], sizes[1].books, limit)
+	}
+	timed("KeySeries", scaleLimitPass, func(s *seriesScale) error {
+		// Every round keys every book from nothing, as the first one does.
+		if _, err := s.c.db.ExecContext(s.ctx, `DELETE FROM server_state WHERE key = ?`, seriesKeysKey); err != nil {
+			return err
+		}
+		_, err := s.c.db.ExecContext(s.ctx, `UPDATE books SET series_key = ''`)
+		return err
+	}, func(s *seriesScale) error {
+		n, err := s.c.KeySeries(s.ctx)
+		if err == nil && n != s.books {
+			err = fmt.Errorf("keyed %d books, want %d", n, s.books)
 		}
 		return err
 	})
-	scope := &Scope{LibraryID: lib.ID, AllowAll: true}
-	timed("player list", 50*time.Millisecond, func() error {
-		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: fmt.Sprint("Series ", mid), Memberships: true, Scope: scope, Limit: 50})
+	timed("player list", scaleLimitRead, nil, func(s *seriesScale) error {
+		page, err := s.c.ListBooks(s.ctx, ListOptions{LibraryID: s.lib, Series: fmt.Sprint("Series ", s.mid), Memberships: true, Scope: s.scope, Limit: 50})
 		if err == nil && len(page.Books) != 25 {
 			err = fmt.Errorf("%d books, want 25", len(page.Books))
 		}
 		return err
 	})
-	timed("admin list in series order, every library", 50*time.Millisecond, func() error {
-		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Series: fmt.Sprint("series-", mid)}, Sort: "series", Limit: 60})
+	timed("admin list in series order, every library", scaleLimitRead, nil, func(s *seriesScale) error {
+		page, err := s.c.ListAdminBooks(s.ctx, AdminListOptions{Filter: BookFilter{Series: fmt.Sprint("series-", s.mid)}, Sort: "series", Limit: 60})
 		if err == nil && (len(page.Books) != 25 || page.Books[0].SeriesIndex != 1) {
-			err = fmt.Errorf("%d books, first at %v", len(page.Books), page.Books[0].SeriesIndex)
+			err = fmt.Errorf("%d books, want 25 from #1: %+v", len(page.Books), page.Books)
 		}
 		return err
 	})
-	timed("a list series", 50*time.Millisecond, func() error {
-		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: "shared 70", Memberships: true, Scope: scope, Limit: 200})
-		if err == nil && (len(page.Books) != min(200, books/100) || (page.NextCursor != "") != (books/100 > 200)) {
+	timed("a list series", scaleLimitRead, nil, func(s *seriesScale) error {
+		page, err := s.c.ListBooks(s.ctx, ListOptions{LibraryID: s.lib, Series: "shared 7", Memberships: true, Scope: s.scope, Limit: 25})
+		if err == nil && (len(page.Books) != 25 || page.NextCursor == "") {
 			err = fmt.Errorf("%d books, next %q", len(page.Books), page.NextCursor)
 		}
 		return err
 	})
-	timed("Health: series spelled several ways", 200*time.Millisecond, func() error {
-		ic, err := c.IssueCounts(ctx, []string{IssueSeriesSpellings})
-		if err == nil && ic[0].Count != books {
-			err = fmt.Errorf("count %d, want %d", ic[0].Count, books)
+	timed("Health: series spelled several ways", scaleLimitPass, nil, func(s *seriesScale) error {
+		ic, err := s.c.IssueCounts(s.ctx, []string{IssueSeriesSpellings})
+		if err == nil && ic[0].Count != s.books {
+			err = fmt.Errorf("count %d, want %d", ic[0].Count, s.books)
 		}
 		return err
 	})
-	book, err := c.GetBookByPath(ctx, lib.ID, fmt.Sprint("B/", mid*25+1)) // #2 in the middle series
-	if err != nil {
-		t.Fatal(err)
-	}
-	timed("next in series", 50*time.Millisecond, func() error {
-		next, _, err := c.NextInSeries(ctx, lib.ID, book, *scope)
+	var book *Book
+	timed("next in series", scaleLimitRead, func(s *seriesScale) (err error) {
+		book, err = s.c.GetBookByPath(s.ctx, s.lib, fmt.Sprint("B/", s.mid*25+1)) // #2 in the middle series
+		return err
+	}, func(s *seriesScale) error {
+		next, _, err := s.c.NextInSeries(s.ctx, s.lib, book, *s.scope)
 		if err == nil && (next == nil || next.SeriesIndex != 3) {
 			err = fmt.Errorf("next = %+v", next)
 		}
 		return err
 	})
+}
+
+// TestIssueCountsPlan: the Health counts are one walk of the books with two index
+// seeks per book for series_spellings, however long the series, never a walk of
+// the series or the library per book; led by the walk, since an IN list for the
+// books-kind libraries (inBookLibrary) lets the planner lead with the library
+// index instead, which reads every book through it.
+func TestIssueCountsPlan(t *testing.T) {
+	t.Parallel()
+	c, _ := newTestCatalog(t)
+	plan := queryPlan(t, c, issueCountsSQL([]string{IssueSeriesSpellings}), nil)
+	joined := strings.Join(plan, "\n")
+	for _, want := range []string{
+		"SEARCH s USING COVERING INDEX idx_books_series_key (library_id=? AND series_key=? AND series<?)",
+		"SEARCH s USING COVERING INDEX idx_books_series_key (library_id=? AND series_key=? AND series>?)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("plan does not use %s:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(joined, "SCAN b") || strings.Contains(joined, "SEARCH b") {
+		t.Errorf("plan is not led by a walk of the books:\n%s", joined)
+	}
+	if strings.Contains(joined, "SCAN s") {
+		t.Errorf("plan walks the books per book:\n%s", joined)
+	}
 }

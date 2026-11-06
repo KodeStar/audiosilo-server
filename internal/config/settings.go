@@ -86,6 +86,10 @@ var fields = []field{
 	// like base_url.
 	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},
+	// The daily report of unknown Audible ASINs (internal/coverage): opt-in,
+	// applied without a restart (the job reads it before each run).
+	{key: "metadata.report_unknown", env: "AUDIOSILO_METADATA_REPORT_UNKNOWN", setting: "metadata.report_unknown",
+		ptr: func(c *Config) any { return &c.Metadata.ReportUnknown }},
 
 	// Upcoming releases: the switch is in Settings > Metadata (the job asks the
 	// metadata service), applied without a restart; the window is config only.
@@ -113,6 +117,8 @@ var fields = []field{
 	{key: "modules.podcasts.enabled", env: "AUDIOSILO_MODULES_PODCASTS_ENABLED", setting: "modules.podcasts", ptr: func(c *Config) any { return &c.Modules.Podcasts.Enabled }},
 	{key: "modules.contributions.enabled", env: "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", setting: "modules.contributions",
 		ptr: func(c *Config) any { return &c.Modules.Contributions.Enabled }},
+	{key: "modules.audible.enabled", env: "AUDIOSILO_MODULES_AUDIBLE_ENABLED", setting: "modules.audible",
+		ptr: func(c *Config) any { return &c.Modules.Audible.Enabled }},
 
 	// Podcast directory search: read once at start, no console setting (the
 	// podcasts module is the live switch).
@@ -193,9 +199,9 @@ func (c *Config) Clone() *Config {
 	return &out
 }
 
-// Pin marks a key as set by an embedding launcher (pkg/launcher's Options, which
-// the desktop manager uses), so the admin console shows it as managed there
-// instead of offering to change it. Call it while starting, before any Clone.
+// Pin marks a key as set by an embedding launcher (pkg/launcher's Options), so
+// the admin console shows it as set there instead of offering to change it.
+// Call it while starting, before any Clone.
 func (c *Config) Pin(key string) {
 	if c.pinned == nil {
 		c.pinned = map[string]bool{}

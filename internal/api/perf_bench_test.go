@@ -1,9 +1,11 @@
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -231,7 +233,16 @@ func (e *perfEnv) getJSON(tb testing.TB, path string, into any) {
 	if rec.Code != http.StatusOK {
 		tb.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), into); err != nil {
+	// serve asks for gzip, as a player does, so a large answer comes compressed.
+	var body io.Reader = rec.Body
+	if rec.Header().Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(rec.Body)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		body = zr
+	}
+	if err := json.NewDecoder(body).Decode(into); err != nil {
 		tb.Fatal(err)
 	}
 }

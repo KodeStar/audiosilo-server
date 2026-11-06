@@ -175,6 +175,24 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 	return p, ""
 }
 
+// ExactDuration is the in-process probe's duration in seconds of the file r
+// holds (size bytes; format its extension's, "mp3", "m4a"), by FFmpeg 8.1's
+// rules (gapless MP3), and false when the probe is unsure of the file: a VBR
+// MP3 with no Xing or VBRI header (ffprobe only estimates its duration), a
+// shape it does not model, a read error or a bound passed. A duration it gives
+// is the container's own (a frame count, a track's length) or a constant
+// bitrate's (checked across the file), not a VBR guess, so one file can be held
+// to another's (a watch rendition to its source).
+func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string) (float64, bool) {
+	b := newBlockFile(r, size)
+	b.ff = ff8
+	p, reason := fastProbe(ctx, b, strings.ToLower(format), maxProbeTime)
+	if reason != "" {
+		return 0, false
+	}
+	return p.Duration, true
+}
+
 // probeFile is fastProbe over the file at path with ff's rules, for the
 // comparison with ffprobe (probeview.go).
 func probeFile(path string, ff ffRules) (*probeResult, string, error) {

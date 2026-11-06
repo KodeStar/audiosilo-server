@@ -542,6 +542,32 @@ describe('match with community metadata', () => {
   const coverPuts = (calls: MockRequest[]) =>
     calls.filter((c) => c.method === 'PUT' && c.path === '/admin/libraries/1/cover/community');
 
+  it('preselects nothing when the work holds only a dramatization the book is not', async () => {
+    mockFetch(
+      matchRoutes(bookDetail(), {
+        'GET /admin/libraries/1/book/match': {
+          body: {
+            candidates: [
+              { ...candidate, dramatization_only: true, default_recording_id: undefined },
+            ],
+          },
+        },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    const edition = within(compare).getByRole('combobox', { name: /Edition/ });
+    expect(edition).toHaveValue('');
+    expect(within(compare).getByRole('option', { name: 'Choose an edition' })).toBeInTheDocument();
+    expect(
+      within(compare).getByText(/holds only a dramatization of this book/),
+    ).toBeInTheDocument();
+    expect(within(compare).queryByRole('checkbox', { name: 'Accept ASIN' })).toBeNull();
+    // The admin may still say it is that production.
+    await user.selectOptions(edition, 'r1');
+    expect(edition).toHaveValue('r1');
+    expect(within(compare).queryByText(/holds only a dramatization of this book/)).toBeNull();
+  });
+
   it('accepts only the ticked fields as community values, own edits unticked', async () => {
     const detail = bookDetail();
     detail.fields.narrator = { ...detail.fields.narrator, source: 'edited', locked: true };

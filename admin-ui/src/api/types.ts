@@ -563,6 +563,10 @@ export interface AdminSettings {
     upcoming?: boolean;
     /** The check's last run (read-only; absent from an older server or without the service). */
     upcoming_status?: UpcomingStatus;
+    /** The opt-in daily report of unknown Audible ASINs (config metadata.report_unknown; absent from an older server). */
+    report_unknown?: boolean;
+    /** The report's last run (read-only; absent from an older server, without the service or on a demo server). */
+    report_status?: ReportStatus;
   };
   demo: {
     enabled: boolean;
@@ -820,6 +824,14 @@ export interface UpcomingStatus {
   next_run_at?: string;
   series: number;
   items: number;
+}
+
+/** coverage.Status: the unknown-ASIN report's last run. */
+export interface ReportStatus {
+  state: 'never' | 'ok' | 'not_offered' | 'failed';
+  last_run_at?: string;
+  /** How many ASINs the last run's accepted reports held. */
+  last_sent: number;
 }
 
 /** Event kinds a destination can be sent (notify.Kinds, in the server's order). */
@@ -1940,6 +1952,11 @@ export interface MatchCandidate {
   /** The recording the book most likely is (the server's meta.DefaultRecording). */
   default_recording_id?: string;
   /**
+   * The work holds only a dramatization, which this book doesn't state it is: no
+   * recording is preselected (see meta.DefaultRecording).
+   */
+  dramatization_only?: boolean;
+  /**
    * 0-100: how well the work fits the book - the community service's structured
    * match score, 100 for an identifier hit, or (older service) the title, author
    * and runtime agreement.
@@ -1967,6 +1984,10 @@ export interface MatchReasons {
   /** Relative runtime difference of the closest recording (0.02 = 2%). */
   runtime?: number;
   identifier?: 'asin' | 'isbn';
+  /** How well the book's narrators name the best-agreeing recording's (only when the server sent narrators). */
+  narrator?: 'full' | 'surname' | 'none';
+  /** The book's language against the work's, when both are known. */
+  language?: 'same' | 'other';
 }
 
 /** One entry of POST /admin/covers (handlers_covers.go coverThumb), in request order. */
@@ -2130,7 +2151,7 @@ export type MatchRunMode = 'match' | 'repick' | 'refresh';
 export type MatchRunStatus =
   'matching' | 'ready' | 'applying' | 'applied' | 'cancelled' | 'failed' | 'interrupted';
 
-/** catalog.Outcome*: confident, worth a look, no candidate, or the service failed. */
+/** catalog.Outcome*: confident, worth a look, no candidate or only weak ones, or the service failed. */
 export type MatchOutcome = 'auto' | 'review' | 'none' | 'error';
 
 /** matchrun.Scopes: how much applying may write, narrowest first. */
@@ -2224,7 +2245,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length. */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };
@@ -2863,4 +2884,176 @@ export interface LibraryPreview {
 export interface LibraryPreviewRequest {
   root: string;
   ignore_patterns?: string[];
+}
+
+// Audible (Bridge Phase 4a, handlers_audible.go, catalog/audible.go): the
+// accounts the Bridge signed in to, each mapped to a person and a books library
+// on the Bridge's own page, and the titles each owns. Read-only here.
+
+/** A title's state: what the account's last poll said, or gone from it. */
+export type AudibleTitleState = 'available' | 'preorder' | 'unavailable' | 'gone';
+export const AUDIBLE_TITLE_STATES: readonly AudibleTitleState[] = [
+  'available',
+  'preorder',
+  'unavailable',
+  'gone',
+];
+
+/** What an account backs up after each poll (Phase 4b). */
+export type AudiblePolicy = 'all' | 'series' | 'manual';
+export const AUDIBLE_POLICIES: readonly AudiblePolicy[] = ['manual', 'series', 'all'];
+
+/** An account's titles counted (GET /admin/audible/accounts). */
+export interface AudibleCounts {
+  total: number;
+  available: number;
+  preorder: number;
+  unavailable: number;
+  gone: number;
+  /** Titles matched to a book on this server. */
+  matched: number;
+}
+
+/** One Audible account (catalog.AudibleAccount): its mapping, never a credential. */
+export interface AudibleAccount {
+  id: string;
+  label: string;
+  /** The store: us, uk, de, ... */
+  marketplace: string;
+  user_id: number;
+  user: { id: number; display_name: string };
+  /** null while paused: its library was deleted. */
+  library_id: number | null;
+  library: { id: number; name: string } | null;
+  paused: boolean;
+  policy: AudiblePolicy;
+  /** Keep the listening place in step with Audible (Phase 4c): the console's, off for a new account. */
+  sync: boolean;
+  poll_hours: number;
+  created_at: string;
+  updated_at: string;
+  last_poll_at: string | null;
+  last_queued_at: string | null;
+  /** The placement template for its backups; "" = beside the series' other books (Phase 4b). */
+  template: string;
+  /** When its automatic policy began: only titles first seen after it are backed up by it. */
+  policy_since: string;
+  /** When its last sync with Audible finished (Phase 4c). */
+  last_sync_at: string | null;
+  /** When Audible refused it during a sync: none is queued until the Bridge signs in again. */
+  refused_at: string | null;
+  titles?: AudibleCounts;
+  /** What "Back up everything" would queue (the accounts list only). */
+  backup_estimate?: AudibleEstimate;
+}
+
+/** "Back up everything": how many titles, and about how many bytes (64 kbps). */
+export interface AudibleEstimate {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * A title's backup (Phase 4b): its audible.import job's state and code, or a
+ * request waiting for a preorder ("pending", no job yet).
+ */
+export interface AudibleImport {
+  job_id: number | null;
+  state: BridgeJobState | 'pending';
+  /** A failed or parked backup's code: not_released, no_rights, exists, disk_full, ... */
+  code: string;
+}
+
+/** GET /admin/audible/accounts. */
+export interface AudibleAccounts {
+  accounts: AudibleAccount[];
+}
+
+/** One title an account owns (catalog.AudibleTitle). */
+export interface AudibleTitle {
+  account: string;
+  asin: string;
+  title: string;
+  authors: string[];
+  series: { name: string; position: string }[];
+  /** YYYY-MM-DD, "" when unknown. */
+  release_date: string;
+  runtime_s: number;
+  state: AudibleTitleState;
+  reason: string;
+  /** The book on this server it was matched to: by ASIN, by title and author, or by its backup. */
+  match: { library_id: number; path: string; how: 'asin' | 'fuzzy' | 'import' } | null;
+  rejected: boolean;
+  ignored: boolean;
+  /** "Don't sync this book" (Phase 4c): its place never syncs with Audible either way; backups don't read it. */
+  no_sync: boolean;
+  dest_path: string;
+  first_seen: string;
+  updated_at: string;
+  import_job_id: number | null;
+  /** Its backup (Phase 4b); null when none was asked for. */
+  import: AudibleImport | null;
+  /** A preorder still not available 14 days after its release date. */
+  needs_attention: boolean;
+  /** Where a backup would go, as the Bridge planned it at its last check; null when matched or not planned. */
+  planned: AudiblePlan | null;
+  /** For a title left unmatched as contested: the book it tied for and the account's other titles on it. */
+  contested: AudibleContest | null;
+}
+
+/** catalog.AudiblePlan: where the Bridge would place a title's backup (planned at its last check). */
+export interface AudiblePlan {
+  library_id: number;
+  /** The file's library-relative path ("" only when state is error). */
+  path: string;
+  file: string;
+  /** Beside the series' books already here, a new series folder, or a book of its own. */
+  kind: 'series_existing' | 'series_new' | 'standalone' | '';
+  /** How many books of its series are there already. */
+  siblings: number;
+  /** A new place, one joining a folder already there, one already taken, or a plan that failed. */
+  state: 'new' | 'joins' | 'exists' | 'error';
+  /** What is in the way ('file' | 'book' | 'audio') when exists; why the plan failed when error. */
+  conflict: string;
+  /** The account template the plan used ("" = the automatic placement). */
+  template: string;
+}
+
+/** catalog.AudibleContest: a contested title's book and the account's other titles on it. */
+export interface AudibleContest {
+  library_id: number;
+  path: string;
+  with: { asin: string; title: string }[];
+}
+
+/** PATCH /admin/audible/titles/{account}/{asin}: "Not this book", a destination, "Don't sync this book". */
+export interface AudibleTitlePatch {
+  rejected?: boolean;
+  /** Folders and file name in the library ("Author/Series/Title.m4b"); "" for the account's placement. */
+  dest_path?: string;
+  no_sync?: boolean;
+}
+
+/** PATCH /admin/audible/accounts/{account}: what it backs up by itself, where, and whether its places sync. */
+export interface AudibleAccountPatch {
+  policy?: AudiblePolicy;
+  template?: string;
+  sync?: boolean;
+}
+
+/** GET /admin/audible/titles: a page, and the next page's cursor ("" at the end). */
+export interface AudibleTitlePage {
+  titles: AudibleTitle[];
+  next: string;
+}
+
+/** GET /admin/audible/titles filters. */
+export interface AudibleTitleQuery {
+  account?: string;
+  state?: AudibleTitleState;
+  /** 1: on this server only; 0: not on it. */
+  matched?: 0 | 1;
+  q?: string;
+  after?: string;
+  limit?: number;
 }

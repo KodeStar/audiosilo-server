@@ -38,10 +38,11 @@ import (
 
 // seriesFacts is what a series' own record says about it that a work's
 // membership doesn't: its derived language ("" where its members tie) and the
-// series it translates.
+// series it translates. works/match's expand=work inlines them under these names,
+// by series id (upstreamMatchResult.SeriesFacts).
 type seriesFacts struct {
-	Language      string
-	TranslationOf []string
+	Language      string   `json:"language"`
+	TranslationOf []string `json:"translation_of"`
 }
 
 // factsOf reads a series detail's facts.
@@ -319,25 +320,45 @@ const (
 	seriesFactsTimeout = 5 * time.Second
 )
 
-// seriesFactsFor reads the facts of the series the works name that a book can
-// be in (the variant orders aside) and the facts could rule on - a work with
-// no language and a single series has nothing to rule on -, each once, at most
-// maxSeriesFacts, concurrently (bounded by workSem), from the cache when they
+// factSeries is the series of work d whose facts are read: the ones a book can be
+// in (the variant orders aside), each once, and none for a work with no language
+// and a single series, which they have nothing to rule on.
+func factSeries(d *upstreamWorkDetail) []string {
+	var own []string
+	for _, ref := range d.Series {
+		if ref.OrderingOf == "" && ref.ID != "" && !slices.Contains(own, ref.ID) {
+			own = append(own, ref.ID)
+		}
+	}
+	if d.Language == "" && len(own) < 2 {
+		return nil
+	}
+	return own
+}
+
+// inlinedFacts is what seriesFactsFor would have read for work d, out of the facts
+// works/match inlined beside it, and fills the cache as those reads do. Whatever else
+// the answer names is left alone, so an inlined work is judged as a fetched one is.
+func (s *Service) inlinedFacts(d *upstreamWorkDetail, inlined map[string]*seriesFacts) map[string]*seriesFacts {
+	ids := factSeries(d)
+	out := make(map[string]*seriesFacts, len(ids))
+	for _, id := range ids[:min(len(ids), maxSeriesFacts)] {
+		if f := inlined[id]; f != nil {
+			cachePut(s.cache, nsSeries.key(id), f, positiveTTL)
+			out[id] = f
+		}
+	}
+	return out
+}
+
+// seriesFactsFor reads the facts of the works' factSeries, each once, at most
+// maxSeriesFacts, concurrently (bounded by workSlot), from the cache when they
 // are there. A series whose record can't be read is left out, which drops
 // nothing.
 func (s *Service) seriesFactsFor(ctx context.Context, works []*upstreamWorkDetail) map[string]*seriesFacts {
 	var ids []string
 	for _, d := range works {
-		var own []string
-		for _, ref := range d.Series {
-			if ref.OrderingOf == "" && ref.ID != "" && !slices.Contains(own, ref.ID) {
-				own = append(own, ref.ID)
-			}
-		}
-		if d.Language == "" && len(own) < 2 {
-			continue
-		}
-		for _, id := range own {
+		for _, id := range factSeries(d) {
 			if len(ids) < maxSeriesFacts && !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
@@ -361,22 +382,59 @@ func (s *Service) seriesFactsFor(ctx context.Context, works []*upstreamWorkDetai
 }
 
 // seriesFacts is one series' facts: from the cache, else its series record
-// (bounded by workSem, like a work's), cached as long as an enrichment; nil
-// when the record can't be read (a failure is not cached).
+// (bounded by workSlot, like a work's), cached as long as an enrichment; nil
+// when the record can't be read (a failure is not cached). Concurrent misses of one
+// series share one read, as a run's workers meet the same series in neighbouring
+// books: the rest wait for it and read the cache, and when it failed one of them asks
+// again, so a read cut short by its own caller costs the others nothing.
 func (s *Service) seriesFacts(ctx context.Context, id string) *seriesFacts {
 	key := nsSeries.key(id)
-	if f, hit, err := cacheGet[seriesFacts](s.cache, key); hit {
-		if err != nil {
+	for {
+		var (
+			f   *seriesFacts
+			hit bool
+			err error
+		)
+		s.flightMu.Lock()
+		flight, busy := s.seriesFlights[id]
+		if !busy {
+			// Read under flightMu: a read records its answer before it leaves the map.
+			if f, hit, err = cacheGet[seriesFacts](s.cache, key); !hit {
+				flight = make(chan struct{})
+				s.seriesFlights[id] = flight
+			}
+		}
+		s.flightMu.Unlock()
+		switch {
+		case hit && err != nil:
+			return nil
+		case hit:
+			return f
+		case !busy:
+			return s.readSeriesFacts(ctx, id, flight)
+		}
+		select {
+		case <-flight:
+		case <-ctx.Done():
 			return nil
 		}
-		return f
 	}
-	select {
-	case s.workSem <- struct{}{}:
-	case <-ctx.Done():
+}
+
+// readSeriesFacts is seriesFacts' read, flight being its entry in seriesFlights.
+func (s *Service) readSeriesFacts(ctx context.Context, id string, flight chan struct{}) *seriesFacts {
+	defer func() {
+		s.flightMu.Lock()
+		delete(s.seriesFlights, id)
+		s.flightMu.Unlock()
+		close(flight)
+	}()
+	release, err := s.workSlot(ctx)
+	if err != nil {
 		return nil
 	}
-	defer func() { <-s.workSem }()
+	defer release()
+	key := nsSeries.key(id)
 	sd, err := s.client.series(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound) || (err == nil && (sd == nil || sd.ID == "")):

@@ -70,6 +70,10 @@ const BY_CODE: Record<string, string> = {
   // The Bridge: queueing a job kind the paired Bridge doesn't run, cancelling a
   // job that already ended.
   kind_unavailable: 'errors.kindUnavailable',
+  // Audible's Check now for an account whose library was deleted, or one the
+  // Bridge removed since the page loaded.
+  account_paused: 'errors.accountPaused',
+  unknown_account: 'errors.unknownAccount',
   finished: 'errors.jobFinished',
   // Queueing a job that writes (sidecars.generate, sidecars.describe) for a
   // library the Bridge's last heartbeat doesn't report as mapped and writable.
@@ -93,6 +97,9 @@ const BY_CODE: Record<string, string> = {
   // community) while the contributions module is off; a share while one is
   // open for the book; a correction whose value isn't the book's edit any more.
   module_off: 'errors.moduleOff',
+  already_matched: 'errors.audibleMatched',
+  import_open: 'errors.audibleImportOpen',
+  not_available: 'errors.audibleNotAvailable',
   contribute_open: 'errors.contributeOpen',
   not_edited: 'errors.notEdited',
   // Bridge Phase 3c: a generate or detect job while the book's read-along job

@@ -216,6 +216,7 @@ type DatabaseConfig struct {
 type ModulesConfig struct {
 	Contributions ModuleConfig `yaml:"contributions"`
 	Podcasts      ModuleConfig `yaml:"podcasts"`
+	Audible       ModuleConfig `yaml:"audible"`
 }
 
 // ModuleConfig is one module's toggle.
@@ -356,6 +357,10 @@ type MetadataConfig struct {
 	// of the service's database (internal/metamirror), downloaded from GitHub once
 	// a day, and asks BaseURL only while that copy can't answer.
 	Mode string `yaml:"mode"`
+	// ReportUnknown sends the metadata service, once a day, the Audible ASINs of
+	// this server's books the community database doesn't know (internal/coverage),
+	// and nothing else. Off by default; applies at once.
+	ReportUnknown bool `yaml:"report_unknown"`
 }
 
 // The metadata.mode values.

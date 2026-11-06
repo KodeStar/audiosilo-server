@@ -200,13 +200,13 @@ export function resultSummary(result: unknown): ResultSummary | null {
   if (!result || typeof result !== 'object') return null;
   const r = result as Record<string, unknown>;
   const out: ResultSummary = {};
-  if (Array.isArray(r.files)) {
-    const files = r.files as unknown[];
-    out.files = {
-      checked: files.length,
-      ok: files.filter((f) => f && typeof f === 'object' && (f as { ok?: unknown }).ok === true)
-        .length,
-    };
+  // bridge.verify's files each say whether they matched; another kind's (an
+  // audible.import's placed file) are no check.
+  const files = Array.isArray(r.files) ? (r.files as unknown[]) : undefined;
+  const okOf = (f: unknown) =>
+    f && typeof f === 'object' ? (f as { ok?: unknown }).ok : undefined;
+  if (files?.every((f) => typeof okOf(f) === 'boolean')) {
+    out.files = { checked: files.length, ok: files.filter((f) => okOf(f) === true).length };
   }
   if (typeof r.writable === 'boolean') out.writable = r.writable;
   const ms = num(r.elapsed_ms);
@@ -214,6 +214,14 @@ export function resultSummary(result: unknown): ResultSummary | null {
   const mount = text(r.mount_path);
   if (mount) out.mountPath = mount;
   return Object.keys(out).length ? out : null;
+}
+
+/**
+ * The title an audible.import backs up (its ASIN): the job has a library but
+ * no path, and is no library-wide job. Undefined for any other kind.
+ */
+export function backupAsin(job: Pick<BridgeJob, 'kind' | 'params'>): string | undefined {
+  return job.kind === 'audible.import' ? text(job.params?.asin) : undefined;
 }
 
 /** Whether an object carries anything (a job's result or progress is `{}` when empty). */
@@ -306,10 +314,17 @@ function hostFolder(root: string): string {
 
 /**
  * Whether a job of this kind is one the server queues itself (a podcast's feed
- * checks, episode fetches and retention), so a job with no requester reads
- * "Scheduled by the server" rather than a deleted account's (BRIDGE-03). A
- * follow (podcast.subscribe) always has a listener behind it.
+ * checks, episode fetches and retention, an Audible account's scheduled poll,
+ * backup and sync),
+ * so a job with no requester reads "Scheduled by the server" rather than a
+ * deleted account's (BRIDGE-03). A follow (podcast.subscribe) always has a
+ * listener behind it.
  */
 export function serverScheduled(kind: string): boolean {
-  return kind.startsWith('podcast.') && kind !== 'podcast.subscribe';
+  return (
+    (kind.startsWith('podcast.') && kind !== 'podcast.subscribe') ||
+    kind === 'audible.poll' ||
+    kind === 'audible.import' ||
+    kind === 'audible.sync'
+  );
 }

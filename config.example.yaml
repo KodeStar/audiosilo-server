@@ -172,6 +172,8 @@ modules:
     enabled: false # Following feeds and scheduled checks need a paired Bridge.
   contributions:
     enabled: false # send corrections and generated sidecars to the community database through the Bridge (needs a Bridge signed in to GitHub) [AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED]
+  audible:
+    enabled: false # back up the Audible books you own through the Bridge, which holds the sign-in; the server queues its library checks (needs a Bridge with Audible) [AUDIOSILO_MODULES_AUDIBLE_ENABLED]
 
 # Podcast directory search and OPML transfer (while the podcasts module is on).
 # Search asks Apple's podcast directory by default (it receives the search text
@@ -210,6 +212,15 @@ metadata:
   #            deletes the copy at the next start.
   # [AUDIOSILO_METADATA_MODE]
   mode: remote
+  # Help complete the community database (Settings > Metadata; off by default,
+  # applies at once): once a day, send the metadata service the Audible ASINs of
+  # your books the community database doesn't know, and nothing else (no titles,
+  # paths, server name or listeners). Each ASIN is looked up first (in mirror
+  # mode only in the local copy, never online); only the unknown ones are sent,
+  # and only over https (or plain http to this machine). A service that takes
+  # no reports (an older one, or intake off) is left alone for a week. Never on
+  # a demo server. [AUDIOSILO_METADATA_REPORT_UNKNOWN]
+  report_unknown: false
 
 # Upcoming releases: once a day the server reads the community metadata for the
 # series it holds and works out, for each listener, the preorders, recent

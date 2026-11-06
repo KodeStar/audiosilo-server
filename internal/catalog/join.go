@@ -89,7 +89,9 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 // cover field by field with the earliest part winning, and only where the joined
 // book has none of its own (so a first disc's edits carry over); chapter renames
 // all carry over (re-keyed to the file under the joined folder, so they never
-// collide). Ignored Health issues stay with the parts: they were about those books.
+// collide). An Audible title's match to a part moves to the joined book (until
+// the account's next poll matches it afresh). Ignored Health issues stay with
+// the parts: they were about those books.
 //
 // Removing the override later splits the folder back into its disc books again.
 // Nothing is destroyed: the joined book's state stays keyed on the folder's path
@@ -157,6 +159,12 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			  ON CONFLICT(library_id, path) DO UPDATE SET
 			      asin = CASE WHEN book_enrichment.asin = '' THEN excluded.asin ELSE book_enrichment.asin END,
 			      isbn = CASE WHEN book_enrichment.isbn = '' THEN excluded.isbn ELSE book_enrichment.isbn END`,
+				[]any{into, libraryID, p.Path}},
+			// An Audible title matched to the part is the joined book's (one match
+			// a title, so moved rather than copied, as moveBookState moves it).
+			{`UPDATE audible_titles SET match_path = ?1 WHERE match_library_id = ?2 AND match_path = ?3`,
+				[]any{into, libraryID, p.Path}},
+			{`UPDATE audible_titles SET contest_path = ?1 WHERE contest_library_id = ?2 AND contest_path = ?3`,
 				[]any{into, libraryID, p.Path}},
 		}
 		for _, st := range stmts {

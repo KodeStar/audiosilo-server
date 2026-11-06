@@ -122,10 +122,14 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 	if err != nil {
 		return nil, err
 	}
+	// With the device that saved the place (the PATCH answer's device_name, as
+	// the player's progress reads carry it; an edit names no device of its own).
+	var deviceName string
 	up, err := scanUserProgress(c.db.QueryRowContext(ctx,
-		`SELECT `+userProgressColumns+` FROM progress p
+		`SELECT `+userProgressColumns+`, p.device_name FROM progress p
 		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
-		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path))
+		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path), &deviceName)
+	up.DeviceName = deviceName
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound // an edit that set nothing, on no progress
 	}
@@ -163,6 +167,13 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			}
 		} else if err != nil {
 			return err
+		}
+		// A place an Audible account wrote, edited, is no longer Audible's: GET
+		// /bridge/progress leaves the account's own rows out (no echo), so the
+		// edit would never reach Audible and Audible's next place could undo it.
+		// The edit names no device, as an edit's new row (Bridge Phase 4c).
+		if IsAudibleDevice(p.DeviceID) {
+			p.DeviceID = ""
 		}
 		wasFinished := p.Finished
 		if e.Finished != nil {
@@ -220,19 +231,22 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		// An edit is also a finish-state change when it flips finished (Sync v2's
 		// finish and unfinish events older than it are then "older"), and it
 		// clears the offered place (other_place): the listener chose the place.
+		// ?10 and ?13 are the same stamp: finishChangedValue/Set bind ?13.
+		stamp := formatSessionTime(now)
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
-			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,CASE WHEN ?6 THEN ?10 END)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,`+finishChangedValue+`)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, finished=excluded.finished, version=excluded.version,
+			     device_id=excluded.device_id,
+			     device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name ELSE '' END,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at,
-			     finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN excluded.updated_at
-			                            ELSE progress.finish_changed_at END,
+			     `+finishChangedSet+`, `+endSpanChain+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished)
+			p.Version+1, p.DeviceID, stamp, started, finished, stamp)
 		return err
 	})
 }

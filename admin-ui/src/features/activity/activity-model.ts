@@ -286,21 +286,30 @@ export function clientRows(clients: readonly ClientCount[]): ClientRow[] {
 }
 
 /** What kind of app a client is, for its icon and label. */
-export type ClientKind = 'unknown' | 'console' | 'phone' | 'web' | 'other';
+export type ClientKind = 'unknown' | 'console' | 'phone' | 'watch' | 'web' | 'other';
 
 export function clientKind(client: Pick<ClientInfo, 'app' | 'platform'> | null): ClientKind {
   if (!client?.app) return 'unknown';
   if (client.app === CLIENT_APP) return 'console';
   const p = client.platform.toLowerCase();
   if (p === 'ios' || p === 'android') return 'phone';
+  if (p === 'watchos' || p === 'wearos') return 'watch';
   if (p === 'web') return 'web';
   return 'other';
 }
 
-/** How a platform reads ("iOS", "Android", "Web"); anything else as sent. */
+/** How a platform reads ("iOS", "Android", "Apple Watch", "Web"); anything else as sent. */
 export function platformLabel(platform: string): string {
-  const known: Record<string, string> = { ios: 'iOS', android: 'Android', web: 'Web' };
-  return known[platform.toLowerCase()] ?? platform;
+  const known: Record<string, string> = {
+    ios: 'iOS',
+    android: 'Android',
+    watchos: 'Apple Watch',
+    wearos: 'Wear OS',
+    web: 'Web',
+  };
+  // Own keys only: a platform named "constructor" is not Object's.
+  const key = platform.toLowerCase();
+  return Object.hasOwn(known, key) ? known[key] : platform;
 }
 
 /**

@@ -100,10 +100,9 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	// (server#189: one outliving its test failed mid-write, or left the folder
 	// not empty to remove).
 	t.Cleanup(backups.Wait)
-	// A remux or warm a request started finishes before the data folder goes.
-	if a.remux != nil {
-		t.Cleanup(a.remux.Wait)
-	}
+	// A remux, warm or rendition a request started finishes before the data
+	// folder goes.
+	t.Cleanup(a.WaitMediaCaches)
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	a.SetBridge(bridge.New(db, time.Now))
@@ -1399,7 +1398,7 @@ func TestDeleteUserHandler(t *testing.T) {
 }
 
 // TestSetupWizard covers the first-run /setup flow as an older page or the
-// manager posts it, with the library fields: it serves while no admin
+// archived manager posts it, with the library fields: it serves while no admin
 // exists, rejects a wrong token (403) and a missing folder (400) without creating
 // anything, creates the admin + library on a valid token (201), and then
 // self-closes (409 + the page redirects to /admin). A server that never enabled

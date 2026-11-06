@@ -13,8 +13,16 @@ func fetchQueue(t *testing.T) *testQueue {
 	t.Helper()
 	q := podcastQueue(t)
 	ctx := context.Background()
-	if _, err := q.db.ExecContext(ctx, `INSERT INTO podcast_shows VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t'); INSERT INTO books(library_id,rel_path,title,indexed_at) VALUES(?1,'Show/episode.mp3','Episode','t'); INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) SELECT id,library_id,'Show','fedcba9876543210','','full',0,0,0,0,'','none' FROM books WHERE library_id=?1 AND rel_path='Show/episode.mp3'`, q.lib); err != nil {
-		t.Fatal(err)
+	// One statement an Exec: the native engine binds a multi-statement Exec's
+	// arguments across its statements (see SQLite in CONVENTIONS.md).
+	for _, stmt := range []string{
+		`INSERT INTO podcast_shows VALUES(?1,'Show','0123456789abcdef','Title','','','','','episodic',0,0,'','','','','',1,NULL,'s','t')`,
+		`INSERT INTO books(library_id,rel_path,title,indexed_at) VALUES(?1,'Show/episode.mp3','Episode','t')`,
+		`INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source) SELECT id,library_id,'Show','fedcba9876543210','','full',0,0,0,0,'','none' FROM books WHERE library_id=?1 AND rel_path='Show/episode.mp3'`,
+	} {
+		if _, err := q.db.ExecContext(ctx, stmt, q.lib); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.9.0", Kinds: []string{KindPodcastFetch, KindPodcastRetain}, Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/podcasts", Mapped: true, Writable: true}}}); err != nil {
 		t.Fatal(err)

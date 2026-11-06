@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   MonitorSmartphone,
   Smartphone,
+  Watch,
   type LucideIcon,
 } from 'lucide-react';
 import type { ClientInfo } from '@/api/types';
@@ -17,12 +18,13 @@ const ICONS: Record<ClientKind | 'api', LucideIcon> = {
   unknown: HelpCircle,
   console: LayoutDashboard,
   phone: Smartphone,
+  watch: Watch,
   web: Globe,
   other: MonitorSmartphone,
   api: KeyRound,
 };
 
-/** A device's icon in a soft tile: a phone, a browser, the console, an API key. */
+/** A device's icon in a soft tile: a phone, a watch, a browser, the console, an API key. */
 export function ClientIcon({
   client,
   apiKey,

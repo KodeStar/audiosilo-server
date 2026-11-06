@@ -101,8 +101,6 @@ const (
 )
 
 var (
-	asinRE      = regexp.MustCompile(`^[A-Z0-9]{10}$`)
-	isbnRE      = regexp.MustCompile(`^(\d{9}[\dX]|\d{13})$`)
 	publishedRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
 )
 
@@ -165,13 +163,13 @@ func normalizeOverride(field, value string) (string, error) {
 		return v, nil
 	case FieldASIN:
 		v = strings.ToUpper(v)
-		if v != "" && !asinRE.MatchString(v) {
+		if v != "" && !match.ValidASIN(v) {
 			return "", invalid(field, "must be 10 letters or digits")
 		}
 		return v, nil
 	case FieldISBN:
 		v = strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(v))
-		if v != "" && !isbnRE.MatchString(v) {
+		if v != "" && !match.ValidISBN(v) {
 			return "", invalid(field, "must be an ISBN-10 or ISBN-13")
 		}
 		return v, nil
@@ -457,11 +455,13 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 	l := &bookLayers{enrichment: bookFields{}}
 	var raw, indexedAt, source, absRaw string
 	var row Book
+	// +?: a join's parameter, so SQLite doesn't re-parse it each run (see SQLite
+	// in CONVENTIONS.md).
 	if err := q.QueryRowContext(ctx,
 		`SELECT b.library_id, b.rel_path, b.is_folder, b.scanned, b.indexed_at,
 		        b.title, b.author, b.narrator, b.series, b.series_index, b.series_index_end, l.metadata_source,
 		        b.abs_file
-		   FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.id = ?`, bookID).
+		   FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.id = +?`, bookID).
 		Scan(&l.libID, &l.path, &l.isFolder, &raw, &indexedAt,
 			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &row.SeriesIndexEnd, &source,
 			&absRaw); err != nil {
@@ -727,7 +727,7 @@ func queryOverrides(ctx context.Context, q rowQuerier, libID int64, path string)
 		return r.Scan(&o.field, &o.Value, &o.Source, &o.UpdatedBy, &o.UpdatedAt)
 	}, `SELECT o.field, o.value, o.source, COALESCE(u.username, ''), o.updated_at
 	      FROM book_overrides o LEFT JOIN users u ON u.id = o.updated_by
-	     WHERE o.library_id = ? AND o.path = ?`, libID, path)
+	     WHERE o.library_id = +? AND o.path = +?`, libID, path) // +?: see SQLite in CONVENTIONS.md
 	if err != nil {
 		return nil, err
 	}

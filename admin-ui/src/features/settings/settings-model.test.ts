@@ -1,6 +1,6 @@
 import i18n from '@/i18n';
 import { settingsWith } from '@/test/fixtures';
-import { outOfRange, restartList, SETTINGS_PAGES, visiblePages } from './settings-model';
+import { lockLabel, outOfRange, restartList, SETTINGS_PAGES, visiblePages } from './settings-model';
 
 describe('outOfRange', () => {
   it('refuses what is not a whole number inside the range, and blank', () => {
@@ -19,8 +19,16 @@ describe('outOfRange', () => {
 describe('visiblePages', () => {
   const pages = ['general', 'bridge', 'modules'] as const;
 
-  it('lists every page while no module brings one (Phase 2a)', () => {
-    expect(visiblePages(SETTINGS_PAGES, settingsWith())).toEqual([...SETTINGS_PAGES]);
+  it("lists every page but a module's whose module is off", () => {
+    expect(visiblePages(SETTINGS_PAGES, settingsWith())).toEqual(
+      SETTINGS_PAGES.filter((p) => p !== 'audible'),
+    );
+    expect(
+      visiblePages(
+        SETTINGS_PAGES,
+        settingsWith({ modules: { contributions: false, audible: true } }),
+      ),
+    ).toEqual([...SETTINGS_PAGES]);
     expect(SETTINGS_PAGES).toContain('modules');
     expect(SETTINGS_PAGES.indexOf('modules')).toBe(SETTINGS_PAGES.indexOf('bridge') + 1);
   });
@@ -48,5 +56,13 @@ describe('restartList', () => {
     const t = i18n.getFixedT('en');
     expect(restartList(t, one, 'en')).toBe('Metadata source');
     expect(restartList(t, two, 'en')).toBe('Metadata source and HTTPS mode');
+  });
+});
+
+describe('lockLabel', () => {
+  it('names the variable, or the program that started the server for a launcher pin', () => {
+    const t = i18n.getFixedT('en');
+    expect(lockLabel(t, 'AUDIOSILO_PUBLIC_URL')).toBe('Set by AUDIOSILO_PUBLIC_URL');
+    expect(lockLabel(t, 'launcher')).toBe('Set by the program that started the server');
   });
 });

@@ -1,4 +1,5 @@
 import { Link, useSearch } from '@tanstack/react-router';
+import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -6,6 +7,7 @@ import {
   ArrowRight,
   BellRing,
   Globe,
+  Headphones,
   House,
   Import,
   Info,
@@ -20,7 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
-import type { AdminSettings, UpcomingStatus } from '@/api/types';
+import type { AdminSettings, ReportStatus, UpcomingStatus } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
@@ -36,6 +38,7 @@ import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { activeMirror, mirrorLook } from '@/features/health/system-model';
+import { AudibleTopic } from '@/features/audible/audible-topic';
 import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
@@ -68,12 +71,13 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   import: Import,
   bridge: Waypoints,
   modules: Puzzle,
+  audible: Headphones,
 };
 
 /**
  * Server > Settings: config.yaml as a page, one topic at a time (`?topic=`),
- * each setting in exactly one place. A setting the environment or the desktop
- * app sets is shown locked, one read only at start says so, and a saved one
+ * each setting in exactly one place. A setting the environment or an embedding
+ * launcher sets is shown locked, one read only at start says so, and a saved one
  * still waiting for a restart is listed at the top.
  */
 export function SettingsPage() {
@@ -162,6 +166,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <BridgeTopic />;
     case 'modules':
       return <ModulesTopic settings={settings} />;
+    case 'audible':
+      return <AudibleTopic />;
     default:
       return <GeneralTopic settings={settings} />;
   }
@@ -415,7 +421,22 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
             />
           </SettingRow>
           {m.enabled && m.available ? <MetadataStatusRow /> : null}
-          {m.upcoming !== undefined && m.available ? <UpcomingRow settings={settings} /> : null}
+          {m.upcoming !== undefined && m.available ? (
+            <JobRow
+              settings={settings}
+              field="upcoming"
+              name="upcoming"
+              runText={<UpcomingRunText status={m.upcoming_status} />}
+            />
+          ) : null}
+          {m.report_unknown !== undefined && m.available ? (
+            <JobRow
+              settings={settings}
+              field="report_unknown"
+              name="report"
+              runText={<ReportRunText status={m.report_status} />}
+            />
+          ) : null}
         </div>
         {!m.available ? (
           <Notice
@@ -476,40 +497,93 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
 }
 
 /**
- * The daily upcoming-releases check (absent from an older server): its switch,
- * which works only while the lookup is on, and how its last run went.
+ * A daily metadata job's switch (absent from an older server), which works
+ * only while the lookup is on, and how its last run went: the upcoming-releases
+ * check (`upcoming`) and the opt-in unknown-ASIN report (`report_unknown`).
  */
-function UpcomingRow({ settings }: { settings: AdminSettings }) {
+function JobRow({
+  settings,
+  field,
+  name,
+  runText,
+}: {
+  settings: AdminSettings;
+  field: 'upcoming' | 'report_unknown';
+  /** The i18n key and element id stem: settings.metadata.<name>, <name>-switch. */
+  name: 'upcoming' | 'report';
+  runText: ReactNode;
+}) {
   const { t } = useTranslation();
   const m = settings.metadata;
+  const on = m.enabled && Boolean(m[field]);
   return (
     <SettingRow
-      title={t('settings.metadata.upcoming')}
-      badges={<SettingBadges settings={settings} id="metadata.upcoming" />}
-      htmlFor="upcoming-switch"
+      title={t(`settings.metadata.${name}`)}
+      badges={<SettingBadges settings={settings} id={`metadata.${field}`} />}
+      htmlFor={`${name}-switch`}
       description={
         <>
-          {t('settings.metadata.upcomingBody')}
-          {m.enabled && m.upcoming ? <UpcomingRunText status={m.upcoming_status} /> : null}
+          {t(`settings.metadata.${name}Body`)}
+          {on ? runText : null}
         </>
       }
-      descriptionId="upcoming-switch-desc"
+      descriptionId={`${name}-switch-desc`}
     >
       <InstantSwitch
-        id="upcoming-switch"
-        checked={m.enabled && Boolean(m.upcoming)}
-        disabled={!m.enabled || Boolean(lockOf(settings, 'metadata.upcoming'))}
-        describedBy="upcoming-switch-desc"
-        patch={(on) => ({ metadata: { upcoming: on } })}
-        failedTitle={t('settings.metadata.upcomingFailed')}
-        onSaved={(on) =>
+        id={`${name}-switch`}
+        checked={on}
+        disabled={!m.enabled || Boolean(lockOf(settings, `metadata.${field}`))}
+        describedBy={`${name}-switch-desc`}
+        patch={(v) => ({ metadata: { [field]: v } })}
+        failedTitle={t(`settings.metadata.${name}Failed`)}
+        onSaved={(v) =>
           toast.add({
-            title: on ? t('settings.metadata.upcomingOn') : t('settings.metadata.upcomingOff'),
+            title: v ? t(`settings.metadata.${name}On`) : t(`settings.metadata.${name}Off`),
             type: 'success',
           })
         }
       />
     </SettingRow>
+  );
+}
+
+/** The report's last run in words: not yet, sent, not taken, or failed. */
+function ReportRunText({ status }: { status?: ReportStatus }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const state = status?.state ?? 'never';
+  const when = status?.last_run_at ? formatRelative(status.last_run_at, lang) : '';
+  let text: string;
+  switch (state) {
+    case 'ok':
+      text = status?.last_sent
+        ? t('settings.metadata.reportSent', {
+            when,
+            count: status.last_sent,
+            formatted: formatNumber(status.last_sent, lang),
+          })
+        : t('settings.metadata.reportNothing', { when });
+      break;
+    case 'not_offered':
+      text = t('settings.metadata.reportNotOffered', { when });
+      break;
+    case 'failed':
+      text = t('settings.metadata.reportLastFailed', { when });
+      break;
+    default:
+      text = t('settings.metadata.reportNever');
+  }
+  const tone = state === 'failed' ? 'bad' : state === 'not_offered' ? 'warn' : undefined;
+  return (
+    <span className="mt-1 block" data-testid="report-run">
+      {tone ? (
+        <StatusText tone={tone} colored>
+          {text}
+        </StatusText>
+      ) : (
+        text
+      )}
+    </span>
   );
 }
 

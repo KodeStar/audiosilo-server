@@ -800,3 +800,141 @@ func TestMatchHoldsAnotherLength(t *testing.T) {
 		t.Fatalf("review = %+v, want length_differs", review)
 	}
 }
+
+// TestMatchPrefersTheNarratorsRecording: the book's narrator credit reaches the
+// run's choice of recording, ahead of a closer runtime.
+func TestMatchPrefersTheNarratorsRecording(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: "A/Read", IsFolder: true,
+		Title: "Martian", Author: "Andy Weir", Narrator: "Wil Wheaton", Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	hit := cand("the-martian", 95, "")
+	hit.Recordings = append(hit.Recordings, meta.MatchRecording{ID: "wheaton", RuntimeMin: 660,
+		Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}, ASINs: []string{"B0WHEATON1"}})
+	e.matcher.byTitle["Martian"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Proposal.RecordingID != "wheaton" || auto[0].Proposal.Values["asin"] != "B0WHEATON1" {
+		t.Fatalf("auto = %+v, want his recording", auto)
+	}
+}
+
+// TestMatchRecordsAWeakMatchAsNone: a best candidate under ReviewFloor is no
+// match (detail weak_match, its score kept, nothing proposed); an apply never
+// takes it, even when the admin names it.
+func TestMatchRecordsAWeakMatchAsNone(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Weak", "Weak", "", nil)
+	e.book(t, "A/Fair", "Fair", "", nil)
+	scored := func(score int) meta.MatchCandidate {
+		c := cand("the-martian", score, "")
+		c.Reasons = &meta.MatchReasons{} // metaserve's scale
+		return c
+	}
+	e.matcher.byTitle["Weak"] = []meta.MatchCandidate{scored(ReviewFloor - 1)}
+	e.matcher.byTitle["Fair"] = []meta.MatchCandidate{scored(ReviewFloor)}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	none := e.items(t, run, catalog.OutcomeNone)
+	if len(none) != 1 || none[0].Path != "A/Weak" || none[0].Detail != DetailWeakMatch || none[0].Score != ReviewFloor-1 ||
+		len(none[0].Proposal.Values) != 0 || none[0].Proposal.WorkID != "" {
+		t.Fatalf("none = %+v, want the weak match with no proposal", none)
+	}
+	if review := e.items(t, run, catalog.OutcomeReview); len(review) != 1 || review[0].Path != "A/Fair" {
+		t.Fatalf("review = %+v, want the match at the floor", review)
+	}
+	if _, err := e.runner.Apply(context.Background(), context.Background(), run.ID,
+		ApplyOptions{Scope: ScopeOverwrite, Include: []int64{none[0].ID}, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	st, err := e.cat.BookMatchState(context.Background(), e.lib, "A/Weak")
+	if err != nil || st.Fields[catalog.FieldASIN].Value != "" || st.Title != "Weak" {
+		t.Fatalf("the weak match was applied: %+v %v", st, err)
+	}
+}
+
+// TestMatchSendsLanguageAndNarrators: a run's query carries the book's narrators
+// and its tags' language, and a book that says no language sends none, never the
+// preferred marketplace's.
+func TestMatchSendsLanguageAndNarrators(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for _, b := range []*catalog.Book{
+		{LibraryID: e.lib, RelPath: "A/Dune", IsFolder: true, Title: "Dune", Author: "Frank Herbert",
+			Narrator: "Scott Brick; Simon Vance", Duration: 600, AddedAt: "2020-01-01", TagLanguage: "fr"},
+		{LibraryID: e.lib, RelPath: "A/Emma", IsFolder: true, Title: "Emma", Author: "Jane Austen",
+			Duration: 600, AddedAt: "2020-01-01"},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.start(t, catalog.MatchModeMatch, "de")
+	e.matcher.mu.Lock()
+	defer e.matcher.mu.Unlock()
+	if len(e.matcher.queries) != 2 {
+		t.Fatalf("queries = %+v", e.matcher.queries)
+	}
+	queried := make([]string, 0, len(e.matcher.queries))
+	for _, q := range e.matcher.queries {
+		queried = append(queried, q.Title)
+		switch q.Title {
+		case "Dune":
+			if q.Language != "fr" || !slices.Equal(q.Narrators, []string{"Scott Brick", "Simon Vance"}) {
+				t.Fatalf("Dune: query language %q narrators %q", q.Language, q.Narrators)
+			}
+		case "Emma":
+			if q.Language != "" {
+				t.Fatalf("Emma says no language, on a de server it sent %q", q.Language)
+			}
+		default:
+			t.Fatalf("query for %q", q.Title)
+		}
+	}
+	slices.Sort(queried)
+	if !slices.Equal(queried, []string{"Dune", "Emma"}) {
+		t.Fatalf("queried %q, want each book once", queried)
+	}
+}
+
+// TestMatchHoldsAPlainBookOffADramatization: a confident title match on a work holding
+// only a dramatization is held for review with no identifier to attach; beside a plain
+// reading the plain reading is the proposal, however close the dramatization's length.
+func TestMatchHoldsAPlainBookOffADramatization(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Only", "Only", "", nil)
+	e.book(t, "A/Both", "Both", "", nil)
+	drama := func() meta.MatchCandidate {
+		c := cand("the-martian", 95, "")
+		c.PlainBook = true
+		c.Recordings = c.Recordings[:1]
+		c.Recordings[0].ID, c.Recordings[0].Publisher = "ga", "GraphicAudio"
+		return c
+	}
+	e.matcher.byTitle["Only"] = []meta.MatchCandidate{drama()}
+	both := drama()
+	plain := both.Recordings[0]
+	plain.ID, plain.Publisher, plain.RuntimeMin = "plain", "Tantor Audio", 2000
+	both.Recordings = append(both.Recordings, plain)
+	e.matcher.byTitle["Both"] = []meta.MatchCandidate{both}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	found := map[string]ItemView{}
+	for _, it := range e.items(t, run, catalog.OutcomeReview) {
+		found[it.Book.Title] = it
+	}
+	only, ok := found["Only"]
+	if !ok || only.Detail != DetailDramatizationOnly || only.Proposal.RecordingID != "" || only.Proposal.Values[catalog.FieldASIN] != "" {
+		t.Errorf("Only = %+v, want held for review with no recording", only)
+	}
+	both2, ok := found["Both"]
+	if !ok || both2.Proposal.RecordingID != "plain" || both2.Detail == DetailDramatizationOnly {
+		t.Errorf("Both = %+v, want the plain reading proposed", both2)
+	}
+}

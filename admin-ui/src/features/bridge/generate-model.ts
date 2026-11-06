@@ -529,10 +529,12 @@ export function parkHint(
 /**
  * The reasons the server writes on a job it cancels itself, in plain words
  * (internal/bridge/jobs.go: the kinds' `cancelsOpen`, CancelMoved and
- * CancelReplacedRequest, also on a working job it asked to stop, kept through
- * the Bridge's reports): shown as they are. Any other error on a cancelled job
- * is the park's or the Bridge's own text (a supervisor's, say), never shown
- * (BRIDGE-02).
+ * CancelReplacedRequest; internal/bridge/audible.go: an Audible poll's
+ * CancelAudibleRemoved and CancelAudiblePaused, an Audible sync's
+ * CancelAudibleSyncOff; also on a working job it asked
+ * to stop, kept through the Bridge's reports): shown as they are. Any other
+ * error on a cancelled job is the park's or the Bridge's own text (a
+ * supervisor's, say), never shown (BRIDGE-02).
  */
 const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced it',
@@ -541,6 +543,9 @@ const SERVER_CANCEL_REASONS: readonly string[] = [
   'a generate job for the book replaced it; make the read-along again after',
   'the book moved onto another job of this kind',
   'a newer request replaced it',
+  'the Audible account was removed',
+  "the Audible account's library was deleted",
+  'sync with Audible was turned off for the account',
 ];
 
 /** Whether a job's error is one of the server's own cancel reasons (SERVER_CANCEL_REASONS). */

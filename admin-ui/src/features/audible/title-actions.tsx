@@ -1,0 +1,128 @@
+import { useId, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Ban, CloudDownload, FolderInput, LoaderCircle, RefreshCwOff, Undo2 } from 'lucide-react';
+import type { AudibleTitle } from '@/api/types';
+import { ConfirmDialog } from '@/components/confirm-dialog';
+import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { canBackUp, canSync, cleanDest, plannedPlaceholder, titleName } from './audible-model';
+import type { Backups } from './use-audible';
+
+/**
+ * A title's backup actions (Bridge Phase 4b): Back up (a preorder's waits for
+ * its release), "Not this book" (never backed up by a policy or Back up
+ * everything, and its match isn't this title) and its undo, and the
+ * destination: where in the library the backup goes instead of the account's
+ * placement. Back up is off while the account is paused, as Back up everything.
+ * Phase 4c: "Don't sync this book" (its place never syncs with Audible, either
+ * way) for a title on this server, and its undo.
+ */
+export function TitleActions({
+  title: x,
+  paused = false,
+  backups,
+}: {
+  title: AudibleTitle;
+  paused?: boolean;
+  backups: Backups;
+}) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const busy = backups.busy === backups.titleKey(x);
+  const name = titleName(x);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {canBackUp(x) ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || paused}
+          onClick={() => void backups.backUp(x)}
+        >
+          {busy ? (
+            <LoaderCircle className="animate-spin" aria-hidden="true" />
+          ) : (
+            <CloudDownload aria-hidden="true" />
+          )}
+          {t('audible.backup.action')}
+        </Button>
+      ) : null}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => void backups.setRejected(x, !x.rejected)}
+        aria-label={t(x.rejected ? 'audible.reject.undoLabel' : 'audible.reject.label', { name })}
+      >
+        {x.rejected ? <Undo2 aria-hidden="true" /> : <Ban aria-hidden="true" />}
+        {t(x.rejected ? 'audible.reject.undo' : 'audible.reject.action')}
+      </Button>
+      {canSync(x) || x.no_sync ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => void backups.setNoSync(x, !x.no_sync)}
+          aria-label={t(x.no_sync ? 'audible.nosync.undoLabel' : 'audible.nosync.label', { name })}
+        >
+          {x.no_sync ? <Undo2 aria-hidden="true" /> : <RefreshCwOff aria-hidden="true" />}
+          {t(x.no_sync ? 'audible.nosync.undo' : 'audible.nosync.action')}
+        </Button>
+      ) : null}
+      {!x.match || x.rejected ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setEditing(true)}
+          aria-label={t('audible.dest.label', { name })}
+        >
+          <FolderInput aria-hidden="true" />
+          {t('audible.dest.action')}
+        </Button>
+      ) : null}
+      {editing ? (
+        <DestDialog title={x} backups={backups} onClose={() => setEditing(false)} />
+      ) : null}
+    </div>
+  );
+}
+
+function DestDialog({
+  title: x,
+  backups,
+  onClose,
+}: {
+  title: AudibleTitle;
+  backups: Backups;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [dest, setDest] = useState(x.dest_path);
+  return (
+    <ConfirmDialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      icon={FolderInput}
+      tone="brand"
+      destructive={false}
+      title={t('audible.dest.title', { name: titleName(x) })}
+      description={t('audible.dest.description')}
+      confirmLabel={t('audible.dest.save')}
+      onConfirm={() => backups.setDest(x, cleanDest(dest))}
+    >
+      <Field htmlFor={id} label={t('audible.dest.field')} description={t('audible.dest.hint')}>
+        <Input
+          id={id}
+          value={dest}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={plannedPlaceholder(x)}
+          onChange={(e) => setDest(e.target.value)}
+          aria-describedby={`${id}-desc`}
+        />
+      </Field>
+    </ConfirmDialog>
+  );
+}

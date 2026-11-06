@@ -32,6 +32,15 @@ const (
 // migration 0047's partial index names the same four).
 const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
+// IsOpenState reports whether state is one of OpenStatesSQL's.
+func IsOpenState(state string) bool {
+	switch state {
+	case StateQueued, StateClaimed, StateRunning, StateNeedsAttention:
+		return true
+	}
+	return false
+}
+
 const (
 	// Lease is how long a claim holds a job without a progress update. The
 	// Bridge reports at least every 30 s while it works.
@@ -48,7 +57,9 @@ const (
 	DefaultListLimit = 50
 
 	// defaultParamsBytes bounds a job's params as sent, unless its kind sets
-	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind takes.
+	// its own (kindSpec.maxParams); MaxParamsBytes is the most any kind an
+	// admin may queue takes (the console's POST /admin/bridge/jobs body; an
+	// internal kind's params, audible.sync's larger ones, are the server's own).
 	defaultParamsBytes = 16 << 10
 	MaxParamsBytes     = max(defaultParamsBytes, maxCorrectParamsBytes)
 	maxProgressBytes   = 16 << 10
@@ -147,6 +158,12 @@ type kindSpec struct {
 	module string
 	// maxParams bounds the params as sent, in bytes (0: defaultParamsBytes).
 	maxParams int
+	// promotes: a request that finds a job of the kind already open raises
+	// the open job's priority to its own, never lowers it (Check now on a
+	// scheduled audible.poll; a podcast fetch does the same through its
+	// demand, NewJob.fetch), and gives a job still queued its params (an
+	// audible.poll's template, changed since the scheduler queued it).
+	promotes bool
 }
 
 // paramsCap is the most bytes of params a job of the kind may send.
@@ -174,6 +191,11 @@ var kinds = map[string]kindSpec{
 	KindPodcastSubscribe: {needsLibrary: true, book: bookNone, writes: true, params: subscribeParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true, suffix: subscribeSuffix},
 	KindPodcastPoll:      {needsLibrary: true, book: bookShow, writes: true, params: pollParams, module: ModulePodcasts, libraryKind: libraryPodcasts, internal: true, quiet: true},
 	KindVerify:           {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindAudiblePoll:      {book: bookNone, params: audiblePollParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix, promotes: true},
+	KindAudibleSync: {book: bookNone, params: audibleSyncParams, module: ModuleAudible, internal: true, quiet: true, suffix: audibleAccountSuffix,
+		promotes: true, maxParams: maxAudibleSyncParamsBytes},
+	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
+		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
 			KindReadalong: ErrReadalongOpen},
@@ -493,6 +515,16 @@ func DedupeKey(kind string, libraryID *int64, path *string) string {
 	return b.String()
 }
 
+// jobKey is j's dedupe key: DedupeKey, extended by its kind's suffix when the
+// kind has one.
+func jobKey(j NewJob) string {
+	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
+	if suffix := kinds[j.Kind].suffix; suffix != nil {
+		key += suffix(j)
+	}
+	return key
+}
+
 // NewJob is a validated request for a job, after the transport resolved its target.
 type NewJob struct {
 	Kind      string
@@ -650,10 +682,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
 		refuse = ErrCannotContribute
 	}
-	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
-	if suffix := kinds[j.Kind].suffix; suffix != nil {
-		key += suffix(j)
-	}
+	key := jobKey(j)
 	var exp expiry
 	identityBusy, promoted := false, false
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
@@ -681,18 +710,36 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 					if err := checkPodcastTarget(ctx, tx, j); err != nil {
 						return err
 					}
-					// Promotion only ever raises the priority; an unchanged row
-					// is not rewritten and wakes no claim.
-					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
+				}
+				if j.fetch == nil && !kinds[j.Kind].promotes {
+					return nil
+				}
+				// Promotion only ever raises the priority; an unchanged row
+				// is not rewritten and wakes no claim.
+				res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET priority=?,updated_at=? WHERE id=? AND priority<?`, j.Priority, now, id, j.Priority)
+				if err != nil {
+					return err
+				}
+				if n, err := res.RowsAffected(); err != nil {
+					return err
+				} else if n > 0 {
+					promoted = true
+					job.Priority = j.Priority
+					job.UpdatedAt = now
+				}
+				// A job not claimed yet runs with the newest request's params
+				// (both normalised by checkNew): a Check now after the
+				// account's template changed plans by the new one.
+				if kinds[j.Kind].promotes && job.State == StateQueued && !bytes.Equal(job.Params, j.Params) {
+					res, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET params=?,updated_at=? WHERE id=? AND state=?`,
+						string(j.Params), now, id, StateQueued)
 					if err != nil {
 						return err
 					}
 					if n, err := res.RowsAffected(); err != nil {
 						return err
 					} else if n > 0 {
-						promoted = true
-						job.Priority = j.Priority
-						job.UpdatedAt = now
+						job.Params, job.UpdatedAt = j.Params, now
 					}
 				}
 				return nil
@@ -746,6 +793,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		}
 		if podcastWork(j.Kind) {
 			if err := s.prunePolls(ctx, tx, j); err != nil {
+				return err
+			}
+		}
+		if j.Kind == KindAudiblePoll || j.Kind == KindAudibleSync {
+			if err := pruneAudibleEnded(ctx, tx, j.Kind, key); err != nil {
 				return err
 			}
 		}
@@ -1581,9 +1633,12 @@ const (
 )
 
 // IsCancelReason reports whether text is one of the server's own cancel
-// reasons: the kinds' cancelsOpen, CancelMoved or CancelReplacedRequest.
+// reasons: the kinds' cancelsOpen, CancelMoved, CancelReplacedRequest or an
+// Audible account's job's (CancelAudibleRemoved, CancelAudiblePaused,
+// CancelAudibleSyncOff).
 func IsCancelReason(text string) bool {
-	if text == CancelMoved || text == CancelReplacedRequest {
+	switch text {
+	case CancelMoved, CancelReplacedRequest, CancelAudibleRemoved, CancelAudiblePaused, CancelAudibleSyncOff:
 		return true
 	}
 	for _, spec := range kinds {

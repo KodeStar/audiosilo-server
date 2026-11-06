@@ -617,3 +617,55 @@ func TestScanConcurrency(t *testing.T) {
 		t.Fatalf("the maximum = %+v, %v", c.Scan, err)
 	}
 }
+
+// metadata.report_unknown (LibraForge C3): off by default, a live console
+// setting in the metadata section, from config.yaml or locked by
+// AUDIOSILO_METADATA_REPORT_UNKNOWN, never written to config.yaml from the
+// environment.
+func TestReportUnknownSetting(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Metadata.ReportUnknown {
+		t.Fatal("the report must ship off")
+	}
+	if v, ok := c.Settings()["metadata"]["report_unknown"]; !ok || v != false {
+		t.Fatalf("metadata.report_unknown in Settings = %v, %v", v, ok)
+	}
+	if slices.Contains(RestartSettings(), "metadata.report_unknown") {
+		t.Fatal("the report switch must apply without a restart")
+	}
+	next, err := c.WithSettings(patch(map[string]string{"metadata.report_unknown": `true`}), Checks{MetadataAvailable: true})
+	if err != nil || !next.Metadata.ReportUnknown || c.Metadata.ReportUnknown {
+		t.Fatalf("switch on = %v, %v (the original must stay off)", next.Metadata, err)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"metadata.report_unknown": `"yes"`}), Checks{}); settingErr(t, err).Reason != ReasonInvalid {
+		t.Fatal("a non-bool switch was accepted")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("metadata:\n  report_unknown: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = Load(dir)
+	if err != nil || !c.Metadata.ReportUnknown || c.Locked()["metadata.report_unknown"] != "" {
+		t.Fatalf("from config.yaml = %+v %v %v", c.Metadata, c.Locked(), err)
+	}
+	t.Setenv("AUDIOSILO_METADATA_REPORT_UNKNOWN", "false")
+	c, _, err = Load(dir)
+	if err != nil || c.Metadata.ReportUnknown || c.Locked()["metadata.report_unknown"] != "AUDIOSILO_METADATA_REPORT_UNKNOWN" {
+		t.Fatalf("from the environment = %+v %v %v", c.Metadata, c.Locked(), err)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"metadata.report_unknown": `true`}), Checks{}); settingErr(t, err).Reason != ReasonLocked {
+		t.Fatal("an env-set switch must be locked")
+	}
+	next, err = c.WithSettings(patch(map[string]string{"general.name": `"Den"`}), Checks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Save(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUDIOSILO_METADATA_REPORT_UNKNOWN", "")
+	if c, _, err = Load(dir); err != nil || !c.Metadata.ReportUnknown {
+		t.Fatalf("config.yaml must keep its own value under the variable: %+v %v", c.Metadata, err)
+	}
+}

@@ -166,6 +166,13 @@ func cutoffOffset(cutoff time.Time, loc *time.Location) *int {
 // and a server-stamped progress updated_at are stored in (they compare as text).
 func FormatStamp(t time.Time) string { return formatSessionTime(t) }
 
+// ParseStamp reads a stamp FormatStamp wrote; ok is false for "" (never) and for
+// one that doesn't parse.
+func ParseStamp(s string) (t time.Time, ok bool) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	return t, err == nil && s != ""
+}
+
 // FormatCutoff is a cutoff as imports.cutoff stores it (RFC3339 UTC, to the
 // second, rounded down so a session in the cutoff's own second stays out).
 func FormatCutoff(t time.Time) *string {
@@ -754,22 +761,25 @@ func jsonOrNil(p *Progress) (any, error) {
 // progressUpsert writes a progress row whole (dates "" stored as NULL), with
 // progressRowArgs' arguments. A row whose finished state it sets or changes
 // gets finish_changed_at (Sync v2: an older finish or unfinish event is then
-// "older" and can't undo it), at progressRowArgs' changedAt.
+// "older" and can't undo it), at progressRowArgs' changedAt. A row left on
+// its device keeps its device name; one whose device changes takes p's (an
+// import's write: none; an undo's: the prior row's, Bridge Phase 4c).
 const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
-	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),CASE WHEN ?6 THEN ?13 END)
+	    playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at, device_name)
+	VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULLIF(?11, ''),NULLIF(?12, ''),` + finishChangedValue + `,?14)
 	ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 	    position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 	    playback_speed=excluded.playback_speed, version=excluded.version, device_id=excluded.device_id,
+	    device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name
+	                     ELSE excluded.device_name END,
 	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at,
-	    finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
-	                           ELSE progress.finish_changed_at END`
+	    ` + finishChangedSet + `, ` + endSpanChain
 
 // progressRowArgs are progressUpsert's arguments for p as userID's progress,
 // changedAt the finish_changed_at a finish-state change records.
 func progressRowArgs(userID int64, p Progress, changedAt string) []any {
 	return []any{userID, p.LibraryID, p.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, changedAt}
+		p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, changedAt, p.DeviceName}
 }
 
 // sameProgress reports whether a stored row is still the one an import wrote: a
@@ -790,10 +800,17 @@ type progressPrior struct {
 }
 
 // restored is the row an undo puts back for pr (prior must be set): the prior
-// row as it was, under a version above the one the import wrote.
+// row as it was, under a version above the one the import wrote. A row the
+// import had moved on (rewound) that was an Audible account's place comes back
+// under no device (Bridge Phase 4c): GET /bridge/progress may already have
+// carried the import's place to Audible, and it leaves the account's own rows
+// out, so restored as Audible's the undo would never reach it.
 func (pr progressPrior) restored() Progress {
 	back := *pr.prior
 	back.Version = pr.wrote.Version + 1
+	if pr.rewound() && IsAudibleDevice(back.DeviceID) {
+		back.DeviceID, back.DeviceName = "", ""
+	}
 	return back
 }
 

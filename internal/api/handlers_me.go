@@ -75,7 +75,8 @@ func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutProgress upserts progress using last-write-wins reconciliation, on
-// the book path addresses (progressPath), as is its listening session.
+// the book path addresses (progressPath), as is its listening session. A path
+// over catalog.MaxPathBytes is 400 (pathInScope).
 func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -93,13 +94,19 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Ref = catalog.Ref{LibraryID: lib.ID, Path: key}
+	// An Audible account's device id is the Bridge's route's alone (Bridge Phase
+	// 4c: GET /bridge/progress leaves its rows out). A body naming one (a row
+	// echoed back) saves under none, so the place still reaches Audible.
+	if catalog.IsAudibleDevice(in.DeviceID) {
+		in.DeviceID = ""
+	}
 	u, cred := userFrom(r.Context()), credentialFrom(r.Context())
 	// The device's name is the token's, never the body's (an echoed row may
 	// carry one), and the save is logged as a Sync v2 "put" event.
 	in.DeviceName = cred.DeviceName
 	saved, err := a.cat.SaveProgressFrom(r.Context(), u.ID, cred.DeviceID, in)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save progress")
+		a.writeCatalogError(w, err, "save progress failed", "could not save progress", "library", lib.ID, "path", key)
 		return
 	}
 	// The save is also the heartbeat of a listening session: what this device

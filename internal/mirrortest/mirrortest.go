@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
 	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
-	_ "modernc.org/sqlite" // the artifact's schema_version rewrite
+	_ "modernc.org/sqlite" // FixtureRewritten
 )
 
 // Fixture is a data release's assets over querytest's real artifact. schema,
@@ -26,14 +27,26 @@ import (
 // newer than the code reading it.
 func Fixture(tb testing.TB, schema int) map[string][]byte {
 	tb.Helper()
+	if schema == 0 {
+		return FixtureRewritten(tb)
+	}
+	return FixtureRewritten(tb, "UPDATE meta SET value="+strconv.Itoa(schema)+" WHERE key='schema_version'")
+}
+
+// FixtureRewritten is Fixture with these statements run on the built artifact first:
+// the fixture's catalogue is fixed, and a test can want another shape of it.
+func FixtureRewritten(tb testing.TB, stmts ...string) map[string][]byte {
+	tb.Helper()
 	path := querytest.Build(tb, tb.TempDir())
-	if schema != 0 {
+	if len(stmts) > 0 {
 		db, err := sql.Open("sqlite", path)
 		if err != nil {
 			tb.Fatal(err)
 		}
-		if _, err := db.ExecContext(context.Background(), `UPDATE meta SET value=? WHERE key='schema_version'`, schema); err != nil {
-			tb.Fatal(err)
+		for _, stmt := range stmts {
+			if _, err := db.ExecContext(context.Background(), stmt); err != nil {
+				tb.Fatalf("%s: %v", stmt, err)
+			}
 		}
 		if err := db.Close(); err != nil {
 			tb.Fatal(err)
@@ -44,6 +57,27 @@ func Fixture(tb testing.TB, schema int) map[string][]byte {
 		tb.Fatal(err)
 	}
 	return releasetest.DataAssets(tb, raw)
+}
+
+// HamletScale is FixtureRewritten's statements for querytest's community work as a
+// sidecar on 5 acts: a character (id "act-N") and a recap (text "Act N.") at each
+// position N.
+func HamletScale() []string {
+	const work = "'" + querytest.CommunityWork + "'"
+	stmts := []string{
+		"UPDATE position_scales SET length=5, unit='act', partial=0 WHERE work_id=" + work,
+		"DELETE FROM character_aliases WHERE work_id=" + work,
+		"DELETE FROM characters WHERE work_id=" + work,
+		"DELETE FROM recaps WHERE work_id=" + work,
+	}
+	for act := 1; act <= 5; act++ {
+		n := strconv.Itoa(act)
+		stmts = append(stmts,
+			"INSERT INTO characters(work_id, id, name, reveal_chapter, ord, license) VALUES("+work+", 'act-"+n+"', 'Act "+n+"', "+n+", "+n+", 'CC-BY-SA-4.0')",
+			"INSERT INTO recaps(work_id, through_chapter, text, license) VALUES("+work+", "+n+", 'Act "+n+".', 'CC-BY-SA-4.0')",
+		)
+	}
+	return stmts
 }
 
 // Releases is a realistic release list: data releases carrying assets for tags

@@ -15,6 +15,7 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
 import {
   BRIDGE_JOB_STATES,
+  backupAsin,
   hasContent,
   jobActions,
   kindName,
@@ -139,6 +140,7 @@ function JobRow({
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);
+  const asin = backupAsin(job);
   const details = hasContent(job.result) || hasContent(job.params);
 
   const meta = [
@@ -192,6 +194,11 @@ function JobRow({
                   ) : (
                     <span className="font-mono text-[12px]">{job.path}</span>
                   )}
+                </>
+              ) : asin ? (
+                <>
+                  {' · '}
+                  <span className="font-mono text-[12px]">{asin}</span>
                 </>
               ) : (
                 <span className="text-muted-foreground"> · {t('bridge.jobs.wholeLibrary')}</span>

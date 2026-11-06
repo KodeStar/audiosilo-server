@@ -34,6 +34,15 @@ var errLocalNotFound = fmt.Errorf("%w (the local copy)", ErrNotFound)
 // per-request timeout budget.
 const clientTimeout = 5 * time.Second
 
+// maxIdleConnsPerHost is how many connections to the service stay open between
+// requests, enough for a bulk run's workers: over HTTP/1.1 the default of two would
+// close most of them after each answer (HTTP/2 multiplexes one, so it never comes up).
+const maxIdleConnsPerHost = 16
+
+// maxDrain bounds what is read of an answer past what was wanted, so its connection
+// can be reused. Anything longer costs a new connection rather than a wait.
+const maxDrain = 64 << 10
+
 // client is a thin read-only HTTP client for the metaserve JSON API. It GETs and
 // decodes the small set of endpoints the enrichment composition needs.
 type client struct {
@@ -45,20 +54,41 @@ type client struct {
 }
 
 // newClient builds a client for the given metaserve base URL. baseURL is
-// expected already trimmed of a trailing slash (NewService does the trim).
+// expected already trimmed of a trailing slash (NewService does the trim). Its
+// connections are its own: on http.DefaultTransport, anything in the process
+// calling CloseIdleConnections (every httptest.Server's Close; pkg/launcher runs
+// inside other programs) can fail a request whose answer has just arrived, which
+// net/http doesn't retry and a lookup would report as an outage.
 func newClient(baseURL string) *client {
 	return &client{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: clientTimeout},
+		http:    &http.Client{Timeout: clientTimeout, Transport: pacedTransport{base: ownTransport(http.DefaultTransport)}},
 		sleep:   sleepCtx,
 	}
+}
+
+// ownTransport is base's settings (proxy, TLS, timeouts) on connections of their
+// own, keeping maxIdleConnsPerHost of them. A base that isn't a plain
+// *http.Transport, a round tripper the program embedding the server put in
+// http.DefaultTransport, has nothing to copy and stays what the client sends
+// through.
+func ownTransport(base http.RoundTripper) http.RoundTripper {
+	if t, ok := base.(*http.Transport); ok {
+		t = t.Clone()
+		t.MaxIdleConnsPerHost = maxIdleConnsPerHost
+		return t
+	}
+	return base
 }
 
 // A 429 (metaserve's per-client rate limit, audiosilo-meta#2749) is waited out
 // and asked again, rateLimitRetries times at most, each wait its Retry-After
 // capped at maxRetryAfter (defaultRetryAfter when it gives none), so a burst a
 // bulk match makes slows down instead of failing books (server#247). A wait the
-// caller's deadline would cut short isn't started.
+// caller's deadline would cut short isn't started. A bulk run (a Pacer in the
+// context) waits out a 503 the same way: metaserve answers one past a match's budget,
+// and books failing in a row stop a run. Anyone else's 503 is the outage it reports at
+// once: an admin or a listener is waiting on the answer.
 const (
 	rateLimitRetries  = 3
 	maxRetryAfter     = 10 * time.Second
@@ -78,9 +108,9 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // getJSON fetches path (relative to the API root) and decodes the JSON body into
 // out. A 404 becomes ErrNotFound (errLocalNotFound when the local copy answered
-// it); a 429 is waited out and retried (rateLimitRetries); any other non-2xx (or
-// transport failure, or a 429 still there after the retries) is a plain error
-// the caller treats as an upstream outage.
+// it); a 429, and for a bulk run a 503, is waited out and retried
+// (rateLimitRetries); any other non-2xx (or transport failure, or a 429 or 503 still
+// there after the retries) is a plain error the caller treats as an upstream outage.
 func (c *client) getJSON(ctx context.Context, path string, out any) error {
 	for attempt := 0; ; attempt++ {
 		wait, err := c.getJSONOnce(ctx, path, out)
@@ -90,13 +120,16 @@ func (c *client) getJSON(ctx context.Context, path string, out any) error {
 		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait {
 			return err
 		}
+		if p := pacerOf(ctx); p != nil {
+			p.noteWait(err, wait)
+		}
 		if c.sleep(ctx, wait) != nil {
 			return err
 		}
 	}
 }
 
-// retryAfter is how long a 429 asks to wait (Retry-After in seconds or as a
+// retryAfter is how long a 429 or 503 asks to wait (Retry-After in seconds or as a
 // date), within (0, maxRetryAfter].
 func retryAfter(h string, now time.Time) time.Duration {
 	d := defaultRetryAfter
@@ -109,8 +142,10 @@ func retryAfter(h string, now time.Time) time.Duration {
 	return min(max(d, 100*time.Millisecond), maxRetryAfter)
 }
 
-// getJSONOnce is one request of getJSON; wait is how long a 429 asks to wait
-// before asking again (0 for any other answer).
+// getJSONOnce is one request of getJSON; wait is how long an answer it waits out asks
+// to wait before asking again (0 for any other answer). Whatever the answer, its body
+// is read to the end, up to maxDrain, as a connection is only reused from there (the
+// JSON decoder stops at the value's end, an error's body isn't read at all).
 func (c *client) getJSONOnce(ctx context.Context, path string, out any) (wait time.Duration, _ error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
@@ -121,19 +156,19 @@ func (c *client) getJSONOnce(ctx context.Context, path string, out any) (wait ti
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrain))
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode == http.StatusServiceUnavailable && pacerOf(ctx) != nil) {
 		return retryAfter(resp.Header.Get("Retry-After"), time.Now()), &statusError{code: resp.StatusCode, path: path}
 	}
 	return 0, decodeAnswer(resp, path, out)
 }
 
-// decodeAnswer is getJSON's reading of an answer other than a 429.
+// decodeAnswer is getJSON's reading of an answer it doesn't wait out.
 func decodeAnswer(resp *http.Response, path string, out any) error {
 	if resp.StatusCode == http.StatusNotFound {
-		// Drain a little so the connection can be reused.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 		if resp.Header.Get(localAnswerHeader) != "" {
 			return errLocalNotFound
 		}
@@ -319,13 +354,19 @@ type upstreamSearch struct {
 
 // upstreamMatchResult is one GET works/match result, best first: a work card
 // (only the id and cover are needed; the full document is fetched by id) with
-// its score, reasons and the recording an identifier named.
+// its score, reasons and the recording an identifier named. Work and SeriesFacts
+// answer expand=work, on the best result by Candidates' order alone (not always the
+// first): GET works/{id} byte for byte, and factsOf's input by series id. A series
+// with no entry is unknown; no Work (an older metaserve, its budget spent) means
+// the details are to be fetched.
 type upstreamMatchResult struct {
-	ID          string        `json:"id"`
-	CoverURL    *string       `json:"cover_url"`
-	Score       int           `json:"score"`
-	RecordingID string        `json:"recording_id"`
-	Reasons     *MatchReasons `json:"reasons"`
+	ID          string                  `json:"id"`
+	CoverURL    *string                 `json:"cover_url"`
+	Score       int                     `json:"score"`
+	RecordingID string                  `json:"recording_id"`
+	Reasons     *MatchReasons           `json:"reasons"`
+	Work        *upstreamWorkDetail     `json:"work"`
+	SeriesFacts map[string]*seriesFacts `json:"series_facts"`
 }
 
 type upstreamPosition struct {
@@ -365,6 +406,14 @@ type upstreamCommunityDescription struct {
 	License string `json:"license"`
 }
 
+// upstreamPositionScale is the scale a work's characters and recaps are numbered on;
+// nil for a work that states none, and on a metaserve or a pkg/query that predates it.
+type upstreamPositionScale struct {
+	Length  int    `json:"length"`
+	Unit    string `json:"unit"`
+	Partial bool   `json:"partial"`
+}
+
 type upstreamWorkDetail struct {
 	ID             string                `json:"id"`
 	Title          string                `json:"title"`
@@ -381,6 +430,7 @@ type upstreamWorkDetail struct {
 	// CommunityDescription is the CC BY-SA description (see
 	// upstreamCommunityDescription); nil for most works.
 	CommunityDescription *upstreamCommunityDescription `json:"community_description"`
+	PositionScale        *upstreamPositionScale        `json:"position_scale"`
 }
 
 type upstreamSeriesEntry struct {

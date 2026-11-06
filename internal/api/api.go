@@ -17,6 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/chaptercheck"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/coverage"
 	"github.com/kodestar/audiosilo-server/internal/covercolors"
 	"github.com/kodestar/audiosilo-server/internal/importer"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -77,6 +78,9 @@ type API struct {
 	// upcoming is the upcoming releases job (Track U1), nil without a
 	// metadata service (StartUpcoming).
 	upcoming *upcoming.Runner
+	// coverage is the daily report of unknown Audible ASINs (LibraForge C3),
+	// nil without a metadata service and on a demo server (StartCoverage).
+	coverage *coverage.Runner
 	// coverColors reads books' cover colours in the background
 	// (StartCoverColors), so a book has one before anyone looks at its cover.
 	coverColors *covercolors.Runner
@@ -138,7 +142,15 @@ type API struct {
 	// remux is the cache of Matroska files holding MP3 copied into plain MP3
 	// (server#174), served at the same stream URL while ffmpeg is configured
 	// (remuxOn). nil without a data dir.
-	remux *media.Remuxer
+	remux *media.FileCache
+	// renditions is the watch rendition cache (Track W2): a small AAC copy of
+	// each audio file of a book, made on request (handlers_renditions.go),
+	// offered while ffmpeg is configured (renditionsOn). nil without a data dir.
+	renditions *media.FileCache
+	// renditionWait is how long a rendition request waits for its encode before
+	// it answers 503 rendition_pending (remuxDownloadWait; a field so tests can
+	// shorten it).
+	renditionWait time.Duration
 	// remuxWait is how long a stream waits for a cold remux before it is
 	// transcoded live instead (remuxColdWait; a field so tests can shorten it).
 	remuxWait time.Duration
@@ -228,6 +240,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		remuxWait:      remuxColdWait,
 		remuxLongWait:  remuxDownloadWait,
+		renditionWait:  remuxDownloadWait,
 		favouriteWait:  favouriteIndexWait,
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
@@ -242,6 +255,14 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			log.Warn("remux cache unavailable: Matroska is served as stored", "err", err)
 		} else {
 			a.remux = rm
+		}
+		if rc, err := media.NewRenditionCache(filepath.Join(cfg.DataDir, "cache", "renditions", media.RenditionWatch), log); err != nil {
+			log.Warn("rendition cache unavailable: no watch renditions", "err", err)
+		} else {
+			a.renditions = rc
+		}
+		if a.remux != nil && a.renditions != nil {
+			a.remux.ShareDiskGuard(a.renditions) // one disk (<data>/cache): one reservation
 		}
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
@@ -264,6 +285,11 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 			Log:      log,
 		})
 		cat.OnBookChange(a.upcoming.Kick)
+		// The unknown-ASIN report: opt-in, daily, never on a demo server (its
+		// books are the demo's, not anyone's library).
+		if !cfg.Demo.Enabled {
+			a.coverage = coverage.New(cat, metaSvc, coverage.Options{On: a.reportUnknownOn, Ready: a.mirrorReady, Log: log})
+		}
 	}
 	// And a cover colour (a new book, a new cover).
 	a.coverColors = covercolors.New(cat, a.colorCover, log)
@@ -280,12 +306,18 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 // ffmpeg configured (read per request; tests flip it) and the cache open.
 func (a *API) remuxOn() bool { return a.remux != nil && a.ffmpeg != "" }
 
-// WaitRemuxes waits for the remuxes and warms under way to end (the launcher
-// defers it, so once shutdown cancels the base context their ffmpeg is killed
-// and its .part removed before the process exits).
-func (a *API) WaitRemuxes() {
-	if a.remux != nil {
-		a.remux.Wait()
+// renditionsOn reports whether watch renditions are offered: ffmpeg
+// configured (read per request; tests flip it) and the cache open.
+func (a *API) renditionsOn() bool { return a.renditions != nil && a.ffmpeg != "" }
+
+// WaitMediaCaches waits for the remuxes, warms and rendition encodes under way
+// to end (the launcher defers it, so once shutdown cancels the base context
+// their ffmpeg is killed and its .part removed before the process exits).
+func (a *API) WaitMediaCaches() {
+	for _, c := range []*media.FileCache{a.remux, a.renditions} {
+		if c != nil {
+			c.Wait()
+		}
 	}
 }
 
@@ -326,6 +358,14 @@ func (a *API) StartChapterChecks(ctx context.Context) {
 func (a *API) StartUpcoming(ctx context.Context) {
 	if a.upcoming != nil {
 		go a.upcoming.Run(ctx)
+	}
+}
+
+// StartCoverage starts the daily unknown-ASIN report (coverage.Runner.Run) for
+// ctx's lifetime; nothing without metadata or on a demo server.
+func (a *API) StartCoverage(ctx context.Context) {
+	if a.coverage != nil {
+		go a.coverage.Run(ctx)
 	}
 }
 
@@ -417,6 +457,10 @@ func (a *API) Handler() http.Handler {
 	// A book's own cover and stream also take a cast token (requireBookMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireBookMediaAuth(http.HandlerFunc(a.handleCover)))
 	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireBookMediaAuth(http.HandlerFunc(a.handleStream)))
+	// Watch renditions of a book's files (Track W2): prepare them all, or read
+	// where each stands; the files themselves come from /stream?rendition=.
+	mux.Handle("POST /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handlePrepareRenditions)))
+	mux.Handle("GET /api/v1/libraries/{id}/renditions", a.requireAuth(http.HandlerFunc(a.handleRenditionStatus)))
 	// A community cover the book's /meta envelope hands out, as a thumbnail from
 	// this server (the web player's CSP takes images only from it).
 	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))
@@ -649,6 +693,38 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET "+bridgeClaimPath, a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
+	// Audible (Bridge Phase 4a, handlers_audible.go): the accounts the Bridge
+	// signed in to, their titles, who an account may be mapped to, a library's
+	// books for the matching and an ASIN backfill. Not behind the module's
+	// toggle (as podcasts' Bridge routes): the Bridge's own setup page signs in
+	// whether or not the console has turned the module on.
+	mux.Handle("GET /api/v1/bridge/users", a.requireBridge(a.handleBridgeUsers))
+	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccount))
+	mux.Handle("DELETE /api/v1/bridge/audible/accounts/{account}", a.requireBridge(a.handleBridgeAudibleAccountDelete))
+	mux.Handle("PUT /api/v1/bridge/audible/accounts/{account}/titles", a.requireBridge(a.handleBridgeAudibleTitles))
+	mux.Handle("GET /api/v1/bridge/libraries/{id}/books", a.requireBridge(a.handleBridgeBooks))
+	mux.Handle("PUT /api/v1/bridge/libraries/{id}/enrichment", a.requireBridge(a.handleBridgeEnrichment))
+	// Position sync (Phase 4c, handlers_audible_sync.go): an account's places
+	// on Audible for its person, and the person's places to push back. Acting
+	// for a person, both answer 403 sync_off while the module or the account's
+	// sync is off.
+	mux.Handle("POST /api/v1/bridge/audible/accounts/{account}/listening", a.requireBridge(a.handleBridgeAudibleListening))
+	mux.Handle("GET /api/v1/bridge/progress", a.requireBridge(a.handleBridgeProgress))
+	// The console's Audible routes: admin, 404 module_off while the module is off.
+	ar := moduleRoutes{a: a, mux: mux, id: bridge.ModuleAudible}
+	ar.Admin("GET /api/v1/admin/audible/accounts", http.HandlerFunc(a.handleAdminAudibleAccounts))
+	ar.Admin("GET /api/v1/admin/audible/titles", http.HandlerFunc(a.handleAdminAudibleTitles))
+	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/poll", http.HandlerFunc(a.handleAdminAudiblePoll))
+	// Backups (Phase 4b): "Back up", "Back up everything", "Not this book" and a
+	// destination, the account's policy and template.
+	ar.Admin("PATCH /api/v1/admin/audible/accounts/{account}", http.HandlerFunc(a.handleAdminAudibleAccount))
+	ar.Admin("POST /api/v1/admin/audible/accounts/{account}/backup-all", http.HandlerFunc(a.handleAdminAudibleBackupAll))
+	ar.Admin("PATCH /api/v1/admin/audible/titles/{account}/{asin}", http.HandlerFunc(a.handleAdminAudibleTitle))
+	ar.Admin("POST /api/v1/admin/audible/titles/{account}/{asin}/backup", http.HandlerFunc(a.handleAdminAudibleBackup))
+	// Removing an account is not behind the toggle: an account the Bridge can no
+	// longer remove (unpaired, re-paired, a failed DELETE) must be cleanable
+	// after the module is turned off.
+	mux.Handle("DELETE /api/v1/admin/audible/accounts/{account}", a.requireAdmin(http.HandlerFunc(a.handleAdminAudibleAccountDelete)))
 
 	// Managed modules (modules.go): Settings > Modules' list, and each module's
 	// own routes, always mounted and answering 404 module_off while it is off.

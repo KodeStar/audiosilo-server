@@ -1,13 +1,14 @@
 package meta
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,8 +38,9 @@ import (
 const maxMatchCandidates = 6
 
 // MatchQuery describes the book being matched. Text is what the admin typed and
-// ASIN/ISBN an identifier they gave; when all three are empty the book's own
-// identifiers are looked up. Title, Series, SeriesIndex and Author are the book's
+// ASIN/ISBN an identifier they gave; when all three are empty BookASIN/BookISBN
+// are looked up (the book's own identifiers, else its tag hints: matchrun.QueryFor).
+// Title, Series, SeriesIndex and Author are the book's
 // (tagged or edited) facts, Path and IsFolder its library path, which is read for
 // facts of its own (metadata.ReadPathLayout); all of them, with Duration, find and score
 // the candidates. Region is the server's preferred Audible marketplace (config
@@ -66,6 +68,29 @@ type MatchQuery struct {
 	// NoSeries says the caller reads no candidate's series (a repick), so the
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
+	// Language is the language the book says it is in (QueryFor: the book's
+	// language, else its tags'), "" for unknown.
+	// metaserve reads a language tag or name ("en", "eng", "English") and
+	// scores a work it knows to be in another language lower; an older
+	// metaserve ignores it.
+	Language string
+	// Narrators are the book's narrators, one name each (names.Split of its
+	// narrator credit). metaserve counts a recording they narrated in the
+	// work's favour (a name that is also the author isn't sent: matchParams),
+	// and DefaultRecording prefers one; an older metaserve ignores them.
+	Narrators []string
+	// BestOnly says the caller reads the whole of the best candidate alone, and of
+	// the next only Score and IdentifierHit (a bulk run: matchrun's matchBook and
+	// Classify). So works/match is asked to inline the best's work and series facts
+	// (expand=work), and nothing else is read: every other candidate comes back a
+	// stub, its work id, cover, score and reasons. A metaserve that inlines nothing
+	// costs the fetches for the best. The dialog lists every candidate and leaves it
+	// off.
+	BestOnly bool
+	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
+	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
+	// details or none. 0 for no such score.
+	NoDetailsBelow int
 }
 
 // limit is how many works the query expands.
@@ -91,6 +116,12 @@ type MatchCandidate struct {
 	Recordings     []MatchRecording `json:"recordings"`
 	// RecordingID names the recording an ASIN/ISBN lookup resolved to.
 	RecordingID string `json:"recording_id,omitempty"`
+	// PlainBook says the book's own text doesn't state it is a dramatized production,
+	// which is what keeps DefaultRecording off a dramatization.
+	PlainBook bool `json:"-"`
+	// DramatizationOnly says the work holds only a dramatization the book isn't, so
+	// DefaultRecording found none: the console's dialog preselects nothing for it.
+	DramatizationOnly bool `json:"dramatization_only,omitempty"`
 	// DefaultRecordingID is the recording the book most likely is
 	// (DefaultRecording): what the console's dialog and a bulk run start from.
 	DefaultRecordingID string `json:"default_recording_id,omitempty"`
@@ -102,6 +133,12 @@ type MatchCandidate struct {
 	// the older search it is absent, except on an identifier lookup's hit,
 	// which carries the identifier it was found by.
 	Reasons *MatchReasons `json:"reasons,omitempty"`
+}
+
+// IdentifierHit reports whether the identifier the query sent (the book's own
+// ASIN or ISBN, or a tag hint) found the work.
+func (c MatchCandidate) IdentifierHit() bool {
+	return c.Reasons != nil && c.Reasons.Identifier != ""
 }
 
 // MatchReasons is metaserve's account of a match score (works/match `reasons`),
@@ -120,6 +157,12 @@ type MatchReasons struct {
 	Runtime *float64 `json:"runtime,omitempty"`
 	// Identifier is "asin" or "isbn" when the work was found by it.
 	Identifier string `json:"identifier,omitempty"`
+	// Narrator is "full", "surname" or "none": how well the book's narrators
+	// name one of the best-agreeing recording's (sent narrators only).
+	Narrator string `json:"narrator,omitempty"`
+	// Language is "same" or "other" when the book's language and the work's
+	// are both known.
+	Language string `json:"language,omitempty"`
 }
 
 // MatchSeries is a series the work belongs to, with its position and its
@@ -133,7 +176,8 @@ type MatchSeries struct {
 // MatchRecording is one recording (narration/edition) of a candidate work.
 // ASINs are best first for this server (orderASINs): the preferred marketplace's,
 // then the US store's, then the rest. ASINRefs keeps each with its marketplace, as
-// metaserve lists them, and ASINRegion names the first one's.
+// metaserve lists them (an ASIN the work was found by first: toCandidate), and
+// ASINRegion names the first one's.
 type MatchRecording struct {
 	ID          string          `json:"id"`
 	Narrators   []MetaPersonRef `json:"narrators"`
@@ -220,32 +264,155 @@ func (r MatchRecording) HasRegion(region string) bool {
 	return region != "" && r.RegionASIN(region) != ""
 }
 
+// A dramatization is a recording of its book, so a plain library book rightly
+// matches a work holding one. What it must not do is take that recording. This is
+// metaserve's rule by hand (model.Recording.IsDramatization, titlerule.DramatizationOf):
+// change one, change the other (CROSS-REPO.md).
+var (
+	// graphicAudioRE is GraphicAudio's imprint in every spelling the catalogue holds.
+	graphicAudioRE = regexp.MustCompile(`(?i)^\s*graphic\s?audio(\s+llc)?\s*$`)
+	// dramatizationTextRE is a text saying it is a dramatized production. Narrower
+	// than fullCastRE: "Radio Free Albemuth" states nothing here.
+	dramatizationTextRE = regexp.MustCompile(`(?i)\b(?:full[- ]?cast|graphic\s?audio|dramati[sz](?:ed|ations?))\b`)
+	// adaptationLabelRE is the label metaserve's importer takes off a title, as a whole
+	// bracketed group.
+	adaptationLabelRE = regexp.MustCompile(`(?i)[(\[]\s*(?:full[- ]cast\s+)?dramati[sz]ed\s+adaptation\s*[)\]]`)
+	// splitPartRE is a split-release part, whose title keeps the label.
+	splitPartRE = regexp.MustCompile(`(?i)[(\[]\s*(?:(?:part|pt\.?|teil)\s+)?[0-9]+\s+(?:of|von)\s+[0-9]+\s*[)\]]|,?\s*vol\.\s*[0-9]+\s+of\s+[0-9]+|\b(?:parts?|pts?\.?)\s*(?:[0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)\b`)
+)
+
+// titleSpeaksFor reports whether a work's title or subtitle speaks for a recording of
+// this publisher that says nothing of itself. A statement that stays on the title
+// ("(Dramatized)", a split part's label) names the production every recording is,
+// whoever published it. The adaptation label is coming off titles, and a plain
+// reading can sit under it until then, so it speaks only for a recording stating no
+// publisher.
+func titleSpeaksFor(title, subtitle, publisher string) bool {
+	for _, t := range []string{title, subtitle} {
+		if !dramatizationTextRE.MatchString(t) {
+			continue
+		}
+		if publisher == "" {
+			return true
+		}
+		if splitPartRE.MatchString(t) || dramatizationTextRE.MatchString(adaptationLabelRE.ReplaceAllString(t, " ")) {
+			return true
+		}
+	}
+	return false
+}
+
+// saysDramatization reports whether a recording says of itself it is a dramatized
+// production: GraphicAudio's imprint or a full-cast credit. Several named readers are
+// not enough, as a volunteer reading credits them too.
+func (r *MatchRecording) saysDramatization() bool {
+	return graphicAudioRE.MatchString(r.Publisher) ||
+		slices.ContainsFunc(r.Narrators, func(n MetaPersonRef) bool { return castMemberRE.MatchString(n.Name) })
+}
+
+// isDramatization reports whether a recording of the work c is one: it says so, or the
+// work's title speaks for it. When no recording of the work says so, any statement on
+// the title is the work's only one and covers them all: metaserve's importer keeps the
+// label on such a work.
+func (r *MatchRecording) isDramatization(c *MatchCandidate) bool {
+	if r.saysDramatization() || titleSpeaksFor(c.Title, c.Subtitle, r.Publisher) {
+		return true
+	}
+	return titleSpeaksFor(c.Title, c.Subtitle, "") &&
+		!slices.ContainsFunc(c.Recordings, func(o MatchRecording) bool { return o.saysDramatization() })
+}
+
+// statesDramatization reports whether the book's own text says it is one: its title,
+// series, folders, typed text or narrator credit.
+func (q MatchQuery) statesDramatization() bool {
+	return slices.ContainsFunc(slices.Concat([]string{q.Text, q.Title, q.Series, q.Path}, q.Narrators), dramatizationTextRE.MatchString)
+}
+
 // DefaultRecording is the recording of c a book most likely is, as the match
 // dialog picks it (admin-ui match-model.ts defaultRecording): the one an
-// identifier lookup resolved to, else the one whose runtime is closest to the
-// book's (seconds), a recording selling in the preferred region winning a tie;
-// recordings without a runtime come last. nil when c has none.
-func DefaultRecording(c *MatchCandidate, seconds float64, region string) *MatchRecording {
-	var best *MatchRecording
-	bestGap := math.Inf(1)
+// identifier lookup resolved to, else, among the recordings one of the book's
+// narrators narrated that may be its edition by length (PlausibleRuntimeOff,
+// or a length unknown; all of them when there is none such, or the book names
+// no narrator), the one whose runtime is closest to the book's (seconds), a
+// recording selling in the preferred region winning a tie; recordings without
+// a runtime come last. A narrator's recording of another length is another
+// edition: the closest runtime then decides. A plain book (MatchCandidate.PlainBook)
+// takes a dramatization only when an identifier names it, or one of its narrators reads
+// it at a plausible length and reads no plain recording that fits as well, so a work
+// holding nothing else gives nil: the work still fits, but no recording does.
+// nil when c has none.
+func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
+	guarded := c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == "")
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
-		if c.RecordingID != "" && r.ID == c.RecordingID {
+		if c.RecordingID != "" && r.ID == c.RecordingID && !(guarded && r.isDramatization(c)) {
 			return r
 		}
 	}
+	var best *MatchRecording
+	bestGap, bestTheirs, bestDrama := math.Inf(1), false, false
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
+		off, known := RuntimeOff(r.RuntimeMin, seconds)
+		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
+		drama := guarded && r.isDramatization(c)
+		if drama && !theirs {
+			continue
+		}
 		gap := math.Inf(1)
 		if r.RuntimeMin > 0 {
 			gap = math.Abs(float64(r.RuntimeMin)*60 - seconds)
 		}
-		if best == nil || gap < bestGap || (gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)) {
-			best, bestGap = r, gap
+		if best == nil || (theirs && !bestTheirs) || (theirs == bestTheirs && ((bestDrama && !drama) || (drama == bestDrama && (gap < bestGap ||
+			(gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)))))) {
+			best, bestGap, bestTheirs, bestDrama = r, gap, theirs, drama
 		}
 	}
 	return best
 }
+
+// readBy reports whether one of the book's narrators narrated r: a name that
+// folds like one of r's narrators, or a multi-word one whose every word the
+// other holds, either way round: a credit and the community's list spell a
+// middle initial as they please ("George Wilson", "George K. Wilson").
+func readBy(r *MatchRecording, narrators []string) bool {
+	for _, n := range narrators {
+		for _, rn := range r.Narrators {
+			if authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// NormalizeLanguage reads a language tag as works/match takes it: the first of
+// several ("eng;fre", "en/de") without a note ("English (US)"), a BCP-47 tag's
+// primary subtag ("en-GB" -> "en"), lowercased (metaserve reads the names and
+// 639-2 codes, "English", "eng"). "" for none, so a book's language falls back to
+// the next that says one: blank, not a word, or a placeholder for no language
+// ("und", "zxx", "mul", "mis", "xxx", "unknown", "N/A").
+func NormalizeLanguage(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if i := strings.IndexAny(s, ";,/|("); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if primary, _, ok := strings.Cut(strings.ReplaceAll(s, "_", "-"), "-"); ok && len(primary) >= 2 && len(primary) <= 3 {
+		s = primary
+	}
+	switch s {
+	case "und", "zxx", "mul", "mis", "xxx", "unknown", "none", "na":
+		return ""
+	}
+	if len(s) < 2 || strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsMark(r) }) {
+		return ""
+	}
+	return s
+}
+
+// maxMatchNarrators is how many of a book's narrators a works/match request
+// names: a full cast's credit adds nothing past the first few.
+const maxMatchNarrators = 4
 
 // matchHit is one work to expand into a candidate. A hit whose score is known
 // carries its reasons (an identifier hit, metaserve's match); one without them
@@ -254,6 +421,33 @@ type matchHit struct {
 	id, recordingID, cover string
 	score                  int
 	reasons                *MatchReasons
+	// work and facts are the work document and series facts works/match inlined
+	// (expand=work; only ever on its best result), nil when it inlined none.
+	work  *upstreamWorkDetail
+	facts map[string]*seriesFacts
+}
+
+// stub is the candidate h is without its work's details: what a caller of
+// MatchQuery.BestOnly reads of a candidate other than the best.
+func (h matchHit) stub() MatchCandidate {
+	return MatchCandidate{WorkID: h.id, CoverURL: h.cover, RecordingID: h.recordingID, Score: h.score, Reasons: h.reasons,
+		Authors: []MetaPersonRef{}, Series: []MatchSeries{}, Recordings: []MatchRecording{}}
+}
+
+// compareMatches is Candidates' order, best first: the higher score, and at one
+// score the work the identifier named, which is the book whatever else scores as
+// well (metaserve breaks a tie on the title, so it can rank that one second).
+func compareMatches(aScore int, aIdentified bool, bScore int, bIdentified bool) int {
+	if c := cmp.Compare(bScore, aScore); c != 0 {
+		return c
+	}
+	switch {
+	case aIdentified && !bIdentified:
+		return -1
+	case bIdentified && !aIdentified:
+		return 1
+	}
+	return 0
 }
 
 // matchUnsupportedTTL is how long a metaserve that answered works/match as an
@@ -317,7 +511,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				if r.ID == "" {
 					continue
 				}
-				h := matchHit{id: r.ID, cover: deref(r.CoverURL), score: r.Score, reasons: r.Reasons}
+				h := matchHit{id: r.ID, cover: deref(r.CoverURL), score: r.Score, reasons: r.Reasons, work: r.Work, facts: r.SeriesFacts}
 				if h.reasons == nil {
 					h.reasons = &MatchReasons{}
 				}
@@ -341,6 +535,9 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	if len(hits) > q.limit() {
 		hits = hits[:q.limit()]
 	}
+	if q.BestOnly && matched {
+		return s.bestCandidates(ctx, q, hits, asin)
+	}
 
 	// Expand each hit into its full work document, a few at a time, then read the
 	// facts of their series once each (works often share one).
@@ -358,17 +555,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	out := make([]*MatchCandidate, len(hits))
 	for i, h := range hits {
 		if detail := details[i]; detail != nil {
-			c := s.toCandidate(detail, facts, h.cover, q.Region)
-			c.RecordingID = h.recordingID
-			if rec := DefaultRecording(c, q.Duration, q.Region); rec != nil {
-				c.DefaultRecordingID = rec.ID
-			}
-			if h.reasons != nil {
-				c.Score, c.Reasons = h.score, h.reasons
-			} else {
-				c.Score = scoreCandidate(q, c)
-			}
-			out[i] = c
+			out[i] = s.hitCandidate(q, h, detail, facts, asin)
 		}
 	}
 
@@ -393,8 +580,89 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 		}
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Score > cands[j].Score })
+	slices.SortStableFunc(cands, func(a, b MatchCandidate) int {
+		return compareMatches(a.Score, a.IdentifierHit(), b.Score, b.IdentifierHit())
+	})
 	return cands, nil
+}
+
+// hitCandidate is hit h as a candidate, from its work document and series facts.
+// asin is the identifier the query sent.
+func (s *Service) hitCandidate(q MatchQuery, h matchHit, detail *upstreamWorkDetail, facts map[string]*seriesFacts, asin string) *MatchCandidate {
+	foundBy := ""
+	if h.reasons != nil && h.reasons.Identifier == "asin" {
+		foundBy = asin
+	}
+	c := s.toCandidate(detail, facts, h.cover, q.Region, foundBy)
+	c.RecordingID = h.recordingID
+	c.PlainBook = !q.statesDramatization()
+	if h.reasons != nil {
+		c.Score, c.Reasons = h.score, h.reasons
+	} else {
+		c.Score = scoreCandidate(q, c)
+	}
+	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
+		c.DefaultRecordingID = rec.ID
+	} else {
+		c.DramatizationOnly = len(c.Recordings) > 0
+	}
+	return c
+}
+
+// bestCandidates is Candidates' answer for MatchQuery.BestOnly, from works/match's
+// hits: what it answers without the flag, as far as the caller reads it, for the
+// fewest requests. The hits are put in Candidates' order first, as the best is the
+// one the details are for. A best whose details can't be read gives way to the
+// next, and every one failing is the first outage, exactly as Candidates reads them.
+// So after an outage the next is read however weak: a stub asks nothing, and would
+// answer for a service that is down, the book a weak match and the run none the wiser.
+func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []matchHit, asin string) ([]MatchCandidate, error) {
+	slices.SortStableFunc(hits, func(a, b matchHit) int {
+		return compareMatches(a.score, a.reasons.Identifier != "", b.score, b.reasons.Identifier != "")
+	})
+	var outage error
+	for i, h := range hits {
+		best, err := s.bestCandidate(ctx, q, h, asin)
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) && outage == nil {
+				outage = err
+				q.NoDetailsBelow = 0
+			}
+			continue
+		}
+		cands := make([]MatchCandidate, 0, len(hits)-i)
+		cands = append(cands, *best)
+		for _, rest := range hits[i+1:] {
+			cands = append(cands, rest.stub())
+		}
+		return cands, nil
+	}
+	if outage != nil {
+		return nil, outage
+	}
+	return []MatchCandidate{}, nil
+}
+
+// bestCandidate is the best hit with its details, as works/match inlined them, else
+// fetched; a stub when the caller would drop it anyway (MatchQuery.NoDetailsBelow). A
+// series with no facts is unknown and drops nothing, as a failed read does.
+func (s *Service) bestCandidate(ctx context.Context, q MatchQuery, h matchHit, asin string) (*MatchCandidate, error) {
+	if h.score < q.NoDetailsBelow && h.reasons.Identifier == "" {
+		stub := h.stub()
+		return &stub, nil
+	}
+	if h.work != nil && h.work.ID != "" {
+		return s.hitCandidate(q, h, h.work, s.inlinedFacts(h.work, h.facts), asin), nil
+	}
+	detail, err := s.fetchWork(ctx, h.id)
+	if err != nil {
+		return nil, err
+	}
+	var facts map[string]*seriesFacts
+	if !q.NoSeries {
+		facts = s.seriesFactsFor(ctx, []*upstreamWorkDetail{detail})
+	}
+	return s.hitCandidate(q, h, detail, facts, asin), nil
 }
 
 // routeMissing reports whether a works/match error says the route does not
@@ -530,7 +798,20 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	if q.Duration >= 1 {
 		v.Set("runtime", strconv.Itoa(int(math.Round(q.Duration))))
 	}
+	add("language", q.Language)
+	for _, n := range q.Narrators[:min(len(q.Narrators), maxMatchNarrators)] {
+		// A narrator credit naming the author is mostly a composer tag (the
+		// narrator's fallback, metadata.Extract) a tagger filled with the author:
+		// it says nothing of the recording, and would count against every work
+		// whose recordings a real narrator read.
+		if authorSimilarity(q.Author, n) != 1 {
+			add("narrator", n)
+		}
+	}
 	v.Set("limit", strconv.Itoa(q.limit()))
+	if q.BestOnly {
+		v.Set("expand", "work")
+	}
 	return v
 }
 
@@ -550,13 +831,22 @@ func hasMatchFacts(v url.Values) bool {
 // a book of the work is in whatever its recording (seriesrules.go, with the
 // series' facts): never a variant reading order (it repeats a series at another
 // position), a translation or another language's series, nor an edition; each
-// recording carries its own, an edition named for it first.
-func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region string) *MatchCandidate {
+// recording carries its own, an edition named for it first. foundBy is the ASIN
+// that found the work ("" for none): where a recording sells under several (a
+// book the store splits in two, or lists twice), it leads its marketplace's, so
+// the book keeps the ASIN its tags gave when that store is the one preferred.
+func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region, foundBy string) *MatchCandidate {
 	series := newWorkSeries(d, facts)
 	c := &MatchCandidate{
 		WorkID: d.ID, Title: d.Title, Subtitle: d.Subtitle, Authors: toPersonRefs(d.Authors),
 		Language: d.Language, FirstPublished: d.FirstPublished, Description: d.Description,
 		Series: series.of(""), CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
+	}
+	rank := func(a ASINRef) int {
+		if a.ASIN == foundBy {
+			return 0
+		}
+		return 1
 	}
 	for _, r := range d.Recordings {
 		mr := MatchRecording{
@@ -569,6 +859,7 @@ func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFac
 				mr.ASINRefs = append(mr.ASINRefs, ref)
 			}
 		}
+		slices.SortStableFunc(mr.ASINRefs, func(a, b ASINRef) int { return rank(a) - rank(b) })
 		mr.ASINs = orderASINs(mr.ASINRefs, region)
 		if len(mr.ASINs) > 0 {
 			mr.ASINRegion = asinRegion(mr.ASINRefs, mr.ASINs[0], region)

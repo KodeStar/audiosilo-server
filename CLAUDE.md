@@ -24,6 +24,9 @@ go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
 
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
+CGO_ENABLED=1 go build -tags "sqlite_native sqlite_fts5 sqlite_preupdate_hook" -o bin/audiosilo ./cmd/audiosilo
+                                     # native C SQLite compiled in (AUDIOSILO_SQLITE=modernc picks the pure-Go one; see SQLite in CONVENTIONS.md).
+                                     # The Dockerfile builds this by default, static against glibc (SQLITE_ENGINE=modernc: pure Go)
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
 scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
@@ -35,39 +38,40 @@ setup wizard** instead of the auto-admin banner - see below).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
-`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere. Two
-build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
-the web player into the binary (`internal/web/player/`, gitignored, populated from
+`DISTRIBUTION.md`): the Linux binaries build the native SQLite engine in, static
+against glibc like the Docker image (see the Dockerfile's build stage), and
+macOS/Windows stay CGO-free (the pure-Go engine). Two build-time knobs make it
+self-contained for home users: `-tags embedplayer` bakes the web player into the
+binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
 `web_dir`. **ffmpeg/ffprobe are NOT bundled** (large, and usually already present):
 `pkg/launcher.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
 path → next to the binary → `$PATH`) and, only if none is found, auto-downloads a
 cached static build into `<data>/tools` (`internal/toolfetch`, HTTPS, self-checked
 by running `-version`; degrades gracefully offline and retries next start). Native
-GUI installers + a system-tray launcher are a **planned follow-up** (see
-DISTRIBUTION.md).
+GUI installers + a system-tray launcher are not planned (DISTRIBUTION.md: no desktop
+installers).
 
-**First-run setup wizard** (`--setup`, intended default for a future GUI launcher):
+**First-run setup wizard** (`--setup`, also the natural default for any GUI launcher):
 instead of auto-creating the admin and printing credentials, the server mints a
 one-time setup token and enables a guarded browser wizard at `/setup` (handlers in
 `internal/api/handlers_setup.go`, page in `internal/web/assets/setup.{html,js}`).
 The wizard creates the admin account only and hands over to the console's "Set up your
 server" flow (`/admin`; see First-run setup in CONVENTIONS.md); a POST that still sends
-`library_name` + `library_root` (an older page, the manager) also creates the library, as
+`library_name` + `library_root` (an older page, the archived manager) also creates the library, as
 before. The token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (404 when never enabled).
 `API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL and reports it
-via `Options.OnURL` (so the audiosilo-manager desktop app, which runs the server
-in-process, can open a browser).
+via `Options.OnURL` (so an embedding launcher can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push in three parallel jobs (Go tests, lint with govet, admin console),
+gates all of them on every PR/push in four parallel jobs (Go tests + coverage; the same suite with `-race` + lint on the native SQLite engine (`test-native`, the only race run: see ci.yml); lint with govet; admin console),
 the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
-without it they `t.Skip` (CI installs it). The `probe-drift` workflow compares the in-process probe
+without it they `t.Skip` (CI puts a pinned static FFmpeg build of the image's release on PATH in both Go test jobs: `.github/actions/setup-ffmpeg`). The `probe-drift` workflow compares the in-process probe
 with the Docker image's ffprobe (see In-process probe in CONVENTIONS.md). The linter is adopted at a **green
 baseline** - its suppressions in `.golangci.yml` are documented and intentional;
 fix new findings rather than widening the excludes.
@@ -103,22 +107,23 @@ admin/connect UI changes. Mapping table:
 
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
-pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
-pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup
+pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so an embedding launcher (another module) can run the server in-process (Run/Options; the archived audiosilo-manager did)
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
-internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
+internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go: SafeJoin, and ContentPath/ContentJoin, the one hidden-segment rule) + background scanner (scanner.go: incl. IndexMoved and the .audiosilo/ walk; scanread.go: a scan reads several files at once, `scan.concurrency`, default one per CPU up to 8, and writes the index alone in discovery order, so the result is a serial scan's, a few books a transaction: `catalog.UpsertBooks`, `writeBatch`, each book under its own savepoint); attachments.go (a book's Bridge attachments: signatures, RefreshAttachments); ebook.go (BookEbook, the Bridge's own .epub rule, for the estimate and, through the one rule function ebookCandidate fed by the walk, books.ebook_path, the reader's ebook; a readable one only: a zip whose directory lists META-INF/container.xml, as the Bridge reads it; OpenEbook, every open of one: a regular file inside the library, checked before it is opened and the same file once open)
-internal/metadata/    dhowden/tag + ffprobe extraction (fastprobe*.go: the in-process probe, ffprobe's answer read in Go by the configured ffprobe's release's rules, ffprobe for a file it is unsure of, see In-process probe; probeview.go: ProbeView, the comparison cmd/probediff and the fixture tests make; tagreader.go: ReadTags, the tag reads outside Extract (media.EmbeddedCover; Extract reads through the probe's block cache): dhowden reads an ID3v2 tag through a buffer up to the tag's end, not a byte per read system call; a narrator tag beats composer in both passes; mp4narrator.go reads the iTunes \xa9nrt item, which neither reads, with a bounded box walk; a series tag ending in a marked position, "Discworld, book #40", is the series and that position: seriestag.go SplitSeriesTag; a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); absfile.go: ParseABSFile/ReadABSFile (an Audiobookshelf metadata.json, see Metadata overrides); attachments.go: AttachmentsDir `.audiosilo`, Read/ParseCharacters, Recaps, Description and Provenance (the Bridge's generated files, checked against audiosilo-meta's formats; see Bridge attachments); chapterlist.go: Read/ParseChapterList (the Bridge's `chapters.json`, chapters found in the narration; see Generated chapters); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
-internal/media/       Range streaming, download, embedded cover extraction, transcoding (a descriptor input read seekably via fd:, pipe:0 for an older ffmpeg); remux.go: Remuxer, the MP3-in-MKA remux cache (<data>/cache/remux, 8 GiB LRU, single-flight, warmed by /item and /chapters, a cold stream transcoded after 2 s (a download, or with every transcode slot busy, after up to 45 s), own ETag; see Recognized audio)
+internal/metadata/    dhowden/tag + ffprobe extraction (fastprobe*.go: the in-process probe, ffprobe's answer read in Go by the configured ffprobe's release's rules, ffprobe for a file it is unsure of, see In-process probe; probeview.go: ProbeView, the comparison cmd/probediff and the fixture tests make; tagreader.go: ReadTags, the tag reads outside Extract (media.EmbeddedCover; Extract reads through the probe's block cache): dhowden reads an ID3v2 tag through a buffer up to the tag's end, not a byte per read system call; a narrator tag beats composer in both passes; mp4narrator.go reads the iTunes \xa9nrt item, which neither reads, with a bounded box walk; a series tag ending in a marked position, "Discworld, book #40", is the series and that position: seriestag.go SplitSeriesTag; a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); absfile.go: ParseABSFile/ReadABSFile (an Audiobookshelf metadata.json, see Metadata overrides); attachments.go: AttachmentsDir `.audiosilo`, Read/ParseCharacters, Recaps, Description and Provenance (the Bridge's generated files, checked against audiosilo-meta's formats; see Bridge attachments); chapterlist.go: Read/ParseChapterList (the Bridge's `chapters.json`, chapters found in the narration; see Generated chapters); foldercode.go: FolderCodePosition (a position or range from the code leading a folder name, "DH06 - ...", "LAM05-06", its letters the series' initials; read only by the Bridge's books listing); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
+internal/media/       Range streaming, download, embedded cover extraction, transcoding (a descriptor input read seekably via fd:, pipe:0 for an older ffmpeg); filecache.go: FileCache, a cache of copies ffmpeg makes from a cacheSpec (LRU by mtime, single-flight, .part + rename, disk guard, refusals remembered for an hour; Open/Status/Queue/WarmAll); remux.go: NewRemuxer, the MP3-in-MKA remux spec (<data>/cache/remux, 8 GiB, warmed by /item and /chapters, a cold stream transcoded after 2 s (a download, or with every transcode slot busy, after up to 45 s), own ETag; see Recognized audio); rendition.go: NewRenditionCache, the watch rendition spec (<data>/cache/renditions/watch, AAC-LC mono 48 kbps, 10 GiB; see Watch renditions)
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below); generated content laid beside the community work (generated.go: `Answer`, `Unmatched`, `MetaGenerated`, `MetaGeneratedDescription`); cache-only reads for the Bridge's estimate (cachedenrich.go: `CachedEnrichment`; `Coverages`, a `Coverage` per book whose `Description` is the community work's `community_description`)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); a bulk run's spacing of its requests (pacer.go: `Pacer`, `WithPacer`, the remote leg's `pacedTransport`); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below); a work's positions on this book's chapters (positionscale.go: `OnRecording`); generated content laid beside the community work (generated.go: `Answer`, `Unmatched`, `MetaGenerated`, `MetaGeneratedDescription`); cache-only reads for the Bridge's estimate (cachedenrich.go: `CachedEnrichment`; `Coverages`, a `Coverage` per book whose `Description` is the community work's `community_description`)
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
 internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); ics.go: ICS (Track U3, pure: the list as the calendar feed); see Upcoming releases in CONVENTIONS.md
+internal/coverage/    the opt-in daily report of unknown Audible ASINs (LibraForge C3, metadata.report_unknown): Runner (Run/Wake/RunOnce: candidates from catalog.UnknownASINCandidates, meta.Service.KnownASIN lookups (only a 404 is unknown), the POST via meta.Service.ReportUnknownASINs, quiet week on not_offered); see Unknown ASIN report in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
@@ -130,11 +135,12 @@ internal/logring/     the admin console's log viewer: an slog handler teeing rec
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
-internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`, and Phase 3c's `readalong.align`), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
+internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`, and Phase 3c's `readalong.align`, Phase 4a's `audible.poll`, 4b's `audible.import` and 4c's `audible.sync` in audible.go), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
 internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format in feed/), poll/fetch/retention scheduler, bounded on-demand media waits and scoped one-ahead prefetch; catalog/podcasts.go and podcast_{fetch,retention}.go hold the generation index, identity-bound status, follows, durable policies and aggregate checks; library/podcast_media.go opens committed media
 internal/podcast/     (2c-3) follow.go: Follower, follow by URL for the single follow and OPML rows; opmlimport.go (rows, the five-new-per-upload wave); export.go (BuildExport); discovery/ (iTunes + Podcast Index search, the artwork proxy, caches/quotas/cooldown, the build-tagged test origin); opml/ (the bounded strict OPML parser and the export writer); quota/ (token buckets with a bounded key map, slots)
 internal/netguard/    the guarded dialer: PublicAddr, Control/Dialer check the address actually dialled (meta covers, podcast discovery)
-internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions: no routes of its own, its actions are Bridge jobs gated by `bridge.ModuleFor`)
+internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions: no routes of its own, its actions are Bridge jobs gated by `bridge.ModuleFor`; podcasts; audible)
+internal/audible/     the audible module's Start (Bridge Phase 4a): RunScheduler queues each due account's `audible.poll` while a Bridge offers it; see Audible accounts in CONVENTIONS.md; imports.go (Phase 4b): Queues, a title's Back up, Back up everything and AfterPoll's policy backups (`audible.import`); see Audible backups; Phase 4c: the scheduler queues each synced account's `audible.sync` every 15 min (`queueSyncs`); see Audible sync
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed` and the upcoming job's `book_released`)
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), home HTTP on the self-signed port, graceful shutdown
@@ -175,10 +181,10 @@ FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK 
 books): `progress`/`bookmarks`/`notes`/`listening_history` on `(user_id,
 library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
 pins a folder's book/collection classification, and `book_enrichment`
-(`library_id, path, asin, isbn`) which attaches metadata to a book (set by the
-manager when it matches an external source) - both durable, path-keyed, no FK to
-the index. The admin console's metadata edits are likewise durable and path-keyed
-(`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
+(`library_id, path, asin, isbn`) which attaches metadata to a book (set when the
+Bridge's Audible backfill matches a book to an external source) - both durable,
+path-keyed, no FK to the index. The admin console's metadata edits are likewise
+durable and path-keyed (`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
 `chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
 index, so a shifted chapter list can't move a rename; the API still sends indexes) and
 `book_covers` (custom cover blobs; `0036` adds `source`, `edited` for an upload or `community` for a
@@ -291,7 +297,21 @@ revoked=0` (one calendar feed token per user; see Upcoming releases in CONVENTIO
 `(user_id, event_id)`, carried by `carryListeningState`, pruned at 120 days) and the progress columns `device_name`,
 `finish_changed_at` and the persisted offer `other_position` / `other_device_id` / `other_device_name` / `other_at` /
 `other_version`, and the index `listening_history(user_id, library_id, rel_path, ended_at)` (a span's history join;
-see Listening sync in CONVENTIONS.md).
+see Listening sync in CONVENTIONS.md). `0062` adds `progress.span_at` / `span_version` (server#289: the end of the
+span the row's device last applied, at the version then, so its backlog's chain lasts across POSTs; NULL or a
+stale version = the old rule; see Listening sync in CONVENTIONS.md). Bridge Phase 4a: `0063` adds
+`audible_accounts` and `audible_titles` (the Bridge's Audible accounts and their titles; a title's match is
+path-keyed with no FK, nulled with its library and moved with its book; user-state writes; see Audible accounts
+in CONVENTIONS.md). Bridge Phase 4b: `0064` adds `audible_accounts.template` / `policy_since` and
+`audible_titles.import_pending` (see Audible backups in CONVENTIONS.md). `0065` adds `audible_titles.planned` /
+`contest_library_id` / `contest_path` (the poll's, cleared with a match; see Audible unmatched titles in CONVENTIONS.md). Bridge Phase 4c: `0066` turns every account's `sync` off (the console's from now on) and adds
+`audible_accounts.sync_queued_at` / `last_sync_at` / `refused_at`; `progress.change_seq` from `progress_change_counter` (the feed's order) and `audible_titles.no_sync` (Don't sync this book; see Audible sync in
+CONVENTIONS.md). `0067` adds `books.tag_asin` / `tag_isbn` / `tag_language` /
+`hints_checked` (a book's tag ASIN/ISBN/language as match hints only, never `books.asin` and never on the wire,
+backfilled once like `released_checked`; see Admin catalog API (Tag identifiers are hints) in CONVENTIONS.md).
+LibraForge C3: `0068` adds `unknown_asin_reports` (`asin` PK, `checked_at`, `unknown`, `sent_at`: the
+unknown-ASIN report's memory, names no book or path, derived and disposable, user-state writes; the run
+status is `server_state('unknown_asin_report')`; see Unknown ASIN report in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -325,6 +345,7 @@ keep this index in step (one line per topic).
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
   - Upcoming releases (Track U1, `internal/upcoming`: the job, silent baseline, `upcoming_announced`, `book_released`; U3: the `feed` token, `releases.ics`, the Upcoming cover)
+  - Unknown ASIN report (LibraForge C3, `internal/coverage`, `0068`: opt-in `metadata.report_unknown`, candidates, lookups, the POST and what it carries, https only, no redirects, quiet week, demo skip)
   - Native deep-link association
   - SQLite (incl. the readers' mmap on shfs, `database.mmap`)
   - Pagination
@@ -336,6 +357,7 @@ keep this index in step (one line per topic).
   - Recognized audio
   - In-process probe (server#261, `metadata/fastprobe*.go`: ffprobe's answer read in Go, ffprobe the fallback)
   - Transcoding
+  - Watch renditions (Track W2, `media/rendition.go`, `api/handlers_renditions.go`: `stream?rendition=watch`, the renditions routes, the cache)
   - Sharing & access (shares)
   - Move-tracking
   - Auto book/folder detection
@@ -357,6 +379,10 @@ keep this index in step (one line per topic).
   - Community chapters (incl. Generated chapters, Bridge Phase 1d)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
+  - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `DELETE /admin/audible/accounts/{account}` outside the toggle)
+  - Audible backups (Bridge Phase 4b, `audible.import`: `0064`, the policy and `policy_since`, preorders, the fold onto the title's match, the backup routes, the console's actions)
+  - Audible unmatched titles (4b owner fixes, `0065`: `planned` and `contested` on the titles, the poll's `template`, the console's planned line and contested explanation)
+  - Audible sync (Bridge Phase 4c, `audible.sync`, `0066`: the console's switch and Don't sync, the scheduler, FurthestOnly, `POST /bridge/audible/accounts/{account}/listening`, `GET /bridge/progress`)
   - Unavailable-root guard
   - First-run setup (Phase F1, `catalog/setup.go`, `library/preview.go`, `api/handlers_admin_setup.go`)
 
@@ -393,7 +419,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`, `listening_sync`), plus one flag per managed module (`contributions`, `podcasts`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `renditions`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
@@ -416,6 +442,9 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 (`GET /libraries/{id}/meta/cover`) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
 AND the live `upcoming.enabled`; `upcoming_calendar` (the calendar feed) and `upcoming_covers`
 (`GET /me/upcoming/cover`) are exactly `upcoming` (see Upcoming releases in CONVENTIONS.md).
+`renditions` is ffmpeg configured AND the rendition cache open (a data dir), with the kinds
+served in a top-level `"renditions": ["watch"]` beside `auth` (`[]` while off; see Watch
+renditions in CONVENTIONS.md).
 
 ## API surface
 

@@ -61,7 +61,7 @@ func TestDefaultRecording(t *testing.T) {
 		{ID: "unknown"},
 	}}
 	pick := func(seconds float64, region string) string {
-		if r := DefaultRecording(c, seconds, region); r != nil {
+		if r := DefaultRecording(c, seconds, region, nil); r != nil {
 			return r.ID
 		}
 		return ""
@@ -79,8 +79,108 @@ func TestDefaultRecording(t *testing.T) {
 	if got := pick(600*60, "uk"); got != "unknown" {
 		t.Errorf("an identifier's recording wins, got %s", got)
 	}
-	if DefaultRecording(&MatchCandidate{}, 60, "uk") != nil {
+	if DefaultRecording(&MatchCandidate{}, 60, "uk", []string{"Ray Porter"}) != nil {
 		t.Error("no recordings, no pick")
+	}
+}
+
+// TestDefaultRecordingPrefersTheNarrator: The Martian read by Wil Wheaton (the
+// newer recording) and by R. C. Bray. The book's narrator picks the recording
+// before the runtime does, after an identifier's; a narrator no recording
+// names, or none, leaves the runtime to choose.
+func TestDefaultRecordingPrefersTheNarrator(t *testing.T) {
+	t.Parallel()
+	people := func(names ...string) []MetaPersonRef {
+		out := []MetaPersonRef{}
+		for _, n := range names {
+			out = append(out, MetaPersonRef{Name: n})
+		}
+		return out
+	}
+	c := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "bray", RuntimeMin: 653, Narrators: people("R. C. Bray")},
+		{ID: "wheaton", RuntimeMin: 660, Narrators: people("Wil Wheaton")},
+		{ID: "cast", RuntimeMin: 700, Narrators: people("Ann Example", "R C Bray")},
+	}}
+	pick := func(narrators ...string) string {
+		if r := DefaultRecording(c, 653*60, "", narrators); r != nil {
+			return r.ID
+		}
+		return ""
+	}
+	for want, narrators := range map[string][]string{
+		"wheaton": {"Wil Wheaton"},
+		"bray":    {"RC Bray"}, // folds alike; of the two he reads, the closer runtime
+		"cast":    {"Ann Example"},
+	} {
+		if got := pick(narrators...); got != want {
+			t.Errorf("narrated by %v: %s, want %s", narrators, got, want)
+		}
+	}
+	if got := pick("Somebody Else"); got != "bray" {
+		t.Errorf("a narrator no recording names: %s, want the runtime's bray", got)
+	}
+	if got := pick(); got != "bray" {
+		t.Errorf("no narrator: %s, want the runtime's bray", got)
+	}
+	// His recording of another length is another edition: the runtime decides.
+	short := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "abridged-wheaton", RuntimeMin: 300, Narrators: people("Wil Wheaton")},
+		{ID: "bray", RuntimeMin: 650, Narrators: people("R. C. Bray")},
+	}}
+	if r := DefaultRecording(short, 653*60, "", []string{"Wil Wheaton"}); r == nil || r.ID != "bray" {
+		t.Errorf("a narrator's recording of another length: %v, want bray", r)
+	}
+	// A middle initial on either side is the same narrator.
+	initials := &MatchCandidate{Recordings: []MatchRecording{
+		{ID: "dietz", RuntimeMin: 653, Narrators: people("Norman Dietz")},
+		{ID: "wilson", RuntimeMin: 660, Narrators: people("George K. Wilson")},
+		{ID: "harding", RuntimeMin: 670, Narrators: people("Michael Harding")},
+	}}
+	for want, narrator := range map[string]string{"wilson": "George Wilson", "harding": "Michael A. Harding"} {
+		if r := DefaultRecording(initials, 653*60, "", []string{narrator}); r == nil || r.ID != want {
+			t.Errorf("narrated by %s: %v, want %s", narrator, r, want)
+		}
+	}
+	c.RecordingID = "cast"
+	if got := pick("Wil Wheaton"); got != "cast" {
+		t.Errorf("an identifier's recording beats the narrator: %s", got)
+	}
+}
+
+// TestCandidatesIdentifierHitLeads: at one score the work an identifier named
+// comes first (metaserve breaks a tie on the title), and the ASIN that found it
+// leads its marketplace's, so a book the store lists under two keeps its tags'
+// when that store is the preferred one; another store's still comes first there.
+func TestCandidatesIdentifierHitLeads(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"other","score":100,"reasons":{"title":1}},
+			{"id":"found","score":100,"recording_id":"r","reasons":{"identifier":"asin"}}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"` + r.PathValue("id") + `","title":"T","recordings":[{"id":"r","runtime_min":600,
+			"asin":[{"region":"uk","asin":"B0UK000001"},{"region":"us","asin":"B0US000001"},{"region":"us","asin":"B0US000002"}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+
+	cands, err := s.Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "b0us000002", Region: "us"})
+	if err != nil || len(cands) != 2 || cands[0].WorkID != "found" {
+		t.Fatalf("candidates = %+v, %v; want the identifier's work first", cands, err)
+	}
+	rec := cands[0].Recordings[0]
+	if strings.Join(rec.ASINs, ",") != "B0US000002,B0US000001,B0UK000001" || rec.ASINRegion != "us" || rec.RegionASIN("us") != "B0US000002" {
+		t.Errorf("found recording = %+v, want the ASIN that found it first", rec)
+	}
+	if other := cands[1].Recordings[0]; other.ASINs[0] != "B0US000001" {
+		t.Errorf("the other work's recording = %+v, want metaserve's order", other)
+	}
+	cands, err = s.Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "B0US000002", Region: "uk"})
+	if err != nil || strings.Join(cands[0].Recordings[0].ASINs, ",") != "B0UK000001,B0US000002,B0US000001" {
+		t.Errorf("preferring uk: %+v, %v; want its ASIN first, then the one that found it", cands, err)
 	}
 }
 
@@ -135,5 +235,149 @@ func TestCandidatesRegionAndLimit(t *testing.T) {
 	defer mu.Unlock()
 	if limit != "6" || fetched != 5 {
 		t.Fatalf("dialog query: limit=%s fetched=%d, want 6 and the 3 hits expanded", limit, fetched)
+	}
+}
+
+func TestNormalizeLanguage(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"en": "en", " English ": "english", "eng": "eng", "en-GB": "en", "en_US": "en", "Deutsch": "deutsch",
+		"pt-BR": "pt", "Klingon": "klingon", "français": "français",
+		// The first of several, without a note.
+		"eng;fre": "eng", "en/de": "en", "English (US)": "english", "en, de": "en",
+		// Says no language.
+		"und": "", "zxx": "", "mul": "", "mis": "", "XXX": "", "unknown": "", "None": "", "N/A": "", "NA": "",
+		"": "", "e": "", "123": "", "?": "",
+	} {
+		if got := NormalizeLanguage(in); got != want {
+			t.Errorf("NormalizeLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A plain book matches a work holding a dramatization, but doesn't take its recording.
+func TestDefaultRecordingKeepsAPlainBookOffADramatization(t *testing.T) {
+	plain := MatchRecording{ID: "plain", RuntimeMin: 700, Publisher: "Tantor Audio", Narrators: []MetaPersonRef{{Name: "Bea Reader"}}}
+	ga := MatchRecording{ID: "ga", RuntimeMin: 400, Publisher: "Graphic Audio LLC", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	cast := MatchRecording{ID: "cast", RuntimeMin: 400, Publisher: "Corey Press", Narrators: []MetaPersonRef{{Name: "Full Cast"}}}
+	bare := MatchRecording{ID: "bare", RuntimeMin: 400, Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	long := MatchRecording{ID: "long", RuntimeMin: 900, Publisher: "GraphicAudio", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	both := MatchRecording{ID: "both", RuntimeMin: 420, Publisher: "Tantor Audio", Narrators: []MetaPersonRef{{Name: "Alex Hill-Knight"}}}
+	many := MatchRecording{ID: "many", RuntimeMin: 400, Publisher: "Spoken Realms", Narrators: []MetaPersonRef{{Name: "A B"}, {Name: "C D"}, {Name: "E F"}, {Name: "G H"}}}
+	cases := []struct {
+		name      string
+		c         MatchCandidate
+		narrators []string
+		want      string
+	}{
+		{"denied: nearer by length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, nil, "plain"},
+		{"denied: a full-cast credit", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, cast}}, nil, "plain"},
+		{"denied: only the dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{ga}}, nil, ""},
+		{"denied: metaserve named it by length", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{plain, ga}}, nil, "plain"},
+		{"denied: no publisher on a labelled work", MatchCandidate{PlainBook: true, Title: "Dune [Dramatized Adaptation]", Recordings: []MatchRecording{bare}}, nil, ""},
+		{"allowed: no publisher on a plain title", MatchCandidate{PlainBook: true, Title: "Dune", Recordings: []MatchRecording{bare}}, nil, "bare"},
+		{"allowed: several readers are no dramatization", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, many}}, nil, "many"},
+		{"allowed: the book states it", MatchCandidate{Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
+		{"allowed: an identifier named it", MatchCandidate{PlainBook: true, RecordingID: "ga", Reasons: &MatchReasons{Identifier: "asin"}, Recordings: []MatchRecording{plain, ga}}, nil, "ga"},
+		{"allowed: its narrator is the book's", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, ga}}, []string{"Alex Hill-Knight"}, "ga"},
+		{"denied: its narrator, but another length", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{plain, long}}, []string{"Alex Hill-Knight"}, "plain"},
+		{"denied: a narrator on both prefers the plain reading", MatchCandidate{PlainBook: true, Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both"},
+		{"denied: metaserve named it, a narrator on both", MatchCandidate{PlainBook: true, RecordingID: "ga", Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "both"},
+		{"allowed: a narrator on both, the book states it", MatchCandidate{Recordings: []MatchRecording{both, ga}}, []string{"Alex Hill-Knight"}, "ga"},
+		{"denied: a publisher under a title keeping (Dramatized)", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized)", Recordings: []MatchRecording{plain}}, nil, ""},
+		{"allowed: a publisher under the label, beside a dramatization", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain, ga}}, nil, "plain"},
+		{"denied: a publisher under the label, no recording saying so", MatchCandidate{PlainBook: true, Title: "The Idiot (Dramatized Adaptation)", Recordings: []MatchRecording{plain}}, nil, ""},
+		{"denied: a publisher under a part's label", MatchCandidate{PlainBook: true, Title: "Warbreaker (1 of 3) [Dramatized Adaptation]", Recordings: []MatchRecording{plain}}, nil, ""},
+		{"denied: a subtitle keeping the statement", MatchCandidate{PlainBook: true, Title: "Dune", Subtitle: "A Full-Cast Dramatization", Recordings: []MatchRecording{plain}}, nil, ""},
+	}
+	for _, tc := range cases {
+		got := ""
+		if r := DefaultRecording(&tc.c, 400*60, "", tc.narrators); r != nil {
+			got = r.ID
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestMatchQueryStatesDramatization(t *testing.T) {
+	cases := []struct {
+		q    MatchQuery
+		want bool
+	}{
+		{MatchQuery{Title: "Dune [Dramatized Adaptation]"}, true},
+		{MatchQuery{Title: "Dune", Series: "Dune (Full Cast)"}, true},
+		{MatchQuery{Title: "Dune", Path: "Frank Herbert/Dune (Dramatised)"}, true},
+		{MatchQuery{Title: "Dune", Narrators: []string{"Full Cast"}}, true},
+		{MatchQuery{Text: "dune full-cast"}, true},
+		{MatchQuery{Title: "Dune (GraphicAudio)"}, true},
+		{MatchQuery{Title: "Dune", Path: "Graphic Audio/Dune"}, true},
+		{MatchQuery{Title: "Graphic Novels of Audio"}, false},
+		{MatchQuery{Title: "Dune", Narrators: []string{"Scott Brick"}, Path: "Frank Herbert/Dune"}, false},
+		{MatchQuery{Title: "Radio Free Albemuth"}, false},
+		{MatchQuery{ASIN: "B0DUNE0001"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.q.statesDramatization(); got != tc.want {
+			t.Errorf("%+v: states = %v, want %v", tc.q, got, tc.want)
+		}
+	}
+}
+
+// Through Candidates: the flag the console reads for a book that holds no recording.
+func TestCandidatesFlagAWorkHoldingOnlyADramatization(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"dune"}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"dune","title":"Dune","authors":[{"id":"fh","name":"Frank Herbert"}],
+			"recordings":[{"id":"ga","narrators":[{"id":"a","name":"Alex Reader"}],"runtime_min":400,"publisher":"GraphicAudio"}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+	for _, tc := range []struct {
+		title     string
+		only      bool
+		recording string
+	}{
+		{"Dune", true, ""},
+		{"Dune [Dramatized Adaptation]", false, "ga"},
+	} {
+		cands, err := s.Candidates(context.Background(), MatchQuery{Text: "dune", Title: tc.title, Duration: 400 * 60})
+		if err != nil || len(cands) != 1 {
+			t.Fatalf("%s: candidates = %+v, %v", tc.title, cands, err)
+		}
+		if c := cands[0]; c.DramatizationOnly != tc.only || c.DefaultRecordingID != tc.recording {
+			t.Errorf("%s: only = %v, default = %q; want %v, %q", tc.title, c.DramatizationOnly, c.DefaultRecordingID, tc.only, tc.recording)
+		}
+	}
+}
+
+// The same table as metaserve's TestTitleDramatizationCovers.
+func TestTitleSpeaksFor(t *testing.T) {
+	cases := []struct {
+		title, subtitle string
+		noPublisher     bool
+		publisher       bool
+	}{
+		{title: "The Idiot"},
+		{title: "Tracker (Dramatized Adaptation)", noPublisher: true},
+		{title: "The Idiot (Dramatized)", noPublisher: true, publisher: true},
+		{title: "The Wonderful Wizard of Oz: A Radio Dramatization", noPublisher: true, publisher: true},
+		{title: "Dirk Gently: Two BBC Radio Full-Cast Dramas", noPublisher: true, publisher: true},
+		{title: "Warbreaker (1 of 3) [Dramatized Adaptation]", noPublisher: true, publisher: true},
+		{title: "Dune", subtitle: "A Full-Cast Dramatization", noPublisher: true, publisher: true},
+		{title: "Dark Road Part Three (Dramatized Adaptation)", noPublisher: true, publisher: true},
+	}
+	for _, c := range cases {
+		if got := titleSpeaksFor(c.title, c.subtitle, ""); got != c.noPublisher {
+			t.Errorf("%q / %q: no publisher = %v, want %v", c.title, c.subtitle, got, c.noPublisher)
+		}
+		if got := titleSpeaksFor(c.title, c.subtitle, "Tantor Audio"); got != c.publisher {
+			t.Errorf("%q / %q: a publisher = %v, want %v", c.title, c.subtitle, got, c.publisher)
+		}
 	}
 }

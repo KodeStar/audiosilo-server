@@ -87,7 +87,7 @@ import {
  * how much it may write, and applies it. A repick run switches books matched
  * earlier to the preferred marketplace's ASIN, and a refresh run looks the books
  * that already have an ASIN or ISBN up by it to fill in their details (an
- * identifier alone, from the manager or an ids-only apply, brought none). Runs
+ * identifier alone, from an enrichment or an ids-only apply, brought none). Runs
  * work on the server, so the
  * card follows the newest one by polling, whoever started it.
  */
@@ -799,7 +799,10 @@ function ItemRow({
                 ? 'health.bulkMatch.item.error'
                 : item.detail === 'identifier_unknown'
                   ? 'health.bulkMatch.item.identifierUnknown'
-                  : 'health.bulkMatch.item.none',
+                  : item.detail === 'weak_match'
+                    ? 'health.bulkMatch.item.weakMatch'
+                    : 'health.bulkMatch.item.none',
+              { score: item.score },
             )}
           </span>
         )}
@@ -809,6 +812,11 @@ function ItemRow({
               book: formatDuration(item.book.duration, lang),
               recording: formatDuration(p.runtime_min * 60, lang),
             })}
+          </span>
+        ) : null}
+        {candidate && item.detail === 'dramatization_only' ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.dramatizationOnly')}
           </span>
         ) : null}
         {candidate && (seriesText || series) ? (

@@ -188,3 +188,24 @@ func TestFixturesHoldNarratorAtom(t *testing.T) {
 		}
 	}
 }
+
+// TestMP4HasTrack: a trak among the moov's children is a track; a moov with
+// none (ffmpeg's empty output: mvhd and udta only), no moov, and a truncated
+// file are not.
+func TestMP4HasTrack(t *testing.T) {
+	t.Parallel()
+	has := func(b []byte) bool { return MP4HasTrack(bytes.NewReader(b), int64(len(b))) }
+	ftyp := box("ftyp", []byte("isom"))
+	withTrak := append(append([]byte{}, ftyp...), box("moov", box("mvhd", make([]byte, 100)), box("trak", box("tkhd", make([]byte, 84))))...)
+	withTrak = append(withTrak, box("mdat", make([]byte, 64))...)
+	if !has(withTrak) {
+		t.Fatal("a moov with a trak: no track found")
+	}
+	empty := append(append([]byte{}, ftyp...), box("moov", box("mvhd", make([]byte, 100)), box("udta", make([]byte, 20)))...)
+	empty = append(append(empty, box("free")...), box("mdat")...)
+	for name, b := range map[string][]byte{"no trak": empty, "no moov": ftyp, "truncated": withTrak[:40], "nothing": nil} {
+		if has(b) {
+			t.Errorf("%s: a track found", name)
+		}
+	}
+}
