@@ -644,7 +644,7 @@ export const api = {
   bookFacets: (filter: BookFilter) =>
     request<BookFacets>('GET', `/admin/books/facets${bookQuery(filter)}`),
   /** One field edit over many books, all or nothing (at most BULK_LIMIT). */
-  bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters'>) =>
+  bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters' | 'match'>) =>
     request<{ updated: number }>('POST', '/admin/books/bulk', { books, ...edit }),
   /** GET /admin/authors or /admin/narrators, as one shape. */
   people: async (field: PersonField, libraryId?: number): Promise<PeopleResponse> => {

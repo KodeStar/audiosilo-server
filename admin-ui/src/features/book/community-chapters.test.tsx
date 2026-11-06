@@ -8,7 +8,7 @@ import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { communityState } from './book-model';
+import { canCheckChapters, communityState } from './book-model';
 
 const BOOK_PATH = 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings';
 const URL = `/library/book?library=1&path=${encodeURIComponent(BOOK_PATH)}`;
@@ -324,6 +324,15 @@ describe('communityState', () => {
     const unmatched = bookDetail({ book: adminBook({ asin: '', isbn: '' }) });
     expect(communityState(unmatched, duration)).toBeNull();
     expect(communityState(bookDetail(), duration)?.line.key).toBe('book.community.unchecked');
+  });
+
+  it('says nothing for a book matched to a store listing, which has no ASIN or ISBN to check by', () => {
+    const listing = bookDetail({ book: adminBook({ asin: '', isbn: '', matched: true }) });
+    expect(communityState(listing, duration)).toBeNull();
+    expect(canCheckChapters(listing)).toBe(false);
+    expect(
+      canCheckChapters(bookDetail({ book: adminBook({ asin: '', isbn: '9780765326355' }) })),
+    ).toBe(true);
   });
 
   it('gives an edition mismatch both lengths', () => {

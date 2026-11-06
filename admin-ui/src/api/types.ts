@@ -1492,7 +1492,11 @@ export interface AdminBook {
   file_count: number;
   asin: string;
   isbn: string;
-  /** An ASIN or ISBN is set: the community metadata can match it (the `matched=` filter's rule). */
+  /**
+   * Matched (the `matched=` filter's rule): an ASIN or ISBN, or a recorded community
+   * match without one (a store listing). The player's community metadata and the
+   * chapter check find a book by its ASIN or ISBN alone: test those for them.
+   */
   matched: boolean;
   edited: boolean;
   /** The fields with an override (an edit or an accepted community value). */
@@ -1783,6 +1787,23 @@ export interface AdminBookDetail {
    * absent when it has none. `generated_at` is when it was written, when known.
    */
   generated_description?: GeneratedDescription;
+  /**
+   * The book's recorded community match (catalog.BookMatch): the work an admin
+   * accepted or a match run applied, with or without an ASIN or ISBN. Absent when
+   * it has none.
+   */
+  community_match?: BookMatch;
+}
+
+/** A book's recorded community match (catalog.BookMatch, book_matches). */
+export interface BookMatch {
+  work_id: string;
+  recording_id?: string;
+  /** "auto": a match run applied it unasked; "accepted": the admin chose it. */
+  how: 'auto' | 'accepted';
+  matched_at: string;
+  /** The work's page on the community site. */
+  web_url?: string;
 }
 
 /** A book's generated description on its page (catalog.GeneratedDescription). */
@@ -1870,6 +1891,12 @@ export interface BookEditRequest {
   chapters?: { set?: Record<number, string>; revert?: number[] };
   /** Where the chapters come from: the files, the community's, or "auto" (the default). */
   chapter_source?: ChapterChoice | 'auto';
+  /**
+   * The community match the values were accepted from (with source "community"),
+   * recorded as the book's match even with no ASIN or ISBN; `{work_id: ""}`
+   * removes it. One book at a time: a bulk edit refuses it.
+   */
+  match?: { work_id: string; recording_id?: string };
 }
 
 /** catalog.Ref: a book by its identity. */
@@ -2223,12 +2250,14 @@ export interface MatchProposal {
 
 /**
  * matchrun.Change: what applying an item under one scope writes - its fields (set
- * or reverted) and the cover - and, when it changes the book's series, the series
+ * or reverted), the cover and the community match - and, when it changes the book's series, the series
  * before and after (main first; position 0 = none), so a removal shows.
  */
 export interface MatchChange {
   fields: OverrideField[];
   cover: boolean;
+  /** Records the book's community match (a new match, or a refresh's heal of a merged work). */
+  match?: boolean;
   series?: { from: SeriesRef[]; to: SeriesRef[] };
 }
 

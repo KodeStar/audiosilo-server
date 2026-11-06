@@ -474,6 +474,67 @@ describe('book page', () => {
   });
 });
 
+describe('a book matched to a store listing (server#320)', () => {
+  /** A matched book with no ASIN or ISBN: its recorded community work matches it. */
+  function listingDetail(how: 'auto' | 'accepted'): AdminBookDetail {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, asin: '', isbn: '', matched: true };
+    detail.fields.asin = { ...detail.fields.asin, value: '', source: '' };
+    detail.community_match = {
+      work_id: 'a-guild-book',
+      recording_id: 'r1',
+      how,
+      matched_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
+      web_url: 'https://meta.audiosilo.app/work?id=a-guild-book',
+    };
+    return detail;
+  }
+
+  it('shows the community work, how it was matched, and unlinks it', async () => {
+    const detail = listingDetail('auto');
+    const unlinked = structuredClone(detail);
+    unlinked.book.matched = false;
+    delete unlinked.community_match;
+    const calls = mockFetch(
+      routes(detail, { 'PATCH /admin/libraries/1/book': { body: unlinked } }),
+    );
+    renderApp(URL);
+    expect(await screen.findByText('Matched')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /a-guild-book/ });
+    expect(link).toHaveAttribute('href', 'https://meta.audiosilo.app/work?id=a-guild-book');
+    expect(
+      screen.getByText(/No ASIN or ISBN: matched to its store listing by a bulk match/),
+    ).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Unlink' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ match: { work_id: '' } });
+    expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
+  });
+
+  it('says an accepted match was accepted', async () => {
+    mockFetch(routes(listingDetail('accepted')));
+    renderApp(URL);
+    expect(
+      await screen.findByText(/No ASIN or ISBN: matched to its store listing \d/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the ASIN, not the work or an unlink, for a book matched by one', async () => {
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: 'the-way-of-kings',
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByText('Matched')).toBeInTheDocument();
+    expect(screen.getAllByText(detail.fields.asin.value).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Unlink' })).toBeNull();
+    expect(screen.queryByText('Community work')).toBeNull();
+  });
+});
+
 const COVER_DATA = 'data:image/jpeg;base64,AAAA';
 
 const candidate: MatchCandidate = {
@@ -613,7 +674,11 @@ describe('match with community metadata', () => {
     expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();
     expect(screen.getByText('Your own edits were left alone.')).toBeInTheDocument();
     expect(patches(calls).map((c) => c.body)).toEqual([
-      { set: { published: '2010' }, source: 'community' },
+      {
+        set: { published: '2010' },
+        source: 'community',
+        match: { work_id: candidate.work_id, recording_id: candidate.recordings[0].id },
+      },
     ]);
     expect(coverPuts(calls)).toHaveLength(0);
   });

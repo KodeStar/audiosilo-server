@@ -521,6 +521,13 @@ describe('metaCandidate and spineHeight', () => {
     expect(metaCandidate([a])).toBeUndefined();
   });
 
+  it('passes over a book matched to a store listing: its /meta has no ASIN or ISBN to find', () => {
+    const listing = book(1, 'A', { asin: '', isbn: '', matched: true });
+    const b = book(2, 'B', { asin: 'B003P2WO5E', isbn: '' });
+    expect(metaCandidate([listing, b])).toBe(b);
+    expect(metaCandidate([listing])).toBeUndefined();
+  });
+
   it('sizes a spine by the book length, on a log scale within the shelf', () => {
     const hours = (h: number) => spineHeight(h * 3600, 'x');
     expect(hours(1)).toBe(72);

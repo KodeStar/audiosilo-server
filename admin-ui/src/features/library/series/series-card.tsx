@@ -18,6 +18,7 @@ import {
   formatPositions,
   formatReleaseDate,
   formatSpan,
+  hasIdentifier,
   metaCandidate,
   pickRail,
   placeBooks,
@@ -66,10 +67,7 @@ export function SeriesCard({
   // Every matched book is asked about (the rail's own book too), batched with
   // the other cards' books: their works place them, and pick the rail when no
   // rail is named like the series.
-  const matched = useMemo(
-    () => (rails?.length ? books.filter((b) => b.matched) : []),
-    [books, rails],
-  );
+  const matched = useMemo(() => (rails?.length ? books.filter(hasIdentifier) : []), [books, rails]);
   const works = useBookWorks(matched);
   // Until the works answer, no rail: wrong gaps would flash, then go. A failed
   // lookup answers too (unresolved: the book falls back to its series index).

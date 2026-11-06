@@ -211,8 +211,13 @@ function MatchBody({
   const accept = async () => {
     setBusy(true);
     try {
-      if (ticks.size) {
-        settleBookEdit(qc, await api.editBook(b.library_id, b.path, acceptRequest(rows, ticks)));
+      // The work and recording go with the fields (acceptRequest's match): a
+      // cover alone records no match, so a cover that fails leaves nothing changed.
+      if (ticks.size && picked) {
+        settleBookEdit(
+          qc,
+          await api.editBook(b.library_id, b.path, acceptRequest(rows, ticks, picked, rec)),
+        );
       }
     } catch (err) {
       setBusy(false);

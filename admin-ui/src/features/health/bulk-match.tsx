@@ -68,6 +68,7 @@ import {
   applyCount,
   applyRequest,
   bulkPhase,
+  changeParts,
   isChosen,
   isPickable,
   leaveOut,
@@ -701,12 +702,13 @@ function ItemRow({
   // (an apply leaves it alone, and says so).
   const status =
     item.matched_since || item.detail === 'matched_since' ? 'matchedSince' : item.applied;
-  const changed = change
-    ? [
-        ...(change.cover ? [t('book.match.cover')] : []),
-        ...change.fields.map((f) => t(`book.field.${f}`)),
-      ]
-    : [];
+  const changed = changeParts(change).map((part) =>
+    part.kind === 'cover'
+      ? t('book.match.cover')
+      : part.kind === 'match'
+        ? t('health.bulkMatch.communityMatch')
+        : t(`book.field.${part.field}`),
+  );
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
   const seriesLine = (refs: SeriesRef[]) =>
