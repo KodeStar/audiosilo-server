@@ -185,3 +185,26 @@ func TestMaybeSeriesTitle(t *testing.T) {
 		}
 	}
 }
+
+// TestPathTitle pins the title the path gives TitleNotSeries, which the book
+// page labels as the path's.
+func TestPathTitle(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path   string
+		folder bool
+		want   string
+	}{
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 05; Into the Fire/x.mp3", false, "x"},
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 05; Into the Fire", true, "Into the Fire"},
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 05; Into the Fire.mp3", false, "Into the Fire"},
+		{"Mark Tufo/Mark Tufo; Indian Hill; Book 05", true, ""},
+		{"J.K. Rowling/Bastion/CD1", true, "Bastion"},
+		{"Will Wight/Cradle/01 - Unsouled", true, "Unsouled"},
+	}
+	for _, c := range cases {
+		if got := PathTitle(c.path, c.folder); got != c.want {
+			t.Errorf("PathTitle(%q, %v) = %q, want %q", c.path, c.folder, got, c.want)
+		}
+	}
+}

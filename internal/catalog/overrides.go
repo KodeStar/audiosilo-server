@@ -58,7 +58,8 @@ var OverrideFields = []string{
 
 // Where a field's value came from. A scanned value is SourcePath when it is what
 // the path yields (metadata.DeriveFromPath, or in a library that prefers its
-// folders metadata.FromPathLayout) and SourceTag otherwise; an override is
+// folders metadata.FromPathLayout; for the title also metadata.PathTitle) and
+// SourceTag otherwise; an override is
 // SourceEdited (typed by an admin) or SourceCommunity (accepted from a
 // community-metadata match); an ASIN/ISBN attached by enrichment reads as
 // SourceCommunity too (it was matched to an external record). A value an
@@ -512,6 +513,10 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 // shows it as provenance, so the two can never disagree.
 func (l *bookLayers) resolve() map[string]FieldValue {
 	scanned, baseline, layout := l.scannedFields()
+	// The title TitleNotSeries may take from the path in place of an album that
+	// only names the series ("Mark Tufo; Indian Hill; Book 05; Into the Fire"),
+	// which the baseline doesn't read.
+	pathTitle := bookFields{FieldTitle: metadata.PathTitle(l.path, l.isFolder)}
 	out := make(map[string]FieldValue, len(OverrideFields))
 	for _, field := range OverrideFields {
 		fv := FieldValue{Value: scanned[field], Scanned: scanned[field]}
@@ -519,7 +524,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 		case "":
 		case l.abs[field]:
 			fv.Source = SourceABS
-		case baseline[field], layout[field]:
+		case baseline[field], layout[field], pathTitle[field]:
 			fv.Source = SourcePath
 		default:
 			fv.Source = SourceTag

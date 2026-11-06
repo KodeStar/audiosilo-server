@@ -86,6 +86,14 @@ func MaybeSeriesTitle(relPath string, isFolder bool, title, series string) bool 
 	return readSeriesPath(relPath, isFolder, series, "").namedForSeries(title)
 }
 
+// PathTitle is the title TitleNotSeries reads off a book's path (the title
+// part of a LeafSeries leaf, the book's folder above a disc or part folder,
+// else DeriveFromPath's; "" for a LeafSeries leaf without one), so the book
+// page can label a title the scan took from there as the path's.
+func PathTitle(relPath string, isFolder bool) string {
+	return readSeriesPath(relPath, isFolder, "", "").title
+}
+
 // seriesPath is what a book's tags and path say of its series and title for
 // TitleNotSeries: the series (the series tag, the folder holding the book, and a
 // LeafSeries leaf's series part; any may be "", which names nothing) and its

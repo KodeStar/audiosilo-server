@@ -1283,7 +1283,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Every player book (list,
   search and item alike, all `omitempty`) also carries `subtitle`, `publisher`, `language`,
   `abridged` (a bool, absent while unknown) and `genres` / `tags` (lists). Validation: `normalizeOverride`; sources: a scanned value is `path` when
-  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; one an ABS
+  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, or for the title
+  `metadata.PathTitle` (the path's title `TitleNotSeries` may take), else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
