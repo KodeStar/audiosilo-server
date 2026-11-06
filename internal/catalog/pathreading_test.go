@@ -152,9 +152,14 @@ func TestStampScannedRev(t *testing.T) {
 			t.Errorf("%s: TitleCheck, RevStamp = %v, want %v", rel, got, w)
 		}
 	}
-	// Asked for the stale one too (a row re-indexed by an older server since the
-	// signature was read), it is left as it is.
-	if err := c.StampScannedRev(ctx, lib.ID, []string{plain, stale}); err != nil {
+	// The series book re-indexed by an older server after the signature was read
+	// (its indexed_at moved, the snapshot no longer its own): asked for anyway, the
+	// compare-and-set leaves it. Asked for the stale one too (a row re-indexed by
+	// an older server before the signature was read), it is left as it is.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET indexed_at = 'later' WHERE rel_path = ?`, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StampScannedRev(ctx, lib.ID, []string{plain, stale, series}); err != nil {
 		t.Fatal(err)
 	}
 	wantRevs := map[string]string{plain: "2|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law"}

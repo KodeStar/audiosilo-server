@@ -1455,7 +1455,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at revision 2 by that scan
   (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1), so later
   scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a snapshot of no revision stays
-  until its next re-index or path reading.
+  until its next re-index or path reading. A stamped book is never tested again, so a later change
+  that makes `TitleNotSeries` change more titles (or `MaybeSeriesTitle` flag more) needs a new
+  `scannedRev`, not a change within revision 2.
   **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
   value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
   label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,
