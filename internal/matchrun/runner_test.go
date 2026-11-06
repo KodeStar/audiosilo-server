@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -24,6 +25,8 @@ type fakeMatcher struct {
 	byTitle map[string][]meta.MatchCandidate
 	byASIN  map[string][]meta.MatchCandidate
 	byISBN  map[string][]meta.MatchCandidate
+	// byWork answers a refresh's lookup of a book matched by its work alone.
+	byWork map[string][]meta.MatchCandidate
 	// answer, when set, answers every match-mode query (one with no ASIN or ISBN).
 	answer  func(q meta.MatchQuery) []meta.MatchCandidate
 	fail    bool          // every query fails
@@ -46,6 +49,9 @@ func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta
 	if fail || q.Title == "Down" {
 		return nil, errors.New("upstream status 500")
 	}
+	if q.WorkID != "" {
+		return f.byWork[q.WorkID], nil
+	}
 	if q.ASIN != "" {
 		return f.byASIN[q.ASIN], nil
 	}
@@ -59,6 +65,7 @@ func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta
 }
 
 type env struct {
+	db      *store.DB
 	cat     *catalog.Catalog
 	admin   int64
 	matcher *fakeMatcher
@@ -72,7 +79,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
 	db := storetest.Open(t)
-	e := &env{cat: catalog.New(db, time.Now), matcher: &fakeMatcher{byTitle: map[string][]meta.MatchCandidate{}, byASIN: map[string][]meta.MatchCandidate{}, byISBN: map[string][]meta.MatchCandidate{}}}
+	e := &env{db: db, cat: catalog.New(db, time.Now), matcher: &fakeMatcher{byTitle: map[string][]meta.MatchCandidate{}, byASIN: map[string][]meta.MatchCandidate{}, byISBN: map[string][]meta.MatchCandidate{}, byWork: map[string][]meta.MatchCandidate{}}}
 	e.enabled.Store(true)
 	admin, err := auth.New(db, time.Now).CreateUser(ctx, "admin", "correct horse battery", "admin")
 	if err != nil {

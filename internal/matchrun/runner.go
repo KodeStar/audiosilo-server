@@ -49,6 +49,12 @@ const (
 // know the book's ASIN or ISBN.
 const DetailIdentifierUnknown = "identifier_unknown"
 
+// DetailWorkUnknown is a refresh item's detail when the community no longer knows
+// the work a book matched without an ASIN or ISBN was recorded as (a 404 after
+// any redirect): no match, and the book keeps its recorded match (a release that
+// dropped the work by mistake must not unmatch the book).
+const DetailWorkUnknown = "work_unknown"
+
 // DetailLengthDiffers is a review item's detail when its recording is another
 // edition by the book's length (lengthFits: more than meta.PlausibleRuntimeOff off,
 // or meta.NarratedRuntimeOff for the book's narrator's recording): held for review
@@ -385,9 +391,20 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 // resolved to. The lookup takes the ASIN when there is one, so an ISBN
 // beside an ASIN the community doesn't know gets a look of its own. An identifier
 // the community doesn't know is no match: a book that names its record is never
-// offered another by title.
+// offered another by title. A book matched with neither (a store listing: its
+// recorded community match, catalog.MatchAnchor) is looked up by its work the
+// same way (meta.MatchQuery.WorkID, a retired id's redirect followed), its
+// recording the recorded one while the work still lists it; a work the community
+// no longer knows is no match (DetailWorkUnknown).
 func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
+	byWork := b.ASIN == "" && b.ISBN == ""
 	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
+	if byWork {
+		if b.MatchWorkID == "" {
+			return nil, nil // matched by nothing a refresh can look up
+		}
+		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
+	}
 	cands, err := r.candidates(ctx, q, item)
 	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
 		q.ASIN = ""
@@ -398,6 +415,9 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	}
 	if len(cands) == 0 {
 		item.Outcome, item.Detail = catalog.OutcomeNone, DetailIdentifierUnknown
+		if byWork {
+			item.Detail = DetailWorkUnknown
+		}
 		return item, nil
 	}
 	c := &cands[0]
@@ -412,15 +432,22 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
-	// The book keeps its own identifiers (switching marketplace is a repick's):
-	// a proposal without them writes none, and the review shows none of the
-	// community's (another marketplace's ASIN, say) as if applying set them.
-	delete(item.Proposal.Values, catalog.FieldASIN)
-	delete(item.Proposal.Values, catalog.FieldISBN)
-	item.Proposal.ASINRegion = ""
-	item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
-	if q.ASIN != "" {
-		item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+	switch {
+	case byWork:
+		// A book matched by its work alone has no identifier to keep: one its
+		// recording gained since fills in (every scope fills a missing identifier).
+		item.Proposal.FoundBy = "work:" + b.MatchWorkID
+	default:
+		// The book keeps its own identifiers (switching marketplace is a repick's):
+		// a proposal without them writes none, and the review shows none of the
+		// community's (another marketplace's ASIN, say) as if applying set them.
+		delete(item.Proposal.Values, catalog.FieldASIN)
+		delete(item.Proposal.Values, catalog.FieldISBN)
+		item.Proposal.ASINRegion = ""
+		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+		if q.ASIN != "" {
+			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+		}
 	}
 	// A book neither scope would change is up to date: nothing to record (most
 	// of a matched library, whose proposals would only fill the review).
@@ -432,7 +459,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
 	}
 	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
-		if !Plan(scope, st, item.Proposal).Empty() {
+		if !planRefresh(scope, st, item.Proposal).Empty() {
 			return item, nil
 		}
 	}
@@ -495,7 +522,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		return !off
 	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
-		applied, detail := r.applyItem(ctx, run.Mode, it, o)
+		applied, detail := r.applyItem(ctx, run, it, o)
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
 		// not taken) stays to apply, so the next apply takes it again; what went in
 		// is marked, so it counts as applied rather than coming back as nothing to
@@ -525,8 +552,12 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 }
 
 // applyItem writes one item's plan to its book: applied, skipped (nothing to
-// change, or no book there now) or failed, with a code saying why.
-func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRunItem, o ApplyOptions) (applied, detail string) {
+// change, or no book there now) or failed, with a code saying why. A community
+// match it records (Writes.Anchor) goes in with the fields, in one transaction:
+// made "auto" for a confident item, "accepted" for a review item the admin
+// included, and a refresh's heal keeps how the book was matched.
+func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catalog.MatchRunItem, o ApplyOptions) (applied, detail string) {
+	mode := run.Mode
 	st, err := r.cat.BookMatchState(ctx, it.LibraryID, it.Path)
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
@@ -544,9 +575,19 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 	if w.Empty() {
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
-	edits := len(w.Set) > 0 || len(w.Revert) > 0
+	edits := len(w.Set) > 0 || len(w.Revert) > 0 || w.Anchor != nil
 	if edits {
 		edit := catalog.BookEdit{Set: w.Set, Revert: w.Revert, Source: catalog.SourceCommunity, UserID: o.UserID}
+		if w.Anchor != nil {
+			how := catalog.MatchHowAccepted
+			switch {
+			case mode == catalog.MatchModeRefresh && st.Anchor.How != "":
+				how = st.Anchor.How
+			case it.Outcome == catalog.OutcomeAuto:
+				how = catalog.MatchHowAuto
+			}
+			edit.Match = &catalog.MatchAnchor{WorkID: w.Anchor.WorkID, RecordingID: w.Anchor.RecordingID, How: how, RunID: run.ID}
+		}
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
@@ -572,12 +613,15 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 }
 
 // Change is what applying an item under one scope would write: its fields (in
-// catalog.OverrideFields order; set or reverted) and whether it takes the
-// community cover, and, when it changes the book's series, the series before and
-// after, so a series it removes is shown, never silent.
+// catalog.OverrideFields order; set or reverted), whether it takes the community
+// cover and whether it records the book's community match (Match: the work, as a
+// new match or a refresh's heal of a merged one), and, when it changes the book's
+// series, the series before and after, so a series it removes is shown, never
+// silent.
 type Change struct {
 	Fields []string      `json:"fields"`
 	Cover  bool          `json:"cover"`
+	Match  bool          `json:"match,omitempty"`
 	Series *SeriesChange `json:"series,omitempty"`
 }
 
@@ -590,7 +634,7 @@ type SeriesChange struct {
 
 // changeOf is what w writes to a book in state st, as the review shows it.
 func changeOf(st *catalog.MatchState, w Writes) Change {
-	ch := Change{Fields: []string{}, Cover: w.Cover}
+	ch := Change{Fields: []string{}, Cover: w.Cover, Match: w.Anchor != nil}
 	for _, f := range catalog.OverrideFields {
 		if _, ok := w.Set[f]; ok || slices.Contains(w.Revert, f) {
 			ch.Fields = append(ch.Fields, f)

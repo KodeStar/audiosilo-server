@@ -95,6 +95,14 @@ type MatchQuery struct {
 	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
 	// details or none. 0 for no such score.
 	NoDetailsBelow int
+	// WorkID asks for that community work alone (works/{id}), whatever else the
+	// query says: a refresh of a book whose recorded match has no ASIN or ISBN
+	// (catalog.MatchAnchor). A retired id's redirect is followed, so the
+	// candidate is the record it was merged into (its WorkID the new one); an
+	// unknown id is no candidate. RecordingID is the recording the book was
+	// matched to: the candidate's RecordingID while the work still lists it.
+	WorkID      string
+	RecordingID string
 }
 
 // limit is how many works the query expands.
@@ -580,6 +588,9 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	ctx, cancel := context.WithTimeout(ctx, s.composeBudget)
 	defer cancel()
 
+	if id := strings.TrimSpace(q.WorkID); id != "" {
+		return s.workCandidates(ctx, q, id)
+	}
 	text, asin, isbn := strings.TrimSpace(q.Text), match.NormalizeASIN(q.ASIN), match.NormalizeISBN(q.ISBN)
 	// An identifier the admin typed (with no text) asks for that record alone.
 	identifierOnly := text == "" && (asin != "" || isbn != "")
@@ -682,6 +693,38 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		return compareMatches(a.Score, a.IdentifierHit(), b.Score, b.IdentifierHit())
 	})
 	return cands, nil
+}
+
+// workCandidates is Candidates' answer for MatchQuery.WorkID: the work id names,
+// as one candidate (score 100, no reasons: it was named, not matched), or none for
+// an id the community doesn't know (a 404 after any redirect). The recording the
+// query names is kept while the work lists it, and then speaks for itself as an
+// identifier's does (no plain-book guard: the admin or a run chose it); else ""
+// and DefaultRecording picks one by length.
+func (s *Service) workCandidates(ctx context.Context, q MatchQuery, id string) ([]MatchCandidate, error) {
+	detail, err := s.fetchWork(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return []MatchCandidate{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var facts map[string]*seriesFacts
+	if !q.NoSeries {
+		facts = s.seriesFactsFor(ctx, []*upstreamWorkDetail{detail})
+	}
+	c := s.toCandidate(detail, facts, "", q.Region, "")
+	c.Score = 100
+	if rid := strings.TrimSpace(q.RecordingID); rid != "" && slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return r.ID == rid }) {
+		c.RecordingID = rid
+	}
+	c.PlainBook = c.RecordingID == "" && !q.statesDramatization()
+	if rec := DefaultRecording(c, q.Duration, q.Region, q.Narrators); rec != nil {
+		c.DefaultRecordingID = rec.ID
+	} else {
+		c.DramatizationOnly = len(c.Recordings) > 0
+	}
+	return []MatchCandidate{*c}, nil
 }
 
 // hitCandidate is hit h as a candidate, from its work document and series facts.
