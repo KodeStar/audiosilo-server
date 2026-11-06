@@ -808,6 +808,49 @@ func TestMatchHoldsAnotherLength(t *testing.T) {
 	}
 }
 
+// TestMatchTakesTheNarratorsLength: a confident match whose recording is 10-20% off
+// the book's length is applied when the book's narrator reads it (metaserve's
+// narrator reason full and the recording's credit): the same production, timed
+// differently. Another narrator's recording at that length, or the narrator's at 25%,
+// is held for its length.
+func TestMatchTakesTheNarratorsLength(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for title, narrator := range map[string]string{"Near": "Wil Wheaton", "Far": "Wil Wheaton", "Other": "Ann Reader"} {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: "A/" + title, IsFolder: true,
+			Title: title, Author: "Andy Weir", Narrator: narrator, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		c := cand("the-martian", 95, "")
+		agreement := "full"
+		if !slices.Contains(q.Narrators, "Wil Wheaton") {
+			agreement = "none"
+		}
+		c.Reasons = &meta.MatchReasons{Narrator: agreement}
+		minutes := map[string]int{"Near": 540, "Far": 475, "Other": 540}[q.Title] // 15%, 25%, 15% short
+		c.Recordings = []meta.MatchRecording{{ID: "wheaton", RuntimeMin: minutes,
+			Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}, ASINs: []string{"B0WHEATON1"}}}
+		return []meta.MatchCandidate{c}
+	}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Path != "A/Near" || auto[0].Proposal.RecordingID != "wheaton" || auto[0].Detail != "" {
+		t.Fatalf("auto = %+v, want Near on his recording", auto)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 2 {
+		t.Fatalf("review = %+v, want Far and Other", review)
+	}
+	for _, it := range review {
+		if (it.Path != "A/Far" && it.Path != "A/Other") || it.Detail != DetailLengthDiffers {
+			t.Errorf("review %s = %+v, want held for its length", it.Path, it)
+		}
+	}
+}
+
 // TestMatchPrefersTheNarratorsRecording: the book's narrator credit reaches the
 // run's choice of recording, ahead of a closer runtime.
 func TestMatchPrefersTheNarratorsRecording(t *testing.T) {

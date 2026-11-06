@@ -379,8 +379,11 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // plain reading's ASIN on a GraphicAudio rip), and so can metaserve's guess; the work
 // is still the book, the recording the length agrees with is the better guess. A
 // narrator reading rec agrees with the hint against the length (a release of the same
-// production at another length), so it stays, and the length holds the book for
-// review. A match run calls it, where an identifier is always a tag's hint; never on
+// production at another length), so it stays: within NarratedRuntimeOff a run applies
+// it, further off the length holds the book for review. It stays even when that
+// narrator reads another recording of c that fits (server#325: swapping to it gained
+// no book on the LibraForge benchmark, and swapping within NarratedRuntimeOff too lost
+// one whose hint was right). A match run calls it, where an identifier is always a tag's hint; never on
 // the book's own identifier (a refresh, a repick), which names the recording the book
 // is. rec nil (the work holds only a dramatization the book isn't) stays nil. The
 // identifier vouched for rec alone, so a plain book (MatchCandidate.PlainBook) gives
@@ -390,7 +393,7 @@ func FitRecording(c *MatchCandidate, rec *MatchRecording, seconds float64, regio
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
 		return known && off <= PlausibleRuntimeOff
 	}
-	if rec == nil || readBy(rec, narrators) || rec.RuntimeMin <= 0 || seconds <= 0 || fits(rec) {
+	if rec == nil || ReadBy(rec, narrators) || rec.RuntimeMin <= 0 || seconds <= 0 || fits(rec) {
 		return rec
 	}
 	return cmp.Or(chooseRecording(c, seconds, region, narrators, c.PlainBook, fits), rec)
@@ -418,7 +421,7 @@ func chooseRecording(c *MatchCandidate, seconds float64, region string, narrator
 	for i := range c.Recordings {
 		r := &c.Recordings[i]
 		off, known := RuntimeOff(r.RuntimeMin, seconds)
-		theirs := (!known || off <= PlausibleRuntimeOff) && readBy(r, narrators)
+		theirs := (!known || off <= PlausibleRuntimeOff) && ReadBy(r, narrators)
 		drama := guarded && r.isDramatization(c)
 		if !keep(r) || (drama && !theirs && !lengthNames(r)) {
 			continue
@@ -435,11 +438,11 @@ func chooseRecording(c *MatchCandidate, seconds float64, region string, narrator
 	return best
 }
 
-// readBy reports whether one of the book's narrators narrated r: a name that
+// ReadBy reports whether one of the book's narrators narrated r: a name that
 // folds like one of r's narrators, or a multi-word one whose every word the
 // other holds, either way round: a credit and the community's list spell a
 // middle initial as they please ("George Wilson", "George K. Wilson").
-func readBy(r *MatchRecording, narrators []string) bool {
+func ReadBy(r *MatchRecording, narrators []string) bool {
 	for _, n := range narrators {
 		for _, rn := range r.Narrators {
 			if authorSimilarity(n, rn.Name) == 1 || authorSimilarity(rn.Name, n) == 1 {
@@ -1049,6 +1052,13 @@ func words(s string) map[string]bool {
 // PlausibleRuntimeOff is how far a recording's runtime may be from a book's length,
 // as a fraction of the book's, and still plausibly be its edition (RuntimeOff).
 const PlausibleRuntimeOff = 0.10
+
+// NarratedRuntimeOff is how far a recording that one of the book's narrators reads
+// may be from the book's length and still be its edition: the narrator says it is
+// the same production, timed differently (a store's runtime with or without credits
+// and samples, a rip that drops the intro). Further off, it is that narrator's other
+// edition.
+const NarratedRuntimeOff = 0.20
 
 // RuntimeOff is how far a recording of runtimeMin minutes is from a book of seconds,
 // as a fraction of the book's length; ok is false when either is unknown.

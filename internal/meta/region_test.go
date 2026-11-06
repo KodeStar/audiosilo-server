@@ -322,6 +322,7 @@ func TestFitRecording(t *testing.T) {
 	near := MatchRecording{ID: "near", RuntimeMin: 600, Narrators: []MetaPersonRef{{Name: "Ann Reader"}}}
 	nearer := MatchRecording{ID: "nearer", RuntimeMin: 570}
 	unknown := MatchRecording{ID: "unknown"}
+	kramerShort := MatchRecording{ID: "short", RuntimeMin: 565, Narrators: []MetaPersonRef{{Name: "Michael Kramer"}}}
 	cases := []struct {
 		name      string
 		c         MatchCandidate
@@ -334,6 +335,11 @@ func TestFitRecording(t *testing.T) {
 		{"swapped: the closest that fits", MatchCandidate{Recordings: []MatchRecording{kramer, near, nearer}}, "kramer", nil, 563 * 60, "nearer"},
 		{"swapped: the narrator's that fits", MatchCandidate{Recordings: []MatchRecording{kramer, near, nearer}}, "kramer", []string{"Ann Reader"}, 563 * 60, "near"},
 		{"kept: the book's narrator reads it", MatchCandidate{Recordings: []MatchRecording{kramer, ga}}, "kramer", []string{"Michael Kramer"}, 563 * 60, "kramer"},
+		// A narrator who reads both editions (server#325): the hint's stays, 35% off or
+		// 15% off, even beside the narrator's recording the length fits.
+		{"kept: the narrator reads both, the hint far off", MatchCandidate{Recordings: []MatchRecording{kramer, kramerShort}}, "kramer", []string{"Michael Kramer"}, 563 * 60, "kramer"},
+		{"kept: the narrator reads both, the hint 15% off", MatchCandidate{Recordings: []MatchRecording{kramer, kramerShort}}, "kramer", []string{"Michael Kramer"}, 660 * 60, "kramer"},
+		{"swapped: another narrator reads the fitting one", MatchCandidate{Recordings: []MatchRecording{kramer, kramerShort}}, "kramer", []string{"Ann Reader"}, 563 * 60, "short"},
 		{"kept: it fits", MatchCandidate{Recordings: []MatchRecording{near, nearer}}, "near", nil, 563 * 60, "near"},
 		{"kept: none fits", MatchCandidate{Recordings: []MatchRecording{kramer, unknown}}, "kramer", nil, 563 * 60, "kramer"},
 		{"kept: the book's length unknown", MatchCandidate{Recordings: []MatchRecording{kramer, ga}}, "kramer", nil, 0, "kramer"},

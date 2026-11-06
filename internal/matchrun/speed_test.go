@@ -38,8 +38,8 @@ func TestClassifyReadsOnlyARunnerUpsScoreAndHit(t *testing.T) {
 			full.Reasons = tc.otherHit
 			stub := meta.MatchCandidate{WorkID: "other", Score: tc.second, Reasons: tc.otherHit}
 			p := Propose(&best, meta.DefaultRecording(&best, 634*60, "", nil))
-			gotFull, s1, r1 := Classify([]meta.MatchCandidate{best, full}, p, 634*60)
-			gotStub, s2, r2 := Classify([]meta.MatchCandidate{best, stub}, p, 634*60)
+			gotFull, s1, r1 := Classify([]meta.MatchCandidate{best, full}, p, 634*60, false)
+			gotStub, s2, r2 := Classify([]meta.MatchCandidate{best, stub}, p, 634*60, false)
 			if gotFull != tc.want || gotStub != gotFull || s1 != s2 || r1 != r2 {
 				t.Fatalf("full %s %d/%d, stub %s %d/%d, want %s", gotFull, s1, r1, gotStub, s2, r2, tc.want)
 			}

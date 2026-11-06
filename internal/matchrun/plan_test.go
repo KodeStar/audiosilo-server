@@ -276,11 +276,11 @@ func TestClassify(t *testing.T) {
 		"a length within 10%":      {cands(90), withRuntime(400), catalog.OutcomeAuto},
 		"a recording of no length": {cands(90), withRuntime(0), catalog.OutcomeAuto},
 	} {
-		if got, _, _ := Classify(tc.cands, tc.p, 7*3600+13*60); got != tc.want {
+		if got, _, _ := Classify(tc.cands, tc.p, 7*3600+13*60, false); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
 		}
 	}
-	if _, score, runnerUp := Classify(cands(95, 85), ids, 0); score != 95 || runnerUp != 85 {
+	if _, score, runnerUp := Classify(cands(95, 85), ids, 0, false); score != 95 || runnerUp != 85 {
 		t.Fatalf("scores = %d %d", score, runnerUp)
 	}
 	// Below ReviewFloor metaserve's best candidate is no match, its scores kept.
@@ -291,19 +291,34 @@ func TestClassify(t *testing.T) {
 		}
 		return out
 	}
-	if got, score, runnerUp := Classify(scored(59, 40), ids, 0); got != catalog.OutcomeNone || score != 59 || runnerUp != 40 {
+	if got, score, runnerUp := Classify(scored(59, 40), ids, 0, false); got != catalog.OutcomeNone || score != 59 || runnerUp != 40 {
 		t.Fatalf("a weak match: %s %d %d", got, score, runnerUp)
 	}
-	if got, _, _ := Classify(scored(ReviewFloor), ids, 0); got != catalog.OutcomeReview {
+	if got, _, _ := Classify(scored(ReviewFloor), ids, 0, false); got != catalog.OutcomeReview {
 		t.Fatalf("a match at the floor: %s, want review", got)
 	}
 	// An older metaserve's search scores on its own scale: the floor says nothing.
-	if got, _, _ := Classify(cands(59, 40), ids, 0); got != catalog.OutcomeReview {
+	if got, _, _ := Classify(cands(59, 40), ids, 0, false); got != catalog.OutcomeReview {
 		t.Fatalf("a fallback's 59: %s, want review", got)
 	}
 	// A book of unknown length isn't held back by the recording's.
-	if got, _, _ := Classify(cands(90), withRuntime(357), 0); got != catalog.OutcomeAuto {
+	if got, _, _ := Classify(cands(90), withRuntime(357), 0, false); got != catalog.OutcomeAuto {
 		t.Fatalf("an unknown length: %s", got)
+	}
+	// 10-20% off is the book's edition when its narrator reads the recording; more
+	// is another edition, whoever reads it.
+	for name, tc := range map[string]struct {
+		minutes  int
+		narrated bool
+		want     string
+	}{
+		"allowed: 15% off, the narrator's":      {368, true, catalog.OutcomeAuto},
+		"denied: 15% off, no narrator vouching": {368, false, catalog.OutcomeReview},
+		"denied: 25% off, the narrator's":       {325, true, catalog.OutcomeReview},
+	} {
+		if got, _, _ := Classify(cands(95), withRuntime(tc.minutes), 7*3600+13*60, tc.narrated); got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
 	}
 }
 
@@ -475,16 +490,59 @@ func TestLengthFits(t *testing.T) {
 	for _, tc := range []struct {
 		runtimeMin int
 		seconds    float64
+		narrated   bool
 		want       bool
 	}{
-		{634, 634 * 60, true},
-		{600, 634 * 60, true},  // 5% short
-		{357, 433 * 60, false}, // the dramatization against the unabridged book
-		{0, 634 * 60, true},    // the recording states no runtime
-		{634, 0, true},         // the book's length is unknown
+		{634, 634 * 60, false, true},
+		{600, 634 * 60, false, true},  // 5% short
+		{357, 433 * 60, false, false}, // the dramatization against the unabridged book
+		{0, 634 * 60, false, true},    // the recording states no runtime
+		{634, 0, false, true},         // the book's length is unknown
+		{540, 634 * 60, false, false}, // 15% short, no narrator vouching
+		{540, 634 * 60, true, true},   // 15% short, the book's narrator reads it
+		{730, 634 * 60, true, true},   // 15% long, the book's narrator reads it
+		{508, 634 * 60, true, true},   // 19.9% short, inside the edge
+		{475, 634 * 60, true, false},  // 25% short: the narrator's other edition
+		{357, 433 * 60, true, true},   // 17.6% short, read by the book's narrator
 	} {
-		if got := lengthFits(catalog.MatchProposal{RuntimeMin: tc.runtimeMin}, tc.seconds); got != tc.want {
-			t.Errorf("lengthFits(%d min, %v s) = %v, want %v", tc.runtimeMin, tc.seconds, got, tc.want)
+		if got := lengthFits(catalog.MatchProposal{RuntimeMin: tc.runtimeMin}, tc.seconds, tc.narrated); got != tc.want {
+			t.Errorf("lengthFits(%d min, %v s, narrated %v) = %v, want %v", tc.runtimeMin, tc.seconds, tc.narrated, got, tc.want)
+		}
+	}
+}
+
+// TestNarratorReads: the book's narrator vouches for the proposed recording only
+// when metaserve found the narrator in full and that recording's credit names them;
+// a surname, no agreement, another of the work's recordings or no recording at all
+// vouch for nothing.
+func TestNarratorReads(t *testing.T) {
+	t.Parallel()
+	work := func(narrator string) *meta.MatchCandidate {
+		return &meta.MatchCandidate{Reasons: &meta.MatchReasons{Narrator: narrator}, Recordings: []meta.MatchRecording{
+			{ID: "wheaton", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
+			{ID: "bray", RuntimeMin: 540, Narrators: []meta.MetaPersonRef{{Name: "R. C. Bray"}}},
+		}}
+	}
+	proposing := func(id string) catalog.MatchProposal { return catalog.MatchProposal{RecordingID: id, RuntimeMin: 540} }
+	wheaton := []string{"Wil Wheaton"}
+	for name, tc := range map[string]struct {
+		c         *meta.MatchCandidate
+		p         catalog.MatchProposal
+		narrators []string
+		want      bool
+	}{
+		"allowed: in full, on the proposed recording":     {work("full"), proposing("wheaton"), wheaton, true},
+		"allowed: a middle initial the credit leaves out": {work("full"), proposing("wheaton"), []string{"Wil G. Wheaton"}, true},
+		"denied: in full, on another of the recordings":   {work("full"), proposing("bray"), wheaton, false},
+		"denied: a surname":                               {work("surname"), proposing("wheaton"), []string{"Wheaton"}, false},
+		"denied: no agreement":                            {work("none"), proposing("wheaton"), []string{"Ann Reader"}, false},
+		"denied: no narrator judged":                      {work(""), proposing("wheaton"), wheaton, false},
+		"denied: no reasons":                              {&meta.MatchCandidate{Recordings: work("full").Recordings}, proposing("wheaton"), wheaton, false},
+		"denied: no recording proposed":                   {work("full"), catalog.MatchProposal{}, wheaton, false},
+		"denied: a recording the work doesn't hold":       {work("full"), proposing("gone"), wheaton, false},
+	} {
+		if got := narratorReads(tc.c, tc.p, tc.narrators); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
 		}
 	}
 }
@@ -547,7 +605,7 @@ func TestClassifyIdentifierHit(t *testing.T) {
 		"a hit behind a best with no reasons":   {[]meta.MatchCandidate{{Score: 100}, hit(100, "asin")}, ids, catalog.OutcomeReview},
 		"a hit, a runner-up with no reasons":    {[]meta.MatchCandidate{hit(100, "asin"), {Score: 95}}, ids, catalog.OutcomeAuto},
 	} {
-		if got, _, _ := Classify(tc.cands, tc.p, 600*60); got != tc.want {
+		if got, _, _ := Classify(tc.cands, tc.p, 600*60, false); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
 		}
 	}
