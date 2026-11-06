@@ -789,6 +789,52 @@ func TestRefreshHoldsAnotherEdition(t *testing.T) {
 	}
 }
 
+// TestRefreshKeepsTheNarratorsLength: a book whose own ASIN names a recording 15%
+// off its length is refreshed as confidently as a match run applied it when the
+// book's narrator credit names that recording's reader; another narrator's book,
+// a "Full Cast" credit (no reader), or a plain book whose ASIN names a dramatization
+// with its reader in the cast, is held for its length.
+func TestRefreshKeepsTheNarratorsLength(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for i, tc := range []struct {
+		path, narrator string
+		readers        []meta.MetaPersonRef
+	}{
+		{"A/Wil", "Wil Wheaton", []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
+		{"A/Ann", "Ann Reader", []meta.MetaPersonRef{{Name: "Wil Wheaton"}}},
+		{"A/Full", "Full Cast", []meta.MetaPersonRef{{Name: "Full Cast"}}},
+		{"A/Drama", "Wil Wheaton", []meta.MetaPersonRef{{Name: "Wil Wheaton"}, {Name: "Full Cast"}}},
+	} {
+		asin := fmt.Sprintf("B0US00000%d", i+1)
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: tc.path, IsFolder: true,
+			Title: "Martian", Author: "Andy Weir", Narrator: tc.narrator, ASIN: asin, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+		hit := cand("the-martian", 100, "")
+		// metaserve's answer to a lookup by identifier alone: found by it, stating no dramatization
+		hit.RecordingID, hit.PlainBook, hit.Reasons = "rec", true, &meta.MatchReasons{Identifier: "asin"}
+		hit.Recordings = []meta.MatchRecording{{ID: "rec", RuntimeMin: 540, // 15% short
+			Narrators: tc.readers, ASINs: []string{asin}}}
+		e.matcher.byASIN[asin] = []meta.MatchCandidate{hit}
+	}
+
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Path != "A/Wil" || auto[0].Detail != "" {
+		t.Fatalf("auto = %+v, want the narrator's book", auto)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 3 {
+		t.Fatalf("review = %+v, want Ann, Full and Drama", review)
+	}
+	for _, it := range review {
+		if !slices.Contains([]string{"A/Ann", "A/Full", "A/Drama"}, it.Path) || it.Detail != DetailLengthDiffers {
+			t.Errorf("review %s = %+v, want held for its length", it.Path, it)
+		}
+	}
+}
+
 // TestMatchHoldsAnotherLength: a confident title match whose recording is
 // another length is held for review with the length_differs detail; one held
 // only for its score carries no detail (#134).
@@ -805,6 +851,52 @@ func TestMatchHoldsAnotherLength(t *testing.T) {
 	if len(review) != 1 || review[0].Detail != DetailLengthDiffers || review[0].Book.Duration != 634*60 ||
 		review[0].Proposal.RuntimeMin != 300 {
 		t.Fatalf("review = %+v, want length_differs", review)
+	}
+}
+
+// TestMatchTakesTheNarratorsLength: a confident match whose recording is 10-20% off
+// the book's length is applied when the book's narrator reads it (metaserve's
+// narrator reason full and the recording's credit): the same production, timed
+// differently. Another narrator's recording at that length, the narrator's at 25%, or
+// a "Full Cast" credit's (a cast names no reader) is held for its length.
+func TestMatchTakesTheNarratorsLength(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for title, narrator := range map[string]string{"Near": "Wil Wheaton", "Far": "Wil Wheaton", "Other": "Ann Reader", "Cast": "Full Cast"} {
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib, RelPath: "A/" + title, IsFolder: true,
+			Title: title, Author: "Andy Weir", Narrator: narrator, Duration: 634 * 60, AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		c := cand("the-martian", 95, "")
+		agreement, reader := "full", "Wil Wheaton"
+		switch {
+		case slices.Contains(q.Narrators, "Full Cast"):
+			reader = "Full Cast" // metaserve agrees in full with the credit it carries
+		case !slices.Contains(q.Narrators, "Wil Wheaton"):
+			agreement = "none"
+		}
+		c.Reasons = &meta.MatchReasons{Narrator: agreement}
+		minutes := map[string]int{"Near": 540, "Far": 475, "Other": 540, "Cast": 540}[q.Title] // 15%, 25%, 15%, 15% short
+		c.Recordings = []meta.MatchRecording{{ID: "wheaton", RuntimeMin: minutes,
+			Narrators: []meta.MetaPersonRef{{Name: reader}}, ASINs: []string{"B0WHEATON1"}}}
+		return []meta.MatchCandidate{c}
+	}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 || auto[0].Path != "A/Near" || auto[0].Proposal.RecordingID != "wheaton" || auto[0].Detail != "" {
+		t.Fatalf("auto = %+v, want Near on his recording", auto)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 3 {
+		t.Fatalf("review = %+v, want Far, Other and Cast", review)
+	}
+	for _, it := range review {
+		if (it.Path != "A/Far" && it.Path != "A/Other" && it.Path != "A/Cast") || it.Detail != DetailLengthDiffers {
+			t.Errorf("review %s = %+v, want held for its length", it.Path, it)
+		}
 	}
 }
 

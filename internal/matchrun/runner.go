@@ -10,6 +10,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
@@ -48,8 +49,9 @@ const (
 // know the book's ASIN or ISBN.
 const DetailIdentifierUnknown = "identifier_unknown"
 
-// DetailLengthDiffers is a review item's detail when its recording is more than
-// meta.PlausibleRuntimeOff off the book's length (lengthFits): held for review
+// DetailLengthDiffers is a review item's detail when its recording is another
+// edition by the book's length (lengthFits: more than meta.PlausibleRuntimeOff off,
+// or meta.NarratedRuntimeOff for the book's narrator's recording): held for review
 // for that, however confident the match (#134). The review words it with both
 // lengths (ItemBook.Duration, the proposal's runtime_min).
 const DetailLengthDiffers = "length_differs"
@@ -315,18 +317,19 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	if err != nil {
 		return item, err
 	}
-	noRecording := false
+	noRecording, narrated := false, false
 	if len(cands) > 0 {
 		rec := meta.DefaultRecording(&cands[0], b.Duration, o.Region, q.Narrators)
 		rec = meta.FitRecording(&cands[0], rec, b.Duration, o.Region, q.Narrators)
 		item.Proposal = Propose(&cands[0], rec)
 		noRecording = rec == nil && len(cands[0].Recordings) > 0
+		narrated = narratorReads(&cands[0], item.Proposal, q.Narrators)
 	}
-	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
+	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration, narrated)
 	switch {
 	case item.Outcome == catalog.OutcomeReview && noRecording:
 		item.Detail = DetailDramatizationOnly
-	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration):
+	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration, narrated):
 		item.Detail = DetailLengthDiffers
 	case item.Outcome == catalog.OutcomeNone && len(cands) > 0:
 		// A weak fit is no proposal: the review offers nothing to apply.
@@ -402,8 +405,11 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region, nil))
 	// The record the book's own identifier names, but another edition by length
 	// (an unabridged book holding its dramatization's ASIN): its details are not
-	// written unasked.
-	if !lengthFits(item.Proposal, b.Duration) {
+	// written unasked. The lookup sends no narrator, so metaserve judges none: the
+	// book's own credit naming the recording's reader widens the guard as in a match
+	// run (readsRecording), so a book a run applied on its narrator's say-so stays
+	// up to date.
+	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
 	// The book keeps its own identifiers (switching marketplace is a repick's):

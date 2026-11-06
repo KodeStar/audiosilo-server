@@ -715,7 +715,8 @@ func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region,
 		p := m.item.Proposal
 		d.PropASIN, d.PropISBN, d.PropMin = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN], p.RuntimeMin
 		d.Identified = d.PropASIN != "" || d.PropISBN != ""
-		d.LengthFits = lengthFits(p, m.book.Duration)
+		narrated := len(m.cands) > 0 && narratorReads(&m.cands[0], p, q.Narrators)
+		d.LengthFits = lengthFits(p, m.book.Duration, narrated)
 	}
 	for i := range m.cands {
 		d.RunCands = append(d.RunCands, diagCandOf(&m.cands[i]))

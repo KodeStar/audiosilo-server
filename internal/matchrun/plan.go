@@ -34,7 +34,8 @@ import (
 // AutoLead ahead of the next candidate (two works that both fit are a choice for
 // the admin), an ASIN or ISBN to attach (the book counts as matched by it), and,
 // when both lengths are known, a recording within meta.PlausibleRuntimeOff of the book's
-// length (the closest recording of a work can still be another edition: the
+// length, or within meta.NarratedRuntimeOff when the book's narrator reads it
+// (lengthFits; the closest recording of a work can still be another edition: the
 // unabridged book of a work that holds only its dramatization).
 // An identifier hit (the ASIN or ISBN the query sent named the work: in a run
 // always a tag hint, a book with its own being no run's subject) needs no lead:
@@ -486,19 +487,52 @@ func PlanRepick(st *catalog.MatchState, p catalog.MatchProposal) map[string]stri
 }
 
 // lengthFits reports whether a proposal's recording may be the book's edition by
-// length: within meta.PlausibleRuntimeOff of the book's seconds, or either length
-// unknown. Nothing is applied unasked otherwise (Classify, a refresh).
-func lengthFits(p catalog.MatchProposal, seconds float64) bool {
+// length: within meta.PlausibleRuntimeOff of the book's seconds, within
+// meta.NarratedRuntimeOff when the book's narrator reads it (narrated,
+// narratorReads), or either length unknown. Nothing is applied unasked otherwise
+// (Classify, a refresh).
+func lengthFits(p catalog.MatchProposal, seconds float64, narrated bool) bool {
 	off, known := meta.RuntimeOff(p.RuntimeMin, seconds)
-	return !known || off <= meta.PlausibleRuntimeOff
+	return !known || off <= meta.PlausibleRuntimeOff || (narrated && off <= meta.NarratedRuntimeOff)
+}
+
+// narratorReads reports whether the book's narrators read p's recording, one of
+// c's: metaserve found one of them in full on a recording of the work (reasons
+// narrator "full"), and the proposed recording's credit names them
+// (readsRecording), so it is that recording the narrator vouches for, not
+// another of the work's.
+func narratorReads(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []string) bool {
+	return c.Reasons != nil && c.Reasons.Narrator == "full" && readsRecording(c, p, narrators)
+}
+
+// readsRecording reports whether p's recording, one of c's, credits one of the
+// book's narrators who is a reader (meta.PersonNarrator: a "Full Cast" or
+// "Various" credit agrees with any recording carrying it, so it vouches for none),
+// and is not a dramatization of a plain book (meta.DramatizesPlainBook: the reader
+// among its cast vouches for another production).
+func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators []string) bool {
+	if p.RecordingID == "" {
+		return false
+	}
+	i := slices.IndexFunc(c.Recordings, func(r meta.MatchRecording) bool { return r.ID == p.RecordingID })
+	if i < 0 || meta.DramatizesPlainBook(c, &c.Recordings[i], narrators) {
+		return false
+	}
+	for _, n := range narrators {
+		if meta.PersonNarrator(n) && meta.ReadBy(&c.Recordings[i], []string{n}) {
+			return true
+		}
+	}
+	return false
 }
 
 // Classify sorts a book's candidates (best first) into an outcome: confident
 // (OutcomeAuto), worth a look (OutcomeReview) or none (no candidate, or none
 // scoring ReviewFloor on metaserve's scale, which only a candidate with Reasons
 // is), with the best score and the next one's. p is the
-// proposal of the best and seconds the book's length (0 = unknown).
-func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64) (outcome string, score, runnerUp int) {
+// proposal of the best, seconds the book's length (0 = unknown) and narrated
+// whether the book's narrator reads p's recording (narratorReads).
+func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64, narrated bool) (outcome string, score, runnerUp int) {
 	if len(cands) == 0 {
 		return catalog.OutcomeNone, 0, 0
 	}
@@ -512,7 +546,7 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 		lead = len(cands) == 1 || !cands[1].IdentifierHit()
 	}
 	switch {
-	case score >= AutoScore && lead && identified && lengthFits(p, seconds):
+	case score >= AutoScore && lead && identified && lengthFits(p, seconds, narrated):
 		return catalog.OutcomeAuto, score, runnerUp
 	case score < ReviewFloor && cands[0].Reasons != nil:
 		return catalog.OutcomeNone, score, runnerUp
