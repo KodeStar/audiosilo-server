@@ -383,11 +383,12 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // it, further off the length holds the book for review. It stays even when that
 // narrator reads another recording of c that fits (server#325: swapping to it gained
 // no book on the LibraForge benchmark, and swapping within NarratedRuntimeOff too lost
-// one whose hint was right). A match run calls it, where an identifier is always a tag's hint; never on
-// the book's own identifier (a refresh, a repick), which names the recording the book
-// is. rec nil (the work holds only a dramatization the book isn't) stays nil. The
-// identifier vouched for rec alone, so a plain book (MatchCandidate.PlainBook) gives
-// way to a dramatization only as when nothing named one (DefaultRecording's rule).
+// one whose hint was right). A match run calls it, where an identifier is always a
+// tag's hint; never on the book's own identifier (a refresh, a repick), which names
+// the recording the book is. rec nil (the work holds only a dramatization the book
+// isn't) stays nil. The identifier vouched for rec alone, so a plain book
+// (MatchCandidate.PlainBook) gives way to a dramatization only as when nothing named
+// one (DefaultRecording's rule).
 func FitRecording(c *MatchCandidate, rec *MatchRecording, seconds float64, region string, narrators []string) *MatchRecording {
 	fits := func(r *MatchRecording) bool {
 		off, known := RuntimeOff(r.RuntimeMin, seconds)

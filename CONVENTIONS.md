@@ -1599,12 +1599,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   marketplace's, `toCandidate`, so a book the store lists under two keeps its tags' when that store
   is the preferred one), `asin_region` names the first's;
   `meta.DefaultRecording` (never a dramatization for a book that doesn't state it is one (its text, folders, author or narrator credit, or a genre such as "Radio Drama" or "Hörspiel": `statesDramatization`), unless an identifier or a narrator names it, or the work holds only dramatizations and one is within max(1%, 2 min) of the book's length (`lengthSays`): `isDramatization`, `MatchCandidate.PlainBook`, a run's `dramatization_only`; identifier's, else among the recordings one of the book's narrators
-  reads, `readBy`: a name folding alike or every word of one in the other, either way round, that
+  reads, `ReadBy`: a name folding alike or every word of one in the other, either way round, that
   fit its length (`PlausibleRuntimeOff`; all when none does) the closest runtime, the
   preferred marketplace breaking a tie) sets each candidate's `default_recording_id`, which
   the dialog starts from (the console has no copy of the rule). A match run then takes
   `meta.FitRecording`: a recording more than 10% off the length that none of the book's
-  narrators reads (a tag hint's, metaserve's guess) gives way to one of the work's that fits,
+  narrators reads (a tag hint's, metaserve's guess) gives way to one of the work's that fits
+  (one a narrator of the book reads stays, even beside that narrator's recording that fits: server#325),
   a plain book's never a dramatization DefaultRecording's rule refuses (the hint named only its
   own recording); never in a refresh or a repick, whose identifier is the book's own. **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
@@ -1666,7 +1667,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A community position that is a range ("1-3") is written as one (`series_index` "1-3", a
   `more_series` entry's `position_end`); one the field refuses (a span over 100) is none.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
-  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a review
+  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`), or within 20%
+  when the book's narrator reads it (`meta.NarratedRuntimeOff`, `narratorReads`: metaserve's
+  `reasons.narrator` is `full` and the proposed recording's credit names them, `meta.ReadBy`; never
+  in a refresh, whose lookup sends no narrator; a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
