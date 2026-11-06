@@ -332,7 +332,7 @@ func (r *Runner) run(ctx context.Context, now time.Time) (catalog.UnknownASINRep
 	if within(last, now, minGap) {
 		return res, lookupErr // once a day, whatever restarted
 	}
-	rand.Shuffle(len(send), func(i, j int) { send[i], send[j] = send[j], send[i] })
+	rand.Shuffle(len(send), func(i, j int) { send[i], send[j] = send[j], send[i] }) //nolint:gosec // hides library and scan order, not a secret
 	for i := 0; i < len(send) && i/chunkSize < maxPosts; i += chunkSize {
 		chunk := send[i:min(i+chunkSize, len(send))]
 		err := r.meta.ReportUnknownASINs(ctx, chunk)
@@ -366,7 +366,7 @@ func (r *Runner) check(ctx context.Context, candidates []string, rows map[string
 			due = append(due, a)
 		}
 	}
-	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
+	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] }) //nolint:gosec // hides library and scan order, not a secret
 	if len(due) > maxChecks {
 		due = due[:maxChecks]
 	}
