@@ -179,6 +179,8 @@ type lfResult struct {
 	// Title is the book's title as scanned, RefTitle the reference's.
 	Title    string `json:"title"`
 	RefTitle string `json:"ref_title"`
+	// Diag is what the run saw (LF_DIAG=1 only).
+	Diag *diag `json:"diag,omitempty"`
 }
 
 // localCopy is a meta.Mirror over one artifact file.
@@ -202,7 +204,7 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 // TestLibraForge runs the benchmark:
 //
 //	LF_DATA=<data.json> LF_ARTIFACT=<meta.sqlite> [LF_REGION=us] \
-//	  [LF_OUT=<results.json>] [LF_WORKERS=8] [LF_LIMIT=n] [LF_BASE_URL=<metaserve>] \
+//	  [LF_OUT=<results.json>] [LF_DIAG=1] [LF_WORKERS=8] [LF_LIMIT=n] [LF_BASE_URL=<metaserve>] \
 //	  go test -tags benchharness -run TestLibraForge -timeout 0 -v ./internal/matchrun
 //
 // With LF_BASE_URL the books are matched through HTTP against that metaserve, as a
@@ -224,6 +226,10 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 // what each verdict was judged against, print the older judging (reference ASIN,
 // else title and author) beside it, and how often the judging agrees with the
 // v2.5.1 audit on the picks the two share.
+//
+// LF_DIAG=1 adds each book's diagnostics to LF_OUT (lfResult.Diag, diagOf):
+// what Classify saw, the query sent and the local copy's top 10 candidates in
+// full, so a change can say which books moved and why.
 func TestLibraForge(t *testing.T) {
 	dataPath, artifact := os.Getenv("LF_DATA"), os.Getenv("LF_ARTIFACT")
 	if dataPath == "" || artifact == "" {
@@ -296,7 +302,13 @@ func TestLibraForge(t *testing.T) {
 
 	// Judged afterwards, from the local copy.
 	results := make([]lfResult, len(books))
-	each(8, len(books), func(i int) { results[i] = judge(local, &books[i], &matched[i], region) })
+	diagOn := os.Getenv("LF_DIAG") == "1"
+	each(8, len(books), func(i int) {
+		results[i] = judge(local, &books[i], &matched[i], region)
+		if diagOn {
+			results[i].Diag = diagOf(local, &books[i], &matched[i], &results[i], region)
+		}
+	})
 
 	printTable(results, region)
 	waited, waitedFor := pacer.Waits()
@@ -465,40 +477,6 @@ func narratedBy(c *meta.MatchCandidate, id, credit string) bool {
 	return false
 }
 
-// sameBook is the fuzzy check for a reference without an ASIN this copy
-// knows: the work's title (alone, with its subtitle, or the part before a
-// colon on either side) reads like the reference title ("&" as "and", a
-// leading article dropped), and one of its authors' surnames is in the
-// reference author.
-func sameBook(c *meta.MatchCandidate, title, author string) bool {
-	ref := []string{normTitle(title), normTitle(beforeColon(title))}
-	work := []string{normTitle(c.Title), normTitle(c.Title + " " + c.Subtitle), normTitle(beforeColon(c.Title))}
-	same := false
-	for _, r := range ref {
-		same = same || (r != "" && slices.Contains(work, r))
-	}
-	if !same {
-		return false
-	}
-	a := match.Fold(author)
-	for _, p := range c.Authors {
-		if f := strings.Fields(p.Name); len(f) > 0 && strings.Contains(a, match.Fold(f[len(f)-1])) {
-			return true
-		}
-	}
-	return false
-}
-
-func beforeColon(s string) string { before, _, _ := strings.Cut(s, ":"); return before }
-
-func normTitle(s string) string {
-	ws := titleWords(strings.ReplaceAll(s, "&", " and "))
-	if len(ws) > 1 && (ws[0] == "the" || ws[0] == "a" || ws[0] == "an") {
-		ws = ws[1:]
-	}
-	return strings.Join(ws, " ")
-}
-
 // matchStateOf is book as Plan sees an unedited, scanned book.
 func matchStateOf(b *catalog.Book) *catalog.MatchState {
 	st := &catalog.MatchState{Title: b.Title, Author: b.Author, Duration: b.Duration, Fields: map[string]catalog.FieldValue{}}
@@ -640,4 +618,106 @@ func printTable(rs []lfResult, region string) {
 		}
 		fmt.Printf("  %-34s %5d of %5d (%.1f%%)\n", c.name, agree, shared, pct)
 	}
+}
+
+// diag is what the run saw for one book (LF_DIAG=1): whether the proposal
+// carries an identifier and its length fits (two of Classify's conditions),
+// the book's and the proposal's runtimes, the query sent, the run's own
+// candidates (run_cands: the best in full, the rest stubs) and the local copy's
+// top 10 in full (cands), with the right work's rank among them.
+type diag struct {
+	Identified bool    `json:"identified"`
+	LengthFits bool    `json:"length_fits"`
+	BookMin    float64 `json:"book_min"`
+	PropMin    int     `json:"prop_min"`
+	PropASIN   string  `json:"prop_asin,omitempty"`
+	PropISBN   string  `json:"prop_isbn,omitempty"`
+	// The query: the book's title, series, position (range), author, language,
+	// identifier hints and narrators.
+	QTitle   string            `json:"q_title,omitempty"`
+	QSeries  string            `json:"q_series,omitempty"`
+	QPos     float64           `json:"q_pos,omitempty"`
+	QPosEnd  float64           `json:"q_pos_end,omitempty"`
+	QAuthor  string            `json:"q_author,omitempty"`
+	QLang    string            `json:"q_lang,omitempty"`
+	QASIN    string            `json:"q_asin,omitempty"`
+	QISBN    string            `json:"q_isbn,omitempty"`
+	QNarr    []string          `json:"q_narr,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+	Cands    []diagCand        `json:"cands"`
+	RunCands []diagCand        `json:"run_cands"`
+	// RightRank is the right work's 1-based rank in cands (0 = absent or no
+	// right work known: the reference ASIN's, LibraForge's pick's, else v2.5.1's
+	// pick when the audit found it right), RightScore its score.
+	RightRank  int `json:"right_rank"`
+	RightScore int `json:"right_score"`
+}
+
+// diagCand is one candidate: its work, score, title, language, authors,
+// series and positions, metaserve's reasons, whether it was an identifier hit,
+// and its recordings (how many, how many with an ASIN or ISBN, their runtimes).
+type diagCand struct {
+	Work     string             `json:"work"`
+	Score    int                `json:"score"`
+	Title    string             `json:"title,omitempty"`
+	Sub      string             `json:"sub,omitempty"`
+	Lang     string             `json:"lang,omitempty"`
+	Authors  string             `json:"authors,omitempty"`
+	Series   []meta.MatchSeries `json:"series,omitempty"`
+	Reasons  *meta.MatchReasons `json:"reasons,omitempty"`
+	Hit      bool               `json:"hit,omitempty"`
+	Recs     int                `json:"recs"`
+	RecsID   int                `json:"recs_id"`
+	Runtimes []int              `json:"runtimes,omitempty"`
+}
+
+func diagCandOf(c *meta.MatchCandidate) diagCand {
+	d := diagCand{
+		Work: c.WorkID, Score: c.Score, Title: c.Title, Sub: c.Subtitle, Lang: c.Language,
+		Authors: joinNames(c.Authors), Series: c.Series, Reasons: c.Reasons, Hit: c.IdentifierHit(),
+		Recs: len(c.Recordings),
+	}
+	for _, r := range c.Recordings {
+		if len(r.ASINs) > 0 || len(r.ISBNs) > 0 {
+			d.RecsID++
+		}
+		d.Runtimes = append(d.Runtimes, r.RuntimeMin)
+	}
+	return d
+}
+
+// diagOf is m's diagnostics, the top 10 asked of the local copy again.
+func diagOf(local *meta.Service, b *lfBook, m *lfMatched, res *lfResult, region string) *diag {
+	q := QueryFor(m.book, region)
+	d := &diag{
+		BookMin: m.book.Duration / 60, Tags: b.Tags,
+		QTitle: q.Title, QSeries: q.Series, QPos: q.SeriesIndex, QPosEnd: q.SeriesIndexEnd, QAuthor: q.Author,
+		QLang: q.Language, QASIN: q.BookASIN, QISBN: q.BookISBN, QNarr: q.Narrators,
+		Cands: []diagCand{}, RunCands: []diagCand{},
+	}
+	if m.item != nil {
+		p := m.item.Proposal
+		d.PropASIN, d.PropISBN, d.PropMin = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN], p.RuntimeMin
+		d.Identified = d.PropASIN != "" || d.PropISBN != ""
+		d.LengthFits = lengthFits(p, m.book.Duration)
+	}
+	for i := range m.cands {
+		d.RunCands = append(d.RunCands, diagCandOf(&m.cands[i]))
+	}
+	q.Limit = 10
+	full, err := local.Candidates(context.Background(), q)
+	if err != nil {
+		return d
+	}
+	right := cmp.Or(res.RefWork, res.LFWork)
+	if right == "" && res.HandRight {
+		right = res.HandWork
+	}
+	for i := range full {
+		d.Cands = append(d.Cands, diagCandOf(&full[i]))
+		if right != "" && full[i].WorkID == right && d.RightRank == 0 {
+			d.RightRank, d.RightScore = i+1, full[i].Score
+		}
+	}
+	return d
 }
