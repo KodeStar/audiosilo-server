@@ -1650,7 +1650,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `library.SetNamesForBench` likewise): the LibraForge books through the run's own `matchBook`
   against a local artifact in mirror mode, or through HTTP with `LF_BASE_URL` (the run's workers and
   pacing, its time reported, the right answers read afterwards from the artifact so a proxy counts
-  only the run's requests), counted per outcome (run line in its doc comment). A
+  only the run's requests), counted per outcome and judged by the reference ASIN, else (a reference
+  with no ASIN) LibraForge's hand-checked pick, else v2.5.1's audited verdict on the same work, else
+  title and author, each its own bucket (run line in its doc comment). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
   book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
