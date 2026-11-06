@@ -420,6 +420,23 @@ func TestPathTitleProvenance(t *testing.T) {
 			t.Errorf("%s: title = %+v, want %q from %s", tc.path, f, tc.title, tc.want)
 		}
 	}
+	// The position such a title gives (titlePosition) reads as the path's too.
+	path := "Mark Tufo/Mark Tufo; Indian Hill; Book XX; Indian Hill 5: Into the Fire"
+	b := &Book{LibraryID: lib.ID, RelPath: path, IsFolder: true, Title: "Indian Hill 5: Into the Fire",
+		Author: "Mark Tufo", Series: "Indian Hill", AddedAt: "2020-01-01"}
+	if _, err := c.UpsertBook(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.AdminBookDetail(ctx, lib.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := d.Fields[FieldTitle]; f.Source != SourcePath {
+		t.Errorf("title = %+v, want from %s", f, SourcePath)
+	}
+	if f := d.Fields[FieldSeriesIndex]; f.Value != "5" || f.Source != SourcePath {
+		t.Errorf("position = %+v, want 5 from %s", f, SourcePath)
+	}
 }
 
 // TestLegacyRowProvenance: a row backfilled by migration 0016 reads the same way

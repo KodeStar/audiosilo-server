@@ -512,11 +512,8 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 // precedence: refreshEffective writes its values to the books row and the book page
 // shows it as provenance, so the two can never disagree.
 func (l *bookLayers) resolve() map[string]FieldValue {
-	scanned, baseline, layout := l.scannedFields()
-	// The title TitleNotSeries may take from the path in place of an album that
-	// only names the series ("Mark Tufo; Indian Hill; Book 05; Into the Fire"),
-	// which the baseline doesn't read.
-	pathTitle := bookFields{FieldTitle: metadata.PathTitle(l.path, l.isFolder)}
+	scanned, baseline, layout, title := l.scannedFields()
+	pathTitle := bookFields{FieldTitle: title}
 	out := make(map[string]FieldValue, len(OverrideFields))
 	for _, field := range OverrideFields {
 		fv := FieldValue{Value: scanned[field], Scanned: scanned[field]}
@@ -541,7 +538,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 }
 
 // scannedFields is what the scan says for each field, with the path readings a
-// value is told apart by (one equal to either is SourcePath, else a tag's; layout
+// value is told apart by (one equal to any is SourcePath, else a tag's; layout
 // is nil outside a library that prefers its folders). The stored snapshot is the
 // tags over the scan's path baseline (metadata.DeriveFromPath). A library that
 // prefers its folders reads the path with the layout instead
@@ -556,14 +553,20 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // or dropped. An Audiobookshelf metadata.json's values then go over all of it
 // (overABS).
 //
+// pathTitle is one more path reading of the title: the one
+// metadata.TitleNotSeries may take in place of an album that only names the
+// series (metadata.PathTitle: "Mark Tufo; Indian Hill; Book 05; Into the Fire"),
+// which the baseline doesn't read.
+//
 // A series with no position takes the one its title gives
 // (titlePosition), so the untagged copies of a numbered series still sit in it
 // by number.
-func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
+func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields, pathTitle string) {
 	scanned, baseline, layout = l.readScanned()
 	scanned = l.overABS(scanned)
-	scanned, baseline = titlePosition(scanned, baseline, layout)
-	return scanned, baseline, layout
+	pathTitle = metadata.PathTitle(l.path, l.isFolder)
+	scanned, baseline = titlePosition(scanned, baseline, layout, pathTitle)
+	return scanned, baseline, layout, pathTitle
 }
 
 // titlePosition is scanned with the position its title gives
@@ -571,7 +574,7 @@ func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
 // is #4 of He Who Fights With Monsters) when it has a series and no position,
 // and baseline with it too when the title is the path's (so the position reads
 // as the path's, else a tag's); both unchanged otherwise.
-func titlePosition(scanned, baseline, layout bookFields) (bookFields, bookFields) {
+func titlePosition(scanned, baseline, layout bookFields, pathTitle string) (bookFields, bookFields) {
 	if scanned[FieldSeries] == "" || ParseSeriesIndex(scanned[FieldSeriesIndex]) != 0 {
 		return scanned, baseline
 	}
@@ -581,7 +584,7 @@ func titlePosition(scanned, baseline, layout bookFields) (bookFields, bookFields
 	}
 	scanned = maps.Clone(scanned)
 	scanned[FieldSeriesIndex] = FormatSeriesPosition(p)
-	if t := scanned[FieldTitle]; t == baseline[FieldTitle] || (layout != nil && t == layout[FieldTitle]) {
+	if t := scanned[FieldTitle]; t == baseline[FieldTitle] || t == pathTitle || (layout != nil && t == layout[FieldTitle]) {
 		baseline = maps.Clone(baseline)
 		baseline[FieldSeriesIndex] = scanned[FieldSeriesIndex]
 	}
