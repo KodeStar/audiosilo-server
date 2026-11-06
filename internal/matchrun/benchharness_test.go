@@ -35,6 +35,10 @@ import (
 // lfBook is one benchmark book as data.json records it: its folder (f, under
 // the library root), its file, its runtime in minutes, its ffprobe tag map and
 // the right answer (ref; asin "" when it has no confirmed Audible listing).
+// Cls, Match and Trace are LibraForge's own pick, hand-checked: its class
+// (rightBook), the listing it chose and its trace, whose last "X MATCH:" header
+// names the store the listing is from. O holds the hand-audited verdicts of
+// other tools, O["audiosilo"] = [class, asin] for AudioSilo v2.5.1.
 type lfBook struct {
 	F    string            `json:"f"`
 	File string            `json:"file"`
@@ -43,6 +47,96 @@ type lfBook struct {
 	Ref  struct {
 		ASIN, Title, Author, Narrator string
 	} `json:"ref"`
+	Cls   string `json:"cls"`
+	Match struct {
+		ASIN, ISBN string
+	} `json:"match"`
+	Trace []string            `json:"trace"`
+	O     map[string][]string `json:"o"`
+}
+
+// rightBook is a hand-checked class that names the right book: fully
+// correct, a field off, another recording of it, or held with the right pick.
+// LibraForge's classes and the audited AudioSilo ones share these names.
+var rightBook = []string{"correct", "partial", "recording", "correct-held"}
+
+// What a verdict was judged against (lfResult.JudgedBy).
+const (
+	byRefASIN = "ref_asin" // the work the reference ASIN names
+	byLFPick  = "lf_pick"  // the work LibraForge's hand-checked pick names (no reference ASIN)
+	byHand    = "hand"     // the same pick as v2.5.1's, whose hand-audited verdict it takes
+	byTitle   = "title"    // the reference title and author alone: the last resort
+)
+
+// lfPick is the listing LibraForge's hand-checked pick names, when it named
+// the right book: its ASIN when the pick is an Audible listing (another
+// store's id is no ASIN), and its ISBN from any store. recording says the
+// pick is another recording of the book, not the book's own.
+func lfPick(b *lfBook) (asin, isbn string, recording bool) {
+	if !slices.Contains(rightBook, b.Cls) {
+		return "", "", false
+	}
+	if lfSource(b.Trace) == "AUDIBLE" {
+		asin = strings.TrimSpace(b.Match.ASIN)
+	}
+	return asin, strings.TrimSpace(b.Match.ISBN), b.Cls == "recording"
+}
+
+// lfSource is the store of the last "X MATCH:" header in a LibraForge trace
+// ("AUDIBLE", "AUDIOBOOK GUILD", "GOODREADS", ...), "" when it has none.
+func lfSource(trace []string) string {
+	src := ""
+	for _, l := range trace {
+		l = strings.TrimSpace(l)
+		head, ok := strings.CutSuffix(l, " MATCH:")
+		if ok && head != "" && !strings.ContainsFunc(head, func(r rune) bool {
+			return (r < 'A' || r > 'Z') && r != ' '
+		}) {
+			src = head
+		}
+	}
+	return src
+}
+
+// handVerdict is the hand-audited AudioSilo v2.5.1 verdict on b: the listing
+// it picked and whether that was the right book; ok is false when v2.5.1
+// picked nothing (or wasn't run).
+func handVerdict(b *lfBook) (asin, class string, right, ok bool) {
+	v := b.O["audiosilo"]
+	if len(v) < 2 || v[1] == "" || v[0] == "none" || v[0] == "not run" {
+		return "", "", false, false
+	}
+	return v[1], v[0], slices.Contains(rightBook, v[0]), true
+}
+
+// answers are what a book's top work is judged against.
+type answers struct {
+	refWork    string // the work the reference ASIN names ("" when this copy knows none)
+	refHasASIN bool
+	lfWork     string // the work LibraForge's pick names
+	handWork   string // the work v2.5.1's hand-audited pick names
+	handRight  bool   // and whether the audit found it the right book
+	titleSame  func() bool
+}
+
+// verdictOf judges the top work: against the reference ASIN's work; for a
+// reference with no ASIN, else against the work LibraForge's pick names, else
+// by the audited v2.5.1 verdict when v2.5.1 picked the same work; else by the
+// reference title and author (titleSame; nil when the reference has no title,
+// and the book is unjudged).
+func verdictOf(top string, a answers) (right, unjudged bool, by string) {
+	switch {
+	case a.refWork != "":
+		return top == a.refWork, false, byRefASIN
+	case !a.refHasASIN && a.lfWork != "":
+		return top == a.lfWork, false, byLFPick
+	case !a.refHasASIN && a.handWork != "" && top == a.handWork:
+		return a.handRight, false, byHand
+	case a.titleSame == nil:
+		return false, true, ""
+	default:
+		return a.titleSame(), false, byTitle
+	}
 }
 
 // lfResult is one book's result, written to LF_OUT for comparing two runs.
@@ -54,12 +148,27 @@ type lfResult struct {
 	RunnerUp int    `json:"runner_up"`
 	Work     string `json:"work,omitempty"`
 	RefWork  string `json:"ref_work,omitempty"`
-	// Right: the top candidate is the right work (by the reference ASIN's
-	// work, else by title and author). RecordingRight: and the recording the
-	// proposal picked is the reference's (its ASIN's, else its narrator).
+	// Right: the top candidate is the right work (verdictOf; JudgedBy says by
+	// what). RecordingRight: and the recording the proposal picked is the
+	// reference's (its ASIN's, else LibraForge's pick's, else its narrator).
 	Right bool `json:"right"`
 	// Unjudged: the reference names no work this copy knows and no title.
-	Unjudged       bool   `json:"unjudged,omitempty"`
+	Unjudged bool   `json:"unjudged,omitempty"`
+	JudgedBy string `json:"judged_by,omitempty"`
+	// RefHasASIN: the reference has an ASIN (known to this copy or not).
+	// LFWork: the work LibraForge's pick names, for a reference without one.
+	RefHasASIN bool   `json:"ref_has_asin"`
+	LFWork     string `json:"lf_work,omitempty"`
+	// TitleRight and TitleUnjudged are the verdict by the reference ASIN, else
+	// by title and author alone (the judging before LibraForge's pick was
+	// read), kept to compare with older results files.
+	TitleRight    bool `json:"title_right"`
+	TitleUnjudged bool `json:"title_unjudged,omitempty"`
+	// Hand is the hand-audited v2.5.1 class (handVerdict), HandWork the work
+	// its listing names: where HandWork is Work, both judged the same pick.
+	Hand           string `json:"hand,omitempty"`
+	HandWork       string `json:"hand_work,omitempty"`
+	HandRight      bool   `json:"hand_right,omitempty"`
 	RecordingRight bool   `json:"recording_right"`
 	Tidied         string `json:"tidied,omitempty"`
 	// Title is the book's title as scanned, RefTitle the reference's.
@@ -102,6 +211,14 @@ func (c *capture) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.Mat
 // metadata.applyProbe), runtime = min*60, then matched by the run's own
 // matchBook (QueryFor, Candidates, Propose/DefaultRecording, Classify). The
 // tags' ASIN, ISBN and language are the book's hints, as a scan reads them.
+//
+// Each top work is judged (verdictOf) against the reference ASIN's work; for a
+// reference with no ASIN, against the work LibraForge's hand-checked pick names,
+// else by the audited v2.5.1 verdict when v2.5.1 picked the same work; title and
+// author are the last resort. The tables split by reference ASIN or none and by
+// what each verdict was judged against, print the older judging (reference ASIN,
+// else title and author) beside it, and how often the judging agrees with the
+// v2.5.1 audit on the picks the two share.
 func TestLibraForge(t *testing.T) {
 	dataPath, artifact := os.Getenv("LF_DATA"), os.Getenv("LF_ARTIFACT")
 	if dataPath == "" || artifact == "" {
@@ -239,19 +356,27 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 	}
 	res.Outcome, res.Detail, res.Score, res.RunnerUp = item.Outcome, item.Detail, item.Score, item.RunnerUp
 
-	// The right work: the one the reference ASIN names in this copy.
+	// The right work: the one the reference ASIN names in this copy, else (no
+	// reference ASIN) the one LibraForge's hand-checked pick names.
 	var refRec string
-	if b.Ref.ASIN != "" {
-		var hits []meta.MatchCandidate
-		var err error
-		for range 3 { // a busy machine's timeout isn't an unknown ASIN
-			if hits, err = local.Candidates(ctx, meta.MatchQuery{ASIN: b.Ref.ASIN, Limit: 1, NoSeries: true}); err == nil {
-				break
-			}
+	res.RefHasASIN = b.Ref.ASIN != ""
+	if res.RefHasASIN {
+		res.RefWork, refRec = lookup(ctx, local, meta.MatchQuery{ASIN: b.Ref.ASIN})
+	} else if asin, isbn, recording := lfPick(b); asin != "" || isbn != "" {
+		var rec string
+		if asin != "" {
+			res.LFWork, rec = lookup(ctx, local, meta.MatchQuery{ASIN: asin})
 		}
-		if err == nil && len(hits) > 0 {
-			res.RefWork, refRec = hits[0].WorkID, hits[0].RecordingID
+		if res.LFWork == "" && isbn != "" {
+			res.LFWork, rec = lookup(ctx, local, meta.MatchQuery{ISBN: isbn})
 		}
+		if !recording {
+			refRec = rec
+		}
+	}
+	if asin, class, right, ok := handVerdict(b); ok {
+		res.Hand, res.HandRight = class, right
+		res.HandWork, _ = lookup(ctx, local, meta.MatchQuery{ASIN: asin})
 	}
 	if len(m.cands) == 0 {
 		return res
@@ -268,14 +393,15 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 			}
 		}
 	}
-	switch {
-	case res.RefWork != "":
-		res.Right = top.WorkID == res.RefWork
-	case strings.TrimSpace(b.Ref.Title) == "":
-		res.Unjudged = true
-	default:
-		res.Right = sameBook(top, b.Ref.Title, b.Ref.Author)
+	var titleSame func() bool
+	if strings.TrimSpace(b.Ref.Title) != "" {
+		titleSame = func() bool { return sameBook(top, b.Ref.Title, b.Ref.Author) }
 	}
+	res.Right, res.Unjudged, res.JudgedBy = verdictOf(top.WorkID, answers{
+		refWork: res.RefWork, refHasASIN: res.RefHasASIN, lfWork: res.LFWork,
+		handWork: res.HandWork, handRight: res.HandRight, titleSame: titleSame,
+	})
+	res.TitleRight, res.TitleUnjudged, _ = verdictOf(top.WorkID, answers{refWork: res.RefWork, refHasASIN: true, titleSame: titleSame})
 	if res.Right {
 		// A weak match proposes nothing: then the recording the run would pick.
 		pick := cmp.Or(item.Proposal.RecordingID, top.DefaultRecordingID)
@@ -288,6 +414,23 @@ func judge(local *meta.Service, b *lfBook, m *lfMatched, region string) lfResult
 		}
 	}
 	return res
+}
+
+// lookup is the work and recording an identifier query names in the local
+// copy ("" when it knows none).
+func lookup(ctx context.Context, local *meta.Service, q meta.MatchQuery) (work, recording string) {
+	q.Limit, q.NoSeries = 1, true
+	var hits []meta.MatchCandidate
+	var err error
+	for range 3 { // a busy machine's timeout isn't an unknown identifier
+		if hits, err = local.Candidates(ctx, q); err == nil {
+			break
+		}
+	}
+	if err != nil || len(hits) == 0 {
+		return "", ""
+	}
+	return hits[0].WorkID, hits[0].RecordingID
 }
 
 // narratedBy reports whether recording id of c is read by the reference
@@ -357,23 +500,40 @@ func matchStateOf(b *catalog.Book) *catalog.MatchState {
 	return st
 }
 
-func printTable(rs []lfResult, region string) {
+// verdict is a judging of one result: whether its top work is right, and
+// whether it could be judged at all.
+type verdict func(r *lfResult) (right, unjudged bool)
+
+func newJudging(r *lfResult) (bool, bool)   { return r.Right, r.Unjudged }
+func titleJudging(r *lfResult) (bool, bool) { return r.TitleRight, r.TitleUnjudged }
+
+// tableKeys are the rows of a table, in order.
+var tableKeys = []string{"auto-right", "auto-right, recording right", "auto-wrong", "auto-unjudged", "review-right", "review-wrong", "review-unjudged",
+	"none", "none: weak_match", "none: weak_match, top was right", "error", "auto: title tidied", "auto: title tidied to the reference"}
+
+// tally counts the results keep admits per row of tableKeys, judged by v.
+func tally(rs []lfResult, keep func(*lfResult) bool, v verdict) map[string]int {
 	count := map[string]int{}
-	for _, r := range rs {
+	for i := range rs {
+		r := &rs[i]
+		if !keep(r) {
+			continue
+		}
+		right, unjudged := v(r)
 		key := r.Outcome
 		switch r.Outcome {
 		case catalog.OutcomeAuto, catalog.OutcomeReview:
-			key += map[bool]string{true: "-right", false: "-wrong"}[r.Right]
-			if r.Unjudged {
+			key += map[bool]string{true: "-right", false: "-wrong"}[right]
+			if unjudged {
 				key = r.Outcome + "-unjudged"
 			}
-			if r.Outcome == catalog.OutcomeAuto && r.Right && r.RecordingRight {
+			if r.Outcome == catalog.OutcomeAuto && right && r.RecordingRight {
 				count["auto-right, recording right"]++
 			}
 		case catalog.OutcomeNone:
 			if r.Detail == DetailWeakMatch {
 				count["none: weak_match"]++
-				if r.Right {
+				if right {
 					count["none: weak_match, top was right"]++
 				}
 			}
@@ -386,10 +546,83 @@ func printTable(rs []lfResult, region string) {
 			}
 		}
 	}
+	return count
+}
+
+// column is one column of a printed table.
+type column struct {
+	name string
+	keep func(*lfResult) bool
+	v    verdict
+}
+
+func printColumns(title string, rs []lfResult, cols []column) {
+	fmt.Printf("\n%s\n  %-34s", title, "")
+	counts := make([]map[string]int, len(cols))
+	for i, c := range cols {
+		fmt.Printf(" %12s", c.name)
+		counts[i] = tally(rs, c.keep, c.v)
+	}
+	fmt.Println()
+	for _, k := range tableKeys {
+		fmt.Printf("  %-34s", k)
+		for _, c := range counts {
+			fmt.Printf(" %12d", c[k])
+		}
+		fmt.Println()
+	}
+}
+
+// agreement is how often v agrees with the hand-audited v2.5.1 verdict on the
+// results keep admits where both judged the same pick (the top work is the
+// work v2.5.1's listing names) and v could judge it without taking that
+// verdict (byHand).
+func agreement(rs []lfResult, keep func(*lfResult) bool, v verdict) (agree, shared int) {
+	for i := range rs {
+		r := &rs[i]
+		if !keep(r) || r.Work == "" || r.HandWork != r.Work || r.JudgedBy == byHand {
+			continue
+		}
+		right, unjudged := v(r)
+		if unjudged {
+			continue
+		}
+		shared++
+		if right == r.HandRight {
+			agree++
+		}
+	}
+	return agree, shared
+}
+
+func printTable(rs []lfResult, region string) {
+	all := func(*lfResult) bool { return true }
+	withASIN := func(r *lfResult) bool { return r.RefHasASIN }
+	noASIN := func(r *lfResult) bool { return !r.RefHasASIN }
+	judgedBy := func(by string) func(*lfResult) bool {
+		return func(r *lfResult) bool { return r.JudgedBy == by }
+	}
 	fmt.Printf("\nLibraForge harness: %d books, region %q\n", len(rs), region)
-	keys := []string{"auto-right", "auto-right, recording right", "auto-wrong", "auto-unjudged", "review-right", "review-wrong", "review-unjudged",
-		"none", "none: weak_match", "none: weak_match, top was right", "error", "auto: title tidied", "auto: title tidied to the reference"}
-	for _, k := range keys {
-		fmt.Printf("  %-34s %5d\n", k, count[k])
+	printColumns("Judged by the reference ASIN, else LibraForge's pick, else v2.5.1's audited pick, else title and author:", rs, []column{
+		{"all", all, newJudging}, {"ref ASIN", withASIN, newJudging}, {"no ref ASIN", noASIN, newJudging},
+	})
+	printColumns("The same, by what each verdict was judged against (unjudged in none):", rs, []column{
+		{"ref ASIN", judgedBy(byRefASIN), newJudging}, {"LF pick", judgedBy(byLFPick), newJudging},
+		{"v2.5.1 hand", judgedBy(byHand), newJudging}, {"title only", judgedBy(byTitle), newJudging},
+	})
+	printColumns("Judged by the reference ASIN, else title and author (the older judging):", rs, []column{
+		{"all", all, titleJudging}, {"ref ASIN", withASIN, titleJudging}, {"no ref ASIN", noASIN, titleJudging},
+	})
+	fmt.Println("\nAgreement with the hand-audited v2.5.1 verdict where both judged the same pick (not by it):")
+	for _, c := range []column{
+		{"all", all, newJudging}, {"ref ASIN", withASIN, newJudging}, {"no ref ASIN", noASIN, newJudging},
+		{"no ref ASIN, older judging", noASIN, titleJudging},
+	} {
+		agree, shared := agreement(rs, c.keep, c.v)
+		pct := 0.0
+		if shared > 0 {
+			pct = 100 * float64(agree) / float64(shared)
+		}
+		fmt.Printf("  %-34s %5d of %5d (%.1f%%)\n", c.name, agree, shared, pct)
 	}
 }
