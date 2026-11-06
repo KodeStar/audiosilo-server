@@ -254,6 +254,9 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, lib *catal
 	d.CommunityCheckFailed = !checking && a.chapterChecks != nil && a.chapterChecks.Failed(ref)
 	b := d.Book
 	d.MatchQuery = meta.SearchPrefill(b.Title, b.Author, b.Series, b.Path, b.IsFolder)
+	if d.CommunityMatch != nil && a.meta != nil {
+		d.CommunityMatch.WebURL = a.meta.WorkURL(d.CommunityMatch.WorkID)
+	}
 	if b.Ebook != nil {
 		d.Book.Readalong = a.readalongOf(r.Context(), lib, b.Path, b.IsFolder, b.Ebook.Path, adminAudioFiles(d))
 	}
@@ -297,6 +300,18 @@ type editRequest struct {
 	// ChapterSource picks where the chapters come from: "files", "community"
 	// or "auto" (catalog.BookEdit.ChapterSource).
 	ChapterSource string `json:"chapter_source"`
+	// Match records the community match the edit was taken from (the match
+	// dialog's accept, with source "community"): the work and recording, with
+	// or without an ASIN or ISBN (catalog.BookEdit.Match, made "accepted").
+	// {"work_id": ""} removes the book's recorded match. One book at a time: a
+	// bulk edit refuses it.
+	Match *matchRequest `json:"match"`
+}
+
+// matchRequest is an edit's community match (editRequest.Match).
+type matchRequest struct {
+	WorkID      string `json:"work_id"`
+	RecordingID string `json:"recording_id"`
 }
 
 func (e editRequest) toEdit(userID int64) catalog.BookEdit {
@@ -304,6 +319,9 @@ func (e editRequest) toEdit(userID int64) catalog.BookEdit {
 		ChapterSource: e.ChapterSource, UserID: userID}
 	if e.Chapters != nil {
 		edit.ChapterSet, edit.ChapterRevert = e.Chapters.Set, e.Chapters.Revert
+	}
+	if e.Match != nil {
+		edit.Match = &catalog.MatchAnchor{WorkID: e.Match.WorkID, RecordingID: e.Match.RecordingID, How: catalog.MatchHowAccepted}
 	}
 	return edit
 }
@@ -343,12 +361,15 @@ func (e editRequest) details() map[string]any {
 	if e.ChapterSource != "" {
 		d["chapter_source"] = e.ChapterSource
 	}
+	if e.Match != nil {
+		d["match"] = e.Match.WorkID // "" = the recorded match removed
+	}
 	return d
 }
 
 func (e editRequest) empty() bool {
 	return len(e.Set) == 0 && len(e.Revert) == 0 && len(e.Add) == 0 && len(e.Remove) == 0 && e.ChapterSource == "" &&
-		(e.Chapters == nil || (len(e.Chapters.Set) == 0 && len(e.Chapters.Revert) == 0))
+		(e.Chapters == nil || (len(e.Chapters.Set) == 0 && len(e.Chapters.Revert) == 0)) && e.Match == nil
 }
 
 // handleAdminEditBook serves PATCH /admin/libraries/{id}/book?path=: set or revert
@@ -396,6 +417,9 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	case req.empty():
 		writeError(w, http.StatusBadRequest, "nothing to change")
+		return
+	case req.Match != nil:
+		writeError(w, http.StatusBadRequest, "a community match is recorded one book at a time")
 		return
 	}
 	if err := a.cat.EditBooks(r.Context(), req.Books, req.toEdit(userFrom(r.Context()).ID)); err != nil {
