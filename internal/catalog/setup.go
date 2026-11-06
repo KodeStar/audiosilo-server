@@ -129,7 +129,7 @@ func ResolveScanned(b *Book, source string) ScannedNames {
 	if b.IsFolder {
 		l.abs = absFields(b.ABS.File)
 	}
-	f, _, _, _ := l.scannedFields()
+	f, _, _ := l.scannedFields()
 	return ScannedNames{
 		Title: f[FieldTitle], Author: f[FieldAuthor], Narrator: f[FieldNarrator],
 		Series: f[FieldSeries], Position: f[FieldSeriesIndex],
