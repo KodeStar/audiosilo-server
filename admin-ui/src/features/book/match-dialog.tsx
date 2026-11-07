@@ -64,6 +64,8 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...`
  * the work (by the book's own facts, words, or an ASIN / ISBN), then compare
  * field by field and accept the ticked ones. The admin's own edits start
  * unticked, and so does the community cover for a book with art of its own.
+ * The book's recorded match starts picked, and a book with no ASIN or ISBN can be
+ * matched to a work with nothing else taken (its recorded match is what matches it).
  * Covers are fetched by the server (the console's CSP loads no other host's
  * images). Each opening starts afresh, at the search.
  *
@@ -182,10 +184,27 @@ function MatchBody({
   const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
-  const picked = candidates.find((c) => c.work_id === pickId) ?? candidates[0];
-  const recordingOf = (c: MatchCandidate, id = recId) =>
-    c.recordings?.find((r) => r.id === id) ?? defaultRecording(c);
+  // The book's recorded match: its work starts picked when the search finds it.
+  const current = detail.community_match;
+  const picked =
+    candidates.find((c) => c.work_id === (pickId ?? current?.work_id)) ?? candidates[0];
+  // The recording chosen here, else the recorded one while its work still lists it,
+  // else the likeliest.
+  const recordingOf = (c: MatchCandidate, id = recId) => {
+    const recs = c.recordings ?? [];
+    const recorded = c.work_id === current?.work_id ? current.recording_id : undefined;
+    return (
+      recs.find((r) => r.id === id) ?? recs.find((r) => r.id === recorded) ?? defaultRecording(c)
+    );
+  };
   const rec = picked ? recordingOf(picked) : undefined;
+  // A book with no ASIN or ISBN is matched by its recorded community work alone, so
+  // a pick that differs from it (work or recording) is itself something to accept.
+  const recordsMatch =
+    !!picked &&
+    !detail.fields.asin.value &&
+    !detail.fields.isbn.value &&
+    (current?.work_id !== picked.work_id || (current?.recording_id ?? '') !== (rec?.id ?? ''));
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
   const coverUrl = picked ? communityCover(picked, rec) : '';
   // defaultCoverTick never ticks a candidate without a cover.
@@ -209,26 +228,26 @@ function MatchBody({
   };
 
   const accept = async () => {
+    if (!picked) return;
     setBusy(true);
+    // The work and recording go with the ticked fields (acceptRequest's match),
+    // before the cover. With no field ticked the cover goes first, then the match
+    // alone when it records one (recordsMatch), so a cover that fails still leaves
+    // nothing changed.
+    const edit = () =>
+      api
+        .editBook(b.library_id, b.path, acceptRequest(rows, ticks, picked, rec))
+        .then((next) => settleBookEdit(qc, next));
     try {
-      // The work and recording go with the fields (acceptRequest's match): a
-      // cover alone records no match, so a cover that fails leaves nothing changed.
-      if (ticks.size && picked) {
-        settleBookEdit(
-          qc,
-          await api.editBook(b.library_id, b.path, acceptRequest(rows, ticks, picked, rec)),
-        );
-      }
+      if (ticks.size) await edit();
     } catch (err) {
       setBusy(false);
       toastError(t('book.match.acceptFailed'), err);
       return;
     }
+    const failed = (err: unknown) => err ?? new Error('failed');
     const coverErr: unknown = coverTick
-      ? await api.setCommunityCover(b.library_id, b.path, coverUrl).then(
-          () => invalidateBookCover(qc, b),
-          (err: unknown) => err ?? new Error('cover failed'),
-        )
+      ? await api.setCommunityCover(b.library_id, b.path, coverUrl).then(() => undefined, failed)
       : undefined;
     if (coverErr) {
       toastError(
@@ -240,14 +259,33 @@ function MatchBody({
       else setBusy(false);
       return;
     }
+    const matchErr: unknown =
+      !ticks.size && recordsMatch ? await edit().then(() => undefined, failed) : undefined;
+    // The cover's reads wait for the match: a read of the book racing it could land
+    // after it, and show the book unmatched.
+    if (coverTick) invalidateBookCover(qc, b);
+    if (matchErr) {
+      toastError(
+        t(coverTick ? 'book.match.matchFailedCoverTaken' : 'book.match.matchFailed'),
+        matchErr,
+      );
+      // A cover taken is a change, so close; with nothing taken, stay.
+      if (coverTick) onDone();
+      else setBusy(false);
+      return;
+    }
     const tookEdits = rows.some((r) => ticks.has(r.field) && r.offered && r.source === 'edited');
-    toast.add({
-      title: t('book.match.accepted', { count: taking }),
-      description: tookEdits
-        ? t('book.match.acceptedTitle', { title: picked?.title ?? '' })
-        : t('book.match.acceptedBody'),
-      type: 'success',
-    });
+    toast.add(
+      taking
+        ? {
+            title: t('book.match.accepted', { count: taking }),
+            description: tookEdits
+              ? t('book.match.acceptedTitle', { title: picked.title })
+              : t('book.match.acceptedBody'),
+            type: 'success',
+          }
+        : { title: t('book.match.matchRecorded', { title: picked.title }), type: 'success' },
+    );
     onDone();
   };
 
@@ -340,9 +378,9 @@ function MatchBody({
         <DialogClose render={<Button type="button" variant="ghost" />}>
           {t('common.cancel')}
         </DialogClose>
-        <Button onClick={() => void accept()} disabled={busy || taking === 0}>
+        <Button onClick={() => void accept()} disabled={busy || (taking === 0 && !recordsMatch)}>
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-          {t('book.match.accept', { count: taking })}
+          {taking ? t('book.match.accept', { count: taking }) : t('book.match.acceptMatch')}
         </Button>
       </DialogFooter>
     </>

@@ -22,14 +22,15 @@ var ErrRunNotReady = errors.New("the match run is not ready to apply")
 
 // Match run modes.
 const (
-	// MatchModeMatch matches the books with no ASIN or ISBN.
+	// MatchModeMatch matches the books not matched yet: no ASIN or ISBN and no
+	// recorded community match (UnmatchedBooks).
 	MatchModeMatch = "match"
 	// MatchModeRepick looks again at books whose ASIN a community match set, for
 	// the same recording's ASIN in the preferred marketplace.
 	MatchModeRepick = "repick"
-	// MatchModeRefresh looks the books with an ASIN or ISBN up by it, to fill in
-	// the details an identifier alone didn't bring (an enrichment, an apply of
-	// ids only).
+	// MatchModeRefresh looks the books with an ASIN or ISBN up by it, and a book
+	// matched with neither by its recorded community match (MatchedBooks), to fill
+	// in the details the match didn't bring (an enrichment, an apply of ids only).
 	MatchModeRefresh = "refresh"
 )
 
@@ -109,9 +110,9 @@ type MatchProposal struct {
 	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
 	// FoundBy is the book's own identifier a refresh found the record by, or
 	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>", or for a
-	// refresh of a book matched with neither its recorded work, "work:<id>"
-	// ("" for a match run, and a repick recorded before 2.4.0): applying it is
-	// for a book that still has it.
+	// refresh of a book matched with neither its recorded match, "work:<work id>"
+	// then "/<recording id>" when it names one ("" for a match run, and a repick
+	// recorded before 2.4.0): applying it is for a book that still has it.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }

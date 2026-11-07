@@ -74,7 +74,9 @@ const DetailWeakMatch = "weak_match"
 
 // DetailCoverPending is a match item's detail while its fields went in but a stop
 // cut its cover short: still to apply, so the next apply takes the cover, the
-// ASIN or ISBN the book has now being the run's own (not matchedSince).
+// ASIN or ISBN and recorded match the book has now being the run's own (not
+// matchedSince, unless the book was matched again by hand since; its match is
+// not recorded again: planFor).
 const DetailCoverPending = "cover_pending"
 
 // ErrBusy is a start or apply asked while a run is working: one at a time.
@@ -434,8 +436,9 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	}
 	if byWork {
 		// A book matched by its work alone has no identifier to keep: one its
-		// recording gained since fills in (every scope fills a missing identifier).
-		item.Proposal.FoundBy = "work:" + b.MatchWorkID
+		// recording gained since fills in (every scope fills a missing identifier),
+		// unless the book has one of its own by the apply (planRefresh).
+		item.Proposal.FoundBy = workFoundBy(b.MatchWorkID, b.MatchRecordingID)
 	} else {
 		// The book keeps its own identifiers (switching marketplace is a repick's):
 		// a proposal without them writes none, and the review shows none of the
@@ -531,8 +534,8 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 				return
 			}
 			// A match's fields went in, its cover didn't: still to apply, marked
-			// as the run's own, as the ASIN the book has now would otherwise read
-			// as matched since and the cover would never be taken.
+			// as the run's own, as the ASIN or match the book has now would
+			// otherwise read as matched since and the cover would never be taken.
 			applied, detail = "", DetailCoverPending
 		}
 		if err := r.cat.MarkMatchItem(context.WithoutCancel(ctx), run.ID, it.ID, applied, detail); err != nil {
@@ -580,7 +583,7 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		if w.Anchor != nil {
 			how := catalog.MatchHowAccepted
 			switch {
-			case mode == catalog.MatchModeRefresh && st.Anchor.How != "":
+			case mode == catalog.MatchModeRefresh: // a heal of the book's own (planRefresh)
 				how = st.Anchor.How
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto

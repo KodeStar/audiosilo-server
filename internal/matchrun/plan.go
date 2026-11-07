@@ -5,13 +5,17 @@
 // Nothing changes until the admin applies the run, choosing how much it may write
 // (a Scope). Applying writes community overrides (catalog.EditBook, source
 // community) and, where a book has no cover, the community cover, so every change
-// is a reversible override, exactly as accepting a match by hand is.
+// is a reversible override, exactly as accepting a match by hand is; the match
+// itself is recorded with them (catalog.MatchAnchor, which the book page's Unlink
+// removes).
 //
 // A repick run looks again at books whose ASIN a community match set, for the same
 // recording's ASIN in the preferred Audible marketplace (config metadata.region),
 // which the community data may have gained since. A refresh run looks the books
-// that already have an ASIN or ISBN up by it alone, to fill in the details an
-// identifier alone didn't bring; it never changes the identifier.
+// that already have an ASIN or ISBN up by it alone, and a book matched with
+// neither by its recorded community match, to fill in the details the match
+// didn't bring; it never changes a book's own identifier (one with neither may
+// take its recording's).
 package matchrun
 
 import (
@@ -90,9 +94,10 @@ var Scopes = []string{ScopeIDs, ScopeFill, ScopeOverwrite}
 func ValidScope(s string) bool { return slices.Contains(Scopes, s) }
 
 // ScopesFor is the scopes an apply of a run in mode may name: every scope for a
-// match; fill and overwrite for a refresh (it never writes an identifier, so ids
-// would write nothing); none for a repick, which writes its ASIN whatever the
-// scope says.
+// match; fill and overwrite for a refresh (a refresh is for the details: what ids
+// alone would write, the identifier a store listing's recording gained and a
+// merged work's new record, fill writes too); none for a repick, which writes its
+// ASIN whatever the scope says.
 func ScopesFor(mode string) []string {
 	switch mode {
 	case catalog.MatchModeRepick:
@@ -326,7 +331,8 @@ func (w Writes) after(st *catalog.MatchState, field string) string {
 // tidy it (tidyTitle). Never: a value the book already has, an admin's own edit,
 // a series position for a series the book won't have, or a cover over any the
 // book has. Every scope records p's work and recording as the book's community
-// match when that is not the one it has (a refresh only heals one: planFor).
+// match when that is not the one it has (a refresh only heals one: planRefresh;
+// see planFor).
 func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Writes{Set: map[string]string{}}
 	for _, field := range catalog.OverrideFields {
@@ -443,16 +449,19 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 
 // planFor is what applying item it (its proposal) to a book in state st writes for a
 // run in mode: a repick's ASIN (whatever the scope), else Plan's, for a refresh
-// only while the book still has the identifier (or recorded work) it was found by
-// (planRefresh), and for a match only while the book is still unmatched
-// (matchedSince).
+// only while the book still has the identifier or recorded match it was found by
+// (stillFoundBy), or the record an apply a stop cut short already healed it to
+// (healedTo; planRefresh), and for a match only while the book is still unmatched
+// (matchedSince). An item a stop cut short (DetailCoverPending) doesn't record
+// its match again: that went in with its fields, so a book without one now was
+// unlinked since.
 func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunItem) Writes {
 	p := it.Proposal
 	switch mode {
 	case catalog.MatchModeRepick:
 		return Writes{Set: PlanRepick(st, p)}
 	case catalog.MatchModeRefresh:
-		if !stillFoundBy(st, p.FoundBy) {
+		if !stillFoundBy(st, p.FoundBy) && !healedTo(st, p) {
 			return Writes{}
 		}
 		return planRefresh(scope, st, p)
@@ -460,13 +469,19 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 		if matchedSince(st, it) {
 			return Writes{}
 		}
+		if it.Detail == DetailCoverPending {
+			w := Plan(scope, st, p)
+			w.Anchor = nil
+			return w
+		}
 	}
 	return Plan(scope, st, p)
 }
 
 // planRefresh is Plan for a refresh's proposal p (refreshBook): the details, an
-// identifier only for a book matched by its recorded work alone (an anchored
-// book's proposal keeps the recording's ASIN/ISBN: one it gained since), and the
+// identifier only for a book with neither (a proposal found by the book's recorded
+// match keeps the recording's ASIN/ISBN: one it gained since; a book that has an
+// ASIN or ISBN now, one it gained after the lookup, keeps its own), and the
 // recorded match only healed, never added: a book matched by its own ASIN or ISBN
 // with no recorded work keeps none (the refresh names no match, it reads one),
 // while one whose work was merged or retired since takes the record the lookup
@@ -475,6 +490,10 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 	w := Plan(scope, st, p)
 	if st.Anchor.WorkID == "" {
 		w.Anchor = nil
+	}
+	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
+		delete(w.Set, catalog.FieldASIN)
+		delete(w.Set, catalog.FieldISBN)
 	}
 	return w
 }
@@ -486,28 +505,49 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 // backfill, or by a rescan reading one from an Audiobookshelf metadata.json. The
 // run's match never writes over it, whatever the scope. An item whose own apply a
 // stop cut short after its fields went in (DetailCoverPending) holds the run's
-// identifier and match, not ones matched since.
+// identifier and match: it is matched since only by a recorded match that isn't
+// the run's (matched again by hand, to another record).
 func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
-		return false
+		p := it.Proposal
+		return st.Anchor.WorkID != "" && (st.Anchor.WorkID != p.WorkID || st.Anchor.RecordingID != p.RecordingID)
 	}
 	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
 }
 
 // stillFoundBy reports whether the book still has the identifier a refresh or
-// a repick found its record by (Proposal.FoundBy), or for "work:<id>" still has
-// that recorded community match: a book matched again since (by hand, to
-// another record) is not overwritten with the old one's details.
+// a repick found its record by (Proposal.FoundBy), or for a "work:" FoundBy
+// (workFoundBy) still has that recorded community match, its work and recording:
+// a book matched again since (by hand, to another record or another recording of
+// the work) is not overwritten with the old one's details.
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {
 		return false
 	}
 	if kind == "work" {
-		return id != "" && st.Anchor.WorkID == id
+		return st.Anchor.WorkID != "" && foundBy == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID)
 	}
 	field := map[string]string{"asin": catalog.FieldASIN, "isbn": catalog.FieldISBN}[kind]
 	return field != "" && catalog.CleanOverride(field, st.Fields[field].Value) == id
+}
+
+// workFoundBy is the FoundBy of a refresh that looked a book up by its recorded
+// community match: "work:<work id>", then "/<recording id>" when the match names
+// one (community ids are slugs, which hold no "/").
+func workFoundBy(workID, recordingID string) string {
+	if recordingID == "" {
+		return "work:" + workID
+	}
+	return "work:" + workID + "/" + recordingID
+}
+
+// healedTo reports whether a refresh found by the book's recorded match already
+// moved that match to p's record (a merged work's heal went in, and a stop cut
+// the rest of the apply, its cover, short), so the item applies again.
+func healedTo(st *catalog.MatchState, p catalog.MatchProposal) bool {
+	return strings.HasPrefix(p.FoundBy, "work:") && p.WorkID != "" &&
+		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's

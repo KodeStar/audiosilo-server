@@ -2,10 +2,19 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, Headphones, LibraryBig, Plus, Share2, Sparkles, Unlink } from 'lucide-react';
+import {
+  ExternalLink,
+  Headphones,
+  LibraryBig,
+  LoaderCircle,
+  Plus,
+  Share2,
+  Sparkles,
+  Unlink,
+} from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBookDetail, BookShare } from '@/api/types';
+import type { AdminBookDetail, BookMatch, BookShare } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
@@ -137,13 +146,35 @@ function CommunityCard({
   // work is what it is matched by, shown with how and when, and can be unlinked.
   const work = !asin && !isbn ? detail.community_match : undefined;
 
-  const unlink = async () => {
+  const b = detail.book;
+  // Unlink's Undo: the same work and recording again, recorded as accepted whoever
+  // made the match (the API records every hand match so).
+  const relink = async (before: BookMatch) => {
+    try {
+      settleBookEdit(
+        qc,
+        await api.editBook(b.library_id, b.path, {
+          source: 'community',
+          match: { work_id: before.work_id, recording_id: before.recording_id ?? '' },
+        }),
+      );
+      invalidateIssues(qc);
+      toast.add({ title: t('book.community.relinked'), type: 'success' });
+    } catch (err) {
+      toastError(t('book.community.relinkFailed'), err);
+    }
+  };
+
+  const unlink = async (before: BookMatch) => {
     setUnlinking(true);
     try {
-      const b = detail.book;
       settleBookEdit(qc, await api.editBook(b.library_id, b.path, { match: { work_id: '' } }));
       invalidateIssues(qc);
-      toast.add({ title: t('book.community.unlinked'), type: 'success' });
+      toast.add({
+        title: t('book.community.unlinked'),
+        type: 'success',
+        actionProps: { children: t('book.revert.undo'), onClick: () => void relink(before) },
+      });
     } catch (err) {
       toastError(t('book.community.unlinkFailed'), err);
     } finally {
@@ -209,7 +240,7 @@ function CommunityCard({
             {work ? (
               <>
                 <dt className="text-muted-foreground">{t('book.community.work')}</dt>
-                <dd className="font-[550] [overflow-wrap:anywhere]">
+                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">
                   {work.web_url ? (
                     <a
                       href={work.web_url}
@@ -242,10 +273,14 @@ function CommunityCard({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void unlink()}
+                onClick={() => void unlink(work)}
                 disabled={matchBlocked || unlinking}
               >
-                <Unlink aria-hidden="true" />
+                {unlinking ? (
+                  <LoaderCircle className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Unlink aria-hidden="true" />
+                )}
                 {t('book.community.unlink')}
               </Button>
             ) : null}

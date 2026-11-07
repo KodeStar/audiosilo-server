@@ -71,6 +71,7 @@ func TestAnchorWrittenWithTheEdit(t *testing.T) {
 		"an admin's own edit": {Match: &MatchAnchor{WorkID: "mine"}},
 		"a bad how":           {Match: &MatchAnchor{WorkID: "mine", How: "guessed"}, Source: SourceCommunity},
 		"a control character": {Match: &MatchAnchor{WorkID: "mi\nne"}, Source: SourceCommunity},
+		"a C1 control":        {Match: &MatchAnchor{WorkID: "mi\u0085ne"}, Source: SourceCommunity},
 		"too long":            {Match: &MatchAnchor{WorkID: strings.Repeat("w", maxMatchID+1)}, Source: SourceCommunity},
 		"a bad recording":     {Match: &MatchAnchor{WorkID: "mine", RecordingID: "r\x00"}, Source: SourceCommunity},
 	} {

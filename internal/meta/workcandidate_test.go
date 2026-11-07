@@ -72,6 +72,42 @@ func TestCandidatesByWorkID(t *testing.T) {
 	}
 }
 
+// TestCandidatesByWorkIDKeepsTheRecordingItNames: the recording a book was matched
+// to speaks for itself, a dramatization beside a plain reading included (a plain
+// book's DefaultRecording would pass it over), while the candidate stays a plain
+// book's, so the book's reader in the dramatization's cast still says nothing
+// about its length (DramatizesPlainBook), as on an identifier's lookup.
+func TestCandidatesByWorkIDKeepsTheRecordingItNames(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/works/dune" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"dune","title":"Dune","authors":[{"id":"a","name":"Frank Herbert"}],
+			"recordings":[{"id":"plain","runtime_min":600,"narrators":[{"id":"s","name":"Scott Brick"}]},
+			  {"id":"cast","runtime_min":600,"narrators":[{"id":"s","name":"Scott Brick"},{"id":"fc","name":"Full Cast"}]}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+	cands, err := s.Candidates(context.Background(), MatchQuery{WorkID: "dune", RecordingID: "cast", Duration: 600 * 60})
+	if err != nil || len(cands) != 1 {
+		t.Fatalf("candidates = %+v %v", cands, err)
+	}
+	c := cands[0]
+	if c.RecordingID != "cast" || c.DefaultRecordingID != "cast" || !c.PlainBook {
+		t.Fatalf("candidate = %+v, want the named dramatization kept, still a plain book's", c)
+	}
+	if !DramatizesPlainBook(&c, &c.Recordings[1], []string{"Scott Brick"}) {
+		t.Fatal("the reader in the cast vouched for the dramatization's length")
+	}
+	// Named nothing, the plain book's guard picks the plain reading.
+	cands, err = s.Candidates(context.Background(), MatchQuery{WorkID: "dune", Duration: 600 * 60})
+	if err != nil || len(cands) != 1 || cands[0].DefaultRecordingID != "plain" {
+		t.Fatalf("unnamed = %+v %v, want the plain reading", cands, err)
+	}
+}
+
 // TestCandidatesByWorkIDInMirrorMode: the local copy answers a work query, its
 // retired slug's redirect followed as online, and an id it lacks is none; the
 // remote service is never asked.

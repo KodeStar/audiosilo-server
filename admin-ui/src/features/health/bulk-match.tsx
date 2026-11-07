@@ -87,10 +87,10 @@ import {
  * "Health triage"). A run only looks; the admin reviews what it found, chooses
  * how much it may write, and applies it. A repick run switches books matched
  * earlier to the preferred marketplace's ASIN, and a refresh run looks the books
- * that already have an ASIN or ISBN up by it to fill in their details (an
- * identifier alone, from an enrichment or an ids-only apply, brought none). Runs
- * work on the server, so the
- * card follows the newest one by polling, whoever started it.
+ * that already have an ASIN or ISBN up by it, and books matched to a store listing
+ * by their recorded community work, to fill in their details (an identifier alone,
+ * from an enrichment or an ids-only apply, brought none). Runs work on the server,
+ * so the card follows the newest one by polling, whoever started it.
  */
 export function BulkMatch() {
   const { t, i18n } = useTranslation();
@@ -352,7 +352,8 @@ function ReviewDialog({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const repick = run.mode === 'repick';
-  // A refresh never changes an identifier, so ASIN and ISBN only would write nothing.
+  // A refresh takes fill or overwrite only (matchrun.ScopesFor): it keeps a book's
+  // own ASIN or ISBN, and either fills in a store listing's from its recording.
   const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
   const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
   const [tab, setTab] = useState<MatchOutcome>(firstTab);
@@ -380,19 +381,20 @@ function ReviewDialog({
     }
   }
   // A book matched by hand leaves the apply, and the Health page under the review
-  // reads its issues again. A match run's book that took an ASIN or ISBN is one
-  // the server now calls matched since (matchrun.matchedSince): its row reads so
-  // at once (no checkbox, so a range passes over it with nothing to wait for),
-  // without asking again for every page the review has loaded. Any other
-  // (another mode, an applied item, a hand match that took no identifier) the
-  // server says what applying would do now, and its row may show a checkbox
-  // until the list has read again.
+  // reads its issues again. A match run's book the server now calls matched
+  // (book.matched, the rule matchrun.matchedSince follows: an ASIN or ISBN, or a
+  // recorded community match) is matched since: its row reads so at once (no
+  // checkbox, so a range passes over it with nothing to wait for), without asking
+  // again for every page the review has loaded. Any other (another mode, an
+  // applied item, a hand accept that left the book unmatched) the server says
+  // what applying would do now, and its row may show a checkbox until the list
+  // has read again.
   const onMatchedByHand = (item: MatchRunItem) => {
     setPicks((p) => leaveOut(p, item));
     invalidateIssues(qc);
     const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
     const itemsKey = keys.matchRunItems(run.id, item.outcome);
-    if (run.mode !== 'match' || item.applied || !(book?.asin || book?.isbn)) {
+    if (run.mode !== 'match' || item.applied || !book?.matched) {
       setMatchedByHand((ids) => withId(ids, item.id));
       // The id stays until a read of the whole list lands (server#198): not when
       // the invalidation's promise settles, which it does at once while the read
@@ -801,9 +803,11 @@ function ItemRow({
                 ? 'health.bulkMatch.item.error'
                 : item.detail === 'identifier_unknown'
                   ? 'health.bulkMatch.item.identifierUnknown'
-                  : item.detail === 'weak_match'
-                    ? 'health.bulkMatch.item.weakMatch'
-                    : 'health.bulkMatch.item.none',
+                  : item.detail === 'work_unknown'
+                    ? 'health.bulkMatch.item.workUnknown'
+                    : item.detail === 'weak_match'
+                      ? 'health.bulkMatch.item.weakMatch'
+                      : 'health.bulkMatch.item.none',
               { score: item.score },
             )}
           </span>

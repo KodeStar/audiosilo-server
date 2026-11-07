@@ -2,6 +2,8 @@ package matchrun
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -261,7 +263,7 @@ func TestRefreshByAnchor(t *testing.T) {
 		byPath[it.Path] = it
 	}
 	m, ok := byPath["A/Merged"]
-	if !ok || m.Proposal.FoundBy != "work:old-slug" || !m.Changes[ScopeFill].Match ||
+	if !ok || m.Proposal.FoundBy != "work:old-slug/bray" || !m.Changes[ScopeFill].Match ||
 		!slices.Contains(m.Changes[ScopeFill].Fields, catalog.FieldASIN) {
 		t.Fatalf("merged item = %+v", m)
 	}
@@ -291,5 +293,270 @@ func TestRefreshByAnchor(t *testing.T) {
 	}
 	if a := e.anchorOf(t, "A/TaggedAnchored"); a.WorkID != "the-martian" {
 		t.Errorf("tagged anchored = %+v, want healed", a)
+	}
+}
+
+// workAnswer is the by-work answer for a refresh of a book whose recorded match is
+// (work, recording): the work named, score 100, no reasons, the recording kept.
+func workAnswer(work, recording string) meta.MatchCandidate {
+	c := cand(work, 100, "")
+	c.RecordingID, c.Reasons = recording, nil
+	return c
+}
+
+func (e *env) field(t *testing.T, path, field string) catalog.FieldValue {
+	t.Helper()
+	st, err := e.cat.BookMatchState(context.Background(), e.lib, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Fields[field]
+}
+
+// TestRefreshByWorkKeepsAnIdentifierGainedSince: a refresh found by a book's
+// recorded match carries its recording's ASIN and ISBN, but a book that gained an
+// identifier of its own between the run and the apply (the Bridge's backfill, an
+// enrichment) keeps it: neither is written, under any scope, and the review
+// offers none.
+func TestRefreshByWorkKeepsAnIdentifierGainedSince(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/GainsASIN", "The Martian", "", nil)
+	e.book(t, "A/GainsISBN", "The Martian", "", nil)
+	e.anchor(t, "A/GainsASIN", "the-martian", "bray")
+	e.anchor(t, "A/GainsISBN", "the-martian", "bray")
+	e.matcher.byWork["the-martian"] = []meta.MatchCandidate{workAnswer("the-martian", "bray")}
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	if run.Counts.Auto != 2 {
+		t.Fatalf("run = %+v", run)
+	}
+	if err := e.cat.BackfillASIN(ctx, e.lib, "A/GainsASIN", "B0MINE0001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.SetEnrichment(ctx, e.lib, "A/GainsISBN", "", "9780000000002"); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		for scope, ch := range it.Changes {
+			if slices.Contains(ch.Fields, catalog.FieldASIN) || slices.Contains(ch.Fields, catalog.FieldISBN) {
+				t.Fatalf("%s %s change = %+v, want no identifier", it.Path, scope, ch)
+			}
+		}
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if a, i := e.field(t, "A/GainsASIN", catalog.FieldASIN), e.field(t, "A/GainsASIN", catalog.FieldISBN); a.Value != "B0MINE0001" || i.Value != "" {
+		t.Errorf("gains ASIN: asin %+v isbn %+v, want its own ASIN alone", a, i)
+	}
+	if a, i := e.field(t, "A/GainsISBN", catalog.FieldASIN), e.field(t, "A/GainsISBN", catalog.FieldISBN); a.Value != "" || i.Value != "9780000000002" {
+		t.Errorf("gains ISBN: asin %+v isbn %+v, want its own ISBN alone", a, i)
+	}
+	if n := e.field(t, "A/GainsASIN", catalog.FieldNarrator); n.Value != "R. C. Bray" {
+		t.Errorf("narrator = %+v, want the details still refreshed", n)
+	}
+}
+
+// TestRefreshByWorkLeavesABookMatchedAgain: a refresh found by a book's recorded
+// match (its work and recording) is for a book that still has it: matched again by
+// hand since to another recording of the same work, the book keeps that one, its
+// narrator included, under any scope.
+func TestRefreshByWorkLeavesABookMatchedAgain(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []string{ScopeFill, ScopeOverwrite} {
+		t.Run(scope, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			ctx := context.Background()
+			e.book(t, "A/Book", "The Martian", "", nil)
+			e.anchor(t, "A/Book", "the-martian", "bray")
+			c := workAnswer("the-martian", "bray")
+			c.Recordings = append(c.Recordings, meta.MatchRecording{ID: "wheaton", RuntimeMin: 634,
+				Narrators: []meta.MetaPersonRef{{Name: "Wil Wheaton"}}, Publisher: "Podium"})
+			e.matcher.byWork["the-martian"] = []meta.MatchCandidate{c}
+			run := e.start(t, catalog.MatchModeRefresh, "")
+			auto := e.items(t, run, catalog.OutcomeAuto)
+			if len(auto) != 1 || auto[0].Proposal.FoundBy != "work:the-martian/bray" {
+				t.Fatalf("auto = %+v", auto)
+			}
+			if err := e.cat.EditBook(ctx, e.lib, "A/Book", catalog.BookEdit{
+				Set:    map[string]string{catalog.FieldNarrator: "Wil Wheaton"},
+				Match:  &catalog.MatchAnchor{WorkID: "the-martian", RecordingID: "wheaton"},
+				Source: catalog.SourceCommunity, UserID: e.admin,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if ch := e.items(t, run, catalog.OutcomeAuto)[0].Changes[scope]; len(ch.Fields) != 0 || ch.Match || ch.Cover {
+				t.Fatalf("change after the hand match = %+v, want none", ch)
+			}
+			if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: scope, UserID: e.admin}); err != nil {
+				t.Fatal(err)
+			}
+			e.runner.Wait()
+			if a := e.anchorOf(t, "A/Book"); a.RecordingID != "wheaton" {
+				t.Errorf("anchor = %+v, want the hand match kept", a)
+			}
+			if n := e.field(t, "A/Book", catalog.FieldNarrator); n.Value != "Wil Wheaton" {
+				t.Errorf("narrator = %+v, want the hand match's", n)
+			}
+		})
+	}
+}
+
+// TestRefreshHealStoppedInItsCover: a refresh that heals a merged work, stopped
+// while it fetched the cover, stays to apply, and the next apply takes the cover
+// though the book's match is already the healed one.
+func TestRefreshHealStoppedInItsCover(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Merged", "The Martian", "", no)
+	e.anchor(t, "A/Merged", "old-slug", "bray")
+	c := workAnswer("new-slug", "bray")
+	c.Recordings[0].CoverURL = "https://c/rec.jpg"
+	e.matcher.byWork["old-slug"] = []meta.MatchCandidate{c}
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	save := e.runner.saveCover
+	e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64) error {
+		e.runner.Cancel(run.ID)
+		return ctx.Err()
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	it := e.items(t, run, catalog.OutcomeAuto)[0]
+	if a := e.anchorOf(t, "A/Merged"); it.Applied != "" || a.WorkID != "new-slug" || !it.Changes[ScopeFill].Cover {
+		t.Fatalf("after the stop: item %+v anchor %+v, want healed, the cover still to take", it, a)
+	}
+	e.runner.saveCover = save
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if it = e.items(t, run, catalog.OutcomeAuto)[0]; it.Applied != catalog.ItemApplied || e.covers.Load() != 1 {
+		t.Fatalf("item = %+v, covers %d; want applied with the cover taken", it.MatchRunItem, e.covers.Load())
+	}
+}
+
+// TestStoppedMatchKeepsWhatTheAdminDidSince: a store listing's apply stopped in
+// its cover (cover_pending: its fields and match went in) is applied again, but
+// never over what the admin did since: a book matched again by hand to another
+// work is matched since, under any scope; an Unlink stays (the match isn't
+// recorded again), while the cover the stop cut short is still taken.
+func TestStoppedMatchKeepsWhatTheAdminDidSince(t *testing.T) {
+	t.Parallel()
+	for _, since := range []string{"rematched", "unlinked"} {
+		t.Run(since, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			ctx := context.Background()
+			e.book(t, "A/Store", "Store", "", no)
+			l := listing("run-work", 95, 634)
+			l.Recordings[0].CoverURL = "https://c/rec.jpg"
+			e.matcher.byTitle["Store"] = []meta.MatchCandidate{l}
+			run := e.start(t, catalog.MatchModeMatch, "")
+			save := e.runner.saveCover
+			e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64) error {
+				e.runner.Cancel(run.ID)
+				return ctx.Err()
+			}
+			if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill, UserID: e.admin}); err != nil {
+				t.Fatal(err)
+			}
+			e.runner.Wait()
+			if it := e.items(t, run, catalog.OutcomeAuto)[0]; it.Detail != DetailCoverPending || e.anchorOf(t, "A/Store").WorkID != "run-work" {
+				t.Fatalf("after the stop: %+v", it.MatchRunItem)
+			}
+			e.runner.saveCover = save
+			edit := catalog.BookEdit{Match: &catalog.MatchAnchor{}} // the book aside's Unlink
+			if since == "rematched" {
+				edit = catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: "Hand Title"},
+					Match: &catalog.MatchAnchor{WorkID: "hand-work", RecordingID: "hand-rec"}, Source: catalog.SourceCommunity, UserID: e.admin}
+			}
+			if err := e.cat.EditBook(ctx, e.lib, "A/Store", edit); err != nil {
+				t.Fatal(err)
+			}
+			it := e.items(t, run, catalog.OutcomeAuto)[0]
+			if it.MatchedSince != (since == "rematched") || it.Changes[ScopeIDs].Match || it.Changes[ScopeFill].Match {
+				t.Fatalf("review = %+v", it)
+			}
+			scope := ScopeIDs
+			if since == "unlinked" {
+				scope = ScopeFill
+			}
+			if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: scope, UserID: e.admin}); err != nil {
+				t.Fatal(err)
+			}
+			e.runner.Wait()
+			a := e.anchorOf(t, "A/Store")
+			it = e.items(t, run, catalog.OutcomeAuto)[0]
+			switch since {
+			case "rematched":
+				if a.WorkID != "hand-work" || a.How != catalog.MatchHowAccepted || it.Detail != "matched_since" {
+					t.Fatalf("anchor %+v item %+v, want the hand match kept", a, it.MatchRunItem)
+				}
+			case "unlinked":
+				if a.WorkID != "" || it.Applied != catalog.ItemApplied || e.covers.Load() != 1 {
+					t.Fatalf("anchor %+v item %+v covers %d, want unlinked still and the cover taken", a, it.MatchRunItem, e.covers.Load())
+				}
+			}
+		})
+	}
+}
+
+// TestRefreshByWorkHoldsADramatization: through the real community client, a
+// dramatization recording whose cast holds the book's narrator, 15% off the book's
+// length, is held for review (length_differs) whether the refresh finds it by the
+// book's ASIN or by its recorded match: the narrator in a dramatization's cast
+// never widens a plain book's length guard (meta.DramatizesPlainBook).
+func TestRefreshByWorkHoldsADramatization(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0DRAMA001" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"drama-work","title":"The Martian"},"recording_id":"rec"}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "drama-work" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"drama-work","title":"The Martian","authors":[{"id":"a","name":"Andy Weir"}],
+			"recordings":[{"id":"rec","runtime_min":540,"publisher":"Some Studio",
+			  "narrators":[{"id":"w","name":"Wil Wheaton"},{"id":"fc","name":"Full Cast"}],
+			  "asin":[{"region":"us","asin":"B0DRAMA001"}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	ctx := context.Background()
+	e.runner = New(e.cat, meta.NewService(srv.URL, nil), e.runner.saveCover, e.enabled.Load, nil)
+	for _, b := range []catalog.Book{
+		{LibraryID: e.lib, RelPath: "A/ByASIN", IsFolder: true, Title: "Martian", Author: "Andy Weir",
+			Narrator: "Wil Wheaton", ASIN: "B0DRAMA001", Duration: 634 * 60, AddedAt: "2020-01-01"},
+		{LibraryID: e.lib, RelPath: "A/ByWork", IsFolder: true, Title: "Martian", Author: "Andy Weir",
+			Narrator: "Wil Wheaton", Duration: 634 * 60, AddedAt: "2020-01-01"},
+	} {
+		if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.anchor(t, "A/ByWork", "drama-work", "rec")
+	run := e.start(t, catalog.MatchModeRefresh, "us")
+	items := e.items(t, run, "")
+	if len(items) != 2 {
+		t.Fatalf("items = %+v", items)
+	}
+	for _, it := range items {
+		if it.Outcome != catalog.OutcomeReview || it.Detail != DetailLengthDiffers || it.Proposal.RecordingID != "rec" {
+			t.Errorf("%s = %+v, want the dramatization held for review", it.Path, it.MatchRunItem)
+		}
 	}
 }

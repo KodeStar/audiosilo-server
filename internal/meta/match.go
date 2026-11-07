@@ -131,6 +131,10 @@ type MatchCandidate struct {
 	// PlainBook says the book's own text doesn't state it is a dramatized production,
 	// which is what keeps DefaultRecording off a dramatization.
 	PlainBook bool `json:"-"`
+	// recordingNamed says the query named RecordingID (MatchQuery.RecordingID, a
+	// recorded community match), which then speaks for itself as an identifier's
+	// does: DefaultRecording keeps it, a dramatization or not.
+	recordingNamed bool
 	// DramatizationOnly says the work holds only a dramatization the book isn't, so
 	// DefaultRecording found none: the console's dialog preselects nothing for it.
 	DramatizationOnly bool `json:"dramatization_only,omitempty"`
@@ -369,14 +373,15 @@ func lengthSays(r *MatchRecording, seconds float64) bool {
 // recording selling in the preferred region winning a tie; recordings without
 // a runtime come last. A narrator's recording of another length is another
 // edition: the closest runtime then decides. A plain book (MatchCandidate.PlainBook)
-// takes a dramatization only when an identifier names it, or one of its narrators reads
+// takes a dramatization only when an identifier names it (or the book's recorded
+// match: workCandidates), or one of its narrators reads
 // it at a plausible length and reads no plain recording that fits as well, or the work
 // holds nothing but dramatizations and this one's runtime is the book's
 // (lengthSays: the length says the book is that production); so a work
 // holding only dramatizations of other lengths gives nil: the work still fits, but no
 // recording does. nil when c has none.
 func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrators []string) *MatchRecording {
-	return chooseRecording(c, seconds, region, narrators, c.PlainBook && (c.Reasons == nil || c.Reasons.Identifier == ""), nil)
+	return chooseRecording(c, seconds, region, narrators, c.PlainBook && !c.recordingNamed && (c.Reasons == nil || c.Reasons.Identifier == ""), nil)
 }
 
 // FitRecording is rec, the recording DefaultRecording picked for a book of seconds
@@ -699,8 +704,10 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 // as one candidate (score 100, no reasons: it was named, not matched), or none for
 // an id the community doesn't know (a 404 after any redirect). The recording the
 // query names is kept while the work lists it, and then speaks for itself as an
-// identifier's does (no plain-book guard: the admin or a run chose it); else ""
-// and DefaultRecording picks one by length.
+// identifier's does (DefaultRecording keeps it: the admin or a run chose it);
+// else "" and DefaultRecording picks one by length. PlainBook keeps its meaning
+// either way, so the book's reader in a dramatization's cast says nothing about
+// its length (DramatizesPlainBook), as on an identifier's lookup.
 func (s *Service) workCandidates(ctx context.Context, q MatchQuery, id string) ([]MatchCandidate, error) {
 	detail, err := s.fetchWork(ctx, id)
 	if errors.Is(err, ErrNotFound) {
@@ -716,9 +723,9 @@ func (s *Service) workCandidates(ctx context.Context, q MatchQuery, id string) (
 	c := s.toCandidate(detail, facts, "", q.Region, "")
 	c.Score = 100
 	if rid := strings.TrimSpace(q.RecordingID); rid != "" && slices.ContainsFunc(c.Recordings, func(r MatchRecording) bool { return r.ID == rid }) {
-		c.RecordingID = rid
+		c.RecordingID, c.recordingNamed = rid, true
 	}
-	c.PlainBook = c.RecordingID == "" && !q.statesDramatization()
+	c.PlainBook = !q.statesDramatization()
 	setDefaultRecording(c, q)
 	return []MatchCandidate{*c}, nil
 }

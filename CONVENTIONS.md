@@ -1640,7 +1640,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
   never a position beside another series, a cover only for a book with none), which
   also computes each item's `changes` for the review, so the two can't disagree. `Plan`
-  returns `Writes` (set, revert, cover): overwrite REPLACES a book's series with the
+  returns `Writes` (set, revert, cover, anchor: the match to record, see Recorded community
+  match below): overwrite REPLACES a book's series with the
   community's for its recording (the series rules), reverting a `series`/`series_index`/
   `more_series` value the community wrote earlier that it no longer offers (a series it
   deleted or merged, an edition or translation the rules leave out) back to the files'
@@ -1651,14 +1652,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Writes.after` is the one rule for a field's value once written (both `planSeries`
   and the review use it). A refresh records only books a scope would change (as a
   repick records only books with a new ASIN), so a clean library leaves no items. A refresh
-  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), as a
+  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:...", or
+  "work:<work id>[/<recording id>]" for a book looked up by its recorded match), as a
   repick's names the ASIN it looked up, and applying either is a no-op for a book that no
-  longer has it (matched again since: `stillFoundBy`; a repick recorded before 2.4.0 has none).
+  longer has it (matched again since, to another record or another recording of the work:
+  `stillFoundBy`; a repick recorded before 2.4.0 has none), except a refresh whose heal went in
+  before a stop cut its cover short (`healedTo`: the book's match is already the proposal's).
   Likewise a match run's book that is matched now (`matchedSince`: an ASIN or ISBN, or a recorded
   community match; matched by hand from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
   in the review and is skipped with detail `matched_since`, under any scope; a match whose
   fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
-  ASIN the run's own rather than one matched since, so the next apply takes the cover. The review's
+  ASIN and recorded match the run's own rather than ones matched since (unless the book was
+  matched again by hand since, to another record), so the next apply takes the cover; it never
+  records the match again, so an Unlink since stays. The review's
   items page best match first (`score DESC, id`), the cursor still an item id whose score
   the next page reads on from.
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
@@ -1671,8 +1677,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the index or the runs): the work (and recording) a book was matched to, whether or not the match gave
   it an ASIN or ISBN. Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
   `MatchAnchor`; an empty work id removes it, from any edit; `EditBooks` refuses it): the match dialog's
-  accept (`PATCH .../book` `match: {work_id, recording_id}`, how `accepted`; `{"work_id": ""}` is the book
-  aside's Unlink; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
+  accept (`PATCH .../book` `match: {work_id, recording_id}` with the ticked fields, or alone for a book
+  with no ASIN or ISBN whose pick isn't its recorded match; the dialog starts from the recorded match
+  when the search lists it; how `accepted`; `{"work_id": ""}` is the book aside's Unlink, whose toast
+  offers Undo; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's). A store listing the
   community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
@@ -1695,7 +1703,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`readsRecording` with the book's own narrator credit), so a book a run applied on its narrator's
   say-so stays up to date; a placeholder credit ("Full Cast", GraphicAudio, "Various", "Unknown":
   `meta.PersonNarrator`) names no reader and never widens it, nor does a plain book's reader in a
-  dramatization's cast (`meta.DramatizesPlainBook`: another production); a review
+  dramatization's cast (`meta.DramatizesPlainBook`: another production; a refresh by recorded match
+  too: the recording it names passes `DefaultRecording` as an identifier's does, `PlainBook`
+  unchanged); a review
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
@@ -1750,13 +1760,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
   fuzzy work); a book with neither is looked up by its recorded work (`meta.MatchQuery.WorkID`:
   works/{id} alone, a retired slug's 301 followed online and in mirror mode, its recorded recording
-  kept while the work lists it, `found_by` `work:<id>`, `stillFoundBy` against the anchor; a 404 is
-  no match, detail `work_unknown`, the anchor KEPT), and may fill an ASIN/ISBN its recording gained.
+  kept while the work lists it, `found_by` `work:<work id>[/<recording id>]`, `stillFoundBy`
+  against the anchor's work and recording; a 404 is no match, detail `work_unknown`, the anchor
+  KEPT), and may fill an ASIN/ISBN its recording gained.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
-  overwrites the details but never writes an identifier for a book that has one (the
-  proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
-  mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
+  overwrites the details but never writes an identifier for a book that has one (an
+  identifier lookup's proposal carries none, and `planRefresh` drops a by-work proposal's
+  once the book has one of its own); `matchrun.ScopesFor` (the one statement of which scopes a
+  mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
   `book.match_refresh`. `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,

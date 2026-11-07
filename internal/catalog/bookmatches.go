@@ -16,8 +16,8 @@ const (
 	MatchHowAccepted = "accepted"
 )
 
-// maxMatchID bounds a community work or recording id an anchor stores (as the
-// api's validWorkID bounds GET /meta/work's).
+// maxMatchID bounds (in characters) a community work or recording id an anchor
+// stores, as the api's validWorkID bounds GET /meta/work's.
 const maxMatchID = 200
 
 // MatchAnchor is a book's community match as an edit writes it (BookEdit.Match):
@@ -42,20 +42,6 @@ type BookMatch struct {
 	WebURL      string `json:"web_url,omitempty"`
 }
 
-// validMatchID reports whether id may be stored as a community work or recording
-// id: bounded, and no control characters (it is logged and sent upstream).
-func validMatchID(id string) bool {
-	if len(id) > maxMatchID {
-		return false
-	}
-	for _, r := range id {
-		if r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
 // normalizeAnchor validates an edit's anchor (nil = none) and returns it in stored
 // form. Setting one takes a community edit (source, normalized); removing one
 // (an empty WorkID) any edit.
@@ -70,8 +56,12 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	if source != SourceCommunity {
 		return nil, invalid("match", "only a community match records one")
 	}
-	if !validMatchID(out.WorkID) || !validMatchID(out.RecordingID) {
-		return nil, invalid("match", "not a community id")
+	// Bounded and free of control characters, as every field an edit sets: an id
+	// is logged and sent upstream.
+	for _, id := range []string{out.WorkID, out.RecordingID} {
+		if err := checkText("match", id, maxMatchID); err != nil {
+			return nil, err
+		}
 	}
 	switch out.How {
 	case "":
