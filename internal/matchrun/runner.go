@@ -46,12 +46,12 @@ const (
 )
 
 // DetailIdentifierUnknown is a refresh item's detail when the community doesn't
-// know the book's ASIN or ISBN.
+// know any of the book's identifiers and it has no recorded work to fall back to.
 const DetailIdentifierUnknown = "identifier_unknown"
 
 // DetailWorkUnknown is a refresh item's detail when the community no longer knows
-// the work a book matched without an ASIN or ISBN was recorded as (a 404 after
-// any redirect): no match, and the book keeps its recorded match (a release that
+// the work a book's match recorded (a direct lookup or an identifier fallback,
+// a 404 after any redirect): no match, and the book keeps its recorded match (a release that
 // dropped the work by mistake must not unmatch the book).
 const DetailWorkUnknown = "work_unknown"
 
@@ -79,8 +79,9 @@ const DetailWeakMatch = "weak_match"
 // not recorded again: planFor).
 const DetailCoverPending = "cover_pending"
 
-// ErrBusy is a start or apply asked while a run is working: one at a time.
-var ErrBusy = errors.New("a match run is already working")
+// ErrBusy is a start or apply asked while a run is working: one at a time. It is
+// catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
+var ErrBusy = catalog.ErrMatchRunBusy
 
 // ErrScope is an apply naming a scope its run's mode doesn't take (ScopesFor).
 var ErrScope = errors.New("the scope doesn't apply to this match run")
@@ -387,29 +388,43 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	return item, nil
 }
 
-// refreshBook looks the book up by its own ASIN or ISBN alone: the record it
+// refreshBook looks the book up by its own ASIN or ISBN first: the record it
 // names is the book (confident, whatever the score, unless its recording is
 // another edition by length: lengthFits), its recording the one the identifier
 // resolved to. The lookup takes the ASIN when there is one, so an ISBN
-// beside an ASIN the community doesn't know gets a look of its own. An identifier
-// the community doesn't know is no match: a book that names its record is never
-// offered another by title. A book matched with neither (a store listing: its
-// recorded community match, catalog.MatchAnchor) is looked up by its work the
-// same way (meta.MatchQuery.WorkID, a retired id's redirect followed), its
-// recording the recorded one while the work still lists it; a work the community
-// no longer knows is no match (DetailWorkUnknown).
+// beside an ASIN the community doesn't know gets a look of its own. Identifiers
+// the community doesn't know fall back to the book's recorded community match
+// (catalog.MatchAnchor), when it has one and neither identifier is an admin edit;
+// a book is never offered another record by title. A book matched with neither
+// (a store listing) is looked up by that work directly. A work lookup
+// (meta.MatchQuery.WorkID) follows a retired id's
+// redirect, its recording the recorded one while the work still lists it; a work
+// the community no longer knows is no match (DetailWorkUnknown).
 func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
-	byWork := b.ASIN == "" && b.ISBN == ""
-	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
-	if byWork {
-		if b.MatchWorkID == "" {
-			return nil, nil // matched by nothing a refresh can look up
-		}
-		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
+	hasIdentifier := b.ASIN != "" || b.ISBN != ""
+	if !hasIdentifier && b.MatchWorkID == "" {
+		return nil, nil // matched by nothing a refresh can look up
 	}
-	cands, err := r.candidates(ctx, q, item)
-	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
-		q.ASIN = ""
+	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
+	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
+			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
+		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
+	}
+	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
+	var cands []meta.MatchCandidate
+	if hasIdentifier {
+		cands, err = r.candidates(ctx, q, item)
+		if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
+			q.ASIN = ""
+			cands, err = r.candidates(ctx, q, item)
+		}
+	}
+	byWork := err == nil && len(cands) == 0 && b.MatchWorkID != "" && (!hasIdentifier || !hasEditedIdentifier(st))
+	if byWork {
+		q.ASIN, q.ISBN = "", ""
+		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
 		cands, err = r.candidates(ctx, q, item)
 	}
 	if err != nil {
@@ -435,31 +450,31 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
 	if byWork {
-		// A book matched by its work alone has no identifier to keep: one its
-		// recording gained since fills in (every scope fills a missing identifier),
-		// unless the book has one of its own by the apply (planRefresh).
+		// Found by the recorded match, the apply's guard (stillFoundBy). A book
+		// with neither identifier takes the ASIN or ISBN its recording has (every
+		// scope fills a missing identifier) unless it has one of its own by the
+		// apply (planRefresh); a fallback keeps its own, and records them, as the
+		// apply needs them as they were when their lookups missed (splitFallback).
 		item.Proposal.FoundBy = workFoundBy(b.MatchWorkID, b.MatchRecordingID)
+		if hasIdentifier {
+			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)
+		}
 	} else {
+		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+		if q.ASIN != "" {
+			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+		}
+	}
+	if hasIdentifier {
 		// The book keeps its own identifiers (switching marketplace is a repick's):
 		// a proposal without them writes none, and the review shows none of the
 		// community's (another marketplace's ASIN, say) as if applying set them.
 		delete(item.Proposal.Values, catalog.FieldASIN)
 		delete(item.Proposal.Values, catalog.FieldISBN)
 		item.Proposal.ASINRegion = ""
-		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
-		if q.ASIN != "" {
-			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
-		}
 	}
 	// A book neither scope would change is up to date: nothing to record (most
 	// of a matched library, whose proposals would only fill the review).
-	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
-	if err != nil {
-		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
-			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
-		}
-		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
-	}
 	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
 		if !planRefresh(scope, st, item.Proposal).Empty() {
 			return item, nil

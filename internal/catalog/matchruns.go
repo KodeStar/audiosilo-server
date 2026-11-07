@@ -20,6 +20,11 @@ const maxMatchRuns = 10
 // matching, already applying or applied, stopped).
 var ErrRunNotReady = errors.New("the match run is not ready to apply")
 
+// ErrMatchRunBusy marks an Unlink asked while a run is matching or applying
+// (clearing the book then would let the run write its match or cover back), and
+// is matchrun.ErrBusy, a run started or applied while another works.
+var ErrMatchRunBusy = errors.New("a match run is already working")
+
 // Match run modes.
 const (
 	// MatchModeMatch matches the books not matched yet: no ASIN or ISBN and no
@@ -110,9 +115,11 @@ type MatchProposal struct {
 	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
 	// FoundBy is the book's own identifier a refresh found the record by, or
 	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>", or for a
-	// refresh of a book matched with neither its recorded match, "work:<work id>"
+	// refresh by its recorded match, "work:<work id>"
 	// then "/<recording id>" when it names one ("" for a match run, and a repick
-	// recorded before 2.4.0): applying it is for a book that still has it.
+	// recorded before 2.4.0). A fallback after identifier misses appends
+	// ";asin:<ASIN>;isbn:<ISBN>" (including empty values): applying it requires
+	// the same recorded match and both identifiers unchanged.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }
@@ -197,22 +204,28 @@ func (c *Catalog) FinishMatching(ctx context.Context, runID int64, status, errCo
 
 // BeginApply moves a ready run to applying total items with scope.
 // ErrRunNotReady when the run isn't ready (another apply got there first, or it
-// never finished matching).
+// never finished matching). A transaction, not a lone statement: an autocommit
+// write under modernc can answer a context that ended after it committed with
+// the context's error, which would leave the run applying with no apply to
+// finish it (and every Unlink refused, ErrMatchRunBusy); a transaction reports
+// a failure only for a write it rolled back.
 func (c *Catalog) BeginApply(ctx context.Context, runID int64, scope string, total int) error {
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE match_runs SET status = ?, scope = ?, apply_total = ?, apply_done = 0
-		  WHERE id = ? AND status = ?`, MatchApplying, scope, total, runID, MatchReady)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrRunNotReady
-	}
-	return nil
+	return c.db.WithTx(ctx, "BeginApply", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE match_runs SET status = ?, scope = ?, apply_total = ?, apply_done = 0
+			  WHERE id = ? AND status = ?`, MatchApplying, scope, total, runID, MatchReady)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrRunNotReady
+		}
+		return nil
+	})
 }
 
 // MarkMatchItem records what applying did to an item and counts it done.

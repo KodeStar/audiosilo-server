@@ -1656,11 +1656,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the review use it). A refresh records only books a scope would change (as a
   repick records only books with a new ASIN), so a clean library leaves no items. A refresh
   proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:...", or
-  "work:<work id>[/<recording id>]" for a book looked up by its recorded match), as a
+  "work:<work id>[/<recording id>]" for a book looked up by its recorded match, a fallback's
+  followed by the identifiers whose lookups missed: below), as a
   repick's names the ASIN it looked up, and applying either is a no-op for a book that no
   longer has it (matched again since, to another record or another recording of the work:
   `stillFoundBy`; a repick recorded before 2.4.0 has none), except a refresh whose heal went in
-  before a stop cut its cover short (`healedTo`: the book's match is already the proposal's).
+  before a stop cut its cover short (`healedTo`: the book's match is already the proposal's;
+  a fallback's identifiers must still agree too).
   Likewise a match run's book that is matched now (`matchedSince`: an ASIN or ISBN, or a recorded
   community match; matched by hand from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
   in the review and is skipped with detail `matched_since`, under any scope; a match whose
@@ -1686,11 +1688,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   when the search lists it; how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
-  (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book:
+  (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book
+  (a whitespace-only id, or a `match` naming no work, `{}` or a null `work_id`, is invalid,
+  400 `invalid_override` on field `match`, never an Unlink):
   `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
   rest of the edit), so its community values and cover go with the row and the next run asks about it
   again (removing only the row would leave the values to match it to the same work); an admin's own
-  edits and uploads stay. No Undo: the cleared values aren't kept. A store listing the
+  edits and uploads stay. While any match run is matching or applying, Unlink is refused
+  (`catalog.ErrMatchRunBusy`, HTTP 409 `match_run_busy`; stop the run or wait for it to finish).
+  The check and clear share the edit's writer transaction, serialized with `StartMatchRun` and
+  `BeginApply`, so no run can start applying between them. Applying stays busy through the
+  last worker's cover write, even after a stop request; ordinary field edits still work.
+  No Undo: the cleared values aren't kept. A store listing the
   community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
@@ -1763,19 +1772,36 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy's top 10 with reasons, series and runtimes, the right work's rank). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every matched book) looks each
-  book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
-  that record as confident, unless its recording is over 10% off the book's length
-  (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
-  fuzzy work); a book with neither is looked up by its recorded work (`meta.MatchQuery.WorkID`:
+  book up by its own identifier first (the ISBN when the ASIN finds nothing) and takes
+  that record as confident, subject to the recording's length guard (`lengthFits`, above:
+  otherwise held for review). A successful identifier lookup keeps precedence even when
+  it names a different work from the recorded match or its recording is held for review.
+  Only when every identifier lookup returns no candidate and neither nonempty identifier
+  is an admin edit (`BookMatchState.Fields`, `source=edited`) does refresh fall back to the
+  recorded work; tag/scan/community identifiers still allow it, and an outage stays an
+  error, never a fallback. With an admin-edited identifier or no recorded work, those
+  misses remain `none` / `identifier_unknown`, never a fuzzy match by title.
+  A book with neither identifier is looked up by its recorded work directly (`meta.MatchQuery.WorkID`:
   works/{id} alone, a retired slug's 301 followed online and in mirror mode, its recorded recording
   kept while the work lists it, `found_by` `work:<work id>[/<recording id>]`, `stillFoundBy`
   against the anchor's work and recording; a 404 is no match, detail `work_unknown`, the anchor
-  KEPT), and may fill an ASIN/ISBN its recording gained.
+  KEPT). The fallback uses the same lookup, recording choice and length guard, and heals
+  the match and refreshes its details under the selected scope. Its `found_by` appends
+  `;asin:<ASIN>;isbn:<ISBN>` to the work source, including empty values: both identifiers
+  and the recorded work/recording must still agree at apply, with neither identifier an
+  admin edit (`planFor` checks the identifiers and their sources,
+  `splitFallback`, before `stillFoundBy`). A stopped apply that already healed the match can
+  resume its cover only while those identifiers still agree (the same check, then `healedTo`).
+  A book with neither identifier may fill an ASIN/ISBN its recording gained.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
   overwrites the details but never writes an identifier for a book that has one (an
   identifier lookup's proposal carries none, and `planRefresh` drops a by-work proposal's
-  once the book has one of its own); `matchrun.ScopesFor` (the one statement of which scopes a
+  once the book has one of its own; a fallback's proposal also carries none).
+  Known issue for v2.7.0 (server#330, edge 1): unticking or reverting an offered ASIN
+  does not remember its rejection or remove the recorded match, so a later refresh can
+  fill it again. Unlink removes the recorded match and community values.
+  `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
   `book.match_refresh`. The review excludes refresh rows with no changes under the
   selected scope (a healed recorded match counts as a change), reading all confident

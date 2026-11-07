@@ -51,7 +51,7 @@ const BY_CODE: Record<string, string> = {
   import_not_ready: 'errors.importNotReady',
   import_not_applied: 'errors.importNotApplied',
   import_applied: 'errors.importApplied',
-  // A match run is working (starting another, applying, clearing matches).
+  // A match run is working (starting another, applying, clearing matches, unlinking a book).
   match_run_busy: 'errors.matchRunBusy',
   // Household members: assigning someone, making them an admin, deleting an owner.
   member_not_admin: 'errors.memberNotAdmin',

@@ -333,9 +333,12 @@ describe('bulk matching', () => {
     );
     const user = userEvent.setup();
     renderApp('/health?issue=unmatched');
-    // Books with an ASIN or ISBN by it, store listings by their recorded work.
+    // Books with an ASIN or ISBN by it first; store listings, and identifiers the
+    // community doesn't know, by their recorded work.
     expect(
-      await screen.findByText(/and books matched to a store listing by their community work/),
+      await screen.findByText(
+        /or whose ASIN or ISBN the community doesn't know, by their community work/,
+      ),
     ).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Fill in matched books' }));
     await waitFor(() =>

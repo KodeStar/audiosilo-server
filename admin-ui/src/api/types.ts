@@ -2250,7 +2250,8 @@ export interface MatchProposal {
   /**
    * A refresh's or a repick's: the book's own identifier the record was found by
    * ("asin:…" / "isbn:…"), or for a store listing with neither, its recorded match
-   * ("work:<work id>[/<recording id>]").
+   * ("work:<work id>[/<recording id>]"). A refresh that fell back to the recorded
+   * match after its identifiers found nothing appends ";asin:<ASIN>;isbn:<ISBN>".
    */
   found_by?: string;
   /** Each field the community has a value for, in stored form. */

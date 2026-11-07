@@ -864,6 +864,7 @@ func (e BookEdit) normalize() (BookEdit, error) {
 // EditBook applies an edit to one indexed book: overrides are written (or deleted,
 // for a revert) and the books row, its chapters and its FTS row are rebuilt, all in
 // one transaction. ErrNotFound when no book is indexed at the path.
+// An Unlink returns ErrMatchRunBusy while any match run is matching or applying.
 func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, edit BookEdit) error {
 	edit, err := edit.normalize()
 	if err != nil {
@@ -927,6 +928,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	switch {
 	case edit.Match == nil:
 	case edit.Match.WorkID == "":
+		// Check under the same writer transaction as the clear: StartMatchRun
+		// and BeginApply cannot start writing the book between the two. Applying
+		// stays busy through its cover fetches, including after a cancel request.
+		var busy bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM match_runs WHERE status IN (?, ?))`,
+			MatchMatching, MatchApplying).Scan(&busy); err != nil {
+			return err
+		}
+		if busy {
+			return ErrMatchRunBusy
+		}
 		// An unlink takes back everything the community match wrote, not just
 		// the record of it: left behind, its values would match the book to
 		// the same work again on the next run. First, so the rest of the edit

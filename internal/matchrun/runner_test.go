@@ -25,7 +25,8 @@ type fakeMatcher struct {
 	byTitle map[string][]meta.MatchCandidate
 	byASIN  map[string][]meta.MatchCandidate
 	byISBN  map[string][]meta.MatchCandidate
-	// byWork answers a refresh's lookup of a book matched by its work alone.
+	// byWork answers a refresh's lookup by a book's recorded work: a book
+	// matched by its work alone, or one whose ASIN and ISBN found nothing.
 	byWork map[string][]meta.MatchCandidate
 	// answer, when set, answers every match-mode query (one with no ASIN or ISBN).
 	answer  func(q meta.MatchQuery) []meta.MatchCandidate
@@ -498,7 +499,7 @@ func TestRepickKeepsHandMatch(t *testing.T) {
 // ISBN by that identifier alone (an ISBN beside an unknown ASIN too), takes the
 // record it names as confident, and applying fills the details (cover included)
 // without touching the identifier or an admin's own edit; an identifier the
-// community doesn't know is no match.
+// community doesn't know, with no recorded match to fall back to, is no match.
 func TestRefresh(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

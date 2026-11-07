@@ -75,6 +75,8 @@ func TestAnchorWrittenWithTheEdit(t *testing.T) {
 		"a C1 control":        {Match: &MatchAnchor{WorkID: "mi\u0085ne"}, Source: SourceCommunity},
 		"too long":            {Match: &MatchAnchor{WorkID: strings.Repeat("w", maxMatchID+1)}, Source: SourceCommunity},
 		"a bad recording":     {Match: &MatchAnchor{WorkID: "mine", RecordingID: "r\x00"}, Source: SourceCommunity},
+		"whitespace only":     {Match: &MatchAnchor{WorkID: " \t\n"}},
+		"unicode whitespace":  {Match: &MatchAnchor{WorkID: "\u2003"}},
 	} {
 		if err := c.EditBook(ctx, lib.ID, p, edit); !errors.Is(err, ErrInvalidOverride) {
 			t.Errorf("%s: err = %v, want ErrInvalidOverride", name, err)
@@ -93,6 +95,63 @@ func TestAnchorWrittenWithTheEdit(t *testing.T) {
 	}
 	if a := anchorOf(t, c, ctx, lib.ID, p); a != (MatchAnchor{}) {
 		t.Fatalf("anchor after the clear = %+v, want none", a)
+	}
+}
+
+// Unlink checks run status in its writer transaction, so a run cannot move to
+// applying between that check and the clear. A refused mixed edit writes none
+// of its fields; an ordinary edit is still allowed, and startup recovery releases
+// a run left working by a stopped server.
+func TestUnlinkWhileMatchRunWorks(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{MatchMatching, MatchApplying} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			c, ctx := newTestCatalog(t)
+			lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const path = "A/Book"
+			if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, path)); err != nil {
+				t.Fatal(err)
+			}
+			anchorBook(t, c, ctx, lib.ID, path, "the-work")
+			id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeRefresh})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status == MatchApplying {
+				if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.BeginApply(ctx, id, "fill", 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			edit := BookEdit{Match: &MatchAnchor{}, Set: map[string]string{FieldTitle: "Must not be written"}}
+			if err := c.EditBook(ctx, lib.ID, path, edit); !errors.Is(err, ErrMatchRunBusy) {
+				t.Fatalf("unlink while a run works = %v, want ErrMatchRunBusy", err)
+			}
+			if a := anchorOf(t, c, ctx, lib.ID, path); a.WorkID != "the-work" {
+				t.Fatalf("refused unlink changed the anchor: %+v", a)
+			}
+			if b := mustBook(t, c, ctx, lib.ID, path); b.Title != "Community Title" {
+				t.Fatalf("refused unlink wrote a field: %q", b.Title)
+			}
+			if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldNarrator: "My Reader"}}); err != nil {
+				t.Fatalf("ordinary edit while a run works: %v", err)
+			}
+			if err := c.InterruptMatchRuns(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.EditBook(ctx, lib.ID, path, BookEdit{Match: &MatchAnchor{}}); err != nil {
+				t.Fatalf("unlink after recovery: %v", err)
+			}
+			if a := anchorOf(t, c, ctx, lib.ID, path); a.WorkID != "" {
+				t.Fatalf("unlink after recovery left the anchor: %+v", a)
+			}
+		})
 	}
 }
 
