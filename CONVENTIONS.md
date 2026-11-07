@@ -1776,9 +1776,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   that record as confident, subject to the recording's length guard (`lengthFits`, above:
   otherwise held for review). A successful identifier lookup keeps precedence even when
   it names a different work from the recorded match or its recording is held for review.
-  Only when every identifier lookup returns no candidate does refresh fall back to the
-  recorded work; an outage stays an error, never a fallback. With no recorded work,
-  those misses remain `none` / `identifier_unknown`, never a fuzzy match by title.
+  Only when every identifier lookup returns no candidate and neither nonempty identifier
+  is an admin edit (`BookMatchState.Fields`, `source=edited`) does refresh fall back to the
+  recorded work; tag/scan/community identifiers still allow it, and an outage stays an
+  error, never a fallback. With an admin-edited identifier or no recorded work, those
+  misses remain `none` / `identifier_unknown`, never a fuzzy match by title.
   A book with neither identifier is looked up by its recorded work directly (`meta.MatchQuery.WorkID`:
   works/{id} alone, a retired slug's 301 followed online and in mirror mode, its recorded recording
   kept while the work lists it, `found_by` `work:<work id>[/<recording id>]`, `stillFoundBy`
@@ -1786,7 +1788,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   KEPT). The fallback uses the same lookup, recording choice and length guard, and heals
   the match and refreshes its details under the selected scope. Its `found_by` appends
   `;asin:<ASIN>;isbn:<ISBN>` to the work source, including empty values: both identifiers
-  and the recorded work/recording must still agree at apply (`planFor` checks the identifiers,
+  and the recorded work/recording must still agree at apply, with neither identifier an
+  admin edit (`planFor` checks the identifiers and their sources,
   `splitFallback`, before `stillFoundBy`). A stopped apply that already healed the match can
   resume its cover only while those identifiers still agree (the same check, then `healedTo`).
   A book with neither identifier may fill an ASIN/ISBN its recording gained.

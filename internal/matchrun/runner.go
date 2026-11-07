@@ -394,9 +394,10 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 // resolved to. The lookup takes the ASIN when there is one, so an ISBN
 // beside an ASIN the community doesn't know gets a look of its own. Identifiers
 // the community doesn't know fall back to the book's recorded community match
-// (catalog.MatchAnchor), when it has one; a book is never offered another record
-// by title. A book matched with neither (a store listing) is looked up by that
-// work directly. A work lookup (meta.MatchQuery.WorkID) follows a retired id's
+// (catalog.MatchAnchor), when it has one and neither identifier is an admin edit;
+// a book is never offered another record by title. A book matched with neither
+// (a store listing) is looked up by that work directly. A work lookup
+// (meta.MatchQuery.WorkID) follows a retired id's
 // redirect, its recording the recorded one while the work still lists it; a work
 // the community no longer knows is no match (DetailWorkUnknown).
 func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
@@ -404,11 +405,15 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	if !hasIdentifier && b.MatchWorkID == "" {
 		return nil, nil // matched by nothing a refresh can look up
 	}
+	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
+	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
+			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
+		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
+	}
 	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
-	var (
-		cands []meta.MatchCandidate
-		err   error
-	)
+	var cands []meta.MatchCandidate
 	if hasIdentifier {
 		cands, err = r.candidates(ctx, q, item)
 		if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
@@ -416,7 +421,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 			cands, err = r.candidates(ctx, q, item)
 		}
 	}
-	byWork := err == nil && len(cands) == 0 && b.MatchWorkID != ""
+	byWork := err == nil && len(cands) == 0 && b.MatchWorkID != "" && (!hasIdentifier || !hasEditedIdentifier(st))
 	if byWork {
 		q.ASIN, q.ISBN = "", ""
 		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
@@ -470,13 +475,6 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	}
 	// A book neither scope would change is up to date: nothing to record (most
 	// of a matched library, whose proposals would only fill the review).
-	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
-	if err != nil {
-		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
-			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
-		}
-		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
-	}
 	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
 		if !planRefresh(scope, st, item.Proposal).Empty() {
 			return item, nil

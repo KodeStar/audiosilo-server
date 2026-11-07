@@ -452,9 +452,9 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // only while the book still has the identifier or recorded match it was found by
 // (stillFoundBy), or the record an apply a stop cut short already healed it to
 // (healedTo; planRefresh), a fallback to the recorded match only while the
-// identifiers whose lookups missed are as they were (splitFallback: one gained
-// or changed since may name another record), and for a match only while the
-// book is still unmatched (matchedSince). An item a stop cut short
+// identifiers whose lookups missed are as they were and none is an admin edit
+// (splitFallback: one gained or changed since may name another record), and for
+// a match only while the book is still unmatched (matchedSince). An item a stop cut short
 // (DetailCoverPending) doesn't record its match again: that went in with its
 // fields, so a book without one now was unlinked since, and an unlink takes back
 // the fields and cover too (BookEdit.Match), so such an item writes nothing.
@@ -465,7 +465,7 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 		return Writes{Set: PlanRepick(st, p)}
 	case catalog.MatchModeRefresh:
 		foundBy, missed := splitFallback(p.FoundBy)
-		if missed != "" && missed != fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value) {
+		if missed != "" && (hasEditedIdentifier(st) || missed != fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value)) {
 			return Writes{}
 		}
 		if !stillFoundBy(st, foundBy) && !healedTo(st, p) {
@@ -561,6 +561,17 @@ func workFoundBy(workID, recordingID string) string {
 // FoundBy survives review, apply and a restart without a separate state model.
 func fallbackIdentifiers(asin, isbn string) string {
 	return "asin:" + catalog.CleanOverride(catalog.FieldASIN, asin) + ";isbn:" + catalog.CleanOverride(catalog.FieldISBN, isbn)
+}
+
+// hasEditedIdentifier reports whether a book's ASIN or ISBN is an admin edit.
+// An empty override clears an identifier rather than supplying one.
+func hasEditedIdentifier(st *catalog.MatchState) bool {
+	for _, field := range []string{catalog.FieldASIN, catalog.FieldISBN} {
+		if f := st.Fields[field]; f.Value != "" && f.Source == catalog.SourceEdited {
+			return true
+		}
+	}
+	return false
 }
 
 // splitFallback splits a refresh's FoundBy into its lookup and, for a fallback
