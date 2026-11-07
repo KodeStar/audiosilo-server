@@ -7,6 +7,7 @@ import {
   hasCloseScore,
   applyRequest,
   bulkPhase,
+  changeParts,
   isChosen,
   isPickable,
   leaveOut,
@@ -117,6 +118,37 @@ describe('picks', () => {
     ];
     const next = togglePickRange(NO_PICKS, rows, 1, rows[1], new Set(), 'refresh', 'fill');
     expect([...next.exclude]).toEqual([2]);
+  });
+
+  it('keeps a refresh that only heals its recorded community match pickable and counted', () => {
+    const healed = item({
+      id: 1,
+      changes: {
+        fill: { fields: [], cover: false, match: true },
+        overwrite: { fields: [], cover: false, match: true },
+      },
+    });
+    const review = { ...healed, id: 2, outcome: 'review' as const };
+    const noop = item({ id: 3, changes: { fill: { fields: [], cover: false, match: false } } });
+    const picks = { exclude: new Set<number>(), include: new Set([2]) };
+    for (const scope of ['fill', 'overwrite'] as const) {
+      expect(isPickable(healed, 'refresh', scope)).toBe(true);
+      expect(isChosen(healed, picks, 'refresh', scope)).toBe(true);
+      expect(isChosen(review, picks, 'refresh', scope)).toBe(true);
+      const effective = picksForScope(picks, [healed, review, noop], 'refresh', scope);
+      expect(applyCount(run({}, { pending: 2 }), effective)).toBe(2);
+      expect(applyRequest(scope, effective)).toEqual({ scope, exclude: [3], include: [2] });
+    }
+    const range = togglePickRange(
+      NO_PICKS,
+      [noop, healed],
+      3,
+      healed,
+      new Set(),
+      'refresh',
+      'fill',
+    );
+    expect([...range.exclude]).toEqual([1]);
   });
   const confident = item({ id: 1, outcome: 'auto' });
   const doubtful = item({ id: 2, outcome: 'review' });
@@ -257,5 +289,27 @@ describe('regions', () => {
     const options = regionOptions('en');
     expect(options).toHaveLength(11);
     expect(options[1]).toEqual({ value: 'uk', label: 'United Kingdom (audible.co.uk)' });
+  });
+});
+
+describe('changeParts', () => {
+  it('lists the community match when it is what matches the book', () => {
+    // A store listing under ids: no identifier to write, the match alone.
+    expect(changeParts({ fields: [], cover: false, match: true })).toEqual([{ kind: 'match' }]);
+    // A refresh healing a merged work, with fields.
+    expect(changeParts({ fields: ['title'], cover: true, match: true })).toEqual([
+      { kind: 'cover' },
+      { kind: 'field', field: 'title' },
+      { kind: 'match' },
+    ]);
+  });
+
+  it('leaves it implied beside an ASIN or ISBN, and lists nothing for no change', () => {
+    expect(changeParts({ fields: ['asin', 'isbn'], cover: false, match: true })).toEqual([
+      { kind: 'field', field: 'asin' },
+      { kind: 'field', field: 'isbn' },
+    ]);
+    expect(changeParts({ fields: [], cover: false })).toEqual([]);
+    expect(changeParts(undefined)).toEqual([]);
   });
 });

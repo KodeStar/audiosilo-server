@@ -164,7 +164,7 @@ describe('compare', () => {
     ticks.delete('series');
     // Discworld's #8 isn't put beside Red Planet, nor Discworld itself (Red Planet
     // may be it, spelled otherwise); the work's other series are still added.
-    const { set } = acceptRequest(rows, ticks);
+    const { set } = acceptRequest(rows, ticks, candidate(), recording());
     expect(set?.series_index).toBeUndefined();
     expect(set?.more_series).toBe('[{"name":"City Watch","position":1}]');
   });
@@ -177,7 +177,7 @@ describe('compare', () => {
     const rows = compareRows(detail.fields, candidate(), recording());
     const ticks = defaultTicks(rows);
     ticks.delete('series');
-    const { set } = acceptRequest(rows, ticks);
+    const { set } = acceptRequest(rows, ticks, candidate(), recording());
     expect(set?.series_index).toBeUndefined();
     expect(set?.more_series).toBeUndefined();
   });
@@ -189,7 +189,7 @@ describe('compare', () => {
     const rows = compareRows(detail.fields, candidate(), recording());
     const ticks = defaultTicks(rows);
     ticks.delete('series');
-    const { set } = acceptRequest(rows, ticks);
+    const { set } = acceptRequest(rows, ticks, candidate(), recording());
     expect(set?.series_index).toBe('1');
     expect(set?.more_series).toBeUndefined();
   });
@@ -222,13 +222,29 @@ describe('compare', () => {
     expect(rows.find((r) => r.field === 'isbn')).toMatchObject({ same: false, offered: false });
     const ticks = defaultTicks(rows);
     expect([...ticks]).toEqual(['published', 'publisher', 'description']);
-    expect(acceptRequest(rows, ticks)).toEqual({
+    expect(acceptRequest(rows, ticks, candidate(), recording())).toEqual({
       set: {
         published: '2010',
         publisher: 'Macmillan Audio',
         description: 'Roshar is a world of stone and storms.',
       },
       source: 'community',
+      match: { work_id: 'the-way-of-kings', recording_id: 'r1' },
+    });
+  });
+
+  it('records the match with no identifier, and with no recording picked', () => {
+    // A store listing: the community holds the book with no ASIN or ISBN, so the
+    // recorded work is what makes the book matched (server#320).
+    const listing = candidate({ recordings: [recording({ asins: [], isbns: [] })] });
+    const rows = compareRows(bookDetail().fields, listing, listing.recordings[0]);
+    const req = acceptRequest(rows, defaultTicks(rows), listing, listing.recordings[0]);
+    expect(req.set?.asin).toBeUndefined();
+    expect(req.match).toEqual({ work_id: 'the-way-of-kings', recording_id: 'r1' });
+    const none = acceptRequest(rows, new Set(), listing, undefined);
+    expect(none).toMatchObject({
+      set: {},
+      match: { work_id: 'the-way-of-kings', recording_id: '' },
     });
   });
 });

@@ -129,6 +129,48 @@ describe('series', () => {
     ).toBeInTheDocument();
   });
 
+  it('says to match a book only for a series with no matched book (server#320)', async () => {
+    // All Systems Red is matched to a store listing: no ASIN or ISBN to find a rail
+    // by, and matching it again wouldn't give it one.
+    const listing = { ...books[2], matched: true };
+    const unmatched = adminBook({
+      title: 'The Long Way to a Small, Angry Planet',
+      path: 'Becky Chambers/The Long Way to a Small, Angry Planet',
+      author: 'Becky Chambers',
+      series: 'Wayfarers',
+      asin: '',
+    });
+    mockFetch(
+      routes({
+        'GET /admin/series': {
+          body: {
+            series: [
+              ...series,
+              {
+                name: 'Wayfarers',
+                author: 'Becky Chambers',
+                books: 1,
+                duration: 1,
+                positions: [1],
+                extra_books: 0,
+              },
+            ],
+          },
+        },
+        'GET /admin/books': seriesBooks([books[0], books[1], listing, books[3], unmatched]),
+      }),
+    );
+    renderApp('/library/series');
+    const hint = "Match a book of this series to see what's missing";
+    const wayfarers = await screen.findByRole('region', { name: 'Wayfarers' });
+    expect(await within(wayfarers).findByText(hint)).toBeInTheDocument();
+    const murderbot = screen.getByRole('region', { name: 'The Murderbot Diaries' });
+    expect(
+      await within(murderbot).findByRole('button', { name: '#1 All Systems Red' }),
+    ).toBeInTheDocument();
+    expect(within(murderbot).queryByText(hint)).toBeNull();
+  });
+
   it('dates a missing entry, and says which are preorders and new releases', async () => {
     const recent = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
     const dated: BookMeta = {

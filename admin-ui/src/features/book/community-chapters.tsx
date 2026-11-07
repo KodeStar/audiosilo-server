@@ -10,7 +10,7 @@ import { toastError } from '@/lib/errors';
 import { counted, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { say } from '@/lib/phrase';
-import { communityState } from './book-model';
+import { canCheckChapters, communityState } from './book-model';
 
 /**
  * The community's chapters for this book, at the top of the Chapters card: where the
@@ -39,7 +39,7 @@ export function CommunityChapters({ detail }: { detail: AdminBookDetail }) {
     wasChecking.current = checking;
   }, [checking, qc]);
 
-  const canCheck = !!server.data?.capabilities.metadata && b.matched;
+  const canCheck = !!server.data?.capabilities.metadata && canCheckChapters(detail);
   if (!state && !checking) return null;
 
   const edit = async (req: BookEditRequest, done: string, count = 1) => {

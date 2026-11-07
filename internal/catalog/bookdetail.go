@@ -48,6 +48,10 @@ type AdminBookDetail struct {
 	// GeneratedDescription is the description the Bridge generated for the book
 	// (its .audiosilo/description.json, as stored), omitted when it has none.
 	GeneratedDescription *GeneratedDescription `json:"generated_description,omitempty"`
+	// CommunityMatch is the book's recorded community match (book_matches),
+	// omitted when it has none: the work an admin accepted or a match run
+	// applied, with or without an ASIN or ISBN. Its web_url is set by the api.
+	CommunityMatch *BookMatch `json:"community_match,omitempty"`
 }
 
 // GeneratedDescription is a book's generated description on the console's book
@@ -144,6 +148,9 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		}
 	}
 	if d.CommunityChapters, err = c.GetCommunityChapters(ctx, libraryID, relPath); err != nil {
+		return nil, err
+	}
+	if d.CommunityMatch, err = bookAnchor(ctx, c.db, libraryID, relPath); err != nil {
 		return nil, err
 	}
 	if d.Chapters, err = queryRows(ctx, c.db, func(rows *sql.Rows, ch *AdminChapter) error {

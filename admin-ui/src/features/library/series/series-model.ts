@@ -424,9 +424,18 @@ export function spineRow(placed: Placed[], missing: RailEntry[]): Spine[] {
   });
 }
 
-/** The book whose community metadata names the series: the first one matched. */
+/**
+ * The book whose community metadata names the series: the first one with an ASIN
+ * or ISBN (the book's /meta is found by one; a book matched to a store listing
+ * has neither, matched as it is).
+ */
 export function metaCandidate(owned: AdminBook[]): AdminBook | undefined {
-  return owned.find((b) => b.matched);
+  return owned.find(hasIdentifier);
+}
+
+/** Whether a book has an ASIN or ISBN, which the community finds it by. */
+export function hasIdentifier(b: Pick<AdminBook, 'asin' | 'isbn'>): boolean {
+  return !!(b.asin || b.isbn);
 }
 
 /** Book lengths, in hours, at the shortest and tallest spines. */

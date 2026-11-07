@@ -5,13 +5,17 @@
 // Nothing changes until the admin applies the run, choosing how much it may write
 // (a Scope). Applying writes community overrides (catalog.EditBook, source
 // community) and, where a book has no cover, the community cover, so every change
-// is a reversible override, exactly as accepting a match by hand is.
+// is a reversible override, exactly as accepting a match by hand is; the match
+// itself is recorded with them (catalog.MatchAnchor, which the book page's Unlink
+// removes).
 //
 // A repick run looks again at books whose ASIN a community match set, for the same
 // recording's ASIN in the preferred Audible marketplace (config metadata.region),
 // which the community data may have gained since. A refresh run looks the books
-// that already have an ASIN or ISBN up by it alone, to fill in the details an
-// identifier alone didn't bring; it never changes the identifier.
+// that already have an ASIN or ISBN up by it alone, and a book matched with
+// neither by its recorded community match, to fill in the details the match
+// didn't bring; it never changes a book's own identifier (one with neither may
+// take its recording's).
 package matchrun
 
 import (
@@ -32,19 +36,31 @@ import (
 
 // What a match must have to be applied unasked: a score of at least AutoScore,
 // AutoLead ahead of the next candidate (two works that both fit are a choice for
-// the admin), an ASIN or ISBN to attach (the book counts as matched by it), and,
-// when both lengths are known, a recording within meta.PlausibleRuntimeOff of the book's
-// length, or within meta.NarratedRuntimeOff when the book's narrator reads it
-// (lengthFits; the closest recording of a work can still be another edition: the
-// unabridged book of a work that holds only its dramatization).
+// the admin), an ASIN or ISBN to attach, and, when both lengths are known, a
+// recording within meta.PlausibleRuntimeOff of the book's length, or within
+// meta.NarratedRuntimeOff when the book's narrator reads it (lengthFits; the
+// closest recording of a work can still be another edition: the unabridged book
+// of a work that holds only its dramatization).
 // An identifier hit (the ASIN or ISBN the query sent named the work: in a run
 // always a tag hint, a book with its own being no run's subject) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
 // that is a guard, not a case a run meets.
+//
+// A match with no ASIN or ISBN to attach (a store listing the community holds
+// without one: LibraForge E6) is applied unasked on firmer ground instead
+// (anchorFits): the same score and plain lead, the author in full and the series
+// at the book's position (metaserve's reasons), and a recording whose length is
+// known on both sides and within AnchorRuntimeOff of the book's. The book is then
+// matched by its recorded community work (catalog.MatchAnchor), as an identifier
+// would match it.
 const (
 	AutoScore = 90
 	AutoLead  = 10
+	// AnchorRuntimeOff is how far (relative) an identifier-less match's recording
+	// may be off the book's length to be applied unasked: tighter than
+	// meta.PlausibleRuntimeOff, as nothing else names the edition.
+	AnchorRuntimeOff = 0.02
 )
 
 // ReviewFloor is the metaserve score a match run's best candidate needs to be
@@ -58,8 +74,9 @@ const ReviewFloor = 60
 
 // How much applying a run may write.
 const (
-	// ScopeIDs attaches the ASIN/ISBN only: the book is matched, and the player's
-	// community enrichment finds it; everything the files say stays.
+	// ScopeIDs attaches the ASIN/ISBN and records the community match
+	// (catalog.MatchAnchor) only: the book is matched, and the player's community
+	// enrichment finds it by the identifier; everything the files say stays.
 	ScopeIDs = "ids"
 	// ScopeFill also fills every field the book has empty, and its cover when it
 	// has none; nothing it has is replaced, except a cluttered title it tidies
@@ -77,9 +94,10 @@ var Scopes = []string{ScopeIDs, ScopeFill, ScopeOverwrite}
 func ValidScope(s string) bool { return slices.Contains(Scopes, s) }
 
 // ScopesFor is the scopes an apply of a run in mode may name: every scope for a
-// match; fill and overwrite for a refresh (it never writes an identifier, so ids
-// would write nothing); none for a repick, which writes its ASIN whatever the
-// scope says.
+// match; fill and overwrite for a refresh (a refresh is for the details: what ids
+// alone would write, the identifier a store listing's recording gained and a
+// merged work's new record, fill writes too); none for a repick, which writes its
+// ASIN whatever the scope says.
 func ScopesFor(mode string) []string {
 	switch mode {
 	case catalog.MatchModeRepick:
@@ -280,16 +298,20 @@ func joinNames(people []meta.MetaPersonRef) string {
 
 // Writes is what applying a match writes to a book: the fields to Set (as
 // community overrides), the community overrides to Revert (a series the community
-// wrote earlier and no longer lists for the book) and whether to take the
-// community Cover.
+// wrote earlier and no longer lists for the book), whether to take the community
+// Cover, and the community match to record (Anchor, nil for none: its work and
+// recording; how and the run are the apply's).
 type Writes struct {
 	Set    map[string]string
 	Revert []string
 	Cover  bool
+	Anchor *catalog.MatchAnchor
 }
 
 // Empty reports whether w writes nothing.
-func (w Writes) Empty() bool { return len(w.Set) == 0 && len(w.Revert) == 0 && !w.Cover }
+func (w Writes) Empty() bool {
+	return len(w.Set) == 0 && len(w.Revert) == 0 && !w.Cover && w.Anchor == nil
+}
 
 // after is field's value on a book in state st once w is applied: the value it
 // sets, else what the files say for one it reverts, else the value it has.
@@ -308,7 +330,9 @@ func (w Writes) after(st *catalog.MatchState, field string) string {
 // writes can't disagree. Fill fills empty fields, and replaces a title only to
 // tidy it (tidyTitle). Never: a value the book already has, an admin's own edit,
 // a series position for a series the book won't have, or a cover over any the
-// book has.
+// book has. Every scope records p's work and recording as the book's community
+// match when that is not the one it has (a refresh only heals one: planRefresh;
+// see planFor).
 func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Writes{Set: map[string]string{}}
 	for _, field := range catalog.OverrideFields {
@@ -329,6 +353,9 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 		}
 	}
 	w.Cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
+	if p.WorkID != "" && (p.WorkID != st.Anchor.WorkID || p.RecordingID != st.Anchor.RecordingID) {
+		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID}
+	}
 	return w
 }
 
@@ -421,51 +448,112 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 }
 
 // planFor is what applying item it (its proposal) to a book in state st writes for a
-// run in mode: a repick's ASIN (whatever the scope), else Plan's (a refresh's
-// proposal carries no identifier, so its Plan writes none: refreshBook), for a
-// refresh only while the book still has the identifier it was found by, and for
-// a match only while the book is still unmatched (matchedSince).
+// run in mode: a repick's ASIN (whatever the scope), else Plan's, for a refresh
+// only while the book still has the identifier or recorded match it was found by
+// (stillFoundBy), or the record an apply a stop cut short already healed it to
+// (healedTo; planRefresh), and for a match only while the book is still unmatched
+// (matchedSince). An item a stop cut short (DetailCoverPending) doesn't record
+// its match again: that went in with its fields, so a book without one now was
+// unlinked since, and an unlink takes back the fields and cover too
+// (BookEdit.Match), so such an item writes nothing.
 func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunItem) Writes {
 	p := it.Proposal
 	switch mode {
 	case catalog.MatchModeRepick:
 		return Writes{Set: PlanRepick(st, p)}
 	case catalog.MatchModeRefresh:
-		if !stillFoundBy(st, p.FoundBy) {
+		if !stillFoundBy(st, p.FoundBy) && !healedTo(st, p) {
 			return Writes{}
 		}
+		return planRefresh(scope, st, p)
 	case catalog.MatchModeMatch:
 		if matchedSince(st, it) {
 			return Writes{}
+		}
+		if it.Detail == DetailCoverPending {
+			if p.WorkID != "" && st.Anchor.WorkID == "" {
+				// Unlinked since: the unlink took back the fields this apply
+				// wrote, and its cover, with the match; none of it goes back.
+				return Writes{}
+			}
+			w := Plan(scope, st, p)
+			w.Anchor = nil
+			return w
 		}
 	}
 	return Plan(scope, st, p)
 }
 
-// matchedSince reports whether a match run's book has an ASIN or ISBN now. The
-// run took only books with neither (UnmatchedBooks), so one has been matched
-// since: by hand (from the review or the book page), by another admin or the
-// Bridge's Audible backfill, or by a rescan reading one from an Audiobookshelf
-// metadata.json. The run's match never writes over it, whatever the scope. An
-// item whose own apply a stop cut short after its fields went in
-// (DetailCoverPending) holds the run's identifier, not one matched since.
+// planRefresh is Plan for a refresh's proposal p (refreshBook): the details, an
+// identifier only for a book with neither (a proposal found by the book's recorded
+// match keeps the recording's ASIN/ISBN: one it gained since; a book that has an
+// ASIN or ISBN now, one it gained after the lookup, keeps its own), and the
+// recorded match only healed, never added: a book matched by its own ASIN or ISBN
+// with no recorded work keeps none (the refresh names no match, it reads one),
+// while one whose work was merged or retired since takes the record the lookup
+// followed it to.
+func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
+	w := Plan(scope, st, p)
+	if st.Anchor.WorkID == "" {
+		w.Anchor = nil
+	}
+	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
+		delete(w.Set, catalog.FieldASIN)
+		delete(w.Set, catalog.FieldISBN)
+	}
+	return w
+}
+
+// matchedSince reports whether a match run's book is matched now: an ASIN or
+// ISBN, or a recorded community match (catalog.MatchAnchor). The run took only
+// unmatched books (UnmatchedBooks), so one has been matched since: by hand (from
+// the review or the book page), by another admin or the Bridge's Audible
+// backfill, or by a rescan reading one from an Audiobookshelf metadata.json. The
+// run's match never writes over it, whatever the scope. An item whose own apply a
+// stop cut short after its fields went in (DetailCoverPending) holds the run's
+// identifier and match: it is matched since only by a recorded match that isn't
+// the run's (matched again by hand, to another record).
 func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 	if it.Detail == DetailCoverPending {
-		return false
+		p := it.Proposal
+		return st.Anchor.WorkID != "" && (st.Anchor.WorkID != p.WorkID || st.Anchor.RecordingID != p.RecordingID)
 	}
-	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != ""
+	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" || st.Anchor.WorkID != ""
 }
 
 // stillFoundBy reports whether the book still has the identifier a refresh or
-// a repick found its record by (Proposal.FoundBy): a book matched again since
-// (by hand, to another record) is not overwritten with the old one's details.
+// a repick found its record by (Proposal.FoundBy), or for a "work:" FoundBy
+// (workFoundBy) still has that recorded community match, its work and recording:
+// a book matched again since (by hand, to another record or another recording of
+// the work) is not overwritten with the old one's details.
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {
 		return false
 	}
+	if kind == "work" {
+		return st.Anchor.WorkID != "" && foundBy == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID)
+	}
 	field := map[string]string{"asin": catalog.FieldASIN, "isbn": catalog.FieldISBN}[kind]
 	return field != "" && catalog.CleanOverride(field, st.Fields[field].Value) == id
+}
+
+// workFoundBy is the FoundBy of a refresh that looked a book up by its recorded
+// community match: "work:<work id>", then "/<recording id>" when the match names
+// one (community ids are slugs, which hold no "/").
+func workFoundBy(workID, recordingID string) string {
+	if recordingID == "" {
+		return "work:" + workID
+	}
+	return "work:" + workID + "/" + recordingID
+}
+
+// healedTo reports whether a refresh found by the book's recorded match already
+// moved that match to p's record (a merged work's heal went in, and a stop cut
+// the rest of the apply, its cover, short), so the item applies again.
+func healedTo(st *catalog.MatchState, p catalog.MatchProposal) bool {
+	return strings.HasPrefix(p.FoundBy, "work:") && p.WorkID != "" &&
+		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's
@@ -526,12 +614,26 @@ func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators [
 	return false
 }
 
+// anchorFits reports whether an identifier-less proposal p of candidate c is firm
+// enough to apply unasked (Classify, LibraForge E6): metaserve found the author in
+// full and the series at the book's position, and p's recording is within
+// AnchorRuntimeOff of the book's seconds, both lengths known. No narrator widens it.
+func anchorFits(c *meta.MatchCandidate, p catalog.MatchProposal, seconds float64) bool {
+	if c.Reasons == nil || c.Reasons.Author != "full" || c.Reasons.Series != "position" {
+		return false
+	}
+	off, known := meta.RuntimeOff(p.RuntimeMin, seconds)
+	return known && off <= AnchorRuntimeOff
+}
+
 // Classify sorts a book's candidates (best first) into an outcome: confident
 // (OutcomeAuto), worth a look (OutcomeReview) or none (no candidate, or none
 // scoring ReviewFloor on metaserve's scale, which only a candidate with Reasons
 // is), with the best score and the next one's. p is the
 // proposal of the best, seconds the book's length (0 = unknown) and narrated
-// whether the book's narrator reads p's recording (narratorReads).
+// whether the book's narrator reads p's recording (narratorReads). A proposal
+// with an ASIN or ISBN is confident by the const block's first rule; one with
+// neither by its second (anchorFits), on a plain lead.
 func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64, narrated bool) (outcome string, score, runnerUp int) {
 	if len(cands) == 0 {
 		return catalog.OutcomeNone, 0, 0
@@ -547,6 +649,8 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 	}
 	switch {
 	case score >= AutoScore && lead && identified && lengthFits(p, seconds, narrated):
+		return catalog.OutcomeAuto, score, runnerUp
+	case !identified && score >= AutoScore && score-runnerUp >= AutoLead && anchorFits(&cands[0], p, seconds):
 		return catalog.OutcomeAuto, score, runnerUp
 	case score < ReviewFloor && cands[0].Reasons != nil:
 		return catalog.OutcomeNone, score, runnerUp

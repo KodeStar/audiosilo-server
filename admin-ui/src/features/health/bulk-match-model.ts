@@ -1,4 +1,4 @@
-import type { MatchRun, MatchRunItem, MatchRunMode, MatchScope } from '@/api/types';
+import type { MatchChange, MatchRun, MatchRunItem, MatchRunMode, MatchScope } from '@/api/types';
 import { rangeOf } from '@/features/library/books/use-selection';
 
 // Bulk matching on Health > Not matched (STYLEGUIDE.md "Health triage"): what the
@@ -78,9 +78,10 @@ export function isPickable(
     !item.applied &&
     !item.gone &&
     !item.matched_since &&
-    // A refresh keeps its identifier: without fields or art to write, it does
-    // nothing. Match and repick may still attach or change an identifier.
-    (mode !== 'refresh' || Boolean(change && (change.cover || change.fields.length)))
+    // A refresh may heal its recorded match without changing fields or art.
+    // Match and repick may still attach or change an identifier.
+    (mode !== 'refresh' ||
+      Boolean(change && (change.match || change.cover || change.fields.length)))
   );
 }
 
@@ -179,4 +180,25 @@ export function applyCount(run: MatchRun, picks: Picks): number {
 /** The apply request for the picks. */
 export function applyRequest(scope: MatchScope, picks: Picks) {
   return { scope, exclude: [...picks.exclude], include: [...picks.include] };
+}
+
+/** One thing a review row says a scope changes: the cover, a field, or the community match. */
+export type ChangePart = { kind: 'cover' } | { kind: 'field'; field: string } | { kind: 'match' };
+
+/**
+ * What a review row lists a change as: the cover, then the fields, then the
+ * community match when it is what matches the book (a store listing with no ASIN
+ * or ISBN, or a refresh healing a merged work). Beside an ASIN or ISBN it is
+ * implied, so it isn't listed.
+ */
+export function changeParts(change: MatchChange | undefined): ChangePart[] {
+  if (!change) return [];
+  const parts: ChangePart[] = [
+    ...(change.cover ? [{ kind: 'cover' } as const] : []),
+    ...change.fields.map((field) => ({ kind: 'field', field }) as const),
+  ];
+  if (change.match && !change.fields.some((f) => f === 'asin' || f === 'isbn')) {
+    parts.push({ kind: 'match' });
+  }
+  return parts;
 }

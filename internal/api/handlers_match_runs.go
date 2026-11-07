@@ -39,8 +39,8 @@ func (a *API) handleListMatchRuns(w http.ResponseWriter, r *http.Request) {
 // handleStartMatchRun serves POST /admin/match-runs {"library_id"?, "mode"?}: match
 // the unmatched books of a library (or all) in the background; mode "repick"
 // instead looks again at community-matched ASINs for the preferred marketplace's,
-// and mode "refresh" looks the books with an ASIN or ISBN up by it, to fill in
-// their details.
+// and mode "refresh" looks the books with an ASIN or ISBN up by it (a book matched
+// with neither by its recorded community match), to fill in their details.
 // 202 with the run; 409 match_run_busy while a run is working; 400 for an unknown
 // mode, and no_region for a repick with no preferred marketplace set.
 func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
@@ -183,8 +183,8 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // handleApplyMatchRun serves POST /admin/match-runs/{id}/apply {"scope",
 // "include"?, "exclude"?}: write the run's confident matches (less exclude, plus
 // the include items, which may be ones that needed review) in the background,
-// under scope ids | fill | overwrite (a refresh run: fill | overwrite, as it never
-// changes an identifier). 202 with the run; 404 for a run that isn't there (or was
+// under scope ids | fill | overwrite (a refresh run: fill | overwrite, keeping
+// existing identifiers). 202 with the run; 404 for a run that isn't there (or was
 // cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {

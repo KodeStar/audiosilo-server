@@ -2,7 +2,13 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairToken } from '@/api/types';
+import type {
+  AdminBookDetail,
+  BookEditRequest,
+  BookMatch,
+  MatchCandidate,
+  PairToken,
+} from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
@@ -474,6 +480,103 @@ describe('book page', () => {
   });
 });
 
+describe('a book matched to a store listing (server#320)', () => {
+  /** A matched book with no ASIN or ISBN: its recorded community work matches it. */
+  function listingDetail(how: 'auto' | 'accepted'): AdminBookDetail {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, asin: '', isbn: '', matched: true };
+    detail.fields.asin = { ...detail.fields.asin, value: '', source: '' };
+    detail.community_match = {
+      work_id: 'a-guild-book',
+      recording_id: 'r1',
+      how,
+      matched_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
+      web_url: 'https://meta.audiosilo.app/work?id=a-guild-book',
+    };
+    return detail;
+  }
+
+  it('shows the community work, how it was matched, and unlinks it after a confirm', async () => {
+    const detail = listingDetail('auto');
+    const unlinked = structuredClone(detail);
+    unlinked.book.matched = false;
+    delete unlinked.community_match;
+    const calls = mockFetch(
+      routes(detail, { 'PATCH /admin/libraries/1/book': { body: unlinked } }),
+    );
+    renderApp(URL);
+    expect(await screen.findByText('Matched')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /a-guild-book/ });
+    expect(link).toHaveAttribute('href', 'https://meta.audiosilo.app/work?id=a-guild-book');
+    expect(
+      screen.getByText(/No ASIN or ISBN: matched to its store listing by a bulk match/),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    // It asks first, saying the community values go too and there is no undo.
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    expect(within(dialog).getByText(/community’s values and cover/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/There is no undo/)).toBeInTheDocument();
+    expect(patches(calls)).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ match: { work_id: '' } });
+    expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
+    expect(await screen.findByText('Not matched')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('sends nothing when the unlink is cancelled', async () => {
+    const calls = mockFetch(routes(listingDetail('auto')));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(patches(calls)).toHaveLength(0);
+    expect(screen.getByText('Matched')).toBeInTheDocument();
+  });
+
+  it('keeps the confirm open with the reason when the unlink fails', async () => {
+    mockFetch(
+      routes(listingDetail('auto'), {
+        'PATCH /admin/libraries/1/book': { status: 500, body: { error: 'database locked' } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByText(/database locked/)).toBeInTheDocument();
+    expect(screen.getByText('Matched')).toBeInTheDocument();
+  });
+
+  it('says an accepted match was accepted', async () => {
+    mockFetch(routes(listingDetail('accepted')));
+    renderApp(URL);
+    expect(
+      await screen.findByText(/No ASIN or ISBN: matched to its store listing \d/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the ASIN, not the work or an unlink, for a book matched by one', async () => {
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: 'the-way-of-kings',
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByText('Matched')).toBeInTheDocument();
+    expect(screen.getAllByText(detail.fields.asin.value).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Unlink' })).toBeNull();
+    expect(screen.queryByText('Community work')).toBeNull();
+  });
+});
+
 const COVER_DATA = 'data:image/jpeg;base64,AAAA';
 
 const candidate: MatchCandidate = {
@@ -519,11 +622,14 @@ describe('match with community metadata', () => {
     });
   }
 
-  /** Opens the dialog on the book page and goes on to compare its first candidate. */
-  async function openCompare() {
+  /**
+   * Opens the dialog on the book page and goes on to compare its first candidate.
+   * The hero's button says Match for a book not matched yet.
+   */
+  async function openCompare(hero = 'Compare with community') {
     renderApp(URL);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    await user.click(await screen.findByRole('button', { name: hero }));
     const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
     await within(dialog).findByRole('radio', { name: /The Way of Kings/ });
     await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
@@ -613,7 +719,11 @@ describe('match with community metadata', () => {
     expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();
     expect(screen.getByText('Your own edits were left alone.')).toBeInTheDocument();
     expect(patches(calls).map((c) => c.body)).toEqual([
-      { set: { published: '2010' }, source: 'community' },
+      {
+        set: { published: '2010' },
+        source: 'community',
+        match: { work_id: candidate.work_id, recording_id: candidate.recordings[0].id },
+      },
     ]);
     expect(coverPuts(calls)).toHaveLength(0);
   });
@@ -633,6 +743,196 @@ describe('match with community metadata', () => {
     expect(coverPuts(calls).map((c) => c.body)).toEqual([{ url: candidate.cover_url }]);
     // The compare step reuses the candidate list's thumbnail: one cover request in all.
     expect(calls.filter((c) => c.path === '/admin/meta/covers')).toHaveLength(1);
+  });
+
+  /** The hero's button for a book not matched yet. */
+  const MATCH_HERO = 'Match with community metadata';
+
+  /** A store listing: no ASIN or ISBN, with art, its recorded match `match` (or none). */
+  function listingBook(match?: BookMatch): AdminBookDetail {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, asin: '', isbn: '', matched: !!match, has_cover: true };
+    detail.fields.asin = { ...detail.fields.asin, value: '', source: '' };
+    if (match) detail.community_match = match;
+    return detail;
+  }
+
+  /** A work that agrees with the book on every field it has: only its cover to take. */
+  const sameWork: MatchCandidate = {
+    work_id: 'a-guild-book',
+    title: 'The Way of Kings',
+    authors: [{ id: 'a1', name: 'Brandon Sanderson' }],
+    series: [{ name: 'The Stormlight Archive', position: '1' }],
+    cover_url: candidate.cover_url,
+    web_url: 'https://meta.audiosilo.app/works/a-guild-book',
+    recordings: [{ id: 'r1', narrators: [], asins: [], isbns: [] }],
+    recording_id: 'r1',
+    score: 96,
+  };
+  const findsSameWork = {
+    'GET /admin/libraries/1/book/match': { body: { candidates: [sameWork] } },
+  };
+  const sameWorkMatch = { work_id: 'a-guild-book', recording_id: 'r1' };
+
+  /** A field's checkbox, any but the cover's. */
+  const fieldBox = (compare: HTMLElement) =>
+    within(compare).queryByRole('checkbox', { name: /^Accept (?!Cover$)/ });
+
+  it('matches a store listing to a work with nothing else to take (server#320)', async () => {
+    const calls = mockFetch(matchRoutes(listingBook(), findsSameWork));
+    const { user, compare } = await openCompare(MATCH_HERO);
+    expect(fieldBox(compare)).toBeNull();
+    expect(within(compare).getByRole('checkbox', { name: 'Accept Cover' })).not.toBeChecked();
+    const accept = within(compare).getByRole('button', { name: 'Match to this work' });
+    expect(accept).toBeEnabled();
+    await user.click(accept);
+
+    expect(await screen.findByText('Matched to The Way of Kings')).toBeInTheDocument();
+    expect(patches(calls).map((c) => c.body)).toEqual([
+      { set: {}, source: 'community', match: sameWorkMatch },
+    ]);
+    expect(coverPuts(calls)).toHaveLength(0);
+  });
+
+  it("takes a store listing's cover, then records its match", async () => {
+    const detail = listingBook();
+    detail.book.has_cover = false;
+    const calls = mockFetch(matchRoutes(detail, findsSameWork));
+    const { user, compare } = await openCompare(MATCH_HERO);
+    expect(within(compare).getByRole('checkbox', { name: 'Accept Cover' })).toBeChecked();
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();
+    // The cover first, so a cover that fails leaves nothing changed.
+    const writes = calls.filter((c) => c.method === 'PUT' || c.method === 'PATCH');
+    expect(writes.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['PUT', '/admin/libraries/1/cover/community', { url: sameWork.cover_url }],
+      ['PATCH', '/admin/libraries/1/book', { set: {}, source: 'community', match: sameWorkMatch }],
+    ]);
+  });
+
+  it("records no match when a store listing's cover fails", async () => {
+    const detail = listingBook();
+    detail.book.has_cover = false;
+    const calls = mockFetch(
+      matchRoutes(detail, {
+        ...findsSameWork,
+        'PUT /admin/libraries/1/cover/community': {
+          status: 502,
+          body: { error: 'could not fetch the cover', code: 'cover_unavailable' },
+        },
+      }),
+    );
+    const { user, compare } = await openCompare(MATCH_HERO);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(
+      await screen.findByText("The cover couldn't be fetched. Nothing changed."),
+    ).toBeInTheDocument();
+    expect(patches(calls)).toHaveLength(0);
+    expect(screen.getByRole('dialog', { name: 'Compare with community metadata' })).toBeVisible();
+  });
+
+  it('says so when the match after a taken cover fails, and closes', async () => {
+    const detail = listingBook();
+    detail.book.has_cover = false;
+    mockFetch(
+      matchRoutes(detail, {
+        ...findsSameWork,
+        'PATCH /admin/libraries/1/book': { status: 500, body: { error: 'database locked' } },
+      }),
+    );
+    const { user, compare } = await openCompare(MATCH_HERO);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(
+      await screen.findByText("The cover was taken, but the match wasn't recorded."),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Compare with community metadata' })).toBeNull(),
+    );
+  });
+
+  it('stays open when the match alone fails', async () => {
+    mockFetch(
+      matchRoutes(listingBook(), {
+        ...findsSameWork,
+        'PATCH /admin/libraries/1/book': { status: 500, body: { error: 'database locked' } },
+      }),
+    );
+    const { user, compare } = await openCompare(MATCH_HERO);
+    await user.click(within(compare).getByRole('button', { name: 'Match to this work' }));
+
+    expect(
+      await screen.findByText("The match wasn't recorded. Nothing changed."),
+    ).toBeInTheDocument();
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeEnabled();
+  });
+
+  it('offers nothing to accept for a store listing already matched to the work', async () => {
+    const match: BookMatch = {
+      ...sameWorkMatch,
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    mockFetch(matchRoutes(listingBook(match), findsSameWork));
+    const { compare } = await openCompare();
+    expect(fieldBox(compare)).toBeNull();
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+  });
+
+  it('offers nothing to accept for a book with an ASIN when nothing is ticked', async () => {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, has_cover: true };
+    mockFetch(matchRoutes(detail, findsSameWork));
+    const { compare } = await openCompare();
+    expect(fieldBox(compare)).toBeNull();
+    expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeDisabled();
+  });
+
+  it("starts at the book's recorded work and recording, and accepting keeps them", async () => {
+    // The book's recorded match: the search's second work, in its second recording.
+    const recorded: MatchCandidate = {
+      ...candidate,
+      work_id: 'the-way-of-kings-part-1',
+      title: 'The Way of Kings, Part 1',
+      recordings: [
+        { ...candidate.recordings[0], id: 'g1' },
+        { ...candidate.recordings[0], id: 'r2', publisher: 'Recorded Books' },
+      ],
+      recording_id: undefined,
+      default_recording_id: 'g1',
+      score: 80,
+    };
+    const detail = bookDetail();
+    detail.book = { ...detail.book, has_cover: true };
+    detail.community_match = {
+      work_id: recorded.work_id,
+      recording_id: 'r2',
+      how: 'accepted',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    const calls = mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [candidate, recorded] } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    expect(await within(dialog).findByRole('radio', { name: /Part 1/ })).toBeChecked();
+    await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    expect(within(compare).getByText('The Way of Kings, Part 1', { selector: 'b' })).toBeVisible();
+    expect(within(compare).getByRole('combobox', { name: /Edition/ })).toHaveValue('r2');
+    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
+
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect((patches(calls)[0].body as BookEditRequest).match).toEqual({
+      work_id: 'the-way-of-kings-part-1',
+      recording_id: 'r2',
+    });
   });
 
   it("leaves a cover the server couldn't preview unticked", async () => {

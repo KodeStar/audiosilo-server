@@ -648,7 +648,8 @@ func mergeFurthest(a, b UserProgress) UserProgress {
 }
 
 // moveBookState carries the book's own path-keyed state (enrichment, ignored
-// issues, an admin's metadata edits, a custom cover) from oldPath to newPath.
+// issues, an admin's metadata edits, a custom cover, its recorded community
+// match) from oldPath to newPath.
 func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
 		return err
@@ -688,7 +689,8 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	if err := bridge.MoveJobs(ctx, tx, libraryID, oldPath, newPath, now); err != nil {
 		return err
 	}
-	// An admin's edits and custom cover belong to the book and follow it as ONE set.
+	// An admin's edits, custom cover and recorded community match (book_matches,
+	// the work the community values were taken from) belong to the book and follow it as ONE set.
 	// When the moved book has any of them, whatever the new path already carries in
 	// those tables (stale rows from an earlier book there) is dropped first, in every
 	// table, so nothing stale can merge into the moved book's set. A moved book with
@@ -698,7 +700,8 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		    EXISTS(SELECT 1 FROM book_overrides WHERE library_id = ?1 AND path = ?2)
 		 OR EXISTS(SELECT 1 FROM chapter_overrides WHERE library_id = ?1 AND path = ?2)
 		 OR EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ?1 AND path = ?2)
-		 OR EXISTS(SELECT 1 FROM book_covers WHERE library_id = ?1 AND path = ?2)`,
+		 OR EXISTS(SELECT 1 FROM book_covers WHERE library_id = ?1 AND path = ?2)
+		 OR EXISTS(SELECT 1 FROM book_matches WHERE library_id = ?1 AND path = ?2)`,
 		libraryID, oldPath).Scan(&hasEdits); err != nil {
 		return err
 	}
@@ -710,6 +713,7 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		`DELETE FROM chapter_overrides WHERE library_id = ? AND path = ?`,
 		`DELETE FROM chapter_choices WHERE library_id = ? AND path = ?`,
 		`DELETE FROM book_covers WHERE library_id = ? AND path = ?`,
+		`DELETE FROM book_matches WHERE library_id = ? AND path = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, libraryID, newPath); err != nil {
 			return err
@@ -720,6 +724,7 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		`UPDATE chapter_overrides SET path = ? WHERE library_id = ? AND path = ?`,
 		`UPDATE chapter_choices SET path = ? WHERE library_id = ? AND path = ?`,
 		`UPDATE book_covers SET path = ? WHERE library_id = ? AND path = ?`,
+		`UPDATE book_matches SET path = ? WHERE library_id = ? AND path = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
 			return err

@@ -451,7 +451,10 @@ export interface Storage {
   by_codec: StorageGroup[];
 }
 
-/** catalog.Coverage: books with an ASIN/ISBN, with chapters (more than one), with a cover. */
+/**
+ * catalog.Coverage: books matched (`identified`: an ASIN or ISBN, or a recorded
+ * community match), with chapters (more than one), with a cover.
+ */
 export interface Coverage {
   books: number;
   identified: number;
@@ -1492,7 +1495,11 @@ export interface AdminBook {
   file_count: number;
   asin: string;
   isbn: string;
-  /** An ASIN or ISBN is set: the community metadata can match it (the `matched=` filter's rule). */
+  /**
+   * Matched (the `matched=` filter's rule): an ASIN or ISBN, or a recorded community
+   * match without one (a store listing). The player's community metadata and the
+   * chapter check find a book by its ASIN or ISBN alone: test those for them.
+   */
   matched: boolean;
   edited: boolean;
   /** The fields with an override (an edit or an accepted community value). */
@@ -1783,6 +1790,23 @@ export interface AdminBookDetail {
    * absent when it has none. `generated_at` is when it was written, when known.
    */
   generated_description?: GeneratedDescription;
+  /**
+   * The book's recorded community match (catalog.BookMatch): the work an admin
+   * accepted or a match run applied, with or without an ASIN or ISBN. Absent when
+   * it has none.
+   */
+  community_match?: BookMatch;
+}
+
+/** A book's recorded community match (catalog.BookMatch, book_matches). */
+export interface BookMatch {
+  work_id: string;
+  recording_id?: string;
+  /** "auto": a match run applied it unasked; "accepted": the admin chose it. */
+  how: 'auto' | 'accepted';
+  matched_at: string;
+  /** The work's page on the community site. */
+  web_url?: string;
 }
 
 /** A book's generated description on its page (catalog.GeneratedDescription). */
@@ -1870,6 +1894,13 @@ export interface BookEditRequest {
   chapters?: { set?: Record<number, string>; revert?: number[] };
   /** Where the chapters come from: the files, the community's, or "auto" (the default). */
   chapter_source?: ChapterChoice | 'auto';
+  /**
+   * The community match the values were accepted from (with source "community"),
+   * recorded as the book's match even with no ASIN or ISBN; `{work_id: ""}`
+   * unlinks the book: the match goes with every community value and cover (the
+   * admin's own edits stay). One book at a time: a bulk edit refuses it.
+   */
+  match?: { work_id: string; recording_id?: string };
 }
 
 /** catalog.Ref: a book by its identity. */
@@ -2143,7 +2174,8 @@ export interface BookMeta {
 
 /**
  * catalog.MatchMode*: a run over unmatched books, a second look at community ASINs,
- * or a lookup of books with an ASIN/ISBN by it, to fill in their details.
+ * or a lookup of matched books by their ASIN/ISBN (a store listing with neither: by
+ * its recorded community match), to fill in their details.
  */
 export type MatchRunMode = 'match' | 'repick' | 'refresh';
 
@@ -2196,7 +2228,7 @@ export interface MatchRun {
 
 /** catalog.ClearedMatches (DELETE /admin/community-matches): what a clear removed. */
 export interface ClearedMatches {
-  /** Books that had a community value or cover. */
+  /** Books that had a community value, cover or recorded match. */
   books: number;
   covers: number;
   /** Match runs, with their reviews. */
@@ -2215,7 +2247,11 @@ export interface MatchProposal {
   cover_url?: string;
   /** The proposed ASIN's marketplace. */
   asin_region?: string;
-  /** A refresh's or a repick's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
+  /**
+   * A refresh's or a repick's: the book's own identifier the record was found by
+   * ("asin:…" / "isbn:…"), or for a store listing with neither, its recorded match
+   * ("work:<work id>[/<recording id>]").
+   */
   found_by?: string;
   /** Each field the community has a value for, in stored form. */
   values: Partial<Record<OverrideField, string>>;
@@ -2223,12 +2259,14 @@ export interface MatchProposal {
 
 /**
  * matchrun.Change: what applying an item under one scope writes - its fields (set
- * or reverted) and the cover - and, when it changes the book's series, the series
+ * or reverted), the cover and the community match - and, when it changes the book's series, the series
  * before and after (main first; position 0 = none), so a removal shows.
  */
 export interface MatchChange {
   fields: OverrideField[];
   cover: boolean;
+  /** Records the book's community match (a new match, or a refresh's heal of a merged work). */
+  match?: boolean;
   series?: { from: SeriesRef[]; to: SeriesRef[] };
 }
 
@@ -2245,18 +2283,22 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /**
-   * A match run's book matched since the run (it has an ASIN or ISBN now: by hand,
-   * or elsewhere): an apply leaves it alone, and it has no changes.
+   * A match run's book matched since the run (it has an ASIN or ISBN, or a recorded
+   * community match, now: by hand, or elsewhere): an apply leaves it alone, and it
+   * has no changes.
    */
   matched_since?: boolean;
-  /** What each scope would write: fields (in display order) and the cover. */
+  /**
+   * What each scope would write: fields (in display order), the cover, and `match`
+   * (recording the community match as the book's).
+   */
   changes: Partial<Record<MatchScope, MatchChange>>;
 }
 

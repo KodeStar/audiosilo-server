@@ -119,7 +119,9 @@ describe('activity overview', () => {
     );
     renderApp('/activity');
     expect(await screen.findByText('No listening in this period')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Storage and coverage' })).toBeInTheDocument();
+    const coverage = screen.getByRole('region', { name: 'Storage and coverage' });
+    // An ASIN or ISBN, or a recorded community match (a store listing).
+    expect(within(coverage).getByText('Matched to the community')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Top books' })).not.toBeInTheDocument();
   });
 

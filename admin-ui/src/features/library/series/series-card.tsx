@@ -18,6 +18,7 @@ import {
   formatPositions,
   formatReleaseDate,
   formatSpan,
+  hasIdentifier,
   metaCandidate,
   pickRail,
   placeBooks,
@@ -66,10 +67,7 @@ export function SeriesCard({
   // Every matched book is asked about (the rail's own book too), batched with
   // the other cards' books: their works place them, and pick the rail when no
   // rail is named like the series.
-  const matched = useMemo(
-    () => (rails?.length ? books.filter((b) => b.matched) : []),
-    [books, rails],
-  );
+  const matched = useMemo(() => (rails?.length ? books.filter(hasIdentifier) : []), [books, rails]);
   const works = useBookWorks(matched);
   // Until the works answer, no rail: wrong gaps would flash, then go. A failed
   // lookup answers too (unresolved: the book falls back to its series index).
@@ -83,7 +81,13 @@ export function SeriesCard({
   );
   const status = useMemo(() => placedOn && seriesStatus(placedOn, placed), [placedOn, placed]);
   const known = status && status.total > 0 ? status : undefined;
-  const unmatched = metadata && complete && (!candidate || meta.data?.matched === false);
+  // "Match a book" only where matching could help: the candidate's /meta found no
+  // match, or, with no candidate, no book is matched. Books matched to a store listing
+  // have no ASIN or ISBN to ask /meta by, and matching them again wouldn't change that.
+  const unmatched =
+    metadata &&
+    complete &&
+    (candidate ? meta.data?.matched === false : !books.some((b) => b.matched));
   const fmt = (n: number) => formatNumber(n, lang);
   const [generating, setGenerating] = useState(false);
   const canGenerate = generate && complete && books.length > 0;

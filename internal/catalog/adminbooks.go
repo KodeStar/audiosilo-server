@@ -77,8 +77,8 @@ type AdminBook struct {
 	FileCount    int    `json:"file_count"`
 	ASIN         string `json:"asin"`
 	ISBN         string `json:"isbn"`
-	// Matched is the matched= filter's rule (an ASIN or ISBN), so the console never
-	// restates it.
+	// Matched is the matched= filter's rule (an ASIN or ISBN, or a recorded
+	// community match: matchedExpr), so the console never restates it.
 	Matched bool `json:"matched"`
 	Edited  bool `json:"edited"`
 	// EditedFields are the fields with an override (an edit or an accepted community
@@ -152,7 +152,12 @@ const (
 		WHERE ch.library_id = b.library_id AND ch.path = b.rel_path), '')`
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
-	matchedExpr   = `(b.asin <> '' OR b.isbn <> '')`
+	// matchedExpr is "matched": an ASIN or ISBN, or a community match recorded
+	// without one (book_matches, a store-listing match: LibraForge E6). Callers
+	// that need an identifier (the unknown-ASIN report, community chapters,
+	// upcoming releases, a repick) test asin/isbn themselves.
+	matchedExpr = `(b.asin <> '' OR b.isbn <> '' OR EXISTS(SELECT 1 FROM book_matches m
+		WHERE m.library_id = b.library_id AND m.path = b.rel_path))`
 	// A chapter override counts only while the book has that chapter: one whose
 	// chapter a rescan dropped is dormant (it reapplies if the chapter comes back) and
 	// shows nowhere on the book page, so it can't mark the book edited.

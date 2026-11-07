@@ -214,6 +214,48 @@ describe('bulk matching', () => {
     );
   });
 
+  it('applies a refresh that only heals a community match while excluding unchanged books', async () => {
+    const healed: MatchRunItem = {
+      ...confident,
+      id: 12,
+      path: 'Andy Weir/Project Hail Mary',
+      book: { title: 'Project Hail Mary', author: 'Andy Weir' },
+      proposal: { work_id: 'project-hail-mary', values: {} },
+      changes: { fill: { fields: [], cover: false, match: true } },
+    };
+    const calls = mockFetch(
+      routes(
+        [run({ mode: 'refresh', counts: { ...run().counts, auto: 2, pending: 2, review: 0 } })],
+        {
+          'GET /admin/match-runs/5/items': {
+            body: { items: [{ ...confident, changes: {} }, healed], next_after: 0 },
+          },
+          'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    expect(
+      await within(dialog).findByRole('checkbox', { name: 'Apply to Project Hail Mary' }),
+    ).toBeChecked();
+    expect(within(dialog).getByText('Sets the community match')).toBeInTheDocument();
+    expect(within(dialog).getByText('Nothing to change with this choice')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
+    const apply = within(dialog).getByRole('button', { name: 'Apply to 1 book' });
+    await waitFor(() => expect(apply).toBeEnabled());
+    await user.click(apply);
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'fill',
+        exclude: [10],
+        include: [],
+      }),
+    );
+  });
+
   it('keeps an identifier-backed confident match confident despite a close runner-up', async () => {
     mockFetch(
       routes([run()], {
@@ -291,6 +333,10 @@ describe('bulk matching', () => {
     );
     const user = userEvent.setup();
     renderApp('/health?issue=unmatched');
+    // Books with an ASIN or ISBN by it, store listings by their recorded work.
+    expect(
+      await screen.findByText(/and books matched to a store listing by their community work/),
+    ).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Fill in matched books' }));
     await waitFor(() =>
       expect(
@@ -348,6 +394,44 @@ describe('bulk matching', () => {
         calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,
       ).toEqual({ scope: 'fill', exclude: [], include: [] }),
     );
+  });
+
+  it("says when a store listing's work is gone from the community, and that its match stays (server#320)", async () => {
+    const gone: MatchRunItem = {
+      ...confident,
+      id: 14,
+      path: 'Someone/Listing',
+      outcome: 'none',
+      score: 0,
+      detail: 'work_unknown',
+      book: { title: 'Listing', author: 'Someone' },
+      changes: {},
+    };
+    mockFetch(
+      routes([run({ mode: 'refresh', counts: { ...run().counts, review: 0, none: 1 } })], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'none' ? [gone] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    // A store listing is found by the community work it's matched to.
+    expect(
+      within(dialog).getByText(/A book with neither was found by the community work/),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /Not found/ }));
+    expect(
+      await within(dialog).findByText(
+        'The community no longer has the work this book is matched to; the match is kept',
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText('No community match')).toBeNull();
   });
 
   it('says when a book had only weak matches, with the best score', async () => {
@@ -622,8 +706,9 @@ describe('bulk matching', () => {
     expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
-  it('asks the server again for a book matched by hand that took no ASIN or ISBN', async () => {
-    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+  it('asks the server again for a book a hand match left unmatched', async () => {
+    // The server's answer to the accept: no ASIN, ISBN or recorded match.
+    const unmatched = bookDetail({ book: { ...books[0], asin: '', matched: false } });
     const calls = mockFetch(
       routes([run()], {
         'GET /admin/libraries/1/book': { body: unmatched },
@@ -654,8 +739,39 @@ describe('bulk matching', () => {
     expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
+  it('marks a book matched by hand to a store listing matched since at once (server#320)', async () => {
+    // No ASIN or ISBN, but the accept recorded the work: the server calls it matched.
+    const listing = bookDetail({ book: { ...books[0], asin: '', isbn: '', matched: true } });
+    const calls = mockFetch(
+      routes([run()], {
+        'GET /admin/libraries/1/book': { body: listing },
+        'PATCH /admin/libraries/1/book': { body: listing },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const review = await screen.findByRole('dialog', { name: 'Review matches' });
+    const row = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    const asked = autoAsked();
+    await matchByHand(user, row);
+
+    const after = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    expect(
+      within(after).getByText('Matched since this run: an apply leaves it as it is'),
+    ).toBeInTheDocument();
+    expect(within(after).queryByRole('checkbox')).toBeNull();
+    // Without asking again for the list.
+    expect(autoAsked()).toBe(asked);
+  });
+
   it('lets a Shift-click range take a book matched by hand once its list reads again (server#194)', async () => {
-    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const unmatched = bookDetail({ book: { ...books[0], asin: '', matched: false } });
     const book = (id: number, title: string): MatchRunItem => ({
       ...confident,
       id,
@@ -700,7 +816,7 @@ describe('bulk matching', () => {
   });
 
   it('keeps a book matched by hand out of a range while its list reads again offline (server#198)', async () => {
-    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const unmatched = bookDetail({ book: { ...books[0], asin: '', matched: false } });
     const book = (id: number, title: string): MatchRunItem => ({
       ...confident,
       id,
@@ -761,7 +877,7 @@ describe('bulk matching', () => {
   });
 
   it('offers no next page while the read after a match by hand waits offline (server#198)', async () => {
-    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const unmatched = bookDetail({ book: { ...books[0], asin: '', matched: false } });
     const one: MatchRunItem = {
       ...confident,
       id: 20,
