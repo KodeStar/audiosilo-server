@@ -20,6 +20,10 @@ const maxMatchRuns = 10
 // matching, already applying or applied, stopped).
 var ErrRunNotReady = errors.New("the match run is not ready to apply")
 
+// ErrMatchRunBusy marks an Unlink asked while a run is matching or applying:
+// clearing the book then would let the run write its match or cover back.
+var ErrMatchRunBusy = errors.New("a match run is already working")
+
 // Match run modes.
 const (
 	// MatchModeMatch matches the books not matched yet: no ASIN or ISBN and no

@@ -52,6 +52,9 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	}
 	out := MatchAnchor{WorkID: strings.TrimSpace(a.WorkID), RecordingID: strings.TrimSpace(a.RecordingID), How: a.How, RunID: a.RunID}
 	if out.WorkID == "" {
+		if a.WorkID != "" {
+			return nil, invalid("match", "only an explicitly empty work_id unlinks a book")
+		}
 		return &MatchAnchor{}, nil
 	}
 	if source != SourceCommunity {

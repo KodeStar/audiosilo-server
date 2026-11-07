@@ -1686,11 +1686,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   when the search lists it; how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
-  (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book:
+  (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book
+  (a whitespace-only id is invalid, 400, never an Unlink):
   `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
   rest of the edit), so its community values and cover go with the row and the next run asks about it
   again (removing only the row would leave the values to match it to the same work); an admin's own
-  edits and uploads stay. No Undo: the cleared values aren't kept. A store listing the
+  edits and uploads stay. While any match run is matching or applying, Unlink is refused
+  (`catalog.ErrMatchRunBusy`, HTTP 409 `match_run_busy`; stop the run or wait for it to finish).
+  The check and clear share the edit's writer transaction, serialized with `StartMatchRun` and
+  `BeginApply`, so no run can start applying between them. Applying stays busy through the
+  last worker's cover write, even after a stop request; ordinary field edits still work.
+  No Undo: the cleared values aren't kept. A store listing the
   community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire

@@ -218,10 +218,15 @@ func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeBookError maps an error from a book endpoint: no book at the path is a 404
-// with its code; everything else goes through writeCatalogError.
+// with its code; an Unlink during a working match run is a 409. Everything else
+// goes through writeCatalogError.
 func (a *API) writeBookError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no book is indexed at that path")
+		return
+	}
+	if errors.Is(err, catalog.ErrMatchRunBusy) {
+		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working; stop it or wait for it to finish before unlinking")
 		return
 	}
 	a.writeCatalogError(w, err, op, genericMsg, logKV...)
