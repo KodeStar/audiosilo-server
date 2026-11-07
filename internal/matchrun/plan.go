@@ -525,14 +525,16 @@ func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 // a repick found its record by (Proposal.FoundBy), or for a "work:" FoundBy
 // (workFoundBy) still has that recorded community match, its work and recording:
 // a book matched again since (by hand, to another record or another recording of
-// the work) is not overwritten with the old one's details.
+// the work) is not overwritten with the old one's details. A work lookup after
+// identifier misses also requires both identifiers to stay unchanged.
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {
 		return false
 	}
 	if kind == "work" {
-		return st.Anchor.WorkID != "" && foundBy == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID)
+		work, _, _ := strings.Cut(foundBy, ";")
+		return st.Anchor.WorkID != "" && work == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID) && fallbackIdentifiersFit(st, foundBy)
 	}
 	field := map[string]string{"asin": catalog.FieldASIN, "isbn": catalog.FieldISBN}[kind]
 	return field != "" && catalog.CleanOverride(field, st.Fields[field].Value) == id
@@ -548,12 +550,24 @@ func workFoundBy(workID, recordingID string) string {
 	return "work:" + workID + "/" + recordingID
 }
 
+// fallbackIdentifiers records both identifiers, including an absent one, whose
+// misses allowed a refresh to fall back to its recorded work. The suffix on
+// FoundBy survives review, apply and a restart without a separate state model.
+func fallbackIdentifiers(asin, isbn string) string {
+	return "asin:" + catalog.CleanOverride(catalog.FieldASIN, asin) + ";isbn:" + catalog.CleanOverride(catalog.FieldISBN, isbn)
+}
+
+func fallbackIdentifiersFit(st *catalog.MatchState, foundBy string) bool {
+	_, identifiers, fallback := strings.Cut(foundBy, ";")
+	return !fallback || identifiers == fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value)
+}
+
 // healedTo reports whether a refresh found by the book's recorded match already
 // moved that match to p's record (a merged work's heal went in, and a stop cut
 // the rest of the apply, its cover, short), so the item applies again.
 func healedTo(st *catalog.MatchState, p catalog.MatchProposal) bool {
 	return strings.HasPrefix(p.FoundBy, "work:") && p.WorkID != "" &&
-		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID
+		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID && fallbackIdentifiersFit(st, p.FoundBy)
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's

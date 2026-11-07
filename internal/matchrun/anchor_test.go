@@ -523,7 +523,9 @@ func TestStoppedMatchKeepsWhatTheAdminDidSince(t *testing.T) {
 // TestRefreshByWorkHoldsADramatization: through the real community client, a
 // dramatization recording whose cast holds the book's narrator, 15% off the book's
 // length, is held for review (length_differs) whether the refresh finds it by the
-// book's ASIN or by its recorded match: the narrator in a dramatization's cast
+// book's ASIN, its recorded match or a fallback after an unknown ASIN. A known
+// identifier keeps precedence even when its recording fails the length guard.
+// The narrator in a dramatization's cast
 // never widens a plain book's length guard (meta.DramatizesPlainBook).
 func TestRefreshByWorkHoldsADramatization(t *testing.T) {
 	t.Parallel()
@@ -556,15 +558,21 @@ func TestRefreshByWorkHoldsADramatization(t *testing.T) {
 			Narrator: "Wil Wheaton", ASIN: "B0DRAMA001", Duration: 634 * 60, AddedAt: "2020-01-01"},
 		{LibraryID: e.lib, RelPath: "A/ByWork", IsFolder: true, Title: "Martian", Author: "Andy Weir",
 			Narrator: "Wil Wheaton", Duration: 634 * 60, AddedAt: "2020-01-01"},
+		{LibraryID: e.lib, RelPath: "A/UnknownASIN", IsFolder: true, Title: "Martian", Author: "Andy Weir",
+			Narrator: "Wil Wheaton", ASIN: "B0UNKNOWN1", Duration: 634 * 60, AddedAt: "2020-01-01"},
+		{LibraryID: e.lib, RelPath: "A/KnownASINAnchored", IsFolder: true, Title: "Martian", Author: "Andy Weir",
+			Narrator: "Wil Wheaton", ASIN: "B0DRAMA001", Duration: 634 * 60, AddedAt: "2020-01-01"},
 	} {
 		if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
 			t.Fatal(err)
 		}
 	}
 	e.anchor(t, "A/ByWork", "drama-work", "rec")
+	e.anchor(t, "A/UnknownASIN", "drama-work", "rec")
+	e.anchor(t, "A/KnownASINAnchored", "unknown-work", "rec")
 	run := e.start(t, catalog.MatchModeRefresh, "us")
 	items := e.items(t, run, "")
-	if len(items) != 2 {
+	if len(items) != 4 {
 		t.Fatalf("items = %+v", items)
 	}
 	for _, it := range items {

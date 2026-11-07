@@ -46,11 +46,12 @@ const (
 )
 
 // DetailIdentifierUnknown is a refresh item's detail when the community doesn't
-// know the book's ASIN or ISBN.
+// know any of the book's identifiers and it has no recorded work to fall back to.
 const DetailIdentifierUnknown = "identifier_unknown"
 
 // DetailWorkUnknown is a refresh item's detail when the community no longer knows
-// the work a book matched without an ASIN or ISBN was recorded as (a 404 after
+// the work a book's match recorded (a direct lookup or an identifier fallback,
+// a 404 after
 // any redirect): no match, and the book keeps its recorded match (a release that
 // dropped the work by mistake must not unmatch the book).
 const DetailWorkUnknown = "work_unknown"
@@ -392,10 +393,10 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 // another edition by length: lengthFits), its recording the one the identifier
 // resolved to. The lookup takes the ASIN when there is one, so an ISBN
 // beside an ASIN the community doesn't know gets a look of its own. An identifier
-// the community doesn't know is no match: a book that names its record is never
-// offered another by title. A book matched with neither (a store listing: its
-// recorded community match, catalog.MatchAnchor) is looked up by its work the
-// same way (meta.MatchQuery.WorkID, a retired id's redirect followed), its
+// the community doesn't know falls back to the recorded community match, when
+// one exists; it is never offered another by title. A book matched with neither
+// (a store listing) is looked up by that work directly. A work lookup
+// (meta.MatchQuery.WorkID) follows a retired id's redirect, its
 // recording the recorded one while the work still lists it; a work the community
 // no longer knows is no match (DetailWorkUnknown).
 func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
@@ -410,6 +411,12 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	cands, err := r.candidates(ctx, q, item)
 	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
 		q.ASIN = ""
+		cands, err = r.candidates(ctx, q, item)
+	}
+	if err == nil && len(cands) == 0 && !byWork && b.MatchWorkID != "" {
+		byWork = true
+		q.ASIN, q.ISBN = "", ""
+		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
 		cands, err = r.candidates(ctx, q, item)
 	}
 	if err != nil {
@@ -435,21 +442,25 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
 	if byWork {
-		// A book matched by its work alone has no identifier to keep: one its
-		// recording gained since fills in (every scope fills a missing identifier),
-		// unless the book has one of its own by the apply (planRefresh).
+		// Keep the recorded match as the apply guard. A fallback also depends on
+		// both identifiers staying as they were when their lookups missed.
 		item.Proposal.FoundBy = workFoundBy(b.MatchWorkID, b.MatchRecordingID)
+		if b.ASIN != "" || b.ISBN != "" {
+			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)
+		}
 	} else {
+		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+		if q.ASIN != "" {
+			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+		}
+	}
+	if b.ASIN != "" || b.ISBN != "" {
 		// The book keeps its own identifiers (switching marketplace is a repick's):
 		// a proposal without them writes none, and the review shows none of the
 		// community's (another marketplace's ASIN, say) as if applying set them.
 		delete(item.Proposal.Values, catalog.FieldASIN)
 		delete(item.Proposal.Values, catalog.FieldISBN)
 		item.Proposal.ASINRegion = ""
-		item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
-		if q.ASIN != "" {
-			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
-		}
 	}
 	// A book neither scope would change is up to date: nothing to record (most
 	// of a matched library, whose proposals would only fill the review).

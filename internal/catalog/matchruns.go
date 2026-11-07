@@ -114,9 +114,11 @@ type MatchProposal struct {
 	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
 	// FoundBy is the book's own identifier a refresh found the record by, or
 	// the ASIN a repick looked up, "asin:<ASIN>" or "isbn:<ISBN>", or for a
-	// refresh of a book matched with neither its recorded match, "work:<work id>"
+	// refresh by its recorded match, "work:<work id>"
 	// then "/<recording id>" when it names one ("" for a match run, and a repick
-	// recorded before 2.4.0): applying it is for a book that still has it.
+	// recorded before 2.4.0). A fallback after identifier misses appends
+	// ";asin:<ASIN>;isbn:<ISBN>" (including empty values): applying it requires
+	// the same recorded match and both identifiers unchanged.
 	FoundBy string            `json:"found_by,omitempty"`
 	Values  map[string]string `json:"values"`
 }

@@ -498,7 +498,7 @@ func TestRepickKeepsHandMatch(t *testing.T) {
 // ISBN by that identifier alone (an ISBN beside an unknown ASIN too), takes the
 // record it names as confident, and applying fills the details (cover included)
 // without touching the identifier or an admin's own edit; an identifier the
-// community doesn't know is no match.
+// community doesn't know, with no recorded match to fall back to, is no match.
 func TestRefresh(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

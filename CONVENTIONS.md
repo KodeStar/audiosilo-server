@@ -1769,19 +1769,32 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   copy's top 10 with reasons, series and runtimes, the right work's rank). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
   (`mode: "refresh"`, `catalog.MatchedBooks`: every matched book) looks each
-  book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
-  that record as confident, unless its recording is over 10% off the book's length
-  (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
-  fuzzy work); a book with neither is looked up by its recorded work (`meta.MatchQuery.WorkID`:
+  book up by its own identifier first (the ISBN when the ASIN finds nothing) and takes
+  that record as confident, subject to the recording's length guard (`lengthFits`, above:
+  otherwise held for review). A successful identifier lookup keeps precedence even when
+  it names a different work from the recorded match or its recording is held for review.
+  Only when every identifier lookup returns no candidate does refresh fall back to the
+  recorded work; an outage stays an error, never a fallback. With no recorded work,
+  those misses remain `none` / `identifier_unknown`, never a fuzzy match by title.
+  A book with neither identifier is looked up by its recorded work directly (`meta.MatchQuery.WorkID`:
   works/{id} alone, a retired slug's 301 followed online and in mirror mode, its recorded recording
   kept while the work lists it, `found_by` `work:<work id>[/<recording id>]`, `stillFoundBy`
   against the anchor's work and recording; a 404 is no match, detail `work_unknown`, the anchor
-  KEPT), and may fill an ASIN/ISBN its recording gained.
+  KEPT). The fallback uses the same lookup, recording choice and length guard, and heals
+  the match and refreshes its details under the selected scope. Its `found_by` appends
+  `;asin:<ASIN>;isbn:<ISBN>` to the work source, including empty values: both identifiers
+  and the recorded work/recording must still agree at apply. A stopped apply that already
+  healed the match can resume its cover only while those identifiers still agree (`healedTo`).
+  A book with neither identifier may fill an ASIN/ISBN its recording gained.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
   overwrites the details but never writes an identifier for a book that has one (an
   identifier lookup's proposal carries none, and `planRefresh` drops a by-work proposal's
-  once the book has one of its own); `matchrun.ScopesFor` (the one statement of which scopes a
+  once the book has one of its own; a fallback's proposal also carries none).
+  Known issue for v2.7.0 (server#330, edge 1): unticking or reverting an offered ASIN
+  does not remember its rejection or remove the recorded match, so a later refresh can
+  fill it again. Unlink removes the recorded match and community values.
+  `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
   `book.match_refresh`. The review excludes refresh rows with no changes under the
   selected scope (a healed recorded match counts as a change), reading all confident
