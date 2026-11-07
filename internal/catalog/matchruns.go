@@ -518,11 +518,10 @@ type ClearedMatches struct {
 func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*ClearedMatches, error) {
 	var out ClearedMatches
 	err := c.db.WithTx(ctx, "ClearCommunityMatches", func(tx *sql.Tx) error {
-		books, covers, err := clearCommunity(ctx, tx, `(?1 = 0 OR library_id = ?1)`, libraryID)
-		if err != nil {
+		var err error
+		if out.Books, out.Covers, err = clearCommunity(ctx, tx, libraryBooks(libraryID)); err != nil {
 			return err
 		}
-		out.Books, out.Covers = books, covers
 
 		// The runs: every one (their items cascade), or this library's and its
 		// books' items in the runs over every library.
@@ -551,13 +550,31 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 	return &out, nil
 }
 
+// clearPick is the books a clearCommunity takes: libraryBooks or oneBook, the
+// only two, so its SQL is written here and never by a caller.
+type clearPick struct {
+	where string // over library_id and path
+	args  []any
+}
+
+// libraryBooks picks every book of a library (0 = every library).
+func libraryBooks(libraryID int64) clearPick {
+	return clearPick{`(?1 = 0 OR library_id = ?1)`, []any{libraryID}}
+}
+
+// oneBook picks the one book at ref (its path clean).
+func oneBook(ref Ref) clearPick {
+	return clearPick{`library_id = ?1 AND path = ?2`, []any{ref.LibraryID, ref.Path}}
+}
+
 // clearCommunity removes the community overrides, covers and recorded matches
-// (book_matches) of the books where picks (a clause over library_id and path,
-// with args), keeping an admin's own edits and uploads, and rebuilds each such
-// indexed book's effective metadata and cover art, in tx. It returns how many
-// books had any and how many community covers went: ClearCommunityMatches for a
-// library, an unlink (BookEdit.Match with no work) for one book.
-func clearCommunity(ctx context.Context, tx *sql.Tx, where string, args ...any) (books, covers int, err error) {
+// (book_matches) of the books pick names, keeping an admin's own edits and
+// uploads, and rebuilds each such indexed book's effective metadata and cover
+// art, in tx. It returns how many books had any and how many community covers
+// went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
+// work) for one book.
+func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, covers int, err error) {
+	where, args := pick.where, pick.args
 	scanRef := func(r *sql.Rows, ref *Ref) error { return r.Scan(&ref.LibraryID, &ref.Path) }
 	fields, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_overrides
 	     WHERE source = 'community' AND `+where+` RETURNING library_id, path`, args...)

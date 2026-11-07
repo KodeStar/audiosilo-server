@@ -129,7 +129,7 @@ function CommunityCard({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const server = useServerInfo();
-  const [unlinking, setUnlinking] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
   const matched = detail.book.matched;
@@ -238,7 +238,7 @@ function CommunityCard({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setUnlinking(true)}
+                onClick={() => setConfirmUnlink(true)}
                 disabled={matchBlocked}
               >
                 <Unlink aria-hidden="true" />
@@ -247,8 +247,8 @@ function CommunityCard({
             ) : null}
           </div>
           <ConfirmDialog
-            open={unlinking}
-            onOpenChange={setUnlinking}
+            open={confirmUnlink}
+            onOpenChange={setConfirmUnlink}
             icon={Unlink}
             title={t('book.community.unlinkTitle')}
             description={t('book.community.unlinkBody')}

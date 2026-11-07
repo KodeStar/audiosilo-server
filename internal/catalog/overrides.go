@@ -923,6 +923,22 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		return err
 	}
 	editor := nullableID(edit.UserID)
+	at := Ref{LibraryID: ref.LibraryID, Path: path}
+	switch {
+	case edit.Match == nil:
+	case edit.Match.WorkID == "":
+		// An unlink takes back everything the community match wrote, not just
+		// the record of it: left behind, its values would match the book to
+		// the same work again on the next run. First, so the rest of the edit
+		// (a series swap, labels) reads the unlinked book and still applies.
+		if _, _, err := clearCommunity(ctx, tx, oneBook(at)); err != nil {
+			return err
+		}
+	default:
+		if err := writeAnchor(ctx, tx, at, edit.Match, editor, now); err != nil {
+			return err
+		}
+	}
 	set, revert := edit.Set, edit.Revert
 	swapSet, swapRevert, err := seriesSwap(ctx, tx, bookID, edit)
 	if err != nil {
@@ -942,21 +958,6 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	}
 	if len(swapRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert)
-	}
-	switch {
-	case edit.Match == nil:
-	case edit.Match.WorkID == "":
-		// An unlink takes back everything the community match wrote, not just
-		// the record of it: left behind, its values would match the book to
-		// the same work again on the next run. Before the edit's own changes,
-		// so those still apply.
-		if _, _, err := clearCommunity(ctx, tx, `library_id = ?1 AND path = ?2`, ref.LibraryID, path); err != nil {
-			return err
-		}
-	default:
-		if err := writeAnchor(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.Match, editor, now); err != nil {
-			return err
-		}
 	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
 		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is

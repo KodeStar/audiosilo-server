@@ -310,11 +310,7 @@ func TestUnlinkClearsTheBooksCommunityMatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var paths []string
-		for _, b := range books {
-			paths = append(paths, b.RelPath)
-		}
-		return paths
+		return relPaths(books)
 	}
 	if got := unmatched(); len(got) != 0 {
 		t.Fatalf("unmatched before = %v, want none", got)
@@ -360,6 +356,41 @@ func TestUnlinkClearsTheBooksCommunityMatch(t *testing.T) {
 	// Unlinking a book with nothing to clear is no error.
 	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestUnlinkWithASeriesEditReadsTheUnlinkedBook: the clear comes first in the
+// edit, so an admin's series change sent with an unlink swaps against the book's
+// own series, never listing the community's main series (about to go) as one of
+// the admin's.
+func TestUnlinkWithASeriesEditReadsTheUnlinkedBook(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{
+		Set: map[string]string{FieldSeries: "Comm Series", FieldSeriesIndex: "4",
+			FieldMoreSeries: `[{"name":"Side","position":2}]`},
+		Match:  &MatchAnchor{WorkID: "the-work"},
+		Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, "A/Book"); len(b.SeriesList) != 2 {
+		t.Fatalf("matched book's series = %+v, want two", b.SeriesList)
+	}
+
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}, Set: map[string]string{FieldSeries: "Side"}}); err != nil {
+		t.Fatal(err)
+	}
+	b := mustBook(t, c, ctx, lib.ID, "A/Book")
+	if b.Series != "Side" || len(b.SeriesList) != 0 {
+		t.Errorf("unlinked book's series = %q %+v, want Side alone (no community series kept as the admin's)", b.Series, b.SeriesList)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Book"); a != (MatchAnchor{}) {
+		t.Errorf("anchor after the unlink = %+v, want none", a)
 	}
 }
 
