@@ -388,33 +388,36 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	return item, nil
 }
 
-// refreshBook looks the book up by its own ASIN or ISBN alone: the record it
+// refreshBook looks the book up by its own ASIN or ISBN first: the record it
 // names is the book (confident, whatever the score, unless its recording is
 // another edition by length: lengthFits), its recording the one the identifier
 // resolved to. The lookup takes the ASIN when there is one, so an ISBN
-// beside an ASIN the community doesn't know gets a look of its own. An identifier
-// the community doesn't know falls back to the recorded community match, when
-// one exists; it is never offered another by title. A book matched with neither
-// (a store listing) is looked up by that work directly. A work lookup
-// (meta.MatchQuery.WorkID) follows a retired id's redirect, its
-// recording the recorded one while the work still lists it; a work the community
-// no longer knows is no match (DetailWorkUnknown).
+// beside an ASIN the community doesn't know gets a look of its own. Identifiers
+// the community doesn't know fall back to the book's recorded community match
+// (catalog.MatchAnchor), when it has one; a book is never offered another record
+// by title. A book matched with neither (a store listing) is looked up by that
+// work directly. A work lookup (meta.MatchQuery.WorkID) follows a retired id's
+// redirect, its recording the recorded one while the work still lists it; a work
+// the community no longer knows is no match (DetailWorkUnknown).
 func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
-	byWork := b.ASIN == "" && b.ISBN == ""
+	hasIdentifier := b.ASIN != "" || b.ISBN != ""
+	if !hasIdentifier && b.MatchWorkID == "" {
+		return nil, nil // matched by nothing a refresh can look up
+	}
 	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
-	if byWork {
-		if b.MatchWorkID == "" {
-			return nil, nil // matched by nothing a refresh can look up
-		}
-		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
-	}
-	cands, err := r.candidates(ctx, q, item)
-	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
-		q.ASIN = ""
+	var (
+		cands []meta.MatchCandidate
+		err   error
+	)
+	if hasIdentifier {
 		cands, err = r.candidates(ctx, q, item)
+		if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
+			q.ASIN = ""
+			cands, err = r.candidates(ctx, q, item)
+		}
 	}
-	if err == nil && len(cands) == 0 && !byWork && b.MatchWorkID != "" {
-		byWork = true
+	byWork := err == nil && len(cands) == 0 && b.MatchWorkID != ""
+	if byWork {
 		q.ASIN, q.ISBN = "", ""
 		q.WorkID, q.RecordingID = b.MatchWorkID, b.MatchRecordingID
 		cands, err = r.candidates(ctx, q, item)
@@ -441,10 +444,12 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
-	hasIdentifier := b.ASIN != "" || b.ISBN != ""
 	if byWork {
-		// Keep the recorded match as the apply guard. A fallback also depends on
-		// both identifiers staying as they were when their lookups missed.
+		// Found by the recorded match, the apply's guard (stillFoundBy). A book
+		// with neither identifier takes the ASIN or ISBN its recording has (every
+		// scope fills a missing identifier) unless it has one of its own by the
+		// apply (planRefresh); a fallback keeps its own, and records them, as the
+		// apply needs them as they were when their lookups missed (splitFallback).
 		item.Proposal.FoundBy = workFoundBy(b.MatchWorkID, b.MatchRecordingID)
 		if hasIdentifier {
 			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)

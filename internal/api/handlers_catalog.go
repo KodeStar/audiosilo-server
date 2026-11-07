@@ -310,14 +310,24 @@ type editRequest struct {
 	// or without an ASIN or ISBN (catalog.BookEdit.Match, made "accepted").
 	// {"work_id": ""} unlinks the book: its recorded match goes with every
 	// community value and cover (the admin's own edits stay), as a clear does
-	// for a library. One book at a time: a bulk edit refuses it.
+	// for a library; a match naming no work ({} or a null work_id) is refused.
+	// One book at a time: a bulk edit refuses it.
 	Match *matchRequest `json:"match"`
 }
 
-// matchRequest is an edit's community match (editRequest.Match).
+// matchRequest is an edit's community match (editRequest.Match). WorkID is a
+// pointer so a match naming no work ({} or a null work_id) is told apart from the
+// Unlink's explicitly empty one, and refused (handleAdminEditBook).
 type matchRequest struct {
-	WorkID      string `json:"work_id"`
-	RecordingID string `json:"recording_id"`
+	WorkID      *string `json:"work_id"`
+	RecordingID string  `json:"recording_id"`
+}
+
+func (m *matchRequest) workID() string {
+	if m == nil || m.WorkID == nil {
+		return ""
+	}
+	return *m.WorkID
 }
 
 func (e editRequest) toEdit(userID int64) catalog.BookEdit {
@@ -327,7 +337,7 @@ func (e editRequest) toEdit(userID int64) catalog.BookEdit {
 		edit.ChapterSet, edit.ChapterRevert = e.Chapters.Set, e.Chapters.Revert
 	}
 	if e.Match != nil {
-		edit.Match = &catalog.MatchAnchor{WorkID: e.Match.WorkID, RecordingID: e.Match.RecordingID, How: catalog.MatchHowAccepted}
+		edit.Match = &catalog.MatchAnchor{WorkID: e.Match.workID(), RecordingID: e.Match.RecordingID, How: catalog.MatchHowAccepted}
 	}
 	return edit
 }
@@ -368,7 +378,7 @@ func (e editRequest) details() map[string]any {
 		d["chapter_source"] = e.ChapterSource
 	}
 	if e.Match != nil {
-		d["match"] = e.Match.WorkID // "" = the book unlinked (its community values and cover gone too)
+		d["match"] = e.Match.workID() // "" = the book unlinked (its community values and cover gone too)
 	}
 	return d
 }
@@ -393,6 +403,13 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.empty() {
 		writeError(w, http.StatusBadRequest, "nothing to change")
+		return
+	}
+	if req.Match != nil && req.Match.WorkID == nil {
+		// Only an explicitly empty work_id unlinks the book: a match naming no
+		// work is a mistake, never read as one.
+		a.writeCatalogError(w, &catalog.OverrideError{Field: "match", Reason: `work_id is required ("" unlinks the book)`},
+			"edit book failed", "could not save the edit")
 		return
 	}
 	if err := a.cat.EditBook(r.Context(), lib.ID, p, req.toEdit(userFrom(r.Context()).ID)); err != nil {

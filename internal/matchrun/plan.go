@@ -12,10 +12,10 @@
 // A repick run looks again at books whose ASIN a community match set, for the same
 // recording's ASIN in the preferred Audible marketplace (config metadata.region),
 // which the community data may have gained since. A refresh run looks the books
-// that already have an ASIN or ISBN up by it alone, and a book matched with
-// neither by its recorded community match, to fill in the details the match
-// didn't bring; it never changes a book's own identifier (one with neither may
-// take its recording's).
+// that already have an ASIN or ISBN up by it, falling back to the book's recorded
+// community match when the community doesn't know it, and a book matched with
+// neither by that match, to fill in the details the match didn't bring; it never
+// changes a book's own identifier (one with neither may take its recording's).
 package matchrun
 
 import (
@@ -451,18 +451,24 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // run in mode: a repick's ASIN (whatever the scope), else Plan's, for a refresh
 // only while the book still has the identifier or recorded match it was found by
 // (stillFoundBy), or the record an apply a stop cut short already healed it to
-// (healedTo; planRefresh), and for a match only while the book is still unmatched
-// (matchedSince). An item a stop cut short (DetailCoverPending) doesn't record
-// its match again: that went in with its fields, so a book without one now was
-// unlinked since, and an unlink takes back the fields and cover too
-// (BookEdit.Match), so such an item writes nothing.
+// (healedTo; planRefresh), a fallback to the recorded match only while the
+// identifiers whose lookups missed are as they were (splitFallback: one gained
+// or changed since may name another record), and for a match only while the
+// book is still unmatched (matchedSince). An item a stop cut short
+// (DetailCoverPending) doesn't record its match again: that went in with its
+// fields, so a book without one now was unlinked since, and an unlink takes back
+// the fields and cover too (BookEdit.Match), so such an item writes nothing.
 func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunItem) Writes {
 	p := it.Proposal
 	switch mode {
 	case catalog.MatchModeRepick:
 		return Writes{Set: PlanRepick(st, p)}
 	case catalog.MatchModeRefresh:
-		if !stillFoundBy(st, p.FoundBy) && !healedTo(st, p) {
+		foundBy, missed := splitFallback(p.FoundBy)
+		if missed != "" && missed != fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value) {
+			return Writes{}
+		}
+		if !stillFoundBy(st, foundBy) && !healedTo(st, p) {
 			return Writes{}
 		}
 		return planRefresh(scope, st, p)
@@ -485,13 +491,13 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 }
 
 // planRefresh is Plan for a refresh's proposal p (refreshBook): the details, an
-// identifier only for a book with neither (a proposal found by the book's recorded
-// match keeps the recording's ASIN/ISBN: one it gained since; a book that has an
-// ASIN or ISBN now, one it gained after the lookup, keeps its own), and the
-// recorded match only healed, never added: a book matched by its own ASIN or ISBN
-// with no recorded work keeps none (the refresh names no match, it reads one),
-// while one whose work was merged or retired since takes the record the lookup
-// followed it to.
+// identifier only for a book with neither (the proposal of a book found by its
+// recorded match with neither keeps the recording's ASIN/ISBN: one it gained
+// since; a book that has an ASIN or ISBN now, one it gained after the lookup,
+// keeps its own), and the recorded match only healed, never added: a book
+// matched by its own ASIN or ISBN with no recorded work keeps none (the refresh
+// names no match, it reads one), while one whose work was merged or retired
+// since takes the record the lookup followed it to.
 func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Plan(scope, st, p)
 	if st.Anchor.WorkID == "" {
@@ -525,16 +531,15 @@ func matchedSince(st *catalog.MatchState, it *catalog.MatchRunItem) bool {
 // a repick found its record by (Proposal.FoundBy), or for a "work:" FoundBy
 // (workFoundBy) still has that recorded community match, its work and recording:
 // a book matched again since (by hand, to another record or another recording of
-// the work) is not overwritten with the old one's details. A work lookup after
-// identifier misses also requires both identifiers to stay unchanged.
+// the work) is not overwritten with the old one's details. A fallback's FoundBy
+// comes without its missed identifiers (splitFallback; planFor checks them).
 func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 	kind, id, ok := strings.Cut(foundBy, ":")
 	if !ok {
 		return false
 	}
 	if kind == "work" {
-		work, _, _ := strings.Cut(foundBy, ";")
-		return st.Anchor.WorkID != "" && work == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID) && fallbackIdentifiersFit(st, foundBy)
+		return st.Anchor.WorkID != "" && foundBy == workFoundBy(st.Anchor.WorkID, st.Anchor.RecordingID)
 	}
 	field := map[string]string{"asin": catalog.FieldASIN, "isbn": catalog.FieldISBN}[kind]
 	return field != "" && catalog.CleanOverride(field, st.Fields[field].Value) == id
@@ -542,7 +547,8 @@ func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
 
 // workFoundBy is the FoundBy of a refresh that looked a book up by its recorded
 // community match: "work:<work id>", then "/<recording id>" when the match names
-// one (community ids are slugs, which hold no "/").
+// one (community ids are slugs, which hold no "/"); a fallback after identifier
+// misses appends ";" and the identifiers (fallbackIdentifiers).
 func workFoundBy(workID, recordingID string) string {
 	if recordingID == "" {
 		return "work:" + workID
@@ -557,9 +563,17 @@ func fallbackIdentifiers(asin, isbn string) string {
 	return "asin:" + catalog.CleanOverride(catalog.FieldASIN, asin) + ";isbn:" + catalog.CleanOverride(catalog.FieldISBN, isbn)
 }
 
-func fallbackIdentifiersFit(st *catalog.MatchState, foundBy string) bool {
-	_, identifiers, fallback := strings.Cut(foundBy, ";")
-	return !fallback || identifiers == fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value)
+// splitFallback splits a refresh's FoundBy into its lookup and, for a fallback
+// to the recorded match, the identifiers whose lookups missed (fallbackIdentifiers;
+// "" for none). They come last and hold only letters and digits, so the last
+// ";asin:" starts them, whatever the ids of a match recorded by hand hold.
+func splitFallback(foundBy string) (lookup, missed string) {
+	if strings.HasPrefix(foundBy, "work:") {
+		if i := strings.LastIndex(foundBy, ";asin:"); i >= 0 {
+			return foundBy[:i], foundBy[i+1:]
+		}
+	}
+	return foundBy, ""
 }
 
 // healedTo reports whether a refresh found by the book's recorded match already
@@ -567,7 +581,7 @@ func fallbackIdentifiersFit(st *catalog.MatchState, foundBy string) bool {
 // the rest of the apply, its cover, short), so the item applies again.
 func healedTo(st *catalog.MatchState, p catalog.MatchProposal) bool {
 	return strings.HasPrefix(p.FoundBy, "work:") && p.WorkID != "" &&
-		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID && fallbackIdentifiersFit(st, p.FoundBy)
+		st.Anchor.WorkID == p.WorkID && st.Anchor.RecordingID == p.RecordingID
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's

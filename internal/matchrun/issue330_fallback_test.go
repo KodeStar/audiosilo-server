@@ -228,7 +228,8 @@ func TestIssue330FallbackLeavesChangesSinceLookup(t *testing.T) {
 }
 
 // A stopped apply can resume its cover after healing the recorded work, but an
-// identifier changed since lookup invalidates that resume too (healedTo).
+// identifier changed since lookup invalidates that resume too (planFor's
+// splitFallback check comes before healedTo).
 func TestIssue330FallbackHealStoppedInItsCover(t *testing.T) {
 	t.Parallel()
 	for _, changed := range []bool{false, true} {

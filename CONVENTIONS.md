@@ -1656,11 +1656,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the review use it). A refresh records only books a scope would change (as a
   repick records only books with a new ASIN), so a clean library leaves no items. A refresh
   proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:...", or
-  "work:<work id>[/<recording id>]" for a book looked up by its recorded match), as a
+  "work:<work id>[/<recording id>]" for a book looked up by its recorded match, a fallback's
+  followed by the identifiers whose lookups missed: below), as a
   repick's names the ASIN it looked up, and applying either is a no-op for a book that no
   longer has it (matched again since, to another record or another recording of the work:
   `stillFoundBy`; a repick recorded before 2.4.0 has none), except a refresh whose heal went in
-  before a stop cut its cover short (`healedTo`: the book's match is already the proposal's).
+  before a stop cut its cover short (`healedTo`: the book's match is already the proposal's;
+  a fallback's identifiers must still agree too).
   Likewise a match run's book that is matched now (`matchedSince`: an ASIN or ISBN, or a recorded
   community match; matched by hand from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
   in the review and is skipped with detail `matched_since`, under any scope; a match whose
@@ -1687,7 +1689,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
   (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book
-  (a whitespace-only id is invalid, 400, never an Unlink):
+  (a whitespace-only id, or a `match` naming no work, `{}` or a null `work_id`, is invalid,
+  400 `invalid_override` on field `match`, never an Unlink):
   `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
   rest of the edit), so its community values and cover go with the row and the next run asks about it
   again (removing only the row would leave the values to match it to the same work); an admin's own
@@ -1783,8 +1786,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   KEPT). The fallback uses the same lookup, recording choice and length guard, and heals
   the match and refreshes its details under the selected scope. Its `found_by` appends
   `;asin:<ASIN>;isbn:<ISBN>` to the work source, including empty values: both identifiers
-  and the recorded work/recording must still agree at apply. A stopped apply that already
-  healed the match can resume its cover only while those identifiers still agree (`healedTo`).
+  and the recorded work/recording must still agree at apply (`planFor` checks the identifiers,
+  `splitFallback`, before `stillFoundBy`). A stopped apply that already healed the match can
+  resume its cover only while those identifiers still agree (the same check, then `healedTo`).
   A book with neither identifier may fill an ASIN/ISBN its recording gained.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or

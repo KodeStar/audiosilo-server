@@ -30,11 +30,14 @@ func TestAdminUnlinkRefusesWhitespaceWorkID(t *testing.T) {
 	if err := e.cat.SetCover(ctx, libID, path, cover, 0, catalog.SourceCommunity); err != nil {
 		t.Fatal(err)
 	}
-	for _, work := range []string{`" "`, `"\t\n "`, `"\u2003"`} {
+	// A blank work id, or a match naming no work at all, is a mistake, not
+	// the Unlink.
+	for _, match := range []string{`{"work_id":" "}`, `{"work_id":"\t\n "}`, `{"work_id":"\u2003"}`,
+		`{}`, `{"work_id":null}`, `{"recording_id":"rec"}`} {
 		resp, body := e.do(t, "PATCH", url, admin,
-			`{"match":{"work_id":`+work+`},"set":{"title":"Must not be written"}}`)
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("work_id %s: %d %s, want 400", work, resp.StatusCode, body)
+			`{"match":`+match+`,"set":{"title":"Must not be written"}}`)
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, `"field":"match"`) {
+			t.Errorf("match %s: %d %s, want 400 on the match", match, resp.StatusCode, body)
 		}
 		st, err := e.cat.BookMatchState(ctx, libID, path)
 		if err != nil || st.Anchor.WorkID != "artemis" || st.Title != "Community Title" {
@@ -112,7 +115,7 @@ func TestAdminUnlinkDuringActiveApply(t *testing.T) {
 			if resp, body := e.do(t, "POST", applyURL, admin, `{"scope":"fill"}`); resp.StatusCode != http.StatusAccepted {
 				t.Fatalf("apply = %d %s", resp.StatusCode, body)
 			}
-			<-entered
+			waitFor(t, entered, "the apply to reach its cover")
 			url := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book?path=" + escape(path)
 			resp, body := e.do(t, "PATCH", url, admin, `{"match":{"work_id":""},"set":{"title":"Must not be written"}}`)
 			if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"match_run_busy"`) {

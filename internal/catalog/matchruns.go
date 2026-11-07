@@ -204,22 +204,28 @@ func (c *Catalog) FinishMatching(ctx context.Context, runID int64, status, errCo
 
 // BeginApply moves a ready run to applying total items with scope.
 // ErrRunNotReady when the run isn't ready (another apply got there first, or it
-// never finished matching).
+// never finished matching). A transaction, not a lone statement: an autocommit
+// write under modernc can answer a context that ended after it committed with
+// the context's error, which would leave the run applying with no apply to
+// finish it (and every Unlink refused, ErrMatchRunBusy); a transaction reports
+// a failure only for a write it rolled back.
 func (c *Catalog) BeginApply(ctx context.Context, runID int64, scope string, total int) error {
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE match_runs SET status = ?, scope = ?, apply_total = ?, apply_done = 0
-		  WHERE id = ? AND status = ?`, MatchApplying, scope, total, runID, MatchReady)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrRunNotReady
-	}
-	return nil
+	return c.db.WithTx(ctx, "BeginApply", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE match_runs SET status = ?, scope = ?, apply_total = ?, apply_done = 0
+			  WHERE id = ? AND status = ?`, MatchApplying, scope, total, runID, MatchReady)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrRunNotReady
+		}
+		return nil
+	})
 }
 
 // MarkMatchItem records what applying did to an item and counts it done.
