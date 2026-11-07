@@ -159,9 +159,8 @@ export function picksForScope(
   mode: MatchRunMode,
   scope: MatchScope,
 ): Picks {
-  const next = leaveOutStale(picks, items);
-  const exclude = new Set(next.exclude);
-  const include = new Set(next.include);
+  const exclude = new Set(picks.exclude);
+  const include = new Set(picks.include);
   for (const item of items) {
     if (item.applied || isPickable(item, mode, scope)) continue;
     if (item.outcome === 'auto') exclude.add(item.id);

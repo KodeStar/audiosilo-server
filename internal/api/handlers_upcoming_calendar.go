@@ -166,5 +166,5 @@ func (a *API) handleUpcomingCover(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, codeNotFound, "no such cover")
 		return
 	}
-	a.serveCommunityCover(w, r, rawURL, size, "private, no-cache")
+	a.serveCommunityCover(w, r, rawURL, size, customCoverCache)
 }

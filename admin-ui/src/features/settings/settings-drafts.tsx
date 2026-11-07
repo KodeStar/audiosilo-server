@@ -1,9 +1,6 @@
 import { useCallback, useState } from 'react';
-import { useBlocker } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { TriangleAlert } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
+import { LeaveGuard } from '@/components/leave-guard';
 
 import { DraftsContext } from './use-settings-draft';
 
@@ -20,36 +17,16 @@ export function SettingsDrafts({ children }: { children: React.ReactNode }) {
       return next;
     });
   }, []);
-  const dirty = cards.size > 0;
-  const blocker = useBlocker({
-    shouldBlockFn: () => true,
-    disabled: !dirty,
-    enableBeforeUnload: dirty,
-    withResolver: true,
-  });
   return (
     <DraftsContext value={register}>
       {children}
-      <Dialog
-        open={blocker.status === 'blocked'}
-        onOpenChange={(open) => !open && blocker.reset?.()}
-      >
-        <DialogContent
-          title={t('settings.leave.title')}
-          description={t('settings.leave.description')}
-          icon={TriangleAlert}
-          tone="danger"
-        >
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => blocker.reset?.()}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="destructive" onClick={() => blocker.proceed?.()}>
-              {t('settings.leave.discard')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <LeaveGuard
+        dirty={cards.size > 0}
+        title={t('settings.leave.title')}
+        description={t('settings.leave.description')}
+        stay={t('common.cancel')}
+        discard={t('settings.leave.discard')}
+      />
     </DraftsContext>
   );
 }

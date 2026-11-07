@@ -373,8 +373,7 @@ function ReviewDialog({
     }
   }, [readAllAuto, autoHasMore, autoFetchStatus, autoError, readMoreAuto]);
   const autoReady =
-    !readAllAuto ||
-    (autoItems.isSuccess && !autoItems.hasNextPage && autoItems.fetchStatus === 'idle');
+    !readAllAuto || (autoItems.isSuccess && !autoHasMore && autoFetchStatus === 'idle');
   // A refresh never changes an identifier, so ASIN and ISBN only would write nothing.
   const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
   const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
@@ -456,9 +455,11 @@ function ReviewDialog({
     });
   }, []);
   const applyScope = repick ? 'ids' : scope;
-  const scopeItems = new Map(loaded);
-  if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
-  const effectivePicks = picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
+  const effectivePicks = useMemo(() => {
+    const scopeItems = new Map(loaded);
+    if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
+    return picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
+  }, [loaded, readAllAuto, autoRows, picks, run.mode, applyScope]);
   const count = applyCount(run, effectivePicks);
   // Finish an empty refresh through the existing apply endpoint with every
   // automatic item excluded, so another mode can be started afterwards.
