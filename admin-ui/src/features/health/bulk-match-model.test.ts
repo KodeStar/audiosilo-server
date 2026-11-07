@@ -3,7 +3,6 @@ import { regionName, regionOptions, regionTag } from '@/lib/regions';
 import {
   NO_PICKS,
   applyCount,
-  leaveOutStale,
   picksForScope,
   hasCloseScore,
   applyRequest,
@@ -154,11 +153,9 @@ describe('picks', () => {
       item({ id: 14, outcome: 'auto', matched_since: true, applied: 'applied' }),
       item({ id: 15, outcome: 'review', matched_since: true }),
     ];
-    const picks = leaveOutStale(NO_PICKS, loaded);
+    const picks = picksForScope(NO_PICKS, loaded, 'match', 'fill');
     expect([...picks.exclude].sort()).toEqual([12, 13]);
     expect(applyCount(r, picks)).toBe(1);
-    // Nothing new: the same picks, so a re-render changes nothing.
-    expect(leaveOutStale(picks, loaded)).toBe(picks);
   });
 
   it('counts what an apply takes: pending confident, less left out, plus put in', () => {

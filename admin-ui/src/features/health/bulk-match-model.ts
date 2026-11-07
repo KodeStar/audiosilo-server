@@ -137,22 +137,11 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
 }
 
 /**
- * Leaves out every confident item the review has loaded whose book an apply
- * would leave alone anyway (gone, or matched since the run), so the apply's
- * count doesn't promise them. The same picks when nothing is new.
+ * The picks an apply sends: every loaded item without a checkbox under this
+ * mode and scope (gone, matched since the run, a refresh with nothing to
+ * write) left out, so the apply's count doesn't promise them. Derived, never
+ * stored, so changing scope restores the admin's own picks.
  */
-export function leaveOutStale(picks: Picks, items: readonly MatchRunItem[]): Picks {
-  const stale = items.filter(
-    (it) =>
-      it.outcome === 'auto' &&
-      !it.applied &&
-      (it.gone || it.matched_since) &&
-      !picks.exclude.has(it.id),
-  );
-  return stale.reduce((p, it) => leaveOut(p, it), picks);
-}
-
-/** Scope-specific exclusions are derived, so changing scope restores the admin's picks. */
 export function picksForScope(
   picks: Picks,
   items: readonly MatchRunItem[],

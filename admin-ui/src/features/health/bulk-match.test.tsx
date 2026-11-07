@@ -188,10 +188,17 @@ describe('bulk matching', () => {
     });
     expect(within(dialog).getByRole('button', { name: /^Apply to \d+ books?/ })).toBeDisabled();
     releasePage();
-    await within(dialog).findByRole('link', { name: 'Open the book page for Later in a new tab' });
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: 'Apply to 1 book' })).toBeEnabled(),
     );
+    // The background read checked the unopened page; the shown list still pages by hand.
+    expect(
+      within(dialog).queryByRole('link', { name: 'Open the book page for Later in a new tab' }),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Show more' })).toBeInTheDocument();
+    expect(
+      calls.some((c) => c.path === '/admin/match-runs/5/items' && c.query.get('limit') === '200'),
+    ).toBe(true);
     expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole('radio', { name: /Use community values/ }));
     expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();

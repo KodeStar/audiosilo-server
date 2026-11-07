@@ -529,7 +529,8 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 	}
 }
 
-// The Upcoming cover: only a cover the caller's own list hands out right now.
+// The Upcoming cover's URL is the work's, stable while its art changes: it is
+// revalidated (private, no-cache), and new art is a new ETag and a new fetch.
 func TestUpcomingCoverRevalidatesChangedURL(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)
@@ -576,6 +577,7 @@ func TestUpcomingCoverRevalidatesChangedURL(t *testing.T) {
 	}
 }
 
+// The Upcoming cover: only a cover the caller's own list hands out right now.
 func TestUpcomingCover(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)

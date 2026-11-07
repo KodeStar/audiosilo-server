@@ -14,6 +14,7 @@ import {
   invalidateMatches,
   keys,
   matchRunActive,
+  useAllMatchRunItems,
   useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
@@ -75,7 +76,6 @@ import {
   leaveOut,
   runFraction,
   runProgress,
-  leaveOutStale,
   togglePick,
   togglePickRange,
   withId,
@@ -356,7 +356,7 @@ function ReviewDialog({
   // Every automatic refresh pick must be checked for changes, including pages
   // the admin has not opened. Other modes keep manual pagination.
   const readAllAuto = open && run.mode === 'refresh' && run.counts.pending > 0;
-  const autoItems = useMatchRunItems(run.id, 'auto', readAllAuto);
+  const autoItems = useAllMatchRunItems(run.id, 'auto', readAllAuto);
   const autoRows = useMemo(
     () => autoItems.data?.pages.flatMap((page) => page.items ?? []) ?? [],
     [autoItems.data],
@@ -443,10 +443,10 @@ function ReviewDialog({
         },
     );
   };
-  // A loaded confident item the apply would leave alone (gone, matched since)
-  // is left out, so the count is what the apply writes.
+  // Every item loaded so far: an apply leaves out the confident ones it would
+  // leave alone (gone, matched since, nothing to write: picksForScope), so the
+  // count is what the apply writes.
   const onLoaded = useCallback((items: MatchRunItem[]) => {
-    setPicks((p) => leaveOutStale(p, items));
     setLoaded((was) => {
       if (items.every((item) => was.get(item.id) === item)) return was;
       const next = new Map(was);
@@ -486,7 +486,9 @@ function ReviewDialog({
     setBusy(true);
     try {
       await api.applyMatchRun(run.id, applyRequest(applyScope, effectivePicks));
-      await qc.invalidateQueries({ queryKey: keys.matchRuns });
+      // The run list only: the review's item pages are read again when it next
+      // opens, not every loaded page before this one closes.
+      await qc.invalidateQueries({ queryKey: keys.matchRuns, exact: true });
       toast.add({
         title: t(finishEmpty ? 'common.done' : 'health.bulkMatch.applyStarted'),
         description: finishEmpty
@@ -551,7 +553,7 @@ function ReviewDialog({
                   />
                 </>
               )}
-              {readAllAuto && autoItems.isError && tab !== 'auto' ? (
+              {readAllAuto && autoItems.isError ? (
                 <QueryError
                   title={t('health.bulkMatch.listError')}
                   error={autoItems.error}
@@ -645,7 +647,7 @@ function ItemList({
   /** Ids matched by hand from the review, which a range leaves as they are. */
   matchedByHand: ReadonlySet<number>;
   onMatchByHand: (item: MatchRunItem) => void;
-  /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
+  /** Each time a page arrives: the items loaded so far (picksForScope reads them). */
   onLoaded: (items: MatchRunItem[]) => void;
 }) {
   const { t } = useTranslation();

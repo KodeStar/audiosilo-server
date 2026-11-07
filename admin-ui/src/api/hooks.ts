@@ -884,13 +884,29 @@ export function useMatchRuns() {
 }
 
 /** One outcome's books of a match run, a page at a time (the review). */
-export function useMatchRunItems(id: number, outcome: MatchOutcome, enabled = true) {
+export function useMatchRunItems(id: number, outcome: MatchOutcome) {
   return useInfiniteQuery({
     queryKey: keys.matchRunItems(id, outcome),
-    enabled,
     queryFn: ({ pageParam }) => api.matchRunItems(id, { outcome, after: pageParam, limit: 50 }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_after || undefined,
+  });
+}
+
+/**
+ * Every page of one outcome's books, read in the background at the server's
+ * largest page (a refresh review's check of which books would change). Its own
+ * query, under the shown list's key (a match by hand reads both again), so the
+ * shown list keeps its pages and a window focus doesn't read every page again.
+ */
+export function useAllMatchRunItems(id: number, outcome: MatchOutcome, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...keys.matchRunItems(id, outcome), 'all'],
+    enabled,
+    queryFn: ({ pageParam }) => api.matchRunItems(id, { outcome, after: pageParam, limit: 200 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_after || undefined,
+    refetchOnWindowFocus: false,
   });
 }
 
