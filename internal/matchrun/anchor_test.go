@@ -456,8 +456,9 @@ func TestRefreshHealStoppedInItsCover(t *testing.T) {
 // TestStoppedMatchKeepsWhatTheAdminDidSince: a store listing's apply stopped in
 // its cover (cover_pending: its fields and match went in) is applied again, but
 // never over what the admin did since: a book matched again by hand to another
-// work is matched since, under any scope; an Unlink stays (the match isn't
-// recorded again), while the cover the stop cut short is still taken.
+// work is matched since, under any scope; an Unlink stays: it took back the
+// fields and cover with the match, so the item writes nothing, not even the
+// cover the stop cut short.
 func TestStoppedMatchKeepsWhatTheAdminDidSince(t *testing.T) {
 	t.Parallel()
 	for _, since := range []string{"rematched", "unlinked"} {
@@ -511,8 +512,8 @@ func TestStoppedMatchKeepsWhatTheAdminDidSince(t *testing.T) {
 					t.Fatalf("anchor %+v item %+v, want the hand match kept", a, it.MatchRunItem)
 				}
 			case "unlinked":
-				if a.WorkID != "" || it.Applied != catalog.ItemApplied || e.covers.Load() != 1 {
-					t.Fatalf("anchor %+v item %+v covers %d, want unlinked still and the cover taken", a, it.MatchRunItem, e.covers.Load())
+				if a.WorkID != "" || it.Applied != catalog.ItemSkipped || e.covers.Load() != 0 {
+					t.Fatalf("anchor %+v item %+v covers %d, want unlinked still, nothing written back", a, it.MatchRunItem, e.covers.Load())
 				}
 			}
 		})

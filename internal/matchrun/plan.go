@@ -454,7 +454,8 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 // (healedTo; planRefresh), and for a match only while the book is still unmatched
 // (matchedSince). An item a stop cut short (DetailCoverPending) doesn't record
 // its match again: that went in with its fields, so a book without one now was
-// unlinked since.
+// unlinked since, and an unlink takes back the fields and cover too
+// (BookEdit.Match), so such an item writes nothing.
 func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunItem) Writes {
 	p := it.Proposal
 	switch mode {
@@ -470,6 +471,11 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 			return Writes{}
 		}
 		if it.Detail == DetailCoverPending {
+			if p.WorkID != "" && st.Anchor.WorkID == "" {
+				// Unlinked since: the unlink took back the fields this apply
+				// wrote, and its cover, with the match; none of it goes back.
+				return Writes{}
+			}
 			w := Plan(scope, st, p)
 			w.Anchor = nil
 			return w

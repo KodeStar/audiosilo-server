@@ -363,7 +363,7 @@ func (e editRequest) details() map[string]any {
 		d["chapter_source"] = e.ChapterSource
 	}
 	if e.Match != nil {
-		d["match"] = e.Match.WorkID // "" = the recorded match removed
+		d["match"] = e.Match.WorkID // "" = the book unlinked (its community values and cover gone too)
 	}
 	return d
 }

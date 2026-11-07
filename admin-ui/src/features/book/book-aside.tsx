@@ -246,15 +246,6 @@ function CommunityCard({
               </Button>
             ) : null}
           </div>
-          <ConfirmDialog
-            open={confirmUnlink}
-            onOpenChange={setConfirmUnlink}
-            icon={Unlink}
-            title={t('book.community.unlinkTitle')}
-            description={t('book.community.unlinkBody')}
-            confirmLabel={t('book.community.unlink')}
-            onConfirm={unlink}
-          />
         </>
       ) : (
         <>
@@ -267,6 +258,17 @@ function CommunityCard({
           </div>
         </>
       )}
+      {/* Outside the matched branch: the unlink's answer turns the card unmatched
+          while the dialog is still closing. */}
+      <ConfirmDialog
+        open={confirmUnlink}
+        onOpenChange={setConfirmUnlink}
+        icon={Unlink}
+        title={t('book.community.unlinkTitle')}
+        description={t('book.community.unlinkBody')}
+        confirmLabel={t('book.community.unlink')}
+        onConfirm={unlink}
+      />
       {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
       <GenerateSection book={detail.book} />
       <ShareSection book={detail.book} />

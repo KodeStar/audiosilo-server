@@ -1664,7 +1664,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
   ASIN and recorded match the run's own rather than ones matched since (unless the book was
   matched again by hand since, to another record), so the next apply takes the cover; it never
-  records the match again, so an Unlink since stays. The review's
+  records the match again, and one unlinked since (no recorded match now) writes nothing, its
+  cover included: the Unlink took back the fields and cover with the match. The review's
   items page best match first (`score DESC, id`), the cursor still an item id whose score
   the next page reads on from.
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
