@@ -137,7 +137,8 @@ func (a *API) handleUpcomingCalendarFeed(w http.ResponseWriter, r *http.Request)
 // a work the list doesn't carry (another person's series, one the caller holds,
 // none at all) or carries without a cover is 404 not_found. 400 without work or
 // with a size outside thumbSizes (unset is defaultThumbSize); the rest is
-// /meta/cover's (serveCommunityCover: the shared fetch, cache and ETag).
+// /meta/cover's (serveCommunityCover: the shared fetch, cache and ETag), with
+// private, no-cache so this stable work URL revalidates when its cover changes.
 func (a *API) handleUpcomingCover(w http.ResponseWriter, r *http.Request) {
 	if a.upcomingOff(w) {
 		return
@@ -165,5 +166,5 @@ func (a *API) handleUpcomingCover(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusNotFound, codeNotFound, "no such cover")
 		return
 	}
-	a.serveCommunityCover(w, r, rawURL, size)
+	a.serveCommunityCover(w, r, rawURL, size, customCoverCache)
 }

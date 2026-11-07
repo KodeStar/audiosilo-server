@@ -188,8 +188,16 @@ export function useStats() {
   return useQuery({ queryKey: keys.stats, queryFn: api.stats, refetchInterval: 30_000 });
 }
 
-export function useSettings() {
-  return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
+/** Report status changes asynchronously after a save; only its mounted topic polls, at most twice a minute. */
+export const REPORT_STATUS_POLL_MS = 30_000;
+
+export function useSettings(pollReport = false) {
+  return useQuery({
+    queryKey: keys.settings,
+    queryFn: api.settings,
+    staleTime: 5 * 60_000,
+    refetchInterval: pollReport ? REPORT_STATUS_POLL_MS : false,
+  });
 }
 
 /** How often Settings > Modules asks again: as often as the Bridge's status does. */
@@ -882,6 +890,23 @@ export function useMatchRunItems(id: number, outcome: MatchOutcome) {
     queryFn: ({ pageParam }) => api.matchRunItems(id, { outcome, after: pageParam, limit: 50 }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_after || undefined,
+  });
+}
+
+/**
+ * Every page of one outcome's books, read in the background at the server's
+ * largest page (a refresh review's check of which books would change). Its own
+ * query, under the shown list's key (a match by hand reads both again), so the
+ * shown list keeps its pages and a window focus doesn't read every page again.
+ */
+export function useAllMatchRunItems(id: number, outcome: MatchOutcome, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: [...keys.matchRunItems(id, outcome), 'all'],
+    enabled,
+    queryFn: ({ pageParam }) => api.matchRunItems(id, { outcome, after: pageParam, limit: 200 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_after || undefined,
+    refetchOnWindowFocus: false,
   });
 }
 

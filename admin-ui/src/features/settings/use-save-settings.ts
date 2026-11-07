@@ -12,6 +12,9 @@ export function useSaveSettings() {
   const qc = useQueryClient();
   return async (patch: SettingsPatch): Promise<AdminSettings> => {
     const saved = await api.updateSettings(patch);
+    // A status poll begun before the save may still hold the old settings.
+    // Discard that reply before publishing the PATCH's authoritative envelope.
+    await qc.cancelQueries({ queryKey: keys.settings });
     qc.setQueryData(keys.settings, saved);
     for (const key of [keys.server, keys.system, keys.update, keys.modules]) {
       void qc.invalidateQueries({ queryKey: key });

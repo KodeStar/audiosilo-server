@@ -13,6 +13,8 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import { bridgeTabLink } from '@/features/bridge/bridge-model';
 import { ACCOUNTS_TAB } from '@/features/bridge/setup-model';
 import { accountName } from './audible-model';
+import { AudibleBridgeNote } from './audible-bridge';
+import { useAudibleBridge } from './use-audible-bridge';
 import { AccountSettingsButton } from './account-settings-button';
 import { BackupAllButton } from './backup-all-button';
 import { CheckNowButton } from './check-now-button';
@@ -32,6 +34,7 @@ import { useAudibleAccounts, useBackups, useCheckNow, type Backups } from './use
 export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
   const { t } = useTranslation();
   const accounts = useAudibleAccounts();
+  const bridge = useAudibleBridge();
   const { checkNow, busy } = useCheckNow();
   const backups = useBackups();
   const accountsTab = bridgeTabLink(uiUrl, ACCOUNTS_TAB);
@@ -56,6 +59,7 @@ export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
           ) : undefined
         }
       />
+      <AudibleBridgeNote state={bridge} />
       {accounts.isError ? (
         <div className="p-5">
           <QueryError
@@ -96,6 +100,7 @@ export function AudibleAccountsCard({ uiUrl }: { uiUrl?: string }) {
               busy={busy === a.id}
               onCheck={() => void checkNow(a)}
               backups={backups}
+              bridge={bridge}
             />
           ))}
         </ul>
@@ -109,11 +114,13 @@ function AccountRow({
   busy,
   onCheck,
   backups,
+  bridge,
 }: {
   account: AudibleAccount;
   busy: boolean;
   onCheck: () => void;
   backups: Backups;
+  bridge: ReturnType<typeof useAudibleBridge>;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -176,9 +183,20 @@ function AccountRow({
         />
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <CheckNowButton busy={busy} paused={a.paused} onCheck={onCheck} />
+        <CheckNowButton
+          busy={busy}
+          paused={a.paused}
+          onCheck={onCheck}
+          blocked={bridge.pollBlocked}
+          describedBy={bridge.descriptionId}
+        />
         <AccountSettingsButton account={a} backups={backups} />
-        <BackupAllButton account={a} backups={backups} />
+        <BackupAllButton
+          account={a}
+          backups={backups}
+          blocked={bridge.backupBlocked}
+          describedBy={bridge.descriptionId}
+        />
         <RemoveAccountButton account={a} />
       </div>
     </li>

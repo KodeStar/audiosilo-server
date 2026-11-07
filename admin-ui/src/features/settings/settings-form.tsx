@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
+import { useSettingsDraft } from './use-settings-draft';
 import { ScheduleInput } from './schedule-input';
 import { useSaveSettings } from './use-save-settings';
 import { describedBy } from '@/lib/a11y';
@@ -190,6 +191,7 @@ export function SettingsForm<S extends SettingsSection>({
   // Let's Encrypt) isn't saved behind the admin's back.
   const wire = Object.fromEntries(shown.map((f) => [f.name, toWire(f, draft[f.name])]));
   const patch = sectionPatch(section, settings[section], wire as Partial<AdminSettings[S]>);
+  useSettingsDraft(formId, editable && Boolean(patch));
   // A number outside its range says so on its field and holds the save.
   const lang = i18n.resolvedLanguage ?? 'en';
   const rangeError = (f: FieldSpec): string | undefined =>
@@ -206,6 +208,18 @@ export function SettingsForm<S extends SettingsSection>({
     setErrors({});
     try {
       const next = await save(p);
+      // A server-normalized value can equal the old saved value, so the
+      // savedFor comparison alone would leave that submitted draft dirty.
+      const accepted = next[section] as Record<string, unknown>;
+      setDraft((current) => {
+        const normalized = { ...current };
+        for (const f of fields) {
+          if (f.name in (p[section] ?? {}) && current[f.name] === draft[f.name]) {
+            normalized[f.name] = toDraft(f, accepted[f.name]);
+          }
+        }
+        return normalized;
+      });
       const waits = patchIds(p).some((id) => next.restart_pending.includes(id));
       toast.add({
         title: savedTitle ?? t('settings.saved', { section: title }),

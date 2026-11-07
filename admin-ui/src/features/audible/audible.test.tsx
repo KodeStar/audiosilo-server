@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
@@ -108,7 +108,7 @@ const bridgeStatus: BridgeStatus = {
   online: true,
   heartbeat_at: new Date().toISOString(),
   version: '0.6.0',
-  kinds: ['bridge.verify', 'audible.poll'],
+  kinds: ['bridge.verify', 'audible.poll', 'audible.import'],
   features: ['audible', 'bridge'],
   libraries: [],
   workers: [],
@@ -128,6 +128,79 @@ function routes(on: boolean, over: Record<string, MockRoute> = {}) {
 }
 
 beforeEach(() => setToken('stored'));
+
+describe('Audible Bridge requirements', () => {
+  const unpaired = { ...bridgeStatus, paired: false, online: false, kinds: [] };
+
+  it('links to pairing when Audible has never had a Bridge', async () => {
+    mockFetch(
+      routes(true, {
+        'GET /admin/bridge': { body: unpaired },
+        'GET /admin/audible/accounts': { body: { accounts: [] } },
+        'GET /admin/audible/titles': { body: { titles: [], next: '' } },
+      }),
+    );
+    renderApp('/server?topic=audible');
+    expect(await screen.findByRole('link', { name: 'Pair a Bridge' })).toHaveAttribute(
+      'href',
+      '/admin/server?topic=bridge',
+    );
+    expect(screen.getByText(/Pair a Bridge to check Audible accounts/)).toBeInTheDocument();
+  });
+
+  it('disables job starts after unpairing, preserves account actions and refreshes after re-pairing', async () => {
+    const calls = mockFetch(
+      routes(true, {
+        'GET /admin/bridge': { body: unpaired },
+        'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+      }),
+    );
+    const { queryClient } = renderApp('/server?topic=audible');
+    await screen.findByRole('list', { name: 'Audible titles' });
+    for (const name of ['Check now', 'Back up', 'Back up everything...']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(/Pair a Bridge/);
+    }
+    expect(screen.getByRole('button', { name: 'Remove...' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Not this book: The Final Empire' })).toBeEnabled();
+    expect(calls.some((c) => c.method === 'POST' && /poll|backup/.test(c.path))).toBe(false);
+    act(() => queryClient.setQueryData(keys.bridge, bridgeStatus));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Back up' })).toBeEnabled();
+    expect(screen.queryByRole('link', { name: 'Pair a Bridge' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [{ ...bridgeStatus, online: false }, true, true, /Supported jobs can be queued/],
+    [{ ...bridgeStatus, kinds: ['audible.poll'] }, true, false, /unsupported actions are disabled/],
+    [
+      { ...bridgeStatus, kinds: ['audible.import'] },
+      false,
+      true,
+      /unsupported actions are disabled/,
+    ],
+  ] as const)(
+    'distinguishes offline from unsupported jobs: %o',
+    async (status, poll, backup, note) => {
+      mockFetch(
+        routes(true, {
+          'GET /admin/bridge': { body: status },
+          'GET /admin/audible/titles': { body: { titles: [title({ match: null })], next: '' } },
+        }),
+      );
+      renderApp('/server?topic=audible');
+      await screen.findByRole('list', { name: 'Audible titles' });
+      expect(screen.getByText(note)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Check now' }).hasAttribute('disabled')).toBe(
+        !poll,
+      );
+      expect(screen.getByRole('button', { name: 'Back up' }).hasAttribute('disabled')).toBe(
+        !backup,
+      );
+    },
+  );
+});
 
 /** Runs fn with the process in time zone tz (Node reads a new TZ at once). */
 async function inZone<T>(tz: string, fn: () => Promise<T>): Promise<T> {

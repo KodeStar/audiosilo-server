@@ -1,5 +1,5 @@
-import { Link, useSearch } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -41,6 +41,7 @@ import { activeMirror, mirrorLook } from '@/features/health/system-model';
 import { AudibleTopic } from '@/features/audible/audible-topic';
 import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
+import { SettingsDrafts } from './settings-drafts';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
 import { ModulesTopic } from './modules-topic';
@@ -81,13 +82,40 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
  * still waiting for a restart is listed at the top.
  */
 export function SettingsPage() {
+  return (
+    <SettingsDrafts>
+      <SettingsContent />
+    </SettingsDrafts>
+  );
+}
+
+function SettingsContent() {
   const { t } = useTranslation();
   const { topic: asked = 'general' } = useSearch({ strict: false }) as { topic?: SettingsPage };
   const settings = useSettings();
+  const navigate = useNavigate();
+  const rawTopic = useLocation({
+    select: (location) => new URLSearchParams(location.searchStr).get('topic'),
+  });
   // A module's page shows only while its module is on; asked for while it is
   // off (an old link), General opens instead.
-  const pages = visiblePages(SETTINGS_PAGES, settings.data);
+  const pages = useMemo(() => visiblePages(SETTINGS_PAGES, settings.data), [settings.data]);
   const topic = !settings.data || pages.includes(asked) ? asked : 'general';
+  useEffect(() => {
+    if (
+      !settings.data ||
+      settings.isError ||
+      rawTopic === null ||
+      (rawTopic !== 'general' && pages.includes(rawTopic as SettingsPage))
+    )
+      return;
+    void navigate({
+      to: '/server/{-$section}',
+      params: { section: undefined },
+      search: {},
+      replace: true,
+    });
+  }, [settings.data, settings.isError, rawTopic, pages, navigate]);
 
   return (
     <Page>
@@ -124,12 +152,15 @@ export function SettingsPage() {
               error={settings.error}
               onRetry={() => void settings.refetch()}
             />
-          ) : !settings.data ? (
-            <div
-              className="skel h-[220px] rounded-xl"
-              role="status"
-              aria-label={t('common.loading')}
-            />
+          ) : null}
+          {!settings.data ? (
+            settings.isError ? null : (
+              <div
+                className="skel h-[220px] rounded-xl"
+                role="status"
+                aria-label={t('common.loading')}
+              />
+            )
           ) : (
             <>
               <RestartNotice settings={settings.data} />
@@ -388,6 +419,7 @@ function PlayersTopic({ settings }: { settings: AdminSettings }) {
 function MetadataTopic({ settings }: { settings: AdminSettings }) {
   const { t, i18n } = useTranslation();
   const m = settings.metadata;
+  useSettings(Boolean(m.enabled && m.report_unknown));
   return (
     <>
       <Card aria-labelledby="metadata-title">
@@ -524,6 +556,9 @@ function JobRow({
       description={
         <>
           {t(`settings.metadata.${name}Body`)}
+          {!m.enabled ? (
+            <span className="mt-1 block">{t('settings.metadata.needsMetadata')}</span>
+          ) : null}
           {on ? runText : null}
         </>
       }

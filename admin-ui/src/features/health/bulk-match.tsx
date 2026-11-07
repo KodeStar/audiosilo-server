@@ -14,6 +14,7 @@ import {
   invalidateMatches,
   keys,
   matchRunActive,
+  useAllMatchRunItems,
   useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
@@ -70,11 +71,12 @@ import {
   bulkPhase,
   changeParts,
   isChosen,
+  hasCloseScore,
+  picksForScope,
   isPickable,
   leaveOut,
   runFraction,
   runProgress,
-  leaveOutStale,
   togglePick,
   togglePickRange,
   withId,
@@ -352,12 +354,34 @@ function ReviewDialog({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const repick = run.mode === 'repick';
+  // Every automatic refresh pick must be checked for changes, including pages
+  // the admin has not opened. Other modes keep manual pagination.
+  const readAllAuto = open && run.mode === 'refresh' && run.counts.pending > 0;
+  const autoItems = useAllMatchRunItems(run.id, 'auto', readAllAuto);
+  const autoRows = useMemo(
+    () => autoItems.data?.pages.flatMap((page) => page.items ?? []) ?? [],
+    [autoItems.data],
+  );
+  const {
+    hasNextPage: autoHasMore,
+    fetchStatus: autoFetchStatus,
+    isError: autoError,
+    fetchNextPage: readMoreAuto,
+  } = autoItems;
+  useEffect(() => {
+    if (readAllAuto && autoHasMore && autoFetchStatus === 'idle' && !autoError) {
+      void readMoreAuto({ cancelRefetch: false });
+    }
+  }, [readAllAuto, autoHasMore, autoFetchStatus, autoError, readMoreAuto]);
+  const autoReady =
+    !readAllAuto || (autoItems.isSuccess && !autoHasMore && autoFetchStatus === 'idle');
   // A refresh takes fill or overwrite only (matchrun.ScopesFor): it keeps a book's
   // own ASIN or ISBN, and either fills in a store listing's from its recording.
   const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
   const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
   const [tab, setTab] = useState<MatchOutcome>(firstTab);
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
+  const [loaded, setLoaded] = useState<ReadonlyMap<number, MatchRunItem>>(() => new Map());
   const [scope, setScope] = useState<MatchScope>('fill');
   const [busy, setBusy] = useState(false);
   // The book being matched by hand, in a dialog over the review (which keeps its
@@ -376,6 +400,7 @@ function ReviewDialog({
       setTab(firstTab);
       setPicks(NO_PICKS);
       setScope('fill');
+      setLoaded(new Map());
       setByHand(undefined);
       setMatchedByHand(new Set());
     }
@@ -421,13 +446,27 @@ function ReviewDialog({
         },
     );
   };
-  // A loaded confident item the apply would leave alone (gone, matched since)
-  // is left out, so the count is what the apply writes.
-  const onLoaded = useCallback(
-    (items: MatchRunItem[]) => setPicks((p) => leaveOutStale(p, items)),
-    [],
-  );
-  const count = applyCount(run, picks);
+  // Every item loaded so far: an apply leaves out the confident ones it would
+  // leave alone (gone, matched since, nothing to write: picksForScope), so the
+  // count is what the apply writes.
+  const onLoaded = useCallback((items: MatchRunItem[]) => {
+    setLoaded((was) => {
+      if (items.every((item) => was.get(item.id) === item)) return was;
+      const next = new Map(was);
+      for (const item of items) next.set(item.id, item);
+      return next;
+    });
+  }, []);
+  const applyScope = repick ? 'ids' : scope;
+  const effectivePicks = useMemo(() => {
+    const scopeItems = new Map(loaded);
+    if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
+    return picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
+  }, [loaded, readAllAuto, autoRows, picks, run.mode, applyScope]);
+  const count = applyCount(run, effectivePicks);
+  // Finish an empty refresh through the existing apply endpoint with every
+  // automatic item excluded, so another mode can be started afterwards.
+  const finishEmpty = run.mode === 'refresh' && autoReady && count === 0;
   const country = regionName(run.region, lang);
   const headings: Record<MatchRunMode, { title: string; description: string }> = {
     match: {
@@ -449,11 +488,15 @@ function ReviewDialog({
   const apply = async () => {
     setBusy(true);
     try {
-      await api.applyMatchRun(run.id, applyRequest(scope, picks));
-      await qc.invalidateQueries({ queryKey: keys.matchRuns });
+      await api.applyMatchRun(run.id, applyRequest(applyScope, effectivePicks));
+      // The run list only: the review's item pages are read again when it next
+      // opens, not every loaded page before this one closes.
+      await qc.invalidateQueries({ queryKey: keys.matchRuns, exact: true });
       toast.add({
-        title: t('health.bulkMatch.applyStarted'),
-        description: t('health.bulkMatch.applyStartedBody', counted(count, lang)),
+        title: t(finishEmpty ? 'common.done' : 'health.bulkMatch.applyStarted'),
+        description: finishEmpty
+          ? undefined
+          : t('health.bulkMatch.applyStartedBody', counted(count, lang)),
         type: 'success',
       });
       onOpenChange(false);
@@ -513,11 +556,18 @@ function ReviewDialog({
                   />
                 </>
               )}
+              {readAllAuto && autoItems.isError ? (
+                <QueryError
+                  title={t('health.bulkMatch.listError')}
+                  error={autoItems.error}
+                  onRetry={() => void autoItems.refetch()}
+                />
+              ) : null}
               <ItemList
                 key={tab}
                 run={run}
                 outcome={tab}
-                scope={repick ? 'ids' : scope}
+                scope={applyScope}
                 picks={picks}
                 onPick={setPicks}
                 matchedByHand={matchedByHand}
@@ -529,9 +579,12 @@ function ReviewDialog({
               <DialogClose render={<Button type="button" variant="ghost" />}>
                 {t('common.cancel')}
               </DialogClose>
-              <Button onClick={() => void apply()} disabled={busy || count === 0}>
+              <Button
+                onClick={() => void apply()}
+                disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
+              >
                 {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                {t('health.bulkMatch.apply', counted(count, lang))}
+                {finishEmpty ? t('common.done') : t('health.bulkMatch.apply', counted(count, lang))}
               </Button>
             </DialogFooter>
             {byHand ? (
@@ -597,7 +650,7 @@ function ItemList({
   /** Ids matched by hand from the review, which a range leaves as they are. */
   matchedByHand: ReadonlySet<number>;
   onMatchByHand: (item: MatchRunItem) => void;
-  /** Each time a page arrives: the items loaded so far (the apply leaves out the stale ones). */
+  /** Each time a page arrives: the items loaded so far (picksForScope reads them). */
   onLoaded: (items: MatchRunItem[]) => void;
 }) {
   const { t } = useTranslation();
@@ -614,7 +667,9 @@ function ItemList({
     const from = anchor.current;
     anchor.current = item.id;
     onPick((p) =>
-      shift ? togglePickRange(p, items, from, item, matchedByHand) : togglePick(p, item),
+      shift
+        ? togglePickRange(p, items, from, item, matchedByHand, run.mode, scope)
+        : togglePick(p, item),
     );
   };
   if (list.isError) {
@@ -654,7 +709,8 @@ function ItemList({
             item={item}
             root={roots[item.library_id]}
             scope={scope}
-            chosen={isChosen(item, picks)}
+            chosen={isChosen(item, picks, run.mode, scope)}
+            mode={run.mode}
             onToggle={(shift) => toggle(item, shift)}
             onMatchByHand={() => onMatchByHand(item)}
           />
@@ -683,6 +739,7 @@ function ItemRow({
   item,
   root,
   scope,
+  mode,
   chosen,
   onToggle,
   onMatchByHand,
@@ -691,6 +748,7 @@ function ItemRow({
   /** The library's folder: the book's whole path is the path's tooltip. */
   root: string | undefined;
   scope: MatchScope;
+  mode: MatchRunMode;
   chosen: boolean;
   onToggle: (shift: boolean) => void;
   onMatchByHand: () => void;
@@ -747,7 +805,7 @@ function ItemRow({
       onMouseDown={keepShiftClickFromSelectingText(true)}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
-        {isPickable(item) ? (
+        {isPickable(item, mode, scope) ? (
           <Checkbox
             checked={chosen}
             onCheckedChange={(_, d) => onToggle(shiftHeld(d.event))}
@@ -823,6 +881,11 @@ function ItemRow({
         {candidate && item.detail === 'dramatization_only' ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
             {t('health.bulkMatch.item.dramatizationOnly')}
+          </span>
+        ) : null}
+        {hasCloseScore(item) ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.closeScore')}
           </span>
         ) : null}
         {candidate && (seriesText || series) ? (

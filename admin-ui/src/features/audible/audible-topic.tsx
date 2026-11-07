@@ -26,6 +26,8 @@ import {
   titleName,
   type MatchedFilter,
 } from './audible-model';
+import { AudibleBridgeNote } from './audible-bridge';
+import { useAudibleBridge } from './use-audible-bridge';
 import { BackupAllButton } from './backup-all-button';
 import { CheckNowButton } from './check-now-button';
 import { RemoveAccountButton } from './remove-account-button';
@@ -51,6 +53,7 @@ import {
 export function AudibleTopic() {
   const { t } = useTranslation();
   const accounts = useAudibleAccounts();
+  const bridge = useAudibleBridge();
   const list = accounts.data?.accounts ?? [];
   const [picked, setPicked] = useState('');
   const account = chosenAccount(list, picked);
@@ -86,16 +89,24 @@ export function AudibleTopic() {
           target ? (
             <div className="flex flex-wrap items-center gap-2">
               <CheckNowButton
+                blocked={bridge.pollBlocked}
+                describedBy={bridge.descriptionId}
                 busy={busy === target.id}
                 paused={target.paused}
                 onCheck={() => void checkNow(target)}
               />
-              <BackupAllButton account={target} backups={backups} />
+              <BackupAllButton
+                account={target}
+                backups={backups}
+                blocked={bridge.backupBlocked}
+                describedBy={bridge.descriptionId}
+              />
               <RemoveAccountButton account={target} />
             </div>
           ) : undefined
         }
       />
+      <AudibleBridgeNote state={bridge} />
       <div className="flex flex-wrap items-center gap-2 border-t px-5 py-3">
         <SearchBox
           value={q}
@@ -187,6 +198,8 @@ export function AudibleTopic() {
               template={templates.get(x.account)}
               paused={paused.has(x.account)}
               backups={backups}
+              blocked={bridge.backupBlocked}
+              describedBy={bridge.descriptionId}
             />
           ))}
         </ul>
@@ -210,6 +223,8 @@ function TitleRow({
   template,
   paused,
   backups,
+  blocked,
+  describedBy,
 }: {
   title: AudibleTitle;
   account?: string;
@@ -218,6 +233,8 @@ function TitleRow({
   /** The title's account is paused (its library was deleted): nothing can be backed up. */
   paused: boolean;
   backups: Backups;
+  blocked: boolean;
+  describedBy: string;
 }) {
   const { t, i18n } = useTranslation();
   const backup = importStatus(x);
@@ -249,7 +266,13 @@ function TitleRow({
         {backup?.code ? (
           <span className="text-[12.5px] text-muted-foreground">{t(backup.code)}</span>
         ) : null}
-        <TitleActions title={x} paused={paused} backups={backups} />
+        <TitleActions
+          title={x}
+          paused={paused}
+          backups={backups}
+          blocked={blocked}
+          describedBy={describedBy}
+        />
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <StatusText

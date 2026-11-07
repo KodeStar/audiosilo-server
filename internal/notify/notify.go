@@ -447,10 +447,8 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 		"What this server generated for the book went to the community for review. The book page links it."},
 	bridge.KindCorrect: {"Corrections", "Corrections sent",
 		"The book's corrections went to the community for review. The book page links them."},
-	// Made, not ready: listeners follow a read-along once the player supports
-	// it (Bridge Phase 3c-2), so the message promises nothing before then.
 	bridge.KindReadalong: {"Read-along", "Read-along made",
-		"It is saved with the book. Listeners can follow along once the player supports read-alongs."},
+		"It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration."},
 	bridge.KindVerify: {label: "Bridge check"},
 }
 

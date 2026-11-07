@@ -195,6 +195,85 @@ func TestMatchRunsRefresh(t *testing.T) {
 	}
 }
 
+// Done in an empty refresh excludes every automatic item and changes no book.
+func TestMatchRunsFinishEmptyRefresh(t *testing.T) {
+	t.Parallel()
+	e, tok, _, libID := newMatchRunEnv(t, "uk")
+	ctx := context.Background()
+	const path = "Someone/Obscure"
+	if err := e.cat.SetEnrichment(ctx, libID, path, "B0US000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", tok, `{"mode":"refresh"}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	run := decodeRun(t, body)
+	e.api.matchRuns.Wait()
+	items, _, err := e.cat.ListMatchRunItems(ctx, run.ID, catalog.OutcomeAuto, 0, 50)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %+v %v", items, err)
+	}
+	runURL := "/api/v1/admin/match-runs/" + strconv.FormatInt(run.ID, 10)
+	resp, body = e.do(t, "POST", runURL+"/apply", tok, `{"scope":"fill","exclude":[`+strconv.FormatInt(items[0].ID, 10)+`]}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("finish = %d %s", resp.StatusCode, body)
+	}
+	e.api.matchRuns.Wait()
+	_, body = e.do(t, "GET", runURL, tok, "")
+	if got := decodeRun(t, body); got.Status != catalog.MatchApplied || got.ApplyTotal != 0 || got.Counts.Applied != 0 {
+		t.Fatalf("finished run = %+v", got)
+	}
+	book, err := e.cat.GetBookByPath(ctx, libID, path)
+	if err != nil || book.ASIN != "B0US000001" || book.Title != "Obscure" || book.Narrator != "" {
+		t.Fatalf("excluded book changed = %+v %v", book, err)
+	}
+}
+
+// A refresh review automatically excludes every unchanged book. Its exclusion
+// list can exceed the manual-pick limit even when only one book needs applying.
+func TestMatchRunLargeExclusions(t *testing.T) {
+	t.Parallel()
+	e, tok, _, libID := newMatchRunEnv(t, "uk")
+	if err := e.cat.SetEnrichment(context.Background(), libID, "Someone/Obscure", "B0US000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", tok, `{"mode":"refresh"}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	run := decodeRun(t, body)
+	e.api.matchRuns.Wait()
+	applyURL := "/api/v1/admin/match-runs/" + strconv.FormatInt(run.ID, 10) + "/apply"
+	ids := make([]int64, maxMatchPicks+1)
+	for i := range ids {
+		ids[i] = int64(i + 1000000) // Other items are ignored, as for smaller lists.
+	}
+	raw, err := json.Marshal(map[string]any{"scope": "fill", "include": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "POST", applyURL, tok, string(raw)); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, codeTooLarge) {
+		t.Fatalf("too many manual picks = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "POST", applyURL, tok, strings.Repeat(" ", 1<<20)+`{"scope":"fill"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversize body = %d %s", resp.StatusCode, body)
+	}
+	raw, err = json.Marshal(map[string]any{"scope": "fill", "exclude": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.do(t, "POST", applyURL, tok, string(raw))
+	if resp.StatusCode != http.StatusAccepted || decodeRun(t, body).ApplyTotal != 1 {
+		t.Fatalf("large exclusion list = %d %s", resp.StatusCode, body)
+	}
+	e.api.matchRuns.Wait()
+	book, err := e.cat.GetBookByPath(context.Background(), libID, "Someone/Obscure")
+	if err != nil || book.Narrator != "R. C. Bray" {
+		t.Fatalf("book after refresh = %+v %v", book, err)
+	}
+}
+
 func TestMatchRunsStartRefusals(t *testing.T) {
 	t.Parallel()
 	e, adminTok, _, _ := newMatchRunEnv(t, "")

@@ -22,6 +22,9 @@ describe('sign-in gate', () => {
     });
     renderApp();
     const user = userEvent.setup();
+    expect(
+      await screen.findByText('Setting up a new server? Open the setup link from the server log.'),
+    ).toBeInTheDocument();
     await user.type(await screen.findByLabelText('Username'), 'chris');
     await user.type(screen.getByLabelText('Password'), 'secret');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));

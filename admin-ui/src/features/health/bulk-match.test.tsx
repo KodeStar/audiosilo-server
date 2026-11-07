@@ -99,6 +99,205 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('bulk matching', () => {
+  it('finishes an unchanged refresh without overwriting books and allows a different run', async () => {
+    let current = run({
+      mode: 'refresh',
+      counts: { ...run().counts, review: 0, none: 0 },
+    });
+    const calls = mockFetch(
+      routes([current], {
+        'GET /admin/match-runs': () => ({ body: { runs: [current], region: 'uk' } }),
+        'GET /admin/match-runs/5/items': {
+          body: {
+            items: [{ ...confident, changes: { fill: { fields: [], cover: false } } }],
+            next_after: 0,
+          },
+        },
+        'POST /admin/match-runs/5/apply': () => {
+          current = { ...current, status: 'applied' };
+          return { status: 202, body: current };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    await user.click(await within(dialog).findByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'fill',
+        exclude: [10],
+        include: [],
+      }),
+    );
+    expect(await screen.findByRole('button', { name: 'Find matches' })).toBeEnabled();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Fill in matched books' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it('excludes refresh no-ops from picks, counts and apply, then restores picks for a wider scope', async () => {
+    let releasePage!: () => void;
+    const secondPage = new Promise<void>((resolve) => {
+      releasePage = resolve;
+    });
+    const noop = {
+      ...confident,
+      changes: {
+        fill: { fields: [], cover: false },
+        overwrite: { fields: ['title' as const], cover: false },
+      },
+    };
+    const changed = {
+      ...confident,
+      id: 12,
+      path: 'Andy Weir/Project Hail Mary',
+      book: { title: 'Project Hail Mary', author: 'Andy Weir' },
+    };
+    const laterNoop = {
+      ...confident,
+      id: 14,
+      path: 'Andy Weir/Later',
+      book: { title: 'Later', author: 'Andy Weir' },
+      changes: {},
+    };
+    const calls = mockFetch(
+      routes(
+        [run({ mode: 'refresh', counts: { ...run().counts, auto: 3, pending: 3, review: 0 } })],
+        {
+          'GET /admin/match-runs/5/items': async (req) => {
+            if (req.query.get('after')) {
+              await secondPage;
+              return { body: { items: [laterNoop], next_after: 0 } };
+            }
+            return { body: { items: [noop, changed], next_after: 12 } };
+          },
+          'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    await within(dialog).findByRole('link', {
+      name: 'Open the book page for The Martian in a new tab',
+    });
+    expect(within(dialog).getByRole('button', { name: /^Apply to \d+ books?/ })).toBeDisabled();
+    releasePage();
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Apply to 1 book' })).toBeEnabled(),
+    );
+    // The background read checked the unopened page; the shown list still pages by hand.
+    expect(
+      within(dialog).queryByRole('link', { name: 'Open the book page for Later in a new tab' }),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Show more' })).toBeInTheDocument();
+    expect(
+      calls.some((c) => c.path === '/admin/match-runs/5/items' && c.query.get('limit') === '200'),
+    ).toBe(true);
+    expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('radio', { name: /Use community values/ }));
+    expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();
+    expect(within(dialog).getByRole('button', { name: 'Apply to 2 books' })).toBeEnabled();
+    await user.click(within(dialog).getByRole('radio', { name: /Fill in what/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'fill',
+        exclude: [10, 14],
+        include: [],
+      }),
+    );
+  });
+
+  it('applies a refresh that only heals a community match while excluding unchanged books', async () => {
+    const healed: MatchRunItem = {
+      ...confident,
+      id: 12,
+      path: 'Andy Weir/Project Hail Mary',
+      book: { title: 'Project Hail Mary', author: 'Andy Weir' },
+      proposal: { work_id: 'project-hail-mary', values: {} },
+      changes: { fill: { fields: [], cover: false, match: true } },
+    };
+    const calls = mockFetch(
+      routes(
+        [run({ mode: 'refresh', counts: { ...run().counts, auto: 2, pending: 2, review: 0 } })],
+        {
+          'GET /admin/match-runs/5/items': {
+            body: { items: [{ ...confident, changes: {} }, healed], next_after: 0 },
+          },
+          'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    expect(
+      await within(dialog).findByRole('checkbox', { name: 'Apply to Project Hail Mary' }),
+    ).toBeChecked();
+    expect(within(dialog).getByText('Sets the community match')).toBeInTheDocument();
+    expect(within(dialog).getByText('Nothing to change with this choice')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox', { name: /The Martian/ })).not.toBeInTheDocument();
+    const apply = within(dialog).getByRole('button', { name: 'Apply to 1 book' });
+    await waitFor(() => expect(apply).toBeEnabled());
+    await user.click(apply);
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'fill',
+        exclude: [10],
+        include: [],
+      }),
+    );
+  });
+
+  it('keeps an identifier-backed confident match confident despite a close runner-up', async () => {
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': {
+          body: { items: [{ ...confident, runner_up: 93 }], next_after: 0 },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();
+    expect(
+      within(dialog).queryByText('Another recording scores almost as well.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('retains repick identifier changes when the display fields have no changes', async () => {
+    const calls = mockFetch(
+      routes([run({ mode: 'repick' })], {
+        'GET /admin/match-runs/5/items': {
+          body: { items: [{ ...confident, changes: {} }], next_after: 0 },
+        },
+        'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('checkbox', { name: /The Martian/ })).toBeChecked();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'ids',
+        exclude: [],
+        include: [],
+      }),
+    );
+  });
+
   it('starts a run over the unmatched books, or a repick for the preferred marketplace', async () => {
     const calls = mockFetch(
       routes([], { 'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) } }),
@@ -161,7 +360,12 @@ describe('bulk matching', () => {
       routes([run({ mode: 'refresh', counts: { ...run().counts, review: 0, none: 1 } })], {
         'GET /admin/match-runs/5/items': (req) => ({
           body: {
-            items: req.query.get('outcome') === 'none' ? [unknown] : [confident],
+            items:
+              req.query.get('outcome') === 'none'
+                ? [unknown]
+                : req.query.get('outcome') === 'auto'
+                  ? [confident]
+                  : [],
             next_after: 0,
           },
         }),
@@ -172,7 +376,12 @@ describe('bulk matching', () => {
     renderApp('/health?issue=unmatched');
     await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
     const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
-    expect(await within(dialog).findByText('The Martian')).toBeInTheDocument();
+    expect(
+      await within(dialog).findByRole('checkbox', { name: 'Apply to The Martian' }),
+    ).toBeChecked();
+    expect(
+      within(within(dialog).getByRole('list', { name: 'Confident' })).getAllByRole('listitem'),
+    ).toHaveLength(1);
     expect(within(dialog).queryByRole('radio', { name: /ASIN and ISBN only/ })).toBeNull();
     expect(within(dialog).getByRole('radio', { name: /Fill in what's missing/ })).toBeChecked();
     await user.click(within(dialog).getByRole('button', { name: /Not found/ }));
@@ -265,6 +474,7 @@ describe('bulk matching', () => {
       path: 'Someone/Plain',
       outcome: 'review',
       score: 95,
+      runner_up: 92,
       detail: 'dramatization_only',
       book: { title: 'Plain', author: 'Someone' },
     };
@@ -288,6 +498,9 @@ describe('bulk matching', () => {
         "Held for review: the community holds only a dramatization of this book, and this book doesn't say it is one",
       ),
     ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText('Another recording scores almost as well.'),
+    ).not.toBeInTheDocument();
   });
 
   it('shows the series a scope replaces, old to new', async () => {
@@ -393,7 +606,9 @@ describe('bulk matching', () => {
 
     // Put the doubtful one in too.
     await user.click(within(dialog).getByRole('button', { name: /To review/ }));
-    const doubtfulRow = (await within(dialog).findByText('Artemis')).closest('li')!;
+    const doubtfulRow = (
+      await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' })
+    ).closest('li')!;
     expect(within(doubtfulRow).getByText('next 86%')).toBeInTheDocument();
     const box = within(doubtfulRow).getByRole('checkbox', { name: 'Apply to Artemis' });
     expect(box).not.toBeChecked();
@@ -910,10 +1125,15 @@ describe('bulk matching', () => {
     await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
     const dialog = await screen.findByRole('dialog');
     await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
-    const row = (await within(dialog).findByText('Artemis')).closest('li')!;
+    const row = (await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' })).closest(
+      'li',
+    )!;
     expect(
       within(row).getByText(/^Held for review: the book is 10h 34m long, this recording 5h/),
     ).toBeInTheDocument();
+    expect(
+      within(row).queryByText('Another recording scores almost as well.'),
+    ).not.toBeInTheDocument();
   });
 
   it('says nothing about length for an item held only for its score', async () => {
@@ -923,7 +1143,10 @@ describe('bulk matching', () => {
     await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
     const dialog = await screen.findByRole('dialog');
     await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
-    const row = (await within(dialog).findByText('Artemis')).closest('li')!;
+    const row = (await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' })).closest(
+      'li',
+    )!;
     expect(within(row).queryByText(/Held for review/)).toBeNull();
+    expect(within(row).getByText('Another recording scores almost as well.')).toBeInTheDocument();
   });
 });

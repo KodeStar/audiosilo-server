@@ -3,7 +3,8 @@ import { regionName, regionOptions, regionTag } from '@/lib/regions';
 import {
   NO_PICKS,
   applyCount,
-  leaveOutStale,
+  picksForScope,
+  hasCloseScore,
   applyRequest,
   bulkPhase,
   changeParts,
@@ -87,6 +88,68 @@ it('runFraction counts matching, then applying', () => {
 });
 
 describe('picks', () => {
+  it('derives refresh choices, counts and apply exclusions from the selected scope', () => {
+    const noChange = item({
+      id: 1,
+      changes: {
+        fill: { fields: [], cover: false },
+        overwrite: { fields: ['title'], cover: false },
+      },
+    });
+    const changed = item({ id: 2, changes: { fill: { fields: [], cover: true } } });
+    const review = item({ id: 3, outcome: 'review', changes: {} });
+    const picks = { exclude: new Set<number>(), include: new Set([3]) };
+    const fill = picksForScope(picks, [noChange, changed, review], 'refresh', 'fill');
+    expect(isPickable(noChange, 'refresh', 'fill')).toBe(false);
+    expect(isChosen(noChange, picks, 'refresh', 'fill')).toBe(false);
+    expect(isChosen(changed, picks, 'refresh', 'fill')).toBe(true);
+    expect(applyCount(run({}, { pending: 2 }), fill)).toBe(1);
+    expect(applyRequest('fill', fill)).toEqual({ scope: 'fill', exclude: [1], include: [] });
+    expect(isPickable(noChange, 'refresh', 'overwrite')).toBe(true);
+    expect(picksForScope(picks, [noChange], 'refresh', 'overwrite').exclude.size).toBe(0);
+    expect(isPickable(noChange, 'repick', 'ids')).toBe(true);
+    expect(isPickable(noChange, 'match', 'ids')).toBe(true);
+  });
+
+  it('passes over no-op refresh rows in a Shift-click range', () => {
+    const rows = [
+      item({ id: 1 }),
+      item({ id: 2, changes: { fill: { fields: ['title'], cover: false } } }),
+    ];
+    const next = togglePickRange(NO_PICKS, rows, 1, rows[1], new Set(), 'refresh', 'fill');
+    expect([...next.exclude]).toEqual([2]);
+  });
+
+  it('keeps a refresh that only heals its recorded community match pickable and counted', () => {
+    const healed = item({
+      id: 1,
+      changes: {
+        fill: { fields: [], cover: false, match: true },
+        overwrite: { fields: [], cover: false, match: true },
+      },
+    });
+    const review = { ...healed, id: 2, outcome: 'review' as const };
+    const noop = item({ id: 3, changes: { fill: { fields: [], cover: false, match: false } } });
+    const picks = { exclude: new Set<number>(), include: new Set([2]) };
+    for (const scope of ['fill', 'overwrite'] as const) {
+      expect(isPickable(healed, 'refresh', scope)).toBe(true);
+      expect(isChosen(healed, picks, 'refresh', scope)).toBe(true);
+      expect(isChosen(review, picks, 'refresh', scope)).toBe(true);
+      const effective = picksForScope(picks, [healed, review, noop], 'refresh', scope);
+      expect(applyCount(run({}, { pending: 2 }), effective)).toBe(2);
+      expect(applyRequest(scope, effective)).toEqual({ scope, exclude: [3], include: [2] });
+    }
+    const range = togglePickRange(
+      NO_PICKS,
+      [noop, healed],
+      3,
+      healed,
+      new Set(),
+      'refresh',
+      'fill',
+    );
+    expect([...range.exclude]).toEqual([1]);
+  });
   const confident = item({ id: 1, outcome: 'auto' });
   const doubtful = item({ id: 2, outcome: 'review' });
   const none = item({ id: 3, outcome: 'none' });
@@ -122,11 +185,9 @@ describe('picks', () => {
       item({ id: 14, outcome: 'auto', matched_since: true, applied: 'applied' }),
       item({ id: 15, outcome: 'review', matched_since: true }),
     ];
-    const picks = leaveOutStale(NO_PICKS, loaded);
+    const picks = picksForScope(NO_PICKS, loaded, 'match', 'fill');
     expect([...picks.exclude].sort()).toEqual([12, 13]);
     expect(applyCount(r, picks)).toBe(1);
-    // Nothing new: the same picks, so a re-render changes nothing.
-    expect(leaveOutStale(picks, loaded)).toBe(picks);
   });
 
   it('counts what an apply takes: pending confident, less left out, plus put in', () => {
@@ -145,6 +206,21 @@ describe('picks', () => {
     // One already applied isn't pending, so leaving it out doesn't lower the count.
     expect(leaveOut(NO_PICKS, item({ applied: 'applied' }))).toBe(NO_PICKS);
   });
+});
+
+it('explains only review scores closer than the classification lead without a stronger reason', () => {
+  expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90 }))).toBe(true);
+  for (const over of [
+    { outcome: 'auto' as const },
+    { runner_up: 84 },
+    { runner_up: 0 },
+    { detail: 'length_differs' },
+    { detail: 'dramatization_only' },
+  ]) {
+    expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90, ...over }))).toBe(
+      false,
+    );
+  }
 });
 
 describe('Shift-click ranges', () => {

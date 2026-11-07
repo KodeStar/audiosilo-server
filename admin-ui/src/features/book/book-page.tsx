@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { Link, useBlocker, useNavigate, useSearch } from '@tanstack/react-router';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookX, TriangleAlert } from 'lucide-react';
+import { BookX } from 'lucide-react';
 import { ApiError } from '@/api/client';
 import { useAdminBook } from '@/api/hooks';
 import type { AdminBookDetail, OverrideField } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
+import { LeaveGuard } from '@/components/leave-guard';
 import { Page } from '@/components/page';
 import { QueryError } from '@/components/query-error';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
+import { buttonVariants } from '@/components/ui/button';
 import { AddToShareDialog } from '@/features/library/add-to-share-dialog';
 import { refKey } from '@/lib/book-route';
 import { BookAside } from './book-aside';
@@ -210,38 +210,13 @@ function BookView({ detail, matchOnOpen }: { detail: AdminBookDetail; matchOnOpe
         books={[detail.book]}
         alreadyIn={new Set((detail.shares ?? []).map((s) => s.share_id))}
       />
-      <LeaveGuard dirty={dirty} count={count} />
-    </>
-  );
-}
-
-/** Unsaved edits: ask before leaving the page (and the browser's own prompt before unloading). */
-function LeaveGuard({ dirty, count }: { dirty: boolean; count: number }) {
-  const { t } = useTranslation();
-  const blocker = useBlocker({
-    shouldBlockFn: () => true,
-    disabled: !dirty,
-    enableBeforeUnload: dirty,
-    withResolver: true,
-  });
-  const open = blocker.status === 'blocked';
-  return (
-    <Dialog open={open} onOpenChange={(o) => (o ? undefined : blocker.reset?.())}>
-      <DialogContent
-        icon={TriangleAlert}
-        tone="danger"
+      <LeaveGuard
+        dirty={dirty}
         title={t('book.leave.title')}
         description={t('book.leave.description', { count })}
-      >
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => blocker.reset?.()}>
-            {t('book.leave.stay')}
-          </Button>
-          <Button variant="destructive" onClick={() => blocker.proceed?.()}>
-            {t('book.leave.discard')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        stay={t('book.leave.stay')}
+        discard={t('book.leave.discard')}
+      />
+    </>
   );
 }

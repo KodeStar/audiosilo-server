@@ -630,7 +630,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `List`'s rule, the first library's entry unless a copy is in scope, read for the one work through
   `catalog.UpcomingWork`; DB only, no meta traffic): a work not in it (another person's series, one the
   caller holds, none) or in it without a cover is 404 `not_found`, before any fetch. Then `/meta/cover`'s tail
-  (`serveCommunityCover`: the ETag + `coverCache`, `communityThumbnail`'s guarded fetch, single flight and
+  (`serveCommunityCover`: the ETag with `private, no-cache` so a stable work URL revalidates when its cover
+  changes, `communityThumbnail`'s guarded fetch, single flight and
   thumbnail cache, 502 `cover_unavailable`, 404 `no cover`). **Flags**: `upcoming_calendar` and
   `upcoming_covers` are exactly `upcoming` (false, never absent, while off); kids and demo accounts are
   refused by the routes, not the flags.
@@ -667,8 +668,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `unknown` row a recheck finds known forgets its `sent_at`. **Storage**: `unknown_asin_reports(asin PK, checked_at,
   unknown, sent_at)`, no path or book (disposable; user-state writes). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
-  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). Trigger by hand: switch it
-  off and on in the console (runs when none ran within 23 h); to run again sooner, delete
+  "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). The mounted Metadata
+  topic polls status every 30 s while metadata and reporting are on. Trigger by hand: switch it
+  off and on in the console (runs when none ran within 23 h; an active 7-day quiet period still applies,
+  measured from the last attempt, and toggling never resets it); to run again sooner, delete
   `server_state('unknown_asin_report')` and the `unknown_asin_reports` rows, then switch it off and on.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
@@ -1774,7 +1777,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   identifier lookup's proposal carries none, and `planRefresh` drops a by-work proposal's
   once the book has one of its own); `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
-  `book.match_refresh`. `InterruptMatchRuns` (launcher, at
+  `book.match_refresh`. The review excludes refresh rows with no changes under the
+  selected scope (a healed recorded match counts as a change), reading all confident
+  pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
+  before enabling Apply; the shown list keeps manual pagination. With no picks,
+  Done finishes the run through an apply with every confident item excluded, changing
+  no books. Apply waits only for the run list to refresh, not the loaded item pages.
+  Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
+  request-body limit so large refreshes can omit every unchanged book.
+  `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
@@ -2903,6 +2914,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and on-this-server filters, search, and Check now and Remove for the chosen or only account; Remove
   (`remove-account-button.tsx`) confirms first, saying it removes the account from this server only and that
   the Bridge's Accounts page signs the device out of Amazon); the loaded titles refresh when an account's `last_poll_at` moves, `useTitlesAfterPolls`).
+  Job-start actions use the existing Bridge status: unpaired shows a pairing link and disables them;
+  unsupported kinds are disabled too. A paired offline Bridge can still queue a kind it offers, with
+  guidance that the job waits for it to return. Account settings and removal remain available.
   A scheduled poll reads "Scheduled by the server" in the job list (`serverScheduled`), and the Bridge's
   optional `audible` setup step links its Accounts tab.
 - **Audible backups (BRIDGE-PLAN.md Phase 4b, `audible.import`, `catalog/audible_import.go`,
@@ -3017,7 +3031,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   proxies and CORS origins, so name, public URL, home address (`lan_url`), CORS, proxies, app links, metadata on/off and the demo
   library/cap apply on the next request. `restart_pending` lists restart settings whose saved value differs
   from `boot`. New keys: `name` (`DisplayName`: GET /server `name`, pairing `server_name`; default
-  "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). `GET /admin/system`
+  "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). The console replaces a hidden
+  or invalid topic with the General URL once settings load. Editable cards share one unsaved-draft
+  navigation and before-unload guard, cleared by saving or resetting all dirty cards. `GET /admin/system`
   (`handlers_system.go`): tools + versions (`toolfetch.Version`, cached), metadata health (`meta.Service.Ping`:
   metaserve `/healthz`, cached a minute, **only while metadata is on**; in mirror mode through the same
   client as lookups: the copy once ready, the remote service until then) plus `metadata.mode` (the running mode, both modes) and, in mirror mode only,

@@ -1,4 +1,4 @@
-import type { MatchChange, MatchRun, MatchRunItem, MatchScope } from '@/api/types';
+import type { MatchChange, MatchRun, MatchRunItem, MatchRunMode, MatchScope } from '@/api/types';
 import { rangeOf } from '@/features/library/books/use-selection';
 
 // Bulk matching on Health > Not matched (STYLEGUIDE.md "Health triage"): what the
@@ -53,8 +53,13 @@ export const withoutId = (set: ReadonlySet<number>, id: number) => {
 };
 
 /** Whether an apply takes the item: confident unless left out, a review one only if put in. */
-export function isChosen(item: MatchRunItem, picks: Picks): boolean {
-  if (!isPickable(item)) return false;
+export function isChosen(
+  item: MatchRunItem,
+  picks: Picks,
+  mode: MatchRunMode = 'match',
+  scope: MatchScope = 'fill',
+): boolean {
+  if (!isPickable(item, mode, scope)) return false;
   return item.outcome === 'auto' ? !picks.exclude.has(item.id) : picks.include.has(item.id);
 }
 
@@ -62,12 +67,21 @@ export function isChosen(item: MatchRunItem, picks: Picks): boolean {
  * Whether the item has a checkbox at all: a candidate, not applied yet, its book
  * still there and not matched since the run (an apply leaves that one alone).
  */
-export function isPickable(item: MatchRunItem): boolean {
+export function isPickable(
+  item: MatchRunItem,
+  mode: MatchRunMode = 'match',
+  scope: MatchScope = 'fill',
+): boolean {
+  const change = item.changes[scope];
   return (
     (item.outcome === 'auto' || item.outcome === 'review') &&
     !item.applied &&
     !item.gone &&
-    !item.matched_since
+    !item.matched_since &&
+    // A refresh may heal its recorded match without changing fields or art.
+    // Match and repick may still attach or change an identifier.
+    (mode !== 'refresh' ||
+      Boolean(change && (change.match || change.cover || change.fields.length)))
   );
 }
 
@@ -95,12 +109,14 @@ export function togglePickRange(
   anchor: number | undefined,
   item: MatchRunItem,
   byHand: ReadonlySet<number> = new Set(),
+  mode: MatchRunMode = 'match',
+  scope: MatchScope = 'fill',
 ): Picks {
-  const chosen = !isChosen(item, picks);
+  const chosen = !isChosen(item, picks, mode, scope);
   const exclude = new Set(picks.exclude);
   const include = new Set(picks.include);
   for (const it of rangeOf(shown, anchor, item, (x) => x.id)) {
-    if (!isPickable(it) || (it !== item && byHand.has(it.id))) continue;
+    if (!isPickable(it, mode, scope) || (it !== item && byHand.has(it.id))) continue;
     // A confident one is in unless left out; a review one is out unless put in.
     const [ids, on] = it.outcome === 'auto' ? [exclude, !chosen] : [include, chosen];
     if (on) ids.add(it.id);
@@ -122,19 +138,38 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
 }
 
 /**
- * Leaves out every confident item the review has loaded whose book an apply
- * would leave alone anyway (gone, or matched since the run), so the apply's
- * count doesn't promise them. The same picks when nothing is new.
+ * The picks an apply sends: every loaded item without a checkbox under this
+ * mode and scope (gone, matched since the run, a refresh with nothing to
+ * write) left out, so the apply's count doesn't promise them. Derived, never
+ * stored, so changing scope restores the admin's own picks.
  */
-export function leaveOutStale(picks: Picks, items: readonly MatchRunItem[]): Picks {
-  const stale = items.filter(
-    (it) =>
-      it.outcome === 'auto' &&
-      !it.applied &&
-      (it.gone || it.matched_since) &&
-      !picks.exclude.has(it.id),
+export function picksForScope(
+  picks: Picks,
+  items: readonly MatchRunItem[],
+  mode: MatchRunMode,
+  scope: MatchScope,
+): Picks {
+  const exclude = new Set(picks.exclude);
+  const include = new Set(picks.include);
+  for (const item of items) {
+    if (item.applied || isPickable(item, mode, scope)) continue;
+    if (item.outcome === 'auto') exclude.add(item.id);
+    include.delete(item.id);
+  }
+  return { exclude, include };
+}
+
+/** Keep this margin aligned with internal/matchrun.AutoLead (Classify). */
+const AUTO_LEAD = 10;
+
+export function hasCloseScore(item: MatchRunItem): boolean {
+  return (
+    item.outcome === 'review' &&
+    item.runner_up > 0 &&
+    item.score - item.runner_up < AUTO_LEAD &&
+    item.detail !== 'length_differs' &&
+    item.detail !== 'dramatization_only'
   );
-  return stale.reduce((p, it) => leaveOut(p, it), picks);
 }
 
 /** How many books an apply writes to: the confident ones still pending, less left out, plus put in. */

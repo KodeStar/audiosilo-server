@@ -17,7 +17,8 @@ import (
 // Bounds on the bulk match endpoints.
 const (
 	maxMatchItemsPage = 200
-	// maxMatchPicks caps one apply's include and exclude lists (item ids).
+	// maxMatchPicks caps manually included item ids. Exclusions are bounded by
+	// the request's 1 MiB body: refresh reviews exclude every unchanged book.
 	maxMatchPicks = 20000
 )
 
@@ -182,8 +183,8 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // handleApplyMatchRun serves POST /admin/match-runs/{id}/apply {"scope",
 // "include"?, "exclude"?}: write the run's confident matches (less exclude, plus
 // the include items, which may be ones that needed review) in the background,
-// under scope ids | fill | overwrite (a refresh run: fill | overwrite, as it never
-// changes an identifier). 202 with the run; 404 for a run that isn't there (or was
+// under scope ids | fill | overwrite (a refresh run: fill | overwrite, keeping
+// existing identifiers). 202 with the run; 404 for a run that isn't there (or was
 // cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +204,7 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `scope must be "ids", "fill" or "overwrite"`)
 		return
 	}
-	if len(req.Include) > maxMatchPicks || len(req.Exclude) > maxMatchPicks {
+	if len(req.Include) > maxMatchPicks {
 		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many items in one apply")
 		return
 	}
