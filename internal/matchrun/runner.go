@@ -51,8 +51,7 @@ const DetailIdentifierUnknown = "identifier_unknown"
 
 // DetailWorkUnknown is a refresh item's detail when the community no longer knows
 // the work a book's match recorded (a direct lookup or an identifier fallback,
-// a 404 after
-// any redirect): no match, and the book keeps its recorded match (a release that
+// a 404 after any redirect): no match, and the book keeps its recorded match (a release that
 // dropped the work by mistake must not unmatch the book).
 const DetailWorkUnknown = "work_unknown"
 
@@ -80,8 +79,9 @@ const DetailWeakMatch = "weak_match"
 // not recorded again: planFor).
 const DetailCoverPending = "cover_pending"
 
-// ErrBusy is a start or apply asked while a run is working: one at a time.
-var ErrBusy = errors.New("a match run is already working")
+// ErrBusy is a start or apply asked while a run is working: one at a time. It is
+// catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
+var ErrBusy = catalog.ErrMatchRunBusy
 
 // ErrScope is an apply naming a scope its run's mode doesn't take (ScopesFor).
 var ErrScope = errors.New("the scope doesn't apply to this match run")
@@ -441,11 +441,12 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	if !lengthFits(item.Proposal, b.Duration, readsRecording(c, item.Proposal, names.Split(b.Narrator))) {
 		item.Outcome, item.Detail = catalog.OutcomeReview, DetailLengthDiffers
 	}
+	hasIdentifier := b.ASIN != "" || b.ISBN != ""
 	if byWork {
 		// Keep the recorded match as the apply guard. A fallback also depends on
 		// both identifiers staying as they were when their lookups missed.
 		item.Proposal.FoundBy = workFoundBy(b.MatchWorkID, b.MatchRecordingID)
-		if b.ASIN != "" || b.ISBN != "" {
+		if hasIdentifier {
 			item.Proposal.FoundBy += ";" + fallbackIdentifiers(b.ASIN, b.ISBN)
 		}
 	} else {
@@ -454,7 +455,7 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 			item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
 		}
 	}
-	if b.ASIN != "" || b.ISBN != "" {
+	if hasIdentifier {
 		// The book keeps its own identifiers (switching marketplace is a repick's):
 		// a proposal without them writes none, and the review shows none of the
 		// community's (another marketplace's ASIN, say) as if applying set them.

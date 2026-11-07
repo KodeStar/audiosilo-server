@@ -525,8 +525,8 @@ func TestStoppedMatchKeepsWhatTheAdminDidSince(t *testing.T) {
 // length, is held for review (length_differs) whether the refresh finds it by the
 // book's ASIN, its recorded match or a fallback after an unknown ASIN. A known
 // identifier keeps precedence even when its recording fails the length guard.
-// The narrator in a dramatization's cast
-// never widens a plain book's length guard (meta.DramatizesPlainBook).
+// The narrator in a dramatization's cast never widens a plain book's length
+// guard (meta.DramatizesPlainBook).
 func TestRefreshByWorkHoldsADramatization(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
