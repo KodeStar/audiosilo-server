@@ -1729,7 +1729,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   overwrites the details but never writes an identifier (`planFor` drops them, the
   proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
-  `book.match_refresh`. `InterruptMatchRuns` (launcher, at
+  `book.match_refresh`. The review excludes refresh rows with no changes under the
+  selected scope, loading all confident pages before enabling Apply. With no picks,
+  Done finishes the run through an apply with every confident item excluded, changing
+  no books. Apply caps manual includes at 20,000 ids; exclusions use the existing
+  1 MiB request-body limit so large refreshes can omit every unchanged book.
+  `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so

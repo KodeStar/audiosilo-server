@@ -99,6 +99,46 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('bulk matching', () => {
+  it('finishes an unchanged refresh without overwriting books and allows a different run', async () => {
+    let current = run({
+      mode: 'refresh',
+      counts: { ...run().counts, review: 0, none: 0 },
+    });
+    const calls = mockFetch(
+      routes([current], {
+        'GET /admin/match-runs': () => ({ body: { runs: [current], region: 'uk' } }),
+        'GET /admin/match-runs/5/items': {
+          body: {
+            items: [{ ...confident, changes: { fill: { fields: [], cover: false } } }],
+            next_after: 0,
+          },
+        },
+        'POST /admin/match-runs/5/apply': () => {
+          current = { ...current, status: 'applied' };
+          return { status: 202, body: current };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    await user.click(await within(dialog).findByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
+        scope: 'fill',
+        exclude: [10],
+        include: [],
+      }),
+    );
+    expect(await screen.findByRole('button', { name: 'Find matches' })).toBeEnabled();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Fill in matched books' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   it('excludes refresh no-ops from picks, counts and apply, then restores picks for a wider scope', async () => {
     let releasePage!: () => void;
     const secondPage = new Promise<void>((resolve) => {

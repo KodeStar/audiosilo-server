@@ -208,6 +208,18 @@ export function SettingsForm<S extends SettingsSection>({
     setErrors({});
     try {
       const next = await save(p);
+      // A server-normalized value can equal the old saved value, so the
+      // savedFor comparison alone would leave that submitted draft dirty.
+      const accepted = next[section] as Record<string, unknown>;
+      setDraft((current) => {
+        const normalized = { ...current };
+        for (const f of fields) {
+          if (f.name in (p[section] ?? {}) && current[f.name] === draft[f.name]) {
+            normalized[f.name] = toDraft(f, accepted[f.name]);
+          }
+        }
+        return normalized;
+      });
       const waits = patchIds(p).some((id) => next.restart_pending.includes(id));
       toast.add({
         title: savedTitle ?? t('settings.saved', { section: title }),

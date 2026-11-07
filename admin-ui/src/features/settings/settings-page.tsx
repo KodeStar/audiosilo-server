@@ -152,12 +152,15 @@ function SettingsContent() {
               error={settings.error}
               onRetry={() => void settings.refetch()}
             />
-          ) : !settings.data ? (
-            <div
-              className="skel h-[220px] rounded-xl"
-              role="status"
-              aria-label={t('common.loading')}
-            />
+          ) : null}
+          {!settings.data ? (
+            settings.isError ? null : (
+              <div
+                className="skel h-[220px] rounded-xl"
+                role="status"
+                aria-label={t('common.loading')}
+              />
+            )
           ) : (
             <>
               <RestartNotice settings={settings.data} />

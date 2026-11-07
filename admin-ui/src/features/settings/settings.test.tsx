@@ -138,6 +138,92 @@ describe('settings', () => {
     expect(reads()).toBe(afterLeave);
   });
 
+  it('keeps a saved report toggle when an older status poll finishes afterwards', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const on = settingsWith({ metadata: { ...base.metadata, report_unknown: true } });
+    let finishPoll!: () => void;
+    const poll = new Promise<void>((resolve) => {
+      finishPoll = resolve;
+    });
+    let reads = 0;
+    mockFetch(
+      routes({
+        'GET /admin/settings': async () => {
+          if (++reads > 1) await poll;
+          return { body: on };
+        },
+        'PATCH /admin/settings': patchEcho(on),
+      }),
+    );
+    const { queryClient } = renderApp('/server?topic=metadata');
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole('switch', {
+      name: 'Help complete the community database',
+    });
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    expect(reads).toBe(2);
+    await user.click(toggle);
+    await screen.findByText('Reporting unknown ASINs is off');
+    await act(async () => {
+      finishPoll();
+      await poll;
+    });
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: keys.settings })).toBe(0));
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByTestId('report-run')).not.toBeInTheDocument();
+  });
+
+  it('preserves settings drafts and their guard when a status poll fails and recovers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const on = settingsWith({ metadata: { ...base.metadata, report_unknown: true } });
+    let reads = 0;
+    let fail = true;
+    mockFetch(
+      routes({
+        'GET /admin/settings': () => (++reads > 1 && fail ? 'network-error' : { body: on }),
+      }),
+    );
+    const { router } = renderApp('/server?topic=metadata');
+    const user = userEvent.setup();
+    const address = await screen.findByRole('textbox', { name: 'Service address' });
+    await user.clear(address);
+    await user.type(address, 'https://metadata.example.com');
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    await screen.findByText("Settings couldn't load");
+    expect(screen.getByRole('textbox', { name: 'Service address' })).toHaveValue(
+      'https://metadata.example.com',
+    );
+    expect(router.history._getBlockers()).toHaveLength(1);
+    fail = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() =>
+      expect(screen.queryByText("Settings couldn't load")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('textbox', { name: 'Service address' })).toHaveValue(
+      'https://metadata.example.com',
+    );
+    expect(router.history._getBlockers()).toHaveLength(1);
+  });
+
+  it('clears the draft guard when a successful save normalizes to the existing value', async () => {
+    const base = settingsWith();
+    mockFetch(routes({ 'PATCH /admin/settings': { body: base } }));
+    const { router } = renderApp('/server');
+    const user = userEvent.setup();
+    const name = await screen.findByRole('textbox', { name: 'Server name' });
+    await user.type(name, '   ');
+    await user.click(
+      within(name.closest('section')!).getByRole('button', { name: 'Save changes' }),
+    );
+    await screen.findByText('Server details saved');
+    await waitFor(() => expect(router.history._getBlockers()).toHaveLength(0));
+    expect(name).toHaveValue('');
+    await user.click(screen.getByRole('link', { name: 'Network & HTTPS' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'network' }));
+  });
+
   it('stops report polling when reporting or metadata is switched off', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const base = settingsWith();

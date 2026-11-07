@@ -460,6 +460,9 @@ function ReviewDialog({
   if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
   const effectivePicks = picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
   const count = applyCount(run, effectivePicks);
+  // Finish an empty refresh through the existing apply endpoint with every
+  // automatic item excluded, so another mode can be started afterwards.
+  const finishEmpty = run.mode === 'refresh' && autoReady && count === 0;
   const country = regionName(run.region, lang);
   const headings: Record<MatchRunMode, { title: string; description: string }> = {
     match: {
@@ -484,8 +487,10 @@ function ReviewDialog({
       await api.applyMatchRun(run.id, applyRequest(applyScope, effectivePicks));
       await qc.invalidateQueries({ queryKey: keys.matchRuns });
       toast.add({
-        title: t('health.bulkMatch.applyStarted'),
-        description: t('health.bulkMatch.applyStartedBody', counted(count, lang)),
+        title: t(finishEmpty ? 'common.done' : 'health.bulkMatch.applyStarted'),
+        description: finishEmpty
+          ? undefined
+          : t('health.bulkMatch.applyStartedBody', counted(count, lang)),
         type: 'success',
       });
       onOpenChange(false);
@@ -568,9 +573,12 @@ function ReviewDialog({
               <DialogClose render={<Button type="button" variant="ghost" />}>
                 {t('common.cancel')}
               </DialogClose>
-              <Button onClick={() => void apply()} disabled={busy || !autoReady || count === 0}>
+              <Button
+                onClick={() => void apply()}
+                disabled={busy || !autoReady || (count === 0 && !finishEmpty)}
+              >
                 {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                {t('health.bulkMatch.apply', counted(count, lang))}
+                {finishEmpty ? t('common.done') : t('health.bulkMatch.apply', counted(count, lang))}
               </Button>
             </DialogFooter>
             {byHand ? (
