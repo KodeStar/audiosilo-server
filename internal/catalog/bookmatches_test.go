@@ -33,7 +33,8 @@ func anchorOf(t *testing.T, c *Catalog, ctx context.Context, libID int64, path s
 
 // TestAnchorWrittenWithTheEdit: a community edit records the match in its own
 // transaction (accepted by default, the run and admin kept), an edit with the
-// anchor alone works, and an empty work id removes it. An admin's own edit can't
+// anchor alone works, and an empty work id removes it (and the book's community
+// values: TestUnlinkClearsTheBooksCommunityMatch). An admin's own edit can't
 // record one, a bulk edit refuses one, and an id with control characters or
 // over the bound is refused, each changing nothing.
 func TestAnchorWrittenWithTheEdit(t *testing.T) {
@@ -86,7 +87,7 @@ func TestAnchorWrittenWithTheEdit(t *testing.T) {
 		t.Fatalf("a refused edit changed the anchor: %+v", a)
 	}
 
-	// An empty work id removes it, from any edit.
+	// An empty work id removes it, from any edit (TestUnlinkClearsTheBooksCommunityMatch).
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,6 +279,87 @@ func TestClearRebuildsAnAnchoredBook(t *testing.T) {
 	}
 	if b := mustBook(t, c, ctx, lib.ID, "A/Book"); b.Title != "Original Name" {
 		t.Fatalf("title = %q, want the scan's back", b.Title)
+	}
+}
+
+// TestUnlinkClearsTheBooksCommunityMatch: an edit with an empty work id (the
+// console's Unlink) takes back what the community match wrote for that one book,
+// as ClearCommunityMatches does for a library: its community values and cover go
+// and its effective metadata is rebuilt, so it is Not matched and the next run
+// asks about it again. An admin's own edit stays, as does every other book's
+// match, and the rest of the edit applies after the clear.
+func TestUnlinkClearsTheBooksCommunityMatch(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, p := range []string{"A/Book", "A/Other"} {
+		if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+			t.Fatal(err)
+		}
+		anchorBook(t, c, ctx, lib.ID, p, "the-work")
+		if err := c.SetCover(ctx, lib.ID, p, pngBytes, 0, SourceCommunity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Set: map[string]string{FieldNarrator: "My Reader"}}); err != nil {
+		t.Fatal(err)
+	}
+	unmatched := func() []string {
+		t.Helper()
+		books, err := c.UnmatchedBooks(ctx, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths []string
+		for _, b := range books {
+			paths = append(paths, b.RelPath)
+		}
+		return paths
+	}
+	if got := unmatched(); len(got) != 0 {
+		t.Fatalf("unmatched before = %v, want none", got)
+	}
+
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}}); err != nil {
+		t.Fatal(err)
+	}
+	b := mustBook(t, c, ctx, lib.ID, "A/Book")
+	if b.Title != "Original Name" || b.Narrator != "My Reader" {
+		t.Errorf("unlinked book = title %q narrator %q, want the scan's title and the admin's narrator", b.Title, b.Narrator)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Book"); a != (MatchAnchor{}) {
+		t.Errorf("anchor after the unlink = %+v, want none", a)
+	}
+	if _, err := c.Cover(ctx, lib.ID, "A/Book"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("community cover after the unlink = %v, want removed", err)
+	}
+	if titles := searchTitles(t, c, ctx, lib.ID, "Community"); !slices.Equal(titles, []string{"Community Title"}) {
+		t.Errorf("search for the community title = %v, want only the other book", titles)
+	}
+	if got := unmatched(); !slices.Equal(got, []string{"A/Book"}) {
+		t.Errorf("unmatched after the unlink = %v, want the unlinked book", got)
+	}
+	// The other book keeps its match.
+	if o := mustBook(t, c, ctx, lib.ID, "A/Other"); o.Title != "Community Title" {
+		t.Errorf("other book's title = %q", o.Title)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, "A/Other"); a.WorkID != "the-work" {
+		t.Errorf("other book's anchor = %+v", a)
+	}
+	if _, err := c.Cover(ctx, lib.ID, "A/Other"); err != nil {
+		t.Errorf("other book's cover = %v", err)
+	}
+
+	// With the rest of an edit: the clear first, then the edit's own value.
+	if err := c.EditBook(ctx, lib.ID, "A/Other", BookEdit{Match: &MatchAnchor{}, Set: map[string]string{FieldTitle: "Mine"}}); err != nil {
+		t.Fatal(err)
+	}
+	if o := mustBook(t, c, ctx, lib.ID, "A/Other"); o.Title != "Mine" {
+		t.Errorf("title after an unlink with an edit = %q, want the edit's", o.Title)
+	}
+	// Unlinking a book with nothing to clear is no error.
+	if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Match: &MatchAnchor{}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

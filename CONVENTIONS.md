@@ -1676,13 +1676,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   work_id, recording_id, how (auto|accepted), run_id, set_by, set_at`, PK `(library_id, path)`, no FK to
   the index or the runs): the work (and recording) a book was matched to, whether or not the match gave
   it an ASIN or ISBN. Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
-  `MatchAnchor`; an empty work id removes it, from any edit; `EditBooks` refuses it): the match dialog's
+  `MatchAnchor`; `EditBooks` refuses it): the match dialog's
   accept (`PATCH .../book` `match: {work_id, recording_id}` with the ticked fields, or alone for a book
   with no ASIN or ISBN whose pick isn't its recorded match; the dialog starts from the recorded match
-  when the search lists it; how `accepted`; `{"work_id": ""}` is the book aside's Unlink, whose toast
-  offers Undo; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
+  when the search lists it; how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
-  `accepted` for an included review item, a refresh's heal keeping the book's). A store listing the
+  `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
+  (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book:
+  `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
+  rest of the edit), so its community values and cover go with the row and the next run asks about it
+  again (removing only the row would leave the values to match it to the same work); an admin's own
+  edits and uploads stay. No Undo: the cleared values aren't kept. A store listing the
   community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire

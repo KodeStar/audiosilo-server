@@ -2,23 +2,14 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import {
-  ExternalLink,
-  Headphones,
-  LibraryBig,
-  LoaderCircle,
-  Plus,
-  Share2,
-  Sparkles,
-  Unlink,
-} from 'lucide-react';
+import { ExternalLink, Headphones, LibraryBig, Plus, Share2, Sparkles, Unlink } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBookDetail, BookMatch, BookShare } from '@/api/types';
+import type { AdminBookDetail, BookShare } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { toastError } from '@/lib/errors';
 import { formatNumber, formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -147,39 +138,13 @@ function CommunityCard({
   const work = !asin && !isbn ? detail.community_match : undefined;
 
   const b = detail.book;
-  // Unlink's Undo: the same work and recording again, recorded as accepted whoever
-  // made the match (the API records every hand match so).
-  const relink = async (before: BookMatch) => {
-    try {
-      settleBookEdit(
-        qc,
-        await api.editBook(b.library_id, b.path, {
-          source: 'community',
-          match: { work_id: before.work_id, recording_id: before.recording_id ?? '' },
-        }),
-      );
-      invalidateIssues(qc);
-      toast.add({ title: t('book.community.relinked'), type: 'success' });
-    } catch (err) {
-      toastError(t('book.community.relinkFailed'), err);
-    }
-  };
-
-  const unlink = async (before: BookMatch) => {
-    setUnlinking(true);
-    try {
-      settleBookEdit(qc, await api.editBook(b.library_id, b.path, { match: { work_id: '' } }));
-      invalidateIssues(qc);
-      toast.add({
-        title: t('book.community.unlinked'),
-        type: 'success',
-        actionProps: { children: t('book.revert.undo'), onClick: () => void relink(before) },
-      });
-    } catch (err) {
-      toastError(t('book.community.unlinkFailed'), err);
-    } finally {
-      setUnlinking(false);
-    }
+  // Unlink takes back everything the match wrote (the community values and
+  // cover, not only the record of it), so it asks first: there is no undo, and
+  // the dialog shows a failure itself.
+  const unlink = async () => {
+    settleBookEdit(qc, await api.editBook(b.library_id, b.path, { match: { work_id: '' } }));
+    invalidateIssues(qc);
+    toast.add({ title: t('book.community.unlinked'), type: 'success' });
   };
 
   if (server.data && !server.data.capabilities.metadata) {
@@ -273,18 +238,23 @@ function CommunityCard({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void unlink(work)}
-                disabled={matchBlocked || unlinking}
+                onClick={() => setUnlinking(true)}
+                disabled={matchBlocked}
               >
-                {unlinking ? (
-                  <LoaderCircle className="animate-spin" aria-hidden="true" />
-                ) : (
-                  <Unlink aria-hidden="true" />
-                )}
+                <Unlink aria-hidden="true" />
                 {t('book.community.unlink')}
               </Button>
             ) : null}
           </div>
+          <ConfirmDialog
+            open={unlinking}
+            onOpenChange={setUnlinking}
+            icon={Unlink}
+            title={t('book.community.unlinkTitle')}
+            description={t('book.community.unlinkBody')}
+            confirmLabel={t('book.community.unlink')}
+            onConfirm={unlink}
+          />
         </>
       ) : (
         <>

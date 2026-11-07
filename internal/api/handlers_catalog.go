@@ -303,8 +303,9 @@ type editRequest struct {
 	// Match records the community match the edit was taken from (the match
 	// dialog's accept, with source "community"): the work and recording, with
 	// or without an ASIN or ISBN (catalog.BookEdit.Match, made "accepted").
-	// {"work_id": ""} removes the book's recorded match. One book at a time: a
-	// bulk edit refuses it.
+	// {"work_id": ""} unlinks the book: its recorded match goes with every
+	// community value and cover (the admin's own edits stay), as a clear does
+	// for a library. One book at a time: a bulk edit refuses it.
 	Match *matchRequest `json:"match"`
 }
 

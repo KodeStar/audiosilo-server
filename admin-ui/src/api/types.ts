@@ -1897,7 +1897,8 @@ export interface BookEditRequest {
   /**
    * The community match the values were accepted from (with source "community"),
    * recorded as the book's match even with no ASIN or ISBN; `{work_id: ""}`
-   * removes it. One book at a time: a bulk edit refuses it.
+   * unlinks the book: the match goes with every community value and cover (the
+   * admin's own edits stay). One book at a time: a bulk edit refuses it.
    */
   match?: { work_id: string; recording_id?: string };
 }

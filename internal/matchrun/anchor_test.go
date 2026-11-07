@@ -189,6 +189,18 @@ func TestRunAppliesAStoreListing(t *testing.T) {
 	if next := e.start(t, catalog.MatchModeMatch, ""); next.Total != 0 {
 		t.Errorf("next run total = %d, want 0", next.Total)
 	}
+	// Unlinked (the console's Unlink), the book is unmatched again: the next run
+	// asks about it, and may well find the same work.
+	if err := e.cat.EditBook(ctx, e.lib, "A/Fits", catalog.BookEdit{Match: &catalog.MatchAnchor{}}); err != nil {
+		t.Fatal(err)
+	}
+	again := e.start(t, catalog.MatchModeMatch, "")
+	if again.Total != 1 {
+		t.Errorf("run after the unlink total = %d, want 1", again.Total)
+	}
+	if auto := e.items(t, again, catalog.OutcomeAuto); len(auto) != 1 || auto[0].Path != "A/Fits" || !auto[0].Changes[ScopeIDs].Match {
+		t.Errorf("run after the unlink = %+v, want the work proposed again", auto)
+	}
 }
 
 // TestApplyLeavesABookAnchoredSince: a run's book matched since by a store

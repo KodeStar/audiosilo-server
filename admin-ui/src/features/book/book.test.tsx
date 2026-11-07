@@ -496,7 +496,7 @@ describe('a book matched to a store listing (server#320)', () => {
     return detail;
   }
 
-  it('shows the community work, how it was matched, and unlinks it', async () => {
+  it('shows the community work, how it was matched, and unlinks it after a confirm', async () => {
     const detail = listingDetail('auto');
     const unlinked = structuredClone(detail);
     unlinked.book.matched = false;
@@ -511,37 +511,46 @@ describe('a book matched to a store listing (server#320)', () => {
     expect(
       screen.getByText(/No ASIN or ISBN: matched to its store listing by a bulk match/),
     ).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Unlink' }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    // It asks first, saying the community values go too and there is no undo.
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    expect(within(dialog).getByText(/community’s values and cover/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/There is no undo/)).toBeInTheDocument();
+    expect(patches(calls)).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     await waitFor(() => expect(patches(calls)).toHaveLength(1));
     expect(patches(calls)[0].body).toEqual({ match: { work_id: '' } });
     expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
+    expect(await screen.findByText('Not matched')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 
-  it('undoes an unlink from its toast, sending the match back', async () => {
-    const detail = listingDetail('auto');
-    const unlinked = structuredClone(detail);
-    unlinked.book.matched = false;
-    delete unlinked.community_match;
-    const calls = mockFetch(
-      routes(detail, {
-        // The unlink answers the book unmatched; the undo, matched again.
-        'PATCH /admin/libraries/1/book': (req) => ({
-          body: (req.body as BookEditRequest).match?.work_id ? detail : unlinked,
-        }),
+  it('sends nothing when the unlink is cancelled', async () => {
+    const calls = mockFetch(routes(listingDetail('auto')));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(patches(calls)).toHaveLength(0);
+    expect(screen.getByText('Matched')).toBeInTheDocument();
+  });
+
+  it('keeps the confirm open with the reason when the unlink fails', async () => {
+    mockFetch(
+      routes(listingDetail('auto'), {
+        'PATCH /admin/libraries/1/book': { status: 500, body: { error: 'database locked' } },
       }),
     );
     renderApp(URL);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Unlink' }));
-    expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Undo' }));
-    expect(await screen.findByText('Linked to the community work again')).toBeInTheDocument();
-    // The same work and recording (recorded as accepted: the API records a hand match so).
-    expect(patches(calls).map((c) => c.body)).toEqual([
-      { match: { work_id: '' } },
-      { source: 'community', match: { work_id: 'a-guild-book', recording_id: 'r1' } },
-    ]);
-    expect(await screen.findByRole('button', { name: 'Unlink' })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByText(/database locked/)).toBeInTheDocument();
+    expect(screen.getByText('Matched')).toBeInTheDocument();
   });
 
   it('says an accepted match was accepted', async () => {

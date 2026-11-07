@@ -23,7 +23,8 @@ const maxMatchID = 200
 // MatchAnchor is a book's community match as an edit writes it (BookEdit.Match):
 // the community work, the recording (may be "") and how it was made (MatchHowAuto
 // or MatchHowAccepted, "" for accepted), with the match run that applied it (0 for
-// none). An empty WorkID removes the book's anchor. Only a community edit sets one.
+// none). An empty WorkID unlinks the book (BookEdit.Match). Only a community edit
+// sets one.
 type MatchAnchor struct {
 	WorkID      string
 	RecordingID string
@@ -73,13 +74,9 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	return &out, nil
 }
 
-// writeAnchor stores (or, for an empty WorkID, removes) the book's anchor at ref
-// in the edit's transaction.
+// writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is
+// clearCommunity's) in the edit's transaction.
 func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a *MatchAnchor, editor any, now string) error {
-	if a.WorkID == "" {
-		_, err := tx.ExecContext(ctx, `DELETE FROM book_matches WHERE library_id = ? AND path = ?`, ref.LibraryID, ref.Path)
-		return err
-	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at)
 		 VALUES(?,?,?,?,?,?,?,?)

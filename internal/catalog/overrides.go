@@ -783,8 +783,11 @@ type BookEdit struct {
 	ChapterSource string
 	// Match records the book's community match (book_matches, migration 0069)
 	// with the edit, in its transaction: the work it is, matched or not by an
-	// ASIN or ISBN. Setting one takes Source community; an empty WorkID removes
-	// it. nil changes nothing. One book at a time (EditBooks refuses it).
+	// ASIN or ISBN. Setting one takes Source community. An empty WorkID unlinks
+	// the book: its community values, cover and recorded match go, as
+	// ClearCommunityMatches does for a library (an admin's own edits stay),
+	// before the rest of the edit applies. nil changes nothing. One book at a
+	// time (EditBooks refuses it).
 	Match  *MatchAnchor
 	Source string
 	UserID int64
@@ -940,7 +943,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if len(swapRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert)
 	}
-	if edit.Match != nil {
+	switch {
+	case edit.Match == nil:
+	case edit.Match.WorkID == "":
+		// An unlink takes back everything the community match wrote, not just
+		// the record of it: left behind, its values would match the book to
+		// the same work again on the next run. Before the edit's own changes,
+		// so those still apply.
+		if _, _, err := clearCommunity(ctx, tx, `library_id = ?1 AND path = ?2`, ref.LibraryID, path); err != nil {
+			return err
+		}
+	default:
 		if err := writeAnchor(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.Match, editor, now); err != nil {
 			return err
 		}

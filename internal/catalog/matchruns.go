@@ -518,51 +518,11 @@ type ClearedMatches struct {
 func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*ClearedMatches, error) {
 	var out ClearedMatches
 	err := c.db.WithTx(ctx, "ClearCommunityMatches", func(tx *sql.Tx) error {
-		scanRef := func(r *sql.Rows, ref *Ref) error { return r.Scan(&ref.LibraryID, &ref.Path) }
-		fields, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_overrides
-		     WHERE source = 'community' AND (?1 = 0 OR library_id = ?1) RETURNING library_id, path`, libraryID)
+		books, covers, err := clearCommunity(ctx, tx, `(?1 = 0 OR library_id = ?1)`, libraryID)
 		if err != nil {
 			return err
 		}
-		// 'community' written out (SourceCommunity), as the covers' partial index,
-		// which lists them without reading an image, can't match a bound value.
-		covers, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_covers
-		     WHERE source = 'community' AND (?1 = 0 OR library_id = ?1) RETURNING library_id, path`, libraryID)
-		if err != nil {
-			return err
-		}
-		anchors, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_matches
-		     WHERE ?1 = 0 OR library_id = ?1 RETURNING library_id, path`, libraryID)
-		if err != nil {
-			return err
-		}
-		books := map[Ref]bool{}
-		for _, ref := range fields {
-			if books[ref] {
-				continue // one row per field
-			}
-			books[ref] = true
-			id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
-			if errors.Is(err, ErrNotFound) {
-				continue // not indexed now: nothing to rebuild
-			}
-			if err != nil {
-				return err
-			}
-			if err := refreshEffective(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-		for _, ref := range covers {
-			books[ref] = true
-			if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
-				return err
-			}
-		}
-		for _, ref := range anchors {
-			books[ref] = true // the row is all there is: nothing to rebuild
-		}
-		out.Books, out.Covers = len(books), len(covers)
+		out.Books, out.Covers = books, covers
 
 		// The runs: every one (their items cascade), or this library's and its
 		// books' items in the runs over every library.
@@ -589,4 +549,58 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 		c.changed() // the books' identifiers may now be their tags' or enrichment's
 	}
 	return &out, nil
+}
+
+// clearCommunity removes the community overrides, covers and recorded matches
+// (book_matches) of the books where picks (a clause over library_id and path,
+// with args), keeping an admin's own edits and uploads, and rebuilds each such
+// indexed book's effective metadata and cover art, in tx. It returns how many
+// books had any and how many community covers went: ClearCommunityMatches for a
+// library, an unlink (BookEdit.Match with no work) for one book.
+func clearCommunity(ctx context.Context, tx *sql.Tx, where string, args ...any) (books, covers int, err error) {
+	scanRef := func(r *sql.Rows, ref *Ref) error { return r.Scan(&ref.LibraryID, &ref.Path) }
+	fields, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_overrides
+	     WHERE source = 'community' AND `+where+` RETURNING library_id, path`, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	// 'community' written out (SourceCommunity), as the covers' partial index,
+	// which lists them without reading an image, can't match a bound value.
+	coverRefs, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_covers
+	     WHERE source = 'community' AND `+where+` RETURNING library_id, path`, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	anchors, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_matches
+	     WHERE `+where+` RETURNING library_id, path`, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	touched := map[Ref]bool{}
+	for _, ref := range fields {
+		if touched[ref] {
+			continue // one row per field
+		}
+		touched[ref] = true
+		id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
+		if errors.Is(err, ErrNotFound) {
+			continue // not indexed now: nothing to rebuild
+		}
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := refreshEffective(ctx, tx, id); err != nil {
+			return 0, 0, err
+		}
+	}
+	for _, ref := range coverRefs {
+		touched[ref] = true
+		if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
+			return 0, 0, err
+		}
+	}
+	for _, ref := range anchors {
+		touched[ref] = true // the row is all there is: nothing to rebuild
+	}
+	return len(touched), len(coverRefs), nil
 }
