@@ -172,9 +172,16 @@ export function defaultTicks(rows: CompareRow[]): Set<OverrideField> {
  * series, isn't taken. The offered series isn't added as another either: a
  * series the community doesn't list is most likely the offered one spelled the
  * book's own way. Unticking only a respelling of the book's own series changes
- * nothing.
+ * nothing. The work and recording accepted go with it (`match`): the server
+ * records them as the book's match, which is what makes a book the community holds
+ * with no ASIN or ISBN (a store listing) matched.
  */
-export function acceptRequest(rows: CompareRow[], ticks: Set<OverrideField>): BookEditRequest {
+export function acceptRequest(
+  rows: CompareRow[],
+  ticks: Set<OverrideField>,
+  candidate: MatchCandidate,
+  recording: MatchRecording | undefined,
+): BookEditRequest {
   const set: Partial<Record<OverrideField, string>> = {};
   for (const r of rows) if (r.offered && ticks.has(r.field)) set[r.field] = r.theirs;
   const row = (f: OverrideField) => rows.find((r) => r.field === f);
@@ -186,7 +193,11 @@ export function acceptRequest(rows: CompareRow[], ticks: Set<OverrideField>): Bo
   ) {
     delete set.series_index;
   }
-  return { set, source: 'community' };
+  return {
+    set,
+    source: 'community',
+    match: { work_id: candidate.work_id, recording_id: recording?.id ?? '' },
+  };
 }
 
 export type LengthCompare =

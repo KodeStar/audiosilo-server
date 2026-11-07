@@ -14,6 +14,7 @@ import {
   type OverrideField,
   type PairToken,
 } from '@/api/types';
+import { hasIdentifier } from '@/features/library/series/series-model';
 import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
 import type { Phrase } from '@/lib/phrase';
@@ -410,6 +411,15 @@ export interface CommunityState {
 }
 
 /**
+ * Whether the community chapter check can look a book up: by its ASIN or ISBN
+ * (meta.RecordingChapters). A book matched to a store listing has neither, matched
+ * as it is (`book.matched`), so it has nothing to check.
+ */
+export function canCheckChapters(d: Pick<AdminBookDetail, 'book'>): boolean {
+  return hasIdentifier(d.book);
+}
+
+/**
  * The community chapters of a book page, in words (null when there is nothing to
  * say: a book with no ASIN or ISBN is never checked). Durations are formatted by
  * the caller's `duration`.
@@ -420,7 +430,7 @@ export function communityState(
 ): CommunityState | null {
   const cc = d.community_chapters;
   if (!cc) {
-    return d.book.matched
+    return canCheckChapters(d)
       ? { line: { key: 'book.community.unchecked' }, titles: [], notes: [] }
       : null;
   }

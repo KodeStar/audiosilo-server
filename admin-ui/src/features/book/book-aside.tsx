@@ -1,12 +1,17 @@
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Headphones, LibraryBig, Plus, Share2, Sparkles } from 'lucide-react';
-import { useLibraries, useServerInfo } from '@/api/hooks';
+import { ExternalLink, Headphones, LibraryBig, Plus, Share2, Sparkles, Unlink } from 'lucide-react';
+import { api } from '@/api/client';
+import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, BookShare } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatNumber, formatPercent, formatRelative, progressFraction } from '@/lib/format';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { DescribeSection } from '@/features/bridge/describe-section';
 import { GenerateSection } from '@/features/bridge/generate-section';
@@ -120,11 +125,27 @@ function CommunityCard({
   matchBlocked: boolean;
   onMatch: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const qc = useQueryClient();
   const server = useServerInfo();
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
   const matched = detail.book.matched;
+  // A book matched to a store listing has no ASIN or ISBN: its recorded community
+  // work is what it is matched by, shown with how and when, and can be unlinked.
+  const work = !asin && !isbn ? detail.community_match : undefined;
+
+  const b = detail.book;
+  // Unlink takes back everything the match wrote (the community values and
+  // cover, not only the record of it), so it asks first: there is no undo, and
+  // the dialog shows a failure itself.
+  const unlink = async () => {
+    settleBookEdit(qc, await api.editBook(b.library_id, b.path, { match: { work_id: '' } }));
+    invalidateIssues(qc);
+    toast.add({ title: t('book.community.unlinked'), type: 'success' });
+  };
 
   if (server.data && !server.data.capabilities.metadata) {
     return (
@@ -181,11 +202,49 @@ function CommunityCard({
                 <dd className="font-mono font-[550] [overflow-wrap:anywhere]">{isbn}</dd>
               </>
             ) : null}
+            {work ? (
+              <>
+                <dt className="text-muted-foreground">{t('book.community.work')}</dt>
+                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">
+                  {work.web_url ? (
+                    <a
+                      href={work.web_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-brand-ink hover:underline"
+                    >
+                      {work.work_id}
+                      <ExternalLink className="size-3.5" aria-hidden="true" />
+                    </a>
+                  ) : (
+                    work.work_id
+                  )}
+                </dd>
+              </>
+            ) : null}
           </dl>
-          <div>
+          {work ? (
+            <p className="text-[12.5px] text-muted-foreground">
+              {t(work.how === 'auto' ? 'book.community.howAuto' : 'book.community.howAccepted', {
+                time: formatRelative(work.matched_at, lang),
+              })}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={onMatch} disabled={matchBlocked}>
               {t('book.community.compare')}
             </Button>
+            {work ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmUnlink(true)}
+                disabled={matchBlocked}
+              >
+                <Unlink aria-hidden="true" />
+                {t('book.community.unlink')}
+              </Button>
+            ) : null}
           </div>
         </>
       ) : (
@@ -199,6 +258,17 @@ function CommunityCard({
           </div>
         </>
       )}
+      {/* Outside the matched branch: the unlink's answer turns the card unmatched
+          while the dialog is still closing. */}
+      <ConfirmDialog
+        open={confirmUnlink}
+        onOpenChange={setConfirmUnlink}
+        icon={Unlink}
+        title={t('book.community.unlinkTitle')}
+        description={t('book.community.unlinkBody')}
+        confirmLabel={t('book.community.unlink')}
+        onConfirm={unlink}
+      />
       {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
       <GenerateSection book={detail.book} />
       <ShareSection book={detail.book} />

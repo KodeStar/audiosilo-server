@@ -781,8 +781,16 @@ type BookEdit struct {
 	// ChaptersFromCommunity, or ChapterSourceAuto to leave it to the default;
 	// "" changes nothing.
 	ChapterSource string
-	Source        string
-	UserID        int64
+	// Match records the book's community match (book_matches, migration 0069)
+	// with the edit, in its transaction: the work it is, matched or not by an
+	// ASIN or ISBN. Setting one takes Source community. An empty WorkID unlinks
+	// the book: its community values, cover and recorded match go, as
+	// ClearCommunityMatches does for a library (an admin's own edits stay),
+	// before the rest of the edit applies. nil changes nothing. One book at a
+	// time (EditBooks refuses it).
+	Match  *MatchAnchor
+	Source string
+	UserID int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -845,7 +853,11 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	if err != nil {
 		return e, err
 	}
-	e.Set, e.ChapterSet, e.Add, e.Remove = set, chSet, add, remove
+	anchor, err := normalizeAnchor(e.Match, e.Source)
+	if err != nil {
+		return e, err
+	}
+	e.Set, e.ChapterSet, e.Add, e.Remove, e.Match = set, chSet, add, remove, anchor
 	return e, nil
 }
 
@@ -874,6 +886,9 @@ func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, ed
 func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) error {
 	if len(edit.ChapterSet) > 0 || len(edit.ChapterRevert) > 0 {
 		return invalid("chapters", "chapter titles can only be edited one book at a time")
+	}
+	if edit.Match != nil {
+		return invalid("match", "a community match is recorded one book at a time")
 	}
 	edit, err := edit.normalize()
 	if err != nil {
@@ -908,6 +923,22 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		return err
 	}
 	editor := nullableID(edit.UserID)
+	at := Ref{LibraryID: ref.LibraryID, Path: path}
+	switch {
+	case edit.Match == nil:
+	case edit.Match.WorkID == "":
+		// An unlink takes back everything the community match wrote, not just
+		// the record of it: left behind, its values would match the book to
+		// the same work again on the next run. First, so the rest of the edit
+		// (a series swap, labels) reads the unlinked book and still applies.
+		if _, _, err := clearCommunity(ctx, tx, oneBook(at)); err != nil {
+			return err
+		}
+	default:
+		if err := writeAnchor(ctx, tx, at, edit.Match, editor, now); err != nil {
+			return err
+		}
+	}
 	set, revert := edit.Set, edit.Revert
 	swapSet, swapRevert, err := seriesSwap(ctx, tx, bookID, edit)
 	if err != nil {
@@ -929,7 +960,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		revert = slices.Concat(edit.Revert, swapRevert)
 	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
-		return nil // nothing for this book (a bulk add of a tag it already has): its row stays as it is
+		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is
 	}
 	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,

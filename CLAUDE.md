@@ -125,7 +125,7 @@ internal/covercolors/ the background cover colour pass: Runner reads the colour 
 internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, released, missing), the daily job (Runner: Run/Kick/Wake, silent first-run baseline, book_released once per work via upcoming_announced) and List (GET /me/upcoming); ics.go: ICS (Track U3, pure: the list as the calendar feed); see Upcoming releases in CONVENTIONS.md
 internal/coverage/    the opt-in daily report of unknown Audible ASINs (LibraForge C3, metadata.report_unknown): Runner (Run/Wake/RunOnce: candidates from catalog.UnknownASINCandidates, meta.Service.KnownASIN lookups (only a 404 is unknown), the POST via meta.Service.ReportUnknownASINs, quiet week on not_offered); see Unknown ASIN report in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
-internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
+internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of matched books by their ASIN/ISBN, else their recorded community work), records each book's best candidate for review, and applies the admin's picks under a scope, recording the match (`book_matches`) with the fields (plan.go is the one statement of what each scope writes; Classify's E6 rule applies a store listing with no ASIN/ISBN unasked on firmer ground)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
@@ -311,7 +311,12 @@ CONVENTIONS.md). `0067` adds `books.tag_asin` / `tag_isbn` / `tag_language` /
 backfilled once like `released_checked`; see Admin catalog API (Tag identifiers are hints) in CONVENTIONS.md).
 LibraForge C3: `0068` adds `unknown_asin_reports` (`asin` PK, `checked_at`, `unknown`, `sent_at`: the
 unknown-ASIN report's memory, names no book or path, derived and disposable, user-state writes; the run
-status is `server_state('unknown_asin_report')`; see Unknown ASIN report in CONVENTIONS.md).
+status is `server_state('unknown_asin_report')`; see Unknown ASIN report in CONVENTIONS.md). LibraForge E6
+(server#320): `0069` adds `book_matches` (a book's recorded community match: work, recording, how
+`auto`|`accepted`, run, admin, time; durable, path-keyed, no FK to the index or the runs, written by a
+community edit's `BookEdit.Match`, moved and joined with the book, dropped by a clear): a store listing
+matched with no ASIN or ISBN is matched by it (`catalog.matchedExpr`; see Admin catalog API (Bulk
+matching, Recorded community match) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

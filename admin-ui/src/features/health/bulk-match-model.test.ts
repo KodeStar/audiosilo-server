@@ -6,6 +6,7 @@ import {
   leaveOutStale,
   applyRequest,
   bulkPhase,
+  changeParts,
   isChosen,
   isPickable,
   leaveOut,
@@ -212,5 +213,27 @@ describe('regions', () => {
     const options = regionOptions('en');
     expect(options).toHaveLength(11);
     expect(options[1]).toEqual({ value: 'uk', label: 'United Kingdom (audible.co.uk)' });
+  });
+});
+
+describe('changeParts', () => {
+  it('lists the community match when it is what matches the book', () => {
+    // A store listing under ids: no identifier to write, the match alone.
+    expect(changeParts({ fields: [], cover: false, match: true })).toEqual([{ kind: 'match' }]);
+    // A refresh healing a merged work, with fields.
+    expect(changeParts({ fields: ['title'], cover: true, match: true })).toEqual([
+      { kind: 'cover' },
+      { kind: 'field', field: 'title' },
+      { kind: 'match' },
+    ]);
+  });
+
+  it('leaves it implied beside an ASIN or ISBN, and lists nothing for no change', () => {
+    expect(changeParts({ fields: ['asin', 'isbn'], cover: false, match: true })).toEqual([
+      { kind: 'field', field: 'asin' },
+      { kind: 'field', field: 'isbn' },
+    ]);
+    expect(changeParts({ fields: [], cover: false })).toEqual([]);
+    expect(changeParts(undefined)).toEqual([]);
   });
 });
