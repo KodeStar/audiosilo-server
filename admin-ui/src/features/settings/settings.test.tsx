@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys, REPORT_STATUS_POLL_MS } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { mirrorStatus, mirrorSystem, settingsWith, systemStatus } from '@/test/fixtures';
@@ -17,8 +18,146 @@ function routes(over: Record<string, MockRoute> = {}) {
 }
 
 beforeEach(() => setToken('stored'));
+afterEach(() => vi.useRealTimers());
 
 describe('settings', () => {
+  it.each([
+    '/server?topic=audible',
+    '/server/settings?topic=audible',
+    '/server?topic=unknown',
+    '/server?topic=',
+    '/server?topic=general',
+  ])('replaces an unavailable topic with the General URL: %s', async (path) => {
+    mockFetch(routes());
+    const { router } = renderApp(path);
+    expect(await screen.findByRole('textbox', { name: 'Server name' })).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.href).toBe('/server'));
+    const nav = screen.getByRole('navigation', { name: 'Settings topics' });
+    expect(within(nav).getByRole('link', { name: 'General' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+  });
+
+  it('normalizes a module topic when its module is turned off', async () => {
+    const base = settingsWith();
+    mockFetch(
+      routes({
+        'GET /admin/settings': { body: settingsWith({ modules: { audible: true } }) },
+        'GET /admin/audible/accounts': { body: { accounts: [] } },
+        'GET /admin/audible/titles': { body: { titles: [], next: '' } },
+        'GET /admin/bridge': { body: { paired: false, kinds: [] } },
+      }),
+    );
+    const { router, queryClient } = renderApp('/server?topic=audible');
+    await screen.findByRole('heading', { name: 'Audible titles' });
+    act(() => queryClient.setQueryData(keys.settings, base));
+    await waitFor(() => expect(router.state.location.href).toBe('/server'));
+    expect(screen.getByRole('textbox', { name: 'Server name' })).toBeInTheDocument();
+  });
+
+  it('keeps a settings draft on Cancel and discards it when leaving', async () => {
+    mockFetch(routes());
+    const { router } = renderApp('/server');
+    const user = userEvent.setup();
+    const name = await screen.findByRole('textbox', { name: 'Server name' });
+    await user.type(name, 'Hearthside');
+    // The browser's own unload prompt covers reload and closing the tab.
+    expect(router.history._getBlockers().some((b) => b.enableBeforeUnload === true)).toBe(true);
+    const network = screen.getByRole('link', { name: 'Network & HTTPS' });
+    await user.click(network);
+    let dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(name).toHaveValue('Hearthside');
+    expect(router.state.location.search).toEqual({});
+    await user.click(network);
+    dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Discard and leave' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'network' }));
+    await user.click(screen.getByRole('link', { name: 'General' }));
+    expect(await screen.findByRole('textbox', { name: 'Server name' })).toHaveValue('');
+  });
+
+  it('keeps one guard for multiple cards and clears it after reset and save', async () => {
+    const base = settingsWith();
+    mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    const { router } = renderApp('/server');
+    const user = userEvent.setup();
+    const name = await screen.findByRole('textbox', { name: 'Server name' });
+    const days = screen.getByRole('textbox', { name: 'Days to keep sessions' });
+    await user.type(name, 'Hearthside');
+    await user.clear(days);
+    await user.type(days, '90');
+    await user.click(within(name.closest('section')!).getByRole('button', { name: 'Reset' }));
+    await user.click(screen.getByRole('link', { name: 'Network & HTTPS' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await user.click(
+      within(days.closest('section')!).getByRole('button', { name: 'Save changes' }),
+    );
+    await screen.findByText('Listening history saved');
+    expect(router.history._getBlockers()).toHaveLength(0);
+    await user.click(screen.getByRole('link', { name: 'Network & HTTPS' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'network' }));
+    expect(screen.queryByRole('dialog', { name: 'Leave without saving?' })).not.toBeInTheDocument();
+  });
+
+  it('polls an enabled report until its delayed result arrives and stops on leaving the topic', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    let report = settingsWith({
+      metadata: {
+        ...base.metadata,
+        report_unknown: true,
+        report_status: { state: 'never', last_sent: 0 },
+      },
+    });
+    const calls = mockFetch(routes({ 'GET /admin/settings': () => ({ body: report }) }));
+    const { router, unmount } = renderApp('/server?topic=metadata');
+    expect(await screen.findByTestId('report-run')).toHaveTextContent('Not sent yet');
+    report = settingsWith({
+      metadata: {
+        ...report.metadata,
+        report_status: { state: 'ok', last_sent: 3, last_run_at: new Date().toISOString() },
+      },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    await waitFor(() =>
+      expect(screen.getByTestId('report-run')).toHaveTextContent('3 unknown ASINs sent'),
+    );
+    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    await act(() =>
+      router.navigate({ to: '/server/{-$section}', params: { section: undefined }, search: {} }),
+    );
+    const afterLeave = reads();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 2));
+    expect(reads()).toBe(afterLeave);
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS));
+    expect(reads()).toBe(afterLeave);
+  });
+
+  it('stops report polling when reporting or metadata is switched off', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const base = settingsWith();
+    const on = settingsWith({ metadata: { ...base.metadata, report_unknown: true } });
+    const calls = mockFetch(routes({ 'GET /admin/settings': { body: on } }));
+    const { queryClient } = renderApp('/server?topic=metadata');
+    await screen.findByTestId('report-run');
+    const reads = () => calls.filter((c) => c.path === '/admin/settings').length;
+    const before = reads();
+    for (const metadata of [
+      { ...on.metadata, report_unknown: false },
+      { ...on.metadata, enabled: false },
+    ]) {
+      act(() => queryClient.setQueryData(keys.settings, settingsWith({ metadata })));
+      await waitFor(() => expect(screen.queryByTestId('report-run')).not.toBeInTheDocument());
+      await act(() => vi.advanceTimersByTimeAsync(REPORT_STATUS_POLL_MS * 2));
+      expect(reads()).toBe(before);
+    }
+  });
+
   it('opens on General and moves between topics', async () => {
     mockFetch(routes());
     const { router } = renderApp('/server');
@@ -432,7 +571,7 @@ describe('settings', () => {
     [{ state: 'ok', last_sent: 0 }, 'Last checked 2 hr. ago: nothing new to send'],
     [
       { state: 'not_offered', last_sent: 0 },
-      "Last tried 2 hr. ago: the metadata service doesn't take reports (it needs an https address and a service that accepts them).",
+      'Last tried 2 hr. ago: the metadata service doesn’t take reports (it needs an https address and a service that accepts them). It is tried again about a week after that attempt. Switching this off and on does not reset the wait.',
     ],
     [{ state: 'failed', last_sent: 0 }, "Last report failed 2 hr. ago; it's tried again tomorrow."],
   ] as const)('says the report last ran %o', async (status, text) => {
@@ -474,6 +613,7 @@ describe('settings', () => {
     });
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    expect(toggle).toHaveAccessibleDescription(/Needs community metadata on/);
     expect(screen.queryByTestId('report-run')).not.toBeInTheDocument();
   });
 

@@ -337,10 +337,10 @@ describe('the read-along kind elsewhere', () => {
     });
     // A server that sends no coverage says nothing more.
     expect(describeEvent(ev({})).body).toBeUndefined();
-    // Made, not "ready": the player follows a read-along only from 3c-2 (S265-NOTIFY).
+    // Current players can follow the map; older players may not support it.
     expect(en['events.bridge_job_finished.readalong']).toBe('Read-along made for {{name}}');
     expect(en['events.bridge_job_finished.readalongCoverage']).toContain(
-      'once the player supports read-alongs',
+      'Open the book in a compatible AudioSilo player to follow the text with the narration.',
     );
   });
 });

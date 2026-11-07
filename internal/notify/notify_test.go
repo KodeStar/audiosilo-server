@@ -647,7 +647,7 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 		t.Fatalf("finished events = %+v", done)
 	}
 	if m := compose(done[0], s.server()); m.Title != "Read-along made: Loyalists (99% lined up)" ||
-		!strings.Contains(m.Text, "once the player supports read-alongs") {
+		m.Text != "It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration." {
 		t.Errorf("finished = %+v", m)
 	}
 	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)

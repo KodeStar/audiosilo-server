@@ -530,6 +530,52 @@ func TestUpcomingFeedEndsWithTheAccount(t *testing.T) {
 }
 
 // The Upcoming cover: only a cover the caller's own list hands out right now.
+func TestUpcomingCoverRevalidatesChangedURL(t *testing.T) {
+	t.Parallel()
+	u := newCalendarEnv(t)
+	oldImage, newImage := coverJPEG(t), testImage(t, 80, 80, false)
+	var fetches atomic.Int32
+	u.api.fetchCover = func(_ context.Context, raw string, _ int64) ([]byte, error) {
+		fetches.Add(1)
+		switch raw {
+		case "https://c/o3.jpg":
+			return oldImage, nil
+		case "https://c/o3-new.jpg":
+			return newImage, nil
+		default:
+			return nil, errors.New("unexpected cover URL")
+		}
+	}
+	tok := adminSession(t, u.testEnv)
+	path := upCoverPath + "?work=o3&size=160"
+	resp, body := u.do(t, "GET", path, tok, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "private, no-cache" || resp.Header.Get("ETag") == "" {
+		t.Fatalf("first cover = %d %v", resp.StatusCode, resp.Header)
+	}
+	etag := resp.Header.Get("ETag")
+	resp, cached := u.doHeaders(t, "GET", path, tok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusNotModified || resp.Header.Get("Cache-Control") != "private, no-cache" || resp.Header.Get("ETag") != etag || cached != "" {
+		t.Fatalf("unchanged cover = %d %v, body length %d", resp.StatusCode, resp.Header, len(cached))
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("unchanged cover fetched %d times, want 1", n)
+	}
+
+	// The work/size route stays the same; the next list refresh hands out new art.
+	u.series(t, u.lib.ID, "Other Series", "other", []catalog.MetaSeriesMember{
+		{WorkID: "o1", Position: "1", Title: "One"},
+		{WorkID: "o3", Position: "3", Title: "Secret Three", ReleaseDate: "2099-05-05", CoverURL: "https://c/o3-new.jpg"},
+	}, []catalog.UpcomingItem{{WorkID: "o3", Kind: catalog.UpcomingPreorder, ReleaseDate: "2099-05-05", Position: "3"}})
+	resp, changed := u.doHeaders(t, "GET", path, tok, "", map[string]string{"If-None-Match": etag})
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "private, no-cache" ||
+		resp.Header.Get("ETag") == "" || resp.Header.Get("ETag") == etag || changed == body {
+		t.Fatalf("changed cover = %d %v, same image %v", resp.StatusCode, resp.Header, changed == body)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Fatalf("changed cover fetched %d times, want 2", n)
+	}
+}
+
 func TestUpcomingCover(t *testing.T) {
 	t.Parallel()
 	u := newCalendarEnv(t)

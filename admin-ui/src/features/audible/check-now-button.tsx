@@ -7,14 +7,24 @@ export function CheckNowButton({
   busy,
   paused,
   onCheck,
+  blocked = false,
+  describedBy,
 }: {
   busy: boolean;
   paused: boolean;
   onCheck: () => void;
+  blocked?: boolean;
+  describedBy?: string;
 }) {
   const { t } = useTranslation();
   return (
-    <Button variant="outline" size="sm" disabled={busy || paused} onClick={onCheck}>
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={busy || paused || blocked}
+      aria-describedby={blocked ? describedBy : undefined}
+      onClick={onCheck}
+    >
       {busy ? (
         <LoaderCircle className="animate-spin" aria-hidden="true" />
       ) : (

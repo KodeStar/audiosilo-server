@@ -22,9 +22,13 @@ export function TitleActions({
   title: x,
   paused = false,
   backups,
+  blocked = false,
+  describedBy,
 }: {
   title: AudibleTitle;
   paused?: boolean;
+  blocked?: boolean;
+  describedBy?: string;
   backups: Backups;
 }) {
   const { t } = useTranslation();
@@ -37,7 +41,8 @@ export function TitleActions({
         <Button
           size="sm"
           variant="outline"
-          disabled={busy || paused}
+          disabled={busy || paused || blocked}
+          aria-describedby={blocked ? describedBy : undefined}
           onClick={() => void backups.backUp(x)}
         >
           {busy ? (

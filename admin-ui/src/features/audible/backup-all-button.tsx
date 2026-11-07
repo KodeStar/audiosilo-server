@@ -18,9 +18,13 @@ import type { Backups } from './use-audible';
 export function BackupAllButton({
   account,
   backups,
+  blocked = false,
+  describedBy,
 }: {
   account: AudibleAccount;
   backups: Backups;
+  blocked?: boolean;
+  describedBy?: string;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -32,7 +36,8 @@ export function BackupAllButton({
       <Button
         variant="outline"
         size="sm"
-        disabled={account.paused || est.count === 0}
+        disabled={account.paused || est.count === 0 || blocked}
+        aria-describedby={blocked ? describedBy : undefined}
         onClick={() => setConfirming(true)}
       >
         <CloudDownload aria-hidden="true" />

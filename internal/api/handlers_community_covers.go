@@ -393,7 +393,7 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such cover")
 		return
 	}
-	a.serveCommunityCover(w, r, rawURL, size)
+	a.serveCommunityCover(w, r, rawURL, size, coverCache)
 }
 
 // serveCommunityCover answers r with the community cover at rawURL as a size
@@ -402,8 +402,8 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 // cover_unavailable when the image can't be fetched (or failed less than
 // communityRetryAfter ago), 404 `no cover` when it is no usable image, or 200
 // image/jpeg.
-func (a *API) serveCommunityCover(w http.ResponseWriter, r *http.Request, rawURL string, size int) {
-	cond := conditional{etag: thumbETag("community", size, catalog.CoverVersion(rawURL)), cacheControl: coverCache}
+func (a *API) serveCommunityCover(w http.ResponseWriter, r *http.Request, rawURL string, size int, cacheControl string) {
+	cond := conditional{etag: thumbETag("community", size, catalog.CoverVersion(rawURL)), cacheControl: cacheControl}
 	if cond.notModified(w, r) {
 		return
 	}

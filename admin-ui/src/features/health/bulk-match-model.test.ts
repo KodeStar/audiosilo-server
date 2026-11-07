@@ -4,6 +4,8 @@ import {
   NO_PICKS,
   applyCount,
   leaveOutStale,
+  picksForScope,
+  hasCloseScore,
   applyRequest,
   bulkPhase,
   isChosen,
@@ -86,6 +88,37 @@ it('runFraction counts matching, then applying', () => {
 });
 
 describe('picks', () => {
+  it('derives refresh choices, counts and apply exclusions from the selected scope', () => {
+    const noChange = item({
+      id: 1,
+      changes: {
+        fill: { fields: [], cover: false },
+        overwrite: { fields: ['title'], cover: false },
+      },
+    });
+    const changed = item({ id: 2, changes: { fill: { fields: [], cover: true } } });
+    const review = item({ id: 3, outcome: 'review', changes: {} });
+    const picks = { exclude: new Set<number>(), include: new Set([3]) };
+    const fill = picksForScope(picks, [noChange, changed, review], 'refresh', 'fill');
+    expect(isPickable(noChange, 'refresh', 'fill')).toBe(false);
+    expect(isChosen(noChange, picks, 'refresh', 'fill')).toBe(false);
+    expect(isChosen(changed, picks, 'refresh', 'fill')).toBe(true);
+    expect(applyCount(run({}, { pending: 2 }), fill)).toBe(1);
+    expect(applyRequest('fill', fill)).toEqual({ scope: 'fill', exclude: [1], include: [] });
+    expect(isPickable(noChange, 'refresh', 'overwrite')).toBe(true);
+    expect(picksForScope(picks, [noChange], 'refresh', 'overwrite').exclude.size).toBe(0);
+    expect(isPickable(noChange, 'repick', 'ids')).toBe(true);
+    expect(isPickable(noChange, 'match', 'ids')).toBe(true);
+  });
+
+  it('passes over no-op refresh rows in a Shift-click range', () => {
+    const rows = [
+      item({ id: 1 }),
+      item({ id: 2, changes: { fill: { fields: ['title'], cover: false } } }),
+    ];
+    const next = togglePickRange(NO_PICKS, rows, 1, rows[1], new Set(), 'refresh', 'fill');
+    expect([...next.exclude]).toEqual([2]);
+  });
   const confident = item({ id: 1, outcome: 'auto' });
   const doubtful = item({ id: 2, outcome: 'review' });
   const none = item({ id: 3, outcome: 'none' });
@@ -144,6 +177,21 @@ describe('picks', () => {
     // One already applied isn't pending, so leaving it out doesn't lower the count.
     expect(leaveOut(NO_PICKS, item({ applied: 'applied' }))).toBe(NO_PICKS);
   });
+});
+
+it('explains only review scores closer than the classification lead without a stronger reason', () => {
+  expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90 }))).toBe(true);
+  for (const over of [
+    { outcome: 'auto' as const },
+    { runner_up: 84 },
+    { runner_up: 0 },
+    { detail: 'length_differs' },
+    { detail: 'dramatization_only' },
+  ]) {
+    expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90, ...over }))).toBe(
+      false,
+    );
+  }
 });
 
 describe('Shift-click ranges', () => {

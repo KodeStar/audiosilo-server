@@ -147,9 +147,14 @@ metadata:
 		t.Fatalf("before the download: %+v", sys.Metadata)
 	}
 	call(t, "POST", base+"/admin/meta/mirror/check", tok, "", http.StatusAccepted, nil)
-	waitFor(t, "the copy", func() bool {
+	// Ready means the copy can answer; NextCheckAt means the check has also
+	// finished saving state.json, so its temporary file is no longer in flight.
+	waitFor(t, "the copy and completed check", func() bool {
+		// A running check omits next_check_at; do not retain the previous poll's.
+		sys.Metadata.Mirror = nil
 		call(t, "GET", base+"/admin/system", tok, "", http.StatusOK, &sys)
-		return sys.Metadata.Mirror != nil && sys.Metadata.Mirror.State == metamirror.StateReady
+		return sys.Metadata.Mirror != nil && sys.Metadata.Mirror.State == metamirror.StateReady &&
+			!sys.Metadata.Mirror.NextCheckAt.IsZero()
 	})
 	if m := sys.Metadata.Mirror; m.Tag != "data-v2026.10.09-ccccccc-ddddddd" || m.Fallback || m.SizeBytes == 0 || m.Error != "" {
 		t.Fatalf("after the download: %+v", m)

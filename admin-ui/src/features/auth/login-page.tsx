@@ -55,6 +55,7 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
         <div className="rounded-xl border bg-card p-6 sm:p-8">
           <h1 className="text-[26px] font-bold tracking-[-0.03em]">{t('login.title')}</h1>
           <p className="mt-1.5 text-muted-foreground">{t('login.intro')}</p>
+          <p className="mt-3 text-[13px] text-muted-foreground">{t('login.setupHint')}</p>
           <form className="mt-6 flex flex-col gap-4" onSubmit={onSubmit} noValidate>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="login-username">{t('login.username')}</Label>
