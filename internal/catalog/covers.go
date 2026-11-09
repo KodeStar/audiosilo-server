@@ -75,8 +75,10 @@ func (c *Catalog) SetCoverIf(ctx context.Context, libraryID int64, path string, 
 		return ErrUnsupportedImage
 	}
 	path = CleanRelPath(path)
-	if _, err := bookIDByPath(ctx, c.db, libraryID, path); err != nil {
-		return err
+	if expect == nil { // else coverExpected finds the book in the transaction
+		if _, err := bookIDByPath(ctx, c.db, libraryID, path); err != nil {
+			return err
+		}
 	}
 	if err := c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
 		if expect != nil {
@@ -109,34 +111,29 @@ func (c *Catalog) CoverExpected(ctx context.Context, libraryID int64, path strin
 }
 
 // coverExpected is CoverExpected through q (the write's transaction for
-// SetCoverIf), path clean. The ASIN and ISBN are the book's resolved values, as
-// BookMatchState reads them, in stored form.
+// SetCoverIf), path clean. The ASIN and ISBN are the books row's, which
+// refreshEffective keeps equal to the resolved values BookMatchState reads, in
+// stored form.
 func coverExpected(ctx context.Context, q querier, libraryID int64, path string, want CoverExpect) error {
-	bookID, err := bookIDByPath(ctx, q, libraryID, path)
-	if err != nil {
-		return err
-	}
 	var (
-		custom          bool
-		work, recording string
+		custom                      bool
+		work, recording, asin, isbn string
 	)
-	if err := q.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM book_covers WHERE library_id = ?1 AND path = ?2),
-		        COALESCE((SELECT work_id FROM book_matches WHERE library_id = ?1 AND path = ?2), ''),
-		        COALESCE((SELECT recording_id FROM book_matches WHERE library_id = ?1 AND path = ?2), '')`,
-		libraryID, path).Scan(&custom, &work, &recording); err != nil {
-		return err
+	err := q.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM book_covers cv WHERE cv.library_id = b.library_id AND cv.path = b.rel_path),
+		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), b.asin, b.isbn
+		   FROM books b
+		   LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path
+		  WHERE b.library_id = ? AND b.rel_path = ?`,
+		libraryID, path).Scan(&custom, &work, &recording, &asin, &isbn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
 	}
-	if custom || work != want.WorkID || recording != want.RecordingID {
-		return ErrCoverSuperseded
-	}
-	l, err := loadLayers(ctx, q, bookID)
 	if err != nil {
 		return err
 	}
-	fields := l.resolve()
-	if CleanOverride(FieldASIN, fields[FieldASIN].Value) != want.ASIN ||
-		CleanOverride(FieldISBN, fields[FieldISBN].Value) != want.ISBN {
+	if custom || work != want.WorkID || recording != want.RecordingID ||
+		CleanOverride(FieldASIN, asin) != want.ASIN || CleanOverride(FieldISBN, isbn) != want.ISBN {
 		return ErrCoverSuperseded
 	}
 	return nil

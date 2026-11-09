@@ -141,7 +141,7 @@ func newUnlinkFixture(t *testing.T, mode string, runLib func(e *testEnv, libID i
 		t.Fatal(err)
 	}
 	f := &unlinkFixture{e: e, admin: admin, libID: libID, runID: id, path: path, release: unblock, runner: runner,
-		bookURL: "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book?path=" + escape(path)}
+		bookURL: fixtureBookURL(libID)}
 	if resp, body := e.do(t, "POST", f.runURL()+"/apply", admin, `{"scope":"fill"}`); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("apply = %d %s", resp.StatusCode, body)
 	}
@@ -274,16 +274,10 @@ func TestAdminUnlinkWhileMatching(t *testing.T) {
 	e, admin, _, libID := newMatchRunEnv(t, "us")
 	ctx := context.Background()
 	const path = unlinkFixturePath
-	if err := e.cat.EditBook(ctx, libID, path, catalog.BookEdit{
-		Set:   map[string]string{catalog.FieldNarrator: "Community Reader"},
-		Match: &catalog.MatchAnchor{WorkID: "the-martian"}, Source: catalog.SourceCommunity,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	url := matchedBookURL(t, e, libID)
 	if _, err := e.cat.StartMatchRun(ctx, catalog.MatchRun{Mode: catalog.MatchModeMatch, LibraryID: &libID}); err != nil {
 		t.Fatal(err)
 	}
-	url := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book?path=" + escape(path)
 	if resp, body := e.do(t, "PATCH", url, admin, `{"match":{"work_id":""}}`); resp.StatusCode != http.StatusOK || strings.Contains(body, `"community_match"`) {
 		t.Fatalf("unlink while a run matches = %d %s, want 200", resp.StatusCode, body)
 	}

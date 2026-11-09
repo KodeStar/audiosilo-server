@@ -272,42 +272,34 @@ func (c *Catalog) InterruptMatchRuns(ctx context.Context) error {
 // knows no worker is behind a run (matchrun.Runner, under its lock with no run
 // active, or keeping the active one).
 func (c *Catalog) SettleMatchRuns(ctx context.Context, keep int64) (int, error) {
-	return c.settleMatchRuns(ctx, "SettleMatchRuns", `id <> ?`, keep)
+	return c.settleMatchRuns(ctx, "SettleMatchRuns", keep, false)
 }
 
 // SettleMatchRun settles run id as SettleMatchRuns does, when it is still
 // marked working: false when it isn't (finished, or no such run).
 func (c *Catalog) SettleMatchRun(ctx context.Context, id int64) (bool, error) {
-	n, err := c.settleMatchRuns(ctx, "SettleMatchRun", `id = ?`, id)
+	n, err := c.settleMatchRuns(ctx, "SettleMatchRun", id, true)
 	return n > 0, err
 }
 
-// settleMatchRuns settles the working runs matching where (one id parameter).
+// settleMatchRuns settles the working run id when only, else every working
+// run but id.
 // An interrupted run's finished_at is when it started, unless it has one: when
 // it stopped is unknown.
-func (c *Catalog) settleMatchRuns(ctx context.Context, op, where string, id int64) (int, error) {
+func (c *Catalog) settleMatchRuns(ctx context.Context, op string, id int64, only bool) (int, error) {
 	var settled int64
 	err := c.db.WithTx(ctx, op, func(tx *sql.Tx) error {
-		settled = 0
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{`UPDATE match_runs SET status = ?, finished_at = COALESCE(finished_at, started_at)
-			   WHERE status = ? AND ` + where, []any{MatchInterrupted, MatchMatching, id}},
-			{`UPDATE match_runs SET status = ? WHERE status = ? AND ` + where, []any{MatchReady, MatchApplying, id}},
-		} {
-			res, err := tx.ExecContext(ctx, q.sql, q.args...)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			settled += n
+		res, err := tx.ExecContext(ctx,
+			`UPDATE match_runs
+			    SET status = CASE status WHEN ?1 THEN ?2 ELSE ?3 END,
+			        finished_at = CASE status WHEN ?1 THEN COALESCE(finished_at, started_at) ELSE finished_at END
+			  WHERE status IN (?1, ?4) AND (id = ?5) = ?6`,
+			MatchMatching, MatchInterrupted, MatchReady, MatchApplying, id, only)
+		if err != nil {
+			return err
 		}
-		return nil
+		settled, err = res.RowsAffected()
+		return err
 	})
 	if err != nil {
 		return 0, err

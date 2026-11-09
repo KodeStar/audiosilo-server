@@ -116,6 +116,19 @@ function Listeners({ detail }: { detail: AdminBookDetail }) {
   );
 }
 
+const idValue = 'font-mono font-[550] [overflow-wrap:anywhere]';
+
+/** One identifier row of the Community card's list, left out when empty. */
+function IdRow({ label, value }: { label: string; value?: string }) {
+  if (!value) return null;
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={idValue}>{value}</dd>
+    </>
+  );
+}
+
 /** The "how" line's key: with no ASIN or ISBN it says the store listing is
  * what the book is matched by. */
 function howKey(how: 'auto' | 'accepted', hasIdentifier: boolean) {
@@ -206,22 +219,12 @@ function CommunityCard({
       {matched ? (
         <>
           <dl className="grid grid-cols-[minmax(80px,auto)_1fr] gap-x-[18px] gap-y-2 text-[13px]">
-            {asin ? (
-              <>
-                <dt className="text-muted-foreground">{t('book.field.asin')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">{asin}</dd>
-              </>
-            ) : null}
-            {isbn ? (
-              <>
-                <dt className="text-muted-foreground">{t('book.field.isbn')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">{isbn}</dd>
-              </>
-            ) : null}
+            <IdRow label={t('book.field.asin')} value={asin} />
+            <IdRow label={t('book.field.isbn')} value={isbn} />
             {work ? (
               <>
                 <dt className="text-muted-foreground">{t('book.community.work')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">
+                <dd className={idValue}>
                   {work.web_url ? (
                     <a
                       href={work.web_url}
@@ -238,14 +241,7 @@ function CommunityCard({
                 </dd>
               </>
             ) : null}
-            {work?.recording_id ? (
-              <>
-                <dt className="text-muted-foreground">{t('book.community.recording')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">
-                  {work.recording_id}
-                </dd>
-              </>
-            ) : null}
+            <IdRow label={t('book.community.recording')} value={work?.recording_id} />
           </dl>
           {work ? (
             <p className="text-[12.5px] text-muted-foreground">

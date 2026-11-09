@@ -53,6 +53,11 @@ func matchedBookURL(t *testing.T, e *testEnv, libID int64) string {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return fixtureBookURL(libID)
+}
+
+// fixtureBookURL is the admin book URL of unlinkFixturePath in libID.
+func fixtureBookURL(libID int64) string {
 	return "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book?path=" + escape(unlinkFixturePath)
 }
 
@@ -133,7 +138,7 @@ func TestStuckApplyingRunIsReleased(t *testing.T) {
 			if s := runStatus(t, e, id); s != catalog.MatchApplying {
 				t.Fatalf("status after a failed finish = %s, want still applying", s)
 			}
-			url := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book?path=" + escape(unlinkFixturePath)
+			url := fixtureBookURL(libID)
 			// The row alone refuses the Unlink in the catalog.
 			if err := e.cat.EditBook(ctx, libID, unlinkFixturePath, catalog.BookEdit{Match: &catalog.MatchAnchor{}}); !errors.Is(err, catalog.ErrMatchRunBusy) {
 				t.Fatalf("catalog unlink beside a stuck apply = %v, want ErrMatchRunBusy", err)
