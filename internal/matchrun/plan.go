@@ -315,8 +315,8 @@ func joinNames(people []meta.MetaPersonRef) string {
 // Writes is what applying a match writes to a book: the fields to Set (as
 // community overrides), the community overrides to Revert (a series the community
 // wrote earlier and no longer lists for the book), whether to take the community
-// Cover, and the community match to record (Anchor, nil for none: its work and
-// recording; how and the run are the apply's).
+// Cover, and the community match to record (Anchor, nil for none: its work,
+// recording and offered identifiers; how and the run are the apply's).
 type Writes struct {
 	Set    map[string]string
 	Revert []string
@@ -523,8 +523,8 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // was made, or reverted it since (server#330). One the recording gained since
 // (another value) fills, and the match then records it as offered, so a revert
 // of that one stays too. A match recorded before 0070 offered none, so it fills
-// as before. A heal records the proposal's identifiers when it names any, else
-// keeps the match's.
+// as before. A heal, or a match recording a new identifier, records for each
+// identifier the proposal's when it names one, else keeps the match's.
 func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Plan(scope, st, p)
 	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
@@ -542,14 +542,15 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 	}
 	_, asin := w.Set[catalog.FieldASIN]
 	_, isbn := w.Set[catalog.FieldISBN]
-	offers := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
-	switch {
-	case w.Anchor == nil && (asin || isbn):
+	if w.Anchor == nil && (asin || isbn) {
 		// A new identifier for the book: the match records it as offered.
-		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID,
-			OfferedASIN: p.Values[catalog.FieldASIN], OfferedISBN: p.Values[catalog.FieldISBN]}
-	case w.Anchor != nil && !offers:
-		w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = st.Anchor.OfferedASIN, st.Anchor.OfferedISBN
+		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID}
+	}
+	if w.Anchor != nil {
+		// Each identifier the proposal names, else the one the match offered, so
+		// a proposal naming only one never forgets the other's rejection.
+		w.Anchor.OfferedASIN = cmp.Or(p.Values[catalog.FieldASIN], st.Anchor.OfferedASIN)
+		w.Anchor.OfferedISBN = cmp.Or(p.Values[catalog.FieldISBN], st.Anchor.OfferedISBN)
 	}
 	return w
 }

@@ -1843,7 +1843,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   identifier), so a revert of that one stays too. Written by `Plan` (the proposal's, written
   or not), the dialog's accept (`PATCH .../book` `match: {asin, isbn}`: the match's identifier
   whether a checkbox or already the book's; one the field would refuse is 400 on field `match`;
-  an Unlink ignores them) and a heal (the proposal's when it names any, else the match's own);
+  an Unlink ignores them) and a heal or a refresh's identifier fill (each identifier the
+  proposal's when it names one, else the match's own);
   copied by a join, moved with the book. No backfill: '' (a match recorded before 0070, or an
   accept from an older console) fills as before.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
@@ -1866,8 +1867,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
   before enabling Apply; the shown list keeps manual pagination. Gone items are still
   excluded, and an admin's own exclusion stays (counted once). With no picks, Done
-  finishes the run through an apply with only the admin's own exclusions, changing no
-  books. Apply waits only for the run list to refresh, not the loaded item pages.
+  finishes the run through an apply with only the admin's own exclusions: the server plans
+  each item again, so it changes no book unless one changed since the review read it (the
+  pages are not read again on focus). Apply waits only for the run list to refresh, not
+  the loaded item pages.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
   request-body limit (an older console still sends every unchanged book).
   `InterruptMatchRuns` (launcher, at

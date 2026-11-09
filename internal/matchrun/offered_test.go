@@ -3,6 +3,7 @@ package matchrun
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -92,6 +93,16 @@ func TestPlanRefreshLeavesTheOfferedIdentifier(t *testing.T) {
 	st.Fields[catalog.FieldASIN] = catalog.FieldValue{}
 	if w := planRefresh(ScopeFill, st, p); w.Anchor == nil || w.Anchor.OfferedASIN != asin || w.Anchor.OfferedISBN != isbn {
 		t.Errorf("heal by work: anchor = %+v, want the proposal's identifiers", w.Anchor)
+	}
+	// A proposal naming only one identifier keeps the other the match offered,
+	// so the recording regaining that one later never fills it back.
+	onlyASIN := p
+	onlyASIN.Values = maps.Clone(p.Values)
+	delete(onlyASIN.Values, catalog.FieldISBN)
+	st.Anchor.OfferedISBN = "9780000000002"
+	if w := planRefresh(ScopeFill, st, onlyASIN); w.Anchor == nil || w.Anchor.OfferedASIN != asin ||
+		w.Anchor.OfferedISBN != "9780000000002" {
+		t.Errorf("heal naming only an ASIN: anchor = %+v, want the match's offered ISBN kept", w.Anchor)
 	}
 
 	// A match run records what its proposal offers, written or not.

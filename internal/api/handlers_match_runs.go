@@ -185,8 +185,9 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // the include items, which may be ones that needed review) in the background,
 // under scope ids | fill | overwrite (a refresh run: fill | overwrite, keeping
 // existing identifiers). The server leaves out a refresh item with nothing to
-// change under the scope (still pending, not counted in apply_total), so a
-// client need not exclude each one (server#332). 202 with the run; 404 for a run that isn't there (or was
+// change under the scope (still pending; the run's apply_total drops it as the
+// apply passes it, while the 202's run and the audit's "books" count every item
+// taken), so a client need not exclude each one (server#332). 202 with the run; 404 for a run that isn't there (or was
 // cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
