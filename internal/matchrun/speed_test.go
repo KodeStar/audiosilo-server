@@ -221,7 +221,8 @@ func TestRunContinuesThrough503(t *testing.T) {
 	}
 }
 
-// A service that keeps answering 503 still stops the run, by the streak.
+// A service that keeps answering 503 still stops the run, by the streak: ready, with
+// the code saying it stopped early (server#306).
 func TestRunStopsOnPersistent503(t *testing.T) {
 	e := newEnv(t)
 	m := &speedMeta{answer: func(_ int32, w http.ResponseWriter) bool {
@@ -231,7 +232,7 @@ func TestRunStopsOnPersistent503(t *testing.T) {
 	}}
 	const books = 120
 	run := runOver(t, e, m.service(t), books)
-	if run.Status != catalog.MatchFailed || run.Error != ErrCodeUnavailable {
+	if run.Status != catalog.MatchReady || run.Error != ErrCodeUnavailable {
 		t.Fatalf("run = %+v", run)
 	}
 	if run.Done >= books {

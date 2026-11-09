@@ -97,7 +97,7 @@ type MatchRun struct {
 	ApplyTotal    int            `json:"apply_total"`
 	ApplyDone     int            `json:"apply_done"`
 	AppliedAt     *string        `json:"applied_at"`
-	Error         string         `json:"error,omitempty"`
+	Error         string         `json:"error,omitempty"` // matchrun's ErrCode*: a failed run's, or metadata_unavailable on a ready (or applied) run an outage stopped early
 	Counts        MatchRunCounts `json:"counts"`
 }
 

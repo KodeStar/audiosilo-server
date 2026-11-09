@@ -77,6 +77,7 @@ import {
   leaveOut,
   runFraction,
   runProgress,
+  stoppedEarly,
   togglePick,
   togglePickRange,
   withId,
@@ -175,6 +176,14 @@ export function BulkMatch() {
         ) : null
       ) : phase === 'ready' && run ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {stoppedEarly(run) ? (
+            <p role="status" className="w-full text-[12.5px] text-warning">
+              {t('health.bulkMatch.stoppedEarly', {
+                done: formatNumber(run.done, lang),
+                total: formatNumber(run.total, lang),
+              })}
+            </p>
+          ) : null}
           <Summary run={run} lang={lang} />
           <div className="ml-auto flex flex-wrap gap-2">
             <Button
@@ -311,14 +320,17 @@ function LastRun({ run, lang }: { run: MatchRun; lang: string }) {
     case 'ready': {
       const { applied, skipped, failed } = run.counts;
       // A ready run shown here has nothing left to apply; one that never applied
-      // anything found nothing (no candidates, or a repick with none to switch).
-      text =
-        run.status === 'ready' && applied + skipped + failed === 0
-          ? t('health.bulkMatch.last.nothing')
-          : t('health.bulkMatch.last.applied', {
-              ...counted(applied, lang),
-              when: formatRelative(run.applied_at ?? run.finished_at ?? run.started_at, lang),
-            });
+      // anything found nothing (no candidates, or a repick with none to switch), or
+      // was stopped early by the service before it answered any.
+      const none = run.status === 'ready' && applied + skipped + failed === 0;
+      const early = stoppedEarly(run);
+      text = none
+        ? t(early ? 'health.bulkMatch.last.stoppedEarly' : 'health.bulkMatch.last.nothing')
+        : t('health.bulkMatch.last.applied', {
+            ...counted(applied, lang),
+            when: formatRelative(run.applied_at ?? run.finished_at ?? run.started_at, lang),
+          });
+      if (early && !none) text += ` ${t('health.bulkMatch.last.stoppedEarlyMore')}`;
       break;
     }
     case 'failed':
@@ -876,6 +888,11 @@ function ItemRow({
               book: formatDuration(item.book.duration, lang),
               recording: formatDuration(p.runtime_min * 60, lang),
             })}
+          </span>
+        ) : null}
+        {candidate && item.detail === 'identifier_disagrees' ? (
+          <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.item.identifierDisagrees')}
           </span>
         ) : null}
         {candidate && item.detail === 'dramatization_only' ? (

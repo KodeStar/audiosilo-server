@@ -1090,6 +1090,83 @@ describe('bulk matching', () => {
     expect(screen.queryByText(/Last run applied/)).not.toBeInTheDocument();
   });
 
+  it('says a run the service stopped early kept what it checked (server#306)', async () => {
+    mockFetch(
+      routes([run({ error: 'metadata_unavailable', total: 120, done: 40 })], {
+        'GET /admin/match-runs/5/items': { body: { items: [confident], next_after: 0 } },
+      }),
+    );
+    renderApp('/health?issue=unmatched');
+    expect(
+      await screen.findByText(
+        "This run stopped early: the community metadata service didn't answer. 40 of 120 books were checked; review them, then run again for the rest.",
+      ),
+    ).toBeInTheDocument();
+    // Its answers are there to review and apply.
+    expect(screen.getByRole('button', { name: 'Review and apply' })).toBeEnabled();
+  });
+
+  it('says how a run the service stopped early ended once nothing is left to apply', async () => {
+    const stopped = run({ error: 'metadata_unavailable', total: 120, done: 12 });
+    stopped.counts = { ...stopped.counts, auto: 0, pending: 0, review: 0, none: 2, error: 10 };
+    mockFetch(routes([stopped]));
+    renderApp('/health?issue=unmatched');
+    expect(
+      await screen.findByText(
+        "The last run stopped early: the community metadata service didn't answer before it found anything to apply. Run it again for the rest.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Find matches' })).toBeEnabled();
+  });
+
+  it('says an applied run stopped early, beside what it applied', async () => {
+    const applied = run({
+      status: 'applied',
+      error: 'metadata_unavailable',
+      applied_at: '2026-10-07T10:06:00Z',
+    });
+    applied.counts = { ...applied.counts, pending: 0, applied: 1 };
+    mockFetch(routes([applied]));
+    renderApp('/health?issue=unmatched');
+    expect(
+      await screen.findByText(
+        /^Last run applied 1 match, .*It stopped early when the community metadata service didn't answer: run it again for the rest\.$/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('words a review item whose tag identifier disagrees (server#306)', async () => {
+    const disagrees: MatchRunItem = {
+      ...doubtful,
+      score: 100,
+      runner_up: 0,
+      detail: 'identifier_disagrees',
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [disagrees] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const box = await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' });
+    // Held: not ticked unasked.
+    expect(box).not.toBeChecked();
+    expect(
+      within(box.closest('li')!).getByText(
+        "Held for review: the ASIN or ISBN in its tags may name another book, as its title or series position doesn't agree",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("starts over on the run's own library", async () => {
     const calls = mockFetch(
       routes([run({ library_id: 3, library_name: 'Fiction' })], {

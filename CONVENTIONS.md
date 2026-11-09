@@ -1616,7 +1616,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
-  stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once), metadata
+  stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):
+  the run is `ready` with `error` `metadata_unavailable` (server#306, additive: before, `failed` with no
+  review), the books it answered kept to review and apply, the console saying it stopped early and how
+  many it checked; the books it never reached are still unmatched (a refresh or repick re-checks them
+  anyway), so the next run takes them. `metadata_off` and `internal` stay `failed`. Metadata
   off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
   included, 404s `metadata_off` then). What a run costs the service: a match sets
   `MatchQuery.BestOnly` and `NoDetailsBelow` (`ReviewFloor`), which the dialog never does, for
@@ -1625,8 +1629,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the facts fill the `s:` cache). It reads the whole of `cands[0]` and of `cands[1]` only `Score` and
   `IdentifierHit()` (`Classify`), so every other candidate is a stub. `work` absent on the best (an
   older metaserve, its budget spent) is the fetch path for the best alone, and nothing for a weak
-  best no identifier found; a best that can't be read gives way to the next, as in `Candidates` (after an
-  outage the next is read however weak, so a stub can't answer for a service that is down). The inlined
+  best no identifier found; a best that is gone (404) gives way to the next, but one that can't be read
+  for any other reason is an outage at once (server#306), unlike `Candidates`: the next standing in
+  would be the only candidate `Classify` sees, so a weaker work could apply unasked, or a stub answer
+  for a service that is down; the book is an `error` item. The inlined
   facts are read as a fetch's are (`factSeries`, `inlinedFacts`). A
   `Limit: 2` still applies; refresh and repick are identifier lookups, never works/match. Each run
   has a `meta.Pacer` in its context (`WithPacer`, `maxRequestsPerSecond` 60 against the service's
@@ -1750,7 +1756,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   item whose recording doesn't fit carries detail `length_differs`, which the review words with
   both lengths). An identifier hit (`reasons.identifier`: the ASIN/ISBN the query sent found it, in
   a run always a tag hint) needs no lead unless the runner-up is one too (review; a guard, as metaserve
-  names one work per request today). With neither ASIN nor ISBN to attach (a store listing), confident
+  names one work per request today), but only while the book agrees with it (`identifierAgrees`,
+  server#306: a tag ASIN can name another book, Chamber of Secrets carrying Philosopher's Stone's
+  scores title 0.62 and series `conflict`): metaserve's `reasons.title`, when judged, at least
+  `IdentifierTitleAgree` (0.65), and with `reasons.series` `conflict` a title of at least
+  `IdentifierTitleSame` (0.9; none judged, a title that is only the series' name and number, is held),
+  as the same title at another position is the series numbered another way (The Witcher counting its
+  story collections, Halo, a chronological order). Else review, detail `identifier_disagrees`.
+  Calibrated on the LibraForge benchmark (the highest title value holding at most 0.2% of its right
+  automatic matches: 3,806 auto-right / 4 auto-wrong before, 3,799 / 4 after, none of its wrong ones
+  an identifier hit); a series conflict alone held 19 right ones (the renumbered series) and nothing
+  wrong, hence the title beside it. With neither ASIN nor ISBN to attach (a store listing), confident
   is firmer (`anchorFits`, LibraForge E6): score >= 90 and a plain 10-point lead (no identifier-hit
   lead, no narrator widening), metaserve's `reasons.author` `full` and `reasons.series` `position`, and
   both lengths known with the recording within `AnchorRuntimeOff` (2%); the apply records the match

@@ -21,6 +21,17 @@ export function bulkPhase(run: MatchRun | undefined): BulkPhase {
   }
 }
 
+/**
+ * The run was stopped early by the community service's outage (server#306): it
+ * is ready, or applied since, with the answers it got, and the books it never
+ * reached are for the next run.
+ */
+export function stoppedEarly(run: MatchRun): boolean {
+  return (
+    (run.status === 'ready' || run.status === 'applied') && run.error === 'metadata_unavailable'
+  );
+}
+
 /** What the run is counting: the books matched, or (applying) the matches applied. */
 export function runProgress(run: MatchRun): { done: number; total: number } {
   return run.status === 'applying'
@@ -168,7 +179,8 @@ export function hasCloseScore(item: MatchRunItem): boolean {
     item.runner_up > 0 &&
     item.score - item.runner_up < AUTO_LEAD &&
     item.detail !== 'length_differs' &&
-    item.detail !== 'dramatization_only'
+    item.detail !== 'dramatization_only' &&
+    item.detail !== 'identifier_disagrees'
   );
 }
 

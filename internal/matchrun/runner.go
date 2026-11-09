@@ -38,7 +38,9 @@ const (
 	maxFailStreak = workers + 4
 )
 
-// Codes a run that stopped by itself records (catalog.MatchRun.Error).
+// Codes a run that stopped by itself records (catalog.MatchRun.Error). A run the
+// service's outage stops (metadata_unavailable) is ready, its answers kept to
+// review and apply; the others are failed.
 const (
 	ErrCodeMetadataOff = "metadata_off"
 	ErrCodeUnavailable = "metadata_unavailable"
@@ -365,7 +367,12 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 
 	status := catalog.MatchReady
 	switch {
-	case stopCode != "": // each has returned: every worker is done with it
+	case stopCode == ErrCodeUnavailable: // each has returned: every worker is done with it
+		// The service went away: what the run answered before stays to review and
+		// apply (server#306), the books it never reached are still unmatched, and the
+		// next run takes them. The code says it stopped early.
+		r.log.Warn("match run stopped early, its answers kept", "run", runID, "code", stopCode, "err", stopErr)
+	case stopCode != "":
 		status = catalog.MatchFailed
 		r.log.Warn("match run stopped", "run", runID, "code", stopCode, "err", stopErr)
 	case ctx.Err() != nil && !r.stoppedByAdmin():
