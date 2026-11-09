@@ -200,11 +200,12 @@ function MatchBody({
   const rec = picked ? recordingOf(picked) : undefined;
   // A book with no ASIN or ISBN is matched by its recorded community work alone, so
   // a pick that differs from it (work or recording) is itself something to accept.
-  const recordsMatch =
+  const isRecorded =
     !!picked &&
-    !detail.fields.asin.value &&
-    !detail.fields.isbn.value &&
-    (current?.work_id !== picked.work_id || (current?.recording_id ?? '') !== (rec?.id ?? ''));
+    current?.work_id === picked.work_id &&
+    (current?.recording_id ?? '') === (rec?.id ?? '');
+  const recordsMatch =
+    !!picked && !detail.fields.asin.value && !detail.fields.isbn.value && !isRecorded;
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
   const coverUrl = picked ? communityCover(picked, rec) : '';
   // defaultCoverTick never ticks a candidate without a cover.
@@ -232,8 +233,11 @@ function MatchBody({
     setBusy(true);
     // The work and recording go with the ticked fields (acceptRequest's match),
     // before the cover. With no field ticked the cover goes first, then the match
-    // alone when it records one (recordsMatch), so a cover that fails still leaves
-    // nothing changed.
+    // alone when it records one (recordsMatch) or is the book's recorded match
+    // already (isRecorded: its offered ASIN and ISBN are recorded again, so one
+    // unticked is never filled back by a refresh, server#330), so a cover that
+    // fails still leaves nothing changed. Another work beside the book's own
+    // ASIN or ISBN leaves the recorded match as it is.
     const edit = () =>
       api
         .editBook(b.library_id, b.path, acceptRequest(rows, ticks, picked, rec))
@@ -260,7 +264,9 @@ function MatchBody({
       return;
     }
     const matchErr: unknown =
-      !ticks.size && recordsMatch ? await edit().then(() => undefined, failed) : undefined;
+      !ticks.size && (recordsMatch || isRecorded)
+        ? await edit().then(() => undefined, failed)
+        : undefined;
     // The cover's reads wait for the match: a read of the book racing it could land
     // after it, and show the book unmatched.
     if (coverTick) invalidateBookCover(qc, b);

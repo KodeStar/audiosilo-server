@@ -467,7 +467,8 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 }
 
 // planFor is what applying item it (its proposal) to a book in state st writes for a
-// run in mode: a repick's ASIN (whatever the scope), else Plan's, for a refresh
+// run in mode: a repick's ASIN (whatever the scope; a book with a recorded match
+// records it as the match's offered one), else Plan's, for a refresh
 // only while the book still has the identifier or recorded match it was found by
 // (stillFoundBy), or the record an apply a stop cut short already healed it to
 // (healedTo; planRefresh), a fallback to the recorded match only while the
@@ -481,7 +482,15 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 	p := it.Proposal
 	switch mode {
 	case catalog.MatchModeRepick:
-		return Writes{Set: PlanRepick(st, p)}
+		w := Writes{Set: PlanRepick(st, p)}
+		if asin, ok := w.Set[catalog.FieldASIN]; ok && st.Anchor.WorkID != "" {
+			// The book's match records the new ASIN as offered, so a revert of it
+			// stays reverted: a refresh never fills it back (planRefresh).
+			a := st.Anchor
+			a.OfferedASIN = asin
+			w.Anchor = &a
+		}
+		return w
 	case catalog.MatchModeRefresh:
 		foundBy, missed := splitFallback(p.FoundBy)
 		if missed != "" && (hasEditedIdentifier(st) || missed != fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value)) {

@@ -95,10 +95,15 @@ const DetailCoverPending = "cover_pending"
 const DetailCoverSuperseded = "cover_superseded"
 
 // detailUnchanged is applyItem's answer for a refresh item with nothing to
-// change under the scope (applied ""): the apply leaves it out, as an exclusion
-// does (catalog.DropApplyItem), rather than marking it skipped, so the console
-// sends no exclusion for it (server#332). Internal: never stored.
+// change under the scope now, though it had when recorded (one with nothing
+// then is never read: catalog.MatchItemsToApply): the apply leaves it out, as
+// an exclusion does (catalog.DropApplyItems, dropBatch at a time), rather than
+// marking it skipped, so the console sends no exclusion for it (server#332).
+// Internal: never stored.
 const detailUnchanged = "unchanged"
+
+// dropBatch is how many such items an apply drops from its total in one write.
+const dropBatch = 100
 
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
@@ -126,6 +131,9 @@ type Runner struct {
 	// enabled is the live metadata switch: a run stops once it is off.
 	enabled func() bool
 	log     *slog.Logger
+	// beforeEdit, when set (tests only), runs between an apply reading a book
+	// and writing its edit: where a hand edit can land meanwhile.
+	beforeEdit func(it *catalog.MatchRunItem)
 
 	mu        sync.Mutex
 	active    int64 // the working run's id, 0 when none
@@ -560,13 +568,19 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		item.Proposal.ASINRegion = ""
 	}
 	// A book neither scope would change is up to date: nothing to record (most
-	// of a matched library, whose proposals would only fill the review).
-	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
-		if !planRefresh(scope, st, item.Proposal).Empty() {
-			return item, nil
+	// of a matched library, whose proposals would only fill the review). The
+	// scopes it has nothing to change under are recorded with it, as the review
+	// shows them: an apply under one leaves it out unread (server#332).
+	scopes := ScopesFor(catalog.MatchModeRefresh)
+	for _, scope := range scopes {
+		if planRefresh(scope, st, item.Proposal).Empty() {
+			item.Unchanged = append(item.Unchanged, scope)
 		}
 	}
-	return nil, nil
+	if len(item.Unchanged) == len(scopes) {
+		return nil, nil
+	}
+	return item, nil
 }
 
 // ApplyOptions is what an apply writes: the run's confident items less Exclude,
@@ -604,7 +618,7 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	if scopes := ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, o.Scope) {
 		return nil, ErrScope
 	}
-	items, err := r.cat.MatchItemsToApply(ctx, runID, o.Include, o.Exclude)
+	items, err := r.cat.MatchItemsToApply(ctx, runID, o.Scope, o.Include, o.Exclude)
 	if err != nil {
 		return nil, err
 	}
@@ -612,8 +626,8 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 		return nil, err
 	}
 	// Read before the apply starts: a refresh's apply_total shrinks as it leaves
-	// out items with nothing to change (DropApplyItem), so the run returned (and
-	// the audit's "books") is every item it takes, never a racy part of it.
+	// out items with nothing to change now (DropApplyItems), so the run returned
+	// (and the audit's "books") is every item it takes, never a racy part of it.
 	started, err := r.cat.GetMatchRun(ctx, runID)
 	work := r.begin(base, runID)
 	r.wg.Go(func() {
@@ -633,12 +647,28 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		off = off || !r.enabled()
 		return !off
 	}
+	// Items left out as unchanged now are counted up and dropped from the total
+	// a batch at a time (and the rest before the run settles), never a write
+	// each: the total only ever runs ahead of what is left, so apply_done stays
+	// within it and reaches it.
+	var dropMu sync.Mutex
+	dropped := 0
+	drop := func(n int) {
+		if err := r.cat.DropApplyItems(context.WithoutCancel(ctx), run.ID, n); err != nil {
+			r.log.Error("drop match items failed", "run", run.ID, "items", n, "err", err)
+		}
+	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run, it, o)
 		if detail == detailUnchanged {
-			if err := r.cat.DropApplyItem(context.WithoutCancel(ctx), run.ID); err != nil {
-				r.log.Error("drop match item failed", "run", run.ID, "item", it.ID, "err", err)
+			dropMu.Lock()
+			dropped++
+			n := 0
+			if dropped >= dropBatch {
+				n, dropped = dropped, 0
 			}
+			dropMu.Unlock()
+			drop(n)
 			return
 		}
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
@@ -658,6 +688,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
 		}
 	})
+	drop(dropped) // the workers are done: no lock needed
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready (InterruptMatchRuns, settleLocked)
 	}
@@ -703,14 +734,23 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		if w.Anchor != nil {
 			how := catalog.MatchHowAccepted
 			switch {
-			case mode == catalog.MatchModeRefresh: // a heal of the book's own (planRefresh)
+			case mode != catalog.MatchModeMatch:
+				// The book's own match, healed or its identifiers recorded
+				// (planRefresh, planFor's repick): kept how it was made, and
+				// only while it is still the one read here, so a match made by
+				// hand meanwhile stays (BookEdit.MatchIf).
 				how = st.Anchor.How
+				was := st.Anchor
+				edit.MatchIf = &was
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto
 			}
 			m := *w.Anchor
 			m.How, m.RunID = how, run.ID
 			edit.Match = &m
+		}
+		if r.beforeEdit != nil {
+			r.beforeEdit(it)
 		}
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {

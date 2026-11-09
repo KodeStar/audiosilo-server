@@ -1843,9 +1843,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   identifier), so a revert of that one stays too. Written by `Plan` (the proposal's, written
   or not), the dialog's accept (`PATCH .../book` `match: {asin, isbn}`: the match's identifier
   whether a checkbox or already the book's; one the field would refuse is 400 on field `match`;
-  an Unlink ignores them) and a heal or a refresh's identifier fill (each identifier the
-  proposal's when it names one, else the match's own);
-  copied by a join, moved with the book. No backfill: '' (a match recorded before 0070, or an
+  an Unlink ignores them; a cover-only accept of the book's recorded match, work and recording,
+  sends it too, `isRecorded` in match-dialog.tsx, while another work beside the book's own ASIN
+  or ISBN still sends none), a heal or a refresh's identifier fill (each identifier the
+  proposal's when it names one, else the match's own) and a repick of a book with a recorded
+  match (`planFor`: the anchor kept, its offered ASIN the one the repick writes);
+  copied by a join, moved with the book. A refresh's or repick's anchor write keeps the
+  match's `how` and is conditional (`BookEdit.MatchIf`, the anchor the apply read: work,
+  recording and offered identifiers, checked in the edit's transaction; else the anchor is
+  left and the rest of the edit applies), so a match made by hand mid-apply stays. No backfill: '' (a match recorded before 0070, or an
   accept from an older console) fills as before.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
@@ -1856,20 +1862,27 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
   `book.match_refresh`. The server leaves out a refresh item with nothing to change under the
-  scope (server#332: `applyItem` answers the internal `detailUnchanged` for an empty
-  `planFor`, and the apply calls `catalog.DropApplyItem`, `apply_total - 1`, instead of
-  marking it): it stays `applied` '' as an exclusion leaves it (pending, not skipped), and
-  `apply_done` ends at `apply_total`. That includes one whose book no longer has what it was
-  found by. A match or repick item with nothing to change is still `skipped` /
+  scope (server#332), in two ways. One that had nothing to change under it when the run
+  recorded it (`0071`: `match_run_items.unchanged`, the scopes whose `planRefresh` was empty,
+  `MatchRunItem.Unchanged`, never on the wire) is never read: `MatchItemsToApply(scope)`
+  filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
+  changed since so planning now would write something the review never showed is left
+  alone. One that had a change then but none now: `applyItem` answers the internal
+  `detailUnchanged` for an empty `planFor`, and the apply counts these up and drops them with
+  `catalog.DropApplyItems` (`apply_total - n`, never below `apply_done`), `dropBatch` (100) at
+  a time and the rest before the run settles, instead of marking each. Either way the item
+  stays `applied` '' as an exclusion leaves it (pending, not skipped), and `apply_done` ends
+  at `apply_total`. That includes one whose book no longer has what it was found by. An item
+  recorded before 0071 (`unchanged` '') is planned as before. A match or repick item with nothing to change is still `skipped` /
   `nothing_to_change`. The review counts refresh rows with no changes under the selected
   scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
   `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
   pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
   before enabling Apply; the shown list keeps manual pagination. Gone items are still
   excluded, and an admin's own exclusion stays (counted once). With no picks, Done
-  finishes the run through an apply with only the admin's own exclusions: the server plans
-  each item again, so it changes no book unless one changed since the review read it (the
-  pages are not read again on focus). Apply waits only for the run list to refresh, not
+  finishes the run through an apply with only the admin's own exclusions: the server leaves
+  out every item recorded with no change under the scope unread, and plans the rest again,
+  so it changes no book the review showed no change for. Apply waits only for the run list to refresh, not
   the loaded item pages.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
   request-body limit (an older console still sends every unchanged book).

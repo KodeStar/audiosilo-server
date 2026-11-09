@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 )
 
 // Bulk community matching (internal/matchrun runs it): a match_runs row per run
@@ -137,6 +138,10 @@ type MatchRunItem struct {
 	Proposal  MatchProposal `json:"proposal"`
 	Applied   string        `json:"applied"`
 	Detail    string        `json:"detail,omitempty"`
+	// Unchanged is the scopes a refresh item had nothing to change under when
+	// the run recorded it (migration 0071): what the review showed as no change,
+	// so an apply under one leaves the item out (MatchItemsToApply). Internal.
+	Unchanged []string `json:"-"`
 }
 
 // StartMatchRun records a run that starts matching run.Total books and returns
@@ -187,10 +192,10 @@ func (c *Catalog) RecordMatchItem(ctx context.Context, runID int64, item *MatchR
 			return err
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO match_run_items(run_id, library_id, path, outcome, score, runner_up, proposal, detail)
-			 SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM libraries WHERE id = ?)`,
+			`INSERT INTO match_run_items(run_id, library_id, path, outcome, score, runner_up, proposal, detail, unchanged)
+			 SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM libraries WHERE id = ?)`,
 			runID, item.LibraryID, item.Path, item.Outcome, item.Score, item.RunnerUp, string(raw), item.Detail,
-			item.LibraryID)
+			strings.Join(item.Unchanged, ","), item.LibraryID)
 		return err
 	})
 }
@@ -243,14 +248,19 @@ func (c *Catalog) MarkMatchItem(ctx context.Context, runID, itemID int64, applie
 	})
 }
 
-// DropApplyItem leaves one item out of a working apply: its total counts one
-// fewer, and the item is not marked (still pending, as an exclusion leaves it).
-// A refresh's item with nothing to change under the scope (server#332), so the
-// apply ends at its total without the console excluding each such item.
-func (c *Catalog) DropApplyItem(ctx context.Context, runID int64) error {
-	return c.db.WithTx(ctx, "DropApplyItem", func(tx *sql.Tx) error {
+// DropApplyItems leaves n items out of a working apply: its total counts n
+// fewer (never below what it has done), and the items are not marked (still
+// pending, as an exclusion leaves them). A refresh's items that had a change
+// under the scope when recorded but have none now (server#332), counted up and
+// dropped in batches, so the apply ends at its total without the console
+// excluding each such item.
+func (c *Catalog) DropApplyItems(ctx context.Context, runID int64, n int) error {
+	if n <= 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "DropApplyItems", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			`UPDATE match_runs SET apply_total = apply_total - 1 WHERE id = ? AND apply_total > 0`, runID)
+			`UPDATE match_runs SET apply_total = max(apply_total - ?, apply_done) WHERE id = ?`, n, runID)
 		return err
 	})
 }
@@ -366,10 +376,13 @@ func (c *Catalog) GetMatchRun(ctx context.Context, id int64) (*MatchRun, error) 
 }
 
 func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
-	var raw string
+	var raw, unchanged string
 	if err := rows.Scan(&it.ID, &it.RunID, &it.LibraryID, &it.Path, &it.Outcome, &it.Score, &it.RunnerUp,
-		&raw, &it.Applied, &it.Detail); err != nil {
+		&raw, &it.Applied, &it.Detail, &unchanged); err != nil {
 		return err
+	}
+	if unchanged != "" {
+		it.Unchanged = strings.Split(unchanged, ",")
 	}
 	if err := json.Unmarshal([]byte(raw), &it.Proposal); err != nil {
 		return err
@@ -380,7 +393,7 @@ func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
 	return nil
 }
 
-const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, proposal, applied, detail`
+const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, proposal, applied, detail, unchanged`
 
 // ListMatchRunItems returns a page of a run's items, the best match first (score
 // descending, then id): of one outcome ("" = all), after the item `after`, at most
@@ -402,12 +415,17 @@ func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome st
 	return items, next, nil
 }
 
-// MatchItemsToApply lists the items an apply works through: the run's confident
-// ones except those in exclude, plus those in include that have a candidate (a
-// "review" item the admin chose), each only while not yet applied.
-func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, exclude []int64) ([]MatchRunItem, error) {
+// MatchItemsToApply lists the items an apply under scope works through: the
+// run's confident ones except those in exclude, plus those in include that have a
+// candidate (a "review" item the admin chose), each only while not yet applied,
+// and never one recorded with nothing to change under scope (MatchRunItem.
+// Unchanged: a refresh item the review showed no change for, left out unread,
+// as an exclusion leaves it, whatever the book would take now: server#332).
+func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, scope string, include, exclude []int64) ([]MatchRunItem, error) {
 	all, err := queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+` FROM match_run_items
-	     WHERE run_id = ? AND applied = '' AND outcome IN (?, ?) ORDER BY id`, runID, OutcomeAuto, OutcomeReview)
+	     WHERE run_id = ? AND applied = '' AND outcome IN (?, ?)
+	       AND instr(',' || unchanged || ',', ',' || ? || ',') = 0 ORDER BY id`,
+		runID, OutcomeAuto, OutcomeReview, scope)
 	if err != nil {
 		return nil, err
 	}

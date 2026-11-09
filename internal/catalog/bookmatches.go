@@ -112,18 +112,31 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 }
 
 // writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is
-// clearCommunity's) in the edit's transaction.
-func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a *MatchAnchor, editor any, now string) error {
+// clearCommunity's) in the edit's transaction. With was (BookEdit.MatchIf), only
+// while the recorded match is still was: else it writes nothing.
+func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
+	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
+		a.OfferedASIN, a.OfferedISBN}
+	if was != nil && was.WorkID != "" {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE book_matches SET work_id = ?3, recording_id = ?4, how = ?5, run_id = ?6, set_by = ?7,
+			        set_at = ?8, offered_asin = ?9, offered_isbn = ?10
+			  WHERE library_id = ?1 AND path = ?2 AND work_id = ?11 AND recording_id = ?12
+			    AND offered_asin = ?13 AND offered_isbn = ?14`,
+			append(args, was.WorkID, was.RecordingID, was.OfferedASIN, was.OfferedISBN)...)
+		return err
+	}
+	upsert := ` ON CONFLICT(library_id, path) DO UPDATE SET
+		     work_id = excluded.work_id, recording_id = excluded.recording_id, how = excluded.how,
+		     run_id = excluded.run_id, set_by = excluded.set_by, set_at = excluded.set_at,
+		     offered_asin = excluded.offered_asin, offered_isbn = excluded.offered_isbn`
+	if was != nil { // none recorded, as the plan read it: a match made since stays
+		upsert = ` ON CONFLICT(library_id, path) DO NOTHING`
+	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at,
 		                          offered_asin, offered_isbn)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT(library_id, path) DO UPDATE SET
-		     work_id = excluded.work_id, recording_id = excluded.recording_id, how = excluded.how,
-		     run_id = excluded.run_id, set_by = excluded.set_by, set_at = excluded.set_at,
-		     offered_asin = excluded.offered_asin, offered_isbn = excluded.offered_isbn`,
-		ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
-		a.OfferedASIN, a.OfferedISBN)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)`+upsert, args...)
 	return err
 }
 

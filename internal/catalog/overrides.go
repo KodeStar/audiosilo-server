@@ -788,9 +788,16 @@ type BookEdit struct {
 	// ClearCommunityMatches does for a library (an admin's own edits stay),
 	// before the rest of the edit applies. nil changes nothing. One book at a
 	// time (EditBooks refuses it).
-	Match  *MatchAnchor
-	Source string
-	UserID int64
+	Match *MatchAnchor
+	// MatchIf, beside a Match naming a work, writes it only while the book's
+	// recorded match is still this one (its work, recording and offered
+	// identifiers; a zero MatchIf: none recorded), checked in the edit's
+	// transaction; else the match is left as it is and the rest of the edit
+	// applies. A run's bookkeeping of a match it read (a refresh's heal or new
+	// identifier, a repick's ASIN), so a match made by hand meanwhile stays.
+	MatchIf *MatchAnchor
+	Source  string
+	UserID  int64
 }
 
 // normalizeSource is where an edit or a custom cover came from, as stored:
@@ -956,7 +963,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			return err
 		}
 	default:
-		if err := writeAnchor(ctx, tx, at, edit.Match, editor, now); err != nil {
+		if err := writeAnchor(ctx, tx, at, edit.Match, edit.MatchIf, editor, now); err != nil {
 			return err
 		}
 	}
