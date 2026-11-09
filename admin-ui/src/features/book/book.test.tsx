@@ -561,19 +561,106 @@ describe('a book matched to a store listing (server#320)', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows the ASIN, not the work or an unlink, for a book matched by one', async () => {
-    const detail = bookDetail();
-    detail.community_match = {
-      work_id: 'the-way-of-kings',
-      how: 'accepted',
-      matched_at: '2026-11-01T00:00:00Z',
-    };
-    mockFetch(routes(detail));
+  /** A matched book with the given identifiers and a recorded match (server#338). */
+  function matchedDetail(ids: { asin?: string; isbn?: string }, own = false): AdminBookDetail {
+    const detail = listingDetail('accepted');
+    const id = (value = '') => ({
+      value,
+      source: value ? (own ? ('edited' as const) : ('community' as const)) : ('' as const),
+      scanned: '',
+      locked: own && Boolean(value),
+    });
+    detail.book = { ...detail.book, asin: ids.asin ?? '', isbn: ids.isbn ?? '' };
+    detail.fields.asin = id(ids.asin);
+    detail.fields.isbn = id(ids.isbn);
+    return detail;
+  }
+
+  it.each<[string, { asin?: string; isbn?: string }]>([
+    ['an ASIN', { asin: 'B00ASIN001' }],
+    ['an ISBN', { isbn: '9780000000002' }],
+    ['both', { asin: 'B00ASIN001', isbn: '9780000000002' }],
+    ['neither', {}],
+  ])('shows the recorded work, recording, how and Unlink beside %s', async (_, ids) => {
+    mockFetch(routes(matchedDetail(ids)));
     renderApp(URL);
     expect(await screen.findByText('Matched')).toBeInTheDocument();
-    expect(screen.getAllByText(detail.fields.asin.value).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Unlink' })).toBeNull();
-    expect(screen.queryByText('Community work')).toBeNull();
+    expect(screen.getByRole('link', { name: /a-guild-book/ })).toBeInTheDocument();
+    expect(screen.getByText('Recording')).toBeInTheDocument();
+    expect(screen.getByText('r1')).toBeInTheDocument();
+    const identified = Boolean(ids.asin || ids.isbn);
+    expect(screen.queryByText(/No ASIN or ISBN: matched to its store listing/) !== null).toBe(
+      !identified,
+    );
+    if (identified) expect(screen.getByText(/^Matched \d/)).toBeInTheDocument();
+    if (ids.asin) expect(screen.getAllByText(ids.asin).length).toBeGreaterThan(0);
+    if (ids.isbn) expect(screen.getAllByText(ids.isbn).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Unlink' })).toBeInTheDocument();
+  });
+
+  it('says a bulk match matched a book with an ASIN', async () => {
+    const detail = matchedDetail({ asin: 'B00ASIN001' });
+    detail.community_match!.how = 'auto';
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByText(/^Matched by a bulk match \d/)).toBeInTheDocument();
+  });
+
+  it('leaves out the recording row when the match names none', async () => {
+    const detail = matchedDetail({ asin: 'B00ASIN001' });
+    delete detail.community_match!.recording_id;
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByRole('link', { name: /a-guild-book/ })).toBeInTheDocument();
+    expect(screen.queryByText('Recording')).toBeNull();
+  });
+
+  it.each([
+    ['its own ASIN', matchedDetail({ asin: 'B00ASIN001' }, true), true],
+    [
+      'an ASIN its files name',
+      (() => {
+        const d = matchedDetail({ asin: 'B00ASIN001' });
+        d.fields.asin.scanned = 'B00ASIN001';
+        return d;
+      })(),
+      true,
+    ],
+    ['only the community ASIN', matchedDetail({ asin: 'B00ASIN001' }), false],
+  ])('words the Unlink confirm for a book with %s', async (_, detail, keeps) => {
+    mockFetch(routes(detail));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    expect(within(dialog).queryByText(/so it still shows as matched/) !== null).toBe(keeps);
+    expect(within(dialog).queryByText(/The book shows as not matched/) !== null).toBe(!keeps);
+  });
+
+  it('keeps the card when a match run applying to the library refuses the Unlink', async () => {
+    const calls = mockFetch(
+      routes(matchedDetail({ asin: 'B00ASIN001' }), {
+        'PATCH /admin/libraries/1/book': {
+          status: 409,
+          body: {
+            error:
+              'a match run is applying to this library; stop it or wait for it to finish before unlinking',
+            code: 'match_run_busy',
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByText(/A match run is working/)).toBeInTheDocument();
+    expect(patches(calls)).toHaveLength(1);
+    expect(screen.queryByText('Unlinked from the community work')).toBeNull();
+    // The card behind the open confirm (hidden from the accessibility tree) is as it was.
+    expect(screen.getByText('Matched')).toBeInTheDocument();
+    expect(screen.getByText('a-guild-book')).toBeInTheDocument();
   });
 });
 
