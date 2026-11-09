@@ -20,9 +20,9 @@ import (
 // TestSetupWizardAccountOnly: the /setup page asks only for the admin account
 // and hands over to the console's setup flow; a POST without library fields
 // creates the admin and no library (201 {user}), and the console's flow then
-// opens (not finished). Sending only one of the two library fields is refused
-// before anything is created. TestSetupWizard covers a POST with both, which
-// still creates the library as before.
+// opens (not finished). The retired library fields (library_name,
+// library_root, the archived manager's) are refused, alone or together, before
+// anything is created.
 func TestSetupWizardAccountOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -54,10 +54,12 @@ func TestSetupWizardAccountOnly(t *testing.T) {
 		t.Error("the setup page still asks for the library")
 	}
 
-	for _, half := range []string{`"library_name":"Books"`, `"library_root":"` + t.TempDir() + `"`} {
-		body := `{"token":"` + tok + `","password":"longenough",` + half + `}`
+	root := t.TempDir()
+	for _, lib := range []string{`"library_name":"Books"`, `"library_root":"` + root + `"`,
+		`"library_name":"Books","library_root":"` + root + `"`} {
+		body := `{"token":"` + tok + `","password":"longenough",` + lib + `}`
 		if code, b := do("POST", "/setup", body); code != http.StatusBadRequest {
-			t.Errorf("POST /setup with only %s = %d %s, want 400", half, code, b)
+			t.Errorf("POST /setup with %s = %d %s, want 400", lib, code, b)
 		}
 	}
 	if ok, _ := authSvc.AdminExists(ctx); ok {

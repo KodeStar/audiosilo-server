@@ -482,15 +482,10 @@ type Config struct {
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
 	// environment. Save writes the file's values for those keys, so a value the
-	// environment supplies never ends up in config.yaml. pinned holds the keys an
-	// embedding launcher overrides (Pin). All three are set while loading and only
-	// read afterwards, so copies share them.
+	// environment supplies never ends up in config.yaml. Both are set while
+	// loading and only read afterwards, so copies share them.
 	fromEnv map[string]string
 	file    *Config
-	pinned  map[string]bool
-	// onDisk: config.yaml exists. The first Save (creating it) records pinned
-	// values in it; later saves keep the file's own values for them, as for env.
-	onDisk bool
 }
 
 // DefaultServerName is the display name of a server whose name isn't set.
@@ -543,7 +538,6 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 	raw, readErr := os.ReadFile(Path(dataDir))
 	switch {
 	case readErr == nil:
-		cfg.onDisk = true
 		if err = yaml.Unmarshal(raw, cfg); err != nil {
 			return nil, false, fmt.Errorf("parse config: %w", err)
 		}
@@ -572,8 +566,7 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 // Save writes the config to disk with restrictive permissions. A field an
 // AUDIOSILO_* variable set keeps config.yaml's own value: the environment wins at
 // every load anyway, and writing it into the file would make it outlive the
-// variable. A field an embedding launcher pins likewise keeps the file's value,
-// except on the save that creates config.yaml, which records it.
+// variable.
 func (c *Config) Save() error {
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
@@ -582,21 +575,11 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(Path(c.DataDir), out, 0o600); err != nil {
-		return err
-	}
-	if !c.onDisk && c.file != nil {
-		// The file now holds the pinned values: later saves keep them.
-		for key := range c.pinned {
-			copyField(c.file, c, key)
-		}
-		c.onDisk = true
-	}
-	return nil
+	return os.WriteFile(Path(c.DataDir), out, 0o600)
 }
 
 // asSaved is c as Save writes it to config.yaml: the file's own values for the
-// keys the environment sets (and, once the file exists, the launcher pins).
+// keys the environment sets.
 func (c *Config) asSaved() *Config {
 	if c.file == nil {
 		return c
@@ -604,11 +587,6 @@ func (c *Config) asSaved() *Config {
 	on := c.Clone()
 	for key := range c.fromEnv {
 		copyField(on, c.file, key)
-	}
-	if c.onDisk {
-		for key := range c.pinned {
-			copyField(on, c.file, key)
-		}
 	}
 	return on
 }

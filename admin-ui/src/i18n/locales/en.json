@@ -1833,7 +1833,6 @@
   "settings.savedNow": "Applied now. No restart needed.",
   "settings.savedRestart": "Saved. Some of it takes effect when the server restarts.",
   "settings.locked.env": "Set by {{name}}",
-  "settings.locked.launcher": "Set by the program that started the server",
   "settings.locked.hint": "Change it where it is set: an environment variable wins over this page.",
   "settings.restart.needed": "Restart to apply",
   "settings.restart.pending": "Waiting for a restart",

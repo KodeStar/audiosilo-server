@@ -12,7 +12,9 @@ import (
 // FK'd to the rebuildable books index, so the enrichment survives a re-scan:
 // UpsertBook re-applies it (refreshEffective) whenever the book is re-indexed. A
 // blank field leaves any existing enrichment for that field untouched, and an
-// admin's override of asin/isbn still wins over it.
+// admin's override of asin/isbn still wins over it. No route writes through it
+// since the admin enrichment PUT was retired (v2.7.0; the Bridge's backfill is
+// BackfillASIN): rows already stored still apply, and tests state one with it.
 func (c *Catalog) SetEnrichment(ctx context.Context, libraryID int64, path, asin, isbn string) error {
 	// Canonicalize the key on write (see CleanRelPath) so it matches the
 	// scanner's rel_path keys - a non-canonical key would never re-apply.

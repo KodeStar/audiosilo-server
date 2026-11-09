@@ -57,13 +57,11 @@ instead of auto-creating the admin and printing credentials, the server mints a
 one-time setup token and enables a guarded browser wizard at `/setup` (handlers in
 `internal/api/handlers_setup.go`, page in `internal/web/assets/setup.{html,js}`).
 The wizard creates the admin account only and hands over to the console's "Set up your
-server" flow (`/admin`; see First-run setup in CONVENTIONS.md); a POST that still sends
-`library_name` + `library_root` (an older page, the archived manager) also creates the library, as
-before. The token rides in the URL
+server" flow (`/admin`; see First-run setup in CONVENTIONS.md); the `library_name` +
+`library_root` pair the archived manager sent was retired in v2.7.0 (400). The token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (404 when never enabled).
-`API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL and reports it
-via `Options.OnURL` (so an embedding launcher can open a browser).
+`API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL.
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
@@ -107,7 +105,7 @@ admin/connect UI changes. Mapping table:
 
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
-pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so an embedding launcher (another module) can run the server in-process (Run/Options; the archived audiosilo-manager did)
+pkg/launcher/         shared run loop (config→store→services→bootstrap→serve) behind cmd/audiosilo; not an embedding API (the overrides the archived audiosilo-manager used were retired in v2.7.0)
 pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle; NewIndex: a candidate list prepared once for many Best calls, the listening import's per-author pools) - same-book identification across messy titles; shared with the Bridge (its Audible import and internal/metaops), usable for server-side enrichment/dedup; BestWith (Best under opt-in Options, with the winning score; NewIndexWith + Index.BestScore its prepared form); options.go: Options and ImportOptions (the Bridge's Audible rules: series "Book N" marker, exact title, wordless fallback, "(Unabridged)" drop), never used by the server's own callers; scan.go: hand-written scanners for its title regexps, checked against them in scan_test.go
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite open + embedded migrations (internal/store/migrations); engine*.go: the library (modernc, pure Go; native C with -tags sqlite_native); stmtcache.go: each connection keeps its statements prepared (see SQLite in CONVENTIONS.md)

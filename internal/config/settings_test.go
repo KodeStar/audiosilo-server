@@ -184,18 +184,6 @@ func TestEnvSettingsLockedAndNotSaved(t *testing.T) {
 	}
 }
 
-func TestPinnedSettingsLocked(t *testing.T) {
-	c := Default(t.TempDir())
-	c.Pin("bind")
-	if got := c.Locked()["network.bind"]; got != PinnedByLauncher {
-		t.Fatalf("pinned bind locked by %q, want %q", got, PinnedByLauncher)
-	}
-	_, err := c.WithSettings(patch(map[string]string{"network.bind": `":9000"`}), ok)
-	if se := settingErr(t, err); se.Reason != ReasonLocked {
-		t.Fatalf("a pinned setting must be locked, got %s", se.Reason)
-	}
-}
-
 func TestRestartPending(t *testing.T) {
 	running := Default(t.TempDir())
 	next, err := running.WithSettings(patch(map[string]string{
@@ -299,44 +287,6 @@ func TestEffective(t *testing.T) {
 	eff := saved.Effective(running)
 	if eff.Bind != running.Bind || eff.Name != "Den" {
 		t.Fatalf("Effective = bind %q name %q", eff.Bind, eff.Name)
-	}
-}
-
-// A launcher's pinned values reach config.yaml when the save creates it, and
-// never again: a later console save keeps the file's own values.
-func TestPinnedSaveKeepsFile(t *testing.T) {
-	dir := t.TempDir()
-	c, firstRun, err := Load(dir)
-	if err != nil || !firstRun {
-		t.Fatal(err)
-	}
-	c.Bind = "127.0.0.1:9000"
-	c.Pin("bind")
-	if err := c.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if got, _, _ := Load(dir); got.Bind != "127.0.0.1:9000" {
-		t.Fatalf("the creating save records the pinned bind, got %q", got.Bind)
-	}
-
-	c2, _, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c2.Bind = "127.0.0.1:9999" // the launcher passes a new one next start
-	c2.PublicURL = "https://tunnel.example.com"
-	c2.Pin("bind")
-	c2.Pin("public_url")
-	next, err := c2.WithSettings(patch(map[string]string{"general.name": `"Den"`}), ok)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := next.Save(); err != nil {
-		t.Fatal(err)
-	}
-	got, _, _ := Load(dir)
-	if got.Name != "Den" || got.Bind != "127.0.0.1:9000" || got.PublicURL != "" {
-		t.Fatalf("a console save must keep the file's pinned values: %+v", got)
 	}
 }
 

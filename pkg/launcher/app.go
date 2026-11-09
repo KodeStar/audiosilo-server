@@ -1,9 +1,10 @@
 // Package launcher holds the AudioSilo server's run loop: load config, open the
 // database, wire the services, bootstrap first-run state, and serve until the
 // context is cancelled. The headless `audiosilo` command is a thin wrapper over
-// it. The package is public (under pkg/) so an embedding launcher (another
-// program, a separate module) can run the server in-process through Run/Options
-// and behave identically; the archived audiosilo-manager desktop app was one.
+// it. It is not an embedding API: the overrides an embedding launcher once set
+// (bind, TLS mode, public URL, libraries, the URL callback; the archived desktop
+// manager used them) were retired in v2.7.0, so config.yaml and the AUDIOSILO_*
+// variables are the only configuration.
 package launcher
 
 import (
@@ -37,7 +38,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
 	"github.com/kodestar/audiosilo-server/internal/updates"
-	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 // Options configures a server run.
@@ -56,31 +56,10 @@ type Options struct {
 	// GUI launcher): leave the admin to the browser setup wizard - when no
 	// admin exists yet a token-guarded /setup is enabled instead.
 	Setup bool
-	// OnURL, if set, is called once at startup with the URL the user should open:
-	// the token-carrying /setup URL when first-run setup is pending, otherwise the
-	// web player (or admin console). A GUI launcher can use it to open a browser.
-	OnURL func(url string)
-
-	// Optional config overrides, applied on top of the loaded config.yaml for an
-	// embedding launcher that controls the server in-process without
-	// hand-writing YAML. Empty/zero fields are ignored, so the headless
-	// `audiosilo` command (which sets none) is unaffected. When the config is
-	// first created these are persisted to config.yaml.
-	Bind      string    // host:port to listen on, e.g. "127.0.0.1:8080"
-	TLSMode   string    // "off" | "selfsigned" | "autocert"
-	PublicURL string    // externally reachable base URL (e.g. a Cloudflare Tunnel URL)
-	Libraries []Library // when non-nil, replaces the configured libraries
 
 	// metaReleases, set only by tests, is where the metadata mirror lists and
 	// downloads data releases (a fake GitHub); zero means GitHub's real one.
 	metaReleases releaseSource
-}
-
-// Library mirrors config.Library for the public Options override API (so an
-// external module can declare a library without naming an internal type).
-type Library struct {
-	Name string
-	Root string
 }
 
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
@@ -108,15 +87,6 @@ func Run(ctx context.Context, opts Options) error {
 	cfg, firstRun, err := config.Load(abs)
 	if err != nil {
 		return err
-	}
-	applyOverrides(cfg, opts)
-	// Overrides are applied after Load's validation, so re-validate before the
-	// config is used (and, on firstRun, persisted): an embedding launcher can pass
-	// a malformed Bind/TLSMode or a library with an empty/duplicate name, and an
-	// unchecked value would otherwise scan the wrong root or bake an unbootable
-	// config.yaml that fails Load on the next start.
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration after applying overrides: %w", err)
 	}
 
 	// Mint a stable per-install identity the first time (also self-heals an existing
@@ -297,60 +267,11 @@ func Run(ctx context.Context, opts Options) error {
 		setupBanner(cfg, setupToken)
 	}
 
-	// Tell the caller (an embedding launcher) which URL to open: the
-	// setup wizard while first-run setup is pending, otherwise the player (or admin
-	// console).
-	if opts.OnURL != nil {
-		opts.OnURL(openURL(cfg, setupToken))
-	}
-
 	return server.Run(ctx, cfg, a.Handler(), log)
 }
 
 // logRingSize is how many log lines the admin console's log viewer keeps.
 const logRingSize = 2000
-
-// applyOverrides layers the (optional) Options overrides on top of the loaded
-// config. Empty/zero fields are left untouched, so a caller that sets none (the
-// headless command) gets the file's configuration verbatim.
-func applyOverrides(cfg *config.Config, opts Options) {
-	// Each override is pinned, so the admin console shows it as managed by the
-	// launcher instead of offering a change the next start would undo.
-	if opts.Bind != "" {
-		cfg.Bind = opts.Bind
-		cfg.Pin("bind")
-	}
-	if opts.TLSMode != "" {
-		cfg.TLS.Mode = config.TLSMode(opts.TLSMode)
-		cfg.Pin("tls.mode")
-	}
-	if opts.PublicURL != "" {
-		cfg.PublicURL = opts.PublicURL
-		cfg.Pin("public_url")
-	}
-	if opts.Libraries != nil {
-		cfg.Libraries = make([]config.Library, len(opts.Libraries))
-		for i, l := range opts.Libraries {
-			cfg.Libraries[i] = config.Library{Name: l.Name, Root: l.Root}
-		}
-		cfg.Pin("libraries")
-	}
-}
-
-// openURL is the URL the user should open in a browser: the token-carrying setup
-// wizard when first-run setup is pending, else the web player if one is available,
-// else the admin console.
-func openURL(cfg *config.Config, setupToken string) string {
-	base := baseURL(cfg)
-	switch {
-	case setupToken != "":
-		return base + "/setup#token=" + setupToken
-	case web.HasPlayer(cfg.WebDir):
-		return base + "/web"
-	default:
-		return base + "/admin"
-	}
-}
 
 // baseURL builds a best-effort browser base URL from config: the configured
 // public_url wins; otherwise scheme is derived from the TLS mode and the host
@@ -381,7 +302,7 @@ func setupBanner(cfg *config.Config, token string) {
 	fmt.Println(" AudioSilo first-run setup")
 	fmt.Println("========================================================")
 	fmt.Println(" Open this URL in your browser to finish setting up:")
-	fmt.Printf("   %s\n", openURL(cfg, token))
+	fmt.Printf("   %s/setup#token=%s\n", baseURL(cfg), token)
 	fmt.Println("--------------------------------------------------------")
 	fmt.Println(" You'll choose an admin password, then the console walks you through the rest.")
 	fmt.Println("========================================================")

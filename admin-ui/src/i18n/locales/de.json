@@ -1833,7 +1833,6 @@
   "settings.savedNow": "Sofort übernommen. Kein Neustart nötig.",
   "settings.savedRestart": "Gespeichert. Einiges greift erst nach einem Neustart des Servers.",
   "settings.locked.env": "Festgelegt durch {{name}}",
-  "settings.locked.launcher": "Festgelegt durch das Programm, das den Server gestartet hat",
   "settings.locked.hint": "Ändere es dort, wo es festgelegt ist: Eine Umgebungsvariable hat Vorrang vor dieser Seite.",
   "settings.restart.needed": "Zum Übernehmen neu starten",
   "settings.restart.pending": "Wartet auf einen Neustart",

@@ -1971,7 +1971,6 @@
   "settings.savedNow": "Applicato subito. Non serve riavviare.",
   "settings.savedRestart": "Salvato. Una parte ha effetto al riavvio del server.",
   "settings.locked.env": "Impostato da {{name}}",
-  "settings.locked.launcher": "Impostato dal programma che ha avviato il server",
   "settings.locked.hint": "Modificalo dove è impostato: una variabile d'ambiente ha la precedenza su questa pagina.",
   "settings.restart.needed": "Riavvia per applicare",
   "settings.restart.pending": "In attesa di un riavvio",

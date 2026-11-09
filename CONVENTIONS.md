@@ -837,7 +837,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
   `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
-  the admin folder-override and enrichment routes, which take their path on their own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
+  the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
   long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
@@ -3179,9 +3179,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (an
-  embedding launcher's bind/TLS/public URL/libraries, via `pkg/launcher.Options`) are `Pin`ned and locked as `"launcher"`
-  (the console says "Set by the program that started the server"). `WithSettings` returns a
+  config.yaml's own value for them (`file`), so an env value never lands in the file. (The embedding
+  launcher's overrides, `Pin` and the `"launcher"` lock were retired in v2.7.0 with the archived desktop
+  manager: config.yaml and the environment are the only sources.) `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
   id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
   `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
@@ -3341,8 +3341,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   next `sort_order` (max + 1), so it lands last in the display order, never in its name's place
   among libraries left at 0 (ADMIN-12). `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
-  change. A library the config declares (config.yaml, or an embedding app's
-  `launcher.Options.Libraries`; upserted by name at every start) keeps its name and folder: changing
+  change. A library the config declares (config.yaml; upserted by name at every start) keeps its name and folder: changing
   either is 409 `config_library`, the same values resent (a folder respelled) write nothing, and
   another library renamed or added with a declared name at another folder is 409 `name_taken`
   (the next start would re-root it). `DELETE /admin/libraries/{id}` removes the library
@@ -3646,9 +3645,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **First-run setup (FIRST-RUN-PLAN.md Phase F1, `catalog/setup.go`, `library/preview.go`,
   `library/mounts.go`, `api/handlers_admin_setup.go`)**: the account still comes from the banner or
   `--setup`'s `/setup` page, which now asks only for the account and links "Continue setup" to `/admin`
-  (`POST /setup` without `library_name`/`library_root` creates only the admin, 201 `{user}`; with both it
-  creates the library as before and records the flow's `folder` step as done, `naming` left open; one
-  alone is 400). The console's flow then runs on the ordinary admin
+  (`POST /setup` creates only the admin, 201 `{user}`; the `library_name`/`library_root` pair the archived
+  desktop manager sent was retired in v2.7.0, so a body carrying either is 400 and creates nothing). The console's flow then runs on the ordinary admin
   APIs; the server holds only its progress and a folder preview. Admin only, console only (no
   capability). **State**: `server_state` key `setup_state`, `{finished, dismissed, steps: {id:
   "done"|"skipped"}}`, ids `catalog.SetupSteps` (`folder naming metadata reach abs backups phone
@@ -3657,7 +3655,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints}`: `request` is the direct
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
-  `config_libraries` the names the config declares (config.yaml, or an embedding app); `mount_hints` (only while not finished or
+  `config_libraries` the names the config declares (config.yaml); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer

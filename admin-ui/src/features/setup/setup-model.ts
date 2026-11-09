@@ -246,7 +246,7 @@ export function folderErrorKey(err: unknown): string | null {
 
 // --- Settings the flow writes -------------------------------------------------
 
-/** Whether the console may change a setting (not set by the environment or an embedding launcher). */
+/** Whether the console may change a setting (not set by the environment). */
 export function editable(settings: AdminSettings, id: SettingId): boolean {
   return !lockOf(settings, id);
 }

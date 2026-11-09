@@ -1971,7 +1971,6 @@
   "settings.savedNow": "Aplicado ahora. No hace falta reiniciar.",
   "settings.savedRestart": "Guardado. Una parte surte efecto cuando el servidor se reinicie.",
   "settings.locked.env": "Definido por {{name}}",
-  "settings.locked.launcher": "Definido por el programa que inició el servidor",
   "settings.locked.hint": "Cámbialo donde está definido: una variable de entorno tiene prioridad sobre esta página.",
   "settings.restart.needed": "Reinicia para aplicar",
   "settings.restart.pending": "Esperando un reinicio",
