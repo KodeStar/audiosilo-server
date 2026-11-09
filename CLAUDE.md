@@ -318,7 +318,7 @@ community edit's `BookEdit.Match`, moved and joined with the book, dropped by a 
 matched with no ASIN or ISBN is matched by it (`catalog.matchedExpr`; see Admin catalog API (Bulk
 matching, Recorded community match) in CONVENTIONS.md). `0070` adds `book_matches.offered_asin` /
 `offered_isbn` (server#330: the identifiers the match offered, ticked or not, `''` for none or a match
-recorded before it, no backfill; a refresh never fills the offered one back). `0071` adds
+recorded before it, no backfill; a refresh never fills the offered one back) and
 `match_run_items.unchanged` (server#332: the scopes a refresh item had nothing to change under when
 recorded; an apply under one leaves it out unread, `''` for an item recorded before it).
 

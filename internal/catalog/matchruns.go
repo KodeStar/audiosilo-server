@@ -139,7 +139,7 @@ type MatchRunItem struct {
 	Applied   string        `json:"applied"`
 	Detail    string        `json:"detail,omitempty"`
 	// Unchanged is the scopes a refresh item had nothing to change under when
-	// the run recorded it (migration 0071): what the review showed as no change,
+	// the run recorded it (migration 0070): what the review showed as no change,
 	// so an apply under one leaves the item out (MatchItemsToApply). Internal.
 	Unchanged []string `json:"-"`
 }

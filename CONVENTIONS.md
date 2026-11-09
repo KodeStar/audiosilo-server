@@ -1863,7 +1863,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
   `book.match_refresh`. The server leaves out a refresh item with nothing to change under the
   scope (server#332), in two ways. One that had nothing to change under it when the run
-  recorded it (`0071`: `match_run_items.unchanged`, the scopes whose `planRefresh` was empty,
+  recorded it (`0070`: `match_run_items.unchanged`, the scopes whose `planRefresh` was empty,
   `MatchRunItem.Unchanged`, never on the wire) is never read: `MatchItemsToApply(scope)`
   filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
   changed since so planning now would write something the review never showed is left
@@ -1873,7 +1873,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a time and the rest before the run settles, instead of marking each. Either way the item
   stays `applied` '' as an exclusion leaves it (pending, not skipped), and `apply_done` ends
   at `apply_total`. That includes one whose book no longer has what it was found by. An item
-  recorded before 0071 (`unchanged` '') is planned as before. A match or repick item with nothing to change is still `skipped` /
+  recorded before 0070 (`unchanged` '') is planned as before. A match or repick item with nothing to change is still `skipped` /
   `nothing_to_change`. The review counts refresh rows with no changes under the selected
   scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
   `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
