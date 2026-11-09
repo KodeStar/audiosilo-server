@@ -172,7 +172,7 @@ export function picksForScope(
     include.delete(item.id);
     if (item.outcome !== 'auto') continue;
     // Pickable but for having nothing to write: a refresh no-op.
-    const noop = mode === 'refresh' && isPickable(item, 'match', scope);
+    const noop = mode === 'refresh' && !item.gone && !item.matched_since;
     if (!noop) exclude.add(item.id);
     else if (!exclude.has(item.id)) leftOut++;
   }

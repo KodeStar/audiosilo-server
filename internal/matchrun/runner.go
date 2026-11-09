@@ -611,12 +611,16 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	if err := r.cat.BeginApply(ctx, runID, o.Scope, len(items)); err != nil {
 		return nil, err
 	}
+	// Read before the apply starts: a refresh's apply_total shrinks as it leaves
+	// out items with nothing to change (DropApplyItem), so the run returned (and
+	// the audit's "books") is every item it takes, never a racy part of it.
+	started, err := r.cat.GetMatchRun(ctx, runID)
 	work := r.begin(base, runID)
 	r.wg.Go(func() {
 		defer r.end()
 		r.apply(work, run, items, o)
 	})
-	return r.cat.GetMatchRun(ctx, runID)
+	return started, err
 }
 
 // apply applies each item, a few at a time, then settles the run. Turning

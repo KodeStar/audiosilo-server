@@ -195,7 +195,8 @@ func TestMatchRunsRefresh(t *testing.T) {
 	}
 }
 
-// Done in an empty refresh excludes every automatic item and changes no book.
+// An apply that excludes every automatic item (an older console's Done in an
+// empty refresh) finishes the run and changes no book.
 func TestMatchRunsFinishEmptyRefresh(t *testing.T) {
 	t.Parallel()
 	e, tok, _, libID := newMatchRunEnv(t, "uk")
