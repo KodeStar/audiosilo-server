@@ -627,6 +627,9 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 	} else {
 		res, err = s.finish(ctx, p)
 	}
+	if err == nil && p.ev.Kind == EventFinish && !s.b.FurthestOnly {
+		err = s.finishSession(ctx, p)
+	}
 	if err != nil {
 		return res, err
 	}
@@ -1016,6 +1019,24 @@ func (s *syncRun) recordSpan(ctx context.Context, p syncPrepared, listened float
 		return insertSession(ctx, s.tx, hb, formatSessionTime(p.started), ended, p.from, p.to, listened)
 	}
 	return extendSession(ctx, s.tx, open.id, hb, ended, p.to, listened)
+}
+
+// finishSession marks the token's session on the book finished for a finish
+// event (server#284), as a PUT saying finished marks the session it lands in
+// (RecordHeartbeat): the session that was open when the device finished, the
+// newest one begun by the finish whose last span ended at most SessionGap
+// before it. Whatever the row did with the finish (applied, or older than its
+// last finish-state change): the listener finished the book in that session.
+// A finish with no such session (Mark finished on a book not played lately)
+// opens none, so it adds no session that never listened.
+func (s *syncRun) finishSession(ctx context.Context, p syncPrepared) error {
+	hb := Heartbeat{UserID: s.b.UserID, Ref: p.target.Key, TokenID: s.b.TokenID}
+	open, err := latestSession(ctx, s.tx, hb, p.ended)
+	if err != nil || open == nil || p.ended.Sub(parseSessionTime(open.lastAt)) > SessionGap {
+		return err
+	}
+	_, err = s.tx.ExecContext(ctx, `UPDATE listening_sessions SET finished = 1 WHERE id = ?`, open.id)
+	return err
 }
 
 // recordHistory adds a span to the user's listening history: it extends a row
