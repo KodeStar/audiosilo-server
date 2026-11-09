@@ -71,6 +71,9 @@ func (a *API) audibleSyncFor(w http.ResponseWriter, r *http.Request, account, op
 // 403), then pathInScope.
 func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncResolver {
 	return func(libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+		if len(rawPath) > catalog.MaxPathBytes {
+			return nil, "", catalog.Scope{}, http.StatusBadRequest, msgPathTooLong
+		}
 		scope, ok := scopeIn(scopes, libraryID)
 		if !ok || (!scope.AllowAll && len(scope.Paths) == 0) {
 			return nil, "", scope, http.StatusForbidden, "no access to this library"

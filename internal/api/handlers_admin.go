@@ -921,6 +921,9 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
+	if pathTooLong(w, path) {
+		return
+	}
 	if _, err := library.ContentJoin(lib.Root, path); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
@@ -1015,6 +1018,9 @@ func (a *API) handleDeleteFolderOverride(w http.ResponseWriter, r *http.Request)
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if pathTooLong(w, path) {
 		return
 	}
 	if err := a.cat.DeleteFolderOverride(r.Context(), id, path); err != nil {

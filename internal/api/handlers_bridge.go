@@ -270,7 +270,11 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		files []bridgeFile
 		err   error
 	)
-	p := catalog.CleanRelPath(r.URL.Query().Get("path"))
+	raw := r.URL.Query().Get("path")
+	if pathTooLong(w, raw) {
+		return
+	}
+	p := catalog.CleanRelPath(raw)
 	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
 			files, _ = statBookFiles(lib, book)

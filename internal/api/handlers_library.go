@@ -214,6 +214,12 @@ func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalo
 // scopedPath is authorizedScope for a library id and a raw path the caller got
 // from elsewhere.
 func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	// Over the cap is 400 whatever the library (server#291): before the
+	// library is looked up, so an unknown or ungranted one doesn't answer
+	// 404/403 for it.
+	if len(rawPath) > catalog.MaxPathBytes {
+		return nil, "", catalog.Scope{}, http.StatusBadRequest, msgPathTooLong
+	}
 	lib, scope, status, msg := a.libraryScope(r, libraryID)
 	if status != 0 {
 		return nil, "", scope, status, msg
@@ -238,13 +244,29 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	return pathInScope(lib, scope, rawPath)
 }
 
+// msgPathTooLong is the 400 for a path over catalog.MaxPathBytes, on every
+// path-addressed route (server#289, #291).
+const msgPathTooLong = "path is too long"
+
+// pathTooLong answers 400 msgPathTooLong for a raw path no file can have
+// (true), before it is cleaned, looked up (a library, a book's ancestors) or
+// stored: a route that takes a path outside pathInScope (an admin's folder
+// override, browse, a list's remove) checks it first.
+func pathTooLong(w http.ResponseWriter, rawPath string) bool {
+	if len(rawPath) <= catalog.MaxPathBytes {
+		return false
+	}
+	writeError(w, http.StatusBadRequest, msgPathTooLong)
+	return true
+}
+
 // pathInScope cleans rawPath and checks scope allows it (400 empty or over
 // catalog.MaxPathBytes, 403 outside, 404 through a hidden folder).
 func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 	// A path no file can have is refused before it is cleaned, looked up (a
 	// book's ancestors are walked) or stored (server#289).
 	if len(rawPath) > catalog.MaxPathBytes {
-		return nil, "", scope, http.StatusBadRequest, "path is too long"
+		return nil, "", scope, http.StatusBadRequest, msgPathTooLong
 	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
@@ -320,6 +342,9 @@ func (a *API) bookAt(w http.ResponseWriter, r *http.Request, lib *catalog.Librar
 // handleBrowseFS serves the filtered filesystem view: the real directory tree,
 // scoped to the caller's share path rules, requiring no prior indexing.
 func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
+	if pathTooLong(w, r.URL.Query().Get("path")) {
+		return
+	}
 	lib, scope, ok := a.browseScope(w, r)
 	if !ok {
 		return

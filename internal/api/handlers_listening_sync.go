@@ -157,6 +157,12 @@ func (a *API) syncTargets(w http.ResponseWriter, r *http.Request, events []catal
 		if _, done := targets[sent]; done || ev.LibraryID <= 0 || ev.Path == "" {
 			continue
 		}
+		// Over the cap the event is invalid before any lookup (server#291): a
+		// library's lookup failing can't fail the batch for it.
+		if len(ev.Path) > catalog.MaxPathBytes {
+			targets[sent] = catalog.SyncTarget{Reason: catalog.SyncInvalid}
+			continue
+		}
 		lib, rel, scope, status, msg := resolve(ev.LibraryID, ev.Path)
 		if reason, ok := syncPathReasons[status]; ok {
 			targets[sent] = catalog.SyncTarget{Reason: reason}

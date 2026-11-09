@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 func TestPodcastFetchInvalidKeepsEpisode(t *testing.T) {
@@ -42,5 +45,23 @@ func TestPodcastEpisodeAudioAllowList(t *testing.T) {
 		if EpisodePath("Show", p) {
 			t.Fatalf("accepted %s", p)
 		}
+	}
+}
+
+// A show or episode path is at most relpath.MaxBytes, as every path-addressed
+// route's (server#291): at the cap it passes, one byte over it doesn't.
+func TestPathsCapped(t *testing.T) {
+	t.Parallel()
+	show := strings.Repeat("s", relpath.MaxBytes)
+	if !ShowPath(show) || ShowPath(show+"s") {
+		t.Fatal("ShowPath doesn't stop at the cap")
+	}
+	short := "Show"
+	ep := short + "/" + strings.Repeat("e", relpath.MaxBytes-len(short)-len("/.mp3")) + ".mp3"
+	if len(ep) != relpath.MaxBytes || !EpisodePath(short, ep) {
+		t.Fatalf("an episode path at the cap (%d bytes) refused", len(ep))
+	}
+	if over := short + "/e" + ep[len(short)+1:]; EpisodePath(short, over) {
+		t.Fatal("an episode path over the cap passed")
 	}
 }

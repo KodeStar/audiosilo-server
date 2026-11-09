@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 // Sync v2 (Track W1, migration 0061): players post what they listened to as
@@ -69,11 +71,11 @@ const (
 	// MaxClockOffset bounds a batch's clock_offset (seconds).
 	MaxClockOffset = 1e9
 	// MaxPathBytes is the longest path, as sent, a sync event or any
-	// path-addressed route (the API's pathInScope) may name (server#289): a
-	// longer one is no file's on Linux (PATH_MAX is 4096, and the library's
-	// root comes first) or macOS (1024), and it would be stored as is on the
-	// progress, event, session, history and bookmark rows.
-	MaxPathBytes = 4096
+	// path-addressed route (the API's pathInScope, pathTooLong) may name
+	// (server#289, relpath.MaxBytes): a longer one is no file's, and it would
+	// be stored as is on the progress, event, session, history and bookmark
+	// rows.
+	MaxPathBytes = relpath.MaxBytes
 	// syncRejectAge: an event older than this (corrected) is rejected too_old.
 	syncRejectAge = 90 * 24 * time.Hour
 	// SyncRetention is how long stored events are kept (PruneListeningEvents):
