@@ -701,7 +701,15 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*S
 	if existing.ReadOnly {
 		ro = 1
 	}
-	if _, err := c.db.ExecContext(ctx,
+	// Making a share read-only takes access away, so that edit commits durably
+	// (DeleteShare); a rename or a description is an ordinary commit.
+	exec := c.db.ExecContext
+	if in.ReadOnly != nil && *in.ReadOnly {
+		exec = func(ctx context.Context, q string, args ...any) (sql.Result, error) {
+			return c.db.ExecDurable(ctx, "UpdateShare", q, args...)
+		}
+	}
+	if _, err := exec(ctx,
 		`UPDATE shares SET name = ?, description = ?, read_only = ? WHERE id = ?`,
 		existing.Name, existing.Description, ro, id); err != nil {
 		if store.IsUniqueViolation(err) {

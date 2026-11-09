@@ -697,10 +697,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   few); a write that ends a credential (sign-out, device or API key revoke, password
   set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
   replaced or used, a pairing token used, Bridge pair code issued, pair/unpair), a write
-  that takes share access away (a grant revoked, a path rule removed, a share deleted:
-  `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`; S260-REVOKE)
-  or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
-  that commit, about one fsync), and a new one of those kinds must too; progress,
+  that takes share access away (a grant revoked, a path rule removed, a share deleted or made
+  read-only, a library deleted, a collection's viewer removed or the collection deleted:
+  `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`, `UpdateShare`'s `read_only`,
+  `DeleteLibrary`, `SetCollectionShares`, `DeleteCollection`; S260-REVOKE, server#260)
+  or a Bridge claim that leases a job uses `WithDurableTx`/`ExecDurable` (FULL for
+  that commit, about one fsync), and a new one of those kinds must too; an account edit
+  that ends nothing (`UpdateUser` with only `can_add_members` or re-enabling, `UpdateMember` a
+  rename) and a claim that only ends a lapsed lease or a lost request (`claimTx` without a job)
+  are ordinary commits; progress,
   heartbeats and other listening writes never do. The readers (never the writer) map the file
   (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`, any case) is
   `on`, or `auto` (the default) and the database file is on Linux on Unraid's shfs: statfs says

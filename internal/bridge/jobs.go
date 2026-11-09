@@ -1105,15 +1105,37 @@ func (s *Service) ClaimForPriority(ctx context.Context, token int64, asked []str
 // paired Bridge's. An idle claim (claimDue false) answers from the reader pool
 // and writes nothing.
 func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, minPriority *int32) (*Job, error) {
-	if due, err := s.claimDue(ctx, token, kinds, minPriority); err != nil || !due {
+	due, hand, err := s.claimDue(ctx, token, kinds, minPriority)
+	if err != nil || !due {
 		return nil, err
 	}
-	var (
-		job *Job
-		exp expiry
-	)
-	// Each write below has its check in claimDue, or an idle claim skips it.
-	err := s.db.WithDurableTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
+	// A claim due only to end a lapsed lease or a lost request (no job of kinds
+	// queued) ends them in an ordinary commit (server#260): only leasing a job
+	// needs the fsync, its attempt number never handed out twice. The jobs it
+	// put back may be this claim's to lease, so it looks again.
+	if !hand {
+		if err := s.claimTx(ctx, s.db.WithTx, token, nil, nil, nil); err != nil {
+			return nil, err
+		}
+		if _, hand, err = s.claimDue(ctx, token, kinds, minPriority); err != nil || !hand {
+			return nil, err
+		}
+	}
+	var job *Job
+	if err := s.claimTx(ctx, s.db.WithDurableTx, token, kinds, minPriority, &job); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// claimTx is a claim's transaction, run by withTx: it ends the lapsed leases
+// (expireTx) and the lost private requests (expirePrivateTx) and, with job set,
+// leases the next queued job of kinds into *job (nil when none). Each write has
+// its check in claimDue, or an idle claim skips it.
+func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, string, func(*sql.Tx) error) error,
+	token int64, kinds []string, minPriority *int32, job **Job) error {
+	var exp expiry
+	err := withTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
 		if err := bridgeTokenLive(ctx, tx, token); err != nil {
 			return err
 		}
@@ -1129,7 +1151,9 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 		for i := range expired {
 			exp.failed = append(exp.failed, transition{job: &expired[i], from: StateQueued})
 		}
-
+		if job == nil {
+			return nil
+		}
 		id, err := s.nextQueued(ctx, tx, kinds, minPriority)
 		if err != nil || id == 0 {
 			return err
@@ -1139,38 +1163,38 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 			        updated_at = ? WHERE id = ?`, at(s.now().Add(Lease)), now, now, id); err != nil {
 			return err
 		}
-		job, err = getJob(ctx, tx, id)
+		*job, err = getJob(ctx, tx, id)
 		return err
 	})
 	if err == nil {
 		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
 	}
-	return job, err
+	return err
 }
 
 // claimDue reports whether a claim has anything to write, read on the reader
 // pool: a lease that ran out (expireTx's, of any kind), a private follow request
 // whose feed URL this server no longer holds (expirePrivateTx's), or a job
-// nextQueued would hand out for kinds. A paired Bridge long-polls on two loops,
+// nextQueued would hand out for kinds (hand). A paired Bridge long-polls on two loops,
 // 4 to 6 claims a minute when idle; without this each took the one writer and
 // moved the content generation (store.DB.ContentGeneration), emptying every cache keyed
 // on it, to change nothing. ErrNotPaired as the claim's own check, which the
 // claim's transaction repeats. A write landing after these reads is no loss: an
 // enqueue or requeue wakes the waiting claims (waitClaim takes its wake channel
 // before it claims), and a lease that lapses later is due at the next claim.
-func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (bool, error) {
+func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, minPriority *int32) (due, hand bool, err error) {
 	if err := bridgeTokenLive(ctx, s.db, token); err != nil {
-		return false, err
-	}
-	if lapsed, err := s.leaseLapsed(ctx, s.ts()); err != nil || lapsed {
-		return lapsed, err
-	}
-	lost, err := s.lostPrivateRequests(ctx, s.db)
-	if err != nil || len(lost) > 0 {
-		return len(lost) > 0, err
+		return false, false, err
 	}
 	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
-	return id != 0, err
+	if err != nil || id != 0 {
+		return id != 0, id != 0, err
+	}
+	if lapsed, err := s.leaseLapsed(ctx, s.ts()); err != nil || lapsed {
+		return lapsed, false, err
+	}
+	lost, err := s.lostPrivateRequests(ctx, s.db)
+	return len(lost) > 0, false, err
 }
 
 // bridgeTokenLive answers ErrNotPaired once token is no longer the paired

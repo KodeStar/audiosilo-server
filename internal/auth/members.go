@@ -552,7 +552,14 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 		m       Member
 		changes = map[string]any{}
 	)
-	err := s.db.WithDurableTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
+	// A kind, access or sharing change can take access away or clear
+	// credentials, so it commits durably; a rename alone is an ordinary commit
+	// (server#260).
+	withTx := s.db.WithDurableTx
+	if in.Kind == nil && in.Access == nil && in.Share == nil {
+		withTx = s.db.WithTx
+	}
+	err := withTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
 		cur, err := s.memberOf(ctx, tx, owner, id)
 		if err != nil {
 			return err

@@ -1555,7 +1555,14 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 			role = RoleAdmin
 		}
 	}
-	return s.db.WithDurableTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
+	// Every edit that can end a credential or take access away commits durably;
+	// one that only gives (re-enabling, the may-add-members switch) is an
+	// ordinary commit (server#260).
+	withTx := s.db.WithDurableTx
+	if c.Password == nil && h == nil && c.Role == nil && (c.Disabled == nil || !*c.Disabled) {
+		withTx = s.db.WithTx
+	}
+	return withTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
 		u, err := getUser(ctx, tx, id)
 		if err != nil {
 			return err

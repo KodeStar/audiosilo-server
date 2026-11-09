@@ -80,12 +80,16 @@ func TestClaimDueLetsWorkThrough(t *testing.T) {
 	}
 
 	q.advance(Lease + time.Second)
-	gen = q.db.ContentGeneration()
+	gen, durable = q.db.ContentGeneration(), q.db.DurableCommits()
 	if j, err := q.claim(ctx, q.token, []string{KindDescribe}); j != nil || err != nil {
 		t.Fatalf("claim of another kind = %+v, %v", j, err)
 	}
 	if q.db.ContentGeneration() == gen {
 		t.Fatal("a claim with a lapsed lease due did not write")
+	}
+	// It leased nothing, so it paid no fsync (server#260).
+	if got := q.db.DurableCommits() - durable; got != 0 {
+		t.Fatalf("a claim that only ended a lapsed lease made %d durable commits, want 0", got)
 	}
 	if got, err := q.Job(ctx, job.ID); err != nil || got.State != StateQueued || got.LeaseUntil != nil {
 		t.Fatalf("lapsed job after another kind's claim = %+v, %v; want queued again", got, err)

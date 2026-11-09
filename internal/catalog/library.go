@@ -215,21 +215,24 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 	if _, err := c.DeleteBooksNotIn(ctx, id, nil); err != nil {
 		return err
 	}
-	// The library's whole-library grant shares grant nothing once it's gone
-	// (their rule cascades away); drop them rather than leave empty shares. One
-	// that also holds another library's rules still grants those, so it stays.
-	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM shares WHERE whole_library_id = ?
-		    AND NOT EXISTS (SELECT 1 FROM share_paths sp
-		                     WHERE sp.share_id = shares.id AND sp.library_id != ?)`, id, id); err != nil {
-		return err
-	}
 	// Audible titles matched to its books lose the match (path-keyed, no FK), those
 	// contested over one the contest, and
 	// the accounts mapped to it pause (library_id SET NULL by the FK), their open
 	// polls cancelled: all with the library's own delete, so no titles call can
-	// match a book of it in between.
-	return c.db.WithTx(ctx, "DeleteLibrary", func(tx *sql.Tx) error {
+	// match a book of it in between. The delete takes every grant of the library
+	// away (its share rules cascade), so it commits durably (DeleteShare,
+	// server#260).
+	return c.db.WithDurableTx(ctx, "DeleteLibrary", func(tx *sql.Tx) error {
+		// The library's whole-library grant shares grant nothing once it's gone
+		// (their rule cascades away); drop them rather than leave empty shares.
+		// One that also holds another library's rules still grants those, so it
+		// stays.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM shares WHERE whole_library_id = ?
+			    AND NOT EXISTS (SELECT 1 FROM share_paths sp
+			                     WHERE sp.share_id = shares.id AND sp.library_id != ?)`, id, id); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE audible_titles SET match_library_id = NULL, match_path = NULL, match_how = ''
 			  WHERE match_library_id = ?`, id); err != nil {

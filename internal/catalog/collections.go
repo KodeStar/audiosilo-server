@@ -447,8 +447,10 @@ func (c *Catalog) UpdateCollection(ctx context.Context, id, userID int64, name, 
 
 // DeleteCollection deletes a collection its owner calls it for (its items and
 // shares go with it), or takes a viewer off it (their share only: they leave).
+// Either takes access away (a household member's reach can be the collections
+// shared with them), so it commits durably (server#260).
 func (c *Catalog) DeleteCollection(ctx context.Context, id, userID int64) error {
-	return c.db.WithTx(ctx, "DeleteCollection", func(tx *sql.Tx) error {
+	return c.db.WithDurableTx(ctx, "DeleteCollection", func(tx *sql.Tx) error {
 		owned, err := collectionRole(ctx, tx, id, userID)
 		if err != nil {
 			return err
@@ -537,7 +539,9 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 	if err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
+	// It can take viewers off, which takes access away (DeleteCollection), so
+	// it commits durably.
+	return c.db.WithDurableTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
 		var kid bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = ? AND `+isKidSQL+`)`,
 			userID).Scan(&kid); err != nil {
