@@ -1867,7 +1867,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `MatchRunItem.Unchanged`, never on the wire) is never read: `MatchItemsToApply(scope)`
   filters it in SQL, so an empty refresh's Done starts at `apply_total` 0, and a book that
   changed since so planning now would write something the review never showed is left
-  alone. One that had a change then but none now: `applyItem` answers the internal
+  alone; the review (`Runner.Items`) shows no change under that scope either, so its
+  `leftOut` count and the apply agree. One that had a change then but none now: `applyItem` answers the internal
   `detailUnchanged` for an empty `planFor`, and the apply counts these up and drops them with
   `catalog.DropApplyItems` (`apply_total - n`, never below `apply_done`), `dropBatch` (100) at
   a time and the rest before the run settles, instead of marking each. Either way the item

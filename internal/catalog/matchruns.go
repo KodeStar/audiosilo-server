@@ -140,9 +140,9 @@ type MatchRunItem struct {
 	Detail    string        `json:"detail,omitempty"`
 	// Unchanged is the scopes a refresh item had nothing to change under when
 	// the run recorded it (migration 0070): what the review showed as no change,
-	// so an apply under one leaves the item out (MatchItemsToApply). Internal and
-	// write-only: RecordMatchItem stores it, the apply filters on it in SQL, and
-	// an item read back leaves it empty.
+	// so an apply under one leaves the item out (MatchItemsToApply), and the
+	// review shows no change under it (matchrun's Items), whatever the book
+	// would take now. Internal, never on the wire.
 	Unchanged []string `json:"-"`
 }
 
@@ -378,10 +378,13 @@ func (c *Catalog) GetMatchRun(ctx context.Context, id int64) (*MatchRun, error) 
 }
 
 func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
-	var raw string
+	var raw, unchanged string
 	if err := rows.Scan(&it.ID, &it.RunID, &it.LibraryID, &it.Path, &it.Outcome, &it.Score, &it.RunnerUp,
-		&raw, &it.Applied, &it.Detail); err != nil {
+		&raw, &it.Applied, &it.Detail, &unchanged); err != nil {
 		return err
+	}
+	if unchanged != "" {
+		it.Unchanged = strings.Split(unchanged, ",")
 	}
 	if err := json.Unmarshal([]byte(raw), &it.Proposal); err != nil {
 		return err
@@ -392,7 +395,7 @@ func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
 	return nil
 }
 
-const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, proposal, applied, detail`
+const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, proposal, applied, detail, unchanged`
 
 // ListMatchRunItems returns a page of a run's items, the best match first (score
 // descending, then id): of one outcome ("" = all), after the item `after`, at most

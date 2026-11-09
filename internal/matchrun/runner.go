@@ -886,6 +886,12 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			v.Book = ItemBook{Title: st.Title, Author: st.Author, Duration: st.Duration}
 			v.MatchedSince = run.Mode == catalog.MatchModeMatch && it.Applied == "" && matchedSince(st, &it)
 			for _, scope := range scopes {
+				if slices.Contains(it.Unchanged, scope) {
+					// Recorded with none: an apply under it leaves the item out
+					// unread (MatchItemsToApply), so the review shows none either.
+					v.Changes[scope] = Change{Fields: []string{}}
+					continue
+				}
 				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, &it))
 			}
 		}

@@ -90,6 +90,12 @@ func TestRefreshApplyWritesOnlyWhatTheReviewShowed(t *testing.T) {
 		}
 	}
 	described(catalog.BookEdit{Revert: []string{catalog.FieldDescription}}) // since the review: fill would write it now
+	// The review read again agrees with the apply: still no change under fill.
+	for _, it := range e.items(t, run, "") {
+		if fill := len(it.Changes[ScopeFill].Fields) > 0; fill != (it.Path == "A/Changed") {
+			t.Fatalf("%s changes after the book changed = %+v, want the recorded no-change shown", it.Path, it.Changes)
+		}
+	}
 	started, ended := e.applyAndWait(t, run, ScopeFill)
 	if d := e.field(t, "A/Unchanged", catalog.FieldDescription); d.Value != "" {
 		t.Fatalf("description = %+v, want nothing the review didn't show written", d)
