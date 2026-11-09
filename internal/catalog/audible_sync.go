@@ -20,7 +20,8 @@ import (
 // pushes the person's places here back to Audible from GET /bridge/progress
 // (AudibleProgress). Only the titles the console lets sync take part: matched
 // to a book here, not "Not this book" (rejected), not "Don't sync this book"
-// (no_sync), not ignored (the manager registry's Ignored), not gone from the account. See CONVENTIONS.md, Audible sync.
+// (no_sync), not ignored (the manager registry's Ignored), not gone from the
+// account, not still a preorder. See CONVENTIONS.md, Audible sync.
 
 var (
 	// ErrAudibleSyncOff: the account's sync is off (403 sync_off).
@@ -39,9 +40,13 @@ const AudibleDevicePrefix = "audible:"
 func IsAudibleDevice(id string) bool { return strings.HasPrefix(id, AudibleDevicePrefix) }
 
 // syncTitleSQL is a title (aliased t) whose book takes part in its account's
-// sync.
+// sync: matched, not rejected, ignored or "Don't sync this book", neither gone
+// from the account nor still a preorder (bridge#60: the poll may match a
+// preorder to another edition on disk, and Audible holds no place for an
+// unreleased ASIN, so a push to it is refused; released, it syncs, and the
+// re-match trigger, 0071, offers its book's place again).
 const syncTitleSQL = `t.match_library_id IS NOT NULL AND t.match_path IS NOT NULL AND t.rejected = 0 AND t.ignored = 0 AND t.no_sync = 0
-	AND t.state <> '` + AudibleGone + `'`
+	AND t.state NOT IN ('` + AudibleGone + `', '` + AudiblePreorder + `')`
 
 // AudibleSyncAccount is an account a sync call acts for: its person (whose
 // scopes and progress rows the call reads and writes) and its names.

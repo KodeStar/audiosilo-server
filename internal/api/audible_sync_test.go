@@ -1115,3 +1115,49 @@ func TestBridgeProgressFeedSyncedAgain(t *testing.T) {
 		}
 	}
 }
+
+// A title still a preorder takes no part in the sync (bridge#60): the poll may
+// match it to another edition on disk, and Audible holds no place for an
+// unreleased ASIN. Neither its titles in audible.sync's params, nor a place
+// for it, nor its book's place in the feed; released, all three, the book's
+// existing place offered again past the cursor.
+func TestAudibleSyncLeavesPreordersOut(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 1 || end.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	poll := func(id, state string) {
+		t.Helper()
+		if code, out := s.putTitles(t, testAccount, id, true,
+			title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook),
+			title(cradleASIN, "Unsouled", state, s.lib.ID, cradleBook)); code != http.StatusOK {
+			t.Fatalf("titles: %d %s", code, out)
+		}
+	}
+	poll("p2", "preorder")
+	titles, err := s.cat.AudibleSyncTitles(ctx, testAccount)
+	if err != nil || len(titles) != 1 || titles[0].ASIN != mistbornASIN {
+		t.Fatalf("sync titles with a preorder = %+v, %v", titles, err)
+	}
+	wantSync(t, s.postResults(t, place("aud-c", s.lib.ID, cradleBook, 900, time.Minute))[0], "rejected", "not_synced")
+	if p := s.patProgress(t, cradleBook); p.Position != 30 {
+		t.Fatalf("a preorder's place moved the book: %+v", p)
+	}
+	if f := s.feed(t, ""); len(f.Rows) != 0 {
+		t.Fatalf("feed with the title a preorder = %+v", f.Rows)
+	}
+	// Released: it syncs again, and the book's place, unchanged since the feed
+	// last read it, is offered again past that cursor (the re-match trigger).
+	poll("p3", "available")
+	if titles, err := s.cat.AudibleSyncTitles(ctx, testAccount); err != nil || len(titles) != 2 {
+		t.Fatalf("sync titles once released = %+v, %v", titles, err)
+	}
+	if f := s.feed(t, "&since="+url.QueryEscape(end.Next)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN || f.Rows[0].Position != 30 {
+		t.Fatalf("feed once released = %+v", f.Rows)
+	}
+	wantSync(t, s.postResults(t, place("aud-c3", s.lib.ID, cradleBook, 900, time.Minute))[0], "applied", "")
+}
