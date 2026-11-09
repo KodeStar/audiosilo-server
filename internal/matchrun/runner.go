@@ -651,24 +651,21 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 	// a batch at a time (and the rest before the run settles), never a write
 	// each: the total only ever runs ahead of what is left, so apply_done stays
 	// within it and reaches it.
-	var dropMu sync.Mutex
-	dropped := 0
-	drop := func(n int) {
-		if err := r.cat.DropApplyItems(context.WithoutCancel(ctx), run.ID, n); err != nil {
+	var dropped atomic.Int64
+	drop := func(n int64) {
+		if n == 0 {
+			return
+		}
+		if err := r.cat.DropApplyItems(context.WithoutCancel(ctx), run.ID, int(n)); err != nil {
 			r.log.Error("drop match items failed", "run", run.ID, "items", n, "err", err)
 		}
 	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run, it, o)
 		if detail == detailUnchanged {
-			dropMu.Lock()
-			dropped++
-			n := 0
-			if dropped >= dropBatch {
-				n, dropped = dropped, 0
+			if dropped.Add(1)%dropBatch == 0 {
+				drop(dropBatch)
 			}
-			dropMu.Unlock()
-			drop(n)
 			return
 		}
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
@@ -688,7 +685,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
 		}
 	})
-	drop(dropped) // the workers are done: no lock needed
+	drop(dropped.Load() % dropBatch) // the workers are done: the rest
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready (InterruptMatchRuns, settleLocked)
 	}
