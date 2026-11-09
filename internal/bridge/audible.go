@@ -162,14 +162,9 @@ type AudibleImportParams struct {
 // The audible.import result's and failure's codes the console names (the
 // Bridge's; a failed job's code is AudibleImportCode's reading).
 const (
-	ImportNotReleased    = "not_released"
-	ImportNoRights       = "no_rights"
-	ImportAudibleRefused = "audible_refused"
-	// ImportAudibleSignIn: Audible refused the account's sign-in for now
-	// (transient: the Bridge tries again), not the device (audible_refused). An
-	// audible.sync failing with it is an ordinary failure: the account is not
-	// marked refused.
-	ImportAudibleSignIn     = "audible_sign_in"
+	ImportNotReleased       = "not_released"
+	ImportNoRights          = "no_rights"
+	ImportAudibleRefused    = "audible_refused"
 	ImportNotWritable       = "not_writable"
 	ImportExists            = "exists"
 	ImportDiskFull          = "disk_full"
@@ -178,7 +173,7 @@ const (
 )
 
 // AudibleImportCodes are the codes an audible.import failure may name.
-var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportAudibleSignIn,
+var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused,
 	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
 
 var asinPattern = regexp.MustCompile(`^[A-Z0-9]{10}$`)
@@ -460,6 +455,13 @@ const AudibleSyncEvery = 15 * time.Minute
 // refused the account (the Bridge's "Sign in again" state), so no sync is
 // queued until the Bridge maps the account again.
 const SyncAudibleRefused = ImportAudibleRefused
+
+// SyncAudibleSignIn: Audible refused the account's sign-in for now
+// (transient: the Bridge tries again), not the device (audible_refused). An
+// audible.sync failing with it is an ordinary failure: the account is not
+// marked refused. Only a sync names it; an import's refused sign-in is
+// audible_refused (server#303).
+const SyncAudibleSignIn = "audible_sign_in"
 
 // AudibleSyncTitle is one title an audible.sync reads: its ASIN, the book on
 // this server it is matched to (library and book path, the progress key the

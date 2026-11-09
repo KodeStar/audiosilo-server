@@ -111,9 +111,11 @@ func (c *Catalog) AudibleSyncTitles(ctx context.Context, account string) ([]brid
 // AudibleSyncBooks are the books account's sync may write (its titles'
 // matches, syncTitleSQL), as progress keys, each with "" or the reason the
 // sync's events on it are rejected: duration_mismatch when no title on the
-// book has a runtime that agrees with the indexed book's duration
-// (audibleRuntimeAgrees: the title is matched to another edition or volume, so
-// neither its places nor its finish are this book's).
+// book has a runtime that agrees with the book's length (audibleRuntimeAgrees:
+// the title is matched to another edition or volume, so neither its places
+// nor its finish are this book's). The length is the indexed duration, else
+// the account's person's own row's, the one rule the feed checks a push by
+// (AudibleProgress, server#303).
 func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref]string, error) {
 	type row struct {
 		ref      Ref
@@ -122,9 +124,13 @@ func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref
 	}
 	titles, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *row) error {
 		return rows.Scan(&x.ref.LibraryID, &x.ref.Path, &x.runtimeS, &x.duration)
-	}, `SELECT t.match_library_id, t.match_path, t.runtime_s, COALESCE(b.duration, 0) FROM audible_titles t
-		  LEFT JOIN books b ON b.library_id = t.match_library_id AND b.rel_path = t.match_path
-		 WHERE t.account = ? AND `+syncTitleSQL, account)
+	}, `SELECT t.match_library_id, t.match_path, t.runtime_s,
+	           CASE WHEN COALESCE(b.duration, 0) > 0 THEN b.duration ELSE COALESCE(p.duration, 0) END
+	      FROM audible_titles t
+	      JOIN audible_accounts a ON a.account = t.account
+	      LEFT JOIN books b ON b.library_id = t.match_library_id AND b.rel_path = t.match_path
+	      LEFT JOIN progress p ON p.user_id = a.user_id AND p.library_id = t.match_library_id AND p.rel_path = t.match_path
+	     WHERE t.account = ? AND `+syncTitleSQL, account)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +261,7 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	}
 	// A row whose title's runtime disagrees with the book's length (the
 	// indexed duration, else the row's own: audibleRuntimeAgrees, the listening
-	// route's duration_mismatch) is another edition or volume's, so it is never
+	// route's duration_mismatch, AudibleSyncBooks) is another edition or volume's, so it is never
 	// pushed to that ASIN; the Bridge needs no check of its own.
 	rows = make([]AudibleProgressRow, 0, len(got))
 	next = since
@@ -325,8 +331,12 @@ func (c *Catalog) MarkAudibleSyncQueued(ctx context.Context, account string) err
 // finding the sync off) is the account's last sync (last_sync_at), one that
 // failed because Audible refused the account (bridge.SyncAudibleRefused) marks
 // it refused, so none is queued until the Bridge maps the account again or
-// polls it whole (PutAudibleTitles: Audible answered the account). Any other
-// ending changes nothing (the next sync is due as usual). A user-state write.
+// polls it whole (PutAudibleTitles: Audible answered the account), unless the
+// refusal ended after the sync was claimed (refusal_ended_at, server#303: a
+// fresh sign-in while the sync ran; its claimed_at is whole seconds, so a
+// refusal ended in the claim's own second still marks it, as before). Any
+// other ending changes nothing (the next sync is due as usual). A user-state
+// write.
 func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	account, err := bridge.AudibleSyncOf(job)
 	if err != nil {
@@ -336,7 +346,28 @@ func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 	case bridge.AudibleSynced(job):
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET last_sync_at = ? WHERE account = ?`, c.ts(), account)
 	case bridge.AudibleSyncCode(job) == bridge.SyncAudibleRefused:
+		var ended sql.NullString
+		err = c.db.QueryRowContext(ctx, `SELECT refusal_ended_at FROM audible_accounts WHERE account = ?`, account).Scan(&ended)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
+			return err
+		}
 		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ?`, c.ts(), account)
 	}
 	return err
+}
+
+// refusalEndedSince reports whether an account's refusal ended (ended, its
+// refusal_ended_at) in a later second than a sync's claim (claimed, whole
+// seconds): that sync's refusal is from before it. Unknown either way, it did
+// not.
+func refusalEndedSince(ended sql.NullString, claimed *string) bool {
+	if !ended.Valid || claimed == nil {
+		return false
+	}
+	end, err1 := time.Parse(time.RFC3339Nano, ended.String)
+	at, err2 := time.Parse(time.RFC3339Nano, *claimed)
+	return err1 == nil && err2 == nil && end.Truncate(time.Second).After(at)
 }

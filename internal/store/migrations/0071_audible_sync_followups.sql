@@ -17,3 +17,9 @@ BEGIN
      WHERE library_id = NEW.match_library_id AND rel_path = NEW.match_path
        AND user_id = (SELECT user_id FROM audible_accounts WHERE account = NEW.account);
 END;
+
+-- server#303: when the account's sync refusal last ended (a mapping, a fresh
+-- sign-in, or a complete poll: Audible answered the account), so a refused
+-- audible.sync claimed before it, which reaches the server after, does not
+-- mark the account refused again (catalog.FoldAudibleSync). NULL: never.
+ALTER TABLE audible_accounts ADD COLUMN refusal_ended_at TEXT;
