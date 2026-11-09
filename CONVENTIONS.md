@@ -1833,25 +1833,43 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   admin edit (`planFor` checks the identifiers and their sources,
   `splitFallback`, before `stillFoundBy`). A stopped apply that already healed the match can
   resume its cover only while those identifiers still agree (the same check, then `healedTo`).
-  A book with neither identifier may fill an ASIN/ISBN its recording gained.
+  A book with neither identifier may fill an ASIN/ISBN its recording gained, never the one its
+  recorded match offered (server#330, `0070`: `book_matches.offered_asin` / `offered_isbn`,
+  `MatchAnchor.OfferedASIN/ISBN`, the identifiers the match offered when recorded, ticked or
+  not, in the fields' stored form): the book has neither, so the admin unticked it in the match
+  dialog or reverted it since, and `planRefresh` drops it (such a book records no item). One the
+  recording gained since (another value) fills, and the apply then records it as offered (the
+  anchor rewritten with the same work and recording, so the review's `match` is true beside the
+  identifier), so a revert of that one stays too. Written by `Plan` (the proposal's, written
+  or not), the dialog's accept (`PATCH .../book` `match: {asin, isbn}`: the match's identifier
+  whether a checkbox or already the book's; one the field would refuse is 400 on field `match`;
+  an Unlink ignores them) and a heal (the proposal's when it names any, else the match's own);
+  copied by a join, moved with the book. No backfill: '' (a match recorded before 0070, or an
+  accept from an older console) fills as before.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
   overwrites the details but never writes an identifier for a book that has one (an
   identifier lookup's proposal carries none, and `planRefresh` drops a by-work proposal's
   once the book has one of its own; a fallback's proposal also carries none).
-  Known issue for v2.7.0 (server#330, edge 1): unticking or reverting an offered ASIN
-  does not remember its rejection or remove the recorded match, so a later refresh can
-  fill it again. Unlink removes the recorded match and community values.
+  Unlink removes the recorded match and community values.
   `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite, a refresh being for the details (else `ErrScope`, 400); audited
-  `book.match_refresh`. The review excludes refresh rows with no changes under the
-  selected scope (a healed recorded match counts as a change), reading all confident
+  `book.match_refresh`. The server leaves out a refresh item with nothing to change under the
+  scope (server#332: `applyItem` answers the internal `detailUnchanged` for an empty
+  `planFor`, and the apply calls `catalog.DropApplyItem`, `apply_total - 1`, instead of
+  marking it): it stays `applied` '' as an exclusion leaves it (pending, not skipped), and
+  `apply_done` ends at `apply_total`. That includes one whose book no longer has what it was
+  found by. A match or repick item with nothing to change is still `skipped` /
+  `nothing_to_change`. The review counts refresh rows with no changes under the selected
+  scope (a healed recorded match counts as a change) as left out (`picksForScope`'s
+  `leftOut`, `applyCount(run, picks, leftOut)`) and never sends them, reading all confident
   pages with a separate `useAllMatchRunItems` query (200 per page, no focus refetch)
-  before enabling Apply; the shown list keeps manual pagination. With no picks,
-  Done finishes the run through an apply with every confident item excluded, changing
-  no books. Apply waits only for the run list to refresh, not the loaded item pages.
+  before enabling Apply; the shown list keeps manual pagination. Gone items are still
+  excluded, and an admin's own exclusion stays (counted once). With no picks, Done
+  finishes the run through an apply with only the admin's own exclusions, changing no
+  books. Apply waits only for the run list to refresh, not the loaded item pages.
   Apply caps manual includes at 20,000 ids; exclusions use the existing 1 MiB
-  request-body limit so large refreshes can omit every unchanged book.
+  request-body limit (an older console still sends every unchanged book).
   `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run

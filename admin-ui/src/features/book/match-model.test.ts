@@ -229,7 +229,28 @@ describe('compare', () => {
         description: 'Roshar is a world of stone and storms.',
       },
       source: 'community',
-      match: { work_id: 'the-way-of-kings', recording_id: 'r1' },
+      // The book already has the match's ASIN: recorded as offered all the same.
+      match: { work_id: 'the-way-of-kings', recording_id: 'r1', asin: 'B003P2WO5E', isbn: '' },
+    });
+  });
+
+  it('sends the offered identifiers with the match, ticked or not (server#330)', () => {
+    const detail = bookDetail();
+    detail.fields.asin = { ...detail.fields.asin, value: '' };
+    const rec = recording({ isbns: ['9780765326355'] });
+    const c = candidate({ recordings: [rec] });
+    const rows = compareRows(detail.fields, c, rec);
+    expect(rows.find((r) => r.field === 'asin')).toMatchObject({ offered: true });
+    const ticks = defaultTicks(rows);
+    ticks.delete('asin');
+    const req = acceptRequest(rows, ticks, c, rec);
+    expect(req.set?.asin).toBeUndefined();
+    expect(req.set?.isbn).toBe('9780765326355');
+    expect(req.match).toEqual({
+      work_id: 'the-way-of-kings',
+      recording_id: 'r1',
+      asin: 'B003P2WO5E',
+      isbn: '9780765326355',
     });
   });
 
@@ -240,11 +261,16 @@ describe('compare', () => {
     const rows = compareRows(bookDetail().fields, listing, listing.recordings[0]);
     const req = acceptRequest(rows, defaultTicks(rows), listing, listing.recordings[0]);
     expect(req.set?.asin).toBeUndefined();
-    expect(req.match).toEqual({ work_id: 'the-way-of-kings', recording_id: 'r1' });
+    expect(req.match).toEqual({
+      work_id: 'the-way-of-kings',
+      recording_id: 'r1',
+      asin: '',
+      isbn: '',
+    });
     const none = acceptRequest(rows, new Set(), listing, undefined);
     expect(none).toMatchObject({
       set: {},
-      match: { work_id: 'the-way-of-kings', recording_id: '' },
+      match: { work_id: 'the-way-of-kings', recording_id: '', asin: '', isbn: '' },
     });
   });
 });

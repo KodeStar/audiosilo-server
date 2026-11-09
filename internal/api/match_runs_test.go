@@ -230,8 +230,9 @@ func TestMatchRunsFinishEmptyRefresh(t *testing.T) {
 	}
 }
 
-// A refresh review automatically excludes every unchanged book. Its exclusion
-// list can exceed the manual-pick limit even when only one book needs applying.
+// An apply's exclusion list can exceed the manual-pick limit (an older console
+// excluded every unchanged refresh book; the server now leaves those out itself:
+// TestRefreshApplyLeavesOutUnchanged), within the 1 MiB body.
 func TestMatchRunLargeExclusions(t *testing.T) {
 	t.Parallel()
 	e, tok, _, libID := newMatchRunEnv(t, "uk")

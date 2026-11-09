@@ -288,8 +288,10 @@ func TestIssue330FallbackLeavesChangesSinceLookup(t *testing.T) {
 				if a := e.anchorOf(t, path); a != before || e.field(t, path, catalog.FieldNarrator).Value != "" || e.covers.Load() != 0 {
 					t.Errorf("fallback wrote after %s: anchor %+v, before %+v, covers %d", since, a, before, e.covers.Load())
 				}
-				if it := e.items(t, run, "")[0]; it.Applied != catalog.ItemSkipped || it.Detail != "nothing_to_change" {
-					t.Errorf("item = %+v, want skipped", it.MatchRunItem)
+				// Nothing to change now: a refresh's apply leaves it out (server#332),
+				// still pending, as an exclusion would.
+				if it := e.items(t, run, "")[0]; it.Applied != "" || it.Detail != "" {
+					t.Errorf("item = %+v, want left out", it.MatchRunItem)
 				}
 			})
 		}
@@ -344,7 +346,7 @@ func TestIssue330FallbackHealStoppedInItsCover(t *testing.T) {
 			e.runner.Wait()
 			wantCovers, wantApplied := int32(1), catalog.ItemApplied
 			if changed {
-				wantCovers, wantApplied = 0, catalog.ItemSkipped
+				wantCovers, wantApplied = 0, "" // nothing to change: left out (server#332)
 			}
 			if it := e.items(t, run, "")[0]; it.Applied != wantApplied || e.covers.Load() != wantCovers {
 				t.Errorf("resumed item = %+v, covers %d, want %s / %d", it.MatchRunItem, e.covers.Load(), wantApplied, wantCovers)

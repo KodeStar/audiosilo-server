@@ -148,8 +148,9 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			    FROM chapter_overrides WHERE library_id = ?3 AND path = ?4`,
 				[]any{into, sub, libraryID, p.Path}},
 			// The recorded community match: the first part's (the parts are one book).
-			{`INSERT OR IGNORE INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at)
-			  SELECT library_id, ?1, work_id, recording_id, how, run_id, set_by, set_at
+			{`INSERT OR IGNORE INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at,
+			                                     offered_asin, offered_isbn)
+			  SELECT library_id, ?1, work_id, recording_id, how, run_id, set_by, set_at, offered_asin, offered_isbn
 			    FROM book_matches WHERE library_id = ?2 AND path = ?3`,
 				[]any{into, libraryID, p.Path}},
 			{`INSERT OR IGNORE INTO book_covers(library_id, path, mime, updated_by, updated_at, data, source)

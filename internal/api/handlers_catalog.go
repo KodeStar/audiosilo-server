@@ -317,10 +317,15 @@ type editRequest struct {
 
 // matchRequest is an edit's community match (editRequest.Match). WorkID is a
 // pointer so a match naming no work ({} or a null work_id) is told apart from the
-// Unlink's explicitly empty one, and refused (handleAdminEditBook).
+// Unlink's explicitly empty one, and refused (handleAdminEditBook). ASIN and
+// ISBN are the identifiers the match offered, ticked or not (optional; recorded
+// so a refresh never fills one back the admin unticked or reverted: server#330);
+// one the field would refuse is 400 on field "match".
 type matchRequest struct {
 	WorkID      *string `json:"work_id"`
 	RecordingID string  `json:"recording_id"`
+	ASIN        string  `json:"asin"`
+	ISBN        string  `json:"isbn"`
 }
 
 func (m *matchRequest) workID() string {
@@ -337,7 +342,8 @@ func (e editRequest) toEdit(userID int64) catalog.BookEdit {
 		edit.ChapterSet, edit.ChapterRevert = e.Chapters.Set, e.Chapters.Revert
 	}
 	if e.Match != nil {
-		edit.Match = &catalog.MatchAnchor{WorkID: e.Match.workID(), RecordingID: e.Match.RecordingID, How: catalog.MatchHowAccepted}
+		edit.Match = &catalog.MatchAnchor{WorkID: e.Match.workID(), RecordingID: e.Match.RecordingID, How: catalog.MatchHowAccepted,
+			OfferedASIN: e.Match.ASIN, OfferedISBN: e.Match.ISBN}
 	}
 	return edit
 }

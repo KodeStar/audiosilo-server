@@ -243,6 +243,18 @@ func (c *Catalog) MarkMatchItem(ctx context.Context, runID, itemID int64, applie
 	})
 }
 
+// DropApplyItem leaves one item out of a working apply: its total counts one
+// fewer, and the item is not marked (still pending, as an exclusion leaves it).
+// A refresh's item with nothing to change under the scope (server#332), so the
+// apply ends at its total without the console excluding each such item.
+func (c *Catalog) DropApplyItem(ctx context.Context, runID int64) error {
+	return c.db.WithTx(ctx, "DropApplyItem", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE match_runs SET apply_total = apply_total - 1 WHERE id = ? AND apply_total > 0`, runID)
+		return err
+	})
+}
+
 // FinishApply ends an apply: applied, or (cancelled) back to ready, its applied
 // items marked, so the rest can be applied later.
 func (c *Catalog) FinishApply(ctx context.Context, runID int64, cancelled bool) error {
@@ -499,7 +511,8 @@ type MatchState struct {
 	Fields       map[string]FieldValue
 	CoverMissing bool
 	// Anchor is the book's recorded community match (book_matches), zero when
-	// it has none. How is MatchHowAuto or MatchHowAccepted.
+	// it has none. How is MatchHowAuto or MatchHowAccepted; the offered
+	// identifiers are those it offered when recorded (0070).
 	Anchor MatchAnchor
 }
 
@@ -512,11 +525,13 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 	)
 	err := c.db.QueryRowContext(ctx,
 		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
-		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, '')
+		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
+		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, '')
 		   FROM books b`+matchSubjectJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
 		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
-			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How)
+			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,
+			&st.Anchor.OfferedASIN, &st.Anchor.OfferedISBN)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

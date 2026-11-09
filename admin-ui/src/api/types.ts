@@ -1899,8 +1899,11 @@ export interface BookEditRequest {
    * recorded as the book's match even with no ASIN or ISBN; `{work_id: ""}`
    * unlinks the book: the match goes with every community value and cover (the
    * admin's own edits stay). One book at a time: a bulk edit refuses it.
+   * `asin`/`isbn` are the identifiers the match offered, ticked or not ("" for
+   * none): recorded so a refresh never fills one back the admin unticked or
+   * reverted (server#330).
    */
-  match?: { work_id: string; recording_id?: string };
+  match?: { work_id: string; recording_id?: string; asin?: string; isbn?: string };
 }
 
 /** catalog.Ref: a book by its identity. */

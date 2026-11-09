@@ -104,10 +104,14 @@ describe('picks', () => {
     expect(isPickable(noChange, 'refresh', 'fill')).toBe(false);
     expect(isChosen(noChange, picks, 'refresh', 'fill')).toBe(false);
     expect(isChosen(changed, picks, 'refresh', 'fill')).toBe(true);
-    expect(applyCount(run({}, { pending: 2 }), fill)).toBe(1);
-    expect(applyRequest('fill', fill)).toEqual({ scope: 'fill', exclude: [1], include: [] });
+    // The no-op is left out by the server (server#332): counted, never sent.
+    expect(fill.leftOut).toBe(1);
+    expect(applyCount(run({}, { pending: 2 }), fill.picks, fill.leftOut)).toBe(1);
+    expect(applyRequest('fill', fill.picks)).toEqual({ scope: 'fill', exclude: [], include: [] });
     expect(isPickable(noChange, 'refresh', 'overwrite')).toBe(true);
-    expect(picksForScope(picks, [noChange], 'refresh', 'overwrite').exclude.size).toBe(0);
+    const overwrite = picksForScope(picks, [noChange], 'refresh', 'overwrite');
+    expect(overwrite.picks.exclude.size).toBe(0);
+    expect(overwrite.leftOut).toBe(0);
     expect(isPickable(noChange, 'repick', 'ids')).toBe(true);
     expect(isPickable(noChange, 'match', 'ids')).toBe(true);
   });
@@ -137,8 +141,8 @@ describe('picks', () => {
       expect(isChosen(healed, picks, 'refresh', scope)).toBe(true);
       expect(isChosen(review, picks, 'refresh', scope)).toBe(true);
       const effective = picksForScope(picks, [healed, review, noop], 'refresh', scope);
-      expect(applyCount(run({}, { pending: 2 }), effective)).toBe(2);
-      expect(applyRequest(scope, effective)).toEqual({ scope, exclude: [3], include: [2] });
+      expect(applyCount(run({}, { pending: 2 }), effective.picks, effective.leftOut)).toBe(2);
+      expect(applyRequest(scope, effective.picks)).toEqual({ scope, exclude: [], include: [2] });
     }
     const range = togglePickRange(
       NO_PICKS,
@@ -186,9 +190,57 @@ describe('picks', () => {
       item({ id: 14, outcome: 'auto', matched_since: true, applied: 'applied' }),
       item({ id: 15, outcome: 'review', matched_since: true }),
     ];
-    const picks = picksForScope(NO_PICKS, loaded, 'match', 'fill');
+    const { picks, leftOut } = picksForScope(NO_PICKS, loaded, 'match', 'fill');
     expect([...picks.exclude].sort()).toEqual([12, 13]);
-    expect(applyCount(r, picks)).toBe(1);
+    expect(leftOut).toBe(0);
+    expect(applyCount(r, picks, leftOut)).toBe(1);
+  });
+
+  it('leaves refresh no-ops to the server: counted, never sent (server#332)', () => {
+    const noop = (id: number, over: Partial<MatchRunItem> = {}) =>
+      item({ id, outcome: 'auto', changes: { fill: { fields: [], cover: false } }, ...over });
+    const changed = item({
+      id: 1,
+      outcome: 'auto',
+      changes: { fill: { fields: ['title'], cover: false } },
+    });
+    const loaded = [
+      changed,
+      noop(2),
+      noop(3),
+      // The admin excluded this one: it stays excluded, counted once.
+      noop(4),
+      // Gone or applied: excluded as before, or no pick at all.
+      noop(5, { gone: true }),
+      noop(6, { applied: 'applied' }),
+      // A review no-op the admin had put in comes out.
+      noop(7, { outcome: 'review' }),
+    ];
+    const picks = { exclude: new Set([4]), include: new Set([7]) };
+    const out = picksForScope(picks, loaded, 'refresh', 'fill');
+    expect(out.leftOut).toBe(2);
+    expect([...out.picks.exclude].sort()).toEqual([4, 5]);
+    expect([...out.picks.include]).toEqual([]);
+    const r = run({}, { auto: 6, pending: 5 });
+    expect(applyCount(r, out.picks, out.leftOut)).toBe(1);
+    expect(applyRequest('fill', out.picks)).toEqual({
+      scope: 'fill',
+      exclude: [4, 5],
+      include: [],
+    });
+  });
+
+  it('keeps a huge refresh apply request small (server#332)', () => {
+    const items = Array.from({ length: 120_000 }, (_, i) =>
+      item({ id: i + 1, outcome: 'auto', changes: { fill: { fields: [], cover: false } } }),
+    );
+    const out = picksForScope(NO_PICKS, items, 'refresh', 'fill');
+    const body = JSON.stringify(applyRequest('fill', out.picks));
+    expect(out.leftOut).toBe(120_000);
+    expect(body.length).toBeLessThan(100);
+    expect(applyCount(run({}, { auto: 120_000, pending: 120_000 }), out.picks, out.leftOut)).toBe(
+      0,
+    );
   });
 
   it('counts what an apply takes: pending confident, less left out, plus put in', () => {

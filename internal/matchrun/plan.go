@@ -370,7 +370,10 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 	}
 	w.Cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
 	if p.WorkID != "" && (p.WorkID != st.Anchor.WorkID || p.RecordingID != st.Anchor.RecordingID) {
-		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID}
+		// The identifiers p offers go with the match, written or not, so a
+		// refresh never fills one back that the admin reverted (planRefresh).
+		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID,
+			OfferedASIN: p.Values[catalog.FieldASIN], OfferedISBN: p.Values[catalog.FieldISBN]}
 	}
 	return w
 }
@@ -514,6 +517,14 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // matched by its own ASIN or ISBN with no recorded work keeps none (the refresh
 // names no match, it reads one), while one whose work was merged or retired
 // since takes the record the lookup followed it to.
+//
+// An identifier the recorded match offered (MatchAnchor.OfferedASIN/ISBN) is
+// never filled: the book has neither, so the admin unticked it when the match
+// was made, or reverted it since (server#330). One the recording gained since
+// (another value) fills, and the match then records it as offered, so a revert
+// of that one stays too. A match recorded before 0070 offered none, so it fills
+// as before. A heal records the proposal's identifiers when it names any, else
+// keeps the match's.
 func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Plan(scope, st, p)
 	if st.Anchor.WorkID == "" {
@@ -522,6 +533,28 @@ func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) 
 	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
 		delete(w.Set, catalog.FieldASIN)
 		delete(w.Set, catalog.FieldISBN)
+	}
+	offered := map[string]string{catalog.FieldASIN: st.Anchor.OfferedASIN, catalog.FieldISBN: st.Anchor.OfferedISBN}
+	fills := false
+	for field, was := range offered {
+		if v, ok := w.Set[field]; ok && was != "" && v == was {
+			delete(w.Set, field)
+		}
+		_, ok := w.Set[field]
+		fills = fills || ok
+	}
+	if st.Anchor.WorkID == "" {
+		return w
+	}
+	if w.Anchor == nil && fills {
+		// A new identifier for the book: the match records it as offered.
+		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID}
+	}
+	if w.Anchor != nil {
+		w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = st.Anchor.OfferedASIN, st.Anchor.OfferedISBN
+		if p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != "" {
+			w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN]
+		}
 	}
 	return w
 }

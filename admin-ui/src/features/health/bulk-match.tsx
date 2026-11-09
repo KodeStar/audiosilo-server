@@ -459,8 +459,9 @@ function ReviewDialog({
     );
   };
   // Every item loaded so far: an apply leaves out the confident ones it would
-  // leave alone (gone, matched since, nothing to write: picksForScope), so the
-  // count is what the apply writes.
+  // leave alone (gone, matched since: excluded; a refresh's with nothing to
+  // write: left out by the server, picksForScope), so the count is what the
+  // apply writes.
   const onLoaded = useCallback((items: MatchRunItem[]) => {
     setLoaded((was) => {
       if (items.every((item) => was.get(item.id) === item)) return was;
@@ -470,14 +471,15 @@ function ReviewDialog({
     });
   }, []);
   const applyScope = repick ? 'ids' : scope;
-  const effectivePicks = useMemo(() => {
+  const { picks: effectivePicks, leftOut } = useMemo(() => {
     const scopeItems = new Map(loaded);
     if (readAllAuto) for (const item of autoRows) scopeItems.set(item.id, item);
     return picksForScope(picks, [...scopeItems.values()], run.mode, applyScope);
   }, [loaded, readAllAuto, autoRows, picks, run.mode, applyScope]);
-  const count = applyCount(run, effectivePicks);
-  // Finish an empty refresh through the existing apply endpoint with every
-  // automatic item excluded, so another mode can be started afterwards.
+  const count = applyCount(run, effectivePicks, leftOut);
+  // Finish an empty refresh through the existing apply endpoint, so another
+  // mode can be started afterwards. The server leaves out the items with
+  // nothing to change, so it sends only the admin's own exclusions.
   const finishEmpty = run.mode === 'refresh' && autoReady && count === 0;
   const country = regionName(run.region, lang);
   const headings: Record<MatchRunMode, { title: string; description: string }> = {

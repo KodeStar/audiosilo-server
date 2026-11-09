@@ -174,7 +174,10 @@ export function defaultTicks(rows: CompareRow[]): Set<OverrideField> {
  * book's own way. Unticking only a respelling of the book's own series changes
  * nothing. The work and recording accepted go with it (`match`): the server
  * records them as the book's match, which is what makes a book the community holds
- * with no ASIN or ISBN (a store listing) matched.
+ * with no ASIN or ISBN (a store listing) matched. So do the ASIN and ISBN the
+ * match offers, ticked or not, and also when the book already has them: one
+ * unticked (or reverted later) is then never filled back by a refresh
+ * (server#330).
  */
 export function acceptRequest(
   rows: CompareRow[],
@@ -193,10 +196,18 @@ export function acceptRequest(
   ) {
     delete set.series_index;
   }
+  // The match's identifier whether it is a checkbox or already the book's (a
+  // match accepted again keeps it recorded): a value is what the match offers.
+  const offered = (f: 'asin' | 'isbn') => row(f)?.theirs ?? '';
   return {
     set,
     source: 'community',
-    match: { work_id: candidate.work_id, recording_id: recording?.id ?? '' },
+    match: {
+      work_id: candidate.work_id,
+      recording_id: recording?.id ?? '',
+      asin: offered('asin'),
+      isbn: offered('isbn'),
+    },
   };
 }
 

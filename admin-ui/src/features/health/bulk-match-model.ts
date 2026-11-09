@@ -149,25 +149,34 @@ export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
 }
 
 /**
- * The picks an apply sends: every loaded item without a checkbox under this
- * mode and scope (gone, matched since the run, a refresh with nothing to
- * write) left out, so the apply's count doesn't promise them. Derived, never
- * stored, so changing scope restores the admin's own picks.
+ * The picks an apply sends, and how many confident items the server leaves out
+ * itself. Every loaded item without a checkbox under this mode and scope (gone,
+ * matched since the run) is excluded, so the apply's count doesn't promise it,
+ * except a refresh's confident item with nothing to write under the scope: the
+ * server leaves that one out of the apply (server#332), so it is only counted
+ * (`leftOut`), never sent, and a huge refresh's request stays small. An admin's
+ * own exclusion of one stays excluded (counted once). Derived, never stored, so
+ * changing scope restores the admin's own picks.
  */
 export function picksForScope(
   picks: Picks,
   items: readonly MatchRunItem[],
   mode: MatchRunMode,
   scope: MatchScope,
-): Picks {
+): { picks: Picks; leftOut: number } {
   const exclude = new Set(picks.exclude);
   const include = new Set(picks.include);
+  let leftOut = 0;
   for (const item of items) {
     if (item.applied || isPickable(item, mode, scope)) continue;
-    if (item.outcome === 'auto') exclude.add(item.id);
     include.delete(item.id);
+    if (item.outcome !== 'auto') continue;
+    // Pickable but for having nothing to write: a refresh no-op.
+    const noop = mode === 'refresh' && isPickable(item, 'match', scope);
+    if (!noop) exclude.add(item.id);
+    else if (!exclude.has(item.id)) leftOut++;
   }
-  return { exclude, include };
+  return { picks: { exclude, include }, leftOut };
 }
 
 /** Keep this margin aligned with internal/matchrun.AutoLead (Classify). */
@@ -184,9 +193,13 @@ export function hasCloseScore(item: MatchRunItem): boolean {
   );
 }
 
-/** How many books an apply writes to: the confident ones still pending, less left out, plus put in. */
-export function applyCount(run: MatchRun, picks: Picks): number {
-  return Math.max(0, run.counts.pending - picks.exclude.size) + picks.include.size;
+/**
+ * How many books an apply writes to: the confident ones still pending, less the
+ * excluded ones and those the server leaves out (`leftOut`: picksForScope), plus
+ * put in.
+ */
+export function applyCount(run: MatchRun, picks: Picks, leftOut = 0): number {
+  return Math.max(0, run.counts.pending - picks.exclude.size - leftOut) + picks.include.size;
 }
 
 /** The apply request for the picks. */
