@@ -527,34 +527,29 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // keeps the match's.
 func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Plan(scope, st, p)
-	if st.Anchor.WorkID == "" {
-		w.Anchor = nil
-	}
 	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
 		delete(w.Set, catalog.FieldASIN)
 		delete(w.Set, catalog.FieldISBN)
 	}
-	offered := map[string]string{catalog.FieldASIN: st.Anchor.OfferedASIN, catalog.FieldISBN: st.Anchor.OfferedISBN}
-	fills := false
-	for field, was := range offered {
-		if v, ok := w.Set[field]; ok && was != "" && v == was {
-			delete(w.Set, field)
-		}
-		_, ok := w.Set[field]
-		fills = fills || ok
-	}
 	if st.Anchor.WorkID == "" {
+		w.Anchor = nil
 		return w
 	}
-	if w.Anchor == nil && fills {
-		// A new identifier for the book: the match records it as offered.
-		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID}
-	}
-	if w.Anchor != nil {
-		w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = st.Anchor.OfferedASIN, st.Anchor.OfferedISBN
-		if p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != "" {
-			w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = p.Values[catalog.FieldASIN], p.Values[catalog.FieldISBN]
+	for field, was := range map[string]string{catalog.FieldASIN: st.Anchor.OfferedASIN, catalog.FieldISBN: st.Anchor.OfferedISBN} {
+		if was != "" && w.Set[field] == was {
+			delete(w.Set, field)
 		}
+	}
+	_, asin := w.Set[catalog.FieldASIN]
+	_, isbn := w.Set[catalog.FieldISBN]
+	offers := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
+	switch {
+	case w.Anchor == nil && (asin || isbn):
+		// A new identifier for the book: the match records it as offered.
+		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID,
+			OfferedASIN: p.Values[catalog.FieldASIN], OfferedISBN: p.Values[catalog.FieldISBN]}
+	case w.Anchor != nil && !offers:
+		w.Anchor.OfferedASIN, w.Anchor.OfferedISBN = st.Anchor.OfferedASIN, st.Anchor.OfferedISBN
 	}
 	return w
 }

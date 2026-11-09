@@ -631,10 +631,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 	}
 	pool.Each(ctx, applyWorkers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run, it, o)
-		if applied == "" && detail == detailUnchanged {
-			// A refresh item with nothing to change under the scope: left out,
-			// as an exclusion leaves it (still pending, not skipped), and no
-			// longer counted in the apply's total.
+		if detail == detailUnchanged {
 			if err := r.cat.DropApplyItem(context.WithoutCancel(ctx), run.ID); err != nil {
 				r.log.Error("drop match item failed", "run", run.ID, "item", it.ID, "err", err)
 			}
@@ -669,9 +666,8 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 }
 
 // applyItem writes one item's plan to its book: applied, skipped (nothing to
-// change, or no book there now) or failed, with a code saying why. A refresh
-// item with nothing to change is none of them ("", detailUnchanged): the apply
-// leaves it out. A community
+// change, or no book there now) or failed, with a code saying why; a refresh
+// item with nothing to change is none of them (detailUnchanged). A community
 // match it records (Writes.Anchor) goes in with the fields, in one transaction:
 // made "auto" for a confident item, "accepted" for a review item the admin
 // included, and a refresh's heal keeps how the book was matched.
@@ -708,8 +704,9 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto
 			}
-			edit.Match = &catalog.MatchAnchor{WorkID: w.Anchor.WorkID, RecordingID: w.Anchor.RecordingID, How: how, RunID: run.ID,
-				OfferedASIN: w.Anchor.OfferedASIN, OfferedISBN: w.Anchor.OfferedISBN}
+			m := *w.Anchor
+			m.How, m.RunID = how, run.ID
+			edit.Match = &m
 		}
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {

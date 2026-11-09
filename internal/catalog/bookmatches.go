@@ -71,8 +71,8 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	if a == nil {
 		return nil, nil
 	}
-	out := MatchAnchor{WorkID: strings.TrimFunc(a.WorkID, invisible), RecordingID: strings.TrimFunc(a.RecordingID, invisible), How: a.How, RunID: a.RunID,
-		OfferedASIN: a.OfferedASIN, OfferedISBN: a.OfferedISBN}
+	out := *a
+	out.WorkID, out.RecordingID = strings.TrimFunc(a.WorkID, invisible), strings.TrimFunc(a.RecordingID, invisible)
 	if out.WorkID == "" {
 		if a.WorkID != "" {
 			return nil, invalid("match", "only an explicitly empty work_id unlinks a book (this one holds only blank or invisible characters)")
@@ -94,7 +94,7 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 		value *string
 	}{{FieldASIN, &out.OfferedASIN}, {FieldISBN, &out.OfferedISBN}} {
 		v, err := normalizeOverride(o.field, *o.value)
-		if oe := (*OverrideError)(nil); errors.As(err, &oe) {
+		if oe, ok := errors.AsType[*OverrideError](err); ok {
 			return nil, invalid("match", "the offered "+o.field+" "+oe.Reason)
 		} else if err != nil {
 			return nil, err
