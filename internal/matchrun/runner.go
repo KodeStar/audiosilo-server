@@ -67,6 +67,12 @@ const DetailLengthDiffers = "length_differs"
 // offers no recording, so there is no identifier to attach unasked.
 const DetailDramatizationOnly = "dramatization_only"
 
+// DetailIdentifierDisagrees is a review item's detail when its best candidate was
+// found by the book's tag ASIN or ISBN but the book's own title or series position
+// doesn't agree with it (identifierAgrees): the tag most likely names another book,
+// so it is held for review however high it scored (server#306).
+const DetailIdentifierDisagrees = "identifier_disagrees"
+
 // DetailWeakMatch is a match item's detail when its best candidate scored
 // below ReviewFloor: recorded as no match (the community most likely doesn't
 // have the book), its score kept for the review's wording.
@@ -401,6 +407,8 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration, narrated)
 	switch {
+	case item.Outcome == catalog.OutcomeReview && cands[0].IdentifierHit() && !identifierAgrees(&cands[0]):
+		item.Detail = DetailIdentifierDisagrees
 	case item.Outcome == catalog.OutcomeReview && noRecording:
 		item.Detail = DetailDramatizationOnly
 	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration, narrated):

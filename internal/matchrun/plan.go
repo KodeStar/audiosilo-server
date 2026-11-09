@@ -45,7 +45,9 @@ import (
 // always a tag hint, a book with its own being no run's subject) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
-// that is a guard, not a case a run meets.
+// that is a guard, not a case a run meets. An identifier hit is the book only while
+// the book's own title and series agree with it (identifierAgrees, server#306): a
+// tag ASIN can name another book, Chamber of Secrets carrying Philosopher's Stone's.
 //
 // A match with no ASIN or ISBN to attach (a store listing the community holds
 // without one: LibraForge E6) is applied unasked on firmer ground instead
@@ -61,6 +63,20 @@ const (
 	// may be off the book's length to be applied unasked: tighter than
 	// meta.PlausibleRuntimeOff, as nothing else names the edition.
 	AnchorRuntimeOff = 0.02
+	// IdentifierTitleAgree is the title similarity (metaserve's reasons.title, 0-1)
+	// an identifier hit needs to be applied unasked: below it the identifier most
+	// likely names another book (Chamber of Secrets carrying Philosopher's Stone's
+	// ASIN scores 0.62). Calibrated on the LibraForge benchmark: the highest value
+	// that holds no more than 0.2% of its right automatic matches for review (7 of
+	// 3,806, books whose title the files barely state: "Book 3", a subtitle alone).
+	IdentifierTitleAgree = 0.65
+	// IdentifierTitleSame is the title similarity an identifier hit at another
+	// series position (reasons.series "conflict") needs: the same title, so the
+	// position is the series numbered another way (The Witcher's novels counted
+	// with or without its two story collections, a chronological order), not the
+	// next volume's ASIN. A conflict with no title judged (metaserve leaves out a
+	// title that is only the series' name and number, "Magus Reborn 3") is held.
+	IdentifierTitleSame = 0.9
 )
 
 // ReviewFloor is the metaserve score a match run's best candidate needs to be
@@ -665,13 +681,29 @@ func anchorFits(c *meta.MatchCandidate, p catalog.MatchProposal, seconds float64
 	return known && off <= AnchorRuntimeOff
 }
 
+// identifierAgrees reports whether the book's own title and series agree with c,
+// an identifier hit, enough to apply it unasked (IdentifierTitleAgree,
+// IdentifierTitleSame). No title judged and no series conflict agrees: the
+// identifier is all the query had to go on.
+func identifierAgrees(c *meta.MatchCandidate) bool {
+	r := c.Reasons
+	if r == nil {
+		return true
+	}
+	if r.Series == "conflict" && (r.Title == nil || *r.Title < IdentifierTitleSame) {
+		return false
+	}
+	return r.Title == nil || *r.Title >= IdentifierTitleAgree
+}
+
 // Classify sorts a book's candidates (best first) into an outcome: confident
 // (OutcomeAuto), worth a look (OutcomeReview) or none (no candidate, or none
 // scoring ReviewFloor on metaserve's scale, which only a candidate with Reasons
 // is), with the best score and the next one's. p is the
 // proposal of the best, seconds the book's length (0 = unknown) and narrated
 // whether the book's narrator reads p's recording (narratorReads). A proposal
-// with an ASIN or ISBN is confident by the const block's first rule; one with
+// with an ASIN or ISBN is confident by the const block's first rule (an
+// identifier hit only while the book agrees with it: identifierAgrees); one with
 // neither by its second (anchorFits), on a plain lead.
 func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds float64, narrated bool) (outcome string, score, runnerUp int) {
 	if len(cands) == 0 {
@@ -684,7 +716,7 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 	identified := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
 	lead := score-runnerUp >= AutoLead
 	if cands[0].IdentifierHit() {
-		lead = len(cands) == 1 || !cands[1].IdentifierHit()
+		lead = (len(cands) == 1 || !cands[1].IdentifierHit()) && identifierAgrees(&cands[0])
 	}
 	switch {
 	case score >= AutoScore && lead && identified && lengthFits(p, seconds, narrated):

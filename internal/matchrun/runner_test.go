@@ -774,6 +774,37 @@ func TestRefreshSkipsABookMatchedAgain(t *testing.T) {
 	}
 }
 
+// TestMatchHoldsAnIdentifierThatDisagrees (server#306): a book whose tag ASIN
+// names another volume of its series (metaserve finds the work by it, but the
+// title barely agrees and the series is at another position) is held for review
+// with identifier_disagrees, and not applied unasked; one whose title agrees is.
+func TestMatchHoldsAnIdentifierThatDisagrees(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Wrong", "Wrong Volume", "", nil)
+	e.book(t, "A/Right", "Right Volume", "", nil)
+	hit := func(title float64, series string) []meta.MatchCandidate {
+		c := cand("the-martian", 100, "")
+		c.Reasons = &meta.MatchReasons{Identifier: "asin", Title: &title, Series: series}
+		return []meta.MatchCandidate{c}
+	}
+	e.matcher.byTitle["Wrong Volume"] = hit(0.62, "conflict")
+	e.matcher.byTitle["Right Volume"] = hit(1, "position")
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 || run.Counts.Review != 1 {
+		t.Fatalf("run = %+v, want one confident, one held", run)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 1 || review[0].Path != "A/Wrong" || review[0].Detail != DetailIdentifierDisagrees ||
+		review[0].Proposal.WorkID != "the-martian" {
+		t.Fatalf("review = %+v, want A/Wrong held with identifier_disagrees and its proposal", review)
+	}
+	if auto := e.items(t, run, catalog.OutcomeAuto); len(auto) != 1 || auto[0].Path != "A/Right" || auto[0].Detail != "" {
+		t.Fatalf("auto = %+v, want A/Right", auto)
+	}
+}
+
 // TestRefreshHoldsAnotherEdition: a book whose own ASIN names a recording of
 // another length (an unabridged book holding its dramatization's ASIN) is not
 // refreshed unasked: the record is offered for review, not applied.
