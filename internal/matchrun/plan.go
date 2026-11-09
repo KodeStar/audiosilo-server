@@ -682,14 +682,15 @@ func anchorFits(c *meta.MatchCandidate, p catalog.MatchProposal, seconds float64
 }
 
 // identifierAgrees reports whether the book's own title and series agree with c,
-// an identifier hit, enough to apply it unasked (IdentifierTitleAgree,
-// IdentifierTitleSame). No title judged and no series conflict agrees: the
-// identifier is all the query had to go on.
+// when an identifier hit, enough to apply it unasked (IdentifierTitleAgree,
+// IdentifierTitleSame); a candidate that is no identifier hit always does. No
+// title judged and no series conflict agrees: the identifier is all the query had
+// to go on.
 func identifierAgrees(c *meta.MatchCandidate) bool {
-	r := c.Reasons
-	if r == nil {
+	if !c.IdentifierHit() {
 		return true
 	}
+	r := c.Reasons
 	if r.Series == "conflict" && (r.Title == nil || *r.Title < IdentifierTitleSame) {
 		return false
 	}

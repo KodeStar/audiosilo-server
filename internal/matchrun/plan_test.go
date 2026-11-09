@@ -618,16 +618,16 @@ func TestClassifyIdentifierHit(t *testing.T) {
 		// server#306: a tag ASIN naming another book. Chamber of Secrets carrying
 		// Philosopher's Stone's ASIN: metaserve's title 0.62, the series at another
 		// position.
-		"another volume's ASIN":                {[]meta.MatchCandidate{judged(100, ptr(0.62), "conflict")}, ids, catalog.OutcomeReview},
-		"a title that disagrees":               {[]meta.MatchCandidate{judged(100, ptr(0.3), "position")}, ids, catalog.OutcomeReview},
-		"a title just under the bar":           {[]meta.MatchCandidate{judged(100, ptr(IdentifierTitleAgree-0.01), "")}, ids, catalog.OutcomeReview},
-		"a title at the bar":                   {[]meta.MatchCandidate{judged(100, ptr(IdentifierTitleAgree), "")}, ids, catalog.OutcomeAuto},
+		"another volume's ASIN":                {[]meta.MatchCandidate{judged(100, new(0.62), "conflict")}, ids, catalog.OutcomeReview},
+		"a title that disagrees":               {[]meta.MatchCandidate{judged(100, new(0.3), "position")}, ids, catalog.OutcomeReview},
+		"a title just under the bar":           {[]meta.MatchCandidate{judged(100, new(IdentifierTitleAgree-0.01), "")}, ids, catalog.OutcomeReview},
+		"a title at the bar":                   {[]meta.MatchCandidate{judged(100, new(IdentifierTitleAgree), "")}, ids, catalog.OutcomeAuto},
 		"no title judged":                      {[]meta.MatchCandidate{judged(100, nil, "position")}, ids, catalog.OutcomeAuto},
 		"no title judged, no series sent":      {[]meta.MatchCandidate{judged(100, nil, "")}, ids, catalog.OutcomeAuto},
-		"the same title, numbered another way": {[]meta.MatchCandidate{judged(100, ptr(1), "conflict")}, ids, catalog.OutcomeAuto},
-		"a conflict, a title not the same":     {[]meta.MatchCandidate{judged(100, ptr(0.8), "conflict")}, ids, catalog.OutcomeReview},
+		"the same title, numbered another way": {[]meta.MatchCandidate{judged(100, new(1.0), "conflict")}, ids, catalog.OutcomeAuto},
+		"a conflict, a title not the same":     {[]meta.MatchCandidate{judged(100, new(0.8), "conflict")}, ids, catalog.OutcomeReview},
 		"a conflict, no title judged":          {[]meta.MatchCandidate{judged(100, nil, "conflict")}, ids, catalog.OutcomeReview},
-		"a weak title, no identifier hit":      {[]meta.MatchCandidate{{Score: 95, Reasons: &meta.MatchReasons{Title: ptr(0.3)}}}, ids, catalog.OutcomeAuto},
+		"a weak title, no identifier hit":      {[]meta.MatchCandidate{{Score: 95, Reasons: &meta.MatchReasons{Title: new(0.3)}}}, ids, catalog.OutcomeAuto},
 	} {
 		if got, _, _ := Classify(tc.cands, tc.p, 600*60, false); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
@@ -849,5 +849,3 @@ func TestQueryForTagHints(t *testing.T) {
 		}
 	}
 }
-
-func ptr(f float64) *float64 { return &f }

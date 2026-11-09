@@ -414,7 +414,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration, narrated)
 	switch {
-	case item.Outcome == catalog.OutcomeReview && cands[0].IdentifierHit() && !identifierAgrees(&cands[0]):
+	case item.Outcome == catalog.OutcomeReview && !identifierAgrees(&cands[0]):
 		item.Detail = DetailIdentifierDisagrees
 	case item.Outcome == catalog.OutcomeReview && noRecording:
 		item.Detail = DetailDramatizationOnly

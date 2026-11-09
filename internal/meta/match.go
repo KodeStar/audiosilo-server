@@ -761,12 +761,13 @@ func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
 
 // bestCandidates is Candidates' answer for MatchQuery.BestOnly, from works/match's
 // hits: what it answers without the flag, as far as the caller reads it, for the
-// fewest requests, but for a failed read. The hits are put in Candidates' order
-// first, as the best is the one the details are for. A best that is gone (ErrNotFound: a work dropped since
-// the index was built) gives way to the next; a best that can't be read for any
-// other reason is an outage at once (server#306). Standing the next in for it would
-// record a weaker work as the book's match while the service is down: the run would
-// read an outage as a match, or, the next being a stub that asks nothing, as no match.
+// fewest requests, except that a failed read is an outage. The hits are put in
+// Candidates' order first, as the best is the one the details are for. A best that
+// is gone (ErrNotFound: a work dropped since the index was built) gives way to the
+// next; a best that can't be read for any other reason is an outage at once
+// (server#306). Standing the next in for it would record a weaker work as the
+// book's match while the service is down: the run would read an outage as a match,
+// or, the next being a stub that asks nothing, as no match.
 func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []matchHit, asin string) ([]MatchCandidate, error) {
 	slices.SortStableFunc(hits, func(a, b matchHit) int {
 		return compareMatches(a.score, a.reasons.Identifier != "", b.score, b.reasons.Identifier != "")

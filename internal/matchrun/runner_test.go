@@ -348,12 +348,14 @@ func TestStoppedRunKeepsItsAnswers(t *testing.T) {
 	}
 	e.matcher.byTitle["Martian"] = []meta.MatchCandidate{cand("the-martian", 100, "")}
 	// The outage begins once both answers are recorded, so the stop can't cut them.
+	var answered atomic.Bool
 	e.matcher.before = func(q meta.MatchQuery) {
-		if q.Title != "Down" {
+		if q.Title != "Down" || answered.Load() {
 			return
 		}
-		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 			if runs, err := e.cat.ListMatchRuns(ctx); err == nil && len(runs) > 0 && runs[0].Counts.Auto == 2 {
+				answered.Store(true)
 				return
 			}
 		}
