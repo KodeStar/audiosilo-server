@@ -218,15 +218,15 @@ func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeBookError maps an error from a book endpoint: no book at the path is a 404
-// with its code; an Unlink during a working match run is a 409. Everything else
-// goes through writeCatalogError.
+// with its code; an Unlink while a match run applies to the book's library is a
+// 409. Everything else goes through writeCatalogError.
 func (a *API) writeBookError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no book is indexed at that path")
 		return
 	}
 	if errors.Is(err, catalog.ErrMatchRunBusy) {
-		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working; stop it or wait for it to finish before unlinking")
+		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is applying to this library; stop it or wait for it to finish before unlinking")
 		return
 	}
 	a.writeCatalogError(w, err, op, genericMsg, logKV...)
@@ -412,7 +412,19 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 			"edit book failed", "could not save the edit")
 		return
 	}
-	if err := a.cat.EditBook(r.Context(), lib.ID, p, req.toEdit(userFrom(r.Context()).ID)); err != nil {
+	edit := req.toEdit(userFrom(r.Context()).ID)
+	err := a.cat.EditBook(r.Context(), lib.ID, p, edit)
+	if errors.Is(err, catalog.ErrMatchRunBusy) {
+		// A run left marked applying with nothing behind it (its finishing
+		// write failed, or a stopped server left it) is settled, and the
+		// Unlink tried once more; a live apply still refuses it.
+		if n, serr := a.matchRuns.SettleOrphans(r.Context()); serr != nil {
+			a.log.Warn("settle match runs for an unlink failed", "err", serr)
+		} else if n > 0 {
+			err = a.cat.EditBook(r.Context(), lib.ID, p, edit)
+		}
+	}
+	if err != nil {
 		a.writeBookError(w, err, "edit book failed", "could not save the edit", "library", lib.ID, "path", p)
 		return
 	}

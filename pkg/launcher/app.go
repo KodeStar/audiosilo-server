@@ -241,6 +241,8 @@ func Run(ctx context.Context, opts Options) error {
 	defer stopMirror()
 	// Bulk match runs a stopped server left working: matching ones are
 	// interrupted, applying ones go back to ready (what they applied is marked).
+	// A failure here only warns: the first Start, Apply, Stop or refused Unlink
+	// settles them too (matchrun.Runner).
 	if err := cat.InterruptMatchRuns(ctx); err != nil {
 		log.Warn("settle interrupted match runs failed", "err", err)
 	}

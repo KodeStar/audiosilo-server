@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode"
 )
 
 // How a book's community match was made (book_matches.how, migration 0069).
@@ -43,17 +44,30 @@ type BookMatch struct {
 	WebURL      string `json:"web_url,omitempty"`
 }
 
+// invisible reports whether r shows nothing: white space, a format character
+// (U+200B ZERO WIDTH SPACE, U+FEFF, U+2060 WORD JOINER, ...), a variation
+// selector, another default-ignorable code point (U+3164 HANGUL FILLER, U+115F,
+// U+1160, U+FFA0) or U+2800 BRAILLE PATTERN BLANK. An id is trimmed of them at
+// both ends, so one made only of them is empty, never an id nobody can see.
+func invisible(r rune) bool {
+	return unicode.IsSpace(r) ||
+		unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point) ||
+		r == '\u2800'
+}
+
 // normalizeAnchor validates an edit's anchor (nil = none) and returns it in stored
-// form. Setting one takes a community edit (source, normalized); removing one
-// (an empty WorkID) any edit.
+// form, its ids trimmed of invisible characters at both ends (interior ones are
+// kept; checkText refuses control characters). Setting one takes a community
+// edit (source, normalized); removing one (an explicitly empty WorkID) any edit.
+// A WorkID that is not empty but invisible only is refused, never an Unlink.
 func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	if a == nil {
 		return nil, nil
 	}
-	out := MatchAnchor{WorkID: strings.TrimSpace(a.WorkID), RecordingID: strings.TrimSpace(a.RecordingID), How: a.How, RunID: a.RunID}
+	out := MatchAnchor{WorkID: strings.TrimFunc(a.WorkID, invisible), RecordingID: strings.TrimFunc(a.RecordingID, invisible), How: a.How, RunID: a.RunID}
 	if out.WorkID == "" {
 		if a.WorkID != "" {
-			return nil, invalid("match", "only an explicitly empty work_id unlinks a book")
+			return nil, invalid("match", "only an explicitly empty work_id unlinks a book (this one holds only blank or invisible characters)")
 		}
 		return &MatchAnchor{}, nil
 	}

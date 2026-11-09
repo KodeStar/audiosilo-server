@@ -864,7 +864,8 @@ func (e BookEdit) normalize() (BookEdit, error) {
 // EditBook applies an edit to one indexed book: overrides are written (or deleted,
 // for a revert) and the books row, its chapters and its FTS row are rebuilt, all in
 // one transaction. ErrNotFound when no book is indexed at the path.
-// An Unlink returns ErrMatchRunBusy while any match run is matching or applying.
+// An Unlink returns ErrMatchRunBusy while a match run that covers the book's
+// library (or every library) is applying.
 func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, edit BookEdit) error {
 	edit, err := edit.normalize()
 	if err != nil {
@@ -928,12 +929,20 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	switch {
 	case edit.Match == nil:
 	case edit.Match.WorkID == "":
-		// Check under the same writer transaction as the clear: StartMatchRun
-		// and BeginApply cannot start writing the book between the two. Applying
-		// stays busy through its cover fetches, including after a cancel request.
+		// Refused only while a run that covers this library (or every library)
+		// is applying: one that only matches records items, and every apply
+		// checks each against the book as it is then (an unlinked book's
+		// refresh item no longer has what it was found by, a match item's
+		// cover_pending writes nothing, a cover is written only to the book it
+		// was planned for: SetCoverIf). Checked under the same writer
+		// transaction as the clear, so BeginApply cannot start writing the book
+		// between the two (one that commits first is seen; one after reads the
+		// unlinked book). Applying stays busy through its last cover write,
+		// including after a stop request.
 		var busy bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM match_runs WHERE status IN (?, ?))`,
-			MatchMatching, MatchApplying).Scan(&busy); err != nil {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM match_runs WHERE status = ? AND (library_id IS NULL OR library_id = ?))`,
+			MatchApplying, ref.LibraryID).Scan(&busy); err != nil {
 			return err
 		}
 		if busy {

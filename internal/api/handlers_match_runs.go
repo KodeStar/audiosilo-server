@@ -242,8 +242,10 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 
 // handleCancelMatchRun serves POST /admin/match-runs/{id}/cancel: stop the run
 // while it works. Matching stops (cancelled); applying stops after the books in
-// hand (ready again, the rest still to apply). 409 match_run_not_running when it
-// isn't working.
+// hand (ready again, the rest still to apply). A run still marked working with
+// nothing behind it (its finishing write failed, or a stopped server left it) is
+// settled at once: matching -> interrupted, applying -> ready (204, audited with
+// "orphan": true). 409 match_run_not_running when it isn't working.
 func (a *API) handleCancelMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -252,11 +254,20 @@ func (a *API) handleCancelMatchRun(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		return
 	}
-	if !a.matchRuns.Cancel(run.ID) {
-		writeErrorCode(w, http.StatusConflict, codeMatchRunNotRunning, "the match run isn't working")
+	stopped, err := a.matchRuns.Cancel(r.Context(), run.ID)
+	if err != nil {
+		a.writeCatalogError(w, err, "stop match run failed", "could not stop the match run")
 		return
 	}
-	a.audit(r, "book.match_stop", run.LibraryName, map[string]any{"run": run.ID})
+	details := map[string]any{"run": run.ID}
+	switch stopped {
+	case matchrun.NotWorking:
+		writeErrorCode(w, http.StatusConflict, codeMatchRunNotRunning, "the match run isn't working")
+		return
+	case matchrun.Settled:
+		details["orphan"] = true
+	}
+	a.audit(r, "book.match_stop", run.LibraryName, details)
 	w.WriteHeader(http.StatusNoContent)
 }
 
