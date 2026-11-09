@@ -25,9 +25,9 @@ var (
 )
 
 // ErrCoverSuperseded marks a conditional cover write (SetCoverIf) whose book is no
-// longer the one the cover was planned for: it has a custom cover now, or another
-// community match, ASIN or ISBN (an upload, a match accepted by hand, an Unlink
-// made while the cover was fetched). Nothing is written.
+// longer the one the cover was planned for: it has a cover now (an upload, or art
+// a scan found), or another community match, ASIN or ISBN (a match accepted by
+// hand, an Unlink made while the cover was fetched). Nothing is written.
 var ErrCoverSuperseded = errors.New("the book changed since its cover was planned")
 
 // CoverExpect is the book a match run planned a community cover for: its
@@ -55,13 +55,14 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 }
 
 // SetCoverIf is SetCover, written only while the book is still as expect says
-// (nil = always, SetCover): it has no custom cover, its recorded community match
-// is expect's and its ASIN and ISBN are (CoverExpected). Checked in the write's
-// own transaction, so nothing that changes the book can land between the check
-// and the write; ErrCoverSuperseded, writing nothing, when it isn't. A bulk match
+// (nil = always, SetCover): it has no cover (no custom cover and no art of its
+// own, as the apply's plan found it), its recorded community match is expect's
+// and its ASIN and ISBN are (CoverExpected). Checked in the write's own
+// transaction, so nothing that changes the book can land between the check and
+// the write; ErrCoverSuperseded, writing nothing, when it isn't. A bulk match
 // run's apply (matchrun.CoverSaver) writes its cover this way: the fetch can take
-// a while, and must never put a community cover over an admin's upload or onto a
-// book matched again or unlinked meanwhile.
+// a while, and must never put a community cover over an admin's upload or art
+// found meanwhile, or onto a book matched again or unlinked meanwhile.
 func (c *Catalog) SetCoverIf(ctx context.Context, libraryID int64, path string, data []byte, userID int64, source string, expect *CoverExpect) error {
 	source, err := normalizeSource(source)
 	if err != nil {
@@ -75,16 +76,13 @@ func (c *Catalog) SetCoverIf(ctx context.Context, libraryID int64, path string, 
 		return ErrUnsupportedImage
 	}
 	path = CleanRelPath(path)
-	if expect == nil { // else coverExpected finds the book in the transaction
-		if _, err := bookIDByPath(ctx, c.db, libraryID, path); err != nil {
-			return err
-		}
-	}
 	if err := c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
 		if expect != nil {
 			if err := coverExpected(ctx, tx, libraryID, path, *expect); err != nil {
 				return err
 			}
+		} else if _, err := bookIDByPath(ctx, tx, libraryID, path); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_covers(library_id, path, mime, data, updated_by, updated_at, source) VALUES(?,?,?,?,?,?,?)
@@ -111,28 +109,28 @@ func (c *Catalog) CoverExpected(ctx context.Context, libraryID int64, path strin
 }
 
 // coverExpected is CoverExpected through q (the write's transaction for
-// SetCoverIf), path clean. The ASIN and ISBN are the books row's, which
+// SetCoverIf), path clean. Any cover the book has now (hasCoverExpr: a custom
+// one, or art a scan found since) supersedes it, as the plan never puts a cover
+// over one (matchrun.Plan). The ASIN and ISBN are the books row's, which
 // refreshEffective keeps equal to the resolved values BookMatchState reads, in
 // stored form.
 func coverExpected(ctx context.Context, q querier, libraryID int64, path string, want CoverExpect) error {
 	var (
-		custom                      bool
+		hasCover                    bool
 		work, recording, asin, isbn string
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM book_covers cv WHERE cv.library_id = b.library_id AND cv.path = b.rel_path),
-		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), b.asin, b.isbn
-		   FROM books b
-		   LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path
+		`SELECT `+hasCoverExpr+`, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), b.asin, b.isbn
+		   FROM books b`+matchSubjectJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`,
-		libraryID, path).Scan(&custom, &work, &recording, &asin, &isbn)
+		libraryID, path).Scan(&hasCover, &work, &recording, &asin, &isbn)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if custom || work != want.WorkID || recording != want.RecordingID ||
+	if hasCover || work != want.WorkID || recording != want.RecordingID ||
 		CleanOverride(FieldASIN, asin) != want.ASIN || CleanOverride(FieldISBN, isbn) != want.ISBN {
 		return ErrCoverSuperseded
 	}

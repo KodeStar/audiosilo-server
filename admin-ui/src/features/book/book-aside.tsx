@@ -160,10 +160,12 @@ function CommunityCard({
   // alone), and unlinkable.
   const work = detail.community_match;
   const hasIdentifier = Boolean(asin || isbn);
-  // An identifier of the book's own (not the community's, or one its files
-  // name) stays after an Unlink, so the book still shows as matched.
-  const keepsIdentifier = [detail.fields.asin, detail.fields.isbn].some(
-    (f) => (f.value && f.source !== 'community') || Boolean(f.scanned),
+  // An Unlink takes back the community's overrides (locked, source community),
+  // leaving what is under one (the files' value); any other value stays (an
+  // admin's edit, or an enrichment, which reads as community but isn't an
+  // override), so the book still shows as matched when one is an identifier.
+  const keepsIdentifier = [detail.fields.asin, detail.fields.isbn].some((f) =>
+    f.locked && f.source === 'community' ? Boolean(f.scanned) : Boolean(f.value),
   );
 
   const b = detail.book;

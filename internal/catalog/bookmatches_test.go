@@ -320,6 +320,21 @@ func TestSetCoverIf(t *testing.T) {
 	if err := c.CoverExpected(ctx, lib.ID, "A/None", want); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no book = %v, want ErrNotFound", err)
 	}
+	if err := c.SetCoverIf(ctx, lib.ID, "A/None", img, 0, SourceCommunity, &want); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetCoverIf, no book = %v, want ErrNotFound", err)
+	}
+	if err := c.SetCover(ctx, lib.ID, "A/None", img, 0, SourceEdited); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetCover, no book = %v, want ErrNotFound", err)
+	}
+	// Art a scan found since the plan is a cover the community's doesn't go over.
+	for _, has := range []bool{true, false} {
+		if _, err := c.db.ExecContext(ctx, `UPDATE books SET has_cover = ? WHERE library_id = ? AND rel_path = ?`, has, lib.ID, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.CoverExpected(ctx, lib.ID, p, want); has != errors.Is(err, ErrCoverSuperseded) {
+			t.Fatalf("has_cover %v: CoverExpected = %v", has, err)
+		}
+	}
 	if err := c.SetCoverIf(ctx, lib.ID, p, img, 0, SourceCommunity, &want); err != nil {
 		t.Fatalf("expected write = %v", err)
 	}

@@ -568,7 +568,8 @@ describe('a book matched to a store listing (server#320)', () => {
       value,
       source: value ? (own ? ('edited' as const) : ('community' as const)) : ('' as const),
       scanned: '',
-      locked: own && Boolean(value),
+      // An override, the admin's or the community's, is locked.
+      locked: Boolean(value),
     });
     detail.book = { ...detail.book, asin: ids.asin ?? '', isbn: ids.isbn ?? '' };
     detail.fields.asin = id(ids.asin);
@@ -627,6 +628,24 @@ describe('a book matched to a store listing (server#320)', () => {
       true,
     ],
     ['only the community ASIN', matchedDetail({ asin: 'B00ASIN001' }), false],
+    [
+      'an enrichment ASIN (community, not an override)',
+      (() => {
+        const d = matchedDetail({ asin: 'B00ASIN001' });
+        d.fields.asin.locked = false;
+        return d;
+      })(),
+      true,
+    ],
+    [
+      'an ASIN its files name that the admin cleared',
+      (() => {
+        const d = matchedDetail({});
+        d.fields.asin = { value: '', source: 'edited', scanned: 'B00ASIN001', locked: true };
+        return d;
+      })(),
+      false,
+    ],
   ])('words the Unlink confirm for a book with %s', async (_, detail, keeps) => {
     mockFetch(routes(detail));
     renderApp(URL);

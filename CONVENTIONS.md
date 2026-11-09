@@ -1712,11 +1712,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **A community cover is written conditionally** (server#340): an apply's cover goes through
   `catalog.SetCoverIf` with a `CoverExpect` (`matchrun.coverExpect`: the match the apply records,
   else the book's own, and the ASIN and ISBN after its edit, `Writes.after`, in stored form);
-  in the write's own transaction the book must still have no custom cover, that recorded match
-  and those resolved identifiers, else `catalog.ErrCoverSuperseded` and nothing is written.
+  in the write's own transaction the book must still have no cover (`hasCoverExpr`: no custom
+  cover and no art of its own, as the plan found it), that recorded match and those resolved
+  identifiers, else `catalog.ErrCoverSuperseded` and nothing is written.
   `saveMatchCover` asks `CoverExpected` before it fetches, then `SetCoverIf` after, so an upload,
-  a match accepted by hand, an identifier edit or an Unlink while the cover was fetched keeps
-  what the admin did. The item reads detail `cover_superseded` (`DetailCoverSuperseded`:
+  art a rescan found, a match accepted by hand, an identifier edit or an Unlink while the cover
+  was fetched keeps what the book has. The item reads detail `cover_superseded` (`DetailCoverSuperseded`:
   applied when its fields went in, else skipped; final, never turned into `cover_pending`).
   `SetCover` (uploads, the dialog's explicit cover tick) stays unconditional.
   No Undo: the cleared values aren't kept. A store listing the
