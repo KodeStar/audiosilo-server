@@ -577,6 +577,9 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpName) }() // gone after the rename; a failed run's leftover
 	if err := m.run(ctx, ffmpegPath, m.spec.args(inputFor(ffmpegPath), tmpName), src); err != nil {
+		if m.timedOut(ctx, runCtx) {
+			return m.refuse(src.Name(), fmt.Errorf("ffmpeg ran past %s: %w", m.spec.timeout, ctx.Err()))
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -591,6 +594,8 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	if m.spec.check != nil {
 		if err := m.spec.check(ctx, src, info.Size(), tmpName); errors.Is(err, errCopyRefused) {
 			return m.refuse(src.Name(), err)
+		} else if err != nil && m.timedOut(ctx, runCtx) {
+			return m.refuse(src.Name(), fmt.Errorf("the copy's check ran past %s: %w", m.spec.timeout, ctx.Err()))
 		} else if err != nil {
 			return err
 		}
@@ -603,6 +608,16 @@ func (m *FileCache) make(runCtx context.Context, ffmpegPath, key, abs string, in
 	}
 	m.evict(key)
 	return nil
+}
+
+// timedOut reports whether a run's own timeout (ctx, the spec's) ended it,
+// not the server going away (runCtx): remembered as a refusal (server#289), so
+// a file whose copy can't be made in the time (a stuck read, a source far
+// longer than any book) isn't started from zero on every request, and is tried
+// again once the refusal expires (cacheRefusalTTL), with its hint
+// (RefusedFor).
+func (m *FileCache) timedOut(ctx, runCtx context.Context) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) && runCtx.Err() == nil
 }
 
 // errCopyRefused is the spec's check refusing a copy ffmpeg wrote and exited 0
