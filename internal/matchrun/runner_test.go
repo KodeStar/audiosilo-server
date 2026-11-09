@@ -384,6 +384,13 @@ func TestStoppedRunKeepsItsAnswers(t *testing.T) {
 	if next.Total != 3*maxFailStreak {
 		t.Fatalf("next run total = %d, want the %d books not matched", next.Total, 3*maxFailStreak)
 	}
+	e.matcher.mu.Lock()
+	defer e.matcher.mu.Unlock()
+	for _, q := range e.matcher.queries {
+		if q.Title != "Down" {
+			t.Fatalf("next run asked about %q, an applied book", q.Title)
+		}
+	}
 }
 
 func TestRunStopsWhenMetadataTurnsOff(t *testing.T) {

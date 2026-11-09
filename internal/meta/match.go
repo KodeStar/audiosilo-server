@@ -88,8 +88,9 @@ type MatchQuery struct {
 	// Classify). So works/match is asked to inline the best's work and series facts
 	// (expand=work), and nothing else is read: every other candidate comes back a
 	// stub, its work id, cover, score and reasons. A metaserve that inlines nothing
-	// costs the fetches for the best. The dialog lists every candidate and leaves it
-	// off.
+	// costs the fetches for the best, and a best that can't be read is an outage,
+	// never the next standing in (bestCandidates). The dialog lists every candidate
+	// and leaves it off.
 	BestOnly bool
 	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
 	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined

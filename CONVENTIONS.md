@@ -1617,8 +1617,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 6 workers (an apply 2), `maxFailStreak` (10) failures in a row
   stop it (`metadata_unavailable`; past the workers, as one moment's failure meets them all at once):
-  the run is `ready` with `error` `metadata_unavailable` (server#306, additive: before, `failed` with no
-  review), the books it answered kept to review and apply, the console saying it stopped early and how
+  the run is `ready` with `error` `metadata_unavailable` (server#306: before, `failed` with no
+  review; a run recorded then stays so), the books it answered kept to review and apply, the console saying it stopped early and how
   many it checked; the books it never reached are still unmatched (a refresh or repick re-checks them
   anyway), so the next run takes them. `metadata_off` and `internal` stay `failed`. Metadata
   off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
@@ -1769,8 +1769,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   wrong, hence the title beside it. With neither ASIN nor ISBN to attach (a store listing), confident
   is firmer (`anchorFits`, LibraForge E6): score >= 90 and a plain 10-point lead (no identifier-hit
   lead, no narrator widening), metaserve's `reasons.author` `full` and `reasons.series` `position`, and
-  both lengths known with the recording within `AnchorRuntimeOff` (2%); the apply records the match
-  (`how` auto). On the LibraForge benchmark this took 186 books from review to confident, none wrong.
+  both lengths known with the recording within `AnchorRuntimeOff` (2%), an identifier hit (scored 100
+  whatever its title) also agreeing (`identifierAgrees`; none on the benchmark); the apply records the
+  match (`how` auto). On the LibraForge benchmark this took 186 books from review to confident, none wrong.
   A match run's best candidate under `matchrun.ReviewFloor` (60)
   on metaserve's scale is no match, detail `weak_match`, its score kept and its proposal empty (the
   dialog still lists everything; an older metaserve's `scoreCandidate` stays for review). Fill (the
@@ -1794,8 +1795,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
   it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
   off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
-  neither of its own: a hint the community knows whose length fits is an identifier hit (confident,
-  above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
+  neither of its own: a hint the community knows whose length fits is an identifier hit (confident
+  while the book's title and series agree with it, above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
   Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
   identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
   `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and

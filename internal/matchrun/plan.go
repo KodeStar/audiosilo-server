@@ -673,8 +673,10 @@ func readsRecording(c *meta.MatchCandidate, p catalog.MatchProposal, narrators [
 // enough to apply unasked (Classify, LibraForge E6): metaserve found the author in
 // full and the series at the book's position, and p's recording is within
 // AnchorRuntimeOff of the book's seconds, both lengths known. No narrator widens it.
+// An identifier hit (scored 100 whatever its title) must agree with the book too
+// (identifierAgrees), as on the first rule.
 func anchorFits(c *meta.MatchCandidate, p catalog.MatchProposal, seconds float64) bool {
-	if c.Reasons == nil || c.Reasons.Author != "full" || c.Reasons.Series != "position" {
+	if c.Reasons == nil || c.Reasons.Author != "full" || c.Reasons.Series != "position" || !identifierAgrees(c) {
 		return false
 	}
 	off, known := meta.RuntimeOff(p.RuntimeMin, seconds)
