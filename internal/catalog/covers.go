@@ -24,6 +24,19 @@ var (
 	ErrCoverTooLarge    = errors.New("the cover image is too large")
 )
 
+// ErrCoverSuperseded marks a conditional cover write (SetCoverIf) whose book is no
+// longer the one the cover was planned for: it has a cover now (an upload, or art
+// a scan found), or another community match, ASIN or ISBN (a match accepted by
+// hand, an Unlink made while the cover was fetched). Nothing is written.
+var ErrCoverSuperseded = errors.New("the book changed since its cover was planned")
+
+// CoverExpect is the book a match run planned a community cover for: its
+// recorded community match (work and recording, "" for none) and its ASIN and
+// ISBN once the apply's edit is in (in stored form, CleanOverride; "" for none).
+type CoverExpect struct {
+	WorkID, RecordingID, ASIN, ISBN string
+}
+
 // coverTypes are the image types a custom cover may be. The type is sniffed from
 // the bytes, never taken from the uploader, because it is served back as the
 // cover's Content-Type (so no SVG, no HTML).
@@ -38,6 +51,19 @@ var coverTypes = map[string]bool{"image/jpeg": true, "image/png": true, "image/w
 // ErrNotFound when no book is indexed at the path; ErrUnsupportedImage or
 // ErrCoverTooLarge when the image is refused.
 func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, data []byte, userID int64, source string) error {
+	return c.SetCoverIf(ctx, libraryID, path, data, userID, source, nil)
+}
+
+// SetCoverIf is SetCover, written only while the book is still as expect says
+// (nil = always, SetCover): it has no cover (no custom cover and no art of its
+// own, as the apply's plan found it), its recorded community match is expect's
+// and its ASIN and ISBN are (CoverExpected). Checked in the write's own
+// transaction, so nothing that changes the book can land between the check and
+// the write; ErrCoverSuperseded, writing nothing, when it isn't. A bulk match
+// run's apply (matchrun.CoverSaver) writes its cover this way: the fetch can take
+// a while, and must never put a community cover over an admin's upload or art
+// found meanwhile, or onto a book matched again or unlinked meanwhile.
+func (c *Catalog) SetCoverIf(ctx context.Context, libraryID int64, path string, data []byte, userID int64, source string, expect *CoverExpect) error {
 	source, err := normalizeSource(source)
 	if err != nil {
 		return err
@@ -50,10 +76,14 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 		return ErrUnsupportedImage
 	}
 	path = CleanRelPath(path)
-	if _, err := bookIDByPath(ctx, c.db, libraryID, path); err != nil {
-		return err
-	}
 	if err := c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
+		if expect != nil {
+			if err := coverExpected(ctx, tx, libraryID, path, *expect); err != nil {
+				return err
+			}
+		} else if _, err := bookIDByPath(ctx, tx, libraryID, path); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_covers(library_id, path, mime, data, updated_by, updated_at, source) VALUES(?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, path) DO UPDATE SET
@@ -67,6 +97,43 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 		return err
 	}
 	c.changed()
+	return nil
+}
+
+// CoverExpected reports whether the book at path is still as expect says
+// (SetCoverIf's condition) without writing: nil when it is, ErrCoverSuperseded
+// when it isn't, ErrNotFound when no book is indexed there. A match run's cover
+// saver asks it before fetching, so a book that changed costs no fetch.
+func (c *Catalog) CoverExpected(ctx context.Context, libraryID int64, path string, expect CoverExpect) error {
+	return coverExpected(ctx, c.db, libraryID, CleanRelPath(path), expect)
+}
+
+// coverExpected is CoverExpected through q (the write's transaction for
+// SetCoverIf), path clean. Any cover the book has now (hasCoverExpr: a custom
+// one, or art a scan found since) supersedes it, as the plan never puts a cover
+// over one (matchrun.Plan). The ASIN and ISBN are the books row's, which
+// refreshEffective keeps equal to the resolved values BookMatchState reads, in
+// stored form.
+func coverExpected(ctx context.Context, q querier, libraryID int64, path string, want CoverExpect) error {
+	var (
+		hasCover                    bool
+		work, recording, asin, isbn string
+	)
+	err := q.QueryRowContext(ctx,
+		`SELECT `+hasCoverExpr+`, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), b.asin, b.isbn
+		   FROM books b`+matchSubjectJoin+`
+		  WHERE b.library_id = ? AND b.rel_path = ?`,
+		libraryID, path).Scan(&hasCover, &work, &recording, &asin, &isbn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if hasCover || work != want.WorkID || recording != want.RecordingID ||
+		CleanOverride(FieldASIN, asin) != want.ASIN || CleanOverride(FieldISBN, isbn) != want.ISBN {
+		return ErrCoverSuperseded
+	}
 	return nil
 }
 

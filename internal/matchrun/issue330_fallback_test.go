@@ -316,8 +316,8 @@ func TestIssue330FallbackHealStoppedInItsCover(t *testing.T) {
 			e.matcher.byWork["old-slug"] = []meta.MatchCandidate{workAnswer("new-slug", "bray")}
 			run := e.start(t, catalog.MatchModeRefresh, "")
 			save := e.runner.saveCover
-			e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64) error {
-				e.runner.Cancel(run.ID)
+			e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64, _ catalog.CoverExpect) error {
+				_, _ = e.runner.Cancel(context.Background(), run.ID)
 				return ctx.Err()
 			}
 			if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {

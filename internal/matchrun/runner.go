@@ -79,6 +79,13 @@ const DetailWeakMatch = "weak_match"
 // not recorded again: planFor).
 const DetailCoverPending = "cover_pending"
 
+// DetailCoverSuperseded is an item's detail when its cover was not written because
+// the book changed while the apply fetched it (catalog.ErrCoverSuperseded: a
+// custom cover uploaded, another match accepted, an Unlink): applied when its
+// fields went in, else skipped. Final, never cover_pending: the book is no longer
+// the one the cover was planned for.
+const DetailCoverSuperseded = "cover_superseded"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time. It is
 // catalog.ErrMatchRunBusy, the Unlink refusal, so one errors.Is matches both.
 var ErrBusy = catalog.ErrMatchRunBusy
@@ -92,8 +99,10 @@ type Matcher interface {
 }
 
 // CoverSaver keeps a community cover image as a book's custom cover, as the match
-// dialog's cover tick does (the api's fetch, check and SetCover).
-type CoverSaver func(ctx context.Context, libraryID int64, path, url string, userID int64) error
+// dialog's cover tick does (the api's fetch and check), only while the book is
+// still as expect says (catalog.SetCoverIf): catalog.ErrCoverSuperseded, writing
+// nothing, when it changed since the apply planned the cover.
+type CoverSaver func(ctx context.Context, libraryID int64, path, url string, userID int64, expect catalog.CoverExpect) error
 
 // Runner runs match runs, one at a time, in the background.
 type Runner struct {
@@ -133,12 +142,16 @@ type StartOptions struct {
 
 // Start records a run and starts matching in the background, under base (the
 // server's lifetime), returning the run as it starts. ErrBusy while another run
-// is working.
+// is working. A run left marked working with nothing behind it is settled first
+// (settleLocked).
 func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != 0 {
 		return nil, ErrBusy
+	}
+	if _, err := r.settleLocked(ctx); err != nil {
+		return nil, err
 	}
 	var (
 		books     []catalog.Book
@@ -209,27 +222,79 @@ func (r *Runner) end() {
 	r.active, r.cancel, r.cancelled = 0, nil, false
 }
 
+// settleLocked settles the runs still marked working that no worker is behind
+// (catalog.SettleMatchRuns): a run whose finishing write failed (FinishMatching,
+// FinishApply only log that, and end clears r.active anyway) or one a stopped
+// server left whose settle at startup failed. Such a row would refuse every
+// Unlink of its library, and a stuck applying one could never be applied again.
+// It returns how many it settled. r.mu held, and safe only because of that
+// lock: Start and Apply hold it across StartMatchRun / BeginApply and begin, so
+// no row this sees working is about to get workers, and end runs only after
+// every worker of the active run, its cover writes included, has returned, so
+// the active run (r.active, kept) is the only one with workers behind it.
+func (r *Runner) settleLocked(ctx context.Context) (int, error) {
+	n, err := r.cat.SettleMatchRuns(ctx, r.active)
+	if n > 0 {
+		r.log.Warn("match run: settled runs left marked working", "runs", n)
+	}
+	return n, err
+}
+
+// SettleOrphans settles the runs left marked working with nothing behind them
+// (settleLocked), keeping the active run, and returns how many it settled: an
+// Unlink refused as busy asks it before trying once more.
+func (r *Runner) SettleOrphans(ctx context.Context) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.settleLocked(ctx)
+}
+
 // stoppedByAdmin reports whether the working run's context ended because the
 // admin cancelled it, rather than because the server is shutting down (then the
-// run is left as it is, and settled at the next start: InterruptMatchRuns).
+// run is left as it is, and settled at the next start, Apply, Stop or Unlink:
+// settleLocked).
 func (r *Runner) stoppedByAdmin() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cancelled
 }
 
+// Stop results (Cancel).
+type StopResult int
+
+const (
+	// NotWorking: the run is neither working nor marked working.
+	NotWorking StopResult = iota
+	// Stopping: the working run was asked to stop.
+	Stopping
+	// Settled: the run was marked working with nothing behind it (a finishing
+	// write failed, or a stopped server left it) and is settled now: matching ->
+	// interrupted, applying -> ready.
+	Settled
+)
+
 // Cancel stops run id if it is the one working: matching stops (the run is
 // cancelled), applying stops after the books in hand (the run is ready again, the
-// rest still to apply). false when it isn't working.
-func (r *Runner) Cancel(id int64) bool {
+// rest still to apply). A run marked working that isn't the active one has
+// nothing behind it, and is settled (catalog.SettleMatchRun) under the lock, so
+// Stop always releases a stuck run. NotWorking when it is neither.
+func (r *Runner) Cancel(ctx context.Context, id int64) (StopResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.active == 0 || r.active != id {
-		return false
+	if r.active != 0 && r.active == id {
+		r.cancelled = true
+		r.cancel()
+		return Stopping, nil
 	}
-	r.cancelled = true
-	r.cancel()
-	return true
+	settled, err := r.cat.SettleMatchRun(ctx, id)
+	switch {
+	case err != nil:
+		return NotWorking, err
+	case settled:
+		r.log.Warn("match run: settled a run left marked working", "run", id)
+		return Settled, nil
+	}
+	return NotWorking, nil
 }
 
 // Clear undoes the community matches of one library (0 = every library) and
@@ -298,7 +363,7 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 		status = catalog.MatchFailed
 		r.log.Warn("match run stopped", "run", runID, "code", stopCode, "err", stopErr)
 	case ctx.Err() != nil && !r.stoppedByAdmin():
-		return // the server is stopping: the next start settles it
+		return // the server is stopping: the next start settles it (InterruptMatchRuns, settleLocked)
 	case ctx.Err() != nil:
 		status = catalog.MatchCancelled
 	}
@@ -496,12 +561,17 @@ type ApplyOptions struct {
 
 // Apply starts applying a ready run in the background, under base, returning the
 // run as it starts. ErrBusy while a run is working; catalog.ErrRunNotReady when
-// this one isn't ready; ErrScope for a scope its mode doesn't take.
+// this one isn't ready; ErrScope for a scope its mode doesn't take. A run left
+// marked working with nothing behind it is settled first (settleLocked), so a
+// stuck applying run is ready, and can be applied, again.
 func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != 0 {
 		return nil, ErrBusy
+	}
+	if _, err := r.settleLocked(ctx); err != nil {
+		return nil, err
 	}
 	run, err := r.cat.GetMatchRun(ctx, runID)
 	if err != nil {
@@ -558,7 +628,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		}
 	})
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
-		return // the server is stopping: the next start puts it back to ready
+		return // the server is stopping: the next start puts it back to ready (InterruptMatchRuns, settleLocked)
 	}
 	if off {
 		r.log.Info("match apply stopped: community metadata is off", "run", run.ID)
@@ -616,7 +686,16 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		}
 	}
 	if w.Cover {
-		if err := r.saveCover(ctx, it.LibraryID, it.Path, it.Proposal.CoverURL, o.UserID); err != nil {
+		err := r.saveCover(ctx, it.LibraryID, it.Path, it.Proposal.CoverURL, o.UserID, coverExpect(st, w))
+		if errors.Is(err, catalog.ErrCoverSuperseded) {
+			// The book changed while the cover was fetched (an upload, a match
+			// accepted by hand, an Unlink): the cover is no longer its own.
+			if !edits {
+				return catalog.ItemSkipped, DetailCoverSuperseded
+			}
+			return catalog.ItemApplied, DetailCoverSuperseded
+		}
+		if err != nil {
 			if ctx.Err() == nil {
 				r.log.Info("match apply cover failed", "library", it.LibraryID, "path", it.Path, "err", err)
 			}
@@ -627,6 +706,22 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 		}
 	}
 	return catalog.ItemApplied, ""
+}
+
+// coverExpect is the book a cover planned by w for a book in state st is for, once
+// w's edit is in: the match it records (else the book's own) and its ASIN and
+// ISBN after the edit (catalog.SetCoverIf's condition). Checked when the cover is
+// written, so a change between the edit and the fetch's end is caught too.
+func coverExpect(st *catalog.MatchState, w Writes) catalog.CoverExpect {
+	anchor := st.Anchor
+	if w.Anchor != nil {
+		anchor = *w.Anchor
+	}
+	return catalog.CoverExpect{
+		WorkID: anchor.WorkID, RecordingID: anchor.RecordingID,
+		ASIN: catalog.CleanOverride(catalog.FieldASIN, w.after(st, catalog.FieldASIN)),
+		ISBN: catalog.CleanOverride(catalog.FieldISBN, w.after(st, catalog.FieldISBN)),
+	}
 }
 
 // Change is what applying an item under one scope would write: its fields (in

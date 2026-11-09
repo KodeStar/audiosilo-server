@@ -99,16 +99,36 @@ func TestAnchorWrittenWithTheEdit(t *testing.T) {
 }
 
 // Unlink checks run status in its writer transaction, so a run cannot move to
-// applying between that check and the clear. A refused mixed edit writes none
-// of its fields; an ordinary edit is still allowed, and startup recovery releases
-// a run left working by a stopped server.
+// applying between that check and the clear. Only a run applying to the book's
+// library (or every library) refuses it: one that only matches, one over
+// another library and one that is ready, applied or interrupted don't. A refused
+// mixed edit writes none of its fields; an ordinary edit is still allowed, and
+// settling the runs (InterruptMatchRuns at startup) releases a refusing one.
 func TestUnlinkWhileMatchRunWorks(t *testing.T) {
 	t.Parallel()
-	for _, status := range []string{MatchMatching, MatchApplying} {
-		t.Run(status, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  string
+		library string // "same", "other", "all"
+		refused bool
+	}{
+		{"matching, same library", MatchMatching, "same", false},
+		{"matching, all libraries", MatchMatching, "all", false},
+		{"applying, same library", MatchApplying, "same", true},
+		{"applying, other library", MatchApplying, "other", false},
+		{"applying, all libraries", MatchApplying, "all", true},
+		{"ready", MatchReady, "same", false},
+		{"applied", MatchApplied, "all", false},
+		{"interrupted", MatchInterrupted, "same", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c, ctx := newTestCatalog(t)
 			lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := c.CreateLibrary(ctx, Library{Name: "Other", Root: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,21 +137,49 @@ func TestUnlinkWhileMatchRunWorks(t *testing.T) {
 				t.Fatal(err)
 			}
 			anchorBook(t, c, ctx, lib.ID, path, "the-work")
-			id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeRefresh})
+			run := MatchRun{Mode: MatchModeRefresh}
+			switch tc.library {
+			case "same":
+				run.LibraryID = &lib.ID
+			case "other":
+				run.LibraryID = &other.ID
+			}
+			id, err := c.StartMatchRun(ctx, run)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status == MatchApplying {
+			if tc.status != MatchMatching {
 				if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
 					t.Fatal(err)
 				}
+			}
+			switch tc.status {
+			case MatchApplying, MatchApplied:
 				if err := c.BeginApply(ctx, id, "fill", 0); err != nil {
 					t.Fatal(err)
 				}
+				if tc.status == MatchApplied {
+					if err := c.FinishApply(ctx, id, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case MatchInterrupted:
+				if _, err := c.db.ExecContext(ctx, `UPDATE match_runs SET status = ? WHERE id = ?`, MatchInterrupted, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tc.refused {
+				if err := c.EditBook(ctx, lib.ID, path, BookEdit{Match: &MatchAnchor{}}); err != nil {
+					t.Fatalf("unlink = %v, want allowed", err)
+				}
+				if a := anchorOf(t, c, ctx, lib.ID, path); a.WorkID != "" {
+					t.Fatalf("unlink left the anchor: %+v", a)
+				}
+				return
 			}
 			edit := BookEdit{Match: &MatchAnchor{}, Set: map[string]string{FieldTitle: "Must not be written"}}
 			if err := c.EditBook(ctx, lib.ID, path, edit); !errors.Is(err, ErrMatchRunBusy) {
-				t.Fatalf("unlink while a run works = %v, want ErrMatchRunBusy", err)
+				t.Fatalf("unlink while a run applies = %v, want ErrMatchRunBusy", err)
 			}
 			if a := anchorOf(t, c, ctx, lib.ID, path); a.WorkID != "the-work" {
 				t.Fatalf("refused unlink changed the anchor: %+v", a)
@@ -152,6 +200,151 @@ func TestUnlinkWhileMatchRunWorks(t *testing.T) {
 				t.Fatalf("unlink after recovery left the anchor: %+v", a)
 			}
 		})
+	}
+}
+
+// SettleMatchRuns settles every run marked working but the one kept, in one
+// transaction (matching -> interrupted, applying -> ready), counting them;
+// SettleMatchRun settles one, only while it is marked working.
+func TestSettleMatchRuns(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	start := func(apply bool) int64 {
+		id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if apply {
+			if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.BeginApply(ctx, id, "fill", 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	status := func(id int64) string {
+		r, err := c.GetMatchRun(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Status
+	}
+	matching, applying, kept := start(false), start(true), start(true)
+	if n, err := c.SettleMatchRuns(ctx, kept); n != 2 || err != nil {
+		t.Fatalf("settle = %d %v, want 2", n, err)
+	}
+	if status(matching) != MatchInterrupted || status(applying) != MatchReady || status(kept) != MatchApplying {
+		t.Fatalf("statuses = %s %s %s", status(matching), status(applying), status(kept))
+	}
+	if r, _ := c.GetMatchRun(ctx, matching); r.FinishedAt == nil {
+		t.Fatal("an interrupted run has no finished_at")
+	}
+	if n, err := c.SettleMatchRuns(ctx, kept); n != 0 || err != nil {
+		t.Fatalf("settle again = %d %v, want nothing", n, err)
+	}
+	if ok, err := c.SettleMatchRun(ctx, applying); ok || err != nil {
+		t.Fatalf("settle a ready run = %v %v, want false", ok, err)
+	}
+	if ok, err := c.SettleMatchRun(ctx, kept); !ok || err != nil || status(kept) != MatchReady {
+		t.Fatalf("settle one = %v %v, status %s", ok, err, status(kept))
+	}
+	if ok, err := c.SettleMatchRun(ctx, 999); ok || err != nil {
+		t.Fatalf("settle an unknown run = %v %v", ok, err)
+	}
+}
+
+// normalizeAnchor trims invisible characters from both ends of the ids: a work
+// id of them alone is refused (never an Unlink), a recording id of them alone
+// is none, interior ones and non-ASCII ids are kept.
+func TestNormalizeAnchorInvisible(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{" ", "\u200b", "\ufeff", "\u2060", "\u3164", "\u115f", "\u1160", "\uffa0",
+		"\u2800", "\ufe0f", " \u200b\t\u2060 ", "\u00ad"} {
+		if _, err := normalizeAnchor(&MatchAnchor{WorkID: in}, SourceCommunity); !errors.Is(err, ErrInvalidOverride) {
+			t.Errorf("work id %q: err = %v, want refused", in, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"\u200bdune":        "dune",
+		"\ufeffdune\u2060 ": "dune",
+		"münchhausen-é":     "münchhausen-é",
+		"du\u200bne":        "du\u200bne",
+	} {
+		a, err := normalizeAnchor(&MatchAnchor{WorkID: in, RecordingID: "\u200b\u3164"}, SourceCommunity)
+		if err != nil || a.WorkID != want || a.RecordingID != "" {
+			t.Errorf("work id %q = %+v %v, want %q and no recording", in, a, err, want)
+		}
+	}
+	if a, err := normalizeAnchor(&MatchAnchor{WorkID: ""}, ""); err != nil || a.WorkID != "" {
+		t.Errorf("explicit unlink = %+v %v", a, err)
+	}
+}
+
+// SetCoverIf writes only while the book is as expected, checked in the write's
+// transaction: no custom cover, the recorded match and the resolved ASIN and
+// ISBN; SetCover writes regardless.
+func TestSetCoverIf(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: t.TempDir()})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Set: map[string]string{FieldASIN: "B000000001"}, Match: &MatchAnchor{WorkID: "w", RecordingID: "r"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	img := pngBytes
+	want := CoverExpect{WorkID: "w", RecordingID: "r", ASIN: "B000000001"}
+	for name, expect := range map[string]CoverExpect{
+		"another work":      {WorkID: "x", RecordingID: "r", ASIN: "B000000001"},
+		"another recording": {WorkID: "w", ASIN: "B000000001"},
+		"another asin":      {WorkID: "w", RecordingID: "r", ASIN: "B000000002"},
+		"an isbn":           {WorkID: "w", RecordingID: "r", ASIN: "B000000001", ISBN: "9780000000002"},
+		"no match":          {ASIN: "B000000001"},
+	} {
+		if err := c.CoverExpected(ctx, lib.ID, p, expect); !errors.Is(err, ErrCoverSuperseded) {
+			t.Errorf("%s: CoverExpected = %v, want superseded", name, err)
+		}
+		if err := c.SetCoverIf(ctx, lib.ID, p, img, 0, SourceCommunity, &expect); !errors.Is(err, ErrCoverSuperseded) {
+			t.Errorf("%s: SetCoverIf = %v, want superseded", name, err)
+		}
+	}
+	if _, err := c.Cover(ctx, lib.ID, p); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a superseded write left a cover: %v", err)
+	}
+	if err := c.CoverExpected(ctx, lib.ID, "A/None", want); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no book = %v, want ErrNotFound", err)
+	}
+	if err := c.SetCoverIf(ctx, lib.ID, "A/None", img, 0, SourceCommunity, &want); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetCoverIf, no book = %v, want ErrNotFound", err)
+	}
+	if err := c.SetCover(ctx, lib.ID, "A/None", img, 0, SourceEdited); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetCover, no book = %v, want ErrNotFound", err)
+	}
+	// Art a scan found since the plan is a cover the community's doesn't go over.
+	for _, has := range []bool{true, false} {
+		if _, err := c.db.ExecContext(ctx, `UPDATE books SET has_cover = ? WHERE library_id = ? AND rel_path = ?`, has, lib.ID, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.CoverExpected(ctx, lib.ID, p, want); has != errors.Is(err, ErrCoverSuperseded) {
+			t.Fatalf("has_cover %v: CoverExpected = %v", has, err)
+		}
+	}
+	if err := c.SetCoverIf(ctx, lib.ID, p, img, 0, SourceCommunity, &want); err != nil {
+		t.Fatalf("expected write = %v", err)
+	}
+	// It has a custom cover now: another conditional write is superseded, an
+	// unconditional one (an upload) still goes in.
+	if err := c.SetCoverIf(ctx, lib.ID, p, img, 0, SourceCommunity, &want); !errors.Is(err, ErrCoverSuperseded) {
+		t.Fatalf("over a custom cover = %v, want superseded", err)
+	}
+	if err := c.SetCover(ctx, lib.ID, p, img, 0, SourceEdited); err != nil {
+		t.Fatalf("upload = %v", err)
 	}
 }
 

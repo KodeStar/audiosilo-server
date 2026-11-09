@@ -292,7 +292,7 @@ func TestCancelStopsARunWaitingOutARetry(t *testing.T) {
 	}
 	<-waiting
 	start := time.Now()
-	if !e.runner.Cancel(run.ID) {
+	if got, err := e.runner.Cancel(context.Background(), run.ID); err != nil || got != Stopping {
 		t.Fatal("cancel found no run")
 	}
 	e.runner.Wait()

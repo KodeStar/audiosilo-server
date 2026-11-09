@@ -20,9 +20,10 @@ const maxMatchRuns = 10
 // matching, already applying or applied, stopped).
 var ErrRunNotReady = errors.New("the match run is not ready to apply")
 
-// ErrMatchRunBusy marks an Unlink asked while a run is matching or applying
-// (clearing the book then would let the run write its match or cover back), and
-// is matchrun.ErrBusy, a run started or applied while another works.
+// ErrMatchRunBusy marks an Unlink asked while a run that covers the book's
+// library (or every library) is applying (clearing the book then would let the
+// apply write its match or cover back), and is matchrun.ErrBusy, a run started
+// or applied while another works.
 var ErrMatchRunBusy = errors.New("a match run is already working")
 
 // Match run modes.
@@ -255,17 +256,55 @@ func (c *Catalog) FinishApply(ctx context.Context, runID int64, cancelled bool) 
 
 // InterruptMatchRuns settles runs a previous server left working: one matching
 // is interrupted; one applying goes back to ready (what it applied is marked).
-// Called once at startup, before any run can start.
+// Called once at startup, before any run can start (SettleMatchRuns of every
+// run).
 func (c *Catalog) InterruptMatchRuns(ctx context.Context) error {
-	return c.db.WithTx(ctx, "InterruptMatchRuns", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE match_runs SET status = ?, finished_at = COALESCE(finished_at, started_at) WHERE status = ?`,
-			MatchInterrupted, MatchMatching); err != nil {
+	_, err := c.SettleMatchRuns(ctx, 0)
+	return err
+}
+
+// SettleMatchRuns settles every run but keep (0 = none kept) still marked
+// working that no worker is behind: matching -> interrupted, applying -> ready
+// (what it applied is marked, the rest still to apply). One transaction; it
+// returns how many runs it settled. Such a run is one a stopped server left, or
+// one whose finishing write failed (FinishMatching, FinishApply), which would
+// otherwise refuse every Unlink of its library until a restart. Only the caller
+// knows no worker is behind a run (matchrun.Runner, under its lock with no run
+// active, or keeping the active one).
+func (c *Catalog) SettleMatchRuns(ctx context.Context, keep int64) (int, error) {
+	return c.settleMatchRuns(ctx, "SettleMatchRuns", keep, false)
+}
+
+// SettleMatchRun settles run id as SettleMatchRuns does, when it is still
+// marked working: false when it isn't (finished, or no such run).
+func (c *Catalog) SettleMatchRun(ctx context.Context, id int64) (bool, error) {
+	n, err := c.settleMatchRuns(ctx, "SettleMatchRun", id, true)
+	return n > 0, err
+}
+
+// settleMatchRuns settles the working run id when only, else every working
+// run but id.
+// An interrupted run's finished_at is when it started, unless it has one: when
+// it stopped is unknown.
+func (c *Catalog) settleMatchRuns(ctx context.Context, op string, id int64, only bool) (int, error) {
+	var settled int64
+	err := c.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE match_runs
+			    SET status = CASE status WHEN ?1 THEN ?2 ELSE ?3 END,
+			        finished_at = CASE status WHEN ?1 THEN COALESCE(finished_at, started_at) ELSE finished_at END
+			  WHERE status IN (?1, ?4) AND (id = ?5) = ?6`,
+			MatchMatching, MatchInterrupted, MatchReady, MatchApplying, id, only)
+		if err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE match_runs SET status = ? WHERE status = ?`, MatchReady, MatchApplying)
+		settled, err = res.RowsAffected()
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return int(settled), nil
 }
 
 // matchRunCols reads a run with its counts, from one pass over its items that

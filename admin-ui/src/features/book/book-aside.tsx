@@ -116,6 +116,28 @@ function Listeners({ detail }: { detail: AdminBookDetail }) {
   );
 }
 
+const idValue = 'font-mono font-[550] [overflow-wrap:anywhere]';
+
+/** One identifier row of the Community card's list, left out when empty. */
+function IdRow({ label, value }: { label: string; value?: string }) {
+  if (!value) return null;
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={idValue}>{value}</dd>
+    </>
+  );
+}
+
+/** The "how" line's key: with no ASIN or ISBN it says the store listing is
+ * what the book is matched by. */
+function howKey(how: 'auto' | 'accepted', hasIdentifier: boolean) {
+  if (hasIdentifier) {
+    return how === 'auto' ? 'book.community.howAutoMatched' : 'book.community.howAcceptedMatched';
+  }
+  return how === 'auto' ? 'book.community.howAuto' : 'book.community.howAccepted';
+}
+
 function CommunityCard({
   detail,
   matchBlocked,
@@ -133,9 +155,18 @@ function CommunityCard({
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
   const matched = detail.book.matched;
-  // A book matched to a store listing has no ASIN or ISBN: its recorded community
-  // work is what it is matched by, shown with how and when, and can be unlinked.
-  const work = !asin && !isbn ? detail.community_match : undefined;
+  // The recorded community work, shown with how and when whenever the book has
+  // one, beside its ASIN or ISBN or without (a store listing is matched by it
+  // alone), and unlinkable.
+  const work = detail.community_match;
+  const hasIdentifier = Boolean(asin || isbn);
+  // An Unlink takes back the community's overrides (locked, source community),
+  // leaving what is under one (the files' value); any other value stays (an
+  // admin's edit, or an enrichment, which reads as community but isn't an
+  // override), so the book still shows as matched when one is an identifier.
+  const keepsIdentifier = [detail.fields.asin, detail.fields.isbn].some((f) =>
+    f.locked && f.source === 'community' ? Boolean(f.scanned) : Boolean(f.value),
+  );
 
   const b = detail.book;
   // Unlink takes back everything the match wrote (the community values and
@@ -190,22 +221,12 @@ function CommunityCard({
       {matched ? (
         <>
           <dl className="grid grid-cols-[minmax(80px,auto)_1fr] gap-x-[18px] gap-y-2 text-[13px]">
-            {asin ? (
-              <>
-                <dt className="text-muted-foreground">{t('book.field.asin')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">{asin}</dd>
-              </>
-            ) : null}
-            {isbn ? (
-              <>
-                <dt className="text-muted-foreground">{t('book.field.isbn')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">{isbn}</dd>
-              </>
-            ) : null}
+            <IdRow label={t('book.field.asin')} value={asin} />
+            <IdRow label={t('book.field.isbn')} value={isbn} />
             {work ? (
               <>
                 <dt className="text-muted-foreground">{t('book.community.work')}</dt>
-                <dd className="font-mono font-[550] [overflow-wrap:anywhere]">
+                <dd className={idValue}>
                   {work.web_url ? (
                     <a
                       href={work.web_url}
@@ -222,12 +243,11 @@ function CommunityCard({
                 </dd>
               </>
             ) : null}
+            <IdRow label={t('book.community.recording')} value={work?.recording_id} />
           </dl>
           {work ? (
             <p className="text-[12.5px] text-muted-foreground">
-              {t(work.how === 'auto' ? 'book.community.howAuto' : 'book.community.howAccepted', {
-                time: formatRelative(work.matched_at, lang),
-              })}
+              {t(howKey(work.how, hasIdentifier), { time: formatRelative(work.matched_at, lang) })}
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
@@ -265,7 +285,9 @@ function CommunityCard({
         onOpenChange={setConfirmUnlink}
         icon={Unlink}
         title={t('book.community.unlinkTitle')}
-        description={t('book.community.unlinkBody')}
+        description={t(
+          keepsIdentifier ? 'book.community.unlinkBodyKeeps' : 'book.community.unlinkBody',
+        )}
         confirmLabel={t('book.community.unlink')}
         onConfirm={unlink}
       />

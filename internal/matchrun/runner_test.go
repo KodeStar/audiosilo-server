@@ -92,7 +92,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.lib = lib.ID
-	save := func(_ context.Context, _ int64, _, url string, _ int64) error {
+	save := func(_ context.Context, _ int64, _, url string, _ int64, _ catalog.CoverExpect) error {
 		if url == "https://c/broken.jpg" {
 			return errors.New("cover unavailable")
 		}
@@ -356,10 +356,10 @@ func TestCancelAndBusy(t *testing.T) {
 	if _, err := e.runner.Clear(ctx, 0); !errors.Is(err, ErrBusy) {
 		t.Fatalf("clear while matching = %v, want ErrBusy", err)
 	}
-	if e.runner.Cancel(run.ID + 1) {
+	if got, err := e.runner.Cancel(ctx, run.ID+1); err != nil || got != NotWorking {
 		t.Fatal("cancelled a run that isn't working")
 	}
-	if !e.runner.Cancel(run.ID) {
+	if got, err := e.runner.Cancel(context.Background(), run.ID); err != nil || got != Stopping {
 		t.Fatal("cancel refused")
 	}
 	e.runner.Wait()
@@ -604,8 +604,8 @@ func TestCancelledApplyMarksWhatWentIn(t *testing.T) {
 	e.matcher.byTitle["Book"] = []meta.MatchCandidate{cand("the-martian", 97, "https://c/rec.jpg")}
 	run := e.start(t, catalog.MatchModeMatch, "")
 	// The cover, the item's last write, lands as the admin presses Stop.
-	e.runner.saveCover = func(context.Context, int64, string, string, int64) error {
-		e.runner.Cancel(run.ID)
+	e.runner.saveCover = func(context.Context, int64, string, string, int64, catalog.CoverExpect) error {
+		_, _ = e.runner.Cancel(context.Background(), run.ID)
 		return nil
 	}
 	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
@@ -628,8 +628,8 @@ func TestStoppedCoverIsTakenAgain(t *testing.T) {
 	e.matcher.byTitle["Book"] = []meta.MatchCandidate{cand("the-martian", 97, "https://c/rec.jpg")}
 	run := e.start(t, catalog.MatchModeMatch, "")
 	save := e.runner.saveCover
-	e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64) error {
-		e.runner.Cancel(run.ID)
+	e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64, _ catalog.CoverExpect) error {
+		_, _ = e.runner.Cancel(context.Background(), run.ID)
 		return ctx.Err()
 	}
 	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {

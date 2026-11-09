@@ -311,13 +311,18 @@ func (a *API) communityCover(ctx context.Context, rawURL string) ([]byte, error)
 }
 
 // saveMatchCover keeps a community cover as a book's custom cover for a bulk match
-// run (matchrun.CoverSaver): the match dialog's cover tick without the request.
-func (a *API) saveMatchCover(ctx context.Context, libraryID int64, path, rawURL string, userID int64) error {
+// run (matchrun.CoverSaver): the match dialog's cover tick without the request,
+// written only while the book is still as expect says (catalog.SetCoverIf). The
+// book first: no fetch for one that changed since the apply planned the cover.
+func (a *API) saveMatchCover(ctx context.Context, libraryID int64, path, rawURL string, userID int64, expect catalog.CoverExpect) error {
+	if err := a.cat.CoverExpected(ctx, libraryID, path, expect); err != nil {
+		return err
+	}
 	data, err := a.communityCover(ctx, rawURL)
 	if err != nil {
 		return err
 	}
-	return a.cat.SetCover(ctx, libraryID, path, data, userID, catalog.SourceCommunity)
+	return a.cat.SetCoverIf(ctx, libraryID, path, data, userID, catalog.SourceCommunity, &expect)
 }
 
 // keepableCover is a fetched community cover as it may be kept: refused

@@ -1689,16 +1689,37 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scope when the proposal's work or recording is not the book's: how `auto` for a confident item,
   `accepted` for an included review item, a refresh's heal keeping the book's). An empty work id
   (`{"work_id": ""}`, from any edit; the book aside's Unlink, behind a confirm) unlinks the book
-  (a whitespace-only id, or a `match` naming no work, `{}` or a null `work_id`, is invalid,
-  400 `invalid_override` on field `match`, never an Unlink):
+  (an id of only white space or other invisible characters (`catalog.invisible`: format characters
+  such as U+200B/U+FEFF/U+2060, variation selectors, default-ignorables such as U+3164, U+2800;
+  both ids are trimmed of them at the ends, interior ones kept), or a `match` naming no work, `{}`
+  or a null `work_id`, is invalid, 400 `invalid_override` on field `match`, never an Unlink):
   `ClearCommunityMatches` for that one book (`clearCommunity`, in the edit's transaction, before the
   rest of the edit), so its community values and cover go with the row and the next run asks about it
   again (removing only the row would leave the values to match it to the same work); an admin's own
-  edits and uploads stay. While any match run is matching or applying, Unlink is refused
-  (`catalog.ErrMatchRunBusy`, HTTP 409 `match_run_busy`; stop the run or wait for it to finish).
-  The check and clear share the edit's writer transaction, serialized with `StartMatchRun` and
-  `BeginApply`, so no run can start applying between them. Applying stays busy through the
-  last worker's cover write, even after a stop request; ordinary field edits still work.
+  edits and uploads stay. Unlink is refused only while a run that covers the book's library (or
+  every library, `library_id` NULL) is applying (`catalog.ErrMatchRunBusy`, HTTP 409
+  `match_run_busy`, "a match run is applying to this library"; stop it or wait for it to finish;
+  server#341). A run that is only matching records items and doesn't refuse it, nor does a run
+  over another library: every apply checks each item against the book as it is then (a refresh
+  item no longer has what it was found by, `stillFoundBy`; a repick's community ASIN is gone; a
+  match item reads `matched_since` or, as `cover_pending`, writes nothing), and a cover goes only
+  to the book it was planned for (below). The check and clear share the edit's writer
+  transaction, serialized with `StartMatchRun` and `BeginApply` (one that commits first is seen;
+  one after reads the unlinked book). Applying stays busy through the last worker's cover write,
+  even after a stop request (`FinishApply` runs only once every worker has returned); ordinary
+  field edits still work. A run left marked applying with nothing behind it (below) is settled
+  and the Unlink tried once more (`handleAdminEditBook`: `Runner.SettleOrphans`).
+  **A community cover is written conditionally** (server#340): an apply's cover goes through
+  `catalog.SetCoverIf` with a `CoverExpect` (`matchrun.coverExpect`: the match the apply records,
+  else the book's own, and the ASIN and ISBN after its edit, `Writes.after`, in stored form);
+  in the write's own transaction the book must still have no cover (`hasCoverExpr`: no custom
+  cover and no art of its own, as the plan found it), that recorded match and those resolved
+  identifiers, else `catalog.ErrCoverSuperseded` and nothing is written.
+  `saveMatchCover` asks `CoverExpected` before it fetches, then `SetCoverIf` after, so an upload,
+  art a rescan found, a match accepted by hand, an identifier edit or an Unlink while the cover
+  was fetched keeps what the book has. The item reads detail `cover_superseded` (`DetailCoverSuperseded`:
+  applied when its fields went in, else skipped; final, never turned into `cover_pending`).
+  `SetCover` (uploads, the dialog's explicit cover tick) stays unconditional.
   No Undo: the cleared values aren't kept. A store listing the
   community holds with no ASIN or ISBN (Guild books) is matched by this row alone: `catalog.matchedExpr`
   (`b.asin <> '' OR b.isbn <> '' OR EXISTS(book_matches by its key)`) is the list's `matched` and its
@@ -1711,7 +1732,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no
-  ASIN/ISBN is written beside it). No backfill: a book matched before E6 has none until matched again.
+  ASIN/ISBN is written beside it). The console's Community card shows a recorded match whenever the
+  book has one, with or without an ASIN or ISBN (work, recording, how and when, Unlink; server#338); its
+  Unlink confirm says the book stays matched when it keeps an identifier of its own (one not from the
+  community, or one its files name). No backfill: a book matched before E6 has none until matched again.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`), or within 20%
   when the book's narrator reads it (`meta.NarratedRuntimeOff`, `narratorReads`: metaserve's
@@ -1813,7 +1837,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   request-body limit so large refreshes can omit every unchanged book.
   `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
-  ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
+  ready (`catalog.SettleMatchRuns(ctx, 0)`, one transaction; a failure is a warning). A run
+  whose finishing write failed (`FinishMatching`, `FinishApply` only log it) or that the start's
+  settle missed is settled too (server#339): `Runner.settleLocked` at the top of `Start` and
+  `Apply` (so a stuck applying run is ready, and can be applied, again), `Runner.SettleOrphans`
+  on an Unlink refused as busy, and Stop (`Runner.Cancel` on a run that isn't the active one:
+  `catalog.SettleMatchRun`; `POST .../cancel` 204, audited `book.match_stop` with `"orphan":
+  true`; 409 `match_run_not_running` only for a run not marked working). Safe only under the
+  runner's lock, keeping the active run: `Start` and `Apply` hold it across `StartMatchRun` /
+  `BeginApply` and `begin`, and `end` clears the active run only after every worker, cover
+  writes included, has returned, so no settled row has a worker behind it. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
   overrides and covers and the recorded matches (`book_matches`), rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
