@@ -299,3 +299,64 @@ func TestSignOutEverywhereRoute(t *testing.T) {
 		t.Fatal("the bridge token was refused after its admin signed out everywhere")
 	}
 }
+
+// Security-critical (server#285, owner decision 2026-11-09): the owner's
+// password change and the admin's Sign out everywhere end the household
+// members' sessions made on the owner's other devices, on the very next
+// request; the member on the device the change was made on stays, and so do
+// another owner's members. A refused change ends nothing.
+func TestOwnersPasswordAndSignOutEndMembersSessions(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	laptop, err := m.auth.IssueToken(ctx, m.adam, auth.KindSession, "adam's laptop", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, onLaptop := m.kid(t, laptop, "Evie")
+	_, onPhone := m.grownup(t, m.adamTok, "Ellis", "all")
+	_, bobs := m.kid(t, m.bobTok, "Kit")
+	status := func(tok string) int {
+		t.Helper()
+		resp, _ := m.do(t, "GET", "/api/v1/me", tok, "")
+		return resp.StatusCode
+	}
+	for _, tok := range []string{onLaptop, onPhone, bobs} {
+		if s := status(tok); s != http.StatusOK {
+			t.Fatalf("setup: a member's session = %d", s)
+		}
+	}
+
+	// Denied: a refused change (the wrong current password) ends no member.
+	if resp, _ := m.do(t, "POST", "/api/v1/auth/password", m.adamTok,
+		`{"password":"a-new-password","current_password":"wrong-password"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("change with the wrong password = %d, want 401", resp.StatusCode)
+	}
+	if s := status(onLaptop); s != http.StatusOK {
+		t.Fatalf("the member on the laptop after a refused change = %d, want 200", s)
+	}
+
+	// Allowed: the change on the phone ends the member on the laptop.
+	if resp, body := m.do(t, "POST", "/api/v1/auth/password", m.adamTok,
+		`{"password":"a-new-password","current_password":"adam-password"}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("change = %d %s, want 204", resp.StatusCode, body)
+	}
+	if s := status(onLaptop); s != http.StatusUnauthorized {
+		t.Fatalf("the member on the owner's laptop = %d, want 401", s)
+	}
+	if s := status(onPhone); s != http.StatusOK {
+		t.Fatalf("the member on the phone the change was made on = %d, want 200", s)
+	}
+
+	// Sign out everywhere (nothing kept) ends the member on the phone too.
+	resp, body := m.do(t, "POST", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10)+"/sign-out", m.adminTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign out everywhere = %d %s", resp.StatusCode, body)
+	}
+	if s := status(onPhone); s != http.StatusUnauthorized {
+		t.Fatalf("the member on the owner's phone after Sign out everywhere = %d, want 401", s)
+	}
+	if s := status(bobs); s != http.StatusOK {
+		t.Fatalf("another owner's member = %d, want 200", s)
+	}
+}

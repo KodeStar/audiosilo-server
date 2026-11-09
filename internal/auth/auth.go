@@ -1705,11 +1705,16 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // neither see nor revoke: their open pairing codes (unlinked pairing tokens,
 // POST /auth/pair: one use, but one that would make a session after the end, as
 // leaveOwners ends them) and their recovery code (its linked pairing tokens
-// cascade). API keys stay (listed and revoked on their own), and so do the
-// calendar feed token (the person's to end) and Bridge tokens (the Bridge's). A
-// cast token needs no write: it is refused once its parent is revoked (cast.go).
-// The write moves the content generation, so the token cache reads an ended token
-// again and refuses it on the very next request.
+// cascade). Their household members go the same way where the person put them
+// (server#285): a member's session made on any of the person's devices but keep
+// (created_on_token_id, as the device revoke's alsoMembers), and every member's
+// open pairing code (minted from one of the person's sessions). A member's own
+// device, paired before, stays signed in. API keys stay (listed and revoked on
+// their own), and so do the calendar feed token (the person's to end) and Bridge
+// tokens (the Bridge's). A cast token needs no write: it is refused once its
+// parent is revoked (cast.go). The write moves the content generation, so the
+// token cache reads an ended token again and refuses it on the very next request.
+// It returns how many of the person's own sessions it ended.
 func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1
@@ -1728,6 +1733,14 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tokens SET revoked = 1
+		  WHERE revoked = 0 AND user_id IN (SELECT id FROM users WHERE managed_by = ?1)
+		    AND ((kind = ?2 AND created_on_token_id IN (SELECT id FROM tokens WHERE user_id = ?1 AND id != ?3))
+		         OR (kind = ?4 AND auth_code_id IS NULL))`,
+		userID, KindSession, keep, KindPairing); err != nil {
 		return 0, err
 	}
 	return n, nil

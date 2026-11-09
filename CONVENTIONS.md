@@ -142,7 +142,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   change, and forgets the person's browsers. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
   (unlinked `pairing` tokens, `POST /auth/pair`) and their recovery code (its linked pairing tokens
-  cascade). API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
+  cascade). Their household members go the same way where the person put them (server#285): a member's
+  session made on any of the person's devices but the kept one (`created_on_token_id`, the device
+  revoke's `also_members` rule, a device signed out earlier included) and every member's open pairing
+  code; a member's own paired device stays, and `signed_out` counts the person's sessions only. API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
   do the calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
   lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
