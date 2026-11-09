@@ -371,6 +371,44 @@ func TestWholeLibraryGrantsAreMarked(t *testing.T) {
 	}
 }
 
+// TestLibraryGrantPathEditsRefused (server#254): a library grant's share
+// changes only by granting or revoking the library. Denied: a path add or
+// remove on it is 409 library_grant and leaves the whole-library rule. Allowed:
+// the same edits on an admin's own share are 204.
+func TestLibraryGrantPathEditsRefused(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, _, memberID := adminAndMember(t, e)
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Fiction", Root: t.TempDir()})
+	if err := e.cat.GrantWholeLibrary(ctx, memberID, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ := e.cat.ListShares(ctx)
+	if len(shares) != 1 || shares[0].WholeLibraryID == nil {
+		t.Fatalf("precondition: shares = %+v", shares)
+	}
+	mine, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Mine"})
+	paths := func(id int64) string { return "/api/v1/admin/shares/" + strconv.FormatInt(id, 10) + "/paths" }
+	folder := fmt.Sprintf(`{"library_id":%d,"path":"Author/Book"}`, lib.ID)
+	whole := fmt.Sprintf(`{"library_id":%d,"path":""}`, lib.ID)
+
+	for _, c := range []struct{ method, body string }{{"POST", folder}, {"DELETE", whole}} {
+		resp, body := e.do(t, c.method, paths(shares[0].ID), adminTok, c.body)
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"library_grant"`) {
+			t.Fatalf("%s on a grant = %d %s, want 409 library_grant", c.method, resp.StatusCode, body)
+		}
+	}
+	if got, _ := e.cat.GetShare(ctx, shares[0].ID); len(got.Paths) != 1 || got.Paths[0] != (catalog.PathRule{LibraryID: lib.ID}) {
+		t.Fatalf("the grant's rules = %+v, want the whole library only", got.Paths)
+	}
+	for _, method := range []string{"POST", "DELETE"} {
+		if resp, body := e.do(t, method, paths(mine.ID), adminTok, folder); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("%s on an admin's share = %d %s, want 204", method, resp.StatusCode, body)
+		}
+	}
+}
+
 // TestAdminLibrariesCarryScanProgress: one poll of the list shows each scan.
 func TestAdminLibrariesCarryScanProgress(t *testing.T) {
 	t.Parallel()

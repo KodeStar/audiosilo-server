@@ -522,8 +522,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   index alone); the player's `findNextSibling`: names compared as its `localeCompare`
   (numeric, base) does, by `x/text/collate`, a pending folder as a book (offered with no
   `book`), and a bare folder only when nothing in the folder, the current book
-  included, is indexed), else `{source:"none"}`. A numbered series' end still answers
-  `{source:"series"}` with a pending folder after the book (the folder step isn't asked). A
+  included, is indexed), else `{source:"none"}`. A numbered series' end gives way to a pending
+  folder after the book (`folderNext`'s `pendingOnly`: `{source:"folder"}` with no `book`), so a
+  numbered series no scan has reached is walked book by book (server#254); an indexed book after it
+  never does, and with nothing pending the end answers `{source:"series"}`. A
   failure to place the caller's books leaves the next entry unplaced (as `/meta`
   degrades). `book` is the list shape; everything `next` names is in the caller's
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
@@ -1151,6 +1153,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
   from 2, server#230), made whole and marked in one transaction that looks for the library's grant
   share again first: write transactions run one at a time, so first grants sent together share one.
+  A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
+  /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
+  edit's transaction; server#254), as the console never offers it.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
@@ -1173,7 +1178,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   above both rows. A favourite on a navigation folder (author, series) has no book to move:
   `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
   went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
-  by exact name (so a case-only rename, of it or a folder above it, counts).
+  by exact name (so a case-only rename, of it or a folder above it, counts). The on-demand move
+  (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
+  about the disk, so every listener's folder favourite follows it (owner decision on server#254,
+  `TestIndexPathMovesEveryListenersFolderFavourite`).
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is

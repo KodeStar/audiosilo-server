@@ -730,10 +730,37 @@ func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule
 	return err
 }
 
+// ErrLibraryGrant: the share is a library grant (whole_library_id, made by
+// GrantWholeLibrary), whose folders change only by granting or revoking the
+// library (server#254): a path edit would leave it marked as the whole library
+// while its rules say otherwise.
+var ErrLibraryGrant = errors.New("the share is a library grant")
+
+// refuseLibraryGrant is ErrLibraryGrant for a marked share, read inside the
+// edit's transaction so a grant made meanwhile can't slip past it.
+func refuseLibraryGrant(ctx context.Context, tx *sql.Tx, shareID int64) error {
+	var marked bool
+	err := tx.QueryRowContext(ctx,
+		`SELECT whole_library_id IS NOT NULL FROM shares WHERE id = ?`, shareID).Scan(&marked)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil // no such share: the edit writes nothing (the foreign key refuses an add)
+	case err != nil:
+		return err
+	case marked:
+		return ErrLibraryGrant
+	}
+	return nil
+}
+
 // AddSharePaths adds several path rules to a share in one transaction (adding a
-// selection of books to a share): all or none.
+// selection of books to a share): all or none. A library grant is
+// ErrLibraryGrant.
 func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []PathRule) error {
 	return c.db.WithTx(ctx, "AddSharePaths", func(tx *sql.Tx) error {
+		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+			return err
+		}
 		for _, rule := range rules {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
@@ -745,12 +772,18 @@ func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []Path
 	})
 }
 
-// RemoveSharePath removes a path rule from a share, durably (DeleteShare).
+// RemoveSharePath removes a path rule from a share, durably (DeleteShare). A
+// library grant is ErrLibraryGrant.
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
-	_, err := c.db.ExecDurable(ctx, "RemoveSharePath",
-		`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
-		shareID, rule.LibraryID, CleanRelPath(rule.Path))
-	return err
+	return c.db.WithDurableTx(ctx, "RemoveSharePath", func(tx *sql.Tx) error {
+		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
+			shareID, rule.LibraryID, CleanRelPath(rule.Path))
+		return err
+	})
 }
 
 // ListSharePaths returns a share's path rules.

@@ -489,6 +489,50 @@ func TestNextFolder(t *testing.T) {
 	}
 }
 
+// TestNextUnscannedNumberedSeries (server#254): a numbered series no scan has
+// reached is walked book by book. Each book opened is indexed in turn, so the
+// series knows only those, and at its end a pending folder after the book is
+// the next one; once nothing pending follows, the series end stands, and an
+// indexed book outside the series never takes its place. Denied: a pending
+// folder outside the member's grant is never offered.
+func TestNextUnscannedNumberedSeries(t *testing.T) {
+	t.Parallel()
+	e := newSagaEnv(t, false, &catalog.Book{RelPath: "Saga/1", IsFolder: true, Series: "Saga", SeriesIndex: 1})
+	mkdirs(t, e.lib.Root, "Saga/1", "Saga/2", "Saga/3")
+	index := func(rel string, pos float64) {
+		t.Helper()
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: rel, IsFolder: true,
+			Series: "Saga", SeriesIndex: pos, Title: rel, Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	walk := []struct {
+		from, want string
+		pos        float64
+	}{{"Saga/1", "Saga/2", 2}, {"Saga/2", "Saga/3", 3}}
+	for _, w := range walk {
+		n := getNext(t, e.testEnv, e.url("next", w.from), e.adminTok)
+		if n.nextPath() != w.want || n.Book != nil {
+			t.Fatalf("after %s = %s, want the pending %s", w.from, n.raw, w.want)
+		}
+		index(w.want, w.pos) // the player opens it, which indexes it
+	}
+	// Denied: Saga/3 is outside the member's grant (Saga/1 and Saga/2).
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/2"), e.memberTok); n.Source != nextSeries || n.Next != nil || strings.Contains(n.raw, "Saga/3") {
+		t.Fatalf("member at their grant's end = %s", n.raw)
+	}
+	// The end: nothing pending follows, and an indexed book outside the series
+	// after it does not replace the series' answer.
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: "Saga/4 Notes", IsFolder: true,
+		Title: "Notes", Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	mkdirs(t, e.lib.Root, "Saga/4 Notes")
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/3"), e.adminTok); n.Source != nextSeries || n.Next != nil {
+		t.Fatalf("the series end = %s", n.raw)
+	}
+}
+
 // The pending folder after a book is found past a batch of folders that are no
 // books (markPendingNext reads them a batch at a time, in name order, and stops
 // at the batch holding one), and the first of two pending ones answers.

@@ -65,7 +65,10 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 // can lag the library - so otherwise the local series numbering of every series
 // the book is in (seriesNext), then the book's folder (folderNext), then none
 // answer, carrying the community's unplaced next work, if it named one, as Work.
-// Whatever Next names is in the caller's scope.
+// A series that ends at the book gives way to a pending folder after it
+// (server#254): in a numbered series no scan has reached, the series knows only
+// the books opened so far, and the next one is still a folder. Whatever Next
+// names is in the caller's scope.
 func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
 	work, placed := a.communityNext(ctx, lib.ID, book)
 	if work != nil && work.Local != nil {
@@ -73,8 +76,15 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 		return &nextBook{Source: nextCommunity, Next: &ref, Book: placed, Work: work}, nil
 	}
 	next, err := a.seriesNext(ctx, lib.ID, scope, book)
-	if next == nil && err == nil {
-		next, err = a.folderNext(ctx, lib, scope, book)
+	switch {
+	case err != nil:
+	case next == nil:
+		next, err = a.folderNext(ctx, lib, scope, book, false)
+	case next.Next == nil: // the end of the series
+		var pending *nextBook
+		if pending, err = a.folderNext(ctx, lib, scope, book, true); pending != nil {
+			next = pending
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -159,10 +169,11 @@ func (a *API) seriesNext(ctx context.Context, libraryID int64, scope catalog.Sco
 }
 
 // folderNext reads the next book off the book's folder (library.NextInFolder).
-// nil (fall through) when nothing follows.
-func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
+// nil (fall through) when nothing follows, or, with pendingOnly, when what
+// follows is not a pending folder (one with audio no scan has indexed yet).
+func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book, pendingOnly bool) (*nextBook, error) {
 	e, b, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.log)
-	if e == nil || err != nil {
+	if e == nil || err != nil || (pendingOnly && (b != nil || !e.PendingBook)) {
 		return nil, err
 	}
 	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: lib.ID, Path: e.Path}, Book: b}, nil

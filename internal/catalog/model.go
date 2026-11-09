@@ -272,6 +272,9 @@ type catalogDB interface {
 	// ExecDurable is ExecContext committed durably (store.DB.WithDurableTx): for
 	// a write that takes access away (a share's grant, rule or the share itself).
 	ExecDurable(context.Context, string, string, ...any) (sql.Result, error)
+	// WithDurableTx is WithTx committed durably, for a transaction that takes
+	// access away.
+	WithDurableTx(context.Context, string, func(*sql.Tx) error) error
 	Ping(context.Context) error
 }
 

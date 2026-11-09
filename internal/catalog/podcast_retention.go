@@ -171,6 +171,9 @@ func (s snapshotDB) WithUserStateTx(ctx context.Context, name string, fn func(*s
 func (s snapshotDB) ExecDurable(ctx context.Context, _ string, q string, args ...any) (sql.Result, error) {
 	return s.ExecContext(ctx, q, args...) // inside the caller's transaction, which commits it
 }
+func (s snapshotDB) WithDurableTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
+	return s.WithTx(ctx, name, fn) // inside the caller's transaction, which commits it
+}
 func (s snapshotDB) Ping(ctx context.Context) error {
 	var x int
 	return s.tx.QueryRowContext(ctx, `SELECT 1`).Scan(&x)
