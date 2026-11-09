@@ -259,8 +259,9 @@ func TestBestOnlyMissingFactsDropNothing(t *testing.T) {
 	}
 }
 
-// As Candidates reads failures: the next hit stands in for a best that can't be read,
-// and with none left an outage is an error, a gone work no match.
+// A gone best gives way to the next; a best that can't be read is an outage at
+// once (server#306), never the next standing in: Classify would see that one alone
+// and could apply the wrong work unasked. With none left, a gone work is no match.
 func TestBestOnlyBestCantBeRead(t *testing.T) {
 	body := matchBody(matchResult("colour", 97, ""), matchResult("light", 71, ""))
 	for name, tc := range map[string]struct {
@@ -270,9 +271,9 @@ func TestBestOnlyBestCantBeRead(t *testing.T) {
 		wantErr bool
 	}{
 		"gone, the next stands in": {nil, map[string]string{"light": otherWork}, "light", false},
-		"failing, the next stands": {map[string]int{"colour": 500}, map[string]string{"light": otherWork}, "light", false},
+		"failing is an outage":     {map[string]int{"colour": 500}, map[string]string{"light": otherWork}, "", true},
+		"gone, then failing":       {map[string]int{"light": 500}, nil, "", true},
 		"all failing is an outage": {map[string]int{"colour": 500, "light": 500}, nil, "", true},
-		"one failing, one gone":    {map[string]int{"light": 500}, nil, "", true},
 		"all gone is no match":     {nil, nil, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -294,8 +295,9 @@ func TestBestOnlyBestCantBeRead(t *testing.T) {
 	}
 }
 
-// A weak next stands in only by being read, as Candidates reads it: a stub asks nothing,
-// so it would answer for a service that is down, the book a weak match and no outage.
+// A weak next never hides an outage: a best that can't be read is one at once, so the
+// next is not asked (a stub asks nothing, and would answer for a service that is down,
+// the book a weak match and no outage), and a gone best leaves the weak next a stub.
 func TestBestOnlyWeakNextDoesNotHideAnOutage(t *testing.T) {
 	body := matchBody(matchResult("colour", 97, ""), matchResult("light", 40, ""))
 	for name, tc := range map[string]struct {
@@ -305,7 +307,7 @@ func TestBestOnlyWeakNextDoesNotHideAnOutage(t *testing.T) {
 		wantErr   bool
 	}{
 		"both failing is an outage": {failing: map[string]int{"colour": 503, "light": 503}, wantErr: true},
-		"the next read stands in":   {failing: map[string]int{"colour": 500}, works: map[string]string{"light": otherWork}, wantTitle: "The Light Fantastic"},
+		"the best failing":          {failing: map[string]int{"colour": 500}, works: map[string]string{"light": otherWork}, wantErr: true},
 		"gone: no outage to hide":   {works: map[string]string{"light": otherWork}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -316,6 +318,9 @@ func TestBestOnlyWeakNextDoesNotHideAnOutage(t *testing.T) {
 			}
 			if !tc.wantErr && (len(cands) != 1 || cands[0].WorkID != "light" || cands[0].Title != tc.wantTitle) {
 				t.Fatalf("candidates = %+v, want light titled %q", cands, tc.wantTitle)
+			}
+			if got := m.calls()["work:light"]; got != 0 {
+				t.Fatalf("the weak next was read %d times: a stub asks nothing", got)
 			}
 		})
 	}

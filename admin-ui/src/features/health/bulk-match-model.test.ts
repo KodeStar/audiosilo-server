@@ -12,6 +12,7 @@ import {
   isPickable,
   leaveOut,
   runFraction,
+  stoppedEarly,
   togglePick,
   togglePickRange,
 } from './bulk-match-model';
@@ -216,11 +217,21 @@ it('explains only review scores closer than the classification lead without a st
     { runner_up: 0 },
     { detail: 'length_differs' },
     { detail: 'dramatization_only' },
+    { detail: 'identifier_disagrees' },
   ]) {
     expect(hasCloseScore(item({ outcome: 'review', score: 94, runner_up: 90, ...over }))).toBe(
       false,
     );
   }
+});
+
+it('reads a run the service stopped early from its status and code (server#306)', () => {
+  expect(stoppedEarly(run({ error: 'metadata_unavailable' }))).toBe(true);
+  expect(stoppedEarly(run({ status: 'applied', error: 'metadata_unavailable' }))).toBe(true);
+  // An older server's failed run, and any other code, is not one.
+  expect(stoppedEarly(run({ status: 'failed', error: 'metadata_unavailable' }))).toBe(false);
+  expect(stoppedEarly(run({ status: 'failed', error: 'metadata_off' }))).toBe(false);
+  expect(stoppedEarly(run())).toBe(false);
 });
 
 describe('Shift-click ranges', () => {

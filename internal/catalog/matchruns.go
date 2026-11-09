@@ -97,7 +97,7 @@ type MatchRun struct {
 	ApplyTotal    int            `json:"apply_total"`
 	ApplyDone     int            `json:"apply_done"`
 	AppliedAt     *string        `json:"applied_at"`
-	Error         string         `json:"error,omitempty"`
+	Error         string         `json:"error,omitempty"` // matchrun's ErrCode* (see there)
 	Counts        MatchRunCounts `json:"counts"`
 }
 
@@ -195,7 +195,8 @@ func (c *Catalog) RecordMatchItem(ctx context.Context, runID int64, item *MatchR
 	})
 }
 
-// FinishMatching ends a run's matching: ready, cancelled or failed (with a code).
+// FinishMatching ends a run's matching: ready, cancelled or failed (with a code;
+// a ready run an outage stopped early carries one too).
 func (c *Catalog) FinishMatching(ctx context.Context, runID int64, status, errCode string) error {
 	_, err := c.db.ExecContext(ctx,
 		`UPDATE match_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?`,

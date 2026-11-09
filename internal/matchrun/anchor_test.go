@@ -47,6 +47,13 @@ func TestClassifyStoreListing(t *testing.T) {
 		c.Score = score
 		return c
 	}
+	// Found by a tag identifier the chosen recording doesn't carry: scored 100, so
+	// only its title says whether it is the book (server#306).
+	hitTitled := func(title float64) meta.MatchCandidate {
+		c := withScore(100)
+		c.Reasons = &meta.MatchReasons{Identifier: "isbn", Author: "full", Series: "position", Title: &title}
+		return c
+	}
 	for name, tc := range map[string]struct {
 		cands   []meta.MatchCandidate
 		seconds float64
@@ -54,15 +61,17 @@ func TestClassifyStoreListing(t *testing.T) {
 		want    string
 	}{
 		"allowed: 92, lead 12, full, position, 1.5% off": {[]meta.MatchCandidate{ok, runnerUp(80)}, book, 609, catalog.OutcomeAuto},
-		"allowed: alone":                     {[]meta.MatchCandidate{ok}, book, 609, catalog.OutcomeAuto},
-		"denied: the author's surname only":  {[]meta.MatchCandidate{withReasons("surname", "position"), runnerUp(80)}, book, 609, catalog.OutcomeReview},
-		"denied: the series name only":       {[]meta.MatchCandidate{withReasons("full", "name"), runnerUp(80)}, book, 609, catalog.OutcomeReview},
-		"denied: 2.5% off":                   {[]meta.MatchCandidate{ok, runnerUp(80)}, book, 615, catalog.OutcomeReview},
-		"denied: the book's length unknown":  {[]meta.MatchCandidate{ok, runnerUp(80)}, 0, 609, catalog.OutcomeReview},
-		"denied: the recording's unknown":    {[]meta.MatchCandidate{ok, runnerUp(80)}, book, 0, catalog.OutcomeReview},
-		"denied: score 89":                   {[]meta.MatchCandidate{withScore(89), runnerUp(70)}, book, 609, catalog.OutcomeReview},
-		"denied: lead 9":                     {[]meta.MatchCandidate{ok, runnerUp(83)}, book, 609, catalog.OutcomeReview},
-		"denied: no reasons (older service)": {[]meta.MatchCandidate{noReasons, runnerUp(80)}, book, 609, catalog.OutcomeReview},
+		"allowed: alone":                         {[]meta.MatchCandidate{ok}, book, 609, catalog.OutcomeAuto},
+		"denied: the author's surname only":      {[]meta.MatchCandidate{withReasons("surname", "position"), runnerUp(80)}, book, 609, catalog.OutcomeReview},
+		"denied: the series name only":           {[]meta.MatchCandidate{withReasons("full", "name"), runnerUp(80)}, book, 609, catalog.OutcomeReview},
+		"denied: 2.5% off":                       {[]meta.MatchCandidate{ok, runnerUp(80)}, book, 615, catalog.OutcomeReview},
+		"denied: the book's length unknown":      {[]meta.MatchCandidate{ok, runnerUp(80)}, 0, 609, catalog.OutcomeReview},
+		"denied: the recording's unknown":        {[]meta.MatchCandidate{ok, runnerUp(80)}, book, 0, catalog.OutcomeReview},
+		"denied: score 89":                       {[]meta.MatchCandidate{withScore(89), runnerUp(70)}, book, 609, catalog.OutcomeReview},
+		"denied: lead 9":                         {[]meta.MatchCandidate{ok, runnerUp(83)}, book, 609, catalog.OutcomeReview},
+		"denied: no reasons (older service)":     {[]meta.MatchCandidate{noReasons, runnerUp(80)}, book, 609, catalog.OutcomeReview},
+		"allowed: an identifier hit that agrees": {[]meta.MatchCandidate{hitTitled(1), runnerUp(80)}, book, 609, catalog.OutcomeAuto},
+		"denied: an identifier hit that doesn't": {[]meta.MatchCandidate{hitTitled(0.3), runnerUp(80)}, book, 609, catalog.OutcomeReview},
 	} {
 		p := proposal(tc.cands[0])
 		p.RuntimeMin = tc.runtime

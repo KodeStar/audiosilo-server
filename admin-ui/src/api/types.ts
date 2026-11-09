@@ -2211,7 +2211,12 @@ export interface MatchRun {
   apply_total: number;
   apply_done: number;
   applied_at: string | null;
-  /** Why a failed run stopped: metadata_off | metadata_unavailable | internal. */
+  /**
+   * Why a run stopped by itself: a failed run's metadata_off | internal (an older
+   * server's also metadata_unavailable), or metadata_unavailable on a ready (or
+   * since applied) run the community service's outage stopped early, its answers
+   * kept for review and the books it never reached left for the next run.
+   */
   error?: string;
   counts: {
     auto: number;
@@ -2284,7 +2289,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; work_unknown on a refresh's none item whose recorded work the community no longer has (the book keeps its match); dramatization_only (held for review); cover_pending while still to apply (a stop cut its cover short); cover_superseded when its cover was not written because the book changed while it was fetched (a cover uploaded, another match accepted, an Unlink: final, applied when its fields went in, else skipped); length_differs on a review item held because the recording is another length; identifier_disagrees on a review item found by its tag ASIN or ISBN whose title or series position doesn't agree (it may name another book); weak_match on a none item whose best candidate scored under the review floor (its `score` kept). */
   detail?: string;
   /** The book as it is now; duration in seconds (absent when unknown, or from an older server). */
   book: { title: string; author: string; duration?: number };

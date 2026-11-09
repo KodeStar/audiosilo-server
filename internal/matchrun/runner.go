@@ -38,7 +38,9 @@ const (
 	maxFailStreak = workers + 4
 )
 
-// Codes a run that stopped by itself records (catalog.MatchRun.Error).
+// Codes a run that stopped by itself records (catalog.MatchRun.Error). A run the
+// service's outage stops (metadata_unavailable) is ready, its answers kept to
+// review and apply; the others are failed.
 const (
 	ErrCodeMetadataOff = "metadata_off"
 	ErrCodeUnavailable = "metadata_unavailable"
@@ -66,6 +68,12 @@ const DetailLengthDiffers = "length_differs"
 // holds only a dramatization, which the book doesn't state it is: meta.DefaultRecording
 // offers no recording, so there is no identifier to attach unasked.
 const DetailDramatizationOnly = "dramatization_only"
+
+// DetailIdentifierDisagrees is a review item's detail when its best candidate was
+// found by the book's tag ASIN or ISBN but the book's own title or series position
+// doesn't agree with it (identifierAgrees): the tag most likely names another book,
+// so it is held for review however high it scored (server#306).
+const DetailIdentifierDisagrees = "identifier_disagrees"
 
 // DetailWeakMatch is a match item's detail when its best candidate scored
 // below ReviewFloor: recorded as no match (the community most likely doesn't
@@ -359,7 +367,12 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 
 	status := catalog.MatchReady
 	switch {
-	case stopCode != "": // each has returned: every worker is done with it
+	case stopCode == ErrCodeUnavailable: // each has returned: every worker is done with it
+		// The service went away: what the run answered before stays to review and
+		// apply (server#306), the books it never reached are still unmatched, and the
+		// next run takes them. The code says it stopped early.
+		r.log.Warn("match run stopped early, its answers kept", "run", runID, "code", stopCode, "err", stopErr)
+	case stopCode != "":
 		status = catalog.MatchFailed
 		r.log.Warn("match run stopped", "run", runID, "code", stopCode, "err", stopErr)
 	case ctx.Err() != nil && !r.stoppedByAdmin():
@@ -401,6 +414,8 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book,
 	}
 	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration, narrated)
 	switch {
+	case item.Outcome == catalog.OutcomeReview && !identifierAgrees(&cands[0]):
+		item.Detail = DetailIdentifierDisagrees
 	case item.Outcome == catalog.OutcomeReview && noRecording:
 		item.Detail = DetailDramatizationOnly
 	case item.Outcome == catalog.OutcomeReview && !lengthFits(item.Proposal, b.Duration, narrated):

@@ -30,16 +30,20 @@ type fakeMatcher struct {
 	byWork map[string][]meta.MatchCandidate
 	// answer, when set, answers every match-mode query (one with no ASIN or ISBN).
 	answer  func(q meta.MatchQuery) []meta.MatchCandidate
-	fail    bool          // every query fails
-	block   chan struct{} // when set, each query waits on it (or the context)
+	fail    bool                    // every query fails
+	block   chan struct{}           // when set, each query waits on it (or the context)
+	before  func(q meta.MatchQuery) // when set, called first with each query
 	queries []meta.MatchQuery
 }
 
 func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta.MatchCandidate, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
-	block, fail := f.block, f.fail
+	block, fail, before := f.block, f.fail, f.before
 	f.mu.Unlock()
+	if before != nil {
+		before(q)
+	}
 	if block != nil {
 		select {
 		case <-block:
@@ -325,8 +329,67 @@ func TestRunStopsWhenTheServiceIsDown(t *testing.T) {
 	}
 	e.matcher.fail = true
 	run := e.start(t, catalog.MatchModeMatch, "")
-	if run.Status != catalog.MatchFailed || run.Error != ErrCodeUnavailable || run.Done >= 12 {
+	if run.Status != catalog.MatchReady || run.Error != ErrCodeUnavailable || run.Done >= 12 {
 		t.Fatalf("run = %+v", run)
+	}
+}
+
+// TestStoppedRunKeepsItsAnswers (server#306): a run the service's outage stops keeps
+// the books it already answered, ready to review and apply, the code saying it
+// stopped early; the books it never reached are still unmatched, so the next run
+// takes them (and not the ones applied).
+func TestStoppedRunKeepsItsAnswers(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/1", "Martian", "", nil)
+	e.book(t, "A/2", "Martian", "", nil)
+	for i := range 3 * maxFailStreak {
+		e.book(t, fmt.Sprintf("B/%02d", i), "Down", "", nil)
+	}
+	e.matcher.byTitle["Martian"] = []meta.MatchCandidate{cand("the-martian", 100, "")}
+	// The outage begins once both answers are recorded, so the stop can't cut them.
+	var answered atomic.Bool
+	e.matcher.before = func(q meta.MatchQuery) {
+		if q.Title != "Down" || answered.Load() {
+			return
+		}
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if runs, err := e.cat.ListMatchRuns(ctx); err == nil && len(runs) > 0 && runs[0].Counts.Auto == 2 {
+				answered.Store(true)
+				return
+			}
+		}
+	}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Status != catalog.MatchReady || run.Error != ErrCodeUnavailable || run.Done >= run.Total {
+		t.Fatalf("run = %+v, want ready, stopped early", run)
+	}
+	if run.Counts.Auto != 2 || run.Counts.Pending != 2 {
+		t.Fatalf("counts = %+v, want both answers kept", run.Counts)
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeIDs}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	for _, p := range []string{"A/1", "A/2"} {
+		if b, _ := e.cat.GetBookByPath(ctx, e.lib, p); b.ASIN == "" {
+			t.Fatalf("%s not matched by the stopped run's apply", p)
+		}
+	}
+	// The next run asks only about the books still unmatched.
+	e.matcher.mu.Lock()
+	e.matcher.before, e.matcher.queries = nil, nil
+	e.matcher.mu.Unlock()
+	next := e.start(t, catalog.MatchModeMatch, "")
+	if next.Total != 3*maxFailStreak {
+		t.Fatalf("next run total = %d, want the %d books not matched", next.Total, 3*maxFailStreak)
+	}
+	e.matcher.mu.Lock()
+	defer e.matcher.mu.Unlock()
+	for _, q := range e.matcher.queries {
+		if q.Title != "Down" {
+			t.Fatalf("next run asked about %q, an applied book", q.Title)
+		}
 	}
 }
 
@@ -771,6 +834,37 @@ func TestRefreshSkipsABookMatchedAgain(t *testing.T) {
 	e.runner.Wait()
 	if b, _ := e.cat.GetBookByPath(ctx, e.lib, "A/Book"); b.Title != "Another Book" {
 		t.Fatalf("title = %q, want the new match's kept", b.Title)
+	}
+}
+
+// TestMatchHoldsAnIdentifierThatDisagrees (server#306): a book whose tag ASIN
+// names another volume of its series (metaserve finds the work by it, but the
+// title barely agrees and the series is at another position) is held for review
+// with identifier_disagrees, and not applied unasked; one whose title agrees is.
+func TestMatchHoldsAnIdentifierThatDisagrees(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Wrong", "Wrong Volume", "", nil)
+	e.book(t, "A/Right", "Right Volume", "", nil)
+	hit := func(title float64, series string) []meta.MatchCandidate {
+		c := cand("the-martian", 100, "")
+		c.Reasons = &meta.MatchReasons{Identifier: "asin", Title: &title, Series: series}
+		return []meta.MatchCandidate{c}
+	}
+	e.matcher.byTitle["Wrong Volume"] = hit(0.62, "conflict")
+	e.matcher.byTitle["Right Volume"] = hit(1, "position")
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 || run.Counts.Review != 1 {
+		t.Fatalf("run = %+v, want one confident, one held", run)
+	}
+	review := e.items(t, run, catalog.OutcomeReview)
+	if len(review) != 1 || review[0].Path != "A/Wrong" || review[0].Detail != DetailIdentifierDisagrees ||
+		review[0].Proposal.WorkID != "the-martian" {
+		t.Fatalf("review = %+v, want A/Wrong held with identifier_disagrees and its proposal", review)
+	}
+	if auto := e.items(t, run, catalog.OutcomeAuto); len(auto) != 1 || auto[0].Path != "A/Right" || auto[0].Detail != "" {
+		t.Fatalf("auto = %+v, want A/Right", auto)
 	}
 }
 

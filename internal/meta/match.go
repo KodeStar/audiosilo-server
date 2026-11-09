@@ -88,8 +88,9 @@ type MatchQuery struct {
 	// Classify). So works/match is asked to inline the best's work and series facts
 	// (expand=work), and nothing else is read: every other candidate comes back a
 	// stub, its work id, cover, score and reasons. A metaserve that inlines nothing
-	// costs the fetches for the best. The dialog lists every candidate and leaves it
-	// off.
+	// costs the fetches for the best, and a best that can't be read is an outage,
+	// never the next standing in (bestCandidates). The dialog lists every candidate
+	// and leaves it off.
 	BestOnly bool
 	// NoDetailsBelow, with BestOnly, is the score under which the caller drops a best
 	// candidate no identifier found (matchrun.ReviewFloor): a stub too, inlined
@@ -761,24 +762,24 @@ func setDefaultRecording(c *MatchCandidate, q MatchQuery) {
 
 // bestCandidates is Candidates' answer for MatchQuery.BestOnly, from works/match's
 // hits: what it answers without the flag, as far as the caller reads it, for the
-// fewest requests. The hits are put in Candidates' order first, as the best is the
-// one the details are for. A best whose details can't be read gives way to the
-// next, and every one failing is the first outage, exactly as Candidates reads them.
-// So after an outage the next is read however weak: a stub asks nothing, and would
-// answer for a service that is down, the book a weak match and the run none the wiser.
+// fewest requests, except that a failed read is an outage. The hits are put in
+// Candidates' order first, as the best is the one the details are for. A best that
+// is gone (ErrNotFound: a work dropped since the index was built) gives way to the
+// next; a best that can't be read for any other reason is an outage at once
+// (server#306). Standing the next in for it would record a weaker work as the
+// book's match while the service is down: the run would read an outage as a match,
+// or, the next being a stub that asks nothing, as no match.
 func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []matchHit, asin string) ([]MatchCandidate, error) {
 	slices.SortStableFunc(hits, func(a, b matchHit) int {
 		return compareMatches(a.score, a.reasons.Identifier != "", b.score, b.reasons.Identifier != "")
 	})
-	var outage error
 	for i, h := range hits {
 		best, err := s.bestCandidate(ctx, q, h, asin)
-		if err != nil {
-			if !errors.Is(err, ErrNotFound) && outage == nil {
-				outage = err
-				q.NoDetailsBelow = 0
-			}
+		if errors.Is(err, ErrNotFound) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		cands := make([]MatchCandidate, 0, len(hits)-i)
 		cands = append(cands, *best)
@@ -786,9 +787,6 @@ func (s *Service) bestCandidates(ctx context.Context, q MatchQuery, hits []match
 			cands = append(cands, rest.stub())
 		}
 		return cands, nil
-	}
-	if outage != nil {
-		return nil, outage
 	}
 	return []MatchCandidate{}, nil
 }
