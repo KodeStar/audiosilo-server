@@ -15,7 +15,7 @@ func anchorBook(t *testing.T, c *Catalog, ctx context.Context, libID int64, path
 	t.Helper()
 	if err := c.EditBook(ctx, libID, path, BookEdit{
 		Set:    map[string]string{FieldTitle: "Community Title"},
-		Match:  &MatchAnchor{WorkID: work, RecordingID: "rec-1"},
+		Match:  &MatchAnchor{WorkID: work, RecordingID: "rec-1", OfferedASIN: "B0OFFERED1"},
 		Source: SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
@@ -282,6 +282,56 @@ func TestNormalizeAnchorInvisible(t *testing.T) {
 	}
 }
 
+// TestAnchorOfferedIdentifiers (server#330): the identifiers a match offered
+// are stored with it in the ASIN and ISBN fields' form, replaced by the next
+// match recorded (none when it offers none), refused when the field would
+// refuse them (on field "match", changing nothing), and ignored by an Unlink.
+func TestAnchorOfferedIdentifiers(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Match:  &MatchAnchor{WorkID: "the-work", OfferedASIN: " b0offered1 ", OfferedISBN: "978-0-553-41802-6"},
+		Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0OFFERED1" || a.OfferedISBN != "9780553418026" {
+		t.Fatalf("anchor = %+v, want the offered identifiers in stored form", a)
+	}
+	if b, err := c.GetBookByPath(ctx, lib.ID, p); err != nil || b.ASIN != "" || b.ISBN != "" {
+		t.Fatalf("book = %+v %v, want no identifier written: offered is not set", b, err)
+	}
+	for name, a := range map[string]MatchAnchor{
+		"a bad ASIN": {WorkID: "other", OfferedASIN: "not-an-asin"},
+		"a bad ISBN": {WorkID: "other", OfferedISBN: "12345"},
+	} {
+		err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &a, Source: SourceCommunity})
+		var oe *OverrideError
+		if !errors.As(err, &oe) || oe.Field != "match" {
+			t.Errorf("%s: err = %v, want refused on match", name, err)
+		}
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "the-work" || a.OfferedASIN != "B0OFFERED1" {
+		t.Fatalf("a refused edit changed the anchor: %+v", a)
+	}
+	// Another match offering none replaces them.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{WorkID: "other"}, Source: SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "other" || a.OfferedASIN != "" || a.OfferedISBN != "" {
+		t.Fatalf("anchor = %+v, want the new match's (none offered)", a)
+	}
+	// An Unlink ignores them, even ones the field would refuse.
+	if a, err := normalizeAnchor(&MatchAnchor{OfferedASIN: "not-an-asin"}, ""); err != nil || *a != (MatchAnchor{}) {
+		t.Fatalf("unlink with offered = %+v %v", a, err)
+	}
+}
+
 // SetCoverIf writes only while the book is as expected, checked in the write's
 // transaction: no custom cover, the recorded match and the resolved ASIN and
 // ISBN; SetCover writes regardless.
@@ -387,7 +437,7 @@ func TestAnchorSurvivesRescanRebuildMoveAndJoin(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "new/Book")); err != nil {
 		t.Fatal(err)
 	}
-	if a := anchorOf(t, c, ctx, lib.ID, "new/Book"); a.WorkID != "the-work" {
+	if a := anchorOf(t, c, ctx, lib.ID, "new/Book"); a.WorkID != "the-work" || a.OfferedASIN != "B0OFFERED1" {
 		t.Fatalf("after move: %+v", a)
 	}
 	var left int
@@ -408,7 +458,7 @@ func TestAnchorSurvivesRescanRebuildMoveAndJoin(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "Joined")); err != nil {
 		t.Fatal(err)
 	}
-	if a := anchorOf(t, c, ctx, lib.ID, "Joined"); a.WorkID != "work-of-CD1" {
+	if a := anchorOf(t, c, ctx, lib.ID, "Joined"); a.WorkID != "work-of-CD1" || a.OfferedASIN != "B0OFFERED1" {
 		t.Fatalf("after join: %+v, want the first part's", a)
 	}
 }
@@ -654,5 +704,98 @@ func TestMatchedExprIsAnIndexSeek(t *testing.T) {
 	plan := strings.Join(queryPlan(t, c, `SELECT COUNT(*) FROM books b WHERE `+issuePredicates[IssueUnmatched], nil), "\n")
 	if !strings.Contains(plan, "SEARCH m USING") || strings.Contains(plan, "SCAN m") {
 		t.Errorf("book_matches is not read by its key:\n%s", plan)
+	}
+}
+
+// TestAnchorWrittenOnlyIfStillTheOne: an edit with MatchIf records its match only
+// while the book's recorded match is still MatchIf (work, recording and offered
+// identifiers), checked in the edit's transaction; else the match stays as it
+// is and the rest of the edit still applies. A zero MatchIf records one only
+// while the book has none.
+func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	anchorBook(t, c, ctx, lib.ID, p, "the-work")
+	read := anchorOf(t, c, ctx, lib.ID, p)
+	edit := func(title string, was *MatchAnchor) {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+			Set:     map[string]string{FieldTitle: title},
+			Match:   &MatchAnchor{WorkID: "the-work", RecordingID: "rec-1", OfferedASIN: "B0FILLED01", How: MatchHowAuto, RunID: 3},
+			MatchIf: was, Source: SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Matched by hand to another work since the plan read it: the match stays,
+	// the fields go in.
+	anchorBook(t, c, ctx, lib.ID, p, "hand-work")
+	edit("Fields", &read)
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "hand-work" || a.How != MatchHowAccepted {
+		t.Fatalf("a hand match since = %+v, want it kept", a)
+	}
+	if st, _ := c.BookMatchState(ctx, lib.ID, p); st.Fields[FieldTitle].Value != "Fields" {
+		t.Fatalf("title = %+v, want the rest of the edit applied", st.Fields[FieldTitle])
+	}
+	// The same work but other offered identifiers (accepted again by hand): kept.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
+		Match: &MatchAnchor{WorkID: "the-work", RecordingID: "rec-1", OfferedASIN: "B0HAND0001"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edit("Again", &read)
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0HAND0001" || a.How != MatchHowAccepted {
+		t.Fatalf("a re-accept since = %+v, want it kept", a)
+	}
+	// Still the one read: written.
+	read = anchorOf(t, c, ctx, lib.ID, p)
+	edit("Written", &read)
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" || a.How != MatchHowAuto {
+		t.Fatalf("still the one read = %+v, want it written", a)
+	}
+	// A zero MatchIf (none read): never over a match the book has now.
+	edit("None", &MatchAnchor{})
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" {
+		t.Fatalf("none read, one there = %+v, want it kept", a)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil { // Unlink
+		t.Fatal(err)
+	}
+	edit("Fresh", &MatchAnchor{})
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "the-work" || a.OfferedASIN != "B0FILLED01" {
+		t.Fatalf("none read, none there = %+v, want it written", a)
+	}
+}
+
+// TestDropApplyItems: an apply's total drops by n at once, never below what it
+// has done; n <= 0 writes nothing.
+func TestDropApplyItems(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	id, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeRefresh, Total: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FinishMatching(ctx, id, MatchReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.BeginApply(ctx, id, "fill", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `UPDATE match_runs SET apply_done = 4 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct{ n, want int }{{0, 10}, {3, 7}, {5, 4}} {
+		if err := c.DropApplyItems(ctx, id, step.n); err != nil {
+			t.Fatal(err)
+		}
+		if r, err := c.GetMatchRun(ctx, id); err != nil || r.ApplyTotal != step.want || r.ApplyDone != 4 {
+			t.Fatalf("drop %d: run %+v %v, want total %d", step.n, r, err, step.want)
+		}
 	}
 }

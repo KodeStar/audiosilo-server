@@ -99,7 +99,7 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('bulk matching', () => {
-  it('finishes an unchanged refresh without overwriting books and allows a different run', async () => {
+  it('finishes an unchanged refresh with no exclusions and allows a different run', async () => {
     let current = run({
       mode: 'refresh',
       counts: { ...run().counts, review: 0, none: 0 },
@@ -124,10 +124,11 @@ describe('bulk matching', () => {
     await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
     const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
     await user.click(await within(dialog).findByRole('button', { name: 'Done' }));
+    // The server leaves the unchanged book out itself (server#332).
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
         scope: 'fill',
-        exclude: [10],
+        exclude: [],
         include: [],
       }),
     );
@@ -139,7 +140,7 @@ describe('bulk matching', () => {
     );
   });
 
-  it('excludes refresh no-ops from picks, counts and apply, then restores picks for a wider scope', async () => {
+  it('leaves refresh no-ops out of picks, counts and the apply body, then restores picks for a wider scope', async () => {
     let releasePage!: () => void;
     const secondPage = new Promise<void>((resolve) => {
       releasePage = resolve;
@@ -205,16 +206,17 @@ describe('bulk matching', () => {
     expect(within(dialog).getByRole('button', { name: 'Apply to 2 books' })).toBeEnabled();
     await user.click(within(dialog).getByRole('radio', { name: /Fill in what/ }));
     await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    // No no-op ids in the body: the server leaves them out (server#332).
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
         scope: 'fill',
-        exclude: [10, 14],
+        exclude: [],
         include: [],
       }),
     );
   });
 
-  it('applies a refresh that only heals a community match while excluding unchanged books', async () => {
+  it('applies a refresh that only heals a community match, leaving unchanged books to the server', async () => {
     const healed: MatchRunItem = {
       ...confident,
       id: 12,
@@ -250,7 +252,7 @@ describe('bulk matching', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/apply'))?.body).toEqual({
         scope: 'fill',
-        exclude: [10],
+        exclude: [],
         include: [],
       }),
     );

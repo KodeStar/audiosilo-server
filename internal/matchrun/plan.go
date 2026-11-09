@@ -315,8 +315,8 @@ func joinNames(people []meta.MetaPersonRef) string {
 // Writes is what applying a match writes to a book: the fields to Set (as
 // community overrides), the community overrides to Revert (a series the community
 // wrote earlier and no longer lists for the book), whether to take the community
-// Cover, and the community match to record (Anchor, nil for none: its work and
-// recording; how and the run are the apply's).
+// Cover, and the community match to record (Anchor, nil for none: its work,
+// recording and offered identifiers; how and the run are the apply's).
 type Writes struct {
 	Set    map[string]string
 	Revert []string
@@ -370,7 +370,10 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes 
 	}
 	w.Cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
 	if p.WorkID != "" && (p.WorkID != st.Anchor.WorkID || p.RecordingID != st.Anchor.RecordingID) {
-		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID}
+		// The identifiers p offers go with the match, written or not, so a
+		// refresh never fills one back that the admin reverted (planRefresh).
+		w.Anchor = &catalog.MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID,
+			OfferedASIN: p.Values[catalog.FieldASIN], OfferedISBN: p.Values[catalog.FieldISBN]}
 	}
 	return w
 }
@@ -464,7 +467,8 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 }
 
 // planFor is what applying item it (its proposal) to a book in state st writes for a
-// run in mode: a repick's ASIN (whatever the scope), else Plan's, for a refresh
+// run in mode: a repick's ASIN (whatever the scope; a book with a recorded match
+// records it as the match's offered one), else Plan's, for a refresh
 // only while the book still has the identifier or recorded match it was found by
 // (stillFoundBy), or the record an apply a stop cut short already healed it to
 // (healedTo; planRefresh), a fallback to the recorded match only while the
@@ -478,7 +482,15 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 	p := it.Proposal
 	switch mode {
 	case catalog.MatchModeRepick:
-		return Writes{Set: PlanRepick(st, p)}
+		w := Writes{Set: PlanRepick(st, p)}
+		if asin, ok := w.Set[catalog.FieldASIN]; ok && st.Anchor.WorkID != "" {
+			// The book's match records the new ASIN as offered, so a revert of it
+			// stays reverted: a refresh never fills it back (planRefresh).
+			a := st.Anchor
+			a.OfferedASIN = asin
+			w.Anchor = &a
+		}
+		return w
 	case catalog.MatchModeRefresh:
 		foundBy, missed := splitFallback(p.FoundBy)
 		if missed != "" && (hasEditedIdentifier(st) || missed != fallbackIdentifiers(st.Fields[catalog.FieldASIN].Value, st.Fields[catalog.FieldISBN].Value)) {
@@ -514,14 +526,40 @@ func planFor(mode, scope string, st *catalog.MatchState, it *catalog.MatchRunIte
 // matched by its own ASIN or ISBN with no recorded work keeps none (the refresh
 // names no match, it reads one), while one whose work was merged or retired
 // since takes the record the lookup followed it to.
+//
+// An identifier the recorded match offered (MatchAnchor.OfferedASIN/ISBN) is
+// never filled: the book has neither, so the admin unticked it when the match
+// was made, or reverted it since (server#330). One the recording gained since
+// (another value) fills, and the match then records it as offered, so a revert
+// of that one stays too. A match recorded before 0070 offered none, so it fills
+// as before. A heal, or a match recording a new identifier, records for each
+// identifier the proposal's when it names one, else keeps the match's.
 func planRefresh(scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	w := Plan(scope, st, p)
-	if st.Anchor.WorkID == "" {
-		w.Anchor = nil
-	}
 	if st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != "" {
 		delete(w.Set, catalog.FieldASIN)
 		delete(w.Set, catalog.FieldISBN)
+	}
+	if st.Anchor.WorkID == "" {
+		w.Anchor = nil
+		return w
+	}
+	for field, was := range map[string]string{catalog.FieldASIN: st.Anchor.OfferedASIN, catalog.FieldISBN: st.Anchor.OfferedISBN} {
+		if was != "" && w.Set[field] == was {
+			delete(w.Set, field)
+		}
+	}
+	_, asin := w.Set[catalog.FieldASIN]
+	_, isbn := w.Set[catalog.FieldISBN]
+	if w.Anchor == nil && (asin || isbn) {
+		// A new identifier for the book: the match records it as offered.
+		w.Anchor = &catalog.MatchAnchor{WorkID: st.Anchor.WorkID, RecordingID: st.Anchor.RecordingID}
+	}
+	if w.Anchor != nil {
+		// Each identifier the proposal names, else the one the match offered, so
+		// a proposal naming only one never forgets the other's rejection.
+		w.Anchor.OfferedASIN = cmp.Or(p.Values[catalog.FieldASIN], st.Anchor.OfferedASIN)
+		w.Anchor.OfferedISBN = cmp.Or(p.Values[catalog.FieldISBN], st.Anchor.OfferedISBN)
 	}
 	return w
 }

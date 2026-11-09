@@ -828,7 +828,13 @@ describe('match with community metadata', () => {
       {
         set: { published: '2010' },
         source: 'community',
-        match: { work_id: candidate.work_id, recording_id: candidate.recordings[0].id },
+        // The match's ASIN goes with it, ticked or not (server#330).
+        match: {
+          work_id: candidate.work_id,
+          recording_id: candidate.recordings[0].id,
+          asin: 'B003P2WO5E',
+          isbn: '',
+        },
       },
     ]);
     expect(coverPuts(calls)).toHaveLength(0);
@@ -878,7 +884,7 @@ describe('match with community metadata', () => {
   const findsSameWork = {
     'GET /admin/libraries/1/book/match': { body: { candidates: [sameWork] } },
   };
-  const sameWorkMatch = { work_id: 'a-guild-book', recording_id: 'r1' };
+  const sameWorkMatch = { work_id: 'a-guild-book', recording_id: 'r1', asin: '', isbn: '' };
 
   /** A field's checkbox, any but the cover's. */
   const fieldBox = (compare: HTMLElement) =>
@@ -975,6 +981,40 @@ describe('match with community metadata', () => {
     expect(within(compare).getByRole('button', { name: 'Match to this work' })).toBeEnabled();
   });
 
+  it('records the offered ASIN again when only the cover of the recorded match is taken (server#330)', async () => {
+    const match: BookMatch = {
+      ...sameWorkMatch,
+      how: 'auto',
+      matched_at: '2026-11-01T00:00:00Z',
+    };
+    const detail = listingBook(match);
+    detail.book.has_cover = false;
+    const offering: MatchCandidate = {
+      ...sameWork,
+      recordings: [{ id: 'r1', narrators: [], asins: ['B0OFFER001'], isbns: [] }],
+    };
+    const calls = mockFetch(
+      matchRoutes(detail, {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [offering] } },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    // The ASIN is offered; the admin leaves it and takes only the cover.
+    await onlyCover(user, compare);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();
+    const writes = calls.filter((c) => c.method === 'PUT' || c.method === 'PATCH');
+    expect(writes.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['PUT', '/admin/libraries/1/cover/community', { url: sameWork.cover_url }],
+      [
+        'PATCH',
+        '/admin/libraries/1/book',
+        { set: {}, source: 'community', match: { ...sameWorkMatch, asin: 'B0OFFER001' } },
+      ],
+    ]);
+  });
+
   it('offers nothing to accept for a store listing already matched to the work', async () => {
     const match: BookMatch = {
       ...sameWorkMatch,
@@ -1038,6 +1078,8 @@ describe('match with community metadata', () => {
     expect((patches(calls)[0].body as BookEditRequest).match).toEqual({
       work_id: 'the-way-of-kings-part-1',
       recording_id: 'r2',
+      asin: 'B003P2WO5E',
+      isbn: '',
     });
   });
 

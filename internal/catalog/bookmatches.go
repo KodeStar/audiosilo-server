@@ -25,12 +25,17 @@ const maxMatchID = 200
 // the community work, the recording (may be "") and how it was made (MatchHowAuto
 // or MatchHowAccepted, "" for accepted), with the match run that applied it (0 for
 // none). An empty WorkID unlinks the book (BookEdit.Match). Only a community edit
-// sets one.
+// sets one. OfferedASIN and OfferedISBN are the identifiers the match offered,
+// ticked or not ("" for none, or a match recorded before 0070): a refresh by the
+// recorded match never fills one a book with neither has when it is the one
+// offered (the admin unticked it, or reverted it since; server#330).
 type MatchAnchor struct {
 	WorkID      string
 	RecordingID string
 	How         string
 	RunID       int64
+	OfferedASIN string
+	OfferedISBN string
 }
 
 // BookMatch is a book's community match as the console's book page shows it
@@ -59,12 +64,15 @@ func invisible(r rune) bool {
 // form, its ids trimmed of invisible characters at both ends (interior ones are
 // kept; checkText refuses control characters). Setting one takes a community
 // edit (source, normalized); removing one (an explicitly empty WorkID) any edit.
-// A WorkID that is not empty but invisible only is refused, never an Unlink.
+// A WorkID that is not empty but invisible only is refused, never an Unlink. The
+// offered identifiers are stored as the ASIN and ISBN fields store theirs; one
+// they would refuse is invalid (field "match"); an Unlink ignores them.
 func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 	if a == nil {
 		return nil, nil
 	}
-	out := MatchAnchor{WorkID: strings.TrimFunc(a.WorkID, invisible), RecordingID: strings.TrimFunc(a.RecordingID, invisible), How: a.How, RunID: a.RunID}
+	out := *a
+	out.WorkID, out.RecordingID = strings.TrimFunc(a.WorkID, invisible), strings.TrimFunc(a.RecordingID, invisible)
 	if out.WorkID == "" {
 		if a.WorkID != "" {
 			return nil, invalid("match", "only an explicitly empty work_id unlinks a book (this one holds only blank or invisible characters)")
@@ -81,6 +89,18 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 			return nil, err
 		}
 	}
+	for _, o := range []struct {
+		field string
+		value *string
+	}{{FieldASIN, &out.OfferedASIN}, {FieldISBN, &out.OfferedISBN}} {
+		v, err := normalizeOverride(o.field, *o.value)
+		if oe, ok := errors.AsType[*OverrideError](err); ok {
+			return nil, invalid("match", "the offered "+o.field+" "+oe.Reason)
+		} else if err != nil {
+			return nil, err
+		}
+		*o.value = v
+	}
 	switch out.How {
 	case "":
 		out.How = MatchHowAccepted
@@ -92,15 +112,31 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 }
 
 // writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is
-// clearCommunity's) in the edit's transaction.
-func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a *MatchAnchor, editor any, now string) error {
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(library_id, path) DO UPDATE SET
+// clearCommunity's) in the edit's transaction. With was (BookEdit.MatchIf), only
+// while the recorded match is still was: else it writes nothing.
+func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, editor any, now string) error {
+	args := []any{ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now,
+		a.OfferedASIN, a.OfferedISBN}
+	if was != nil && was.WorkID != "" {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE book_matches SET work_id = ?3, recording_id = ?4, how = ?5, run_id = ?6, set_by = ?7,
+			        set_at = ?8, offered_asin = ?9, offered_isbn = ?10
+			  WHERE library_id = ?1 AND path = ?2 AND work_id = ?11 AND recording_id = ?12
+			    AND offered_asin = ?13 AND offered_isbn = ?14`,
+			append(args, was.WorkID, was.RecordingID, was.OfferedASIN, was.OfferedISBN)...)
+		return err
+	}
+	upsert := ` ON CONFLICT(library_id, path) DO UPDATE SET
 		     work_id = excluded.work_id, recording_id = excluded.recording_id, how = excluded.how,
-		     run_id = excluded.run_id, set_by = excluded.set_by, set_at = excluded.set_at`,
-		ref.LibraryID, ref.Path, a.WorkID, a.RecordingID, a.How, nullableID(a.RunID), editor, now)
+		     run_id = excluded.run_id, set_by = excluded.set_by, set_at = excluded.set_at,
+		     offered_asin = excluded.offered_asin, offered_isbn = excluded.offered_isbn`
+	if was != nil { // none recorded, as the plan read it: a match made since stays
+		upsert = ` ON CONFLICT(library_id, path) DO NOTHING`
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, run_id, set_by, set_at,
+		                          offered_asin, offered_isbn)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)`+upsert, args...)
 	return err
 }
 
