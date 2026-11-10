@@ -443,6 +443,11 @@ func TestOPMLImportRefusals(t *testing.T) {
 	if resp.Header.Get("Retry-After") != "1" {
 		t.Fatal("busy Retry-After")
 	}
+	// server#179: with both slots busy the answer comes before the body is
+	// read: an over-limit body is busy, not 413 (reading it would say so), and
+	// the refunded token leaves the budget bounding the reads.
+	resp, body = b.doHeaders(t, "POST", route, b.userTok, strings.Repeat("x", 2<<20), h)
+	wantErr(t, resp, body, 503, "opml_busy")
 	// server#179: the busy answer gave its token back, so the retry it asks
 	// for runs once a slot frees, rather than meeting 429.
 	b.api.opml.slots.Release()

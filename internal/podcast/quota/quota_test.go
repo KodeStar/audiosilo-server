@@ -89,11 +89,17 @@ func TestMapBound(t *testing.T) {
 
 func TestSlots(t *testing.T) {
 	s := NewSlots(2)
+	if s.Busy() {
+		t.Fatal("busy while empty")
+	}
 	first, second, third := s.TryAcquire(), s.TryAcquire(), s.TryAcquire()
-	if !first || !second || third {
+	if !first || !second || third || !s.Busy() {
 		t.Fatal("two slots")
 	}
 	s.Release()
+	if s.Busy() {
+		t.Fatal("busy after a release")
+	}
 	if !s.TryAcquire() {
 		t.Fatal("released")
 	}

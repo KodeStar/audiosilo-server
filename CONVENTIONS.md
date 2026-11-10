@@ -2992,7 +2992,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
   Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
-  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import refunds its token, so the retry runs). The export (`catalog.PodcastExport`: current
+  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
   dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an
