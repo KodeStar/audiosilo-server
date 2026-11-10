@@ -861,8 +861,9 @@ func TestAbandonedReadsAreCapped(t *testing.T) {
 
 // TestWaitReadThatReturnsIsNotAbandoned: a read that returns in time leaves no
 // abandoned read counted.
+// Not parallel: a parallel test that gives up on a read moves the process-wide
+// count between the two loads.
 func TestWaitReadThatReturnsIsNotAbandoned(t *testing.T) {
-	t.Parallel()
 	b := newBlockFile(bytes.NewReader(make([]byte, 1<<16)), 1<<16)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ import (
 func TestReindexWithTagsUnreadKeepsTheStoredReading(t *testing.T) {
 	t.Parallel()
 	probes := map[string]string{"no ffprobe": ""}
-	if p := findFFprobe(); p != "" {
+	if p, err := exec.LookPath("ffprobe"); err == nil {
 		probes["ffprobe"] = p
 	}
 	for name, ffprobe := range probes {
@@ -99,14 +100,4 @@ func TestReindexWithTagsUnreadKeepsTheStoredReading(t *testing.T) {
 			}
 		})
 	}
-}
-
-// findFFprobe is the ffprobe on PATH, or "".
-func findFFprobe() string {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if p := filepath.Join(dir, "ffprobe"); fileExists(p) {
-			return p
-		}
-	}
-	return ""
 }
