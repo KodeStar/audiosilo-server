@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -24,10 +25,14 @@ func TestSpecForBtbNAssets(t *testing.T) {
 	t.Parallel()
 	const base = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
 	for platform, want := range map[string]spec{
-		"linux/amd64":   {combinedURL: base + "ffmpeg-n8.1-latest-linux64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
-		"linux/arm64":   {combinedURL: base + "ffmpeg-n8.1-latest-linuxarm64-lgpl-8.1.tar.xz", combinedKind: "tar.xz"},
-		"windows/amd64": {combinedURL: base + "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip", combinedKind: "zip"},
-		"windows/arm64": {combinedURL: base + "ffmpeg-n8.1-latest-winarm64-lgpl-8.1.zip", combinedKind: "zip"},
+		"linux/amd64": {combinedURL: base + "ffmpeg-n8.1-latest-linux64-lgpl-8.1.tar.xz", combinedKind: "tar.xz",
+			masterURL: base + "ffmpeg-master-latest-linux64-lgpl.tar.xz"},
+		"linux/arm64": {combinedURL: base + "ffmpeg-n8.1-latest-linuxarm64-lgpl-8.1.tar.xz", combinedKind: "tar.xz",
+			masterURL: base + "ffmpeg-master-latest-linuxarm64-lgpl.tar.xz"},
+		"windows/amd64": {combinedURL: base + "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip", combinedKind: "zip",
+			masterURL: base + "ffmpeg-master-latest-win64-lgpl.zip"},
+		"windows/arm64": {combinedURL: base + "ffmpeg-n8.1-latest-winarm64-lgpl-8.1.zip", combinedKind: "zip",
+			masterURL: base + "ffmpeg-master-latest-winarm64-lgpl.zip"},
 	} {
 		goos, goarch, _ := strings.Cut(platform, "/")
 		if got, ok := specFor(goos, goarch); !ok || got != want {
@@ -306,5 +311,97 @@ func TestReleaseFetchCancelAndBadStage(t *testing.T) {
 	}
 	if _, err := os.Stat(next); !os.IsNotExist(err) {
 		t.Fatalf("bad stage kept: %v", err)
+	}
+}
+
+// When BtbN no longer publishes the pinned branch (a 404), a host with no
+// tools gets BtbN's master build rather than none; any other failure is not
+// retried that way, and the background release fetch never falls back.
+func TestEnsureFallsBackToMasterWhenThePinIsGone(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the downloaded stubs are shell scripts")
+	}
+	for _, tc := range []struct {
+		name    string
+		pinErr  error
+		wantURL []string
+	}{
+		{"pin gone", fmt.Errorf("download x: %w", errAssetGone), []string{"ffmpeg-n8.1-latest-", "ffmpeg-master-latest-"}},
+		{"offline", errors.New("offline"), []string{"ffmpeg-n8.1-latest-"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			var got []string
+			dl := func(_ context.Context, s spec, into string) error {
+				got = append(got, s.combinedURL)
+				if strings.Contains(s.combinedURL, "-n8.1-") {
+					return tc.pinErr
+				}
+				writeStubs(t, into, "N-1-g0")
+				return nil
+			}
+			fm, fp := ensure(context.Background(), dir, discard(), "linux", "amd64", dl, func(func()) {})
+			if len(got) != len(tc.wantURL) {
+				t.Fatalf("downloads %q, want %q", got, tc.wantURL)
+			}
+			for i, want := range tc.wantURL {
+				if !strings.Contains(got[i], want) {
+					t.Errorf("download %d = %q, want %q", i, got[i], want)
+				}
+			}
+			if gotTools := fm != "" && fp != ""; gotTools != (tc.pinErr == nil || errors.Is(tc.pinErr, errAssetGone)) {
+				t.Errorf("ensure = %q, %q", fm, fp)
+			}
+		})
+	}
+}
+
+// A swap a failed rename stopped (a locked executable on Windows) keeps the
+// stage, and the next start swaps in what it still holds; what a download
+// stopped part way left in the tools folder is removed at the next start.
+func TestPromoteStagedResumesAndStaleDownloadsGo(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts; folder permissions differ")
+	}
+	dir := t.TempDir()
+	writeStubs(t, dir, "N-1-g0")
+	next := filepath.Join(dir, stagedDir)
+	if err := os.MkdirAll(next, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeStubs(t, next, "n8.1.3")
+	stale := filepath.Join(dir, downloadPrefix+"123")
+	if err := os.MkdirAll(stale, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// The tools folder can't take the rename: nothing swapped, the stage kept.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	promoteStaged(context.Background(), dir, discard())
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if fm, fp := Cached(next); fm == "" || fp == "" {
+		t.Fatalf("stage after a failed swap = %q, %q, want it kept", fm, fp)
+	}
+	// Half a swap: ffprobe already moved, ffmpeg still staged.
+	if err := os.Rename(filepath.Join(next, binName("ffprobe")), filepath.Join(dir, binName("ffprobe"))); err != nil {
+		t.Fatal(err)
+	}
+	fm, fp := ensure(context.Background(), dir, discard(), "linux", "amd64",
+		func(context.Context, spec, string) error { t.Error("downloaded"); return nil }, func(func()) {})
+	for _, p := range []string{fm, fp} {
+		if v, err := Version(context.Background(), p); err != nil || v != "n8.1.3" {
+			t.Errorf("%s = %q %v, want the release build", filepath.Base(p), v, err)
+		}
+	}
+	for _, gone := range []string{next, stale} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s still there: %v", filepath.Base(gone), err)
+		}
 	}
 }

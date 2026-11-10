@@ -1007,10 +1007,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
   gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
   `-version` turns the probe off and ffprobe reads every file, as before; the start-up log says
-  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master, and
+  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master (unless that
+  asset is gone, a 404, and no tools are cached: master's build then, the probe off, warned), and
   replaces a master build an older server cached without holding up the start: the cached build serves
   that run, the release build is fetched in the background into `<data>/tools/next` and swapped in at
-  the next start, a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269). Anything a reader does
+  the next start, ffprobe first (a rename that fails keeps the stage, finished at the following start),
+  a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269; a download
+  unpacks in a `.download-*` folder inside the one it fills, removed at the next start if a stop left it). Anything a reader does
   not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
   `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
