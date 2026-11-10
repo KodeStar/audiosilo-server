@@ -261,6 +261,10 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	raw := r.URL.Query().Get("path")
+	if pathTooLong(w, raw) {
+		return
+	}
 	lib, ok := a.libraryFor(w, r, id, "bridge book failed")
 	if !ok {
 		return
@@ -270,10 +274,6 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		files []bridgeFile
 		err   error
 	)
-	raw := r.URL.Query().Get("path")
-	if pathTooLong(w, raw) {
-		return
-	}
 	p := catalog.CleanRelPath(raw)
 	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {

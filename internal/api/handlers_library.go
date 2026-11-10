@@ -231,6 +231,10 @@ func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*cat
 // (callerScopes): a request body's book (POST /me/queue,
 // /me/collections/{id}/items) whose answer reads the caller's lists with them.
 func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	// Over the cap first, as scopedPath: scopedLibrary may refuse first.
+	if len(rawPath) > catalog.MaxPathBytes {
+		return nil, "", catalog.Scope{}, http.StatusBadRequest, msgPathTooLong
+	}
 	scope, ok := scopeIn(scopes, libraryID)
 	if !ok {
 		// None granted, hidden by the client gate, or no such library: scopedPath
@@ -251,7 +255,8 @@ const msgPathTooLong = "path is too long"
 // pathTooLong answers 400 msgPathTooLong for a raw path no file can have
 // (true), before it is cleaned, looked up (a library, a book's ancestors) or
 // stored: a route that takes a path outside pathInScope (an admin's folder
-// override, browse, a list's remove) checks it first.
+// override or enrichment, browse, a list's remove, the Bridge's book read)
+// checks it first, before the library is looked up.
 func pathTooLong(w http.ResponseWriter, rawPath string) bool {
 	if len(rawPath) <= catalog.MaxPathBytes {
 		return false

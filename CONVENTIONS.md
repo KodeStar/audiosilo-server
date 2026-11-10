@@ -3355,10 +3355,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
   event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, `relpath.MaxBytes`, server#289;
-  every path-addressed route answers one with 400 `path is too long`: `pathInScope`, `pathTooLong` for a route taking a
-  path outside it (the admin's folder override, browse, a list's remove, the Bridge's book read), `feed.ShowPath` /
-  `EpisodePath` for a podcast's; before the library is looked up, server#291, so an unknown one answers the 400 and an
-  event's over-cap path is `invalid` before any lookup). The handler resolves each distinct
+  every path-addressed route answers one with 400 `path is too long`: `pathInScope` (`scopedPath` and `scopedPathIn`
+  check first), `pathTooLong` for a route taking a path outside it (the admin's folder override and enrichment, browse, a
+  list's remove, the Bridge's book read); before the library is looked up, server#291, so an unknown one answers the 400
+  and an event's over-cap path is `invalid` before any lookup. A podcast's show or episode path is capped by
+  `feed.ShowPath` / `EpisodePath`, the route's own 400 `invalid_request`). The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks

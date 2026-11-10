@@ -113,12 +113,20 @@ export function canBackUp(x: AudibleTitle): boolean {
 
 /**
  * Whether a title's place can sync with Audible (Phase 4c): it is on this
- * server (a match not marked "Not this book") and still the account's, not
+ * server (a match not marked "Not this book"), still the account's and
+ * released (not a preorder: the server's syncTitleSQL, bridge#60), not
  * ignored, and not marked "Don't sync this book". The account's own sync
  * switch is separate.
  */
 export function canSync(x: AudibleTitle): boolean {
-  return x.match !== null && !x.rejected && x.state !== 'gone' && !x.ignored && !x.no_sync;
+  return (
+    x.match !== null &&
+    !x.rejected &&
+    x.state !== 'gone' &&
+    x.state !== 'preorder' &&
+    !x.ignored &&
+    !x.no_sync
+  );
 }
 
 /** How a title's backup reads: its i18n key, the status dot, and its code's words. */

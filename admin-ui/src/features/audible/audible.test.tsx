@@ -933,6 +933,8 @@ describe('audible sync', () => {
     expect(canSync(title({ match: null }))).toBe(false);
     expect(canSync(title({ rejected: true }))).toBe(false);
     expect(canSync(title({ state: 'gone' }))).toBe(false);
+    expect(canSync(title({ state: 'preorder' }))).toBe(false);
+    expect(canSync(title({ state: 'unavailable' }))).toBe(true);
     expect(canSync(title({ ignored: true }))).toBe(false);
     expect(canSync(title({ no_sync: true }))).toBe(false);
   });

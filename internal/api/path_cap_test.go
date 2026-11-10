@@ -55,9 +55,21 @@ func TestPathCapComesFirst(t *testing.T) {
 
 	lib := fmt.Sprint(s.lib.ID)
 	q := func(p string) string { return "?path=" + url.QueryEscape(p) }
+	// The admin's routes check the cap before the library too.
+	for _, req := range []struct{ method, route, body string }{
+		{"PUT", "folder-override", `{"mode":"book"}`},
+		{"DELETE", "folder-override", ""},
+		{"PUT", "enrichment", `{"asin":"B000000001"}`},
+	} {
+		u := fmt.Sprintf("/api/v1/admin/libraries/%d/%s%s", unknownLib, req.route, q(over))
+		if resp, raw := s.do(t, req.method, u, tok, req.body); !tooLong(resp, raw) {
+			t.Fatalf("%s %s over the cap on an unknown library = %d %s, want 400", req.method, req.route, resp.StatusCode, raw)
+		}
+	}
 	for _, req := range []struct{ method, url, body string }{
 		{"PUT", "/api/v1/admin/libraries/" + lib + "/folder-override", `{"mode":"book"}`},
 		{"DELETE", "/api/v1/admin/libraries/" + lib + "/folder-override", ""},
+		{"PUT", "/api/v1/admin/libraries/" + lib + "/enrichment", `{"asin":"B000000001"}`},
 		{"GET", "/api/v1/libraries/" + lib + "/fs", ""},
 		{"DELETE", "/api/v1/me/queue", ""},
 	} {

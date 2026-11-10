@@ -152,7 +152,7 @@ func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref
 }
 
 // audibleRuntimeAgrees reports whether an Audible title's runtime (seconds)
-// and the indexed book's duration are one recording's: within 5% of the
+// and the book's length (audibleBookLengthSQL) are one recording's: within 5% of the
 // longer plus 2 minutes (furthestPastEndRatio, the manager's wrong-match
 // guard), or either unknown.
 func audibleRuntimeAgrees(runtimeS int64, duration float64) bool {
@@ -360,7 +360,11 @@ func (c *Catalog) FoldAudibleSync(ctx context.Context, job bridge.Job) error {
 		if err != nil || refusalEndedSince(ended, job.ClaimedAt) {
 			return err
 		}
-		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ?`, c.ts(), account)
+		// Only while the refusal_ended_at read stands: a sign-in or complete
+		// poll landing between the read and this write ended the refusal after
+		// the claim, so it marks nothing.
+		_, err = c.db.ExecUserState(ctx, `UPDATE audible_accounts SET refused_at = ? WHERE account = ? AND refusal_ended_at IS ?`,
+			c.ts(), account, ended)
 	}
 	return err
 }
