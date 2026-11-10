@@ -35,6 +35,14 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 		b.ScanError = problemEmptyFile
 	case md != nil && md.OpenErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, pathErrText(md.OpenErr)
+	case md.ReadRefused():
+		// Not read at all: too many reads hang already (metadata.ReadRefused).
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, readRefusedDetail
+	case md.TagsUnread():
+		// Opened but not read in time (a share that stopped answering): the same
+		// problem with ffprobe or without (ffprobe may still have read its
+		// length), so the next scan looks again (problemCleared).
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, tagsUnreadDetail
 	case md != nil && md.ProbeErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemProbe, md.ProbeErr.Error()
 	default:
@@ -76,8 +84,16 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 		return false
 	}
 	s.noteRejected(abs, at, md)
-	return md.OpenErr == nil && (!probe || md.ProbeErr == nil)
+	return md.OpenErr == nil && !md.TagsUnread() && (!probe || md.ProbeErr == nil)
 }
+
+// tagsUnreadDetail is the detail of a file that opened but wasn't read in
+// time, and readRefusedDetail of one not read at all, as too many earlier
+// reads, on any library, are stuck (Health: "<file> couldn't be read: <detail>").
+const (
+	tagsUnreadDetail  = "reading it timed out"
+	readRefusedDetail = "too many earlier reads are stuck (on this or another library), so it wasn't tried"
+)
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,
 // what a rejection of its data is remembered by (noteRejected). A scan that
@@ -222,12 +238,13 @@ func suspectParts(parts []partFacts) int {
 // suspectFromTags runs the check for a folder book indexed before it existed,
 // reading only tags (no ffprobe). Migration 0017 left unchecked only the folder
 // books whose parts are all at least an hour long, so the lengths are taken as
-// passing. ok is false when a part can't be read (left for the next scan).
+// passing. ok is false when a part can't be read, or its tag read was cut short
+// (left for the next scan).
 func suspectFromTags(lib catalog.Library, b *catalog.Book) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
-		md, _ := metadata.Extract(absOf(lib, f.RelPath), "")
-		if md.OpenErr != nil {
+		md := metadata.ExtractTags(absOf(lib, f.RelPath))
+		if md.OpenErr != nil || md.TagsUnread() {
 			return 0, false
 		}
 		parts = append(parts, partFacts{title: partName(f.RelPath, md), duration: minSuspectPart})

@@ -308,6 +308,10 @@ func m4bs() {
 	write("m4b-textonly.m4b", patchType(src, "chpl", "free", 0))
 	write("m4b-chplonly.m4b", patchType(src, "chap", "free", 0))
 	write("m4b-noelst.m4b", patchType(src, "edts", "free", 0))
+	// The audio track with no stts: FFmpeg's "missing mandatory atoms, broken
+	// header", its duration then read in 1/90000, not 1/44100 (server#276). No
+	// chapter track, whose duration would hide it.
+	write("m4b-broken-header.m4b", patchType(read("m4b-aac-tags.m4b"), "stts", "free", 0))
 	// chpl titles that differ from the text track's (same lengths).
 	o := append([]byte(nil), src...)
 	ci := bytes.Index(o, []byte("chpl"))

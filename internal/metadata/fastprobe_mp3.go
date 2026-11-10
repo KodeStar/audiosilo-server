@@ -328,6 +328,11 @@ func parseID3v2(b *blockFile, start, size int64, version, flags byte, d *avDict,
 			tlen -= 4
 		}
 		tcomp, tencr, tunsync := tflags&0x0008 != 0, tflags&0x0004 != 0, tflags&0x0002 != 0
+		if !isv34 && tag == "CHA" {
+			// FFmpeg matches an ID3v2.2 frame by the first three letters of its
+			// v2.3 name, so "CHA" reads as a CHAP chapter: not modelled.
+			return unsure("mp3: ID3v2.2 CHA frame")
+		}
 		isText := tag[0] == 'T'
 		isChap := isv34 && tag == "CHAP"
 		isPic := tag == apic

@@ -337,8 +337,12 @@ func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || est.Source != bridge.SourceAudio || est.Ebook != "" {
 		t.Fatalf("unreadable epub estimate: %d %s", resp.StatusCode, body)
 	}
-	// Audio of unknown length (no ffprobe in these tests): no estimate, never a
+	// Audio of unknown length (an index with no duration): no estimate, never a
 	// free run.
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE books SET duration = 0 WHERE library_id = ? AND rel_path = ?`,
+		b.lib.ID, cradleBook); err != nil {
+		t.Fatal(err)
+	}
 	resp, est, body = b.estimate(t, b.adminTok, b.lib.ID, cradleBook)
 	if resp.StatusCode != http.StatusOK || est.Source != bridge.SourceAudio || est.Ebook != "" || strings.Contains(body, `"ebook"`) ||
 		est.ASRHours != 0 || est.AgentCostUSD != nil || !strings.Contains(body, `"agent_cost_usd":null`) {

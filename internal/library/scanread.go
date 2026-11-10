@@ -26,11 +26,19 @@ type readSlots struct {
 	started atomic.Uint64
 	// timeout is each ffprobe run's (Scanner.probeTimeout).
 	timeout time.Duration
+	// readFile is metadata.ExtractTimeout, or a test's stand-in for it.
+	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
 }
 
 // newReadSlots returns n slots (at least one) whose ffprobe runs get timeout.
 func newReadSlots(n int, timeout time.Duration) *readSlots {
-	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: timeout}
+	return &readSlots{ch: make(chan struct{}, max(n, 1)), timeout: timeout, readFile: extractFile}
+}
+
+// extractFile is metadata.ExtractTimeout's reading (it never errs).
+func extractFile(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata {
+	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, timeout)
+	return md
 }
 
 // size is how many files may be read at once.
@@ -43,10 +51,11 @@ func (r *readSlots) size() int { return cap(r.ch) }
 // on its own: files sharing a slow disk or a busy share can each take longer
 // than ffprobe is given, and a healthy file must not be recorded as a read
 // problem because others were read beside it. Only a time-out alone is the
-// file's problem.
+// file's problem. So is one whose in-process read ran out of time with no
+// ffprobe to fall back to (ProbeTimedOut): it would otherwise have no duration.
 func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *metadata.Metadata {
 	md, shared := r.read(ctx, absPath, ffprobePath)
-	if md == nil || !shared || !errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) {
+	if md == nil || !shared || !(errors.Is(md.ProbeErr, metadata.ErrProbeTimeout) || md.ProbeTimedOut()) {
 		return md
 	}
 	// One retry at a time, each waiting for the reads under way to finish.
@@ -55,8 +64,7 @@ func (r *readSlots) extract(ctx context.Context, absPath, ffprobePath string) *m
 	if ctx.Err() != nil {
 		return md // stopped: dropped by the scan
 	}
-	again, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
-	return again
+	return r.readFile(ctx, absPath, ffprobePath, r.timeout)
 }
 
 // read is metadata.ExtractTimeout holding a slot, and whether another read ran
@@ -75,7 +83,7 @@ func (r *readSlots) read(ctx context.Context, absPath, ffprobePath string) (*met
 	}
 	start := r.started.Add(1)
 	before := r.active.Add(1)
-	md, _ := metadata.ExtractTimeout(ctx, absPath, ffprobePath, r.timeout)
+	md := r.readFile(ctx, absPath, ffprobePath, r.timeout)
 	after := r.active.Add(-1)
 	return md, before > 1 || after > 0 || r.started.Load() != start
 }

@@ -91,6 +91,13 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 
 // upsertBook is UpsertBook's writes, in tx.
 func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
+	// A read cut short (Book.TagsUnread) rewrites nothing of a book indexed
+	// before: only its read problem is recorded, so the next scan reads it again.
+	if b.TagsUnread {
+		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
+			return id, err
+		}
+	}
 	// The snapshot carries this upsert's indexed_at, which is how loadLayers tells
 	// it from one an older server left stale (see scannedStampKey).
 	indexedAt := c.ts()
@@ -214,6 +221,27 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		return 0, err
 	}
 	return id, refreshEffective(ctx, tx, id)
+}
+
+// recordReadProblem records b's read problem (ScanError, ScanErrorFile,
+// ScanErrorDetail) on the stored row at b's path and nothing else: every field
+// a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,
+// indexed_at) stays as the last full read left it, and since the stored mtime
+// and size are the old ones, the next scan reads the book again. ok is false
+// when the book has no row yet (a new book is written whole).
+func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok bool, err error) {
+	err = tx.QueryRowContext(ctx,
+		`UPDATE books SET scan_error = ?, scan_error_file = ?, scan_error_detail = ?
+		  WHERE library_id = ? AND rel_path = ? RETURNING id`,
+		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.LibraryID, b.RelPath).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	b.ID = id
+	return id, true, nil
 }
 
 // BooksByPaths returns the books in a library whose rel_path is in paths, keyed
@@ -448,7 +476,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, hints_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
-		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
+		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`, format,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
 		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
@@ -464,18 +492,17 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		var stored sql.NullInt64
 		var files, rev sql.NullString
-		var title, series string
+		var format, title, series, narrator string
 		var revOlder bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &revOlder); err != nil {
+			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {
-			sig.NamesCheck = metadata.PathLeafSeries(rel, sig.IsFolder) ||
-				(rev.String != revTitleNotSeries && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series))
+			sig.NamesCheck = namesCheck(revNumber(rev.String), rel, sig.IsFolder, format, title, series, narrator)
 			sig.RevStamp = !sig.NamesCheck && revOlder
 		}
 		switch {

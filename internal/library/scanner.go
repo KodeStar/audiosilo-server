@@ -58,11 +58,48 @@ type Scanner struct {
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
+	// readFile, when set (tests), stands in for each scan read's
+	// metadata.ExtractTimeout (readSlots.readFile).
+	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
 
 	// The files this server has seen ffprobe reject (problemCleared), by
 	// absolute path.
 	rejectedMu sync.Mutex
 	rejected   map[string]fileState
+
+	// With no ffprobe: the books with no stored duration this server has read
+	// again since it started (rereadUnprobed), in the state read.
+	unprobedMu sync.Mutex
+	unprobed   map[bookKey]fileState
+}
+
+// rereadUnprobed reports whether a scan with no ffprobe should read again a
+// book it finds unchanged with no stored duration or codec (the caller's
+// test): once per
+// server run and book state (noteUnprobed). A server that ran without ffprobe
+// before the in-process probe ran without it (SCAN-SPIKE decision 2) gets its
+// existing books' durations from its first scan since, while a file the probe
+// is unsure of (no ffprobe to ask) is not re-indexed on every scan. A restart
+// reads such books once more.
+func (s *Scanner) rereadUnprobed(libraryID int64, b *catalog.Book) bool {
+	s.unprobedMu.Lock()
+	defer s.unprobedMu.Unlock()
+	was, ok := s.unprobed[bookKey{libraryID, b.RelPath}]
+	return !ok || was != (fileState{mtime: b.MTime, size: b.Size})
+}
+
+// noteUnprobed remembers a book a scan with no ffprobe has just written with
+// no duration or codec, in the state it read (rereadUnprobed).
+func (s *Scanner) noteUnprobed(libraryID int64, b *catalog.Book) {
+	if s.ffprobePath != "" || (b.Duration > 0 && b.Codec != "") {
+		return
+	}
+	s.unprobedMu.Lock()
+	defer s.unprobedMu.Unlock()
+	if s.unprobed == nil {
+		s.unprobed = map[bookKey]fileState{}
+	}
+	s.unprobed[bookKey{libraryID, b.RelPath}] = fileState{mtime: b.MTime, size: b.Size}
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -362,12 +399,55 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
+	slots := newReadSlots(s.readers(), s.probeTimeout)
+	if s.readFile != nil {
+		slots.readFile = s.readFile
+	}
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
 	// can take a while, and a scan stopped part way keeps what it read (written past
 	// the Stop: at most pathFlushEvery books).
+	//
+	// The unchanged books whose primary file a backfill reads (dates, genres,
+	// tag hints, names): read a batch at a time, as many at once as the scan's
+	// slots allow (one an upgrade asks of most of a library is not a file at a
+	// time), then recorded in the backfills above.
+	var tagReads []*tagRead
+	readTags := func() {
+		if len(tagReads) == 0 {
+			return
+		}
+		pool.Each(ctx, slots.size(), tagReads, func() bool { return ctx.Err() == nil }, func(r **tagRead) {
+			if md := slots.extract(ctx, (*r).primary, s.ffprobePath); ctx.Err() == nil {
+				(*r).md = md // one a Stop may have cut short is dropped, for the next scan
+			}
+		})
+		for _, r := range tagReads {
+			md, b, old := r.md, r.book, r.old
+			if md == nil || md.OpenErr != nil || md.TagsUnread() {
+				// Stopped, unopenable now, or its tag read cut short (recording it would
+				// record no date, genres, hints or names): the next scan reads it.
+				continue
+			}
+			if old.ReleasedUnchecked {
+				releasedBackfill[b.RelPath] = md.Released
+			}
+			if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+				hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
+			}
+			if old.GenresUnchecked {
+				genresBackfill[b.RelPath] = md.Genres
+			}
+			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+				pathBackfill[b.RelPath] = readNames(b, md)
+			}
+		}
+		clear(tagReads)
+		tagReads = tagReads[:0]
+	}
 	flushBackfills := func() {
+		readTags()
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
 		}
@@ -405,7 +485,6 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// its own goroutine, up to a window of books ahead of the one written next; the
 	// index is written here alone, in discovery order (writeNext), so the rows,
 	// their ids and the log come out as a scan reading one file at a time writes them.
-	slots := newReadSlots(s.readers(), s.probeTimeout)
 	window := 2 * slots.size()
 	var pending []*bookRead
 	// The books read and waiting to be written: a few share a transaction
@@ -427,6 +506,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
 			return
 		}
+		s.noteUnprobed(lib.ID, b)
 		if b.ScanError != "" {
 			res.Errors++
 			rl.add("warn", "problem", func(e *catalog.RunEvent) {
@@ -537,15 +617,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
-			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
+			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			!s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order);
-			// only skip the probe when ffprobe is
-			// disabled, or a prior probe already stored both duration and codec
-			// (so books indexed before the codec column get it backfilled), or the
-			// book's one file has a read problem that problemCleared just found
-			// still there: reading the book again would find the same.
+			// only skip the probe when a prior probe already stored both duration
+			// and codec (so books indexed before the codec column get it
+			// backfilled), or, with no ffprobe, the in-process probe has had its
+			// one go at the book this run (rereadUnprobed), or the book's one
+			// file has a read problem that problemCleared just found still there:
+			// reading the book again would find the same.
 			// Whether it is a disc of a split book turns on its siblings, so it can
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {
@@ -612,19 +693,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 					revBackfill = append(revBackfill, b.RelPath)
 				}
 				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
-					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
-						if old.ReleasedUnchecked {
-							releasedBackfill[b.RelPath] = md.Released
-						}
-						if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-							hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
-						}
-						if old.GenresUnchecked {
-							genresBackfill[b.RelPath] = md.Genres
-						}
-						if readPath && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-							pathBackfill[b.RelPath] = readNames(b, md)
-						}
+					tagReads = append(tagReads, &tagRead{book: b, old: old, primary: primary, names: readPath})
+					if len(tagReads) >= slots.size()*tagReadsPerSlot {
+						readTags()
 					}
 				}
 				// A file new, changed or gone since the last read, or one not read for
@@ -697,6 +768,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetSplitParent(ctx, lib.ID, splitBackfill); err != nil {
 		s.log.Warn("record split discs failed", "library", lib.Name, "err", err)
 	}
+	readTags() // the release dates' reads, before they are recorded
 	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
 		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
 	}
@@ -825,8 +897,8 @@ const pathFlushEvery = 500
 // Series; Book NN[; Title]" states included) as the baseline, then md's tags,
 // which are authoritative when present (an unreadable file's md carries none;
 // nil reads the same), except an album tag that only names the book's series,
-// which gives way to the book's own title (metadata.TitleNotSeries). So the
-// leaf's series fills only a series the tags leave out.
+// which gives way to the book's own title (metadata.TitleNotSeries), and md's
+// narrator. So the leaf's series fills only a series the tags leave out.
 func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
@@ -843,6 +915,7 @@ func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 		n.SeriesIndex, n.SeriesIndexEnd = md.SeriesIndex, md.SeriesIndexEnd
 	}
 	n.Title = metadata.TitleNotSeries(n.Title, md, b.RelPath, b.IsFolder, len(b.Files) > 1)
+	n.Narrator = md.Narrator
 	return n
 }
 
@@ -854,7 +927,7 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 	n := readNames(b, md)
 	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
 	if md != nil {
-		b.Narrator = md.Narrator
+		b.Narrator = n.Narrator
 		b.TagASIN, b.TagISBN, b.TagLanguage = md.TagASIN, md.TagISBN, md.TagLanguage
 	}
 }
@@ -891,6 +964,12 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		at = &fileState{mtime: b.MTime, size: b.Size}
 	}
 	s.noteRejected(abs, at, md)
+	// A read cut short or refused (a share that stopped answering) knows nothing
+	// of the file: UpsertBook then rewrites nothing of a stored book but its
+	// read problem, rather than path-only names and no length, codec, chapters,
+	// cover, date or genres; a new book is written with what there is. A folder
+	// book's other parts count too (buildMultiFileChapters).
+	b.TagsUnread = md.TagsUnread()
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released
@@ -1144,6 +1223,9 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		f := &b.Files[i]
 		md := mds[i]
 		noteProblem(b, f.RelPath, f.Size, md)
+		if md.TagsUnread() {
+			b.TagsUnread = true // its length and chapters unknown: see enrich
+		}
 		if i > 0 { // the first is enrich's reading, noted there
 			s.noteRejected(absOf(lib, f.RelPath), nil, md)
 		}
@@ -1813,6 +1895,20 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 	}
 	return s.indexShared(ctx, lib, book)
 }
+
+// tagRead is an unchanged book whose primary file a scan reads for its
+// backfills (readTags): what to read, what for, and the reading.
+type tagRead struct {
+	book    *catalog.Book
+	old     catalog.Signature
+	primary string // its absolute path
+	names   bool   // the names are read too (PathRead, Signature.NamesCheck)
+	md      *metadata.Metadata
+}
+
+// tagReadsPerSlot is how many backfill reads a scan gathers per read slot
+// before reading them, at once as the slots allow.
+const tagReadsPerSlot = 8
 
 // bookKey names a book across libraries: (library_id, rel_path).
 type bookKey struct {

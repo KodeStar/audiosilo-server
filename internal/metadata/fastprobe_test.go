@@ -8,13 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/dhowden/tag"
 )
 
 func fixture(name string) string { return filepath.Join(probeFixtures, name) }
@@ -153,19 +158,136 @@ func TestExtractLeavesUnknownReleasesToFFprobe(t *testing.T) {
 	}
 }
 
-// With ffprobe off ("") nothing is probed, in-process or not: tags only, no
-// duration or chapters, as before the probe (SCAN-SPIKE decision 2).
-func TestExtractWithoutFFprobeReadsTagsOnly(t *testing.T) {
+// With no ffprobe ("") the in-process probe still answers, by FFmpeg 8.1's
+// rules (SCAN-SPIKE decision 2, server#269); a file it is unsure of has no
+// duration and no ProbeErr, as every file had before; ExtractTags reads the
+// tags alone.
+func TestExtractWithoutFFprobe(t *testing.T) {
 	t.Parallel()
 	md, err := Extract(fixture("m4b-aac-chap.m4b"), "")
 	if err != nil || md.ProbeErr != nil {
 		t.Fatal(err, md.ProbeErr)
 	}
-	if md.Duration != 0 || len(md.Chapters) != 0 || md.Codec != "" {
-		t.Errorf("duration %v codec %q chapters %d, want none", md.Duration, md.Codec, len(md.Chapters))
+	if md.Duration != 5.3 || len(md.Chapters) != 3 || md.Codec != "aac" {
+		t.Errorf("duration %v codec %q chapters %d, want the probe's answer", md.Duration, md.Codec, len(md.Chapters))
 	}
 	if md.Title != "The Spike Book (Unabridged)" {
 		t.Errorf("title %q, want the tags' title", md.Title)
+	}
+	// A VBR MP3 with no Xing/VBRI header: ffprobe's estimate, which nothing gives here.
+	unsure, err := Extract(fixture("craft-junk-vbr.mp3"), "")
+	if err != nil || unsure.ProbeErr != nil || unsure.ProbeTimedOut() {
+		t.Fatal(err, unsure.ProbeErr, unsure.ProbeTimedOut())
+	}
+	if unsure.Duration != 0 || unsure.Codec != "" {
+		t.Errorf("unsure file: duration %v codec %q, want none", unsure.Duration, unsure.Codec)
+	}
+	tags := ExtractTags(fixture("m4b-aac-chap.m4b"))
+	if tags.OpenErr != nil || tags.Title != "The Spike Book (Unabridged)" || tags.Duration != 0 || tags.Codec != "" || len(tags.Chapters) != 0 {
+		t.Errorf("ExtractTags: %+v, want the tags alone", tags)
+	}
+	if ExtractTags(filepath.Join(t.TempDir(), "gone.mp3")).OpenErr == nil {
+		t.Error("ExtractTags of a missing file: no OpenErr")
+	}
+}
+
+// slowFile is a file whose reads take delay each, or never return while
+// hang is open (a share that stopped answering).
+type slowFile struct {
+	r     io.ReaderAt
+	delay time.Duration
+	hang  chan struct{}
+}
+
+func (f slowFile) ReadAt(p []byte, off int64) (int, error) {
+	if f.hang != nil {
+		<-f.hang
+	}
+	time.Sleep(f.delay)
+	return f.r.ReadAt(p, off)
+}
+
+// A read from the file that never returns is given up at the deadline: the
+// bounded read ends with the deadline's reason, never a hang (server#269 item
+// 4), and the caller's buffer is never written after it gives up.
+func TestBoundedReadGivesUpOnAHungRead(t *testing.T) {
+	t.Parallel()
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	b := newBlockFile(slowFile{r: bytes.NewReader(make([]byte, 1<<20)), hang: hang}, 1<<20)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 50*time.Millisecond, errReadDeadline)
+	defer cancel()
+	start := time.Now()
+	why := b.bounded(ctx, func() { b.bytesAt(0, 16) })
+	if why != "limit: read deadline" || !timedOutReason(why) {
+		t.Errorf("why %q, want the read deadline", why)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("gave up after %v", took)
+	}
+	// Disarmed again: a later read goes straight to the file.
+	if b.ctx != nil {
+		t.Error("still armed")
+	}
+}
+
+// With no ffprobe, a read that ran out of time says so (ProbeTimedOut), so a
+// scan can read it again alone; one out of bytes or unsure doesn't.
+func TestTimedOutReason(t *testing.T) {
+	t.Parallel()
+	for reason, want := range map[string]bool{
+		"limit: probe deadline":            true,
+		"tags: limit: read deadline":       true,
+		"limit: probe read budget":         false,
+		"limit: context canceled":          false,
+		"mp3: no Xing/VBRI header and not": false,
+		"":                                 false,
+	} {
+		if got := timedOutReason(reason); got != want {
+			t.Errorf("timedOutReason(%q) = %t, want %t", reason, got, want)
+		}
+	}
+}
+
+// The tag read runs under the read's deadline too: a file whose reads are too
+// slow for it gives no tags (readFile then runs no probe), and, with no
+// ffprobe to ask, a ProbeTimedOut reading (server#269 items 4 and 6).
+func TestTagReadIsBounded(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile(fixture("mp3-v23-chap.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newBlockFile(slowFile{r: bytes.NewReader(src), delay: 200 * time.Millisecond}, int64(len(src)))
+	rctx, cancel := context.WithTimeoutCause(context.Background(), 40*time.Millisecond, errReadDeadline)
+	defer cancel()
+	var md tag.Metadata
+	why := b.bounded(rctx, func() { md, _ = tag.ReadFrom(&blockReader{b: b}) })
+	if !timedOutReason(why) || md != nil {
+		t.Errorf("why %q, tags %v: want the deadline and none", why, md)
+	}
+	m := &Metadata{timedOut: timedOutReason("tags: " + why)}
+	if !m.ProbeTimedOut() || (*Metadata)(nil).ProbeTimedOut() {
+		t.Error("ProbeTimedOut")
+	}
+}
+
+// A tag read cut short says so (TagsUnread), so a scan's backfill records no
+// empty date, genres or names for it; a whole read doesn't.
+func TestTagsUnreadWhenCutShort(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := &Metadata{Format: "mp3"}
+	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, ProbeTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if !m.TagsUnread() || m.Title != "" {
+		t.Errorf("cut short: TagsUnread %t, title %q; want true and none", m.TagsUnread(), m.Title)
+	}
+	whole := ExtractTags(fixture("mp3-v23-chap.mp3"))
+	if whole.TagsUnread() || whole.Title == "" || (*Metadata)(nil).TagsUnread() {
+		t.Errorf("a whole read (title %q), or none, reported its tags unread", whole.Title)
 	}
 }
 
@@ -458,6 +580,74 @@ func TestRescale(t *testing.T) {
 	}
 }
 
+// A rescale whose answer doesn't fit in int64 (a crafted file's: FFmpeg gives
+// INT64_MIN, or wraps) leaves the file to ffprobe (server#269 item 7).
+func TestRescaleOverflowIsUnsure(t *testing.T) {
+	t.Parallel()
+	b := newBlockFile(bytes.NewReader(nil), 0)
+	why := b.bounded(context.Background(), func() { rescale(math.MaxInt64, 1_000_000, 3) })
+	if why != "a time past int64" {
+		t.Errorf("why %q, want the overflow", why)
+	}
+	if got := rescale(math.MaxInt64/2, 2, 2); got != math.MaxInt64/2 {
+		t.Errorf("rescale in range = %d", got)
+	}
+}
+
+// patched writes fixture name with every from (the first n of them, n > 0)
+// replaced by to, into a temp file of the same extension.
+func patched(t *testing.T, name string, from, to []byte, n int) string {
+	t.Helper()
+	src, err := os.ReadFile(fixture(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := bytes.Replace(src, from, to, n)
+	if bytes.Equal(out, src) {
+		t.Fatalf("%s holds no %q", name, from)
+	}
+	p := filepath.Join(t.TempDir(), "patched"+filepath.Ext(name))
+	if err := os.WriteFile(p, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Crafted-file edges FFmpeg reads in ways the probe doesn't model leave the
+// file to ffprobe (server#269 item 7): an mvhd or mdhd timescale past
+// INT32_MAX (FFmpeg's int wraps negative), an ID3v2.2 "CHA" frame (FFmpeg
+// matches v2.2 frames by three letters, so it reads as a CHAP chapter).
+func TestCraftedEdgesAreUnsure(t *testing.T) {
+	t.Parallel()
+	timescale := func(box string) string {
+		src, err := os.ReadFile(fixture("m4b-aac-bare.m4b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := bytes.Index(src, []byte(box))
+		if i < 0 || src[i+4] != 0 {
+			t.Fatalf("no version 0 %s", box)
+		}
+		binary.BigEndian.PutUint32(src[i+4+12:], 0x80000000) // version/flags, created, modified, then the timescale
+		p := filepath.Join(t.TempDir(), box+".m4b")
+		if err := os.WriteFile(p, src, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for path, want := range map[string]string{
+		timescale("mvhd"): "mp4: mvhd timescale past INT32_MAX",
+		timescale("mdhd"): "mp4: mdhd timescale past INT32_MAX",
+		patched(t, "craft-id3v22.mp3", []byte("TT2"), []byte("CHA"), 1): "mp3: ID3v2.2 CHA frame",
+	} {
+		for _, ff := range []ffRules{ff7, ff8} {
+			if v, reason, err := probeView(path, ff); err != nil || v != nil || reason != want {
+				t.Errorf("%s: %v %v %q, want %q", filepath.Base(path), v, err, reason, want)
+			}
+		}
+	}
+}
+
 // freeBoxes is an MP4 of nothing but free boxes of every bytes, size long:
 // each box header the walk reads costs it a block, so a big one reads past the
 // probe's budget without ever finding a moov. delay slows every read.
@@ -601,4 +791,87 @@ func TestBlockFileBudgetBeforeAllocation(t *testing.T) {
 	}()
 	b.bytesAt(0, 1<<39)
 	t.Error("a read past the budget was made")
+}
+
+// TestAbandonedReadsAreCapped (server#269): a read waitRead gave up on holds
+// its goroutine and its file until it returns, so with maxAbandonedReads of
+// them outstanding a new read fails fast, the file not opened and no ffprobe
+// run, its tags unread, logged once; as the hung reads return, reads work
+// again. Not parallel: it fills the process-wide count.
+func TestAbandonedReadsAreCapped(t *testing.T) {
+	var logged bytes.Buffer
+	was := probeLog.Load()
+	SetLogger(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { probeLog.Store(was) })
+	hang := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hang) }) }
+	t.Cleanup(release)
+
+	src := bytes.NewReader(make([]byte, 1<<20))
+	for abandonedReads.Load() < maxAbandonedReads {
+		b := newBlockFile(slowFile{r: src, hang: hang}, 1<<20)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Millisecond, errReadDeadline)
+		why := b.bounded(ctx, func() { b.bytesAt(0, 16) })
+		cancel()
+		if !timedOutReason(why) {
+			t.Fatalf("a hung read: why = %q, want it given up at its deadline", why)
+		}
+	}
+	if n := abandonedReads.Load(); n != maxAbandonedReads {
+		t.Fatalf("abandoned reads = %d, want the cap, %d", n, maxAbandonedReads)
+	}
+
+	// Saturated: a missing file is not opened (no OpenErr), no ffprobe runs (no
+	// ProbeErr), nothing is retried (no ProbeTimedOut), and it takes no time.
+	start := time.Now()
+	for range 3 {
+		m, err := ExtractTimeout(context.Background(), filepath.Join(t.TempDir(), "missing.mp3"), "/no/such/ffprobe", time.Second)
+		if err != nil || m.OpenErr != nil || !m.TagsUnread() || m.ProbeErr != nil || m.ProbeTimedOut() || m.Duration != 0 {
+			t.Fatalf("saturated read = %+v (err %v), want it failed fast, tags unread", m, err)
+		}
+	}
+	if m := ExtractTags(fixture("mp3-v23-chap.mp3")); !m.TagsUnread() || m.Title != "" {
+		t.Errorf("saturated tag read = %+v, want nothing read", m)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("saturated reads took %v, want them failed fast", d)
+	}
+	if n := strings.Count(logged.String(), "reads stopped answering"); n != 1 {
+		t.Errorf("logged the cap %d times, want once:\n%s", n, logged.String())
+	}
+
+	// The share answers: each abandoned read returns and frees its place.
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for abandonedReads.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("abandoned reads = %d after they returned, want 0", abandonedReads.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	m, err := Extract(fixture("mp3-v23-chap.mp3"), "")
+	if err != nil || m.TagsUnread() || m.Duration <= 0 {
+		t.Errorf("read after the hung reads returned = %+v (err %v), want it read", m, err)
+	}
+	if saturationLogged.Load() {
+		t.Error("the cap's log is still marked: a later hit would not be logged")
+	}
+}
+
+// TestWaitReadThatReturnsIsNotAbandoned: a read that returns in time leaves no
+// abandoned read counted.
+// Not parallel: a parallel test that gives up on a read moves the process-wide
+// count between the two loads.
+func TestWaitReadThatReturnsIsNotAbandoned(t *testing.T) {
+	b := newBlockFile(bytes.NewReader(make([]byte, 1<<16)), 1<<16)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	before := abandonedReads.Load()
+	if why := b.bounded(ctx, func() { b.bytesAt(0, 16) }); why != "" {
+		t.Fatalf("why = %q, want the read done", why)
+	}
+	if after := abandonedReads.Load(); after > before {
+		t.Errorf("abandoned reads %d -> %d after a read that returned", before, after)
+	}
 }

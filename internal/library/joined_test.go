@@ -91,16 +91,17 @@ func filePaths(b *catalog.Book) []string {
 // A `book` override on a folder whose audio is only in its disc folders reads them
 // as one book, the folders in natural order, with hidden and ignored files left out;
 // no override (or removing it) leaves each disc its own book, as before. The join
-// is a reshape: nothing is counted or announced as added. Without ffprobe no disc's
-// length is known, so only the first disc's offset is (0): its listening state
-// carries over, and the later discs' stays on their own paths, logged as such.
+// is a reshape: nothing is counted or announced as added. When no disc's length
+// is known (files nothing reads a duration from), only the first disc's offset is
+// (0): its listening state carries over, and the later discs' stays on their own
+// paths, logged as such.
 func TestJoinedDiscFolders(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
-	audio := testAudio(t)
+	audio := []byte("not an MP4: no length to read") // the in-process probe is unsure, and there is no ffprobe
 	for _, p := range []string{
 		"Cowell/Dragonese/CD1/01.m4b",
 		"Cowell/Dragonese/CD1/02.m4b",

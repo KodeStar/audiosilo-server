@@ -281,17 +281,35 @@ const scannedStampKey = "@indexed_at"
 // predates revision 2, when an album tag naming only the book's series became
 // its title (metadata.TitleNotSeries); one of revision 2 predates revision 3,
 // when a leaf named "Author; Series; Book NN[; Title]" came to state the
-// series and position the tags leave out (metadata.DeriveFromPath). The next
-// scan reads such a book again where a newer revision may read it otherwise
-// (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
-// adds today's to revOlderOwn's list, so its snapshots are stamped too.
+// series and position the tags leave out (metadata.DeriveFromPath); one of
+// revision 3 may predate revision 4, the tag reading of 2.4.0 and 2.5.0 (a
+// series tag carrying its position, "Discworld, book #40": SplitSeriesTag; a
+// title in any script not generic: IsGenericTitle; the MP4 narrator item and
+// a narrator tag over composer), which a snapshot stamped from an older
+// revision never had. The next scan reads such a book again where a newer
+// revision may read it otherwise (Signature.NamesCheck) and stamps the rest
+// (StampScannedRev). A new revision adds today's to revOlderOwn's list, so its
+// snapshots are stamped too.
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "3"
-	// revTitleNotSeries is the revision that brought TitleNotSeries in: a
-	// snapshot of it needs no MaybeSeriesTitle read (Signature.NamesCheck).
-	revTitleNotSeries = "2"
+	scannedRev    = "4"
+	// The revisions that brought a reading in, so a snapshot of one needs no read
+	// for it (Signature.NamesCheck): TitleNotSeries (MaybeSeriesTitle), a leaf
+	// that states a series (PathLeafSeries), the tag reading (tagReadingMayDiffer).
+	revTitleNotSeries = 2
+	revLeafSeries     = 3
+	revTagReading     = 4
 )
+
+// revNumber is a snapshot's revision as a number: 0 before revision 1 (none),
+// and for one it can't read.
+func revNumber(rev string) int {
+	n, err := strconv.Atoi(rev)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
 
 // scannedJSON encodes what the scan found for b (its fields before anything is
 // layered on top) for the `scanned` column (encodeScanned), read with today's path
@@ -711,15 +729,10 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	// values just written. The series column holds every series the book is in,
 	// so a search finds it by any (the series= filter goes by key instead), and
 	// the genres and tags columns a label a line, so a search finds a book by its
-	// labels too (the genre= and tag= filters go by book_labels).
-	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
-		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator),
-		ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags)))
-	return err
+	// labels too (the genre= and tag= filters go by book_labels). Every column is
+	// in ftsText's form, a Chinese or Japanese character a token (writeFTSRow).
+	return writeFTSRow(ctx, tx, bookID, [6]string{v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)),
+		v(FieldNarrator), ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags))})
 }
 
 // recordScanned writes snap as book id's scanned snapshot, stamped with the

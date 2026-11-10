@@ -186,11 +186,14 @@ func TestScanTitleNotSeries(t *testing.T) {
 		}
 		revs = append(revs, r)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	// Every book is at today's revision: the three read again and the book named
 	// for its series (read, unchanged) by their readings, and the one whose title
 	// isn't a series, never read, stamped (StampScannedRev), so no later scan
 	// tests it again.
-	wantRevs := []string{edited + "=3", vall + "=3", first + "=3", tufo + "=3", carl + "=3"}
+	wantRevs := []string{edited + "=4", vall + "=4", first + "=4", tufo + "=4", carl + "=4"}
 	slices.Sort(wantRevs)
 	if !slices.Equal(revs, wantRevs) {
 		t.Errorf("revisions = %v, want %v", revs, wantRevs)
@@ -274,7 +277,7 @@ func TestScanNamesCheckWaitsForRead(t *testing.T) {
 	if _, err := s.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	reading("readable again", "From The Ashes", "3")
+	reading("readable again", "From The Ashes", "4")
 }
 
 // A leaf named "Author; Series; Book NN[; Title]" states the book's series and
@@ -369,7 +372,7 @@ func TestScanLeafStatesSeries(t *testing.T) {
 	check("after the backfill")
 	var stale int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
-		WHERE json_extract(scanned, '$."@rev"') IS NOT '3'`).Scan(&stale); err != nil || stale != 0 {
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
 		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
 	}
 	sigs, err := cat.Signatures(ctx, lib.ID)
@@ -387,4 +390,86 @@ func TestScanLeafStatesSeries(t *testing.T) {
 	}
 	want[edited] = reading{"Deadlocked", 1, 0}
 	check("after clearing the edit")
+}
+
+// Revision 4 (server#175): a snapshot an older server wrote, before the tag
+// reading of 2.4.0 and 2.5.0, is read again once where that reading may differ
+// (an MP4's \xa9nrt narrator over its composer) and stamped where it can't (an
+// MP3 with an ASCII title and no narrator), all with no re-index.
+func TestScanTagReadingRevision(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	ffprobe := lookFFprobe(t)
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	m4b := "Some Author/Narrated"
+	src, err := os.ReadFile(filepath.Join("..", "metadata", "testdata", "nrt-composer.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(m4b)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(m4b), "Narrated.m4b"), src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := "Charles Dickens/Great Expectations"
+	silence(t, root, plain+"/01.mp3", 1, "artist=Charles Dickens", "album=Great Expectations")
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	s := NewScanner(cat, ffprobe, slog.Default())
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	narrator := func() string {
+		t.Helper()
+		var n string
+		if err := db.QueryRowContext(ctx, `SELECT narrator FROM books WHERE rel_path = ?`, m4b).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := narrator(); n != "The Narrator" {
+		t.Fatalf("first scan: narrator = %q, want the \\xa9nrt item's", n)
+	}
+
+	// What 2.4.0 wrote: the composer as narrator, at revision 3; the MP3 at 3 too.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET narrator = 'A Composer',
+		scanned = json_set(scanned, '$.narrator', 'A Composer') WHERE rel_path = ?`, m4b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET scanned = json_set(scanned, '$."@rev"', '3')`); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := [2]bool{sigs[m4b].NamesCheck, sigs[m4b].RevStamp}; got != [2]bool{true, false} {
+		t.Errorf("m4b: NamesCheck, RevStamp = %v, want a read", got)
+	}
+	if got := [2]bool{sigs[plain].NamesCheck, sigs[plain].RevStamp}; got != [2]bool{false, true} {
+		t.Errorf("mp3: NamesCheck, RevStamp = %v, want a stamp", got)
+	}
+
+	res, err := s.Scan(ctx, *lib)
+	if err != nil || res.Updated != 0 {
+		t.Fatalf("rescan = %+v (err %v), want the narrator backfilled, nothing re-indexed", res.ScanCounts, err)
+	}
+	if n := narrator(); n != "The Narrator" {
+		t.Errorf("after the backfill: narrator = %q, want the \\xa9nrt item's", n)
+	}
+	var stale int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books
+		WHERE json_extract(scanned, '$."@rev"') IS NOT '4'`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("snapshots before today's revision after the backfill = %d (err %v), want 0", stale, err)
+	}
+	if sigs, err = cat.Signatures(ctx, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	for rel, sig := range sigs {
+		if sig.NamesCheck || sig.RevStamp {
+			t.Errorf("%s after the backfill: NamesCheck, RevStamp = %v, %v, want nothing to do", rel, sig.NamesCheck, sig.RevStamp)
+		}
+	}
 }

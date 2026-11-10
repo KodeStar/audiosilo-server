@@ -18,6 +18,7 @@ package toolfetch
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +43,14 @@ type spec struct {
 	combinedKind string // "tar.xz" | "zip"
 	ffmpegURL    string // separate per-tool zips (each holds the bare binary)
 	ffprobeURL   string
+	// masterURL is BtbN's master build of the same platform, fetched only when
+	// combinedURL is gone (errAssetGone: BtbN dropped the pinned branch) and no
+	// tools are cached: working tools, with the in-process probe off.
+	masterURL string
 }
+
+// errAssetGone is a download's HTTP 404: the asset is no longer published.
+var errAssetGone = errors.New("asset not found")
 
 const btbn = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
 
@@ -62,18 +70,25 @@ func btbnAsset(platform, ext string) string {
 	return btbn + "/ffmpeg-n" + btbnBranch + "-latest-" + platform + "-lgpl-" + btbnBranch + "." + ext
 }
 
+// btbnSpec is the download spec of BtbN's platform build, an archive of kind
+// ext: the pinned branch's, and master's should that be gone.
+func btbnSpec(platform, ext string) spec {
+	return spec{combinedURL: btbnAsset(platform, ext), combinedKind: ext,
+		masterURL: btbn + "/ffmpeg-master-latest-" + platform + "-lgpl." + ext}
+}
+
 // specFor returns the download spec for an OS/arch, or ok=false when there's no
 // known static source (the caller then just runs without ffmpeg).
 func specFor(goos, goarch string) (spec, bool) {
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-		return spec{combinedURL: btbnAsset("linux64", "tar.xz"), combinedKind: "tar.xz"}, true
+		return btbnSpec("linux64", "tar.xz"), true
 	case "linux/arm64":
-		return spec{combinedURL: btbnAsset("linuxarm64", "tar.xz"), combinedKind: "tar.xz"}, true
+		return btbnSpec("linuxarm64", "tar.xz"), true
 	case "windows/amd64":
-		return spec{combinedURL: btbnAsset("win64", "zip"), combinedKind: "zip"}, true
+		return btbnSpec("win64", "zip"), true
 	case "windows/arm64":
-		return spec{combinedURL: btbnAsset("winarm64", "zip"), combinedKind: "zip"}, true
+		return btbnSpec("winarm64", "zip"), true
 	case "darwin/amd64", "darwin/arm64":
 		// evermeet ships x86_64 only; on Apple Silicon it runs under Rosetta 2,
 		// which is fine to exec from an arm64 server.
@@ -120,6 +135,7 @@ func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe 
 // ensure is Ensure for platform goos/goarch, downloading with dl; bg runs the
 // background release fetch.
 func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch string, dl func(context.Context, spec, string) error, bg func(func())) (ffmpeg, ffprobe string) {
+	removeStaleDownloads(dir)
 	promoteStaged(ctx, dir, log)
 	// Verify the cached copies rather than trusting a bare stat - a download killed
 	// mid-write (before writeExec became atomic, or a disk/FS fault) can leave a
@@ -144,7 +160,15 @@ func ensure(ctx context.Context, dir string, log *slog.Logger, goos, goarch stri
 		return Cached(dir)
 	}
 	log.Info("ffmpeg/ffprobe not found locally - downloading a static build (one time)", "into", dir)
-	if err := dl(ctx, s, dir); err != nil {
+	err := dl(ctx, s, dir)
+	if errors.Is(err, errAssetGone) && s.masterURL != "" {
+		// BtbN no longer publishes the pinned branch: its master build works,
+		// with the in-process probe off (its version names no release); a later
+		// start fetches a release build in the background (replaceMaster).
+		log.Warn("the pinned ffmpeg "+btbnBranch+" build is gone; downloading BtbN's master build instead", "err", err)
+		err = dl(ctx, spec{combinedURL: s.masterURL, combinedKind: s.combinedKind}, dir)
+	}
+	if err != nil {
 		log.Warn("ffmpeg auto-download failed; running without it (will retry next start)", "err", err)
 		return Cached(dir)
 	}
@@ -226,24 +250,55 @@ func fetchRelease(ctx context.Context, dir, marker string, log *slog.Logger, s s
 }
 
 // promoteStaged moves a checked release build from <dir>/next into dir (the
-// background fetch of an earlier run). An incomplete or failing one is removed.
+// background fetch of an earlier run), ffprobe first (the one the in-process
+// probe needs). A stage that fails its check is removed; a rename that fails (a
+// locked executable on Windows) keeps what is left of the stage for the next
+// start, which swaps in what it still holds.
 func promoteStaged(ctx context.Context, dir string, log *slog.Logger) {
 	next := filepath.Join(dir, stagedDir)
 	if _, err := os.Stat(next); err != nil {
 		return
 	}
-	defer func() { _ = os.RemoveAll(next) }()
-	fm, fp, ok := verifiedPair(ctx, next, log)
-	if !ok {
+	// A stage holds both, checked as a pair, or one: what a swap stopped half
+	// way left. None (a download stopped part way) or a check failed: removed.
+	fm, fp := Cached(next)
+	pair := fm != "" && fp != ""
+	fm, fp = verified(ctx, fm, log), verified(ctx, fp, log)
+	if fm == "" && fp == "" || pair && (fm == "" || fp == "") {
+		_ = os.RemoveAll(next)
 		return
 	}
-	for _, p := range []string{fm, fp} {
+	for _, p := range []string{fp, fm} {
+		if p == "" {
+			continue
+		}
 		if err := os.Rename(p, filepath.Join(dir, filepath.Base(p))); err != nil {
-			log.Warn("could not swap in the ffmpeg release build; keeping the cached one", "err", err)
+			log.Warn("could not swap in the ffmpeg release build; trying again at the next start", "err", err)
 			return
 		}
 	}
+	_ = os.RemoveAll(next)
 	log.Info("swapped in the ffmpeg/ffprobe "+btbnBranch+" release build", "dir", dir)
+}
+
+// downloadPrefix names the temporary folders a download unpacks into, inside
+// the folder it fills, so one a stopped server left is found (and removed) at
+// the next start rather than left in the system's temp folder.
+const downloadPrefix = ".download-"
+
+// partialPrefix names the temporary file writeExec streams a tool into beside
+// its final path.
+const partialPrefix = ".partial-"
+
+// removeStaleDownloads removes what downloads into dir stopped part way left:
+// their unpack folders and a tool copy cut off before its rename (writeExec).
+func removeStaleDownloads(dir string) {
+	for _, prefix := range []string{downloadPrefix, partialPrefix} {
+		stale, _ := filepath.Glob(filepath.Join(dir, prefix+"*"))
+		for _, p := range stale {
+			_ = os.RemoveAll(p)
+		}
+	}
 }
 
 // verifiedPair returns dir's ffmpeg and ffprobe when both are there and pass
@@ -271,7 +326,7 @@ func verified(ctx context.Context, path string, log *slog.Logger) string {
 
 // download fetches and extracts ffmpeg + ffprobe into dir per the platform spec.
 func download(ctx context.Context, s spec, dir string) error {
-	tmp, err := os.MkdirTemp("", "audiosilo-ffmpeg-")
+	tmp, err := os.MkdirTemp(dir, downloadPrefix)
 	if err != nil {
 		return err
 	}
@@ -325,6 +380,9 @@ func fetchArchive(ctx context.Context, url, kind, destDir string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("download %s: %w", url, errAssetGone)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
@@ -403,7 +461,7 @@ func copyExec(src, dst string) error {
 // would then adopt forever, since a stat can't tell a partial file from a whole
 // one).
 func writeExec(path string, r io.Reader) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".partial-"+filepath.Base(path)+"-")
+	tmp, err := os.CreateTemp(filepath.Dir(path), partialPrefix+filepath.Base(path)+"-")
 	if err != nil {
 		return err
 	}

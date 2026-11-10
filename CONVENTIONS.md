@@ -1008,17 +1008,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rules (`ffRules`, read once per path from `-version`: 7.1 and 8.1 are known, they differ in MP3
   gapless durations and empty UTF-16 ID3 strings; any other release, a master build or a failing
   `-version` turns the probe off and ffprobe reads every file, as before; the start-up log says
-  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master, and
+  which, and `toolfetch` downloads BtbN's n8.1 branch build on Linux and Windows, never master (unless that
+  asset is gone, a 404, and no tools are cached: master's build then, the probe off, warned), and
   replaces a master build an older server cached without holding up the start: the cached build serves
   that run, the release build is fetched in the background into `<data>/tools/next` and swapped in at
-  the next start, a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269). Anything a reader does
+  the next start, ffprobe first (a rename that fails keeps the stage, finished at the following start),
+  a failed fetch retried no sooner than 24 h later (`.release-fetch-failed`), server#269; a download
+  unpacks in a `.download-*` folder inside the one it fills, removed at the next start if a stop left it). Anything a reader does
   not model exactly is `unsure` and that one file goes to ffprobe, silently (a debug line,
   `metadata.SetLogger`'s logger, names the file and the reason, a probe limit's included): VBR MP3 with no
   Xing/VBRI (decision 1: ffprobe's estimate kept), a concatenated MP3, a FLAC CUESHEET or ID3
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
   a chapter track whose one edit needs keyframes or a DTS shift (stss/ctts; its samples are cut
-  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter),
+  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter), a
+  track `mov_read_trak`'s sanity check calls a broken header (chunks but no stts/stsc entries or
+  no sample size or count, or samples but no chunks: FFmpeg then reads its duration in 1/90000,
+  server#276), an mvhd/mdhd timescale past INT32_MAX, a rescale past int64, an ID3v2.2 `CHA`
+  frame (FFmpeg's three-letter match reads it as CHAP),
   a crafted table past a bound (a chapter track over 65536 samples or with counts past its
   tables, MKV SimpleTags over 4096 or 8 deep, a compressed ID3 frame over 16 MiB), a read error,
   a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
@@ -1027,13 +1034,37 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   every block read, before inflating an ID3 frame or growing a repeated Vorbis key
   (`blockFile.check`) and, every 256 ticks, in the walks that loop without reading
   (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
-  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
-  nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
-  `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`; FFmpeg's `[mp3 @ 0x...]`
+  address dropped, server#272). The tag read and the narrator walk before the probe are bounded
+  too (`readFile`): the ffprobe run's timeout and the caller's context, and the byte budget; a
+  tag read out of time skips the probe (ffprobe, killable, answers; one that finished just before
+  its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
+  unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
+  only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
+  costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
+  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding process-wide
+  (`abandonedReads`; reads already under way can take it past that) a new read fails fast (`readsSaturated`, `reasonSaturated`), the file
+  not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
+  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`;
+  `Book.TagsUnread`) rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
+  length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
+  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many earlier reads
+  are stuck", on this library or another, with ffprobe or without), so the next scan reads it again (the stored
+  mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
+  path's names. With no
+  ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
+  (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
+  `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
+  alone, as an ffprobe time-out; a scan reads an unchanged book with no stored duration or codec
+  again once per server run (`Scanner.rereadUnprobed`), so a server that ran without ffprobe
+  gets its books' lengths from its first scan since. `metadata.ExtractTags` reads tags alone. A
+  key `applyProbe` starts reading joins `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
   keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
   `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
   release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
-  no ffprobe (`probe_golden_test.go`); `probe_live_test.go` compares the installed ffprobe
+  no ffprobe (`probe_golden_test.go`); both views come from one mapping (`viewOf` of a
+  `probeResult`: `probe()`'s for ffprobe, `readFile`'s, Extract's own opener, for the probe), so
+  the checks compare what Extract stores; `probe_live_test.go` compares the installed ffprobe
   (`AUDIOSILO_PROBE_DIRS` adds folders), and CI's `probe-drift` workflow runs it against the
   image's ffprobe (and weekly), failing on drift or a release with no rules. Adding a release:
   its rules where they differ, its golden, a `knownRules` entry. `cmd/probediff <dirs>` is the
@@ -1275,7 +1306,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `metadata.json`'s values (`books.abs_file`, below), then `book_enrichment`
   (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
   precedence (and of each field's source); `refreshEffective` writes its values to the
-  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
+  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS,
+  each column in `ftsText`'s form: Han, Hiragana and Katakana a character a token, since
+  unicode61 splits only on spaces and punctuation, server#178; `buildMatchQuery` makes a CJK
+  token a phrase of its characters, the last a prefix, and `ftsPhrase` writes the credit
+  filters' phrase the same way; `Catalog.IndexSearchText`, run by the launcher after
+  `KeySeries`, rewrites once the rows an older server wrote, gated by `server_state`
+  `search_text` = `searchTextVersion` (rules + `unicode.Version`), no migration)
   and the book page shows it as provenance, so the two can't disagree. `UpsertBook` runs
   `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
   rescan rewrites the scanned values and re-applies the edit before anything can read
@@ -1461,15 +1498,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FromPathLayout` reads the leaf too (its series, position and title part). The leaf's title
   stays the whole name in `DeriveFromPath` (`TitleNotSeries` reads the title part). The LibraForge
   benchmark's library of these (about 600 books): +39 auto-right, auto-wrong 8 to 7.
-  **Backfill of revisions 2 and 3**: a snapshot older than today's that a newer revision may read
-  otherwise (`Signature.NamesCheck`: before revision 2 a title `metadata.MaybeSeriesTitle` flags,
-  over the snapshot's title and series; before revision 3 a leaf `metadata.PathLeafSeries` reads)
+  **The tag reading** (`@rev` 4, server#175): a snapshot written before 2.4.0 and 2.5.0 read tags
+  as they do now (a series tag carrying its position, `metadata.SplitSeriesTag`; a title in any
+  script not generic, `IsGenericTitle`; the MP4 `\xa9nrt` item and a narrator tag over composer)
+  still holds the old reading; the snapshot carries the narrator too, so a backfill rewrites it.
+  **Backfill of revisions 2 to 4**: a snapshot older than today's that a newer revision may read
+  otherwise (`Signature.NamesCheck`, `namesCheck` by `revNumber`: before revision 2 a title
+  `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
+  `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
+  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
-  revision with its names unread). A current `@rev` 1 or 2 snapshot it doesn't flag
+  revision with its names unread). The reads run `readSlots` wide (`tagRead`, batched
+  `tagReadsPerSlot` per slot, applied before each backfill flush; one a Stop cuts short is dropped
+  for the next scan), so a large revision-4 backfill (every narrated book) costs one parallel tag
+  read each, once. A current `@rev` 1 to 3 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
-  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 or 2,
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 3,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
   snapshot of no revision stays until its next re-index or path reading. A stamped book is never
   tested again, so a later change that makes the reading change more books (`TitleNotSeries` more

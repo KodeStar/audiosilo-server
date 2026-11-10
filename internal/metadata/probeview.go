@@ -46,17 +46,14 @@ type ProbeGoldenAnswer struct {
 // the file to ffprobe (the view nil then); an error when the file can't be
 // opened.
 func ProbeInProcess(ctx context.Context, path, ffprobePath string) (*ProbeView, string, error) {
-	ff := ffprobeRules(ctx, ffprobePath)
-	if ff == ffNone {
-		return nil, "no rules for this ffprobe's release", nil
-	}
-	return probeView(path, ff)
+	return probeView(path, ffprobeRules(ctx, ffprobePath))
 }
 
 // ProbeRelease is the FFmpeg release ("7.1", "8.1") whose rules the probe
-// follows for the ffprobe at ffprobePath; "" when the probe is off for it.
+// follows for the ffprobe at ffprobePath (with "", none: noFFprobeRules); ""
+// when the probe is off for it.
 func ProbeRelease(ctx context.Context, ffprobePath string) string {
-	ff := ffprobeRules(ctx, ffprobePath)
+	ff := probeRules(ctx, ffprobePath)
 	for rel, r := range knownRules {
 		if r == ff && ff != ffNone {
 			return rel
@@ -65,34 +62,46 @@ func ProbeRelease(ctx context.Context, ffprobePath string) string {
 	return ""
 }
 
-// probeView is ProbeInProcess by ff's rules.
+// probeRules is the rules the probe follows for the ffprobe at ffprobePath: its
+// release's (ffprobeRules), or with "" (none) noFFprobeRules.
+func probeRules(ctx context.Context, ffprobePath string) ffRules {
+	if ffprobePath == "" {
+		return noFFprobeRules
+	}
+	return ffprobeRules(ctx, ffprobePath)
+}
+
+// probeView is ProbeInProcess by ff's rules. It reads the file as Extract
+// does (readFile: the tags, the narrator, then the probe through one block
+// cache), so the view checked is the answer Extract stores.
 func probeView(path string, ff ffRules) (*ProbeView, string, error) {
-	p, reason, err := probeFile(path, ff)
+	if ff == ffNone {
+		return nil, "no rules for this ffprobe's release", nil
+	}
+	p, reason, err := readFile(context.Background(), &Metadata{Format: fileFormat(path)}, path, ff, ProbeTimeout)
 	if err != nil || reason != "" {
 		return nil, reason, err
 	}
+	return viewOf(p), "", nil
+}
+
+// ProbeFFprobe is ffprobe's view of the file at path: probe's answer, the one
+// Extract stores, through the same viewOf as the in-process probe's.
+func ProbeFFprobe(ctx context.Context, path, ffprobePath string) (*ProbeView, error) {
+	p, err := probe(ctx, path, ffprobePath, ProbeTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return viewOf(p), nil
+}
+
+// viewOf is a probe's answer (in-process or ffprobe's) as ffprobe prints it.
+func viewOf(p *probeResult) *ProbeView {
 	v := &ProbeView{Duration: ffTime(p.Duration), Codec: p.Codec, Tags: probedTags(p.Tags)}
 	for _, c := range p.Chapters {
 		v.Chapters = append(v.Chapters, ProbeChapter{Start: ffTime(c.Start), End: ffTime(c.End), Title: c.Title})
 	}
-	return v, "", nil
-}
-
-// ProbeFFprobe is ffprobe's view of the file at path, as probe reads it.
-func ProbeFFprobe(ctx context.Context, path, ffprobePath string) (*ProbeView, error) {
-	out, err := runFFprobe(ctx, path, ffprobePath, ProbeTimeout)
-	if err != nil {
-		return nil, err
-	}
-	v := &ProbeView{Duration: out.Format.Duration}
-	if len(out.Streams) > 0 {
-		v.Codec = out.Streams[0].CodecName
-	}
-	v.Tags = probedTags(normalizeTags(out.Format.Tags))
-	for _, c := range out.Chapters {
-		v.Chapters = append(v.Chapters, ProbeChapter{Start: c.StartTime, End: c.EndTime, Title: c.Tags.Title})
-	}
-	return v, nil
+	return v
 }
 
 // probeTagKeys are the format tags applyProbe reads: the only ones that reach

@@ -56,6 +56,13 @@ func newAudibleSyncEnv(t *testing.T) *audibleSyncEnv {
 		title("B000000003", "Elsewhere", "available", 0, "")); code != http.StatusOK {
 		t.Fatalf("put titles: %d %s", code, out)
 	}
+	// The fixtures are seconds of audio (the in-process probe reads their length
+	// with no ffprobe); the books are given the titles' runtime, so Audible's
+	// places hours in are this edition's (audibleRuntimeAgrees).
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE books SET duration = 36000 WHERE library_id = ? AND rel_path IN (?, ?)`,
+		b.lib.ID, mistbornBook, cradleBook); err != nil {
+		t.Fatal(err)
+	}
 	setAudible(t, b.testEnv, b.adminTok, true)
 	s.setSync(t, true)
 	return s

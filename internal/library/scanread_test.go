@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +109,45 @@ func newTestScanner(t *testing.T, root, ffprobe string, concurrency int) (*Scann
 	return s, cat, lib, db
 }
 
+// tableLines is q's rows, one line each prefixed with table, the id columns
+// left out.
+func tableLines(t *testing.T, db *store.DB, table, q string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, _ := rows.Columns()
+	var lines []string
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		b.WriteString(table + ":")
+		for i, v := range vals {
+			if cols[i] == "id" || cols[i] == "book_id" {
+				continue
+			}
+			if raw, ok := v.([]byte); ok {
+				v = string(raw)
+			}
+			fmt.Fprintf(&b, " %s=%v", cols[i], v)
+		}
+		lines = append(lines, b.String())
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return lines
+}
+
 // dumpIndex is every row of the scan's tables, one line each, sorted: a file's
 // and a chapter's book named by its path, not its id (ids follow discovery's
 // order, which is the walk's map order, the same for a serial scan run twice).
@@ -119,36 +160,7 @@ func dumpIndex(t *testing.T, db *store.DB) string {
 	}
 	var lines []string
 	for table, q := range queries {
-		rows, err := db.QueryContext(context.Background(), q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cols, _ := rows.Columns()
-		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				t.Fatal(err)
-			}
-			var b strings.Builder
-			b.WriteString(table + ":")
-			for i, v := range vals {
-				if cols[i] == "id" || cols[i] == "book_id" {
-					continue
-				}
-				if raw, ok := v.([]byte); ok {
-					v = string(raw)
-				}
-				fmt.Fprintf(&b, " %s=%v", cols[i], v)
-			}
-			lines = append(lines, b.String())
-		}
-		if err := rows.Close(); err != nil {
-			t.Fatal(err)
-		}
+		lines = append(lines, tableLines(t, db, table, q)...)
 	}
 	slices.Sort(lines)
 	// ffprobe names its decoder by address in a message ("[mp3 @ 0xaac820000]"),
@@ -385,29 +397,52 @@ const probeAnswer = `{"format":{"duration":"1.500000"},"streams":[{"codec_name":
 
 // A file whose ffprobe runs out of time while others are read beside it (a slow
 // disk shared by several reads) is read again on its own, and a healthy file
-// read in time then is no read problem. The stand-in hangs while another of its
-// runs is alive and answers when it runs alone; its first run waits for a
-// second to start (up to 3 s), so two always overlap however busy the machine
-// is. Nothing turns on how fast a run starts: the time-out (5 s) is only ever
-// reached by a run that hangs.
+// read in time then is no read problem. The stand-in for the read runs out of
+// time at once whenever another read is under way beside it, and the first read
+// waits until a second has started, so two always overlap however busy the
+// machine is; a read alone is the real one. Nothing turns on a clock.
 func TestScanRetriesTimedOutProbeAlone(t *testing.T) {
 	t.Parallel()
-	running, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
-	probe := stubProbe(t, fmt.Sprintf(`touch %[1]q/$$
-alive() { n=0; for f in %[1]q/*; do kill -0 "${f##*/}" 2>/dev/null && n=$((n+1)); done; echo $n; }
-if [ "$(alive)" -gt 1 ]; then echo hung >> %[2]q; exec sleep 30; fi
-if mkdir %[1]q/.first 2>/dev/null; then
-  i=0; while [ "$(ls %[1]q | wc -l)" -lt 2 ] && [ $i -lt 60 ]; do sleep 0.05; i=$((i+1)); done
-fi
-rm -f %[1]q/$$
-echo '%[3]s'`, running, log, probeAnswer))
+	probe := stubProbe(t, "echo '"+probeAnswer+"'")
 	s, lib, db := timeoutScanner(t, smallLibrary(t, 2, 2), probe, 4, 5*time.Second)
+	var (
+		mu         sync.Mutex
+		under      int
+		first      sync.Once
+		overlapped = make(chan struct{})
+		closeOnce  sync.Once
+		timedOut   atomic.Int32
+	)
+	s.readFile = func(ctx context.Context, p, ffprobe string, timeout time.Duration) *metadata.Metadata {
+		mu.Lock()
+		under++
+		beside := under > 1
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			under--
+			mu.Unlock()
+		}()
+		if beside {
+			closeOnce.Do(func() { close(overlapped) })
+			timedOut.Add(1)
+			return &metadata.Metadata{ProbeErr: fmt.Errorf("%w after %s", metadata.ErrProbeTimeout, timeout)}
+		}
+		first.Do(func() {
+			select {
+			case <-overlapped:
+			case <-ctx.Done():
+			case <-time.After(time.Minute): // the scan never read two at once: failed below
+			}
+		})
+		return extractFile(ctx, p, ffprobe, timeout)
+	}
 	res, err := s.Scan(context.Background(), *lib)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hung, _ := os.ReadFile(log); len(hung) == 0 {
-		t.Fatal("no ffprobe run timed out: the scan never read files side by side")
+	if timedOut.Load() == 0 {
+		t.Fatal("no read timed out: the scan never read files side by side")
 	}
 	if res.Errors != 0 || res.Added != 2 {
 		t.Fatalf("added %d, %d read problems", res.Added, res.Errors)
