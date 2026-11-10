@@ -65,8 +65,9 @@ var (
 	// ErrMemberLimit is adding a member at the cap.
 	ErrMemberLimit = errors.New("you have the most household members you can add")
 	// ErrInvalidName is a member name that is empty or too long after trimming,
-	// or holds control characters or invalid UTF-8.
-	ErrInvalidName = fmt.Errorf("the name must be 1 to %d characters, with no control characters", MaxMemberName)
+	// or holds control or invisible characters (invisibleRune) or invalid
+	// UTF-8, or nothing visible.
+	ErrInvalidName = fmt.Errorf("the name must be 1 to %d characters, with no control or invisible characters", MaxMemberName)
 	// ErrInvalidKind is a kind other than MemberKid or MemberGrownup.
 	ErrInvalidKind = errors.New(`kind must be "kid" or "grownup"`)
 	// ErrInvalidAccess is an access other than MemberAll or MemberCollections.
@@ -153,14 +154,41 @@ type NewMember struct {
 }
 
 // cleanMemberName trims a member's name and checks it: 1 to MaxMemberName
-// characters, valid UTF-8, no control characters. ErrInvalidName otherwise.
+// characters, valid UTF-8, no control or invisible characters, at least one
+// visible one (a letter, number, symbol or punctuation). ErrInvalidName
+// otherwise. Right-to-left scripts are names like any other; only the
+// characters that hide text or reorder what follows them are refused
+// (server#190), since the name is shown to the owner and on the member's
+// devices beside other text.
 func cleanMemberName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	n := utf8.RuneCountInString(name)
-	if n == 0 || n > MaxMemberName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+	if n == 0 || n > MaxMemberName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) ||
+		strings.ContainsFunc(name, invisibleRune) || !strings.ContainsFunc(name, visibleRune) {
 		return "", ErrInvalidName
 	}
 	return name, nil
+}
+
+// invisibleRune is a character that shows nothing or changes how the text
+// around it is ordered: the bidi embeddings, overrides, isolates and marks,
+// zero-width spaces and joiners other than ZWJ/ZWNJ (which emoji sequences and
+// some scripts need), the soft hyphen, the BOM and the Hangul fillers.
+func invisibleRune(r rune) bool {
+	switch {
+	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069, // embeddings, overrides, isolates
+		r == 0x200E, r == 0x200F, r == 0x061C, // LRM, RLM, ALM
+		r == 0x200B, r >= 0x2060 && r <= 0x2064, r == 0xFEFF, r == 0x180E, // zero-width space, word joiner, invisible operators, BOM, Mongolian vowel separator
+		r == 0x00AD, r == 0x034F, // soft hyphen, combining grapheme joiner
+		r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0: // Hangul fillers
+		return true
+	}
+	return false
+}
+
+// visibleRune is a letter, number, symbol or punctuation.
+func visibleRune(r rune) bool {
+	return unicode.In(r, unicode.L, unicode.N, unicode.S, unicode.P) && !invisibleRune(r)
 }
 
 func checkKind(kind string) error {

@@ -2391,6 +2391,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; the account limiter, as
   `gateSelfService`'s, charged after the API-key, demo and member refusals;
   403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
+  a name is 1-40 characters with no control or invisible character (`auth.invisibleRune`: bidi
+  controls and marks, zero-width spaces, the BOM, fillers; ZWJ/ZWNJ and right-to-left scripts are
+  fine) and something visible, server#190;
   username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET

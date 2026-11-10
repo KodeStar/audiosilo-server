@@ -171,6 +171,12 @@ func TestMembers_CreateRefused(t *testing.T) {
 		{"no name", adam.ID, NewMember{Name: "  ", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
 		{"long name", adam.ID, NewMember{Name: strings.Repeat("é", 41), Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
 		{"control", adam.ID, NewMember{Name: "Ev\x07ie", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"bidi override", adam.ID, NewMember{Name: "Evie\u202Egpj.exe", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"bidi isolate", adam.ID, NewMember{Name: "\u2067Evie", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"right-to-left mark", adam.ID, NewMember{Name: "Evie\u200F", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"zero-width space", adam.ID, NewMember{Name: "Ev\u200Bie", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"only a joiner", adam.ID, NewMember{Name: "\u200D", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"Hangul filler", adam.ID, NewMember{Name: "\u3164", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
 		{"kind", adam.ID, NewMember{Name: "Evie", Kind: "teen", Access: MemberAll}, testPolicy, ErrInvalidKind},
 		{"access", adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: "some"}, testPolicy, ErrInvalidAccess},
 		{"share fails", adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
@@ -633,5 +639,22 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 	}
 	if _, _, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil {
 		t.Fatalf("owner's pairing for the kid = %v", err)
+	}
+}
+
+// server#190: right-to-left scripts, joined emoji and ZWNJ (Persian) are names
+// like any other; only the characters that hide or reorder text are refused.
+func TestMemberNameAllowsScriptsAndEmoji(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"Evie", "\u0645\u0631\u064a\u0645", "\u05e0\u05d5\u05e2\u05d4", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "\U0001F468\u200D\U0001F469\u200D\U0001F467 Kids", "Zo\u00eb", "\u674e\u660e"} {
+		got, err := cleanMemberName("  " + name + " ")
+		if err != nil || got != name {
+			t.Errorf("%q: %q %v", name, got, err)
+		}
+	}
+	for _, name := range []string{"Evie\u202E", "\u2066x", "a\u200Bb", "\uFEFFEvie", "Ev\u00ADie", "\u200D\u200C"} {
+		if _, err := cleanMemberName(name); !errors.Is(err, ErrInvalidName) {
+			t.Errorf("%q: %v, want ErrInvalidName", name, err)
+		}
 	}
 }
