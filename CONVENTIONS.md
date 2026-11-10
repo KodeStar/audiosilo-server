@@ -941,11 +941,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /libraries/{id}/readalong?path=<the book's own path>` serves the book's `.audiosilo/readalong.json`
   (see Bridge attachments) as `application/json`, gzipped for a client that accepts it
   (`spa.AcceptsGzip`; `Vary: Accept-Encoding`), `Cache-Control: private, no-cache` and a strong ETag of
-  the file's size and mtime (the same for both encodings; 304 on a match). **Header auth only**, as
+  the file's size and mtime, `-gz` for the gzip answer (chosen by the request's Accept-Encoding before
+  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
   a real `.audiosilo` folder that isn't ignored, a regular file never through a link, read once
-  more when the Bridge renamed a new map in as it was opened: `metadata.ErrReplacedWhileOpening`) and
+  more when the Bridge renamed a new map in as it was opened: `metadata.readRegularFileInfo`'s
+  `retrySwap`, which every attachment, `feed.json` and `library.json` read shares since server#265) and
   checks it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`,
   the ebook's digest the stored one only while the file on disk still has the signature it was
   computed for, one stat against `ebook_hashed_sig`: `library.Scanner.EbookDigestNow`, else hashed now and

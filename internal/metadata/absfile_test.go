@@ -2,6 +2,8 @@ package metadata
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -170,6 +172,40 @@ func TestHTMLText(t *testing.T) {
 	} {
 		if got := htmlText(in); got != want {
 			t.Errorf("htmlText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRetrySwap: a file replaced while being opened (the Bridge
+// renaming a new one into place) is read once more; a second replacement in a row, or
+// any other failure, is the answer.
+func TestRetrySwap(t *testing.T) {
+	t.Parallel()
+	swapped := fmt.Errorf("m: %w", ErrReplacedWhileOpening)
+	other := errors.New("permission denied")
+	for _, tc := range []struct {
+		name  string
+		errs  []error
+		want  error
+		calls int
+	}{
+		{"read", []error{nil}, nil, 1},
+		{"swapped once", []error{swapped, nil}, nil, 2},
+		{"swapped twice", []error{swapped, swapped}, ErrReplacedWhileOpening, 2},
+		{"other failure", []error{other}, other, 1},
+	} {
+		calls := 0
+		read := func() ([]byte, fs.FileInfo, error) {
+			err := tc.errs[calls]
+			calls++
+			if err != nil {
+				return nil, nil, err
+			}
+			return []byte("{}"), nil, nil
+		}
+		data, _, err := retrySwap(read)
+		if calls != tc.calls || !errors.Is(err, tc.want) || (tc.want == nil && string(data) != "{}") {
+			t.Errorf("%s: %d calls, %q, %v; want %d calls, %v", tc.name, calls, data, err, tc.calls, tc.want)
 		}
 	}
 }

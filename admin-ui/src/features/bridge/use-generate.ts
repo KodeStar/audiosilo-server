@@ -11,7 +11,8 @@ import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
 import {
   generatePollMs,
-  isFileKind,
+  changesBookMeta,
+  writesBookFiles,
   KIND_DETECT,
   KIND_GENERATE,
   KIND_READALONG,
@@ -66,9 +67,11 @@ export function useBookGenerateJob(
     // Whether a job is open changed with it, and, for a job that writes the
     // book's files, what the book has (a share or a correction only files issues).
     void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(libraryId, path) });
-    if (!isFileKind(job.kind)) return;
+    if (!writesBookFiles(job.kind)) return;
     void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
-    void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
+    if (changesBookMeta(job.kind)) {
+      void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
+    }
   }, [job, qc, libraryId, path]);
   return { job, jobs: query.data?.jobs };
 }

@@ -140,6 +140,8 @@ func TestReadalongServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	etag := fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano())
+	gzETag := strings.TrimSuffix(etag, `"`) + `-gz"` // the gzip answer's own (server#265)
+	// The default client asks for gzip and undoes it.
 	for _, tok := range []string{e.annTok, key} {
 		resp, body := e.do(t, "GET", e.at("readalong", ebookBook), tok, "")
 		if resp.StatusCode != http.StatusOK || body != string(e.maps[ebookBook]) {
@@ -148,7 +150,7 @@ func TestReadalongServed(t *testing.T) {
 		for name, want := range map[string]string{
 			"Content-Type":  "application/json; charset=utf-8",
 			"Cache-Control": "private, no-cache",
-			"ETag":          etag,
+			"ETag":          gzETag,
 		} {
 			if got := resp.Header.Get(name); got != want {
 				t.Errorf("%s = %q, want %q", name, got, want)
@@ -175,9 +177,37 @@ func TestReadalongServed(t *testing.T) {
 	if plain, _ := io.ReadAll(zr); !bytes.Equal(plain, e.maps[ebookBook]) {
 		t.Fatalf("gunzipped = %.80s", plain)
 	}
+	if got := resp.Header.Get("ETag"); got != gzETag {
+		t.Fatalf("gzip ETag = %q, want %q", got, gzETag)
+	}
+	// Plain: the identity ETag, and each revalidates only its own answer.
+	plain := func(inm string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("GET", e.srv.URL+e.at("readalong", ebookBook), nil)
+		req.Header.Set("Authorization", "Bearer "+e.annTok)
+		req.Header.Set("Accept-Encoding", "identity")
+		if inm != "" {
+			req.Header.Set("If-None-Match", inm)
+		}
+		resp, err := (&http.Transport{DisableCompression: true}).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+	if resp := plain(""); resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != etag || resp.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("plain = %d ETag %q encoding %q", resp.StatusCode, resp.Header.Get("ETag"), resp.Header.Get("Content-Encoding"))
+	}
+	if resp := plain(etag); resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("plain revalidation = %d, want 304", resp.StatusCode)
+	}
+	if resp := plain(gzETag); resp.StatusCode != http.StatusOK {
+		t.Fatalf("plain with the gzip ETag = %d, want 200", resp.StatusCode)
+	}
 	if resp, _ := e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "",
-		map[string]string{"If-None-Match": etag}); resp.StatusCode != http.StatusNotModified {
-		t.Fatalf("revalidation = %d, want 304", resp.StatusCode)
+		map[string]string{"If-None-Match": gzETag}); resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("gzip revalidation = %d, want 304", resp.StatusCode)
 	}
 	if resp, body := e.do(t, "GET", e.at("readalong", looseBook), e.annTok, ""); resp.StatusCode != http.StatusOK ||
 		body != string(e.maps[looseBook]) {

@@ -143,7 +143,8 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 	case err != nil:
 		return nil, nil, err
 	}
-	data, fi, err := readRetryingSwap(metadata.ReadReadalongFile, filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
+	// metadata reads a map the Bridge renamed in mid-read once more.
+	data, fi, err := metadata.ReadReadalongFile(filepath.Join(attDir, prefix+metadata.AttachmentReadalong))
 	switch {
 	case err == nil:
 		return data, fi, nil
@@ -151,17 +152,4 @@ func ReadReadalongMap(lib catalog.Library, bookPath string, folder bool) ([]byte
 		return nil, nil, fmt.Errorf("%w: %w", ErrNoReadalong, err)
 	}
 	return nil, nil, err
-}
-
-// readRetryingSwap reads the file at p with read, once more when it was
-// replaced while being opened (metadata.ErrReplacedWhileOpening): the Bridge
-// renames a new map into place ("Make again"), and a request that met the
-// rename reads the new file rather than failing. A second replacement in a row
-// is the error.
-func readRetryingSwap(read func(string) ([]byte, fs.FileInfo, error), p string) ([]byte, fs.FileInfo, error) {
-	data, info, err := read(p)
-	if errors.Is(err, metadata.ErrReplacedWhileOpening) {
-		data, info, err = read(p)
-	}
-	return data, info, err
 }
