@@ -68,8 +68,7 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 // A series that ends at the book gives way to a pending folder after it in the
 // series' own folder (server#254): in a numbered series no scan has reached,
 // the series knows only the books opened so far, and the next one is still a
-// folder. Whatever Next
-// names is in the caller's scope.
+// folder. Whatever Next names is in the caller's scope.
 func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
 	work, placed := a.communityNext(ctx, lib.ID, book)
 	if work != nil && work.Local != nil {
@@ -195,11 +194,10 @@ func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalo
 // and none outside it (catalog.SharesSeries).
 func seriesFolder(book *catalog.Book, folder map[string]catalog.Book) bool {
 	others := 0
-	for p := range folder {
+	for p, b := range folder {
 		if p == book.RelPath {
 			continue
 		}
-		b := folder[p]
 		if !catalog.SharesSeries(book, &b) {
 			return false
 		}
