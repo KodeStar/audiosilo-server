@@ -58,6 +58,9 @@ type Scanner struct {
 	// batched, when set (tests), hears each book a scan takes into its write
 	// batch, with the batch's length then.
 	batched func(n int)
+	// readFile, when set (tests), stands in for each scan read's
+	// metadata.ExtractTimeout (readSlots.readFile).
+	readFile func(ctx context.Context, absPath, ffprobePath string, timeout time.Duration) *metadata.Metadata
 
 	// The files this server has seen ffprobe reject (problemCleared), by
 	// absolute path.
@@ -397,6 +400,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// later scans don't test them again.
 	var revBackfill []string
 	slots := newReadSlots(s.readers(), s.probeTimeout)
+	if s.readFile != nil {
+		slots.readFile = s.readFile
+	}
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
