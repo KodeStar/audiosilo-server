@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -117,5 +118,47 @@ func TestClaimDueFailsLostPrivateRequest(t *testing.T) {
 	got, err := restarted.Job(ctx, j.ID)
 	if err != nil || got.State != StateFailed {
 		t.Fatalf("lost private request = %+v, %v; want failed", got, err)
+	}
+}
+
+// server#179: a private feed is its requester's credential. Once their account
+// is deleted (requested_by goes NULL), their queued request is failed before a
+// claim instead of being followed for nobody; another listener's stays.
+func TestDeletedUsersPrivateSubscribeIsNotClaimed(t *testing.T) {
+	t.Parallel()
+	q := podcastQueue(t)
+	ctx := context.Background()
+	res, err := q.db.ExecContext(ctx, `INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES('gone','','user','t','t')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, _ := res.LastInsertId()
+	lost, _, err := q.EnqueueSubscribe(ctx, q.lib, gone, "https://example.com/rss?secret=GONE", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, gone); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := q.ClaimFor(ctx, q.token, nil, 0); claim != nil || err != nil {
+		t.Fatalf("claim = %+v, %v; want none", claim, err)
+	}
+	got, err := q.Job(ctx, lost.ID)
+	if err != nil || got.State != StateFailed || !strings.Contains(string(got.Result), "request_expired") {
+		t.Fatalf("deleted user's request = %+v, %v; want failed", got, err)
+	}
+	q.secretMu.Lock()
+	held := len(q.privateURLs)
+	q.secretMu.Unlock()
+	if held != 0 {
+		t.Fatalf("its feed URL is still held (%d)", held)
+	}
+	kept, _, err := q.EnqueueSubscribe(ctx, q.lib, q.admin, "https://example.com/rss?secret=KEPT", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := q.ClaimFor(ctx, q.token, nil, 0)
+	if err != nil || claim == nil || claim.ID != kept.ID || !strings.Contains(string(claim.Params), "KEPT") {
+		t.Fatalf("a live user's request = %+v, %v; want claimed", claim, err)
 	}
 }

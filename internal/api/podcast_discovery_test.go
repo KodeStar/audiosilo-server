@@ -443,6 +443,11 @@ func TestOPMLImportRefusals(t *testing.T) {
 	if resp.Header.Get("Retry-After") != "1" {
 		t.Fatal("busy Retry-After")
 	}
+	// server#179: the busy answer gave its token back, so the retry it asks
+	// for runs once a slot frees, rather than meeting 429.
+	b.api.opml.slots.Release()
+	resp, body = b.doHeaders(t, "POST", route, b.userTok, valid, h)
+	wantErr(t, resp, body, 200, "")
 	// The module off.
 	b.api.opml = newOPMLTransfers()
 	podcastsModule(t, b, false)

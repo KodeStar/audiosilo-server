@@ -2861,7 +2861,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `podcast`; reads do not. Five open subscribes per user, deduped by URL hash and user. Private
   URLs live only in the Bridge service's volatile memory and its claim reply; stored params keep
   an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
-  display labels are redacted, a restart expires unclaimed requests, and deleting a library keeps only
+  display labels are redacted, a restart expires unclaimed requests (so does deleting the
+  requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
   the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
   errors, progress and results are redacted before storage and never notify. The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
@@ -2984,7 +2985,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
   Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
-  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1). The export (`catalog.PodcastExport`: current
+  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import refunds its token, so the retry runs). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
   dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an

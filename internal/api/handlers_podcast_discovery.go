@@ -299,6 +299,9 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	body, err := opml.ReadBody(r.Body)
 	if err == nil {
 		if !a.opml.slots.TryAcquire() {
+			// The import never ran: its token goes back, so the retry
+			// Retry-After asks for isn't refused as over the budget.
+			a.opml.imports.Refund(quotaKey(r))
 			writeNoStoreError(w, http.StatusServiceUnavailable, "opml_busy", "OPML transfers are busy. Try again shortly.", 1)
 			return
 		}
