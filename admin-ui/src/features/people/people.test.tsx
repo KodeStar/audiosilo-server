@@ -392,7 +392,11 @@ describe('a person', () => {
     // sam has no password: the way back is a new invite.
     expect(within(dialog).getByText(/pairing with a new invite/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
-    expect(await screen.findByText('Signed sam out of 1 device')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'Signed sam out of 1 device, and any household members signed in on it',
+      ),
+    ).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/users/2/sign-out')).toBe(
       true,
     );
@@ -454,6 +458,10 @@ describe('a person', () => {
     const dialog = await screen.findByRole('dialog', { name: "Change sam's password" });
     expect(
       within(dialog).getByText(/Their phones, tablets and browsers are signed out/),
+    ).toBeInTheDocument();
+    // server#285: members signed in on those devices end with them.
+    expect(
+      within(dialog).getByText(/Household members signed in on those devices are signed out too/),
     ).toBeInTheDocument();
     await waitFor(() => expect(devicesReads()).toBeGreaterThan(0));
     const before = devicesReads();
