@@ -802,7 +802,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `SetRating` / `DeleteRating`, the queue (`AddToQueue`, `SetQueue`, `RemoveFromQueue`),
   `SaveReadingProgress`, `SyncListening` (Sync v2: `listening_events`, progress, sessions, history), `RecordServerEvent`,
   the Bridge's Audible title lists (`PutAudibleTitles`: `audible_titles` rows and the account's `last_poll_at`, a
-  complete poll's `refused_at` cleared), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
+  complete poll's `refused_at` cleared and `refusal_ended_at` stamped), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
   `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
   `PutMetaCache`, the upcoming releases job's tables
   (`upcoming_owned`, `upcoming_series`, `meta_series`, `upcoming_items`, `upcoming_announced`: derived,
@@ -971,7 +971,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
+  failed partway, a full disk or a read error, is not one; a run its own timeout killed is, server#289, the server
+  shutting down is not) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
   environment's, an EIO at open, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
   as they are for no regular file at the path (a 404),
   so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
@@ -2975,8 +2976,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `last_queued_at`) and `audible_titles` (account CASCADE + asin; title, authors/series JSON, release_date,
   runtime_s, state `available`|`preorder`|`unavailable`|`gone`, reason, the match `match_library_id` /
   `match_path` / `match_how` (`asin`|`fuzzy`): path-keyed, **no FK**, nulled by `DeleteLibrary` (in the
-  library's own delete transaction, so no titles call matches into it between), moved by `moveBookState`
-  and by a join (`joinBookState`, onto the joined book); plus the console's later columns rejected,
+  library's own delete transaction, so no titles call matches into it between), moved with a moved book's
+  places (`moveAudibleTitles`, `MoveDurableState`'s per-user transaction) and by a join (`JoinDurableState`, onto the
+  joined book); plus the console's later columns rejected,
   ignored, dest_path, import_job_id, which a titles PUT never overwrites). **Paused** = `library_id` NULL
   (the library was deleted, its open poll cancelled with `bridge.CancelAudiblePaused`): the scheduler
   skips it and Check now is 409 `account_paused` until the Bridge maps it again. **Bridge routes** (bridge
@@ -3352,8 +3354,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   to apply opens no writer transaction.
   A bad EVENT never fails the batch: each is decoded on its own, strictly (`DecodeSyncEvents`), so a wrong type,
   an unknown field, or a listen without a number for `from_pos` or `to_pos` (a null would read as 0:00) is that
-  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, server#289; every
-  path-addressed route answers one with 400 `path is too long`, `pathInScope`). The handler resolves each distinct
+  event's `rejected` `invalid`, as is a `path` over `MaxPathBytes` (4096 bytes as sent, `relpath.MaxBytes`, server#289;
+  every path-addressed route answers one with 400 `path is too long`: `pathInScope`, `pathTooLong` for a route taking a
+  path outside it (the admin's folder override, browse, a list's remove, the Bridge's book read), `feed.ShowPath` /
+  `EpisodePath` for a podcast's; before the library is looked up, server#291, so an unknown one answers the 400 and an
+  event's over-cap path is `invalid` before any lookup). The handler resolves each distinct
   `(library_id, path)` as PUT progress does (`scopedPathIn`: 403 -> `no_access`, 404 -> `not_found`, a path
   cleaning to nothing or over the cap -> `invalid`; then `progressPath`; then `SyncBookAt`, the book's length and its files'
   offsets in current order), all reads before the one write. `SyncListening` is ONE `WithUserStateTx`: checks
@@ -3386,8 +3391,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a finished row for its device (so the restart span after it resolves on that device's own row, not as
   diverged from the device that finished it; an unfinish of another device's unfinished row takes nothing, so
   that device's place stays and this device's next base-0 span still diverges from it); both bump the version.
+  A `finish` (applied or `older`, not a furthest-only batch's) marks the token's session on the book finished
+  when its last span ended within `SessionGap` before it (`finishSession`, server#284), opening none.
   Every stored listen counts, whatever its place did: `recordSpan` (the token's session begun by the span's
-  start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`; a
+  start with the latest last save, `latestSession`, extended within `SessionGap` or by `continuousPlayback`, its place,
+  length and speed taken only from a span not older than its last save, server#284; a
   span from before a household switch continues the session before it; `listenedBetween`'s clip of the span;
   `transcoded` only for a span ending within `livePlaying`) and history (extends the newest row on the book
   that ended 0-60 s before the span's start, 2 s overlap allowed, and within 5 s of its start, however many
@@ -3508,7 +3516,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   showed then). "Don't sync this book" is `audible_titles.no_sync`
   (`0066`; `PATCH /admin/audible/titles/{account}/{asin}` `{no_sync}`, audited, kept by a poll like `rejected` and
   `ignored`); it is the sync's alone, backups never read it (the registry's `ignored` still keeps a title out of
-  backups). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not no_sync, not `gone`. **Audible to
+  backups). A title syncs when `syncTitleSQL`: matched, not rejected, not ignored, not no_sync, not `gone`, not
+  `preorder` (bridge#60: the poll may match a preorder to another edition on disk, and Audible holds no place for an
+  unreleased ASIN; released, it syncs, the re-match trigger offering its book's place again, `0071`). **Audible to
   here**: `audible/scheduler.go` `queueSyncs` (while the Bridge offers the kind) queues one `audible.sync` per
   `DueAudibleSyncs` account (sync on, not paused, `refused_at` NULL, `bridgeUserSQL`, `sync_queued_at` older than
   `bridge.AudibleSyncEvery`, 15 min) at priority -10, none for an account with no synced title; params
@@ -3521,8 +3531,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Bridge drops a left-out title now; a sync the Bridge already runs keeps its titles). Ended (`OnEnded`, `FoldAudibleSync`): a sync that read Audible's places sets
   `last_sync_at` (`bridge.AudibleSynced`: done, its result neither `waiting` nor `sync_off`, the Bridge's result
   fields, hand-mirrored); failed with code `audible_refused` (result `code`, or an `audible_refused:` error prefix,
-  `AudibleSyncCode`; `audible_sign_in`, the Bridge's transient sign-in refusal, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
-  complete poll (`PutAudibleTitles` final: Audible answered the account). The Bridge posts the places to `POST
+  `AudibleSyncCode`; `audible_sign_in`, `bridge.SyncAudibleSignIn`, the Bridge's transient sign-in refusal, a sync's code
+  only, is an ordinary failure) sets `refused_at`, cleared by any account PUT of the Bridge's (a fresh sign-in, an edit) or a
+  complete poll (`PutAudibleTitles` final: Audible answered the account), both stamping `refusal_ended_at` (`0071`):
+  a refused sync claimed in an earlier second than that (`refusalEndedSince`; `claimed_at` is whole seconds, so one
+  in the same second still marks it) is from before the fresh sign-in and marks nothing (server#303). The Bridge posts the places to `POST
   /bridge/audible/accounts/{account}/listening` `{sent_at, events}` (bridge token only, header only; body strict,
   `sent_at` required, the Sync v2 event shapes and limits): the batch is `SyncBatch{UserID: the account's person,
   DeviceID: "audible:<account>", DeviceName: "Audible (<label or STORE>)", TokenID: 0, FurthestOnly: true}`, set by
@@ -3530,7 +3543,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   resolved under the PERSON's scopes (`userPathResolver`, `catalog.UserScopes`: no access is `no_access`), then must
   be a synced title's match (`AudibleSyncBooks`, else `rejected` `not_synced`; `rejected` `duration_mismatch`, listen
   and finish alike, when no title on the book has an Audible `runtime_s` within 5% of the longer plus 2 min of the
-  indexed book's duration, `audibleRuntimeAgrees`: matched to another recording; either unknown agrees). **FurthestOnly** (`furthestListen`): a
+  book's length, `audibleRuntimeAgrees`: matched to another recording; the length is the indexed duration, else the
+  person's own row's, the feed's rule, server#303; either unknown agrees). **FurthestOnly** (`furthestListen`): a
   listen more than 1 s (`furthestSlack`) ahead of the stored place applies over any device's row whatever its time
   (the row's `updated_at` never moves back, its playback speed and offer kept; the player's own reconcile then moves
   or offers, and a device's diverged span offers Audible's place by name); at or behind it, or on a finished row,
@@ -3561,8 +3575,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   UPDATE OF position, duration, finished, version, device_id or updated_at (so no write path can miss it; free in
   the user-state rule, the counter's `seq` too), existing rows numbered in updated_at order. Two triggers on
   `audible_titles` (a title inserted with a match; its match changed, synced again (`no_sync`, `rejected`, `ignored`
-  cleared, back from gone) or its `runtime_s` changed) move the person's row on that book to the next number, so a
-  newly matched or re-synced book's existing place (or one left out for a length that may agree now) is offered to Audible. A row written late with
+  cleared, back from gone or released from preorder, `0071`) or its `runtime_s` changed) move the person's row on that
+  book to the next number, so a newly matched or re-synced book's existing place (or one left out for a length that may
+  agree now) is offered to Audible. A move or join moves the book's titles in its per-user transaction, after the
+  places (`moveAudibleTitles`, server#303), so the trigger offers the moved book's place, never a row an earlier book
+  left at the new path, and a carry that fails leaves the titles where they were. A row written late with
   an earlier `updated_at` (an offline backlog, a diverged apply or late finish keeping the later time, a client's
   clock behind) is still fed; the row's own `updated_at` is what the feed sends. Console:
   Account settings... (`account-settings-button.tsx`, renamed from Backup settings) holds the sync switch, the
