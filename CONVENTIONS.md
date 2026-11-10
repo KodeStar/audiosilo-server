@@ -983,9 +983,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one; a run its own timeout killed is, server#289, the server
-  shutting down is not) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
-  environment's, an EIO at open, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
+  failed partway, a full disk or a read error, is not one, nor one whose log names an I/O error before any
+  output: `readFailed`, server#212; a run its own timeout killed is, server#289, the server shutting down is not)
+  is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
+  environment's, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
   as they are for no regular file at the path (a 404),
   so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
   running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -379,6 +380,39 @@ func TestRemuxerFailurePartwayIsNotARefusal(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(m.dir); len(entries) != 0 {
 		t.Fatalf("cache holds %d files after failed runs, want none", len(entries))
+	}
+}
+
+// TestRemuxerReadErrorIsNotARefusal (server#212): a run that failed reading
+// the source before it wrote anything (a network mount's hiccup: ffmpeg logs
+// EIO) is not the file's refusal: not remembered, so the next request tries
+// again. Denied: the same exit with no read error in the log is a refusal.
+func TestRemuxerReadErrorIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	status := exitStatus(t)
+	for _, tc := range []struct {
+		log     string
+		refusal bool
+		runs    int32
+	}{
+		{"fd:: Input/output error", false, 2},
+		{"Error during demuxing: I/O error", false, 2},
+		{"Stream map '0:a:0' matches no streams.", true, 1},
+	} {
+		var runs atomic.Int32
+		m, src := fakeRemuxer(t, func(string, string) error {
+			runs.Add(1)
+			return fmt.Errorf("%w: %s", status, tc.log)
+		})
+		ctx := context.Background()
+		for range 2 {
+			if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); err == nil || errors.Is(err, ErrRefused) != tc.refusal {
+				t.Fatalf("%s: open = %v, want refusal %v", tc.log, err, tc.refusal)
+			}
+		}
+		if n := runs.Load(); n != tc.runs {
+			t.Fatalf("%s: %d runs, want %d", tc.log, n, tc.runs)
+		}
 	}
 }
 
