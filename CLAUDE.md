@@ -52,7 +52,7 @@ by running `-version`; degrades gracefully offline and retries next start). Nati
 GUI installers + a system-tray launcher are not planned (DISTRIBUTION.md: no desktop
 installers).
 
-**First-run setup wizard** (`--setup`, also the natural default for any GUI launcher):
+**First-run setup wizard** (`--setup`):
 instead of auto-creating the admin and printing credentials, the server mints a
 one-time setup token and enables a guarded browser wizard at `/setup` (handlers in
 `internal/api/handlers_setup.go`, page in `internal/web/assets/setup.{html,js}`).

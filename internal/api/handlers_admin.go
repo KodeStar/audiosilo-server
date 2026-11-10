@@ -748,7 +748,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lib catalog.Library
-	if req.Kind != nil && *req.Kind != catalog.KindBooks && *req.Kind != catalog.KindPodcasts {
+	if req.Kind != nil && !catalog.KnownKind(*req.Kind) {
 		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
 		return
 	}
@@ -772,8 +772,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 // ignore rules and metadata source. A new root or new ignore rules make the index
 // stale, so either queues a rescan, returned as `job`; browsing still works
 // immediately. A new metadata source re-resolves the books before it answers.
-// A library the config declares (config.yaml, or the app embedding the server:
-// launcher.Options.Libraries) keeps the name and folder declared there: every
+// A library config.yaml declares keeps the name and folder declared there: every
 // start upserts it by name (launcher.syncLibraries) and the server never writes
 // a library to config.yaml, so a rename would come back as a second library and
 // a new folder would be put back. Changing either is 409 config_library, and

@@ -183,17 +183,11 @@ func TestReadalongServed(t *testing.T) {
 	// Plain: the identity ETag, and each revalidates only its own answer.
 	plain := func(inm string) *http.Response {
 		t.Helper()
-		req, _ := http.NewRequest("GET", e.srv.URL+e.at("readalong", ebookBook), nil)
-		req.Header.Set("Authorization", "Bearer "+e.annTok)
-		req.Header.Set("Accept-Encoding", "identity")
+		headers := map[string]string{"Accept-Encoding": "identity"}
 		if inm != "" {
-			req.Header.Set("If-None-Match", inm)
+			headers["If-None-Match"] = inm
 		}
-		resp, err := (&http.Transport{DisableCompression: true}).RoundTrip(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
+		resp, _ := e.doHeaders(t, "GET", e.at("readalong", ebookBook), e.annTok, "", headers)
 		return resp
 	}
 	if resp := plain(""); resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != etag || resp.Header.Get("Content-Encoding") != "" {

@@ -1114,27 +1114,24 @@ func (s *Service) claimStored(ctx context.Context, token int64, kinds []string, 
 	// needs the fsync, its attempt number never handed out twice. The jobs it
 	// put back may be this claim's to lease, so it looks again.
 	if !hand {
-		if err := s.claimTx(ctx, s.db.WithTx, token, nil, nil, nil); err != nil {
+		if _, err := s.claimTx(ctx, s.db.WithTx, token, nil, nil, false); err != nil {
 			return nil, err
 		}
-		if _, hand, err = s.claimDue(ctx, token, kinds, minPriority); err != nil || !hand {
+		if id, err := s.nextQueued(ctx, s.db, kinds, minPriority); err != nil || id == 0 {
 			return nil, err
 		}
 	}
-	var job *Job
-	if err := s.claimTx(ctx, s.db.WithDurableTx, token, kinds, minPriority, &job); err != nil {
-		return nil, err
-	}
-	return job, nil
+	return s.claimTx(ctx, s.db.WithDurableTx, token, kinds, minPriority, true)
 }
 
 // claimTx is a claim's transaction, run by withTx: it ends the lapsed leases
-// (expireTx) and the lost private requests (expirePrivateTx) and, with job set,
-// leases the next queued job of kinds into *job (nil when none). Each write has
-// its check in claimDue, or an idle claim skips it.
+// (expireTx) and the lost private requests (expirePrivateTx) and, with lease,
+// leases the next queued job of kinds (nil when none). Each write has its check
+// in claimDue, or an idle claim skips it.
 func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, string, func(*sql.Tx) error) error,
-	token int64, kinds []string, minPriority *int32, job **Job) error {
+	token int64, kinds []string, minPriority *int32, lease bool) (*Job, error) {
 	var exp expiry
+	var job *Job
 	err := withTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
 		if err := bridgeTokenLive(ctx, tx, token); err != nil {
 			return err
@@ -1151,7 +1148,7 @@ func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, stri
 		for i := range expired {
 			exp.failed = append(exp.failed, transition{job: &expired[i], from: StateQueued})
 		}
-		if job == nil {
+		if !lease {
 			return nil
 		}
 		id, err := s.nextQueued(ctx, tx, kinds, minPriority)
@@ -1163,13 +1160,14 @@ func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, stri
 			        updated_at = ? WHERE id = ?`, at(s.now().Add(Lease)), now, now, id); err != nil {
 			return err
 		}
-		*job, err = getJob(ctx, tx, id)
+		job, err = getJob(ctx, tx, id)
 		return err
 	})
-	if err == nil {
-		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
+	if err != nil {
+		return nil, err
 	}
-	return err
+	s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
+	return job, nil
 }
 
 // claimDue reports whether a claim has anything to write, read on the reader

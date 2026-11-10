@@ -176,8 +176,7 @@ func cleanMemberName(name string) (string, error) {
 // some scripts need), the soft hyphen, the BOM and the Hangul fillers.
 func invisibleRune(r rune) bool {
 	switch {
-	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069, // embeddings, overrides, isolates
-		r == 0x200E, r == 0x200F, r == 0x061C, // LRM, RLM, ALM
+	case unicode.Is(unicode.Bidi_Control, r), // embeddings, overrides, isolates, LRM, RLM, ALM
 		r == 0x200B, r >= 0x2060 && r <= 0x2064, r == 0xFEFF, r == 0x180E, // zero-width space, word joiner, invisible operators, BOM, Mongolian vowel separator
 		r == 0x00AD, r == 0x034F, // soft hyphen, combining grapheme joiner
 		r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0: // Hangul fillers

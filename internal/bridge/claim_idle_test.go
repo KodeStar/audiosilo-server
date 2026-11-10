@@ -128,11 +128,7 @@ func TestDeletedUsersPrivateSubscribeIsNotClaimed(t *testing.T) {
 	t.Parallel()
 	q := podcastQueue(t)
 	ctx := context.Background()
-	res, err := q.db.ExecContext(ctx, `INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES('gone','','user','t','t')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gone, _ := res.LastInsertId()
+	gone := fetchLimitListener(t, q, "gone", false)
 	lost, _, err := q.EnqueueSubscribe(ctx, q.lib, gone, "https://example.com/rss?secret=GONE", true, "")
 	if err != nil {
 		t.Fatal(err)

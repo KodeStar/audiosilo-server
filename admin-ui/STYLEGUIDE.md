@@ -56,7 +56,7 @@ Sub bar (48px, per destination):      Title  [segmented control of sections]    
   Transcoding, Household, Demo mode, Backups, Notifications, Import, Bridge (pairing the optional
   companion, its libraries' mappings and its jobs). Logs, Audit log and About are
   records, not settings, so they live only in the sub bar. **Each setting lives in exactly one
-  place.** A setting the environment or an embedding launcher sets is shown locked with what sets it; one
+  place.** A setting an environment variable sets is shown locked with what sets it; one
   read only at start says "Restart to apply"; each card saves only its changed fields.
 - Mobile (<720px): the five destinations move to a bottom tab bar; the sub bar becomes a horizontally
   scrolling segmented control; the omnisearch stays in the top bar.

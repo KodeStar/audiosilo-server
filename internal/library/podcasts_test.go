@@ -239,17 +239,11 @@ func TestPodcastScanRestoresEpisodesRewrittenByARollback(t *testing.T) {
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
-	dir := filepath.Join(root, "Example Show")
-	if err := os.Mkdir(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	raw, err := os.ReadFile("../podcast/testdata/feed-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, root, "Example Show/feed.json", raw)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Podcasts", Root: root, Kind: catalog.KindPodcasts})
 	if err != nil {
 		t.Fatal(err)
@@ -296,12 +290,7 @@ func TestScanRefusesAnUnknownLibraryKind(t *testing.T) {
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "Author", "Book", "01.mp3"), []byte("not really audio"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, root, "Author/Book/01.mp3", []byte("not really audio"))
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Books", Root: root, Kind: catalog.KindBooks})
 	if err != nil {
 		t.Fatal(err)

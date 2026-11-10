@@ -119,14 +119,6 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeLibraryGrant is a path edit on a library grant's share: 409
-// library_grant (server#254). Its folders change by granting or revoking the
-// library on the person's page.
-func writeLibraryGrant(w http.ResponseWriter) {
-	writeErrorCode(w, http.StatusConflict, "library_grant",
-		"this share gives a whole library; grant or revoke the library instead of editing its folders")
-}
-
 // sharePathReq is the body for adding/removing a path rule.
 type sharePathReq struct {
 	LibraryID int64  `json:"library_id"`
@@ -166,12 +158,8 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		}
 		add[i] = catalog.PathRule{LibraryID: rule.LibraryID, Path: rule.Path}
 	}
-	if err := a.cat.AddSharePaths(r.Context(), id, add); errors.Is(err, catalog.ErrLibraryGrant) {
-		writeLibraryGrant(w)
-		return
-	} else if err != nil {
-		a.log.Warn("add share paths failed", "err", err, "share", id, "rules", len(add))
-		writeError(w, http.StatusInternalServerError, "could not add path")
+	if err := a.cat.AddSharePaths(r.Context(), id, add); err != nil {
+		a.writeCatalogError(w, err, "add share paths failed", "could not add path", "share", id, "rules", len(add))
 		return
 	}
 	a.audit(r, "share.add_paths", a.shareName(r, id), map[string]any{"paths": sharePaths(a, r, add)})
@@ -189,11 +177,8 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "library_id is required")
 		return
 	}
-	if err := a.cat.RemoveSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); errors.Is(err, catalog.ErrLibraryGrant) {
-		writeLibraryGrant(w)
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not remove path")
+	if err := a.cat.RemoveSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); err != nil {
+		a.writeCatalogError(w, err, "remove share path failed", "could not remove path", "share", id)
 		return
 	}
 	a.audit(r, "share.remove_paths", a.shareName(r, id),

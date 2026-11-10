@@ -36,7 +36,7 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 	if lib.Kind == "" {
 		lib.Kind = KindBooks
 	}
-	if lib.Kind != KindBooks && lib.Kind != KindPodcasts {
+	if !KnownKind(lib.Kind) {
 		return nil, ErrInvalidKind
 	}
 	var id int64

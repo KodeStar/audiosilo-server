@@ -1557,9 +1557,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 	}
 	// Every edit that can end a credential or take access away commits durably;
 	// one that only gives (re-enabling, the may-add-members switch) is an
-	// ordinary commit (server#260).
+	// ordinary commit (server#260). It names what may skip the fsync, so a field
+	// added to UserChanges later commits durably until it is listed here.
 	withTx := s.db.WithDurableTx
-	if c.Password == nil && h == nil && c.Role == nil && (c.Disabled == nil || !*c.Disabled) {
+	gives := UserChanges{CanAddMembers: c.CanAddMembers, Disabled: c.Disabled, KeepToken: c.KeepToken}
+	if c == gives && (c.Disabled == nil || !*c.Disabled) {
 		withTx = s.db.WithTx
 	}
 	return withTx(ctx, "UpdateUser", func(tx *sql.Tx) error {

@@ -2,7 +2,7 @@
 // console's log viewer (Server > Logs). Handler tees every record the server
 // logs into a Ring of bounded size; nothing is written to disk, so the viewer
 // shows what happened since the server started, and the full log stays wherever
-// the process's output goes (stderr, docker logs, an embedding launcher's log).
+// the process's output goes (stderr, docker logs).
 //
 // Records are copied out as plain text, so a later change to a logged value
 // can't reach the ring. Attributes whose key names a secret are redacted, and

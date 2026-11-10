@@ -20,21 +20,37 @@ type everyKind struct {
 	pairing, recovery       string
 }
 
+// mustSession signs userID in on device and returns the session token and its
+// credential id.
+func mustSession(t *testing.T, s *Service, ctx context.Context, userID int64, device string) (string, int64) {
+	t.Helper()
+	tok, err := s.IssueToken(ctx, userID, KindSession, device, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok, cred.ID
+}
+
+// wantLive asserts err is nil when live, ErrInvalidToken when not.
+func wantLive(t *testing.T, what string, live bool, err error) {
+	t.Helper()
+	switch {
+	case live && err != nil:
+		t.Errorf("%s = %v, want it accepted", what, err)
+	case !live && !errors.Is(err, ErrInvalidToken):
+		t.Errorf("%s = %v, want ErrInvalidToken", what, err)
+	}
+}
+
 func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) everyKind {
 	t.Helper()
 	admin, bridgeTok := pairBridge(t, s, ctx, name)
 	k := everyKind{user: admin, bridgeSecret: bridgeTok}
-	session := func(device string) (string, int64) {
-		tok, err := s.IssueToken(ctx, admin.ID, KindSession, device, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return tok, cred.ID
-	}
+	session := func(device string) (string, int64) { return mustSession(t, s, ctx, admin.ID, device) }
 	var laptopID int64
 	k.phone, k.phoneID = session("phone")
 	k.laptop, laptopID = session("laptop")
@@ -70,15 +86,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 // the API key, feed and Bridge tokens always live.
 func (k everyKind) check(t *testing.T, s *Service, ctx context.Context, phoneLive, laptopLive bool) {
 	t.Helper()
-	want := func(what string, live bool, err error) {
-		t.Helper()
-		switch {
-		case live && err != nil:
-			t.Errorf("%s = %v, want it accepted", what, err)
-		case !live && !errors.Is(err, ErrInvalidToken):
-			t.Errorf("%s = %v, want ErrInvalidToken", what, err)
-		}
-	}
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
 	_, _, err := s.ResolveRequest(ctx, k.phone, Presence{}, KindSession)
 	want("the phone's session", phoneLive, err)
 	_, _, err = resolveCast(s, ctx, k.castPhone, "Author/Book")
@@ -286,17 +294,7 @@ func mintHouseholdSignIns(t *testing.T, s *Service, ctx context.Context) househo
 	t.Helper()
 	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
 	neighbour := mustUser(t, s, ctx, "nina", "nina-password", RoleUser)
-	device := func(name string) int64 {
-		tok, err := s.IssueToken(ctx, owner.ID, KindSession, name, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return cred.ID
-	}
+	device := func(name string) int64 { _, id := mustSession(t, s, ctx, owner.ID, name); return id }
 	phone, laptop, oldTab := device("phone"), device("laptop"), device("old tablet")
 	evie := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
 	h := householdSignIns{owner: owner, phoneID: phone}
@@ -335,15 +333,7 @@ func mintHouseholdSignIns(t *testing.T, s *Service, ctx context.Context) househo
 // the member's own device and everything of the neighbour's stay.
 func (h householdSignIns) check(t *testing.T, s *Service, ctx context.Context, phoneKept bool) {
 	t.Helper()
-	want := func(what string, live bool, err error) {
-		t.Helper()
-		switch {
-		case live && err != nil:
-			t.Errorf("%s = %v, want it accepted", what, err)
-		case !live && !errors.Is(err, ErrInvalidToken):
-			t.Errorf("%s = %v, want ErrInvalidToken", what, err)
-		}
-	}
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
 	session := func(tok string) error {
 		_, _, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
 		return err
