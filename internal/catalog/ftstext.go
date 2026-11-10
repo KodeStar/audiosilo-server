@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -78,8 +79,8 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 			if err := r.Scan(&w.id, &cols[0], &cols[1], &cols[2], &cols[3], &cols[4], &cols[5]); err != nil {
 				return err
 			}
-			for i, c := range cols {
-				w.cols[i] = c.String
+			for i, col := range cols {
+				w.cols[i] = col.String
 			}
 			return nil
 		}, `SELECT rowid, title, author, series, narrator, genres, tags FROM books_fts`)
@@ -87,11 +88,7 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 			return err
 		}
 		for _, w := range rows {
-			changed := false
-			for _, c := range w.cols {
-				changed = changed || ftsText(c) != c
-			}
-			if !changed {
+			if !slices.ContainsFunc(w.cols[:], func(col string) bool { return ftsText(col) != col }) {
 				continue
 			}
 			if err := writeFTSRow(ctx, tx, w.id, w.cols); err != nil {

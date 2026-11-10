@@ -419,8 +419,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		})
 		for _, r := range tagReads {
 			md, b, old := r.md, r.book, r.old
-			if md == nil || md.OpenErr != nil {
-				continue // stopped, or unopenable now: the next scan reads it
+			if md == nil || md.OpenErr != nil || md.TagsUnread() {
+				// Stopped, unopenable now, or its tag read cut short (recording it would
+				// record no date, genres, hints or names): the next scan reads it.
+				continue
 			}
 			if old.ReleasedUnchecked {
 				releasedBackfill[b.RelPath] = md.Released

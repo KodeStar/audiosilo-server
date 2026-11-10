@@ -377,6 +377,11 @@ func TestPromoteStagedResumesAndStaleDownloadsGo(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatal(err)
 	}
+	// A tool copy a stop cut off before its rename (writeExec).
+	partial := filepath.Join(dir, partialPrefix+binName("ffmpeg")+"-456")
+	if err := os.WriteFile(partial, []byte("half a binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// The tools folder can't take the rename: nothing swapped, the stage kept.
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
@@ -399,7 +404,7 @@ func TestPromoteStagedResumesAndStaleDownloadsGo(t *testing.T) {
 			t.Errorf("%s = %q %v, want the release build", filepath.Base(p), v, err)
 		}
 	}
-	for _, gone := range []string{next, stale} {
+	for _, gone := range []string{next, stale, partial} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("%s still there: %v", filepath.Base(gone), err)
 		}

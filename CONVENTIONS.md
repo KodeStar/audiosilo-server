@@ -1036,8 +1036,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`; FFmpeg's `[mp3 @ 0x...]`
   address dropped, server#272). The tag read and the narrator walk before the probe are bounded
   too (`readFile`): the ffprobe run's timeout and the caller's context, and the byte budget; a
-  tag read out of time skips the probe (ffprobe, killable, answers), one past the budget keeps
-  what it read. While armed every read from the file runs on its own goroutine and is waited for
+  tag read out of time skips the probe (ffprobe, killable, answers; one that finished just before
+  its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
+  unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
   costs a leaked goroutine, never a stuck reader (`os.Open`/`Stat` are not bounded). With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules

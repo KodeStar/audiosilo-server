@@ -286,11 +286,18 @@ func promoteStaged(ctx context.Context, dir string, log *slog.Logger) {
 // the next start rather than left in the system's temp folder.
 const downloadPrefix = ".download-"
 
-// removeStaleDownloads removes what downloads into dir stopped part way left.
+// partialPrefix names the temporary file writeExec streams a tool into beside
+// its final path.
+const partialPrefix = ".partial-"
+
+// removeStaleDownloads removes what downloads into dir stopped part way left:
+// their unpack folders and a tool copy cut off before its rename (writeExec).
 func removeStaleDownloads(dir string) {
-	stale, _ := filepath.Glob(filepath.Join(dir, downloadPrefix+"*"))
-	for _, p := range stale {
-		_ = os.RemoveAll(p)
+	for _, prefix := range []string{downloadPrefix, partialPrefix} {
+		stale, _ := filepath.Glob(filepath.Join(dir, prefix+"*"))
+		for _, p := range stale {
+			_ = os.RemoveAll(p)
+		}
 	}
 }
 
@@ -454,7 +461,7 @@ func copyExec(src, dst string) error {
 // would then adopt forever, since a stat can't tell a partial file from a whole
 // one).
 func writeExec(path string, r io.Reader) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".partial-"+filepath.Base(path)+"-")
+	tmp, err := os.CreateTemp(filepath.Dir(path), partialPrefix+filepath.Base(path)+"-")
 	if err != nil {
 		return err
 	}

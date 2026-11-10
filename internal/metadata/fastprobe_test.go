@@ -270,6 +270,25 @@ func TestTagReadIsBounded(t *testing.T) {
 	}
 }
 
+// A tag read cut short says so (TagsUnread), so a scan's backfill records no
+// empty date, genres or names for it; a whole read doesn't.
+func TestTagsUnreadWhenCutShort(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := &Metadata{Format: "mp3"}
+	if _, _, err := readFile(ctx, m, fixture("mp3-v23-chap.mp3"), noFFprobeRules, ProbeTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if !m.TagsUnread() || m.Title != "" {
+		t.Errorf("cut short: TagsUnread %t, title %q; want true and none", m.TagsUnread(), m.Title)
+	}
+	whole := ExtractTags(fixture("mp3-v23-chap.mp3"))
+	if whole.TagsUnread() || whole.Title == "" || (*Metadata)(nil).TagsUnread() {
+		t.Errorf("a whole read (title %q), or none, reported its tags unread", whole.Title)
+	}
+}
+
 // A file that reads short of the size its stat gave (it shrank, or a read
 // failed) is left to ffprobe, never answered from what was read.
 func TestFastProbeReadFailureIsUnsure(t *testing.T) {

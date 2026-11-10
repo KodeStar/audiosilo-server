@@ -97,6 +97,9 @@ type Metadata struct {
 	// timedOut: with no ffprobe to ask, the in-process read ran out of time
 	// (ProbeTimedOut).
 	timedOut bool
+	// tagsUnread: the tag read was cut short (out of time, or the caller's
+	// context ended), so the tags were not read (TagsUnread).
+	tagsUnread bool
 }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
@@ -105,6 +108,12 @@ type Metadata struct {
 // busy disk may read it given time alone. With ffprobe configured a timed-out
 // probe goes to ffprobe, whose own time-out is the ProbeErr.
 func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
+
+// TagsUnread reports whether the file's tag read was cut short (a share that
+// stopped answering, most likely), so its tags were not read: a field from
+// them is unknown, not empty. ffprobe, when configured, may still have read
+// the duration and its own container tags.
+func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
 // .mp4 is included because audiobooks are sometimes delivered as AAC-in-MP4;
@@ -250,15 +259,18 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 	if why == "" && ((terr == nil && md.Format() == tag.MP4) || (terr != nil && mp4Extensions[m.Format])) {
 		why = b.bounded(rctx, func() { narrator = readMP4Narrator(b, b.size) })
 	}
-	if timedOutReason(why) || rctx.Err() != nil {
-		// Out of time (a share that stopped answering, most likely): the probe
-		// would be too, so ffprobe, killable, answers.
+	if timedOutReason(why) || (why != "" && rctx.Err() != nil) {
+		// Out of time (a share that stopped answering, most likely), or the
+		// caller's context ended mid-read: the probe would be cut short too, so
+		// ffprobe, killable, answers. A read that finished just before the
+		// deadline passed keeps its tags and goes on to the probe.
 		reason = "tags: " + why
+		m.tagsUnread = true
 		probeLogger().Debug("in-process read: out of time, ffprobe reads this file", "path", path, "reason", reason)
 		return nil, reason, nil
 	}
-	// Past the byte budget, or a reader's panic: the tags read so far stand (a
-	// narrator walk's bound leaves dhowden's tags), the probe still runs.
+	// Past the byte budget, or a reader's panic: dhowden's tags are unread if it
+	// was cut short (a narrator walk's bound leaves them), the probe still runs.
 	if terr == nil {
 		applyTags(m, md)
 	}
