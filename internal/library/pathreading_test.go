@@ -186,6 +186,9 @@ func TestScanTitleNotSeries(t *testing.T) {
 		}
 		revs = append(revs, r)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	// Every book is at today's revision: the three read again and the book named
 	// for its series (read, unchanged) by their readings, and the one whose title
 	// isn't a series, never read, stamped (StampScannedRev), so no later scan

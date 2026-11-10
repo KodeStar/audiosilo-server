@@ -107,6 +107,45 @@ func newTestScanner(t *testing.T, root, ffprobe string, concurrency int) (*Scann
 	return s, cat, lib, db
 }
 
+// tableLines is q's rows, one line each prefixed with table, the id columns
+// left out.
+func tableLines(t *testing.T, db *store.DB, table, q string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, _ := rows.Columns()
+	var lines []string
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		b.WriteString(table + ":")
+		for i, v := range vals {
+			if cols[i] == "id" || cols[i] == "book_id" {
+				continue
+			}
+			if raw, ok := v.([]byte); ok {
+				v = string(raw)
+			}
+			fmt.Fprintf(&b, " %s=%v", cols[i], v)
+		}
+		lines = append(lines, b.String())
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return lines
+}
+
 // dumpIndex is every row of the scan's tables, one line each, sorted: a file's
 // and a chapter's book named by its path, not its id (ids follow discovery's
 // order, which is the walk's map order, the same for a serial scan run twice).
@@ -119,36 +158,7 @@ func dumpIndex(t *testing.T, db *store.DB) string {
 	}
 	var lines []string
 	for table, q := range queries {
-		rows, err := db.QueryContext(context.Background(), q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cols, _ := rows.Columns()
-		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				t.Fatal(err)
-			}
-			var b strings.Builder
-			b.WriteString(table + ":")
-			for i, v := range vals {
-				if cols[i] == "id" || cols[i] == "book_id" {
-					continue
-				}
-				if raw, ok := v.([]byte); ok {
-					v = string(raw)
-				}
-				fmt.Fprintf(&b, " %s=%v", cols[i], v)
-			}
-			lines = append(lines, b.String())
-		}
-		if err := rows.Close(); err != nil {
-			t.Fatal(err)
-		}
+		lines = append(lines, tableLines(t, db, table, q)...)
 	}
 	slices.Sort(lines)
 	// ffprobe names its decoder by address in a message ("[mp3 @ 0xaac820000]"),
