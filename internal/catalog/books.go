@@ -91,23 +91,19 @@ func (c *Catalog) UpsertBooks(ctx context.Context, books []*Book, budget time.Du
 
 // upsertBook is UpsertBook's writes, in tx.
 func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, error) {
+	// A read cut short (Book.TagsUnread) rewrites nothing of a book indexed
+	// before: only its read problem is recorded, so the next scan reads it again.
+	if b.TagsUnread {
+		if id, ok, err := recordReadProblem(ctx, tx, b); err != nil || ok {
+			return id, err
+		}
+	}
 	// The snapshot carries this upsert's indexed_at, which is how loadLayers tells
 	// it from one an older server left stale (see scannedStampKey).
 	indexedAt := c.ts()
 	scanned, err := scannedJSON(b, indexedAt)
 	if err != nil {
 		return 0, err
-	}
-	// A read whose tags were cut short keeps the stored reading of a book
-	// indexed before (keepTagReading); the columns it keeps are the CASEs on
-	// keep below.
-	keep := false
-	if b.TagsUnread {
-		if kept, ok, err := keepTagReading(ctx, tx, b.LibraryID, b.RelPath, indexedAt); err != nil {
-			return 0, err
-		} else if ok {
-			scanned, keep = kept, true
-		}
 	}
 	// The scan's own chapters, kept as found (books.scanned_chapters): what a
 	// community chapter check fits against, and what the chapters go back to.
@@ -162,20 +158,13 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
 		     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at,
 		     published=excluded.published, description=excluded.description,
-		     -- A kept tag reading (keep) keeps the embedded art flag, unless a
-		     -- sibling cover sets it now.
-		     has_cover=CASE WHEN ? AND excluded.has_cover IS NOT 1 THEN books.has_cover ELSE excluded.has_cover END,
-		     scanned=excluded.scanned,
+		     has_cover=excluded.has_cover, scanned=excluded.scanned,
 		     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 		     scan_error_detail=excluded.scan_error_detail,
 		     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
-		     released=CASE WHEN ? THEN books.released ELSE excluded.released END,
-		     released_checked=CASE WHEN ? THEN books.released_checked ELSE 1 END,
-		     genres_checked=CASE WHEN ? THEN books.genres_checked ELSE 1 END,
-		     tag_asin=CASE WHEN ? THEN books.tag_asin ELSE excluded.tag_asin END,
-		     tag_isbn=CASE WHEN ? THEN books.tag_isbn ELSE excluded.tag_isbn END,
-		     tag_language=CASE WHEN ? THEN books.tag_language ELSE excluded.tag_language END,
-		     hints_checked=CASE WHEN ? THEN books.hints_checked ELSE 1 END,
+		     released=excluded.released, released_checked=1, genres_checked=1,
+		     tag_asin=excluded.tag_asin, tag_isbn=excluded.tag_isbn, tag_language=excluded.tag_language,
+		     hints_checked=1,
 		     -- The rows below are the scan's: refreshEffective puts a community
 		     -- list back over them when it should.
 		     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
@@ -200,9 +189,8 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 		b.Released, b.TagASIN, b.TagISBN, b.TagLanguage, string(scannedChapters), chaptersHash(string(scannedChapters)),
 		absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt, storedFileOrder(b), fileOrderAt,
-		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(),
-		keep, keep, keep, keep, keep, keep, keep, keep,
-		b.EbookFile.Unread, b.EbookFile.Unread, b.EbookFile.Unread).Scan(&id); err != nil {
+		b.EbookFile.Path, b.EbookFile.Sig, b.EbookFile.ebookSize(), b.EbookFile.Unread, b.EbookFile.Unread,
+		b.EbookFile.Unread).Scan(&id); err != nil {
 		return 0, err
 	}
 	b.ID = id
@@ -233,6 +221,27 @@ func (c *Catalog) upsertBook(ctx context.Context, tx *sql.Tx, b *Book) (int64, e
 		return 0, err
 	}
 	return id, refreshEffective(ctx, tx, id)
+}
+
+// recordReadProblem records b's read problem (ScanError, ScanErrorFile,
+// ScanErrorDetail) on the stored row at b's path and nothing else: every field
+// a scan wrote (names, duration, codec, chapters, cover flag, mtime and size,
+// indexed_at) stays as the last full read left it, and since the stored mtime
+// and size are the old ones, the next scan reads the book again. ok is false
+// when the book has no row yet (a new book is written whole).
+func recordReadProblem(ctx context.Context, tx *sql.Tx, b *Book) (id int64, ok bool, err error) {
+	err = tx.QueryRowContext(ctx,
+		`UPDATE books SET scan_error = ?, scan_error_file = ?, scan_error_detail = ?
+		  WHERE library_id = ? AND rel_path = ? RETURNING id`,
+		b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.LibraryID, b.RelPath).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	b.ID = id
+	return id, true, nil
 }
 
 // BooksByPaths returns the books in a library whose rel_path is in paths, keyed

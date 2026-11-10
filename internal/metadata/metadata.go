@@ -98,8 +98,11 @@ type Metadata struct {
 	// (ProbeTimedOut).
 	timedOut bool
 	// tagsUnread: the tag read was cut short (out of time, or the caller's
-	// context ended), so the tags were not read (TagsUnread).
+	// context ended), or refused, so the tags were not read (TagsUnread).
 	tagsUnread bool
+	// readRefused: the read was refused, the file not opened, as too many
+	// earlier reads hang (ReadRefused).
+	readRefused bool
 }
 
 // ProbeTimedOut reports whether, with no ffprobe configured, the file's read
@@ -114,6 +117,11 @@ func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 // them is unknown, not empty. ffprobe, when configured, may still have read
 // the duration and its own container tags.
 func (m *Metadata) TagsUnread() bool { return m != nil && m.tagsUnread }
+
+// ReadRefused reports whether the file was not read at all, not even opened,
+// because maxAbandonedReads earlier reads have not returned (a share that
+// stopped answering); TagsUnread holds too.
+func (m *Metadata) ReadRefused() bool { return m != nil && m.readRefused }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
 // .mp4 is included because audiobooks are sometimes delivered as AAC-in-MP4;
@@ -243,7 +251,7 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 	if readsSaturated() {
 		// Enough reads hang already (a share that stopped answering): this one
 		// fails fast, the file not opened, its tags unread and no probe.
-		m.tagsUnread = true
+		m.tagsUnread, m.readRefused = true, true
 		return nil, reasonSaturated, nil
 	}
 	f, err := os.Open(path)
@@ -332,6 +340,17 @@ func ForceFFprobeForTests(ffprobePath string) {
 		panic("metadata.ForceFFprobeForTests called outside a test binary")
 	}
 	ffprobeOnly.Store(ffprobePath, true)
+}
+
+// UnreadForTests is the reading of a file whose read was cut short (its tags
+// unread), or, with refused, not tried at all (ReadRefused): for tests of what
+// a scan does with one, which can't fill the process-wide count of hung reads
+// without stopping every other test's reads. It panics outside a test binary.
+func UnreadForTests(path string, refused bool) *Metadata {
+	if !testing.Testing() {
+		panic("metadata.UnreadForTests called outside a test binary")
+	}
+	return &Metadata{Format: fileFormat(path), tagsUnread: true, readRefused: refused}
 }
 
 // ffprobeForced reports whether ForceFFprobeForTests named ffprobePath.

@@ -1044,12 +1044,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   are not bounded); once `maxAbandonedReads` (16) such reads are outstanding process-wide
   (`abandonedReads`; reads already under way can take it past that) a new read fails fast (`readsSaturated`, `reasonSaturated`), the file
   not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
-  whose tag read was cut short (`Metadata.TagsUnread`, `Book.TagsUnread`) keeps the stored book's
-  reading of its tags (`catalog.keepTagReading`: the snapshot at its own revision; the embedded art
-  flag unless a sibling cover sets it, `released`, the tag hints and their checked flags), never
-  the path's names over it, and the file is recorded `unreadable` ("reading it timed out", with
-  ffprobe or without), so the next scan reads it again (`problemCleared`); a new book read so takes
-  the path's names. With no
+  where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`;
+  `Book.TagsUnread`) rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
+  length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
+  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many reads
+  are stuck on this share", with ffprobe or without), so the next scan reads it again (the stored
+  mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
+  path's names. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again

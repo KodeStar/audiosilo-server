@@ -964,9 +964,11 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		at = &fileState{mtime: b.MTime, size: b.Size}
 	}
 	s.noteRejected(abs, at, md)
-	// A read cut short (a share that stopped answering) knows none of the tags:
-	// UpsertBook keeps a stored book's reading of them rather than this one's
-	// path-only names, no cover, date or genres; a new book takes these.
+	// A read cut short or refused (a share that stopped answering) knows nothing
+	// of the file: UpsertBook then rewrites nothing of a stored book but its
+	// read problem, rather than path-only names and no length, codec, chapters,
+	// cover, date or genres; a new book is written with what there is. A folder
+	// book's other parts count too (buildMultiFileChapters).
 	b.TagsUnread = md.TagsUnread()
 	setNames(b, md)
 	if md != nil {
@@ -1221,6 +1223,9 @@ func (s *Scanner) buildMultiFileChapters(ctx context.Context, lib catalog.Librar
 		f := &b.Files[i]
 		md := mds[i]
 		noteProblem(b, f.RelPath, f.Size, md)
+		if md.TagsUnread() {
+			b.TagsUnread = true // its length and chapters unknown: see enrich
+		}
 		if i > 0 { // the first is enrich's reading, noted there
 			s.noteRejected(absOf(lib, f.RelPath), nil, md)
 		}

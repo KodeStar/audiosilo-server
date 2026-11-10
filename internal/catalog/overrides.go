@@ -499,12 +499,17 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 	}
 	l.preferPath = source == MetadataFromPath
 	l.abs = parseABSFile(absRaw)
-	scanned, rev, fromRow, err := rowSnapshot(raw, indexedAt, &row)
+	scanned, stamp, rev, err := parseScanned(raw)
 	if err != nil {
 		return nil, err
 	}
-	if fromRow {
-		l.fromRow = indexedAt
+	if raw == "" || stamp != indexedAt {
+		// Written by a server that predates the snapshot: the row holds what that
+		// scan found (it applies no overrides; asin/isbn only ever come from
+		// enrichment, so they stay out, as in migration 0016).
+		scanned = fieldsOf(&row)
+		maps.DeleteFunc(scanned, func(_, v string) bool { return v == "" })
+		l.fromRow, rev = indexedAt, ""
 	}
 	l.pathRev = rev
 	l.scanned, l.indexedAt = scanned, indexedAt
@@ -524,56 +529,6 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 		return nil, err
 	}
 	return l, nil
-}
-
-// rowSnapshot is what a books row's scan found: its `scanned` snapshot (raw)
-// and the snapshot's path revision, or, when the snapshot isn't the row's own
-// (raw blank, or stamped with another indexed_at), the row's own values
-// (fromRow): written by a server that predates the snapshot, the row holds what
-// that scan found (it applies no overrides; asin/isbn only ever come from
-// enrichment, so they stay out, as in migration 0016). row carries the row's
-// title, author, narrator, series and position.
-func rowSnapshot(raw, indexedAt string, row *Book) (scanned bookFields, rev string, fromRow bool, err error) {
-	scanned, stamp, rev, err := parseScanned(raw)
-	if err != nil {
-		return nil, "", false, err
-	}
-	if raw == "" || stamp != indexedAt {
-		scanned = fieldsOf(row)
-		maps.DeleteFunc(scanned, func(_, v string) bool { return v == "" })
-		return scanned, "", true, nil
-	}
-	return scanned, rev, false, nil
-}
-
-// keepTagReading is the `scanned` snapshot, stamped indexedAt, a re-index of the
-// book at (libraryID, relPath) whose tag read was cut short (Book.TagsUnread)
-// writes: the stored one's fields, at its own path revision, so the next read
-// that finds the tags puts right what it should (a backfill, as for an older
-// revision). ok is false when the book has no row yet: a new book takes the
-// scan's reading (the path's names).
-func keepTagReading(ctx context.Context, q querier, libraryID int64, relPath, indexedAt string) (scanned string, ok bool, err error) {
-	var raw, stamp string
-	var row Book
-	err = q.QueryRowContext(ctx,
-		`SELECT scanned, indexed_at, title, author, narrator, series, series_index, series_index_end
-		   FROM books WHERE library_id = ? AND rel_path = ?`, libraryID, relPath).
-		Scan(&raw, &stamp, &row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &row.SeriesIndexEnd)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	fields, rev, _, err := rowSnapshot(raw, stamp, &row)
-	if err != nil {
-		return "", false, err
-	}
-	if rev != "" {
-		fields[scannedRevKey] = rev
-	}
-	scanned, err = encodeScanned(fields, indexedAt)
-	return scanned, err == nil, err
 }
 
 // resolve layers the fields - what the scan found (the folder layout first in a

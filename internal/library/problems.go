@@ -35,6 +35,9 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 		b.ScanError = problemEmptyFile
 	case md != nil && md.OpenErr != nil:
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, pathErrText(md.OpenErr)
+	case md.ReadRefused():
+		// Not read at all: too many reads hang already (metadata.ReadRefused).
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, readRefusedDetail
 	case md.TagsUnread():
 		// Opened but not read in time (a share that stopped answering): the same
 		// problem with ffprobe or without (ffprobe may still have read its
@@ -84,8 +87,13 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 	return md.OpenErr == nil && !md.TagsUnread() && (!probe || md.ProbeErr == nil)
 }
 
-// tagsUnreadDetail is the detail of a file that opened but wasn't read in time.
-const tagsUnreadDetail = "reading it timed out"
+// tagsUnreadDetail is the detail of a file that opened but wasn't read in
+// time, and readRefusedDetail of one not read at all, as too many reads on
+// its share are stuck (Health: "<file> couldn't be read: <detail>").
+const (
+	tagsUnreadDetail  = "reading it timed out"
+	readRefusedDetail = "too many reads are stuck on this share, so it wasn't tried"
+)
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,
 // what a rejection of its data is remembered by (noteRejected). A scan that
