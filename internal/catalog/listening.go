@@ -411,9 +411,12 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // (migration 0063), and those left contested over it (0065), to into. It runs
 // in the per-user transaction AFTER the progress has moved (server#303): the
 // re-match trigger (0066, 0071) offers the account's person's row at into to
-// Audible, so it must already be the moved book's place, never a row an
-// earlier book left at into, and a carry that fails leaves the titles where
-// they were (the next poll matches them afresh).
+// Audible, so it is already the carried place (merged with a row an earlier
+// book left at into by the carry's rule, mergeNewest or mergeFurthest), never
+// that left-behind row as it stood before the carry, and a carry that fails
+// leaves the titles where they were (the next poll matches them afresh). A
+// person with no place on the moved book still has a left-behind row at into
+// offered, as the player shows it for the moved book.
 func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,

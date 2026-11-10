@@ -459,8 +459,9 @@ const SyncAudibleRefused = ImportAudibleRefused
 // SyncAudibleSignIn: Audible refused the account's sign-in for now
 // (transient: the Bridge tries again), not the device (audible_refused). An
 // audible.sync failing with it is an ordinary failure: the account is not
-// marked refused. Only a sync names it; an import's refused sign-in is
-// audible_refused (server#303).
+// marked refused. An import never names it (its refused sign-in is
+// audible_refused, server#303), so the console words it for no backup; a
+// poll's failure may name it, and the server folds no poll's code.
 const SyncAudibleSignIn = "audible_sign_in"
 
 // AudibleSyncTitle is one title an audible.sync reads: its ASIN, the book on
