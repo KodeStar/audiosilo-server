@@ -1340,7 +1340,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
   rescan rewrites the scanned values and re-applies the edit before anything can read
   the row) and why there is no separate post-scan enrichment pass any more.
-  `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
+  `BackfillASIN` (the Bridge's enrichment, `setEnrichmentTx`) and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
   export read the row, so they see edits with no join. The player's book JSON carries
   `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
   `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
@@ -3552,7 +3552,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
   unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
   file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
-  listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
+  listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `BackfillASIN`, `SetCover`/`DeleteCover` commit,
   and a library's new metadata source re-resolving its books) wakes the background pass, so a
   scan, an applied match or a typed ASIN is checked without waiting for the
   10-minute tick. **Generated chapters** (Phase 1d, `catalog/generatedchapters.go`): a book's stored

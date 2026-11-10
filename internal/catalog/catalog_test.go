@@ -347,9 +347,7 @@ func TestMoveDurableState(t *testing.T) {
 	if err := c.AddFavourite(ctx, uid, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, lib.ID, "old/Book.m4b", "B0ASIN", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, "old/Book.m4b", "B0ASIN", "")
 	if err := c.MoveDurableState(ctx, lib.ID, "old/Book.m4b", "new/Book.m4b"); err != nil {
 		t.Fatal(err)
 	}

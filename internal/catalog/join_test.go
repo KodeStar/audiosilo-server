@@ -50,12 +50,8 @@ func TestJoinDurableState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The first disc has only an ISBN: it mustn't keep the third disc's ASIN out.
-	if err := c.SetEnrichment(ctx, lib.ID, cd1, "", "9780340999073"); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetEnrichment(ctx, lib.ID, cd3, "B0DRAGON", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, cd1, "", "9780340999073")
+	setEnrichment(t, c, lib.ID, cd3, "B0DRAGON", "")
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: into, IsFolder: true, Title: "Book",
 		Files: []BookFile{{RelPath: cd1 + "/01.mp3"}, {RelPath: cd2 + "/01.mp3", Seq: 1}, {RelPath: cd3 + "/01.mp3", Seq: 2}},
 		Chapters: []metadata.Chapter{
@@ -265,9 +261,7 @@ func TestJoinLeavesUnplacedPartState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.SetEnrichment(ctx, lib.ID, cd2, "B0DISC2", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, cd2, "B0DISC2", "")
 	parts := []JoinPart{{Path: cd1}, {Path: cd2, Last: true, Unplaced: true}}
 	if err := c.JoinDurableState(ctx, lib.ID, into, parts, 0); err != nil {
 		t.Fatal(err)

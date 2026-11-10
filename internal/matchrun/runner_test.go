@@ -575,9 +575,8 @@ func TestRefresh(t *testing.T) {
 	if err := e.cat.EditBook(ctx, e.lib, "A/Edited", catalog.BookEdit{Set: map[string]string{"narrator": "My Reader"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.cat.SetEnrichment(ctx, e.lib, "A/ByISBN", "B0NONE0002", "9780553418026"); err != nil {
-		t.Fatal(err)
-	}
+	storeEnrichment(t, e.db, e.lib, "A/ByISBN", "B0NONE0002", "9780553418026")
+	e.book(t, "A/ByISBN", "Martian Too", "", nil) // a scan applies it
 	hit := cand("the-martian", 100, "https://c/rec.jpg")
 	hit.RecordingID = "bray"
 	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}

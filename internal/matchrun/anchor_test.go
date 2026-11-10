@@ -355,9 +355,8 @@ func TestRefreshByWorkKeepsAnIdentifierGainedSince(t *testing.T) {
 	if err := e.cat.BackfillASIN(ctx, e.lib, "A/GainsASIN", "B0MINE0001"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.cat.SetEnrichment(ctx, e.lib, "A/GainsISBN", "", "9780000000002"); err != nil {
-		t.Fatal(err)
-	}
+	storeEnrichment(t, e.db, e.lib, "A/GainsISBN", "", "9780000000002")
+	e.book(t, "A/GainsISBN", "The Martian", "", nil) // a scan applies it
 	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
 		for scope, ch := range it.Changes {
 			if slices.Contains(ch.Fields, catalog.FieldASIN) || slices.Contains(ch.Fields, catalog.FieldISBN) {

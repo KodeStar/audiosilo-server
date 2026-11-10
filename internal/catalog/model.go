@@ -299,7 +299,7 @@ type Catalog struct {
 
 // OnBookChange adds f to the listeners that hear, after the fact and without
 // blocking, that a book was indexed or edited (UpsertBook, EditBook, EditBooks,
-// SetEnrichment, ClearCommunityMatches, a library's new metadata source
+// BackfillASIN, ClearCommunityMatches, a library's new metadata source
 // re-resolving its books in UpdateLibrary), its custom cover set or removed, or
 // its art file replaced in place (SetArtVersions):
 // what a background check of the books may want to look at again. f must return

@@ -674,7 +674,7 @@ func pathFields(m *metadata.Metadata) bookFields {
 // its books row (with its series keys: series_key, book_more_series; and its
 // labels: book_labels), its chapters (their source: applyChapterSource; then their
 // titles), then refreshes its FTS row. UpsertBook,
-// SetEnrichment and every edit call it, so the books row can never disagree with
+// the ASIN backfill (setEnrichmentTx) and every edit call it, so the books row can never disagree with
 // what the durable tables say.
 func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	l, err := loadLayers(ctx, tx, bookID)

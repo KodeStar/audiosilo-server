@@ -54,7 +54,7 @@ func TestIssue330UnknownIdentifierAnchorFallback(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "enrichment":
-					if err := e.cat.SetEnrichment(ctx, e.lib, path, tc.value, ""); err != nil {
+					if err := e.cat.BackfillASIN(ctx, e.lib, path, tc.value); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -245,9 +245,8 @@ func TestIssue330FallbackLeavesChangesSinceLookup(t *testing.T) {
 				const path = "A/Book"
 				e.book(t, path, "Book", "B0UNKNOWN1", no)
 				if since == "isbn_changed" || since == "isbn_edited_same" {
-					if err := e.cat.SetEnrichment(ctx, e.lib, path, "", "9780000000002"); err != nil {
-						t.Fatal(err)
-					}
+					storeEnrichment(t, e.db, e.lib, path, "", "9780000000002")
+					e.book(t, path, "Book", "B0UNKNOWN1", no) // a scan applies it
 				}
 				e.anchor(t, path, "old-slug", "bray")
 				e.matcher.byWork["old-slug"] = []meta.MatchCandidate{workAnswer("new-slug", "bray")}
