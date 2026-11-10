@@ -116,10 +116,10 @@ export type GenerateNeed = 'asr' | 'agent' | 'libraries';
  * The first step still to do that generating for a book in this library
  * needs, in the checklist's order: speech recognition, the agent's credential,
  * or this library's mapping (the libraries step counts only when this library
- * is the one the Bridge can't write to yet). The agent step counts whether or
- * not the checklist marks it required: a Bridge where it is optional (it runs
- * other jobs without one) still can't generate without it, and the job would
- * park agent_unavailable. Undefined without an online Bridge's checklist, or
+ * is the one the Bridge can't write to yet). These count whether or not the
+ * checklist marks them required: a Bridge where one is optional (the agent,
+ * bridge#36: it runs other jobs without one) still can't generate without it,
+ * and the job would park. Undefined without an online Bridge's checklist, or
  * when nothing it needs is missing (budget and GitHub never stop a run here:
  * the budget is a cap, GitHub only for contributing).
  */
@@ -129,7 +129,7 @@ export function generateNeed(
 ): GenerateNeed | undefined {
   if (!status?.online || !status.setup) return undefined;
   for (const item of status.setup.items) {
-    if (item.done || (!item.required && item.id !== 'agent')) continue;
+    if (item.done) continue;
     if (item.id === 'asr' || item.id === 'agent') return item.id;
     if (item.id === 'libraries') {
       const mapping = status.libraries.find((l) => l.id === libraryId)?.mapping ?? null;
