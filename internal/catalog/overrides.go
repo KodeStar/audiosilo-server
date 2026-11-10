@@ -729,14 +729,15 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	// values just written. The series column holds every series the book is in,
 	// so a search finds it by any (the series= filter goes by key instead), and
 	// the genres and tags columns a label a line, so a search finds a book by its
-	// labels too (the genre= and tag= filters go by book_labels).
+	// labels too (the genre= and tag= filters go by book_labels). Every column is
+	// in ftsText's form, a Chinese or Japanese character a token.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
-		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator),
-		ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags)))
+		bookID, ftsText(v(FieldTitle)), ftsText(v(FieldAuthor)), ftsText(ftsSeries(v(FieldSeries), v(FieldMoreSeries))),
+		ftsText(v(FieldNarrator)), ftsText(ftsLabels(v(FieldGenres))), ftsText(ftsLabels(v(FieldTags))))
 	return err
 }
 

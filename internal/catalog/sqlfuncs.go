@@ -98,13 +98,14 @@ func sqlText(v driver.Value) string {
 	return ""
 }
 
-// ftsPhrase quotes value as one FTS5 phrase (a MATCH argument); ok is false when
-// it has no letter or digit, so no phrase to match.
+// ftsPhrase quotes value as one FTS5 phrase (a MATCH argument), in the index's
+// form (ftsText: 夏目漱石 is the phrase of its four characters); ok is false
+// when it has no letter or digit, so no phrase to match.
 func ftsPhrase(value string) (phrase string, ok bool) {
 	if !strings.ContainsFunc(value, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 		return "", false
 	}
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`, true
+	return `"` + strings.ReplaceAll(ftsText(value), `"`, `""`) + `"`, true
 }
 
 // hasFTSPhrase reports whether a filter on value is looked up in the full-text

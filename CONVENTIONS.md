@@ -1294,7 +1294,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `metadata.json`'s values (`books.abs_file`, below), then `book_enrichment`
   (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
   precedence (and of each field's source); `refreshEffective` writes its values to the
-  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
+  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS,
+  each column in `ftsText`'s form: Han, Hiragana and Katakana a character a token, since
+  unicode61 splits only on spaces and punctuation, server#178; `buildMatchQuery` makes a CJK
+  token a phrase of its characters, the last a prefix, and `ftsPhrase` writes the credit
+  filters' phrase the same way; `Catalog.IndexSearchText`, run by the launcher after
+  `KeySeries`, rewrites once the rows an older server wrote, gated by `server_state`
+  `search_text` = `searchTextVersion` (rules + `unicode.Version`), no migration)
   and the book page shows it as provenance, so the two can't disagree. `UpsertBook` runs
   `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
   rescan rewrites the scanned values and re-applies the edit before anything can read

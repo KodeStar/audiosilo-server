@@ -72,6 +72,10 @@ func prefixCols(p string) string {
 // discard every non-ASCII rune and return no results. A token only ever contains
 // letters/digits, so it can never carry an embedded quote or FTS operator, which
 // keeps the quoted-prefix construction injection-safe.
+//
+// A token with Chinese or Japanese characters, which the index holds a
+// character a token (ftsText), becomes a phrase of them, its last a prefix:
+// 吾輩 is "吾 輩"*, so it still finds 吾輩は猫である, and 猫 finds it too.
 func buildMatchQuery(input string) string {
 	fields := strings.FieldsFunc(input, func(r rune) bool {
 		return !(unicode.IsLetter(r) || unicode.IsDigit(r))
@@ -81,7 +85,7 @@ func buildMatchQuery(input string) string {
 		if len(f) == 0 {
 			continue
 		}
-		terms = append(terms, `"`+f+`"*`)
+		terms = append(terms, `"`+ftsText(f)+`"*`)
 	}
 	return strings.Join(terms, " AND ")
 }
