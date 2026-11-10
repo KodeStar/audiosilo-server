@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
@@ -51,27 +52,59 @@ const pathCheckExpr = `CASE
 	WHEN lower(json_extract(scanned, '$.author')) = lower(substr(rel_path, 1, instr(rel_path, '/') - 1)) THEN 1
 	ELSE 2 END`
 
-// snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title
-// and series, for Signature.NamesCheck: the snapshot's (a field it leaves out is
-// blank, as encodeScanned writes it), else, with no snapshot that is JSON, the
-// row's own (as loadLayers reads it), never the row's effective values over a
-// snapshot.
+// snapshotNamesExpr is a books row's `scanned` revision (NULL for none), title,
+// series and narrator, for Signature.NamesCheck: the snapshot's (a field it
+// leaves out is blank, as encodeScanned writes it), else, with no snapshot
+// that is JSON, the row's own (as loadLayers reads it), never the row's
+// effective values over a snapshot.
 //
-// The fourth column is revOlderOwn, so a revision 1 or 2 snapshot a scan finds
-// needs no read can be stamped with today's revision (StampScannedRev).
+// The fifth column is revOlderOwn, so an older snapshot a scan finds needs no
+// read can be stamped with today's revision (StampScannedRev).
 const snapshotNamesExpr = `CASE WHEN json_valid(scanned) THEN json_extract(scanned, '$."@rev"') END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.title'), '') ELSE title END,
 	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.series'), '') ELSE series END,
+	CASE WHEN json_valid(scanned) THEN IFNULL(json_extract(scanned, '$.narrator'), '') ELSE narrator END,
 	` + revOlderOwn
 
-// revOlderOwn is whether a books row's snapshot is of revision 1 or 2 (older
+// revOlderOwn is whether a books row's snapshot is of revision 1 to 3 (older
 // than today's, scannedRev, but read with a lone folder as the author) and its
 // own (its stamp the row's indexed_at, scannedStampKey): Signature.RevStamp,
 // and StampScannedRev's compare-and-set.
 const revOlderOwn = `CASE WHEN json_valid(scanned)
-	THEN IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') IN ('1', '2')
+	THEN IFNULL(json_extract(scanned, '$."` + scannedRevKey + `"'), '') IN ('1', '2', '3')
 	 AND json_extract(scanned, '$."` + scannedStampKey + `"') IS indexed_at
 	ELSE 0 END`
+
+// namesCheck is Signature.NamesCheck: whether a snapshot of revision rev (a
+// book at rel, a folder or not, its primary file of format, its snapshot's
+// title, series and narrator) may read otherwise under a newer revision, so
+// the next scan reads its tags once: before revision 2 a title that may be the
+// album naming its series (MaybeSeriesTitle), before 3 a leaf that states a
+// series (PathLeafSeries), before 4 a book the tag reading of 2.4.0 and 2.5.0
+// may read otherwise (tagReadingMayDiffer).
+func namesCheck(rev int, rel string, isFolder bool, format, title, series, narrator string) bool {
+	return (rev < revLeafSeries && metadata.PathLeafSeries(rel, isFolder)) ||
+		(rev < revTitleNotSeries && metadata.MaybeSeriesTitle(rel, isFolder, title, series)) ||
+		(rev < revTagReading && tagReadingMayDiffer(rel, format, title, series, narrator))
+}
+
+// tagReadingMayDiffer reports whether revision 4's tag reading may read a book
+// otherwise than the snapshot (server#175): an MP4 (its \xa9nrt narrator item,
+// read since 2.5.0), a narrator (a NARRATOR tag now beats composer), a series
+// SplitSeriesTag splits ("Discworld, book #40", since 2.4.0), or a letter
+// outside ASCII in its title or path (IsGenericTitle reads every script since
+// 2.4.0, so a non-Latin title tag no longer gives way to the path's). A book
+// none of these fits read the same then.
+func tagReadingMayDiffer(rel, format, title, series, narrator string) bool {
+	if metadata.IsMP4Format(format) || narrator != "" {
+		return true
+	}
+	if _, _, ok := metadata.SplitSeriesTag(series); ok {
+		return true
+	}
+	nonASCII := func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) }
+	return strings.ContainsFunc(title, nonASCII) || strings.ContainsFunc(rel, nonASCII)
+}
 
 // StampScannedRev records today's revision (scannedRev) on the snapshots of the
 // books at these paths, which a scan found need nothing of the newer revisions
@@ -94,8 +127,8 @@ func (c *Catalog) StampScannedRev(ctx context.Context, libraryID int64, paths []
 // a large backfill never holds the writer for long.
 const pathReadingBatch = 250
 
-// SetPathReading rewrites the scanned title, author and series of the books at
-// these paths to today's reading (the scanner's backfill of PathCheck and
+// SetPathReading rewrites the scanned title, author, series and narrator of the
+// books at these paths to today's reading (the scanner's backfill of PathCheck and
 // Signature.NamesCheck), and
 // re-resolves their effective values. A reading is what a fresh read of the
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
@@ -152,6 +185,7 @@ func setPathReading(ctx context.Context, tx *sql.Tx, libraryID int64, relPath st
 	snap := maps.Clone(l.scanned)
 	if m != nil {
 		maps.Copy(snap, pathFields(m))
+		snap[FieldNarrator] = m.Narrator // revision 4's reading of it (tagReadingMayDiffer)
 	} else {
 		folder, _, _ := strings.Cut(relPath, "/")
 		if snap[FieldSeries] == folder {

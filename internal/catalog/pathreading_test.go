@@ -177,8 +177,8 @@ func TestStampScannedRev(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRevs := map[string]string{
-		plain: "3|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
-		series2: "3|Without Law", leaf: "2|From The Ashes", plain2: "3|The Butcher's Masquerade",
+		plain: "4|A Parade of Horribles", stale: "1|The Final Empire", series: "1|Without Law",
+		series2: "4|Without Law", leaf: "2|From The Ashes", plain2: "4|The Butcher's Masquerade",
 	}
 	for rel, w := range wantRevs {
 		var got string
@@ -192,5 +192,43 @@ func TestStampScannedRev(t *testing.T) {
 	}
 	if sigs, err = c.Signatures(ctx, lib.ID); err != nil || sigs[plain].RevStamp || sigs[plain].NamesCheck {
 		t.Errorf("stamped book's signature = %+v (err %v), want nothing to do", sigs[plain], err)
+	}
+}
+
+// TestNamesCheckByRevision: a snapshot is read again only for the readings that
+// came after its revision, and revision 4's tag reading only where it may read
+// the book otherwise (tagReadingMayDiffer).
+func TestNamesCheckByRevision(t *testing.T) {
+	t.Parallel()
+	const leaf = "Mark Tufo/Mark Tufo; Indian Hill; Book 04; From The Ashes"
+	cases := []struct {
+		name                            string
+		rev                             int
+		rel, format, title, series, nar string
+		want                            bool
+	}{
+		{"plain mp3 at 3", 3, "Charles Dickens/Great Expectations", "mp3", "Great Expectations", "", "", false},
+		{"plain mp3 at 4", 4, "Charles Dickens/Great Expectations", "mp3", "Great Expectations", "", "", false},
+		{"m4b at 3", 3, "Some Author/Narrated.m4b", "m4b", "Narrated", "", "", true},
+		{"M4A at 3", 3, "Some Author/Narrated", "M4A", "Narrated", "", "", true},
+		{"m4b at 4", 4, "Some Author/Narrated.m4b", "m4b", "Narrated", "", "", false},
+		{"narrator at 3", 3, "A/B", "mp3", "B", "", "Comp", true},
+		{"series with its position at 3", 3, "A/B", "mp3", "B", "Discworld, book #40", "", true},
+		{"plain series at 3", 3, "A/B", "mp3", "B", "Discworld", "", false},
+		{"Han title at 3", 3, "Natsume/Neko", "mp3", "吾輩は猫である", "", "", true},
+		{"Cyrillic path at 3", 3, "Толстой/Война и мир", "mp3", "Book", "", "", true},
+		{"Latin accent at 3", 3, "A/Les Misérables", "mp3", "Les Misérables", "", "", true},
+		{"punctuation only at 3", 3, "A/B – C", "mp3", "B – C", "", "", false},
+		{"leaf series at 2", 2, leaf, "mp3", "From The Ashes", "", "", true},
+		{"leaf series at 3", 3, leaf, "mp3", "From The Ashes", "", "", false},
+		{"no revision", 0, "Charles Dickens/Great Expectations", "mp3", "Great Expectations", "", "", false},
+	}
+	for _, c := range cases {
+		if got := namesCheck(c.rev, c.rel, true, c.format, c.title, c.series, c.nar); got != c.want {
+			t.Errorf("%s: namesCheck = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if revNumber("3") != 3 || revNumber("") != 0 || revNumber("x") != 0 || revNumber("-1") != 0 {
+		t.Error("revNumber misreads a revision")
 	}
 }

@@ -398,12 +398,50 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// (Signature.RevStamp): stamped with today's revision (StampScannedRev), so
 	// later scans don't test them again.
 	var revBackfill []string
+	slots := newReadSlots(s.readers(), s.probeTimeout)
 	// The path, genre, tag hint, ABS, attachments, file order and ebook backfills are
 	// written as they go: a large one (most of a library laid out Author/Title, or
 	// every folder book of a library ABS has managed, read once after an upgrade)
 	// can take a while, and a scan stopped part way keeps what it read (written past
 	// the Stop: at most pathFlushEvery books).
+	//
+	// The unchanged books whose primary file a backfill reads (dates, genres,
+	// tag hints, names): read a batch at a time, as many at once as the scan's
+	// slots allow (one an upgrade asks of most of a library is not a file at a
+	// time), then recorded in the backfills above.
+	var tagReads []*tagRead
+	readTags := func() {
+		if len(tagReads) == 0 {
+			return
+		}
+		pool.Each(ctx, slots.size(), tagReads, func() bool { return ctx.Err() == nil }, func(r **tagRead) {
+			if md := slots.extract(ctx, (*r).primary, s.ffprobePath); ctx.Err() == nil {
+				(*r).md = md // one a Stop may have cut short is dropped, for the next scan
+			}
+		})
+		for _, r := range tagReads {
+			md, b, old := r.md, r.book, r.old
+			if md == nil || md.OpenErr != nil {
+				continue // stopped, or unopenable now: the next scan reads it
+			}
+			if old.ReleasedUnchecked {
+				releasedBackfill[b.RelPath] = md.Released
+			}
+			if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+				hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
+			}
+			if old.GenresUnchecked {
+				genresBackfill[b.RelPath] = md.Genres
+			}
+			if r.names && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+				pathBackfill[b.RelPath] = readNames(b, md)
+			}
+		}
+		clear(tagReads)
+		tagReads = tagReads[:0]
+	}
 	flushBackfills := func() {
+		readTags()
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
 		}
@@ -441,7 +479,6 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// its own goroutine, up to a window of books ahead of the one written next; the
 	// index is written here alone, in discovery order (writeNext), so the rows,
 	// their ids and the log come out as a scan reading one file at a time writes them.
-	slots := newReadSlots(s.readers(), s.probeTimeout)
 	window := 2 * slots.size()
 	var pending []*bookRead
 	// The books read and waiting to be written: a few share a transaction
@@ -650,19 +687,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 					revBackfill = append(revBackfill, b.RelPath)
 				}
 				if old.ReleasedUnchecked || old.GenresUnchecked || old.HintsUnchecked || readPath {
-					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
-						if old.ReleasedUnchecked {
-							releasedBackfill[b.RelPath] = md.Released
-						}
-						if old.HintsUnchecked && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-							hintsBackfill[b.RelPath] = catalog.TagHints{ASIN: md.TagASIN, ISBN: md.TagISBN, Language: md.TagLanguage}
-						}
-						if old.GenresUnchecked {
-							genresBackfill[b.RelPath] = md.Genres
-						}
-						if readPath && (md.ProbeErr == nil || old.ScanError == problemProbe) {
-							pathBackfill[b.RelPath] = readNames(b, md)
-						}
+					tagReads = append(tagReads, &tagRead{book: b, old: old, primary: primary, names: readPath})
+					if len(tagReads) >= slots.size()*tagReadsPerSlot {
+						readTags()
 					}
 				}
 				// A file new, changed or gone since the last read, or one not read for
@@ -735,6 +762,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetSplitParent(ctx, lib.ID, splitBackfill); err != nil {
 		s.log.Warn("record split discs failed", "library", lib.Name, "err", err)
 	}
+	readTags() // the release dates' reads, before they are recorded
 	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
 		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
 	}
@@ -863,8 +891,8 @@ const pathFlushEvery = 500
 // Series; Book NN[; Title]" states included) as the baseline, then md's tags,
 // which are authoritative when present (an unreadable file's md carries none;
 // nil reads the same), except an album tag that only names the book's series,
-// which gives way to the book's own title (metadata.TitleNotSeries). So the
-// leaf's series fills only a series the tags leave out.
+// which gives way to the book's own title (metadata.TitleNotSeries), and md's
+// narrator. So the leaf's series fills only a series the tags leave out.
 func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 	n := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	if md == nil {
@@ -881,6 +909,7 @@ func readNames(b *catalog.Book, md *metadata.Metadata) *metadata.Metadata {
 		n.SeriesIndex, n.SeriesIndexEnd = md.SeriesIndex, md.SeriesIndexEnd
 	}
 	n.Title = metadata.TitleNotSeries(n.Title, md, b.RelPath, b.IsFolder, len(b.Files) > 1)
+	n.Narrator = md.Narrator
 	return n
 }
 
@@ -892,7 +921,7 @@ func setNames(b *catalog.Book, md *metadata.Metadata) {
 	n := readNames(b, md)
 	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
 	if md != nil {
-		b.Narrator = md.Narrator
+		b.Narrator = n.Narrator
 		b.TagASIN, b.TagISBN, b.TagLanguage = md.TagASIN, md.TagISBN, md.TagLanguage
 	}
 }
@@ -1851,6 +1880,20 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 	}
 	return s.indexShared(ctx, lib, book)
 }
+
+// tagRead is an unchanged book whose primary file a scan reads for its
+// backfills (readTags): what to read, what for, and the reading.
+type tagRead struct {
+	book    *catalog.Book
+	old     catalog.Signature
+	primary string // its absolute path
+	names   bool   // the names are read too (PathRead, Signature.NamesCheck)
+	md      *metadata.Metadata
+}
+
+// tagReadsPerSlot is how many backfill reads a scan gathers per read slot
+// before reading them, at once as the slots allow.
+const tagReadsPerSlot = 8
 
 // bookKey names a book across libraries: (library_id, rel_path).
 type bookKey struct {

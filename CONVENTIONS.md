@@ -1480,15 +1480,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FromPathLayout` reads the leaf too (its series, position and title part). The leaf's title
   stays the whole name in `DeriveFromPath` (`TitleNotSeries` reads the title part). The LibraForge
   benchmark's library of these (about 600 books): +39 auto-right, auto-wrong 8 to 7.
-  **Backfill of revisions 2 and 3**: a snapshot older than today's that a newer revision may read
-  otherwise (`Signature.NamesCheck`: before revision 2 a title `metadata.MaybeSeriesTitle` flags,
-  over the snapshot's title and series; before revision 3 a leaf `metadata.PathLeafSeries` reads)
+  **The tag reading** (`@rev` 4, server#175): a snapshot written before 2.4.0 and 2.5.0 read tags
+  as they do now (a series tag carrying its position, `metadata.SplitSeriesTag`; a title in any
+  script not generic, `IsGenericTitle`; the MP4 `\xa9nrt` item and a narrator tag over composer)
+  still holds the old reading; the snapshot carries the narrator too, so a backfill rewrites it.
+  **Backfill of revisions 2 to 4**: a snapshot older than today's that a newer revision may read
+  otherwise (`Signature.NamesCheck`, `namesCheck` by `revNumber`: before revision 2 a title
+  `metadata.MaybeSeriesTitle` flags, over the snapshot's title and series; before revision 3 a leaf
+  `metadata.PathLeafSeries` reads; before revision 4 `tagReadingMayDiffer`: an MP4, a narrator, a
+  series `SplitSeriesTag` splits, a non-ASCII letter in the title or path)
   is read once by the next scan with the PathRead read and rewritten by `SetPathReading` (which
   skips only a snapshot already at `scannedRev`), no re-index and no migration (a
   `PathFromSnapshot` one waits for that read too, so an unreadable file never records today's
-  revision with its names unread). A current `@rev` 1 or 2 snapshot it doesn't flag
+  revision with its names unread). The reads run `readSlots` wide (`tagRead`, batched
+  `tagReadsPerSlot` per slot, applied before each backfill flush; one a Stop cuts short is dropped
+  for the next scan), so a large revision-4 backfill (every narrated book) costs one parallel tag
+  read each, once. A current `@rev` 1 to 3 snapshot it doesn't flag
   (`Signature.RevStamp`: its stamp the row's `indexed_at`) is stamped at today's revision by that
-  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 or 2,
+  scan (`Catalog.StampScannedRev`, the revision alone, compare-and-set on a current revision 1 to 3,
   `revOlderOwn`), so later scans don't test it again (`MaybeSeriesTitle` is about 2 µs a row); a
   snapshot of no revision stays until its next re-index or path reading. A stamped book is never
   tested again, so a later change that makes the reading change more books (`TitleNotSeries` more

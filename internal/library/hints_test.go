@@ -133,8 +133,9 @@ func countHinted(t *testing.T, db *store.DB) int {
 }
 
 // A scan stopped part way through the backfill keeps the hints it read, as it
-// keeps a book's genres: the second read waits for the Stop, the third book is
-// never read, and the next scan reads what is left.
+// keeps a book's genres: with one read at a time, the second read waits for the
+// Stop (which cuts it short, so it is dropped), the third book is never read,
+// and the next scan reads what is left.
 func TestStoppedScanKeepsTagHints(t *testing.T) {
 	t.Parallel()
 	cat, lib, db, healthy := uncheckedHints(t, "One", "Two", "Three")
@@ -155,11 +156,13 @@ echo '%[3]s'`, starts, stop, probeAnswer))
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	if _, err := NewScanner(cat, probe, slog.Default()).Scan(ctx, *lib); !errors.Is(err, context.Canceled) {
+	stopping := NewScanner(cat, probe, slog.Default())
+	stopping.SetConcurrency(1)
+	if _, err := stopping.Scan(ctx, *lib); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stopped scan: err = %v", err)
 	}
-	if n := countHinted(t, db); n != 2 {
-		t.Fatalf("a stopped scan kept %d books' hints, want the 2 it read", n)
+	if n := countHinted(t, db); n != 1 {
+		t.Fatalf("a stopped scan kept %d books' hints, want the 1 it read", n)
 	}
 	if _, err := NewScanner(cat, healthy, slog.Default()).Scan(t.Context(), *lib); err != nil {
 		t.Fatal(err)

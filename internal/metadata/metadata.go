@@ -134,6 +134,10 @@ var AudioExtensions = map[string]bool{
 // mp4Extensions are the AudioExtensions an MP4 container carries.
 var mp4Extensions = map[string]bool{"m4b": true, "m4a": true, "mp4": true}
 
+// IsMP4Format reports whether format (an extension without its dot, any case:
+// a book's or file's Format) names an MP4 container.
+func IsMP4Format(format string) bool { return mp4Extensions[strings.ToLower(format)] }
+
 // IsAudio reports whether path has a recognized audiobook extension.
 func IsAudio(path string) bool {
 	return AudioExtensions[strings.ToLower(filepath.Ext(path))]

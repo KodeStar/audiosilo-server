@@ -448,7 +448,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, cover_art, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
 		        released_checked = 0, genres_checked = 0, hints_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
-		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`,
+		        attachments_sig, `+attachmentsUncheckedExpr+`, `+fileOrderExpr+`, format,
 		        CASE WHEN is_folder AND `+fileOrderExpr+` IS NULL THEN
 		             (SELECT group_concat(f.rel_path, char(10) ORDER BY f.seq)
 		                FROM book_files f WHERE f.book_id = books.id) END, ebook_sig, indexed_at,
@@ -464,18 +464,17 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		var stored sql.NullInt64
 		var files, rev sql.NullString
-		var title, series string
+		var format, title, series, narrator string
 		var revOlder bool
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.CoverArt, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.HintsUnchecked, &sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked,
-			&stored, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &revOlder); err != nil {
+			&stored, &format, &files, &sig.EbookSig, &sig.IndexedAt, &rev, &title, &series, &narrator, &revOlder); err != nil {
 			return nil, err
 		}
 		if rev.String != scannedRev {
-			sig.NamesCheck = metadata.PathLeafSeries(rel, sig.IsFolder) ||
-				(rev.String != revTitleNotSeries && metadata.MaybeSeriesTitle(rel, sig.IsFolder, title, series))
+			sig.NamesCheck = namesCheck(revNumber(rev.String), rel, sig.IsFolder, format, title, series, narrator)
 			sig.RevStamp = !sig.NamesCheck && revOlder
 		}
 		switch {

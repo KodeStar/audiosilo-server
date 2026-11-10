@@ -281,17 +281,35 @@ const scannedStampKey = "@indexed_at"
 // predates revision 2, when an album tag naming only the book's series became
 // its title (metadata.TitleNotSeries); one of revision 2 predates revision 3,
 // when a leaf named "Author; Series; Book NN[; Title]" came to state the
-// series and position the tags leave out (metadata.DeriveFromPath). The next
-// scan reads such a book again where a newer revision may read it otherwise
-// (Signature.NamesCheck) and stamps the rest (StampScannedRev). A new revision
-// adds today's to revOlderOwn's list, so its snapshots are stamped too.
+// series and position the tags leave out (metadata.DeriveFromPath); one of
+// revision 3 may predate revision 4, the tag reading of 2.4.0 and 2.5.0 (a
+// series tag carrying its position, "Discworld, book #40": SplitSeriesTag; a
+// title in any script not generic: IsGenericTitle; the MP4 narrator item and
+// a narrator tag over composer), which a snapshot stamped from an older
+// revision never had. The next scan reads such a book again where a newer
+// revision may read it otherwise (Signature.NamesCheck) and stamps the rest
+// (StampScannedRev). A new revision adds today's to revOlderOwn's list, so its
+// snapshots are stamped too.
 const (
 	scannedRevKey = "@rev"
-	scannedRev    = "3"
-	// revTitleNotSeries is the revision that brought TitleNotSeries in: a
-	// snapshot of it needs no MaybeSeriesTitle read (Signature.NamesCheck).
-	revTitleNotSeries = "2"
+	scannedRev    = "4"
+	// The revisions that brought a reading in, so a snapshot of one needs no read
+	// for it (Signature.NamesCheck): TitleNotSeries (MaybeSeriesTitle), a leaf
+	// that states a series (PathLeafSeries), the tag reading (tagReadingMayDiffer).
+	revTitleNotSeries = 2
+	revLeafSeries     = 3
+	revTagReading     = 4
 )
+
+// revNumber is a snapshot's revision as a number: 0 before revision 1 (none),
+// and for one it can't read.
+func revNumber(rev string) int {
+	n, err := strconv.Atoi(rev)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
 
 // scannedJSON encodes what the scan found for b (its fields before anything is
 // layered on top) for the `scanned` column (encodeScanned), read with today's path
