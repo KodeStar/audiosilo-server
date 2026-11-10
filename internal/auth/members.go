@@ -65,8 +65,8 @@ var (
 	// ErrMemberLimit is adding a member at the cap.
 	ErrMemberLimit = errors.New("you have the most household members you can add")
 	// ErrInvalidName is a member name that is empty or too long after trimming,
-	// or holds control or invisible characters (invisibleRune) or invalid
-	// UTF-8, or nothing visible.
+	// or holds control or invisible characters (hidesText) or invalid UTF-8,
+	// or nothing visible.
 	ErrInvalidName = fmt.Errorf("the name must be 1 to %d characters, with no control or invisible characters", MaxMemberName)
 	// ErrInvalidKind is a kind other than MemberKid or MemberGrownup.
 	ErrInvalidKind = errors.New(`kind must be "kid" or "grownup"`)
@@ -170,25 +170,60 @@ func cleanMemberName(name string) (string, error) {
 	return name, nil
 }
 
-// hidesText reports whether name holds an invisible character (invisibleRune).
-// Tag characters are invisible too, except in an emoji flag's tag sequence
-// (U+1F3F4, the tags, then the cancel tag U+E007F: England, Scotland, Wales).
+// hidesText reports whether name holds an invisible character (invisibleRune),
+// a line or paragraph separator, or a variation selector that selects nothing
+// (one opening the name or following another: a run of them after one
+// character carries hidden bytes). Tag characters are invisible too, except as
+// an emoji flag's tag sequence: U+1F3F4, 1 to maxFlagTags subdivision tags
+// (lowercase letters and digits), then the cancel tag U+E007F (England,
+// Scotland, Wales). Any other tag, or a sequence the cancel tag doesn't close,
+// is hidden text (the tags spell ASCII).
 func hidesText(name string) bool {
-	inFlag := false
+	const blackFlag, cancelTag = 0x1F3F4, 0xE007F
+	tags := -1     // tags since a black flag; -1 outside a flag's sequence
+	prevVS := true // the name's start: a variation selector there selects nothing
 	for _, r := range name {
-		if r >= 0xE0020 && r <= 0xE007F { // tag characters
-			if !inFlag {
+		if r >= 0xE0020 && r <= cancelTag { // tag characters
+			switch {
+			case tags < 0:
+				return true
+			case r == cancelTag:
+				if tags == 0 {
+					return true
+				}
+				tags = -1
+			case subdivisionTag(r) && tags < maxFlagTags:
+				tags++
+			default:
 				return true
 			}
-			inFlag = r != 0xE007F
+			prevVS = false
 			continue
 		}
-		if invisibleRune(r) {
+		if tags > 0 || invisibleRune(r) || unicode.In(r, unicode.Zl, unicode.Zp) {
 			return true
 		}
-		inFlag = r == 0x1F3F4 // waving black flag, which a tag sequence follows
+		vs := unicode.Is(unicode.Variation_Selector, r)
+		if vs && prevVS {
+			return true
+		}
+		prevVS = vs
+		tags = -1
+		if r == blackFlag {
+			tags = 0
+		}
 	}
-	return false
+	return tags > 0
+}
+
+// maxFlagTags is the longest subdivision code a flag's tag sequence spells
+// (CLDR: a 2-letter or 3-digit region and 1 to 4 letters or digits).
+const maxFlagTags = 7
+
+// subdivisionTag is a tag character a flag's subdivision code is spelled with:
+// a lowercase letter or a digit.
+func subdivisionTag(r rune) bool {
+	return r >= 0xE0030 && r <= 0xE0039 || r >= 0xE0061 && r <= 0xE007A
 }
 
 // invisibleRune is a character that shows nothing or changes how the text

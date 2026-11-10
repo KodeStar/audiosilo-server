@@ -1716,9 +1716,11 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // leaveOwners ends them) and their recovery code (its linked pairing tokens
 // cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
-// (created_on_token_id, as the device revoke's alsoMembers), and every member's
-// open pairing code (minted from one of the person's sessions). A member's own
-// device, paired before, stays signed in. API keys stay (listed and revoked on
+// (created_on_token_id, the record the device revoke's alsoMembers reads; only
+// sessions here, a member's API keys stay as the person's do), and every
+// member's open pairing code (a pairing code records no device, so one a
+// grown-up member minted on their own device goes too). A member's own device,
+// paired before, stays signed in. API keys stay (listed and revoked on
 // their own), and so do the calendar feed token (the person's to end) and Bridge
 // tokens (the Bridge's). A cast token needs no write: it is refused once its
 // parent is revoked (cast.go). The write moves the content generation, so the

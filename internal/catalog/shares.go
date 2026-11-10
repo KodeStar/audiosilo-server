@@ -688,18 +688,24 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*S
 	if err != nil {
 		return nil, err
 	}
+	// Only the fields sent are written (NULL keeps the stored value), so an edit
+	// racing another never writes back what it read: a rename can't undo a
+	// share just made read-only.
+	var name, description, ro any
 	if in.Name != nil && *in.Name != "" {
 		existing.Name = *in.Name
+		name = *in.Name
 	}
 	if in.Description != nil {
 		existing.Description = *in.Description
+		description = *in.Description
 	}
 	if in.ReadOnly != nil {
 		existing.ReadOnly = *in.ReadOnly
-	}
-	ro := 0
-	if existing.ReadOnly {
-		ro = 1
+		ro = 0
+		if *in.ReadOnly {
+			ro = 1
+		}
 	}
 	// Making a share read-only takes access away, so that edit commits durably
 	// (DeleteShare); a rename or a description is an ordinary commit.
@@ -710,8 +716,9 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*S
 		}
 	}
 	if _, err := exec(ctx,
-		`UPDATE shares SET name = ?, description = ?, read_only = ? WHERE id = ?`,
-		existing.Name, existing.Description, ro, id); err != nil {
+		`UPDATE shares SET name = COALESCE(?, name), description = COALESCE(?, description),
+		        read_only = COALESCE(?, read_only) WHERE id = ?`,
+		name, description, ro, id); err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
 		}

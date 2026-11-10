@@ -647,14 +647,21 @@ func TestMembers_KidRefusedInTheWrite(t *testing.T) {
 func TestMemberNameAllowsScriptsAndEmoji(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"Evie", "\u0645\u0631\u064a\u0645", "\u05e0\u05d5\u05e2\u05d4", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "\U0001F468\u200D\U0001F469\u200D\U0001F467 Kids", "Zo\u00eb", "\u674e\u660e",
-		"\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F Kids"} { // Scotland's flag: a tag sequence
+		"\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F Kids", // Scotland's flag: a tag sequence
+		"❤️ Evie", "1️⃣ Kit"} { // a heart and a keycap: one variation selector after its base
 		got, err := cleanMemberName("  " + name + " ")
 		if err != nil || got != name {
 			t.Errorf("%q: %q %v", name, got, err)
 		}
 	}
 	for _, name := range []string{"Evie\u202E", "\u2066x", "a\u200Bb", "\uFEFFEvie", "Ev\u00ADie", "\u200D\u200C",
-		"Evie\u206A", "Evie\uFFF9", "Evie\U000E0041\U000E0042", "\U000E0067\U000E007F", "\u2800", "\u2800\u2800"} { // a deprecated format control, an annotation anchor, tags outside a flag, the Braille blank
+		"Evie\u206A", "Evie\uFFF9", "Evie\U000E0041\U000E0042", "\U000E0067\U000E007F", "\u2800", "\u2800\u2800", // a deprecated format control, an annotation anchor, tags outside a flag, the Braille blank
+		// Hidden text behind a flag: a sequence never closed, one closed after
+		// text, tags no subdivision code is spelled with, and an empty one.
+		"Evie \U0001F3F4\U000E0068\U000E0069", "\U0001F3F4\U000E0068\U000E0069Evie", "\U0001F3F4\U000E0048\U000E0049\U000E007F Evie",
+		"\U0001F3F4\U000E007F Evie", "\U0001F3F4\U000E0061\U000E0062\U000E0063\U000E0064\U000E0065\U000E0066\U000E0067\U000E0068\U000E007F",
+		// Variation selectors selecting nothing (a run, one first) and a line or paragraph separator.
+		"Evie\uFE0F\uFE0E", "a\U000E0100\U000E0101Evie", "\uFE0FEvie", "Evie\u2028Admin", "Evie\u2029Admin"} {
 		if _, err := cleanMemberName(name); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("%q: %v, want ErrInvalidName", name, err)
 		}

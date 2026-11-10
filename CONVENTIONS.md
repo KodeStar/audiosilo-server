@@ -2395,8 +2395,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
   a name is 1-40 characters with no control or invisible character (`auth.invisibleRune`: every
   format character, so bidi controls and marks, zero-width spaces, the BOM and tags, plus the Hangul
-  fillers and the Braille blank; ZWJ/ZWNJ, an emoji flag's tag sequence (`hidesText`) and
-  right-to-left scripts are fine) and something visible, server#190;
+  fillers and the Braille blank; nor a line or paragraph separator, nor a variation selector selecting
+  nothing (first, or after another); ZWJ/ZWNJ, an emoji flag's closed tag sequence of 1-7 lowercase
+  letters and digits (`hidesText`) and right-to-left scripts are fine) and something visible, server#190;
   username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
@@ -2826,7 +2827,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tombstone and no publication journal. Show and attachment listings extend the feed signature, so
   audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh, as
   does a show with fewer episode rows than its `episode_count` (`PodcastEpisodeRows`: an older server
-  scanned the library as books; a row counts only while its `indexed_at` (`0073`, NULL before it) is
+  scanned the library as books; a row counts only while its `indexed_at` (`0073`, backfilled from the books row; NULL counts) is
   its books row's, so one that older scan rewrote in place counts as missing), and every scan removes the library's books rows that are no episode
   (`PruneNonEpisodeBooks`, that older scan's folder books). A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing

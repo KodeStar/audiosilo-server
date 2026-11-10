@@ -273,7 +273,7 @@ func TestPodcastScanRestoresEpisodesRewrittenByARollback(t *testing.T) {
 	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 3 {
 		t.Fatalf("after the next scan: %d %v", n, err)
 	}
-	// An episode row from before 0073 (no stamp) counts as indexed.
+	// An episode row without a stamp counts as indexed.
 	if _, err := db.ExecContext(ctx, `UPDATE podcast_episodes SET indexed_at=NULL WHERE book_id=?`, id); err != nil {
 		t.Fatal(err)
 	}
