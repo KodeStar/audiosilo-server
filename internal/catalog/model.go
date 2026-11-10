@@ -184,6 +184,12 @@ type Book struct {
 	// UpsertBook records it, or keeps what is stored when it is Unread.
 	Ebook     *Ebook       `json:"ebook,omitempty"`
 	EbookFile EbookReading `json:"-"`
+	// TagsUnread: the scan's read of the book's primary file was cut short
+	// (metadata.Metadata.TagsUnread: a share that stopped answering), so its
+	// names, dates, genres, tag hints and embedded art are unknown, not empty.
+	// UpsertBook then keeps the stored reading of them over a re-indexed row (a
+	// new one takes what the scan has: the path's names); see keepTagReading.
+	TagsUnread bool `json:"-"`
 	// FoundAdded is when each of the book's audio files first appeared on disk
 	// as the scan's discovery read it (its lstat: the birth time where that
 	// carries one, else the mtime; Unix seconds), in Files' order, or the

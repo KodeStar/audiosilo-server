@@ -958,6 +958,10 @@ func (s *Scanner) enrich(ctx context.Context, lib catalog.Library, b *catalog.Bo
 		at = &fileState{mtime: b.MTime, size: b.Size}
 	}
 	s.noteRejected(abs, at, md)
+	// A read cut short (a share that stopped answering) knows none of the tags:
+	// UpsertBook keeps a stored book's reading of them rather than this one's
+	// path-only names, no cover, date or genres; a new book takes these.
+	b.TagsUnread = md.TagsUnread()
 	setNames(b, md)
 	if md != nil {
 		b.Released = md.Released

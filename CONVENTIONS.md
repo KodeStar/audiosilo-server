@@ -1040,7 +1040,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
   unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
-  costs a leaked goroutine, never a stuck reader (`os.Open`/`Stat` are not bounded). With no
+  costs a leaked goroutine, never a stuck reader (`os.Open`/`Stat` are not bounded). A re-index
+  whose tag read was cut short (`Metadata.TagsUnread`, `Book.TagsUnread`) keeps the stored book's
+  reading of its tags (`catalog.keepTagReading`: the snapshot at its own revision; the embedded art
+  flag unless a sibling cover sets it, `released`, the tag hints and their checked flags), never
+  the path's names over it, and the file is recorded `unreadable` ("reading it timed out", with
+  ffprobe or without), so the next scan reads it again (`problemCleared`); a new book read so takes
+  the path's names. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
   (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
   `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
