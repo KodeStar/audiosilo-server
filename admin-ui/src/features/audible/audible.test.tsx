@@ -571,6 +571,16 @@ describe('audible backups', () => {
     expect(audibleJobReason(job('audible.poll', 'drm_free'))).toBeUndefined();
     expect(audibleJobReason(job('sidecars.generate', 'audible_refused'))).toBeUndefined();
     expect(audibleJobReason({ kind: 'audible.poll', result: null })).toBeUndefined();
+    // A place sync names the same refusals; a backup's code may be its error's prefix.
+    expect(audibleJobReason(job('audible.sync', 'audible_sign_in'))).toBe(
+      'audible.pollCode.audible_sign_in',
+    );
+    expect(
+      audibleJobReason({ kind: 'audible.import', result: {}, error: 'drm_free: only an MP3' }),
+    ).toBe('audible.code.drm_free');
+    expect(
+      audibleJobReason({ kind: 'audible.import', result: {}, error: 'something else' }),
+    ).toBeUndefined();
   });
 
   it('backs a title up, and says a preorder waits for its release', async () => {

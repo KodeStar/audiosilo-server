@@ -84,27 +84,37 @@ export const IMPORT_CODES = [
 ] as const;
 
 /**
- * The codes a failed Check now (audible.poll) may name, each worded as
- * `audible.pollCode.<code>`: Audible refused the device (sign in again) or
- * the sign-in for now (the next check tries again).
+ * The codes a failed Check now (audible.poll) or place sync (audible.sync) may
+ * name, each worded as `audible.pollCode.<code>`: Audible refused the device
+ * (sign in again) or the sign-in for now (the next check tries again).
  */
 export const POLL_CODES = ['audible_refused', 'audible_sign_in'] as const;
 
 /**
  * The words for an Audible job's failure code in the Bridge's jobs list (an
  * i18n key), undefined for a job of another kind or a code the console
- * doesn't know (its error is shown as the Bridge wrote it).
+ * doesn't know (its error is shown as the Bridge wrote it). The code is the
+ * result's, else (a backup's, as the server's bridge.AudibleImportCode reads
+ * it) one its error starts with ("drm_free: ...").
  */
 export function audibleJobReason(job: {
   kind: string;
   result?: Record<string, unknown> | null;
+  error?: string;
 }): string | undefined {
-  const code = typeof job.result?.code === 'string' ? job.result.code : '';
-  if (job.kind === 'audible.import' && (IMPORT_CODES as readonly string[]).includes(code)) {
-    return `audible.code.${code}`;
+  const known = (codes: readonly string[]) => {
+    const code = typeof job.result?.code === 'string' ? job.result.code : '';
+    if (code) return codes.includes(code) ? code : undefined;
+    const err = job.error ?? '';
+    return codes.find((c) => err === c || err.startsWith(`${c}:`));
+  };
+  if (job.kind === 'audible.import') {
+    const code = known(IMPORT_CODES);
+    return code ? `audible.code.${code}` : undefined;
   }
-  if (job.kind === 'audible.poll' && (POLL_CODES as readonly string[]).includes(code)) {
-    return `audible.pollCode.${code}`;
+  if (job.kind === 'audible.poll' || job.kind === 'audible.sync') {
+    const code = known(POLL_CODES);
+    return code ? `audible.pollCode.${code}` : undefined;
   }
   return undefined;
 }
