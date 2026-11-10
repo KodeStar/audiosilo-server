@@ -7,6 +7,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"os"
@@ -93,7 +94,17 @@ type Metadata struct {
 	// item, Vorbis or ffprobe "narrator"), which a composer tag, the fallback
 	// when there is none, never replaces (applyProbe).
 	narratorExplicit bool
+	// timedOut: with no ffprobe to ask, the in-process read ran out of time
+	// (ProbeTimedOut).
+	timedOut bool
 }
+
+// ProbeTimedOut reports whether, with no ffprobe configured, the file's read
+// ran out of its time (the tag read's or the in-process probe's deadline) and
+// so gave no duration: as with an ffprobe time-out (ErrProbeTimeout), a slow or
+// busy disk may read it given time alone. With ffprobe configured a timed-out
+// probe goes to ffprobe, whose own time-out is the ProbeErr.
+func (m *Metadata) ProbeTimedOut() bool { return m != nil && m.timedOut }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
 // .mp4 is included because audiobooks are sometimes delivered as AAC-in-MP4;
@@ -150,16 +161,19 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // ffprobe's release would (ffprobeRules; off for a release it doesn't know),
 // and ffprobe runs only when it is off or unsure of the file (a shape it does
 // not model, a read error), so a file neither reads still has ffprobe's own
-// error as its ProbeErr. With ffprobePath "" nothing is probed, in-process or
-// not: tags only, as with ffprobe disabled before the probe existed
-// (SCAN-SPIKE decision 2).
+// error as its ProbeErr. With ffprobePath "" (none configured, or none found)
+// the probe still runs, by noFFprobeRules (SCAN-SPIKE decision 2, server#269):
+// a file it is unsure of then has no duration, and no ProbeErr, as before.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
-	ff := ffNone
-	if ffprobePath != "" && !ffprobeForced(ffprobePath) {
-		ff = ffprobeRules(ctx, ffprobePath)
+	ff := noFFprobeRules
+	if ffprobePath != "" {
+		ff = ffNone
+		if !ffprobeForced(ffprobePath) {
+			ff = ffprobeRules(ctx, ffprobePath)
+		}
 	}
-	p, err := readFile(ctx, m, path, ff, timeout)
+	p, reason, err := readFile(ctx, m, path, ff, timeout)
 	if err != nil {
 		m.OpenErr = err
 		return m, nil // ffprobe can't read what the server can't open
@@ -174,9 +188,25 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 		} else {
 			m.ProbeErr = err
 		}
+	default:
+		m.timedOut = timedOutReason(reason)
 	}
 	return m, nil
 }
+
+// ExtractTags reads only the tags of the file at path (and the iTunes
+// narrator): no probe, in-process or ffprobe, so no duration, codec or
+// chapters. An OpenErr when it can't be opened.
+func ExtractTags(path string) *Metadata {
+	m := &Metadata{Format: fileFormat(path)}
+	if _, _, err := readFile(context.Background(), m, path, ffNone, ProbeTimeout); err != nil {
+		m.OpenErr = err
+	}
+	return m
+}
+
+// errTagsUnread stands for dhowden's answer when its read was cut short.
+var errTagsUnread = errors.New("tags unread")
 
 // fileFormat is the format a file's extension names ("m4b", "mp3").
 func fileFormat(path string) string {
@@ -184,14 +214,18 @@ func fileFormat(path string) string {
 }
 
 // readFile reads the tags of the file at path into m and, unless ff is ffNone,
-// the in-process probe's answer by ff's rules (nil when it is unsure: ffprobe
-// reads the file), bounded by ctx and timeout as ffprobe would be (fastProbe).
-// The file is closed when it returns, before any ffprobe run. An error: it
-// could not be opened.
-func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (*probeResult, error) {
+// the in-process probe's answer by ff's rules, or why it has none (reason:
+// unsure of the file, a bound passed; ffprobe reads it then). The tag read and
+// the narrator walk are bounded as the probe is: timeout (the ffprobe run's) and
+// ctx, and the probe's byte budget, every read from the file waited for under
+// them (blockFile.raw), so a file on a share that stops answering costs at most
+// timeout. A tag read over a bound leaves the tags unread and the probe unrun
+// (ffprobe, killable, answers). The file is closed when it returns, before any
+// ffprobe run. An error: it could not be opened.
+func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer f.Close()
 	info, err := f.Stat()
@@ -200,32 +234,47 @@ func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout
 		if md, terr := ReadTags(f); terr == nil {
 			applyTags(m, md)
 		}
-		return nil, nil
+		return nil, "no size", nil
 	}
 	b := newBlockFile(f, info.Size())
-	md, terr := tag.ReadFrom(&blockReader{b: b})
+	rctx, cancel := context.WithTimeoutCause(ctx, timeout, errReadDeadline)
+	defer cancel()
+	var md tag.Metadata
+	terr := errTagsUnread
+	narrator := ""
+	why := b.bounded(rctx, func() { md, terr = tag.ReadFrom(&blockReader{b: b}) })
+	// The iTunes narrator item, which neither dhowden nor ffprobe reads. Asked
+	// of an MP4 (or a file named as one dhowden could not read: its walk is
+	// bounded and a stranger simply has no moov).
+	if why == "" && ((terr == nil && md.Format() == tag.MP4) || (terr != nil && mp4Extensions[m.Format])) {
+		why = b.bounded(rctx, func() { narrator = readMP4Narrator(b, b.size) })
+	}
+	if timedOutReason(why) || rctx.Err() != nil {
+		// Out of time (a share that stopped answering, most likely): the probe
+		// would be too, so ffprobe, killable, answers.
+		reason = "tags: " + why
+		probeLogger().Debug("in-process read: out of time, ffprobe reads this file", "path", path, "reason", reason)
+		return nil, reason, nil
+	}
+	// Past the byte budget, or a reader's panic: the tags read so far stand (a
+	// narrator walk's bound leaves dhowden's tags), the probe still runs.
 	if terr == nil {
 		applyTags(m, md)
 	}
-	// The iTunes narrator item, which neither dhowden nor ffprobe reads. Asked of
-	// an MP4 (or a file named as one dhowden could not read: its walk is bounded
-	// and a stranger simply has no moov).
-	if (terr == nil && md.Format() == tag.MP4) || (terr != nil && mp4Extensions[m.Format]) {
-		if n := readMP4Narrator(b, b.size); n != "" {
-			m.Narrator, m.narratorExplicit = n, true
-		}
+	if narrator != "" {
+		m.Narrator, m.narratorExplicit = narrator, true
 	}
 	if ff == ffNone {
-		return nil, nil
+		return nil, "", nil
 	}
 	b.ff = ff
-	p, reason := fastProbe(ctx, b, m.Format, timeout)
+	p, reason = fastProbe(ctx, b, m.Format, timeout)
 	if reason != "" {
 		// Silent by design (ffprobe answers instead), but worth seeing when a
 		// scan is slower than expected: which files, and why (server#269).
 		probeLogger().Debug("in-process probe: ffprobe reads this file", "path", path, "reason", reason)
 	}
-	return p, nil
+	return p, reason, nil
 }
 
 // probeLog is where the in-process probe's fallbacks are logged, at debug

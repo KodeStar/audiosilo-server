@@ -1017,7 +1017,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   prefix, fragmented/compressed MP4, an unknown handler or sample entry, multi-stream Ogg, an MKA
   with no duration or a second SeekHead, another container named .mp3 (WAV, FLAC, Ogg, MKV, MP4),
   a chapter track whose one edit needs keyframes or a DTS shift (stss/ctts; its samples are cut
-  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter),
+  at the edit's end as mov_fix_index does, so a trailing zero-length sample is no chapter), a
+  track `mov_read_trak`'s sanity check calls a broken header (chunks but no stts/stsc entries or
+  no sample size or count, or samples but no chunks: FFmpeg then reads its duration in 1/90000,
+  server#276), an mvhd/mdhd timescale past INT32_MAX, a rescale past int64, an ID3v2.2 `CHA`
+  frame (FFmpeg's three-letter match reads it as CHAP),
   a crafted table past a bound (a chapter track over 65536 samples or with counts past its
   tables, MKV SimpleTags over 4096 or 8 deep, a compressed ID3 frame over 16 MiB), a read error,
   a reader's panic, no duration, or a probe limit: each file's probe stops at a deadline (the
@@ -1026,13 +1030,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   every block read, before inflating an ID3 frame or growing a repeated Vorbis key
   (`blockFile.check`) and, every 256 ticks, in the walks that loop without reading
   (`blockFile.tick`; a `probeLimit` panic `fastProbe` recovers). A file neither reads keeps
-  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`). `--ffprobe ""` probes
-  nothing, in-process included (decision 2, a follow-up). A key `applyProbe` starts reading joins
-  `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
+  ffprobe's error as `ProbeErr` (Health's text, `ErrProbeRejected`; FFmpeg's `[mp3 @ 0x...]`
+  address dropped, server#272). The tag read and the narrator walk before the probe are bounded
+  too (`readFile`): the ffprobe run's timeout and the caller's context, and the byte budget; a
+  tag read out of time skips the probe (ffprobe, killable, answers), one past the budget keeps
+  what it read. While armed every read from the file runs on its own goroutine and is waited for
+  only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
+  costs a leaked goroutine, never a stuck reader (`os.Open`/`Stat` are not bounded). With no
+  ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
+  (`noFFprobeRules`, decision 2, server#269): a file it is unsure of has no duration and no
+  `ProbeErr`; a read out of time says so (`Metadata.ProbeTimedOut`) and the scan reads it again
+  alone, as an ffprobe time-out; a scan reads an unchanged book with no stored duration or codec
+  again once per server run (`Scanner.rereadUnprobed`), so a server that ran without ffprobe
+  gets its books' lengths from its first scan since. `metadata.ExtractTags` reads tags alone. A
+  key `applyProbe` starts reading joins `probeTagKeys`. A CBR MP3's bitrate-estimated duration counts each ID3 picture read_apic
   keeps (its stream's 1/90000 can round past the audio's). Tests: `testdata/probe` (~100 fixtures, < 3 MB, made by
   `scripts/gen-probe-fixtures.sh` with `cmd/mkfixtures`) and `golden-<release>.json` per known
   release (`cmd/probediff -golden`; the script writes the Docker image's via docker), checked with
-  no ffprobe (`probe_golden_test.go`); `probe_live_test.go` compares the installed ffprobe
+  no ffprobe (`probe_golden_test.go`); both views come from one mapping (`viewOf` of a
+  `probeResult`: `probe()`'s for ffprobe, `readFile`'s, Extract's own opener, for the probe), so
+  the checks compare what Extract stores; `probe_live_test.go` compares the installed ffprobe
   (`AUDIOSILO_PROBE_DIRS` adds folders), and CI's `probe-drift` workflow runs it against the
   image's ffprobe (and weekly), failing on drift or a release with no rules. Adding a release:
   its rules where they differ, its golden, a `knownRules` entry. `cmd/probediff <dirs>` is the

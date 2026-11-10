@@ -8,6 +8,7 @@ package metadata
 
 import (
 	"encoding/binary"
+	"math"
 	"strconv"
 	"unicode/utf16"
 )
@@ -87,6 +88,9 @@ func probeMP4(b *blockFile) (*probeResult, error) {
 	for i, t := range s.tracks {
 		if t.timescale <= 0 {
 			return nil, unsure("mp4: track without a timescale")
+		}
+		if s.brokenHeader(t) {
+			return nil, unsure("mp4: missing mandatory atoms")
 		}
 		isText := false
 		switch t.handler {
@@ -183,6 +187,39 @@ func probeMP4(b *blockFile) (*probeResult, error) {
 		startUS = start
 	}
 	return result(durUS, codec, &s.dict, s.chapters.finish(durUS, startUS, hasStart)), nil
+}
+
+// brokenHeader is mov_read_trak's sanity check: a track with chunks but no
+// stts or stsc entries, or neither a sample size nor a sample count, or with
+// samples but no chunks ("missing mandatory atoms, broken header"). FFmpeg then
+// returns before the track's time base is set, so its duration is read in
+// 1/90000 rather than its own timescale (server#276: 13,163 s at timescale
+// 24,000 printed as 3,510 s). Such a file is left to ffprobe. A count a box is
+// too short to hold reads as none.
+func (s *mp4State) brokenHeader(t *mp4Track) bool {
+	chunks := s.leafCount(t.stco, 0)
+	stsc := s.leafCount(t.stsc, 0)
+	var sampleSize int64
+	if !t.stz2 {
+		sampleSize = s.leafCount(t.stsz, 0) // stsz's sample_size field (stz2 has none)
+	}
+	samples := s.leafCount(t.stsz, 4)
+	return (chunks > 0 && (t.sttsEntries == 0 || stsc == 0 || (sampleSize == 0 && samples == 0))) ||
+		(chunks == 0 && samples > 0)
+}
+
+// leafCount is the 32-bit field at off past a sample table box's version and
+// flags (an entry count, or stsz's sample size); 0 for a box not there or too
+// short to hold it.
+func (s *mp4State) leafCount(l mp4Leaf, off int64) int64 {
+	if l.size < 8+off {
+		return 0
+	}
+	v, ok := s.b.bytesAt(l.off+4+off, 4)
+	if !ok {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint32(v))
 }
 
 func (s *mp4State) chapterIDs() []uint32 {
@@ -353,6 +390,11 @@ func (s *mp4State) atom(typ string, body, size int64, parent string, depth int) 
 		} else {
 			s.mvTimescale = int64(binary.BigEndian.Uint32(v[12:16]))
 		}
+		if s.mvTimescale > math.MaxInt32 {
+			// FFmpeg keeps it in an int: wrapped negative, then read as 1.
+			s.err = unsure("mp4: mvhd timescale past INT32_MAX")
+			return
+		}
 		if s.mvTimescale <= 0 {
 			s.mvTimescale = 1
 		}
@@ -391,6 +433,10 @@ func (s *mp4State) atom(typ string, body, size int64, parent string, depth int) 
 				d = 0
 			}
 			t.mdhdDur = int64(d)
+		}
+		if t.timescale > math.MaxInt32 {
+			s.err = unsure("mp4: mdhd timescale past INT32_MAX") // FFmpeg's int wraps
+			return
 		}
 		if t.timescale <= 0 {
 			t.timescale = 1

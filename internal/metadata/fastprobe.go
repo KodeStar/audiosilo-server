@@ -22,7 +22,6 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -48,6 +47,12 @@ const (
 // knownRules are the releases the probe answers for, by the version ffprobe
 // names (its first line: "ffprobe version 8.1.3 Copyright ...").
 var knownRules = map[string]ffRules{"7.1": ff7, "8.1": ff8}
+
+// noFFprobeRules is the rules the probe answers by with no ffprobe configured
+// (SCAN-SPIKE decision 2, server#269): the Docker image's release, the newest
+// known. No ffprobe means no fallback: a file the probe is unsure of has no
+// duration, as every file had before.
+const noFFprobeRules = ff8
 
 // rulesByPath caches each ffprobe path's rules, read once per process.
 var rulesByPath sync.Map // ffprobe path -> *pathRules
@@ -119,13 +124,25 @@ const (
 	maxProbeBytes = 64 << 20
 )
 
-// probeLimit is the panic a blockFile's tick raises once a bound is passed:
-// fastProbe recovers it, from wherever the reader was.
+// probeLimit is the panic a blockFile's tick raises once a bound is passed
+// (and rescale for a time it can't hold): fastProbe recovers it, from wherever
+// the reader was.
 type probeLimit string
 
-// errProbeDeadline is the probe's own timeout's cause (the caller's ending
-// context keeps its own).
-var errProbeDeadline = errors.New("probe deadline")
+// errProbeDeadline is the probe's own timeout's cause, and errReadDeadline the
+// tag read's (the caller's ending context keeps its own).
+var (
+	errProbeDeadline = errors.New("probe deadline")
+	errReadDeadline  = errors.New("read deadline")
+)
+
+// timedOutReason reports whether a reason readFile gives is a deadline of its
+// own (the probe's or the tag read's), not a bound on bytes, a shape it does
+// not model or the caller's context ending.
+func timedOutReason(reason string) bool {
+	return strings.HasSuffix(reason, "limit: "+errProbeDeadline.Error()) ||
+		strings.HasSuffix(reason, "limit: "+errReadDeadline.Error())
+}
 
 // fastProbe answers for the file's format as b.ff's ffprobe would, or says why
 // it can't ("" when it answered), within the probe's bounds: timeout (capped at
@@ -134,31 +151,24 @@ var errProbeDeadline = errors.New("probe deadline")
 func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Duration) (p *probeResult, reason string) {
 	ctx, cancel := context.WithTimeoutCause(ctx, min(timeout, maxProbeTime), errProbeDeadline)
 	defer cancel()
-	b.arm(ctx, maxProbeBytes)
-	defer b.disarm()
-	defer func() {
-		if r := recover(); r != nil {
-			if l, ok := r.(probeLimit); ok {
-				p, reason = nil, string(l)
-				return
-			}
-			p, reason = nil, fmt.Sprintf("panic: %v", r)
-		}
-	}()
 	var err error
-	switch format {
-	case "mp3":
-		p, err = probeMP3(b)
-	case "m4b", "m4a", "mp4":
-		p, err = probeMP4(b)
-	case "flac":
-		p, err = probeFLAC(b)
-	case "ogg", "opus":
-		p, err = probeOgg(b)
-	case "mka":
-		p, err = probeMKV(b)
-	default:
-		err = unsure("format " + format)
+	if why := b.bounded(ctx, func() {
+		switch format {
+		case "mp3":
+			p, err = probeMP3(b)
+		case "m4b", "m4a", "mp4":
+			p, err = probeMP4(b)
+		case "flac":
+			p, err = probeFLAC(b)
+		case "ogg", "opus":
+			p, err = probeOgg(b)
+		case "mka":
+			p, err = probeMKV(b)
+		default:
+			err = unsure("format " + format)
+		}
+	}); why != "" {
+		return nil, why
 	}
 	switch {
 	case b.err != nil:
@@ -173,6 +183,26 @@ func fastProbe(ctx context.Context, b *blockFile, format string, timeout time.Du
 		return nil, "no duration"
 	}
 	return p, ""
+}
+
+// bounded runs fn with b armed with a read's bounds: ctx (its deadline the
+// read's) and maxProbeBytes. It returns why fn was cut short ("" when it
+// wasn't): a bound passed (probeLimit) or a panic, which it recovers, from
+// wherever fn was (dhowden's tag read included).
+func (b *blockFile) bounded(ctx context.Context, fn func()) (why string) {
+	b.arm(ctx, maxProbeBytes)
+	defer b.disarm()
+	defer func() {
+		if r := recover(); r != nil {
+			if l, ok := r.(probeLimit); ok {
+				why = string(l)
+				return
+			}
+			why = fmt.Sprintf("panic: %v", r)
+		}
+	}()
+	fn()
+	return ""
 }
 
 // ExactDuration is the in-process probe's duration in seconds of the file r
@@ -191,24 +221,6 @@ func ExactDuration(ctx context.Context, r io.ReaderAt, size int64, format string
 		return 0, false
 	}
 	return p.Duration, true
-}
-
-// probeFile is fastProbe over the file at path with ff's rules, for the
-// comparison with ffprobe (probeview.go).
-func probeFile(path string, ff ffRules) (*probeResult, string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, "", err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, "", err
-	}
-	b := newBlockFile(f, info.Size())
-	b.ff = ff
-	p, reason := fastProbe(context.Background(), b, fileFormat(path), maxProbeTime)
-	return p, reason, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -275,15 +287,20 @@ func (b *blockFile) check() {
 
 // raw reads p at off from the file, noting a failure (a short read ending
 // before the file's size included: it shrank since its stat). While armed it
-// spends the byte budget and checks ctx.
+// spends the byte budget and checks ctx, and waits for the read only as long as
+// ctx lives (waitRead).
 func (b *blockFile) raw(p []byte, off int64) (int, error) {
+	var n int
+	var err error
 	if b.ctx != nil {
 		if b.budget -= int64(len(p)); b.budget < 0 {
 			panic(probeLimit("limit: probe read budget"))
 		}
 		b.check()
+		n, err = b.waitRead(p, off)
+	} else {
+		n, err = b.f.ReadAt(p, off)
 	}
-	n, err := b.f.ReadAt(p, off)
 	if n < len(p) && off+int64(n) < b.size && b.err == nil {
 		if err == nil || errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
@@ -291,6 +308,31 @@ func (b *blockFile) raw(p []byte, off int64) (int, error) {
 		b.err = err
 	}
 	return n, err
+}
+
+// waitRead is the read of p at off on a goroutine of its own, waited for until
+// b's ctx ends: a pread on a network share that stops answering (NFS hard
+// mounts, SMB) can't be interrupted, and would hold a scan's reader for good.
+// Past ctx it panics with a probeLimit, leaving the read to finish (or not) on
+// its own goroutine. Every caller's buffer is its own, made for this read on
+// the stack the panic unwinds (a block, bytesAt's, dhowden's), so nothing reads
+// p after that.
+func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
+	type res struct {
+		n   int
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		n, err := b.f.ReadAt(p, off)
+		done <- res{n, err}
+	}()
+	select {
+	case r := <-done:
+		return r.n, r.err
+	case <-b.ctx.Done():
+		panic(probeLimit("limit: " + context.Cause(b.ctx).Error()))
+	}
 }
 
 func (b *blockFile) block(i int64) []byte {
@@ -559,6 +601,11 @@ func rescale(a, b, c int64) int64 {
 	x.Quo(x, cc)
 	if neg {
 		x.Neg(x)
+	}
+	if !x.IsInt64() {
+		// FFmpeg gives INT64_MIN here, or wraps on its fast path: a crafted
+		// file's, which ffprobe reads instead (server#269).
+		panic(probeLimit("a time past int64"))
 	}
 	return x.Int64()
 }

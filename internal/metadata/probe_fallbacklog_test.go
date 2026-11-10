@@ -44,18 +44,18 @@ func TestProbeFallbackLoggedAtDebug(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if p, err := readFile(context.Background(), &Metadata{Format: "wav"}, wav, ff8, time.Second); err != nil || p != nil {
+	if p, _, err := readFile(context.Background(), &Metadata{Format: "wav"}, wav, ff8, time.Second); err != nil || p != nil {
 		t.Fatalf("wav: %v %v", p, err)
 	}
 	done, cancel := context.WithCancel(context.Background())
-	cancel() // the caller's context ended: a probe limit
-	if p, err := readFile(done, &Metadata{Format: "mp3"}, mp3, ff8, time.Second); err != nil || p != nil {
+	cancel() // the caller's context ended: a limit, met by the tag read already
+	if p, _, err := readFile(done, &Metadata{Format: "mp3"}, mp3, ff8, time.Second); err != nil || p != nil {
 		t.Fatalf("mp3: %v %v", p, err)
 	}
 	out := logs.String()
 	for _, want := range []string{
 		`level=DEBUG msg="in-process probe: ffprobe reads this file" path=` + wav + ` reason="format wav"`,
-		`path=` + mp3 + ` reason="limit: context canceled"`,
+		`path=` + mp3 + ` reason="tags: limit: context canceled"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)

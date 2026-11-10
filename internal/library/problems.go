@@ -226,7 +226,7 @@ func suspectParts(parts []partFacts) int {
 func suspectFromTags(lib catalog.Library, b *catalog.Book) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
-		md, _ := metadata.Extract(absOf(lib, f.RelPath), "")
+		md := metadata.ExtractTags(absOf(lib, f.RelPath))
 		if md.OpenErr != nil {
 			return 0, false
 		}

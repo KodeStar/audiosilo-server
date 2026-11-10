@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -116,6 +117,9 @@ func runFFprobe(parent context.Context, path, ffprobePath string, timeout time.D
 	return &parsed, nil
 }
 
+// ffContextAddr is the address in FFmpeg's log prefix, "[mov,mp4 @ 0x7de824000]".
+var ffContextAddr = regexp.MustCompile(` @ 0x[0-9a-fA-F]+\]`)
+
 // maxProbeMessage bounds the ffprobe message kept for the Health page.
 const maxProbeMessage = 300
 
@@ -143,6 +147,9 @@ func probeError(err error) error {
 		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
 			l = l[i+2:]
 		}
+		// FFmpeg names the reader that complained by its address ("[mp3 @
+		// 0xcbcc3c000]"): new each run, and noise on the Health page (server#272).
+		l = ffContextAddr.ReplaceAllString(l, "]")
 		if l != "" && !slices.Contains(parts, l) {
 			parts = append(parts, l)
 		}

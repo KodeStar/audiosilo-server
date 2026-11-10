@@ -227,6 +227,20 @@
       },
       "fallback": "mp3: no Xing/VBRI header and not constant bitrate"
     },
+    "craft-m4b-broken-header.m4b": {
+      "ffprobe": {
+        "duration": "2.608378",
+        "codec": "aac",
+        "tags": {
+          "album": "Plain Album",
+          "artist": "Plain Artist",
+          "date": "2021",
+          "genre": "Mystery",
+          "title": "Plain Title"
+        }
+      },
+      "fallback": "mp4: missing mandatory atoms"
+    },
     "craft-m4b-chaptrack-trailing.m4b": {
       "ffprobe": {
         "duration": "5.300000",
@@ -497,7 +511,7 @@
       }
     },
     "craft-m4b-truncated.m4b": {
-      "ffprobe_error": "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x] moov atom not found; Invalid data found when processing input",
+      "ffprobe_error": "[mov,mp4,m4a,3gp,3g2,mj2] moov atom not found; Invalid data found when processing input",
       "fallback": "mp4: no moov"
     },
     "craft-mka-a.mka": {

@@ -63,6 +63,42 @@ type Scanner struct {
 	// absolute path.
 	rejectedMu sync.Mutex
 	rejected   map[string]fileState
+
+	// With no ffprobe: the books with no stored duration this server has read
+	// again since it started (rereadUnprobed), in the state read.
+	unprobedMu sync.Mutex
+	unprobed   map[bookKey]fileState
+}
+
+// rereadUnprobed reports whether a scan with no ffprobe should read again a
+// book it finds unchanged with no stored duration or codec (sig): once per
+// server run and book state (noteUnprobed). A server that ran without ffprobe
+// before the in-process probe ran without it (SCAN-SPIKE decision 2) gets its
+// existing books' durations from its first scan since, while a file the probe
+// is unsure of (no ffprobe to ask) is not re-indexed on every scan. A restart
+// reads such books once more.
+func (s *Scanner) rereadUnprobed(libraryID int64, b *catalog.Book, sig catalog.Signature) bool {
+	if s.ffprobePath != "" || (sig.Duration > 0 && sig.Codec != "") {
+		return false
+	}
+	s.unprobedMu.Lock()
+	defer s.unprobedMu.Unlock()
+	was, ok := s.unprobed[bookKey{libraryID, b.RelPath}]
+	return !ok || was != (fileState{mtime: b.MTime, size: b.Size})
+}
+
+// noteUnprobed remembers a book a scan with no ffprobe has just written with
+// no duration or codec, in the state it read (rereadUnprobed).
+func (s *Scanner) noteUnprobed(libraryID int64, b *catalog.Book) {
+	if s.ffprobePath != "" || (b.Duration > 0 && b.Codec != "") {
+		return
+	}
+	s.unprobedMu.Lock()
+	defer s.unprobedMu.Unlock()
+	if s.unprobed == nil {
+		s.unprobed = map[bookKey]fileState{}
+	}
+	s.unprobed[bookKey{libraryID, b.RelPath}] = fileState{mtime: b.MTime, size: b.Size}
 }
 
 // SetConcurrency sets how many audio files a scan reads at once (tags and
@@ -427,6 +463,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
 			return
 		}
+		s.noteUnprobed(lib.ID, b)
 		if b.ScanError != "" {
 			res.Errors++
 			rl.add("warn", "problem", func(e *catalog.RunEvent) {
@@ -537,15 +574,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
-			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
+			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b, old)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			!s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order);
-			// only skip the probe when ffprobe is
-			// disabled, or a prior probe already stored both duration and codec
-			// (so books indexed before the codec column get it backfilled), or the
-			// book's one file has a read problem that problemCleared just found
-			// still there: reading the book again would find the same.
+			// only skip the probe when a prior probe already stored both duration
+			// and codec (so books indexed before the codec column get it
+			// backfilled), or, with no ffprobe, the in-process probe has had its
+			// one go at the book this run (rereadUnprobed), or the book's one
+			// file has a read problem that problemCleared just found still there:
+			// reading the book again would find the same.
 			// Whether it is a disc of a split book turns on its siblings, so it can
 			// change while the book doesn't (and starts unset before migration 0022).
 			if old.SplitParent != b.SplitParent {

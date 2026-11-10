@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -180,8 +179,6 @@ func report(rs []result, timing bool) bool {
 	return mismatch
 }
 
-var ffAddr = regexp.MustCompile(`@ 0x[0-9a-f]+`)
-
 // writeGolden writes dir/golden-<release>.json from the fixtures in dir. It
 // fails when the probe answers a fixture differently from ffprobe, or follows
 // no rules for its release: a golden file never records a mismatch.
@@ -200,8 +197,7 @@ func writeGolden(ctx context.Context, dir, ffprobe string) error {
 		var a metadata.ProbeGoldenAnswer
 		ff, err := metadata.ProbeFFprobe(ctx, path, ffprobe)
 		if err != nil {
-			// ffprobe names its demuxer by address ("[mov,mp4 @ 0xc7ac5c000]"), new each run.
-			a.Error = ffAddr.ReplaceAllString(err.Error(), "@ 0x")
+			a.Error = err.Error() // without the reader's address, new each run (probeError)
 		}
 		a.FFprobe = ff
 		fast, reason, err := metadata.ProbeInProcess(ctx, path, ffprobe)
