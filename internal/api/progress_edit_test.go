@@ -32,6 +32,11 @@ func TestEditMyProgress(t *testing.T) {
 	e := newRateEnv(t)
 	ctx := context.Background()
 	ref := catalog.Ref{LibraryID: e.libID, Path: cradleBook}
+	// The book's length is the progress row's (the fixture's seconds, read with
+	// no ffprobe, put aside): an index with no duration.
+	if _, err := e.db.ExecContext(ctx, `UPDATE books SET duration = 0 WHERE library_id = ? AND rel_path = ?`, e.libID, cradleBook); err != nil {
+		t.Fatal(err)
+	}
 
 	// Allowed: no progress yet on an indexed book in scope: the row is created,
 	// started now.
