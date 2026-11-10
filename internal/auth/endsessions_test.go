@@ -20,21 +20,37 @@ type everyKind struct {
 	pairing, recovery       string
 }
 
+// mustSession signs userID in on device and returns the session token and its
+// credential id.
+func mustSession(t *testing.T, s *Service, ctx context.Context, userID int64, device string) (string, int64) {
+	t.Helper()
+	tok, err := s.IssueToken(ctx, userID, KindSession, device, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok, cred.ID
+}
+
+// wantLive asserts err is nil when live, ErrInvalidToken when not.
+func wantLive(t *testing.T, what string, live bool, err error) {
+	t.Helper()
+	switch {
+	case live && err != nil:
+		t.Errorf("%s = %v, want it accepted", what, err)
+	case !live && !errors.Is(err, ErrInvalidToken):
+		t.Errorf("%s = %v, want ErrInvalidToken", what, err)
+	}
+}
+
 func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) everyKind {
 	t.Helper()
 	admin, bridgeTok := pairBridge(t, s, ctx, name)
 	k := everyKind{user: admin, bridgeSecret: bridgeTok}
-	session := func(device string) (string, int64) {
-		tok, err := s.IssueToken(ctx, admin.ID, KindSession, device, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return tok, cred.ID
-	}
+	session := func(device string) (string, int64) { return mustSession(t, s, ctx, admin.ID, device) }
 	var laptopID int64
 	k.phone, k.phoneID = session("phone")
 	k.laptop, laptopID = session("laptop")
@@ -70,15 +86,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 // the API key, feed and Bridge tokens always live.
 func (k everyKind) check(t *testing.T, s *Service, ctx context.Context, phoneLive, laptopLive bool) {
 	t.Helper()
-	want := func(what string, live bool, err error) {
-		t.Helper()
-		switch {
-		case live && err != nil:
-			t.Errorf("%s = %v, want it accepted", what, err)
-		case !live && !errors.Is(err, ErrInvalidToken):
-			t.Errorf("%s = %v, want ErrInvalidToken", what, err)
-		}
-	}
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
 	_, _, err := s.ResolveRequest(ctx, k.phone, Presence{}, KindSession)
 	want("the phone's session", phoneLive, err)
 	_, _, err = resolveCast(s, ctx, k.castPhone, "Author/Book")
@@ -267,5 +275,131 @@ func TestSignInRacingAPasswordChangeGetsNoSession(t *testing.T) {
 	}
 	if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession); err != nil {
 		t.Fatalf("its session = %v, want it accepted", err)
+	}
+}
+
+// householdSignIns is an owner with a phone (the caller's device) and a laptop,
+// a member signed in on each, the member on a device of their own (paired, no
+// created_on_token_id), a member signed in on a device the owner signed out
+// earlier, an open pairing code for the member, and a neighbour's member whose
+// session claims the owner's laptop (bad data) and whose pairing code is open.
+type householdSignIns struct {
+	owner                                   *User
+	phoneID                                 int64
+	onPhone, onLaptop, ownDevice, onOldTab  string
+	pairing, neighbourOnLaptop, neighbourPC string
+}
+
+func mintHouseholdSignIns(t *testing.T, s *Service, ctx context.Context) householdSignIns {
+	t.Helper()
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	neighbour := mustUser(t, s, ctx, "nina", "nina-password", RoleUser)
+	device := func(name string) int64 { _, id := mustSession(t, s, ctx, owner.ID, name); return id }
+	phone, laptop, oldTab := device("phone"), device("laptop"), device("old tablet")
+	evie := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	h := householdSignIns{owner: owner, phoneID: phone}
+	var err error
+	sessionOn := func(owner, member, on int64) string {
+		tok, _, err := s.MemberSession(ctx, owner, member, "here", on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		warm(t, s, tok, KindSession)
+		return tok
+	}
+	h.onPhone = sessionOn(owner.ID, evie.ID, phone)
+	h.onLaptop = sessionOn(owner.ID, evie.ID, laptop)
+	h.onOldTab = sessionOn(owner.ID, evie.ID, oldTab)
+	if _, err = s.RevokeOwnDeviceAndMembers(ctx, owner.ID, oldTab, false); err != nil {
+		t.Fatal(err)
+	}
+	if h.ownDevice, err = s.IssueToken(ctx, evie.ID, KindSession, "kid's tablet", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, h.pairing, err = s.MemberPairing(ctx, owner.ID, evie.ID, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	kit := mustMember(t, s, ctx, neighbour.ID, NewMember{Name: "Kit", Kind: MemberKid, Access: MemberAll})
+	h.neighbourOnLaptop = sessionOn(neighbour.ID, kit.ID, laptop)
+	if _, h.neighbourPC, err = s.MemberPairing(ctx, neighbour.ID, kit.ID, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// check asserts the members' sign-ins after the owner's sessions ended
+// (keeping the phone or not): the members' sessions on the owner's ended
+// devices and their open pairing code are refused; the one on the kept device,
+// the member's own device and everything of the neighbour's stay.
+func (h householdSignIns) check(t *testing.T, s *Service, ctx context.Context, phoneKept bool) {
+	t.Helper()
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
+	session := func(tok string) error {
+		_, _, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		return err
+	}
+	pairing := func(tok string) error {
+		_, _, err := s.lookupToken(ctx, hashSecret(tok), KindPairing)
+		return err
+	}
+	want("the member on the kept phone", phoneKept, session(h.onPhone))
+	want("the member on the laptop", false, session(h.onLaptop))
+	want("the member on a device signed out earlier", false, session(h.onOldTab))
+	want("the member's own device", true, session(h.ownDevice))
+	want("the member's open pairing code", false, pairing(h.pairing))
+	want("the neighbour's member on the laptop (bad data)", true, session(h.neighbourOnLaptop))
+	want("the neighbour's member's pairing code", true, pairing(h.neighbourPC))
+}
+
+// Security-critical (server#285, owner decision 2026-11-09): the owner's
+// password change ends their household members' sessions made on the owner's
+// other devices and the members' open pairing codes, keeping the member on the
+// device the change was made on, the member's own device and every other
+// owner's members.
+func TestPasswordChangeEndsMembersOnOwnersDevices(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	h := mintHouseholdSignIns(t, s, ctx)
+	if err := s.SetPassword(ctx, h.owner.ID, "a-new-password", h.phoneID); err != nil {
+		t.Fatal(err)
+	}
+	h.check(t, s, ctx, true)
+}
+
+// Security-critical (server#285): Sign out everywhere with nothing kept ends
+// the members on every one of the owner's devices; kept the caller's, the
+// member there stays.
+func TestSignOutEverywhereEndsMembersOnOwnersDevices(t *testing.T) {
+	t.Parallel()
+	for _, keepPhone := range []bool{false, true} {
+		s, ctx := newTestService(t)
+		h := mintHouseholdSignIns(t, s, ctx)
+		keep := int64(0)
+		if keepPhone {
+			keep = h.phoneID
+		}
+		if _, err := s.SignOutEverywhere(ctx, h.owner.ID, keep); err != nil {
+			t.Fatal(err)
+		}
+		h.check(t, s, ctx, keepPhone)
+	}
+}
+
+// Denied: a change that ends nothing of the owner's (an edit with no
+// password) leaves the members alone too.
+func TestNoPasswordChangeKeepsMembers(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	h := mintHouseholdSignIns(t, s, ctx)
+	if err := s.UpdateUser(ctx, h.owner.ID, UserChanges{CanAddMembers: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{h.onPhone, h.onLaptop, h.onOldTab, h.ownDevice} {
+		if _, _, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession); err != nil {
+			t.Errorf("an edit without a password ended a member's session: %v", err)
+		}
+	}
+	if _, _, err := s.lookupToken(ctx, hashSecret(h.pairing), KindPairing); err != nil {
+		t.Errorf("an edit without a password ended a member's pairing code: %v", err)
 	}
 }

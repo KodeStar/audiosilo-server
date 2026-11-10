@@ -18,9 +18,10 @@ import (
 // scope and the library's ignore rules), its entries marked from the index
 // (MarkBooks) and the pending folders after rel (markPendingNext, best-effort:
 // logged to log), then NextSibling. book is the index's book at the entry, nil
-// for a bare or pending folder. next is nil when nothing follows or the folder
-// cannot be read; an error is the index's.
-func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Library, scope catalog.Scope, rel string, log *slog.Logger) (next *Entry, book *catalog.Book, err error) {
+// for a bare or pending folder; folder is the index's books in the folder by
+// path (the current one included). next is nil when nothing follows or the
+// folder cannot be read; an error is the index's.
+func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Library, scope catalog.Scope, rel string, log *slog.Logger) (next *Entry, book *catalog.Book, folder map[string]catalog.Book, err error) {
 	var allow func(string) bool
 	if !scope.AllowAll {
 		allow = scope.Allows
@@ -28,7 +29,7 @@ func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Librar
 	ignore := ParseIgnore(lib.IgnorePatterns)
 	entries, err := ListDir(lib.Root, dirOf(rel), allow, ignore)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// Every entry is marked, the current book included, as the folder listing
 	// marks it for the player.
@@ -38,18 +39,18 @@ func NextInFolder(ctx context.Context, cat *catalog.Catalog, lib *catalog.Librar
 	}
 	books, err := cat.BooksByPaths(ctx, lib.ID, paths)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	MarkBooks(entries, books)
 	markPendingNext(ctx, cat, lib, scope, ignore, entries, rel, log)
 	next = NextSibling(entries, rel)
 	if next == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if b, ok := books[next.Path]; ok {
 		book = &b
 	}
-	return next, book, nil
+	return next, book, books, nil
 }
 
 // pendingNextBatch is how many of the folders after rel markPendingNext reads

@@ -111,7 +111,7 @@ const (
 	codeNotABook           = "not_a_book"      // POST /cast/token for a podcast episode (403)
 	codeInvalidSetting     = "invalid_setting" // + "field": the setting it names
 	codeInvalidSetupStep   = "invalid_setup_step"
-	codeSettingLocked      = "setting_locked"    // + "field": set by the environment or the launcher
+	codeSettingLocked      = "setting_locked"    // + "field": set by an AUDIOSILO_* variable
 	codeUnknownSetting     = "unknown_setting"   // + "field"
 	codeSettingReadOnly    = "setting_read_only" // + "field"
 	codeUpdateCheckOff     = "update_check_off"
@@ -200,6 +200,11 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
 	case errors.Is(err, catalog.ErrKindImmutable):
 		writeErrorCode(w, 400, "kind_immutable", "Library kind cannot be changed.")
+	case errors.Is(err, catalog.ErrLibraryGrant):
+		// A path edit on a library grant's share (server#254): its folders change
+		// by granting or revoking the library on the person's page.
+		writeErrorCode(w, http.StatusConflict, "library_grant",
+			"this share gives a whole library; grant or revoke the library instead of editing its folders")
 	case errors.Is(err, catalog.ErrRootOverlaps):
 		writeErrorCode(w, 409, "root_overlaps", "A podcast library root cannot overlap another library.")
 	case errors.Is(err, catalog.ErrInvalidMetadataSource):

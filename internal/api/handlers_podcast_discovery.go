@@ -293,13 +293,25 @@ func (a *API) handleOPMLImport(w http.ResponseWriter, r *http.Request) {
 	if !a.opmlAdmit(w, a.opml.imports.Take(quotaKey(r))) {
 		return
 	}
+	// busy answers 503 opml_busy for an import that never ran: its token goes
+	// back, so the retry Retry-After asks for isn't refused as over the budget.
+	busy := func() {
+		a.opml.imports.Refund(quotaKey(r))
+		writeNoStoreError(w, http.StatusServiceUnavailable, "opml_busy", "OPML transfers are busy. Try again shortly.", 1)
+	}
+	// Both slots taken: answered before the body is read, so a refunded
+	// upload costs no 1 MiB read and the budget still bounds the reads.
+	if a.opml.slots.Busy() {
+		busy()
+		return
+	}
 	// The body (<= 1 MiB, the person's budget spent) is read before a slot is
 	// taken, so a slow upload can't hold one of the two server-wide slots for
 	// the whole read timeout.
 	body, err := opml.ReadBody(r.Body)
 	if err == nil {
 		if !a.opml.slots.TryAcquire() {
-			writeNoStoreError(w, http.StatusServiceUnavailable, "opml_busy", "OPML transfers are busy. Try again shortly.", 1)
+			busy() // a slot filled during the read
 			return
 		}
 		defer a.opml.slots.Release()

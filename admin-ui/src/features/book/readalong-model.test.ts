@@ -9,7 +9,8 @@ import {
   generatePollMs,
   generateResult,
   isBookKind,
-  isFileKind,
+  changesBookMeta,
+  writesBookFiles,
   KNOWN_STAGES,
   readalongFailure,
 } from '@/features/bridge/generate-model';
@@ -287,7 +288,10 @@ describe('the read-along kind elsewhere', () => {
 
   it('is a book kind that writes the book, polled while it works', () => {
     expect(isBookKind('readalong.align')).toBe(true);
-    expect(isFileKind('readalong.align')).toBe(true);
+    expect(writesBookFiles('readalong.align')).toBe(true);
+    // A read-along map changes the book, not its community metadata.
+    expect(changesBookMeta('readalong.align')).toBe(false);
+    expect(changesBookMeta('sidecars.generate')).toBe(true);
     expect(generatePollMs([job({ state: 'running' })])).toBe(10_000);
   });
 

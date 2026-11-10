@@ -184,7 +184,7 @@ export function SettingsForm<S extends SettingsSection>({
     });
   }
 
-  // Every shown field set elsewhere (the environment, an embedding launcher): nothing to save here.
+  // Every shown field set by the environment: nothing to save here.
   const shown = fields.filter((f) => !visible || visible(f.name, draft));
   const editable = shown.some((f) => !lockOf(settings, `${section}.${f.name}` as SettingId));
   // Only the shown fields: an edit to one hidden since (TLS hosts after leaving

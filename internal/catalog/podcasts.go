@@ -191,12 +191,13 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				chapterSource = "id3_chap"
 			}
 			var id int64
+			indexedAt := c.ts() // the books row's, and its episode row's stamp of it
 			err = tx.QueryRowContext(ctx, `INSERT INTO books(library_id,rel_path,title,author,duration,cover_path,cover_art,format,size,mtime,indexed_at,added_at,description,has_cover,codec,chapters_source,genres_checked,released_checked)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover,codec=excluded.codec,chapters_source=excluded.chapters_source RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, c.ts(), e.FirstSeen, e.Description, cover != "", codec, chapterSource).Scan(&id)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1) ON CONFLICT(library_id,rel_path) DO UPDATE SET title=excluded.title,author=excluded.author,duration=excluded.duration,cover_path=excluded.cover_path,cover_art=excluded.cover_art,format=excluded.format,size=excluded.size,mtime=excluded.mtime,indexed_at=excluded.indexed_at,description=excluded.description,has_cover=excluded.has_cover,codec=excluded.codec,chapters_source=excluded.chapters_source RETURNING id`, lib, e.Path, e.Title, f.Show.Author, duration, cover, coverVersion, strings.TrimPrefix(strings.ToLower(path.Ext(e.Path)), "."), info.Size, info.MTime, indexedAt, e.FirstSeen, e.Description, cover != "", codec, chapterSource).Scan(&id)
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source,sha256,timeline_changed,fetch_json,feed_sig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source,sha256=excluded.sha256,timeline_changed=excluded.timeline_changed,fetch_json=excluded.fetch_json,feed_sig=excluded.feed_sig`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source, hash, timeline, fetchJSON, info.FeedSig)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_episodes(book_id,library_id,show_path,episode_id,guid,published,season,episode,episode_type,explicit,feed_duration,present,generation,removed_at,duration_source,sha256,timeline_changed,fetch_json,feed_sig,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET show_path=excluded.show_path,episode_id=excluded.episode_id,guid=excluded.guid,published=excluded.published,season=excluded.season,episode=excluded.episode,episode_type=excluded.episode_type,explicit=excluded.explicit,feed_duration=excluded.feed_duration,present=excluded.present,generation=excluded.generation,removed_at=excluded.removed_at,duration_source=excluded.duration_source,sha256=excluded.sha256,timeline_changed=excluded.timeline_changed,fetch_json=excluded.fetch_json,feed_sig=excluded.feed_sig,indexed_at=excluded.indexed_at`, id, lib, show, e.ID, e.GUID, stringOrNil(e.Published), e.Season, e.Episode, e.EpisodeType, e.Explicit, feedDuration, exists, gen, e.RemovedAt, source, hash, timeline, fetchJSON, info.FeedSig, indexedAt)
 			if err != nil {
 				return err
 			}
@@ -550,7 +551,8 @@ func (c *Catalog) PodcastEpisodesWithin(ctx context.Context, lib int64, show, or
 // rows), whatever their files.
 func (c *Catalog) PodcastEpisodeRows(ctx context.Context, lib int64, show string) (int, error) {
 	var n int
-	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_episodes WHERE library_id=? AND show_path=?`, lib, show).Scan(&n)
+	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM podcast_episodes e JOIN books b ON b.id=e.book_id
+	  WHERE e.library_id=? AND e.show_path=? AND (e.indexed_at IS NULL OR e.indexed_at=b.indexed_at)`, lib, show).Scan(&n)
 	return n, err
 }
 

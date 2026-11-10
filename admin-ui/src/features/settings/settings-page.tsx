@@ -77,8 +77,8 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
 
 /**
  * Server > Settings: config.yaml as a page, one topic at a time (`?topic=`),
- * each setting in exactly one place. A setting the environment or an embedding
- * launcher sets is shown locked, one read only at start says so, and a saved one
+ * each setting in exactly one place. A setting the environment sets is shown
+ * locked, one read only at start says so, and a saved one
  * still waiting for a restart is listed at the top.
  */
 export function SettingsPage() {

@@ -159,8 +159,7 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		add[i] = catalog.PathRule{LibraryID: rule.LibraryID, Path: rule.Path}
 	}
 	if err := a.cat.AddSharePaths(r.Context(), id, add); err != nil {
-		a.log.Warn("add share paths failed", "err", err, "share", id, "rules", len(add))
-		writeError(w, http.StatusInternalServerError, "could not add path")
+		a.writeCatalogError(w, err, "add share paths failed", "could not add path", "share", id, "rules", len(add))
 		return
 	}
 	a.audit(r, "share.add_paths", a.shareName(r, id), map[string]any{"paths": sharePaths(a, r, add)})
@@ -179,7 +178,7 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.cat.RemoveSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not remove path")
+		a.writeCatalogError(w, err, "remove share path failed", "could not remove path", "share", id)
 		return
 	}
 	a.audit(r, "share.remove_paths", a.shareName(r, id),

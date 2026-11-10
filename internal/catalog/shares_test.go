@@ -153,7 +153,7 @@ func TestGrantWholeLibraryRegrantsPastAHeldRulelessShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RemoveSharePath(ctx, share.ID, PathRule{LibraryID: lib.ID, Path: ""}); err != nil {
+	if err := dropGrantRule(c, ctx, share.ID, PathRule{LibraryID: lib.ID, Path: ""}); err != nil {
 		t.Fatal(err)
 	}
 	if sc, _ := c.UserScope(ctx, uid, lib.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
@@ -588,7 +588,7 @@ func TestGrantWholeLibraryNeverAdoptsAHeldRulelessShare(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := c.RemoveSharePath(ctx, s.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+				if err := dropGrantRule(c, ctx, s.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
 					t.Fatal(err)
 				}
 				empty = s
@@ -662,7 +662,7 @@ func TestGrantWholeLibraryHeldRulelessGrantNeverShadowsAnAdoptableOne(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.RemoveSharePath(ctx, dead.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
+			if err := dropGrantRule(c, ctx, dead.ID, PathRule{LibraryID: kids.ID, Path: ""}); err != nil {
 				t.Fatal(err)
 			}
 			left := Share{Name: wholeLibraryIDName("Library: Kids", kids.ID), Description: wholeLibraryShareDescription}
@@ -725,9 +725,11 @@ func TestGrantWholeLibraryNeverWidensAChangedGrant(t *testing.T) {
 				t.Fatalf("precondition: shares = %+v; want one marked grant", shares)
 			}
 			changed := shares[0].ID
+			// Changed as an older version allowed (the path routes refuse a
+			// grant now: ErrLibraryGrant), so the data can still hold one.
 			remove, add := tc.change(kids.ID, other.ID)
 			for _, r := range remove {
-				if err := c.RemoveSharePath(ctx, changed, r); err != nil {
+				if err := dropGrantRule(c, ctx, changed, r); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -909,7 +911,7 @@ func TestGrantWholeLibraryNeverTakesAnotherLibrarysRulelessGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RemoveSharePath(ctx, old.ID, PathRule{LibraryID: fiction.ID, Path: ""}); err != nil {
+	if err := dropGrantRule(c, ctx, old.ID, PathRule{LibraryID: fiction.ID, Path: ""}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := c.UpdateLibrary(ctx, fiction.ID, LibraryPatch{Name: "Novels", Root: "/tmp/a"}); err != nil {
@@ -931,4 +933,53 @@ func TestGrantWholeLibraryNeverTakesAnotherLibrarysRulelessGrant(t *testing.T) {
 	if sc, _ := c.UserScope(ctx, sam, next.ID, false); !sc.AllowAll {
 		t.Fatalf("sam's scope in the new library = %+v; want the whole library", sc)
 	}
+}
+
+// server#254: a library grant's folders change only by granting or revoking the
+// library. Denied: adding or removing a path rule on a marked grant is
+// ErrLibraryGrant and changes nothing. Allowed: the same edits on an admin's own
+// share.
+func TestLibraryGrantRefusesPathEdits(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/kids"})
+	guest := seedUserNamed(t, c, ctx, "guest")
+	if err := c.GrantWholeLibrary(ctx, guest, kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ := c.ListShares(ctx)
+	if len(shares) != 1 || shares[0].WholeLibraryID == nil {
+		t.Fatalf("precondition: shares = %+v; want one marked grant", shares)
+	}
+	grant := shares[0].ID
+	folder := PathRule{LibraryID: kids.ID, Path: "Kids/Picture books"}
+	if err := c.AddSharePaths(ctx, grant, []PathRule{folder}); !errors.Is(err, ErrLibraryGrant) {
+		t.Fatalf("add to a grant = %v; want ErrLibraryGrant", err)
+	}
+	if err := c.RemoveSharePath(ctx, grant, PathRule{LibraryID: kids.ID}); !errors.Is(err, ErrLibraryGrant) {
+		t.Fatalf("remove from a grant = %v; want ErrLibraryGrant", err)
+	}
+	if after, _ := c.GetShare(ctx, grant); len(after.Paths) != 1 || after.Paths[0] != (PathRule{LibraryID: kids.ID}) {
+		t.Fatalf("the grant's rules = %+v; want the whole library only", after.Paths)
+	}
+
+	mine, _ := c.CreateShare(ctx, Share{Name: "Mine"})
+	if err := c.AddSharePaths(ctx, mine.ID, []PathRule{folder}); err != nil {
+		t.Fatalf("add to an admin's share = %v", err)
+	}
+	if err := c.RemoveSharePath(ctx, mine.ID, folder); err != nil {
+		t.Fatalf("remove from an admin's share = %v", err)
+	}
+	if after, _ := c.GetShare(ctx, mine.ID); len(after.Paths) != 0 {
+		t.Fatalf("the admin's share's rules = %+v; want none", after.Paths)
+	}
+}
+
+// dropGrantRule removes rule from a library grant's share as an older version
+// let an admin (the path routes refuse a grant now, ErrLibraryGrant), so the
+// tests can hold the data that left.
+func dropGrantRule(c *Catalog, ctx context.Context, shareID int64, rule PathRule) error {
+	_, err := c.db.ExecContext(ctx, `DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
+		shareID, rule.LibraryID, rule.Path)
+	return err
 }

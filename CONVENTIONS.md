@@ -142,7 +142,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   change, and forgets the person's browsers. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
   (unlinked `pairing` tokens, `POST /auth/pair`) and their recovery code (its linked pairing tokens
-  cascade). API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
+  cascade). Their household members go the same way where the person put them (server#285): a member's
+  session made on any of the person's devices but the kept one (`created_on_token_id`, the device
+  revoke's `also_members` rule, a device signed out earlier included) and every member's open pairing
+  code; a member's own paired device stays, and `signed_out` counts the person's sessions only. API keys stay (listed and revoked on their own: the device lists, `/auth/tokens`), and so
   do the calendar `feed` token (the person's to end, `DELETE /me/upcoming/calendar`; the console has no
   lever for it) and Bridge tokens (the Bridge's); an invite is the admin's (listed and revoked in the
   console). A cast token needs no write (its parent is checked on every request, `castGrant`). The
@@ -519,8 +522,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   index alone); the player's `findNextSibling`: names compared as its `localeCompare`
   (numeric, base) does, by `x/text/collate`, a pending folder as a book (offered with no
   `book`), and a bare folder only when nothing in the folder, the current book
-  included, is indexed), else `{source:"none"}`. A numbered series' end still answers
-  `{source:"series"}` with a pending folder after the book (the folder step isn't asked). A
+  included, is indexed), else `{source:"none"}`. A numbered series' end gives way to a pending
+  folder after the book (`folderNext`'s `pendingOnly`: `{source:"folder"}` with no `book`) in the
+  series' own folder only (`seriesFolder`: its other indexed books share a series with the book,
+  `catalog.SharesSeries`, and there is at least one), so a numbered series no scan has reached is
+  walked book by book (server#254); an indexed book after it, or a new folder in an author's folder
+  of other books, never does, and with nothing pending the end answers `{source:"series"}`. A
   failure to place the caller's books leaves the next entry unplaced (as `/meta`
   degrades). `book` is the list shape; everything `next` names is in the caller's
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the
@@ -692,10 +699,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   few); a write that ends a credential (sign-out, device or API key revoke, password
   set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
   replaced or used, a pairing token used, Bridge pair code issued, pair/unpair), a write
-  that takes share access away (a grant revoked, a path rule removed, a share deleted:
-  `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`; S260-REVOKE)
-  or a Bridge claim uses `WithDurableTx`/`ExecDurable` (FULL for
-  that commit, about one fsync), and a new one of those kinds must too; progress,
+  that takes share access away (a grant revoked, a path rule removed, a share deleted or made
+  read-only, a library deleted, a collection's viewer removed, a book taken off a collection
+  (a collections-access member's reach) or the collection deleted:
+  `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`, `UpdateShare`'s `read_only`,
+  `DeleteLibrary`, `SetCollectionShares`, `RemoveCollectionItem`, `SetCollectionItems`,
+  `DeleteCollection`; S260-REVOKE, server#260)
+  or a Bridge claim that leases a job uses `WithDurableTx`/`ExecDurable` (FULL for
+  that commit, about one fsync), and a new one of those kinds must too; an account edit
+  that ends nothing (`UpdateUser` with only `can_add_members` or re-enabling, `UpdateMember` a
+  rename) and a claim that only ends a lapsed lease or a lost request (`claimTx` without a job)
+  are ordinary commits; progress,
   heartbeats and other listening writes never do. The readers (never the writer) map the file
   (`mmap_size` 256 MiB, `store/mmap.go`) when `database.mmap` (`AUDIOSILO_DB_MMAP`, any case) is
   `on`, or `auto` (the default) and the database file is on Linux on Unraid's shfs: statfs says
@@ -837,7 +851,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). Every one resolved through
   `pathInScope` (`authorizedPath`/`authorizedScope`/`scopedPath*`; not the browse, the list-remove, the podcast or
-  the admin folder-override and enrichment routes, which take their path on their own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
+  the admin folder-override route, which takes its path on its own) checks it first: over `catalog.MaxPathBytes` (4096 bytes as sent) is 400 `path is too
   long`, before it is cleaned, looked up or stored (server#289). `item`/`chapters`/
   `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
@@ -931,11 +945,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   /libraries/{id}/readalong?path=<the book's own path>` serves the book's `.audiosilo/readalong.json`
   (see Bridge attachments) as `application/json`, gzipped for a client that accepts it
   (`spa.AcceptsGzip`; `Vary: Accept-Encoding`), `Cache-Control: private, no-cache` and a strong ETag of
-  the file's size and mtime (the same for both encodings; 304 on a match). **Header auth only**, as
+  the file's size and mtime, `-gz` for the gzip answer (chosen by the request's Accept-Encoding before
+  any gzipping, so a 304 gzips nothing; server#265; 304 on a match). **Header auth only**, as
   `/ebook` (`requireAuth`; `?token=` is never read; it stays under the request timeout: a map is
   at most 16 MiB, no media route). Each request reads the map from disk (`library.ReadReadalongMap`:
   a real `.audiosilo` folder that isn't ignored, a regular file never through a link, read once
-  more when the Bridge renamed a new map in as it was opened: `metadata.ErrReplacedWhileOpening`) and
+  more when the Bridge renamed a new map in as it was opened: `metadata.readRegularFileInfo`'s
+  `retrySwap`, which every attachment, `feed.json` and `library.json` read shares since server#265) and
   checks it again (`metadata.ParseReadalongHead`) and against the book now (`catalog.ReadalongState`,
   the ebook's digest the stored one only while the file on disk still has the signature it was
   computed for, one stat against `ebook_hashed_sig`: `library.Scanner.EbookDigestNow`, else hashed now and
@@ -971,9 +987,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `FileCache.ShareDiskGuard`), `internal/diskspace`); single-flight per key, 2 at once, run under
   `baseCtx` with a 30 min timeout from when it has a slot (a waiter that leaves doesn't stop it). ffmpeg's refusal (not one
   MP3 stream: AAC/Opus/FLAC in `.mka`; an exit status before it wrote anything, so a run killed or
-  failed partway, a full disk or a read error, is not one; a run its own timeout killed is, server#289, the server
-  shutting down is not) is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
-  environment's, an EIO at open, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
+  failed partway, a full disk or a read error, is not one, nor one whose log names an I/O error before any
+  output: `readFailed`, server#212; a run its own timeout killed is, server#289, the server shutting down is not)
+  is remembered per key in memory for an hour (`cacheRefusalTTL`: what looks like the file's fault may be the
+  environment's, an ffmpeg missing an encoder; a changed file is a new key at once) and the stored bytes served,
   as they are for no regular file at the path (a 404),
   so those still play on web only, through `?transcode=1`. A remux that can't be had now (still
   running after `remuxColdWait`, 2 s, under the player's 3 s stall timer and Android's 8 s read
@@ -1148,6 +1165,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the grant gets a share of its own, "Library: <name> (<id>)" when the name is taken (then numbered
   from 2, server#230), made whole and marked in one transaction that looks for the library's grant
   share again first: write transactions run one at a time, so first grants sent together share one.
+  A marked grant's rules change only by granting or revoking the library: `POST`/`DELETE
+  /admin/shares/{id}/paths` on one is 409 `library_grant` (`catalog.ErrLibraryGrant`, read inside the
+  edit's transaction; server#254), as the console never offers it.
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). A folder book's fingerprint is its
@@ -1170,7 +1190,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   above both rows. A favourite on a navigation folder (author, series) has no book to move:
   `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
   went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
-  by exact name (so a case-only rename, of it or a folder above it, counts).
+  by exact name (so a case-only rename, of it or a folder above it, counts). The on-demand move
+  (`IndexPath`'s `movedFrom`, `IndexMoved`) does the same from one listener's request: a move is a fact
+  about the disk, so every listener's folder favourite follows it (owner decision on server#254,
+  `TestIndexPathMovesEveryListenersFolderFavourite`).
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is
@@ -1317,7 +1340,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
   rescan rewrites the scanned values and re-applies the edit before anything can read
   the row) and why there is no separate post-scan enrichment pass any more.
-  `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
+  `BackfillASIN` (the Bridge's enrichment, `setEnrichmentTx`) and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
   export read the row, so they see edits with no join. The player's book JSON carries
   `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
   `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
@@ -2372,6 +2395,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; the account limiter, as
   `gateSelfService`'s, charged after the API-key, demo and member refusals;
   403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
+  a name is 1-40 characters with no control or invisible character (`auth.invisibleRune`: every
+  format character, so bidi controls and marks, zero-width spaces, the BOM and tags, plus the Hangul
+  fillers and the Braille blank; nor a line or paragraph separator, nor a variation selector selecting
+  nothing (first, or after another); ZWJ/ZWNJ, an emoji flag's closed tag sequence of 1-7 lowercase
+  letters and digits (`hidesText`) and right-to-left scripts are fine) and something visible, server#190;
   username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
@@ -2801,7 +2829,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tombstone and no publication journal. Show and attachment listings extend the feed signature, so
   audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh, as
   does a show with fewer episode rows than its `episode_count` (`PodcastEpisodeRows`: an older server
-  scanned the library as books), and every scan removes the library's books rows that are no episode
+  scanned the library as books; a row counts only while its `indexed_at` (`0073`, backfilled from the books row; NULL counts) is
+  its books row's, so one that older scan rewrote in place counts as missing), and every scan removes the library's books rows that are no episode
   (`PruneNonEpisodeBooks`, that older scan's folder books). A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing
   episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
@@ -2810,6 +2839,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   serial follows its numbers) for episode pages and their cursor (an older four-value cursor is 400),
   `/fs`, `/next`, the Keep window and the fetch candidates (these put undated episodes last).
   Artwork belongs to the show.
+  A library kind this server does not know (`catalog.KnownKind`; a newer server's, left by a
+  rollback) is never scanned as books: `Scan` fails with `library.ErrUnknownKind` and a targeted index
+  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`).
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release
@@ -2838,7 +2870,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `podcast`; reads do not. Five open subscribes per user, deduped by URL hash and user. Private
   URLs live only in the Bridge service's volatile memory and its claim reply; stored params keep
   an empty URL (a follow that restores a private show's URL is private, whatever its flag says),
-  display labels are redacted, a restart expires unclaimed requests, and deleting a library keeps only
+  display labels are redacted, a restart expires unclaimed requests (so does deleting the
+  requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
   the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
   errors, progress and results are redacted before storage and never notify. The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
@@ -2961,7 +2994,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   queued nor counted (`FollowURL.SkipRecentFailure`, `bridge.RecentSubscribeFailure`); a failure that
   isn't the feed's (`notFeedFailures`: an expired private request, a lost lease, the library or the
   Bridge's storage) never counts, and the single follow always retries. Budgets: import 2/min burst 1 and two at a time server-wide, export 6/min burst 2 (429
-  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1). The export (`catalog.PodcastExport`: current
+  `opml_rate_limited` + Retry-After, 503 `opml_busy` + 1; a busy import is answered before its body is read (`Slots.Busy`) and refunds its token, so the retry runs). The export (`catalog.PodcastExport`: current
   scopes and private narrowing, follows matching the show id, <= 10,000 rows else 413
   `opml_export_limit`; `podcast.BuildExport`; `opml.Render`, <= 4 MiB) never writes a private show,
   dedupes public URLs (lowest library then path) and counts omissions in `X-OPML-*` headers. For an
@@ -3179,9 +3212,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
   (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
   environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
-  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (an
-  embedding launcher's bind/TLS/public URL/libraries, via `pkg/launcher.Options`) are `Pin`ned and locked as `"launcher"`
-  (the console says "Set by the program that started the server"). `WithSettings` returns a
+  config.yaml's own value for them (`file`), so an env value never lands in the file. (The embedding
+  launcher's overrides, `Pin` and the `"launcher"` lock were retired in v2.7.0 with the archived desktop
+  manager: config.yaml and the environment are the only sources.) `WithSettings` returns a
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
   id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
   `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
@@ -3341,8 +3374,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   next `sort_order` (max + 1), so it lands last in the display order, never in its name's place
   among libraries left at 0 (ADMIN-12). `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
   settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
-  change. A library the config declares (config.yaml, or an embedding app's
-  `launcher.Options.Libraries`; upserted by name at every start) keeps its name and folder: changing
+  change. A library the config declares (config.yaml; upserted by name at every start) keeps its name and folder: changing
   either is 409 `config_library`, the same values resent (a folder respelled) write nothing, and
   another library renamed or added with a declared name at another folder is 409 `name_taken`
   (the next start would re-root it). `DELETE /admin/libraries/{id}` removes the library
@@ -3520,7 +3552,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
   unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
   file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
-  listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
+  listener after `UpsertBook`, `UpsertBooks` (once a transaction), `EditBook(s)`, `BackfillASIN`, `SetCover`/`DeleteCover` commit,
   and a library's new metadata source re-resolving its books) wakes the background pass, so a
   scan, an applied match or a typed ASIN is checked without waiting for the
   10-minute tick. **Generated chapters** (Phase 1d, `catalog/generatedchapters.go`): a book's stored
@@ -3646,9 +3678,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
 - **First-run setup (FIRST-RUN-PLAN.md Phase F1, `catalog/setup.go`, `library/preview.go`,
   `library/mounts.go`, `api/handlers_admin_setup.go`)**: the account still comes from the banner or
   `--setup`'s `/setup` page, which now asks only for the account and links "Continue setup" to `/admin`
-  (`POST /setup` without `library_name`/`library_root` creates only the admin, 201 `{user}`; with both it
-  creates the library as before and records the flow's `folder` step as done, `naming` left open; one
-  alone is 400). The console's flow then runs on the ordinary admin
+  (`POST /setup` creates only the admin, 201 `{user}`; the `library_name`/`library_root` pair the archived
+  desktop manager sent was retired in v2.7.0, so a body carrying either is 400 and creates nothing). The console's flow then runs on the ordinary admin
   APIs; the server holds only its progress and a folder preview. Admin only, console only (no
   capability). **State**: `server_state` key `setup_state`, `{finished, dismissed, steps: {id:
   "done"|"skipped"}}`, ids `catalog.SetupSteps` (`folder naming metadata reach abs backups phone
@@ -3657,7 +3688,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints}`: `request` is the direct
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
-  `config_libraries` the names the config declares (config.yaml, or an embedding app); `mount_hints` (only while not finished or
+  `config_libraries` the names the config declares (config.yaml); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer

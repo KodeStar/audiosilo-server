@@ -69,16 +69,14 @@ type ReadOnlyFact =
   | 'upcoming_status'
   | 'report_status';
 
-/** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
+/** Why the console can't change a setting, if it can't: the AUDIOSILO_* variable that sets it. */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
   return s.locked[id];
 }
 
-/** What a lock says: "Set by AUDIOSILO_X" or "Set by the program that started the server". */
+/** What a lock says: "Set by AUDIOSILO_X". */
 export function lockLabel(t: TFunction, lock: string): string {
-  return lock === 'launcher'
-    ? t('settings.locked.launcher')
-    : t('settings.locked.env', { name: lock });
+  return t('settings.locked.env', { name: lock });
 }
 
 /** The setting is read only when the server starts. */

@@ -137,12 +137,8 @@ func TestMoveReplacesStaleEnrichment(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
-	if err := c.SetEnrichment(ctx, lib.ID, "new/Book", "B0STALE000", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetEnrichment(ctx, lib.ID, "old/Book", "B0MOVED000", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, "new/Book", "B0STALE000", "")
+	setEnrichment(t, c, lib.ID, "old/Book", "B0MOVED000", "")
 	if _, err := c.SaveProgress(ctx, uid, Progress{Ref: Ref{LibraryID: lib.ID, Path: "old/Book"}, Position: 7}); err != nil {
 		t.Fatal(err)
 	}
@@ -309,15 +305,11 @@ func TestOverrideBeatsEnrichment(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, lib.ID, p, "B000000001", "9780441172719"); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, p, "B000000001", "9780441172719")
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldASIN: "B000000002"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, lib.ID, p, "B000000003", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, p, "B000000003", "")
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
 		t.Fatal(err)
 	}
@@ -343,9 +335,7 @@ func TestBookDetailProvenance(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, lib.ID, p, "B000000001", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, p, "B000000001", "")
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldTitle: "Edited"}, UserID: uid}); err != nil {
 		t.Fatal(err)
 	}
@@ -797,9 +787,7 @@ func TestRowsFromAnOlderServerKeepTheirValues(t *testing.T) {
 		VALUES(?, 'Old/Book', 1, 'Real Title', 'Real Author', 'Real Series', '2026-01-01T00:00:00Z')`, lib.ID)
 	exec(`INSERT INTO chapters(book_id, idx, title) VALUES(?, 0, 'Chapter One')`, id)
 	exec(`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?, 'Real Title', 'Real Author', 'Real Series', '')`, id)
-	if err := c.SetEnrichment(ctx, lib.ID, "Old/Book", "B000000001", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, lib.ID, "Old/Book", "B000000001", "")
 	b := mustBook(t, c, ctx, lib.ID, "Old/Book")
 	if b.Title != "Real Title" || b.Author != "Real Author" || b.Chapters[0].Title != "Chapter One" || b.ASIN != "B000000001" {
 		t.Fatalf("an older server's row lost its values: %+v", b)

@@ -642,14 +642,24 @@ func unchanged(src *os.File, info os.FileInfo) bool {
 // exit status before it wrote anything to out (a muxer checks the streams as
 // it starts; a source with no audio stream fails its -map). A run that didn't
 // start, was killed, or failed partway (a full disk, a read error) is not the
-// file's, so it isn't remembered. A remembered one expires (cacheRefusalTTL).
+// file's, so it isn't remembered, and nor is one whose log names a read error
+// (EIO, which a network mount's hiccup gives before any output; server#212). A
+// remembered one expires (cacheRefusalTTL).
 func refused(err error, out string) bool {
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() <= 0 {
+	if !errors.As(err, &exit) || exit.ExitCode() <= 0 || readFailed(err) {
 		return false
 	}
 	written, serr := os.Stat(out)
 	return serr == nil && written.Size() == 0
+}
+
+// readFailed reports whether a run's error (its stderr included, runFFmpeg)
+// names an I/O error: the system's strerror for EIO, as ffmpeg prints it, or
+// ffmpeg's own wording where it has none.
+func readFailed(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "Input/output error") || strings.Contains(msg, "I/O error")
 }
 
 // syncFile flushes path's bytes to disk before the rename that names it, so a

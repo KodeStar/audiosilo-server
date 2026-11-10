@@ -748,7 +748,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lib catalog.Library
-	if req.Kind != nil && *req.Kind != catalog.KindBooks && *req.Kind != catalog.KindPodcasts {
+	if req.Kind != nil && !catalog.KnownKind(*req.Kind) {
 		writeErrorCode(w, 400, "invalid_kind", "Kind must be books or podcasts.")
 		return
 	}
@@ -772,8 +772,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 // ignore rules and metadata source. A new root or new ignore rules make the index
 // stale, so either queues a rescan, returned as `job`; browsing still works
 // immediately. A new metadata source re-resolves the books before it answers.
-// A library the config declares (config.yaml, or the app embedding the server:
-// launcher.Options.Libraries) keeps the name and folder declared there: every
+// A library config.yaml declares keeps the name and folder declared there: every
 // start upserts it by name (launcher.syncLibraries) and the server never writes
 // a library to config.yaml, so a rename would come back as a second library and
 // a new folder would be put back. Changing either is 409 config_library, and
@@ -944,61 +943,6 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 	a.audit(r, "library.folder_override", lib.Name+": "+path, map[string]any{"mode": req.Mode})
 	a.startScan(r, *lib, library.TriggerChange)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
-}
-
-// handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book after
-// an admin's API client matched an external source (e.g. an Audible library) to
-// an indexed book, so a book scanned without an ASIN gains one - making future
-// matches exact. No first-party client calls it now (the archived manager did;
-// the Bridge backfills through its own route, handleBridgeEnrichment); it stays
-// for API clients. The enrichment is durable and survives a re-scan
-// (UpsertBook re-applies it); no file on disk is modified, so the network API
-// stays non-destructive.
-func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid library id")
-		return
-	}
-	path := r.URL.Query().Get("path")
-	if pathTooLong(w, path) {
-		return
-	}
-	lib, err := a.cat.GetLibrary(r.Context(), id)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "library not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load library")
-		return
-	}
-	if path == "" {
-		writeError(w, http.StatusBadRequest, "path is required")
-		return
-	}
-	if _, err := library.ContentJoin(lib.Root, path); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid path")
-		return
-	}
-	var req struct {
-		ASIN string `json:"asin"`
-		ISBN string `json:"isbn"`
-	}
-	if err := decodeJSON(r, &req, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
-	if strings.TrimSpace(req.ASIN) == "" && strings.TrimSpace(req.ISBN) == "" {
-		writeError(w, http.StatusBadRequest, "asin or isbn is required")
-		return
-	}
-	if err := a.cat.SetEnrichment(r.Context(), id, path, req.ASIN, req.ISBN); err != nil {
-		a.writeCatalogError(w, err, "set enrichment failed", "could not set enrichment", "library", id, "path", path)
-		return
-	}
-	a.audit(r, "book.enrichment", lib.Name+": "+path, map[string]any{"asin": req.ASIN, "isbn": req.ISBN})
-	writeJSON(w, http.StatusOK, map[string]any{"status": "enrichment set", "path": path})
 }
 
 // handleDeleteFolderOverride clears a folder's detection override (reverting it

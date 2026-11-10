@@ -60,9 +60,8 @@ describe('restartList', () => {
 });
 
 describe('lockLabel', () => {
-  it('names the variable, or the program that started the server for a launcher pin', () => {
+  it('names the variable that sets it', () => {
     const t = i18n.getFixedT('en');
     expect(lockLabel(t, 'AUDIOSILO_PUBLIC_URL')).toBe('Set by AUDIOSILO_PUBLIC_URL');
-    expect(lockLabel(t, 'launcher')).toBe('Set by the program that started the server');
   });
 });

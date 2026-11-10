@@ -80,7 +80,7 @@ func TestRefreshApplyLeavesOutUnchanged(t *testing.T) {
 	t.Parallel()
 	e, tok, _, libID := newMatchRunEnv(t, "uk")
 	ctx := context.Background()
-	if err := e.cat.SetEnrichment(ctx, libID, "Someone/Obscure", "B0US000001", ""); err != nil {
+	if err := e.cat.BackfillASIN(ctx, libID, "Someone/Obscure", "B0US000001"); err != nil {
 		t.Fatal(err)
 	}
 	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", tok, `{"mode":"refresh"}`)

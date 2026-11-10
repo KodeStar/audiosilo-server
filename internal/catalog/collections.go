@@ -447,8 +447,10 @@ func (c *Catalog) UpdateCollection(ctx context.Context, id, userID int64, name, 
 
 // DeleteCollection deletes a collection its owner calls it for (its items and
 // shares go with it), or takes a viewer off it (their share only: they leave).
+// Either takes access away (a household member's reach can be the collections
+// shared with them), so it commits durably (server#260).
 func (c *Catalog) DeleteCollection(ctx context.Context, id, userID int64) error {
-	return c.db.WithTx(ctx, "DeleteCollection", func(tx *sql.Tx) error {
+	return c.db.WithDurableTx(ctx, "DeleteCollection", func(tx *sql.Tx) error {
 		owned, err := collectionRole(ctx, tx, id, userID)
 		if err != nil {
 			return err
@@ -463,10 +465,17 @@ func (c *Catalog) DeleteCollection(ctx context.Context, id, userID int64) error 
 }
 
 // changeItems runs one change to a collection's items for its owner, inside a
-// transaction, and moves its updated_at when the items changed.
-func (c *Catalog) changeItems(ctx context.Context, op string, id, userID int64,
+// transaction, and moves its updated_at when the items changed. A change that
+// can take items off commits durably (durable): a household member's reach can
+// be the books in the collections shared with them (DeleteCollection,
+// server#260).
+func (c *Catalog) changeItems(ctx context.Context, op string, id, userID int64, durable bool,
 	change func(tx *sql.Tx, now string) (bool, error)) error {
-	return c.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+	withTx := c.db.WithTx
+	if durable {
+		withTx = c.db.WithDurableTx
+	}
+	return withTx(ctx, op, func(tx *sql.Tx) error {
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
 		}
@@ -487,7 +496,7 @@ func (c *Catalog) changeItems(ctx context.Context, op string, id, userID int64,
 // (an ErrListFull); one full only because of hidden items loses the oldest of
 // them instead.
 func (c *Catalog) AddCollectionItem(ctx context.Context, id, userID int64, ref Ref, position *int, scopes []Scope) error {
-	return c.changeItems(ctx, "AddCollectionItem", id, userID, func(tx *sql.Tx, now string) (bool, error) {
+	return c.changeItems(ctx, "AddCollectionItem", id, userID, false, func(tx *sql.Tx, now string) (bool, error) {
 		return collectionItems.add(ctx, tx, id, ref, position, scopes, now)
 	})
 }
@@ -507,7 +516,7 @@ func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs
 	if err != nil {
 		return err
 	}
-	return c.changeItems(ctx, "SetCollectionItems", id, userID, func(tx *sql.Tx, now string) (bool, error) {
+	return c.changeItems(ctx, "SetCollectionItems", id, userID, true, func(tx *sql.Tx, now string) (bool, error) {
 		return collectionItems.replace(ctx, tx, id, listed, keep, now)
 	})
 }
@@ -515,7 +524,7 @@ func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs
 // RemoveCollectionItem takes a book off a collection userID owns (idempotent; no
 // access check on the path, so a revoked one can still be cleaned up).
 func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, ref Ref) error {
-	return c.changeItems(ctx, "RemoveCollectionItem", id, userID, func(tx *sql.Tx, _ string) (bool, error) {
+	return c.changeItems(ctx, "RemoveCollectionItem", id, userID, true, func(tx *sql.Tx, _ string) (bool, error) {
 		return collectionItems.drop(ctx, tx, id, ref)
 	})
 }
@@ -537,7 +546,9 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 	if err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
+	// It can take viewers off, which takes access away (DeleteCollection), so
+	// it commits durably.
+	return c.db.WithDurableTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
 		var kid bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = ? AND `+isKidSQL+`)`,
 			userID).Scan(&kid); err != nil {

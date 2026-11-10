@@ -688,22 +688,37 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*S
 	if err != nil {
 		return nil, err
 	}
+	// Only the fields sent are written (NULL keeps the stored value), so an edit
+	// racing another never writes back what it read: a rename can't undo a
+	// share just made read-only.
+	var name, description, ro any
 	if in.Name != nil && *in.Name != "" {
 		existing.Name = *in.Name
+		name = *in.Name
 	}
 	if in.Description != nil {
 		existing.Description = *in.Description
+		description = *in.Description
 	}
 	if in.ReadOnly != nil {
 		existing.ReadOnly = *in.ReadOnly
+		ro = 0
+		if *in.ReadOnly {
+			ro = 1
+		}
 	}
-	ro := 0
-	if existing.ReadOnly {
-		ro = 1
+	// Making a share read-only takes access away, so that edit commits durably
+	// (DeleteShare); a rename or a description is an ordinary commit.
+	exec := c.db.ExecContext
+	if in.ReadOnly != nil && *in.ReadOnly {
+		exec = func(ctx context.Context, q string, args ...any) (sql.Result, error) {
+			return c.db.ExecDurable(ctx, "UpdateShare", q, args...)
+		}
 	}
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE shares SET name = ?, description = ?, read_only = ? WHERE id = ?`,
-		existing.Name, existing.Description, ro, id); err != nil {
+	if _, err := exec(ctx,
+		`UPDATE shares SET name = COALESCE(?, name), description = COALESCE(?, description),
+		        read_only = COALESCE(?, read_only) WHERE id = ?`,
+		name, description, ro, id); err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
 		}
@@ -730,10 +745,37 @@ func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule
 	return err
 }
 
+// ErrLibraryGrant: the share is a library grant (whole_library_id, made by
+// GrantWholeLibrary), whose folders change only by granting or revoking the
+// library (server#254): a path edit would leave it marked as the whole library
+// while its rules say otherwise.
+var ErrLibraryGrant = errors.New("the share is a library grant")
+
+// refuseLibraryGrant is ErrLibraryGrant for a marked share, read inside the
+// edit's transaction so a grant made meanwhile can't slip past it.
+func refuseLibraryGrant(ctx context.Context, tx *sql.Tx, shareID int64) error {
+	var marked bool
+	err := tx.QueryRowContext(ctx,
+		`SELECT whole_library_id IS NOT NULL FROM shares WHERE id = ?`, shareID).Scan(&marked)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil // no such share: the edit writes nothing (the foreign key refuses an add)
+	case err != nil:
+		return err
+	case marked:
+		return ErrLibraryGrant
+	}
+	return nil
+}
+
 // AddSharePaths adds several path rules to a share in one transaction (adding a
-// selection of books to a share): all or none.
+// selection of books to a share): all or none. A library grant is
+// ErrLibraryGrant.
 func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []PathRule) error {
 	return c.db.WithTx(ctx, "AddSharePaths", func(tx *sql.Tx) error {
+		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+			return err
+		}
 		for _, rule := range rules {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
@@ -745,12 +787,18 @@ func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []Path
 	})
 }
 
-// RemoveSharePath removes a path rule from a share, durably (DeleteShare).
+// RemoveSharePath removes a path rule from a share, durably (DeleteShare). A
+// library grant is ErrLibraryGrant.
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
-	_, err := c.db.ExecDurable(ctx, "RemoveSharePath",
-		`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
-		shareID, rule.LibraryID, CleanRelPath(rule.Path))
-	return err
+	return c.db.WithDurableTx(ctx, "RemoveSharePath", func(tx *sql.Tx) error {
+		if err := refuseLibraryGrant(ctx, tx, shareID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
+			shareID, rule.LibraryID, CleanRelPath(rule.Path))
+		return err
+	})
 }
 
 // ListSharePaths returns a share's path rules.

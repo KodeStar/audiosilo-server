@@ -71,8 +71,6 @@ var fields = []field{
 	{key: "app_links.android_sha256", setting: "players.android_sha256",
 		ptr: func(c *Config) any { return &c.AppLinks.AndroidSHA256 }, fix: fixFingerprints},
 
-	{key: "libraries", ptr: func(c *Config) any { return &c.Libraries }}, // launcher-pinned only
-
 	{key: "max_upload_bytes", env: "AUDIOSILO_MAX_UPLOAD_BYTES",
 		ptr: func(c *Config) any { return &c.MaxUploadBytes }},
 
@@ -199,29 +197,10 @@ func (c *Config) Clone() *Config {
 	return &out
 }
 
-// Pin marks a key as set by an embedding launcher (pkg/launcher's Options), so
-// the admin console shows it as set there instead of offering to change it.
-// Call it while starting, before any Clone.
-func (c *Config) Pin(key string) {
-	if c.pinned == nil {
-		c.pinned = map[string]bool{}
-	}
-	c.pinned[key] = true
-}
-
-// PinnedByLauncher is the lock reason Locked reports for a pinned key.
-const PinnedByLauncher = "launcher"
-
 // lockedBy is why the console can't change f: the AUDIOSILO_* variable that set
-// it, PinnedByLauncher, or "" when it can.
+// it, or "" when it can.
 func (c *Config) lockedBy(f *field) string {
-	if env := c.fromEnv[f.key]; env != "" {
-		return env
-	}
-	if c.pinned[f.key] {
-		return PinnedByLauncher
-	}
-	return ""
+	return c.fromEnv[f.key]
 }
 
 // Settings is the console's view of the settings: section -> name -> value.
@@ -241,8 +220,8 @@ func (c *Config) Settings() map[string]map[string]any {
 	return out
 }
 
-// Locked maps each setting the environment or the launcher sets to which: the
-// AUDIOSILO_* variable, or PinnedByLauncher. A read-only setting is listed too
+// Locked maps each setting the environment sets to the AUDIOSILO_* variable
+// that sets it. A read-only setting is listed too
 // when a variable sets it (the console shows what sets it).
 func (c *Config) Locked() map[string]string {
 	out := map[string]string{}
@@ -322,7 +301,7 @@ func (c *Config) Effective(running *Config) *Config {
 const (
 	ReasonUnknown  = "unknown"   // no such setting
 	ReasonReadOnly = "read_only" // shown, not changeable in the console
-	ReasonLocked   = "locked"    // set by the environment or the launcher
+	ReasonLocked   = "locked"    // set by an AUDIOSILO_* variable
 	ReasonInvalid  = "invalid"   // the value doesn't validate
 )
 
@@ -340,7 +319,7 @@ func (e *SettingError) Error() string {
 	case e.Err != nil:
 		return e.Err.Error()
 	case e.Reason == ReasonLocked:
-		return "set by an environment variable or the launcher; change it there"
+		return "set by an environment variable; change it there"
 	case e.Reason == ReasonReadOnly:
 		return "can only be changed in config.yaml"
 	}

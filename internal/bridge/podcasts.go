@@ -365,15 +365,39 @@ func (s *Service) expirePrivateTx(ctx context.Context, tx *sql.Tx, now string) (
 }
 
 // lostPrivateRequests is the queued private subscriptions whose feed URL this
-// server doesn't hold (it restarted since they were asked for), read through q.
+// server doesn't hold (it restarted since they were asked for), or whose
+// requester's account was deleted since (requested_by is set NULL: a private
+// feed is that person's credential, never followed for nobody), read through q.
 func (s *Service) lostPrivateRequests(ctx context.Context, q rowsQuerier) ([]int64, error) {
-	queued, err := queryIDs(ctx, q, `SELECT id FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
+	type request struct {
+		id       int64
+		orphaned bool
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, requested_by IS NULL FROM bridge_jobs WHERE kind=? AND state=? AND json_extract(params,'$.private')=1`, KindPodcastSubscribe, StateQueued)
 	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var queued []request
+	for rows.Next() {
+		var r request
+		if err := rows.Scan(&r.id, &r.orphaned); err != nil {
+			return nil, err
+		}
+		queued = append(queued, r)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	s.secretMu.Lock()
 	defer s.secretMu.Unlock()
-	return slices.DeleteFunc(queued, func(id int64) bool { return s.privateURLs[id] != "" }), nil
+	var lost []int64
+	for _, r := range queued {
+		if r.orphaned || s.privateURLs[r.id] == "" {
+			lost = append(lost, r.id)
+		}
+	}
+	return lost, nil
 }
 
 func queryIDs(ctx context.Context, db rowsQuerier, q string, args ...any) ([]int64, error) {

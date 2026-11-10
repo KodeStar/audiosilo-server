@@ -40,8 +40,8 @@ var errABSFileNotRegular = fmt.Errorf("%w: not a regular file", ErrABSFileInvali
 var utf8BOM = []byte("\xef\xbb\xbf")
 
 // ErrReplacedWhileOpening is ReadRegularFile's answer when the file was
-// replaced between its look and its open (a new version renamed into place, or
-// a link): reading again sees what is there now.
+// replaced between its look and its open twice in a row (a new version renamed
+// into place, or a link): it reads once more after the first (retrySwap).
 var ErrReplacedWhileOpening = errors.New("replaced while being opened")
 
 // ABSFile is what an Audiobookshelf metadata.json says about a book, "" (nil)
@@ -129,8 +129,28 @@ func ReadRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte
 }
 
 // readRegularFileInfo is ReadRegularFile with the opened file's info (its size
-// and modification time as read).
+// and modification time as read). A file replaced while being opened (the
+// Bridge renaming a new version into place, server#265) is read once more
+// (retrySwap), so every attachment, feed.json and library.json read meets the
+// rename with the new file rather than failing.
 func readRegularFileInfo(path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
+	return retrySwap(func() ([]byte, fs.FileInfo, error) {
+		return readRegularFileOnce(path, limit, notRegular, tooLarge)
+	})
+}
+
+// retrySwap runs read, once more when the file was replaced while being opened
+// (ErrReplacedWhileOpening). A second replacement in a row is the answer.
+func retrySwap(read func() ([]byte, fs.FileInfo, error)) ([]byte, fs.FileInfo, error) {
+	data, info, err := read()
+	if errors.Is(err, ErrReplacedWhileOpening) {
+		data, info, err = read()
+	}
+	return data, info, err
+}
+
+// readRegularFileOnce is one try of readRegularFileInfo.
+func readRegularFileOnce(path string, limit int, notRegular, tooLarge error) ([]byte, fs.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, nil, err

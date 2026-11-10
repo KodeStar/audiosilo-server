@@ -139,5 +139,9 @@ func (s Slots) Acquire(ctx context.Context) bool {
 	}
 }
 
+// Busy reports whether every slot is taken right now (a hint: one may free
+// or fill a moment later, so TryAcquire still decides).
+func (s Slots) Busy() bool { return len(s) == cap(s) }
+
 // Release returns a slot TryAcquire or Acquire took.
 func (s Slots) Release() { <-s }

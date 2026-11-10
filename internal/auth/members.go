@@ -65,8 +65,9 @@ var (
 	// ErrMemberLimit is adding a member at the cap.
 	ErrMemberLimit = errors.New("you have the most household members you can add")
 	// ErrInvalidName is a member name that is empty or too long after trimming,
-	// or holds control characters or invalid UTF-8.
-	ErrInvalidName = fmt.Errorf("the name must be 1 to %d characters, with no control characters", MaxMemberName)
+	// or holds control or invisible characters (hidesText) or invalid UTF-8,
+	// or nothing visible.
+	ErrInvalidName = fmt.Errorf("the name must be 1 to %d characters, with no control or invisible characters", MaxMemberName)
 	// ErrInvalidKind is a kind other than MemberKid or MemberGrownup.
 	ErrInvalidKind = errors.New(`kind must be "kid" or "grownup"`)
 	// ErrInvalidAccess is an access other than MemberAll or MemberCollections.
@@ -153,14 +154,102 @@ type NewMember struct {
 }
 
 // cleanMemberName trims a member's name and checks it: 1 to MaxMemberName
-// characters, valid UTF-8, no control characters. ErrInvalidName otherwise.
+// characters, valid UTF-8, no control or invisible characters, at least one
+// visible one (a letter, number, symbol or punctuation). ErrInvalidName
+// otherwise. Right-to-left scripts are names like any other; only the
+// characters that hide text or reorder what follows them are refused
+// (server#190), since the name is shown to the owner and on the member's
+// devices beside other text.
 func cleanMemberName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	n := utf8.RuneCountInString(name)
-	if n == 0 || n > MaxMemberName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+	if n == 0 || n > MaxMemberName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) ||
+		hidesText(name) || !strings.ContainsFunc(name, visibleRune) {
 		return "", ErrInvalidName
 	}
 	return name, nil
+}
+
+// hidesText reports whether name holds an invisible character (invisibleRune),
+// a line or paragraph separator, or a variation selector that selects nothing
+// (one opening the name or following another: a run of them after one
+// character carries hidden bytes). Tag characters are invisible too, except as
+// an emoji flag's tag sequence: U+1F3F4, 1 to maxFlagTags subdivision tags
+// (lowercase letters and digits), then the cancel tag U+E007F (England,
+// Scotland, Wales). Any other tag, or a sequence the cancel tag doesn't close,
+// is hidden text (the tags spell ASCII).
+func hidesText(name string) bool {
+	const blackFlag, cancelTag = 0x1F3F4, 0xE007F
+	tags := -1     // tags since a black flag; -1 outside a flag's sequence
+	prevVS := true // the name's start: a variation selector there selects nothing
+	for _, r := range name {
+		if r >= 0xE0020 && r <= cancelTag { // tag characters
+			switch {
+			case tags < 0:
+				return true
+			case r == cancelTag:
+				if tags == 0 {
+					return true
+				}
+				tags = -1
+			case subdivisionTag(r) && tags < maxFlagTags:
+				tags++
+			default:
+				return true
+			}
+			prevVS = false
+			continue
+		}
+		if tags > 0 || invisibleRune(r) || unicode.In(r, unicode.Zl, unicode.Zp) {
+			return true
+		}
+		vs := unicode.Is(unicode.Variation_Selector, r)
+		if vs && prevVS {
+			return true
+		}
+		prevVS = vs
+		tags = -1
+		if r == blackFlag {
+			tags = 0
+		}
+	}
+	return tags > 0
+}
+
+// maxFlagTags is the longest subdivision code a flag's tag sequence spells
+// (CLDR: a 2-letter or 3-digit region and 1 to 4 letters or digits).
+const maxFlagTags = 7
+
+// subdivisionTag is a tag character a flag's subdivision code is spelled with:
+// a lowercase letter or a digit.
+func subdivisionTag(r rune) bool {
+	return r >= 0xE0030 && r <= 0xE0039 || r >= 0xE0061 && r <= 0xE007A
+}
+
+// invisibleRune is a character that shows nothing or changes how the text
+// around it is ordered: every format character (unicode.Cf: the bidi
+// embeddings, overrides, isolates and marks, zero-width spaces, the word
+// joiner and invisible operators, the soft hyphen, the BOM, the deprecated
+// format controls, the tags) but ZWJ/ZWNJ (which emoji sequences and some
+// scripts need), the combining grapheme joiner, the Hangul fillers and the
+// Braille blank.
+func invisibleRune(r rune) bool {
+	switch {
+	case r == 0x200C, r == 0x200D: // ZWNJ, ZWJ
+		return false
+	case unicode.Is(unicode.Cf, r),
+		r == 0x034F,                                        // combining grapheme joiner
+		r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0, // Hangul fillers
+		r == 0x2800: // Braille pattern blank
+		return true
+	}
+	return false
+}
+
+// visibleRune is a letter, number, symbol or punctuation that shows something
+// (the Hangul fillers are letters, the Braille blank a symbol).
+func visibleRune(r rune) bool {
+	return unicode.In(r, unicode.L, unicode.N, unicode.S, unicode.P) && !invisibleRune(r)
 }
 
 func checkKind(kind string) error {
@@ -552,7 +641,14 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 		m       Member
 		changes = map[string]any{}
 	)
-	err := s.db.WithDurableTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
+	// A kind, access or sharing change can take access away or clear
+	// credentials, so it commits durably; a rename alone is an ordinary commit
+	// (server#260).
+	withTx := s.db.WithDurableTx
+	if in.Kind == nil && in.Access == nil && in.Share == nil {
+		withTx = s.db.WithTx
+	}
+	err := withTx(ctx, "UpdateMember", func(tx *sql.Tx) error {
 		cur, err := s.memberOf(ctx, tx, owner, id)
 		if err != nil {
 			return err

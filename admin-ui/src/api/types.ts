@@ -603,7 +603,7 @@ export interface AdminSettings {
    * "modules.<id>"). GET /admin/modules says more about each.
    */
   modules: Record<string, boolean>;
-  /** Setting id -> why the console can't change it: an AUDIOSILO_* variable, or "launcher". */
+  /** Setting id -> why the console can't change it: the AUDIOSILO_* variable that sets it. */
   locked: Record<string, string>;
   /** Setting ids read only at start. */
   restart_settings: string[];

@@ -209,4 +209,22 @@ func TestOrdinaryAuthWritesAreNotDurable(t *testing.T) {
 	if got := s.db.DurableCommits(); got != before {
 		t.Fatalf("durable commits %d -> %d", before, got)
 	}
+
+	// server#260: an account edit that ends nothing (the may-add-members
+	// switch, re-enabling) and a member's rename are ordinary commits.
+	owner := mustUser(t, s, ctx, "owner", "owner-password", RoleUser)
+	m := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Evie", Kind: MemberGrownup, Access: MemberAll})
+	before = s.db.DurableCommits()
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{CanAddMembers: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.UpdateMember(ctx, owner.ID, m.ID, MemberUpdate{Name: new("Evelyn")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.db.DurableCommits(); got != before {
+		t.Fatalf("a rename or a switch made durable commits: %d -> %d", before, got)
+	}
 }

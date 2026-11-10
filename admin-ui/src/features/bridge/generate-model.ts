@@ -97,9 +97,17 @@ const FILE_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT
  */
 const WRITING_KINDS: readonly string[] = [...FILE_KINDS, KIND_READALONG];
 
-/** Whether a kind writes the book's files (WRITING_KINDS). */
-export function isFileKind(kind: string): boolean {
+/** Whether a kind writes the book's files (WRITING_KINDS), so its end changes the book. */
+export function writesBookFiles(kind: string): boolean {
   return WRITING_KINDS.includes(kind);
+}
+
+/**
+ * Whether a kind's end can change what the book's community metadata answer
+ * holds (the generated files, FILE_KINDS); a read-along map doesn't.
+ */
+export function changesBookMeta(kind: string): boolean {
+  return FILE_KINDS.includes(kind);
 }
 
 /**

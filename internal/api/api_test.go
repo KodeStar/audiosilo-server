@@ -907,7 +907,11 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 	}
 }
 
-func TestEnrichmentEndpoint(t *testing.T) {
+// TestAdminEnrichmentRetired: PUT /admin/libraries/{id}/enrichment (the
+// archived desktop manager's ASIN/ISBN write) was retired in v2.7.0. An admin's
+// PUT is a 404 and writes nothing; the Bridge's own route
+// (PUT /bridge/libraries/{id}/enrichment, TestBridgeEnrichment) stays.
+func TestAdminEnrichmentRetired(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
@@ -917,51 +921,12 @@ func TestEnrichmentEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=Author/Book"
-
-	// A non-admin is rejected by requireAdmin.
-	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
-	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
-	if resp, _ := e.do(t, "PUT", url, memberTok, `{"asin":"B0EVIL"}`); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("non-admin enrichment = %d, want 403", resp.StatusCode)
-	}
-
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
-	if resp, body := e.do(t, "PUT", url, adminTok, `{"asin":"B0ABC123"}`); resp.StatusCode != http.StatusOK {
-		t.Fatalf("admin set enrichment = %d %s, want 200", resp.StatusCode, body)
+	if resp, body := e.do(t, "PUT", url, adminTok, `{"asin":"B0ABC123"}`); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("admin enrichment PUT = %d %s, want 404 (retired)", resp.StatusCode, body)
 	}
-	got, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book")
-	if err != nil {
-		t.Fatalf("get book after enrichment: %v", err)
-	}
-	if got.ASIN != "B0ABC123" {
-		t.Fatalf("enrichment not applied to book: asin=%q", got.ASIN)
-	}
-
-	// SafeJoin denial: a path-traversal attempt is a 400, never a write or a 500.
-	// CLAUDE.md requires both an allowed and a denied test for anything that calls
-	// library.SafeJoin.
-	evil := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=../../../etc/passwd"
-	if resp, _ := e.do(t, "PUT", evil, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("traversal enrichment = %d, want 400", resp.StatusCode)
-	}
-	// Denied: nor a path in a hidden folder (library.ContentJoin).
-	hidden := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=Author/Book/.audiosilo/x.m4b"
-	if resp, _ := e.do(t, "PUT", hidden, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("hidden enrichment = %d, want 400", resp.StatusCode)
-	}
-	// A blank payload is a 400, not a silent 200 no-op.
-	if resp, _ := e.do(t, "PUT", url, adminTok, `{}`); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("blank enrichment = %d, want 400", resp.StatusCode)
-	}
-
-	// Durability: a rebuild re-indexes the book from a scan that found no ASIN; the
-	// upsert itself re-applies the stored enrichment.
-	rebuilt := &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", Title: "Book", Author: "Author", AddedAt: "2020-01-01"}
-	if _, err := e.cat.UpsertBook(ctx, rebuilt); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); b.ASIN != "B0ABC123" {
-		t.Fatalf("enrichment not kept across a rebuild: %q", b.ASIN)
+	if got, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); err != nil || got.ASIN != "" {
+		t.Fatalf("a retired enrichment PUT wrote an ASIN: %q, %v", got.ASIN, err)
 	}
 }
 
@@ -1397,12 +1362,11 @@ func TestDeleteUserHandler(t *testing.T) {
 	}
 }
 
-// TestSetupWizard covers the first-run /setup flow as an older page or the
-// archived manager posts it, with the library fields: it serves while no admin
-// exists, rejects a wrong token (403) and a missing folder (400) without creating
-// anything, creates the admin + library on a valid token (201), and then
-// self-closes (409 + the page redirects to /admin). A server that never enabled
-// the wizard exposes no /setup surface (404).
+// TestSetupWizard covers the first-run /setup flow: it serves while no admin
+// exists, rejects a wrong token (403) without creating anything, creates the
+// admin on a valid token (201), and then self-closes (409 + the page redirects
+// to /admin). A server that never enabled the wizard exposes no /setup surface
+// (404).
 func TestSetupWizard(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1433,42 +1397,27 @@ func TestSetupWizard(t *testing.T) {
 		return resp, string(b)
 	}
 
-	booksDir := t.TempDir() // a folder that actually exists (the handler checks)
-
 	// The wizard serves while no admin exists.
 	if resp, b := do("GET", "/setup", ""); resp.StatusCode != http.StatusOK || !strings.Contains(b, "setup-form") {
 		t.Fatalf("GET /setup = %d, want 200 with the setup form", resp.StatusCode)
 	}
 
-	// Denied: wrong token (403), and a non-existent folder (400). Neither creates
-	// an admin.
-	bad := `{"token":"nope","password":"longenough","library_name":"Books","library_root":"` + booksDir + `"}`
+	// Denied: a wrong token (403) creates no admin.
+	bad := `{"token":"nope","password":"longenough"}`
 	if resp, _ := do("POST", "/setup", bad); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("setup wrong token = %d, want 403", resp.StatusCode)
-	}
-	noRoot := `{"token":"` + tok + `","password":"longenough","library_name":"Books","library_root":"/no/such/dir/xyz123"}`
-	if resp, _ := do("POST", "/setup", noRoot); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("setup missing folder = %d, want 400", resp.StatusCode)
 	}
 	if ok, _ := authSvc.AdminExists(ctx); ok {
 		t.Fatal("a rejected setup attempt created an admin")
 	}
 
-	// Allowed: valid token + inputs creates the admin and the library.
-	good := `{"token":"` + tok + `","username":"boss","password":"longenough","library_name":"Books","library_root":"` + booksDir + `"}`
+	// Allowed: a valid token creates the admin.
+	good := `{"token":"` + tok + `","username":"boss","password":"longenough"}`
 	if resp, b := do("POST", "/setup", good); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("setup = %d %s, want 201", resp.StatusCode, b)
 	}
 	if ok, _ := authSvc.AdminExists(ctx); !ok {
 		t.Fatal("setup did not create an admin")
-	}
-	if libs, _ := cat.ListLibraries(ctx); len(libs) != 1 || libs[0].Name != "Books" {
-		t.Fatalf("setup did not create the library: %+v", libs)
-	}
-	// That library is the console flow's folder: the step is done, the naming
-	// step (its source) still open, the flow not finished.
-	if st, _ := cat.SetupState(ctx); st.Finished || len(st.Steps) != 1 || st.Steps["folder"] != catalog.SetupStepDone {
-		t.Errorf("setup state after a setup with a library = %+v, want only folder done", st)
 	}
 
 	// Self-closes once an admin exists: POST is refused and GET redirects to /admin.

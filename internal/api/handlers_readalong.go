@@ -30,7 +30,8 @@ const (
 
 // handleReadalong serves the read-along map of the book at ?path= (exactly the
 // book's own path): the file's bytes as JSON, gzipped for a client that accepts
-// it, with an ETag of its size and mtime (304 on a match). It is header-auth
+// it, with an ETag of its size and mtime, its own for the gzip answer (304 on a
+// match). It is header-auth
 // only (requireAuth: a session or an API key, never ?token=), scoped like
 // /ebook. Before sending it re-reads the file and checks it against the index
 // now (never trusting the indexed head for the bytes it sends): a map whose
@@ -94,7 +95,17 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Add("Vary", "Accept-Encoding")
-	c := conditional{etag: fileETag(info), cacheControl: readalongCache}
+	// The gzip answer is another representation, so it has an ETag of its own
+	// ("-gz", as spa.Files' are; server#265): a cache never pairs one with the
+	// other's bytes. It is chosen by the request, before any gzipping, so a 304
+	// costs none; a map gzip can't shrink goes out plain under it, which is
+	// still the one answer that ETag ever names.
+	wantGzip := spa.AcceptsGzip(r.Header.Get("Accept-Encoding"))
+	etag := fileETag(info)
+	if wantGzip {
+		etag = etag[:len(etag)-1] + `-gz"`
+	}
+	c := conditional{etag: etag, cacheControl: readalongCache}
 	if c.notModified(w, r) {
 		return
 	}
@@ -102,7 +113,7 @@ func (a *API) handleReadalong(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	body := data
-	if spa.AcceptsGzip(r.Header.Get("Accept-Encoding")) {
+	if wantGzip {
 		if gz := spa.Gzipped(data); gz != nil {
 			h.Set("Content-Encoding", "gzip")
 			body = gz

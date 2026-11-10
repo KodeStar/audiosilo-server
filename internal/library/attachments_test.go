@@ -750,3 +750,61 @@ func TestIndexMoved(t *testing.T) {
 		t.Errorf("an ignored from lost its row: %q", got)
 	}
 }
+
+// TestIndexPathMovesEveryListenersFolderFavourite pins the rule (server#254
+// item 2, owner decision 2026-11-09): a move is a fact about the disk, so the
+// on-demand move one listener's request finds re-keys every listener's favourite
+// on the renamed folder, as a scan's move detection does; a favourite on a
+// folder that did not move stays.
+func TestIndexPathMovesEveryListenersFolderFavourite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Series A", "Book", "audio.m4b"))
+	writeFile(t, root, "Stays/Book/audio.m4b", []byte("other audio"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	ann, bob := namedUser(t, db, "ann"), namedUser(t, db, "bob")
+	for _, uid := range []int64{ann, bob} {
+		for _, p := range []string{"Series A", "Stays"} {
+			if err := cat.AddFavourite(ctx, uid, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	favourites := func(uid int64) []string {
+		t.Helper()
+		rows, err := db.QueryContext(ctx, `SELECT rel_path FROM favourites WHERE user_id = ? AND library_id = ? ORDER BY rel_path`, uid, lib.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, p)
+		}
+		return out
+	}
+
+	// Renamed on disk, then opened by its new path (ann's request, say) before a scan.
+	if err := os.Rename(filepath.Join(root, "Series A"), filepath.Join(root, "Series B")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := scanner.IndexPath(ctx, *lib, "Series B/Book"); err != nil || b.RelPath != "Series B/Book" {
+		t.Fatalf("IndexPath = %+v, %v", b, err)
+	}
+	for _, uid := range []int64{ann, bob} {
+		if got := favourites(uid); !slices.Equal(got, []string{"Series B", "Stays"}) {
+			t.Errorf("user %d's folder favourites = %q, want the renamed folder's followed for everyone", uid, got)
+		}
+	}
+}

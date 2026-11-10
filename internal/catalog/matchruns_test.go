@@ -133,9 +133,7 @@ func TestClearCommunityMatches(t *testing.T) {
 	if err := c.SetCover(ctx, one.ID, "A/Uploaded", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, one.ID, "A/Enriched", "B000000003", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, one.ID, "A/Enriched", "B000000003", "")
 	community(two.ID, "B/Other", map[string]string{FieldASIN: "B000000004"})
 	// A community value left at a path with no book indexed now.
 	if _, err := c.db.ExecContext(ctx, `INSERT INTO book_overrides(library_id, path, field, value, source, updated_at)
@@ -227,15 +225,11 @@ func TestMatchedBooks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.SetEnrichment(ctx, one.ID, "A/Enriched", "B000000001", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, one.ID, "A/Enriched", "B000000001", "")
 	if err := c.EditBook(ctx, one.ID, "A/ISBN", BookEdit{Set: map[string]string{FieldISBN: "9780000000002"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetEnrichment(ctx, two.ID, "B/Other", "B000000003", ""); err != nil {
-		t.Fatal(err)
-	}
+	setEnrichment(t, c, two.ID, "B/Other", "B000000003", "")
 	paths := func(libraryID int64) []string {
 		t.Helper()
 		books, err := c.MatchedBooks(ctx, libraryID)

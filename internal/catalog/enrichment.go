@@ -4,39 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 )
 
-// SetEnrichment attaches durable, path-keyed metadata (ASIN/ISBN) to a book and
-// applies it to the current index row immediately. The book_enrichment table is not
+// setEnrichmentTx attaches durable, path-keyed metadata (ASIN/ISBN) to a book
+// and applies it to the current index row, inside tx so the two never diverge
+// (a failure after the upsert would otherwise store the enrichment but leave
+// the books row stale until the next scan). The book_enrichment table is not
 // FK'd to the rebuildable books index, so the enrichment survives a re-scan:
-// UpsertBook re-applies it (refreshEffective) whenever the book is re-indexed. A
-// blank field leaves any existing enrichment for that field untouched, and an
-// admin's override of asin/isbn still wins over it.
-func (c *Catalog) SetEnrichment(ctx context.Context, libraryID int64, path, asin, isbn string) error {
-	// Canonicalize the key on write (see CleanRelPath) so it matches the
-	// scanner's rel_path keys - a non-canonical key would never re-apply.
-	path = CleanRelPath(path)
-	asin, isbn = strings.TrimSpace(asin), strings.TrimSpace(isbn)
-	if asin == "" && isbn == "" {
-		return nil
-	}
-	// One transaction so the durable row and the live index row never diverge: a
-	// failure after the upsert would otherwise store the enrichment but leave the
-	// books row stale until the next scan.
-	err := c.db.WithTx(ctx, "SetEnrichment", func(tx *sql.Tx) error {
-		return setEnrichmentTx(ctx, tx, libraryID, path, asin, isbn, c.ts())
-	})
-	if err == nil {
-		c.changed()
-	}
-	return err
-}
-
-// setEnrichmentTx is SetEnrichment inside tx: the durable row and the live
-// index row in one transaction, so they never diverge (a failure after the
-// upsert would otherwise store the enrichment but leave the books row stale
-// until the next scan). path is clean; a blank field keeps what is stored.
+// UpsertBook re-applies it (refreshEffective) whenever the book is re-indexed,
+// and an admin's override of asin/isbn still wins over it. Its one writer is
+// the Bridge's ASIN backfill (BackfillASIN); rows the retired admin enrichment
+// PUT stored (ISBNs among them) still apply. path is clean; a blank field keeps
+// what is stored.
 func setEnrichmentTx(ctx context.Context, tx *sql.Tx, libraryID int64, path, asin, isbn, now string) error {
 	// CASE WHEN keeps an existing stored value when the incoming one is blank.
 	if _, err := tx.ExecContext(ctx,
