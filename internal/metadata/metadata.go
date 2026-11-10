@@ -170,12 +170,9 @@ func ExtractContext(ctx context.Context, path, ffprobePath string) (*Metadata, e
 // a file it is unsure of then has no duration, and no ProbeErr, as before.
 func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.Duration) (*Metadata, error) {
 	m := &Metadata{Format: fileFormat(path)}
-	ff := noFFprobeRules
-	if ffprobePath != "" {
-		ff = ffNone
-		if !ffprobeForced(ffprobePath) {
-			ff = ffprobeRules(ctx, ffprobePath)
-		}
+	ff := ffNone
+	if !ffprobeForced(ffprobePath) {
+		ff = probeRules(ctx, ffprobePath)
 	}
 	p, reason, err := readFile(ctx, m, path, ff, timeout)
 	if err != nil {

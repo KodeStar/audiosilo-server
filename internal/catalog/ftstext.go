@@ -22,21 +22,16 @@ func ftsText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + len(s)/2)
 	apart := false // the last rune written is one set apart
-	for i, r := range s {
+	prev := ' '    // the last rune written (a space before the first)
+	for _, r := range s {
 		split := ftsSplitRune(r)
-		if (split || apart) && i > 0 && !unicode.IsSpace(r) && !endsInSpace(&b) {
+		if (split || apart) && !unicode.IsSpace(r) && prev != ' ' && prev != '\n' && prev != '\t' {
 			b.WriteByte(' ')
 		}
 		b.WriteRune(r)
-		apart = split
+		apart, prev = split, r
 	}
 	return b.String()
-}
-
-// endsInSpace reports whether b's text ends in a space (or is empty).
-func endsInSpace(b *strings.Builder) bool {
-	s := b.String()
-	return s == "" || s[len(s)-1] == ' ' || s[len(s)-1] == '\n' || s[len(s)-1] == '\t'
 }
 
 // ftsSplitRune is a character ftsText sets apart: Han (and 々, its iteration
@@ -93,21 +88,13 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 		}
 		for _, w := range rows {
 			changed := false
-			var cols [6]any
-			for i, c := range w.cols {
-				t := ftsText(c)
-				changed = changed || t != c
-				cols[i] = t
+			for _, c := range w.cols {
+				changed = changed || ftsText(c) != c
 			}
 			if !changed {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, w.id); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
-				append([]any{w.id}, cols[:]...)...); err != nil {
+			if err := writeFTSRow(ctx, tx, w.id, w.cols); err != nil {
 				return err
 			}
 			rewritten++
@@ -115,4 +102,20 @@ func (c *Catalog) IndexSearchText(ctx context.Context) (int, error) {
 		return putServerState(ctx, tx, searchTextKey, searchTextVersion, c.stamp())
 	})
 	return rewritten, err
+}
+
+// writeFTSRow writes book id's full-text index row (delete-then-insert, keyed
+// by rowid = book id) from cols, its title, author, series, narrator, genres
+// and tags, each in ftsText's form.
+func writeFTSRow(ctx context.Context, tx *sql.Tx, id int64, cols [6]string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
+		return err
+	}
+	args := []any{id}
+	for _, c := range cols {
+		args = append(args, ftsText(c))
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`, args...)
+	return err
 }

@@ -53,16 +53,22 @@ func ProbeInProcess(ctx context.Context, path, ffprobePath string) (*ProbeView, 
 // follows for the ffprobe at ffprobePath (with "", none: noFFprobeRules); ""
 // when the probe is off for it.
 func ProbeRelease(ctx context.Context, ffprobePath string) string {
-	ff := noFFprobeRules
-	if ffprobePath != "" {
-		ff = ffprobeRules(ctx, ffprobePath)
-	}
+	ff := probeRules(ctx, ffprobePath)
 	for rel, r := range knownRules {
 		if r == ff && ff != ffNone {
 			return rel
 		}
 	}
 	return ""
+}
+
+// probeRules is the rules the probe follows for the ffprobe at ffprobePath: its
+// release's (ffprobeRules), or with "" (none) noFFprobeRules.
+func probeRules(ctx context.Context, ffprobePath string) ffRules {
+	if ffprobePath == "" {
+		return noFFprobeRules
+	}
+	return ffprobeRules(ctx, ffprobePath)
 }
 
 // probeView is ProbeInProcess by ff's rules. It reads the file as Extract

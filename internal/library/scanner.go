@@ -71,16 +71,14 @@ type Scanner struct {
 }
 
 // rereadUnprobed reports whether a scan with no ffprobe should read again a
-// book it finds unchanged with no stored duration or codec (sig): once per
+// book it finds unchanged with no stored duration or codec (the caller's
+// test): once per
 // server run and book state (noteUnprobed). A server that ran without ffprobe
 // before the in-process probe ran without it (SCAN-SPIKE decision 2) gets its
 // existing books' durations from its first scan since, while a file the probe
 // is unsure of (no ffprobe to ask) is not re-indexed on every scan. A restart
 // reads such books once more.
-func (s *Scanner) rereadUnprobed(libraryID int64, b *catalog.Book, sig catalog.Signature) bool {
-	if s.ffprobePath != "" || (sig.Duration > 0 && sig.Codec != "") {
-		return false
-	}
+func (s *Scanner) rereadUnprobed(libraryID int64, b *catalog.Book) bool {
 	s.unprobedMu.Lock()
 	defer s.unprobedMu.Unlock()
 	was, ok := s.unprobed[bookKey{libraryID, b.RelPath}]
@@ -611,7 +609,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(!b.IsFolder || old.FileOrder == catalog.FileOrderKey(b.Files)) &&
-			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b, old)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
+			((s.ffprobePath == "" && !s.rereadUnprobed(lib.ID, b)) || (old.Duration > 0 && old.Codec != "") || soleFileProblem(b, old)) &&
 			!s.problemCleared(ctx, lib, old, slots) {
 			// Unchanged since last scan, its files in the order stored (a book
 			// indexed in byte order before #160 is read again in natural order);
