@@ -230,12 +230,13 @@ func suspectParts(parts []partFacts) int {
 // suspectFromTags runs the check for a folder book indexed before it existed,
 // reading only tags (no ffprobe). Migration 0017 left unchecked only the folder
 // books whose parts are all at least an hour long, so the lengths are taken as
-// passing. ok is false when a part can't be read (left for the next scan).
+// passing. ok is false when a part can't be read, or its tag read was cut short
+// (left for the next scan).
 func suspectFromTags(lib catalog.Library, b *catalog.Book) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
 		md := metadata.ExtractTags(absOf(lib, f.RelPath))
-		if md.OpenErr != nil {
+		if md.OpenErr != nil || md.TagsUnread() {
 			return 0, false
 		}
 		parts = append(parts, partFacts{title: partName(f.RelPath, md), duration: minSuspectPart})
