@@ -65,9 +65,10 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 // can lag the library - so otherwise the local series numbering of every series
 // the book is in (seriesNext), then the book's folder (folderNext), then none
 // answer, carrying the community's unplaced next work, if it named one, as Work.
-// A series that ends at the book gives way to a pending folder after it
-// (server#254): in a numbered series no scan has reached, the series knows only
-// the books opened so far, and the next one is still a folder. Whatever Next
+// A series that ends at the book gives way to a pending folder after it in the
+// series' own folder (server#254): in a numbered series no scan has reached,
+// the series knows only the books opened so far, and the next one is still a
+// folder. Whatever Next
 // names is in the caller's scope.
 func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
 	work, placed := a.communityNext(ctx, lib.ID, book)
@@ -177,14 +178,34 @@ func (a *API) seriesNext(ctx context.Context, libraryID int64, scope catalog.Sco
 }
 
 // folderNext reads the next book off the book's folder (library.NextInFolder).
-// nil (fall through) when nothing follows, or, with pendingOnly, when what
-// follows is not a pending folder (one with audio no scan has indexed yet).
+// nil (fall through) when nothing follows, or, with pendingOnly (after the
+// series ended), when what follows is not a pending folder (one with audio no
+// scan has indexed yet) in the series' own folder (seriesFolder): a new book
+// that merely sorts next among an author's other books is not the series' next.
 func (a *API) folderNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book, pendingOnly bool) (*nextBook, error) {
-	e, b, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.log)
-	if e == nil || err != nil || (pendingOnly && (b != nil || !e.PendingBook)) {
+	e, b, folder, err := library.NextInFolder(ctx, a.cat, lib, scope, book.RelPath, a.log)
+	if e == nil || err != nil || (pendingOnly && (b != nil || !e.PendingBook || !seriesFolder(book, folder))) {
 		return nil, err
 	}
 	return &nextBook{Source: nextFolder, Next: &catalog.Ref{LibraryID: lib.ID, Path: e.Path}, Book: b}, nil
+}
+
+// seriesFolder reports whether the book's folder is its series' folder: the
+// folder's indexed books (folder, by path) include another of the book's series
+// and none outside it (catalog.SharesSeries).
+func seriesFolder(book *catalog.Book, folder map[string]catalog.Book) bool {
+	others := 0
+	for p := range folder {
+		if p == book.RelPath {
+			continue
+		}
+		b := folder[p]
+		if !catalog.SharesSeries(book, &b) {
+			return false
+		}
+		others++
+	}
+	return others > 0
 }
 
 // episodeNext is what follows a podcast episode: the next episode of its show

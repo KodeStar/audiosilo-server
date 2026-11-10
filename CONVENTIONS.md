@@ -523,9 +523,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (numeric, base) does, by `x/text/collate`, a pending folder as a book (offered with no
   `book`), and a bare folder only when nothing in the folder, the current book
   included, is indexed), else `{source:"none"}`. A numbered series' end gives way to a pending
-  folder after the book (`folderNext`'s `pendingOnly`: `{source:"folder"}` with no `book`), so a
-  numbered series no scan has reached is walked book by book (server#254); an indexed book after it
-  never does, and with nothing pending the end answers `{source:"series"}`. A
+  folder after the book (`folderNext`'s `pendingOnly`: `{source:"folder"}` with no `book`) in the
+  series' own folder only (`seriesFolder`: its other indexed books share a series with the book,
+  `catalog.SharesSeries`, and there is at least one), so a numbered series no scan has reached is
+  walked book by book (server#254); an indexed book after it, or a new folder in an author's folder
+  of other books, never does, and with nothing pending the end answers `{source:"series"}`. A
   failure to place the caller's books leaves the next entry unplaced (as `/meta`
   degrades). `book` is the list shape; everything `next` names is in the caller's
   scope. In a podcast library (`episodeNext`) community and series are skipped: `folder` is the

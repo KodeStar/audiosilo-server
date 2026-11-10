@@ -229,6 +229,21 @@ func anyOf[T any](ss []T) []any {
 
 // positionIn is a book's position in the named series (0 when none, or when it
 // isn't in it), the series matched by seriesKey: its first entry that is it.
+// SharesSeries reports whether a and b are in a series together (any spelling,
+// match.SameSeries), through their main series or the more_series loaded with
+// them (AllSeries).
+func SharesSeries(a, b *Book) bool {
+	theirs := b.AllSeries()
+	for _, s := range a.AllSeries() {
+		for _, t := range theirs {
+			if s.Name != "" && t.Name != "" && match.SameSeries(s.Name, t.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func positionIn(list []SeriesRef, name string) float64 {
 	for _, s := range list {
 		if match.SameSeries(s.Name, name) {

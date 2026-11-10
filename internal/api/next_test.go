@@ -533,6 +533,36 @@ func TestNextUnscannedNumberedSeries(t *testing.T) {
 	}
 }
 
+// At the end of a complete series, the pending folder that sorts next is
+// offered only from the series' own folder: among an author's other books, or
+// beside an indexed book outside the series, a new folder is not the series'
+// next, and the series' end answers (server#254).
+func TestNextSeriesEndPendingOnlyInTheSeriesFolder(t *testing.T) {
+	t.Parallel()
+	in := func(rel, series string, pos float64) *catalog.Book {
+		return &catalog.Book{RelPath: rel, IsFolder: true, Title: rel, Series: series, SeriesIndex: pos, Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}
+	}
+	e := newSagaEnv(t, false,
+		in("Arc/1", "Arc", 1), in("Arc/2", "Arc", 2), // the series folder
+		in("Author/Arc 1", "The Arc", 1), in("Author/Arc 2", "The Arc", 2), in("Author/Standalone", "", 0),
+		in("Mixed/1", "Mixed", 1), in("Mixed/2", "Mixed", 2), in("Mixed/0 Notes", "", 0))
+	mkdirs(t, e.lib.Root, "Arc/1", "Arc/2", "Arc/3",
+		"Author/Arc 1", "Author/Arc 2", "Author/Standalone", "Author/New Book",
+		"Mixed/1", "Mixed/2", "Mixed/0 Notes", "Mixed/3")
+	// Allowed: the series' folder holds only its books, so the pending one is next.
+	if n := getNext(t, e.testEnv, e.url("next", "Arc/2"), e.adminTok); n.Source != nextFolder || n.nextPath() != "Arc/3" || n.Book != nil {
+		t.Fatalf("series folder = %s, want the pending Arc/3", n.raw)
+	}
+	// Denied: an author's folder with another indexed book is no series folder.
+	if n := getNext(t, e.testEnv, e.url("next", "Author/Arc 2"), e.adminTok); n.Source != nextSeries || n.Next != nil || strings.Contains(n.raw, "New Book") {
+		t.Fatalf("author folder = %s, want the series end", n.raw)
+	}
+	// Denied: an indexed book outside the series sits beside them.
+	if n := getNext(t, e.testEnv, e.url("next", "Mixed/2"), e.adminTok); n.Source != nextSeries || n.Next != nil {
+		t.Fatalf("mixed folder = %s, want the series end", n.raw)
+	}
+}
+
 // The pending folder after a book is found past a batch of folders that are no
 // books (markPendingNext reads them a batch at a time, in name order, and stops
 // at the batch holding one), and the first of two pending ones answers.
