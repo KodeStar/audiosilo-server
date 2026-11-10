@@ -355,7 +355,9 @@ const (
 )
 
 // maxAbandonedReads is how many reads waitRead may have given up on that have
-// not returned yet, process-wide. Each holds a goroutine and its file open, so
+// not returned yet, process-wide, before a new one is refused (reads already
+// under way may still be given up on, so the count can pass it by the reads
+// running at once). Each holds a goroutine and its file open, so
 // a share that stays hung would otherwise leak a descriptor per attempt
 // (server#269): past it a read fails fast, the file not opened (readFile,
 // errReadsSaturated), until an abandoned read returns.
@@ -385,7 +387,7 @@ func readsSaturated() bool {
 	}
 	if saturationLogged.CompareAndSwap(false, true) {
 		probeLogger().Warn("audio files: reads stopped answering; skipping reads until they return",
-			"abandoned_reads", maxAbandonedReads)
+			"abandoned_reads", abandonedReads.Load())
 	}
 	return true
 }

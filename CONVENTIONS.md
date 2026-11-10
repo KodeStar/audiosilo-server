@@ -1041,8 +1041,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
   costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
-  are not bounded); at most `maxAbandonedReads` (16) such reads are outstanding process-wide
-  (`abandonedReads`): past that a read fails fast (`readsSaturated`, `reasonSaturated`), the file
+  are not bounded); once `maxAbandonedReads` (16) such reads are outstanding process-wide
+  (`abandonedReads`; reads already under way can take it past that) a new read fails fast (`readsSaturated`, `reasonSaturated`), the file
   not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
   whose tag read was cut short (`Metadata.TagsUnread`, `Book.TagsUnread`) keeps the stored book's
   reading of its tags (`catalog.keepTagReading`: the snapshot at its own revision; the embedded art
