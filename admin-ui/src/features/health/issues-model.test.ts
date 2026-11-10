@@ -5,6 +5,7 @@ import {
   chaptersCheckNote,
   fixFor,
   footKey,
+  issueDetail,
   issueReason,
   pickCategory,
 } from './issues-model';
@@ -84,4 +85,34 @@ it("says Detect chapters writes to the book's .audiosilo folder, and only on its
   expect(footKey(false, null)).toBe('health.foot');
   expect(footKey(false, 'chapters')).toBe('health.foot');
   expect(footKey(true, 'detect')).toBe('health.footIgnored');
+});
+
+it('reads a file that is not audio as one plain line, its prober message behind Details', () => {
+  const probe = adminBook({
+    scan_error: 'probe_failed',
+    scan_error_file: 'Author/Book/07.mp3',
+    scan_error_detail:
+      '[mp3 @ 0xcbcc3c000] Failed to find two consecutive MPEG audio frames.\n[mov,mp4,m4a @ 0x7DE824000] moov atom not found',
+  });
+  expect(issueReason('scan_error', probe)).toEqual({
+    key: 'health.reason.probe_failed',
+    values: { file: '07.mp3', detail: '' },
+  });
+  // FFmpeg's context addresses go, for a row stored before the server dropped them.
+  expect(issueDetail('scan_error', probe)).toBe(
+    '[mp3] Failed to find two consecutive MPEG audio frames.\n[mov,mp4,m4a] moov atom not found',
+  );
+  // No toggle without a message, for another code, or another category.
+  expect(issueDetail('scan_error', { ...probe, scan_error_detail: ' ' })).toBeUndefined();
+  expect(
+    issueDetail('scan_error', { scan_error: 'unreadable', scan_error_detail: 'permission denied' }),
+  ).toBeUndefined();
+  expect(issueDetail('no_cover', probe)).toBeUndefined();
+  // An unopenable file still says why in its line.
+  expect(
+    issueReason(
+      'scan_error',
+      adminBook({ scan_error: 'unreadable', scan_error_detail: 'permission denied' }),
+    ).values,
+  ).toMatchObject({ detail: 'permission denied' });
 });

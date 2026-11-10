@@ -90,8 +90,11 @@ export function useIssueActions(
         fresh.book.scan_error
           ? {
               title: t('health.toast.stillBroken', { title }),
+              // A file that couldn't be read as audio says so plainly; the
+              // prober's message is on the Health row's Details.
               description:
-                fresh.book.scan_error_detail || t(`health.code.${fresh.book.scan_error}`),
+                (fresh.book.scan_error !== 'probe_failed' && fresh.book.scan_error_detail) ||
+                t(`health.code.${fresh.book.scan_error}`),
               type: 'warning',
             }
           : { title: t('health.toast.fixed', { title }), type: 'success' },

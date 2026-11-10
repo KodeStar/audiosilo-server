@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
@@ -26,6 +26,7 @@ import {
   detectChosenNote,
   fixFor,
   footKey,
+  issueDetail,
   issueReason,
   rowFix,
   say,
@@ -144,6 +145,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
           const checkNote = chaptersCheckNote(kind, b);
           const chosenNote = detectChosenNote(fix, b);
           const ownFix = rowFix(fix, b);
+          const detail = issueDetail(kind, b);
           return (
             <li
               key={refKey(b)}
@@ -179,6 +181,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                 <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
                   {say(t, issueReason(kind, b), lang)}
                 </span>
+                {detail ? <IssueDetail detail={detail} /> : null}
                 {checkNote ? (
                   <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
                     {t(checkNote)}
@@ -286,5 +289,35 @@ function FixButton({
       <Icon aria-hidden="true" />
       <span className="max-md:hidden">{t(label)}</span>
     </Button>
+  );
+}
+
+/**
+ * A row's raw reason behind a toggle (server#272 ADMIN-10): the prober's
+ * message, for whoever wants it, under the plain line.
+ */
+function IssueDetail({ detail }: { detail: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <>
+      <Button
+        variant="link"
+        className="self-start text-[12px] font-medium text-subtle-foreground"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? t('health.detail.hide') : t('health.detail.show')}
+      </Button>
+      <span
+        id={id}
+        hidden={!open}
+        className="font-mono text-[11.5px] text-subtle-foreground [overflow-wrap:anywhere]"
+      >
+        {detail}
+      </span>
+    </>
   );
 }

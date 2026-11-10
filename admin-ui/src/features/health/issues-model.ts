@@ -121,13 +121,36 @@ export { say, type Phrase } from '@/lib/phrase';
 /** Hours, rounded down, for "one chapter over N hours". */
 const hours = (seconds: number) => Math.floor(seconds / 3600);
 
+/**
+ * FFmpeg's context address in a prober message ("[mp3 @ 0xcbcc3c000]"), which
+ * says nothing to an admin; the server drops it since 2.7.0, this for rows
+ * stored before.
+ */
+const FF_ADDRESS = / @ 0x[0-9a-f]+\]/gi;
+
+/**
+ * The raw message behind a row's plain line, for its Details toggle (server#272
+ * ADMIN-10): a file that couldn't be read as audio, its prober's words without
+ * FFmpeg's context addresses. Undefined when there is none to show.
+ */
+export function issueDetail(
+  kind: IssueKind,
+  b: Pick<AdminBook, 'scan_error' | 'scan_error_detail'>,
+): string | undefined {
+  if (kind !== 'scan_error' || b.scan_error !== 'probe_failed') return undefined;
+  return (b.scan_error_detail ?? '').replace(FF_ADDRESS, ']').trim() || undefined;
+}
+
 /** Why a book is listed under a category. */
 export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
   switch (kind) {
     case 'scan_error': {
       const file = b.scan_error_file ? relBaseName(b.scan_error_file) : '';
       const code = b.scan_error ?? 'unreadable';
-      return { key: `health.reason.${code}`, values: { file, detail: b.scan_error_detail ?? '' } };
+      // A file that couldn't be read as audio is one plain line; its prober's
+      // message is behind Details (issueDetail).
+      const detail = code === 'probe_failed' ? '' : (b.scan_error_detail ?? '');
+      return { key: `health.reason.${code}`, values: { file, detail } };
     }
     case 'suspect':
       return {
