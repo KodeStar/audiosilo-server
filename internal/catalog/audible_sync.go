@@ -48,6 +48,12 @@ func IsAudibleDevice(id string) bool { return strings.HasPrefix(id, AudibleDevic
 const syncTitleSQL = `t.match_library_id IS NOT NULL AND t.match_path IS NOT NULL AND t.rejected = 0 AND t.ignored = 0 AND t.no_sync = 0
 	AND t.state NOT IN ('` + AudibleGone + `', '` + AudiblePreorder + `')`
 
+// audibleBookLengthSQL is the length a title's runtime is checked against
+// (audibleRuntimeAgrees) for its book (b, the index) and the account's person's
+// row on it (p): the indexed duration, else the row's. AudibleSyncBooks and
+// AudibleProgress share it, so the listening route and the feed agree (server#303).
+const audibleBookLengthSQL = `CASE WHEN COALESCE(b.duration, 0) > 0 THEN b.duration ELSE COALESCE(p.duration, 0) END`
+
 // AudibleSyncAccount is an account a sync call acts for: its person (whose
 // scopes and progress rows the call reads and writes) and its names.
 type AudibleSyncAccount struct {
@@ -125,7 +131,7 @@ func (c *Catalog) AudibleSyncBooks(ctx context.Context, account string) (map[Ref
 	titles, err := queryRows(ctx, c.db, func(rows *sql.Rows, x *row) error {
 		return rows.Scan(&x.ref.LibraryID, &x.ref.Path, &x.runtimeS, &x.duration)
 	}, `SELECT t.match_library_id, t.match_path, t.runtime_s,
-	           CASE WHEN COALESCE(b.duration, 0) > 0 THEN b.duration ELSE COALESCE(p.duration, 0) END
+	           `+audibleBookLengthSQL+`
 	      FROM audible_titles t
 	      JOIN audible_accounts a ON a.account = t.account
 	      LEFT JOIN books b ON b.library_id = t.match_library_id AND b.rel_path = t.match_path
@@ -245,7 +251,7 @@ func (c *Catalog) AudibleProgress(ctx context.Context, a *AudibleSyncAccount, sc
 	}, `SELECT p.library_id, p.rel_path, t.asin, p.position,
 	           CASE WHEN p.duration > 0 THEN p.duration ELSE COALESCE(b.duration, 0) END,
 	           p.finished, p.updated_at, p.device_id, p.version, p.change_seq, t.runtime_s,
-	           CASE WHEN COALESCE(b.duration, 0) > 0 THEN b.duration ELSE p.duration END
+	           `+audibleBookLengthSQL+`
 	      FROM progress p
 	      JOIN audible_titles t ON t.account = ? AND t.match_library_id = p.library_id AND t.match_path = p.rel_path
 	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
@@ -367,7 +373,7 @@ func refusalEndedSince(ended sql.NullString, claimed *string) bool {
 	if !ended.Valid || claimed == nil {
 		return false
 	}
-	end, err1 := time.Parse(time.RFC3339Nano, ended.String)
-	at, err2 := time.Parse(time.RFC3339Nano, *claimed)
-	return err1 == nil && err2 == nil && end.Truncate(time.Second).After(at)
+	end, ok1 := ParseStamp(ended.String)
+	at, ok2 := ParseStamp(*claimed)
+	return ok1 && ok2 && end.Truncate(time.Second).After(at)
 }

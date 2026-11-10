@@ -488,9 +488,6 @@ const (
 	// titles (about 120 bytes each); AudibleSync leaves out the last titles of
 	// a list that would be longer.
 	maxAudibleSyncParamsBytes = 1 << 20
-	// maxSyncPathBytes is the longest book path a title may name (the
-	// catalog's MaxPathBytes).
-	maxSyncPathBytes = 4096
 )
 
 // audibleSyncParams checks audible.sync's params strictly: an account id, and
@@ -513,7 +510,7 @@ func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, invalid("titles: each asin must be an ASIN, once")
 		case t.LibraryID <= 0:
 			return nil, invalid("titles: library_id is required")
-		case t.Path == "" || len(t.Path) > maxSyncPathBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
+		case t.Path == "" || len(t.Path) > relpath.MaxBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
 			return nil, invalid("titles: path must be a clean book path")
 		case t.RuntimeS < 0:
 			return nil, invalid("titles: runtime_s must not be negative")
