@@ -88,11 +88,11 @@ func (s *Scanner) problemCleared(ctx context.Context, lib catalog.Library, sig c
 }
 
 // tagsUnreadDetail is the detail of a file that opened but wasn't read in
-// time, and readRefusedDetail of one not read at all, as too many reads on
-// its share are stuck (Health: "<file> couldn't be read: <detail>").
+// time, and readRefusedDetail of one not read at all, as too many earlier
+// reads, on any library, are stuck (Health: "<file> couldn't be read: <detail>").
 const (
 	tagsUnreadDetail  = "reading it timed out"
-	readRefusedDetail = "too many reads are stuck on this share, so it wasn't tried"
+	readRefusedDetail = "too many earlier reads are stuck (on this or another library), so it wasn't tried"
 )
 
 // fileState is a file's mtime (Unix seconds) and size: with its absolute path,

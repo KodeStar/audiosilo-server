@@ -1047,8 +1047,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   where any file's read was cut short or refused (`Metadata.TagsUnread`, `ReadRefused`;
   `Book.TagsUnread`) rewrites nothing of the stored book (`catalog.recordReadProblem`: names,
   length, codec, chapters, cover flag, mtime and size stay as the last full read left them) but
-  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many reads
-  are stuck on this share", with ffprobe or without), so the next scan reads it again (the stored
+  its read problem, `unreadable` ("reading it timed out", or for a refused read "too many earlier reads
+  are stuck", on this library or another, with ffprobe or without), so the next scan reads it again (the stored
   mtime and size are the old ones, else `problemCleared`); a new book read so is written with the
   path's names. With no
   ffprobe (`--ffprobe ""`, or none found) the probe still runs, by FFmpeg 8.1's rules
