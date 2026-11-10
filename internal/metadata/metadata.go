@@ -189,6 +189,9 @@ func ExtractTimeout(ctx context.Context, path, ffprobePath string, timeout time.
 		return m, nil // ffprobe can't read what the server can't open
 	}
 	switch {
+	case reason == reasonSaturated:
+		// Reads stopped answering: ffprobe would hang on the same share, and a
+		// process stuck in a read can't be killed either.
 	case p != nil:
 		applyProbe(m, p)
 	case ffprobePath != "":
@@ -215,6 +218,10 @@ func ExtractTags(path string) *Metadata {
 	return m
 }
 
+// reasonSaturated is readFile's reason when it read nothing because
+// maxAbandonedReads reads hang already (readsSaturated).
+const reasonSaturated = "reads saturated: earlier reads have not returned"
+
 // errTagsUnread stands for dhowden's answer when its read was cut short.
 var errTagsUnread = errors.New("tags unread")
 
@@ -233,6 +240,12 @@ func fileFormat(path string) string {
 // (ffprobe, killable, answers). The file is closed when it returns, before any
 // ffprobe run. An error: it could not be opened.
 func readFile(ctx context.Context, m *Metadata, path string, ff ffRules, timeout time.Duration) (p *probeResult, reason string, err error) {
+	if readsSaturated() {
+		// Enough reads hang already (a share that stopped answering): this one
+		// fails fast, the file not opened, its tags unread and no probe.
+		m.tagsUnread = true
+		return nil, reasonSaturated, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", err

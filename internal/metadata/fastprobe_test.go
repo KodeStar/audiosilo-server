@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -789,4 +791,86 @@ func TestBlockFileBudgetBeforeAllocation(t *testing.T) {
 	}()
 	b.bytesAt(0, 1<<39)
 	t.Error("a read past the budget was made")
+}
+
+// TestAbandonedReadsAreCapped (server#269): a read waitRead gave up on holds
+// its goroutine and its file until it returns, so with maxAbandonedReads of
+// them outstanding a new read fails fast, the file not opened and no ffprobe
+// run, its tags unread, logged once; as the hung reads return, reads work
+// again. Not parallel: it fills the process-wide count.
+func TestAbandonedReadsAreCapped(t *testing.T) {
+	var logged bytes.Buffer
+	was := probeLog.Load()
+	SetLogger(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { probeLog.Store(was) })
+	hang := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hang) }) }
+	t.Cleanup(release)
+
+	src := bytes.NewReader(make([]byte, 1<<20))
+	for abandonedReads.Load() < maxAbandonedReads {
+		b := newBlockFile(slowFile{r: src, hang: hang}, 1<<20)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Millisecond, errReadDeadline)
+		why := b.bounded(ctx, func() { b.bytesAt(0, 16) })
+		cancel()
+		if !timedOutReason(why) {
+			t.Fatalf("a hung read: why = %q, want it given up at its deadline", why)
+		}
+	}
+	if n := abandonedReads.Load(); n != maxAbandonedReads {
+		t.Fatalf("abandoned reads = %d, want the cap, %d", n, maxAbandonedReads)
+	}
+
+	// Saturated: a missing file is not opened (no OpenErr), no ffprobe runs (no
+	// ProbeErr), nothing is retried (no ProbeTimedOut), and it takes no time.
+	start := time.Now()
+	for range 3 {
+		m, err := ExtractTimeout(context.Background(), filepath.Join(t.TempDir(), "missing.mp3"), "/no/such/ffprobe", time.Second)
+		if err != nil || m.OpenErr != nil || !m.TagsUnread() || m.ProbeErr != nil || m.ProbeTimedOut() || m.Duration != 0 {
+			t.Fatalf("saturated read = %+v (err %v), want it failed fast, tags unread", m, err)
+		}
+	}
+	if m := ExtractTags(fixture("mp3-v23-chap.mp3")); !m.TagsUnread() || m.Title != "" {
+		t.Errorf("saturated tag read = %+v, want nothing read", m)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("saturated reads took %v, want them failed fast", d)
+	}
+	if n := strings.Count(logged.String(), "reads stopped answering"); n != 1 {
+		t.Errorf("logged the cap %d times, want once:\n%s", n, logged.String())
+	}
+
+	// The share answers: each abandoned read returns and frees its place.
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for abandonedReads.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("abandoned reads = %d after they returned, want 0", abandonedReads.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	m, err := Extract(fixture("mp3-v23-chap.mp3"), "")
+	if err != nil || m.TagsUnread() || m.Duration <= 0 {
+		t.Errorf("read after the hung reads returned = %+v (err %v), want it read", m, err)
+	}
+	if saturationLogged.Load() {
+		t.Error("the cap's log is still marked: a later hit would not be logged")
+	}
+}
+
+// TestWaitReadThatReturnsIsNotAbandoned: a read that returns in time leaves no
+// abandoned read counted.
+func TestWaitReadThatReturnsIsNotAbandoned(t *testing.T) {
+	t.Parallel()
+	b := newBlockFile(bytes.NewReader(make([]byte, 1<<16)), 1<<16)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	before := abandonedReads.Load()
+	if why := b.bounded(ctx, func() { b.bytesAt(0, 16) }); why != "" {
+		t.Fatalf("why = %q, want the read done", why)
+	}
+	if after := abandonedReads.Load(); after > before {
+		t.Errorf("abandoned reads %d -> %d after a read that returned", before, after)
+	}
 }

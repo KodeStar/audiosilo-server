@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -314,25 +315,79 @@ func (b *blockFile) raw(p []byte, off int64) (int, error) {
 // b's ctx ends: a pread on a network share that stops answering (NFS hard
 // mounts, SMB) can't be interrupted, and would hold a scan's reader for good.
 // Past ctx it panics with a probeLimit, leaving the read to finish (or not) on
-// its own goroutine. Every caller's buffer is its own, made for this read on
-// the stack the panic unwinds (a block, bytesAt's, dhowden's), so nothing reads
-// p after that.
+// its own goroutine, counted in abandonedReads until it does (the file stays
+// open as long: its descriptor is closed only once the read returns). Every
+// caller's buffer is its own, made for this read on the stack the panic
+// unwinds (a block, bytesAt's, dhowden's), so nothing reads p after that.
 func (b *blockFile) waitRead(p []byte, off int64) (int, error) {
 	type res struct {
 		n   int
 		err error
 	}
 	done := make(chan res, 1)
+	var state atomic.Int32 // readRunning, readAbandoned or readReturned
 	go func() {
 		n, err := b.f.ReadAt(p, off)
+		if state.Swap(readReturned) == readAbandoned {
+			releaseAbandonedRead()
+		}
 		done <- res{n, err}
 	}()
 	select {
 	case r := <-done:
 		return r.n, r.err
 	case <-b.ctx.Done():
+		// Counted before it is marked, so the goroutine's release always
+		// follows; a read that returned meanwhile was never abandoned.
+		abandonedReads.Add(1)
+		if !state.CompareAndSwap(readRunning, readAbandoned) {
+			releaseAbandonedRead()
+		}
 		panic(probeLimit("limit: " + context.Cause(b.ctx).Error()))
 	}
+}
+
+// A waitRead's read: still running, abandoned by its waiter, or returned.
+const (
+	readRunning int32 = iota
+	readAbandoned
+	readReturned
+)
+
+// maxAbandonedReads is how many reads waitRead may have given up on that have
+// not returned yet, process-wide. Each holds a goroutine and its file open, so
+// a share that stays hung would otherwise leak a descriptor per attempt
+// (server#269): past it a read fails fast, the file not opened (readFile,
+// errReadsSaturated), until an abandoned read returns.
+const maxAbandonedReads = 16
+
+// abandonedReads counts the reads waitRead gave up on that have not returned.
+var abandonedReads atomic.Int32
+
+// saturationLogged: the cap's hit was logged since abandonedReads was last 0.
+var saturationLogged atomic.Bool
+
+// releaseAbandonedRead uncounts an abandoned read that returned (or one that
+// returned before it was marked); back at none, the next hit of the cap is
+// logged again.
+func releaseAbandonedRead() {
+	if abandonedReads.Add(-1) == 0 {
+		saturationLogged.Store(false)
+	}
+}
+
+// readsSaturated reports whether maxAbandonedReads reads are abandoned and
+// still running, so a new read would most likely hang too; the first time
+// since none were, it says so in the log.
+func readsSaturated() bool {
+	if abandonedReads.Load() < maxAbandonedReads {
+		return false
+	}
+	if saturationLogged.CompareAndSwap(false, true) {
+		probeLogger().Warn("audio files: reads stopped answering; skipping reads until they return",
+			"abandoned_reads", maxAbandonedReads)
+	}
+	return true
 }
 
 func (b *blockFile) block(i int64) []byte {

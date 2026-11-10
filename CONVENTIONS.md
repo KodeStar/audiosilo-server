@@ -1040,7 +1040,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   its deadline passed keeps its tags), one past the budget or panicking leaves dhowden's tags
   unread and the probe still runs (a narrator walk past it keeps them). While armed every read from the file runs on its own goroutine and is waited for
   only until the deadline (`blockFile.waitRead`), so a pread on a share that stopped answering
-  costs a leaked goroutine, never a stuck reader (`os.Open`/`Stat` are not bounded). A re-index
+  costs a goroutine (and the file open) until it returns, never a stuck reader (`os.Open`/`Stat`
+  are not bounded); at most `maxAbandonedReads` (16) such reads are outstanding process-wide
+  (`abandonedReads`): past that a read fails fast (`readsSaturated`, `reasonSaturated`), the file
+  not opened and no ffprobe run, its tags unread, logged once until they have all returned. A re-index
   whose tag read was cut short (`Metadata.TagsUnread`, `Book.TagsUnread`) keeps the stored book's
   reading of its tags (`catalog.keepTagReading`: the snapshot at its own revision; the embedded art
   flag unless a sibling cover sets it, `released`, the tag hints and their checked flags), never
