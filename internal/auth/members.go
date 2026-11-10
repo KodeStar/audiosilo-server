@@ -164,28 +164,55 @@ func cleanMemberName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	n := utf8.RuneCountInString(name)
 	if n == 0 || n > MaxMemberName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) ||
-		strings.ContainsFunc(name, invisibleRune) || !strings.ContainsFunc(name, visibleRune) {
+		hidesText(name) || !strings.ContainsFunc(name, visibleRune) {
 		return "", ErrInvalidName
 	}
 	return name, nil
 }
 
+// hidesText reports whether name holds an invisible character (invisibleRune).
+// Tag characters are invisible too, except in an emoji flag's tag sequence
+// (U+1F3F4, the tags, then the cancel tag U+E007F: England, Scotland, Wales).
+func hidesText(name string) bool {
+	inFlag := false
+	for _, r := range name {
+		if r >= 0xE0020 && r <= 0xE007F { // tag characters
+			if !inFlag {
+				return true
+			}
+			inFlag = r != 0xE007F
+			continue
+		}
+		if invisibleRune(r) {
+			return true
+		}
+		inFlag = r == 0x1F3F4 // waving black flag, which a tag sequence follows
+	}
+	return false
+}
+
 // invisibleRune is a character that shows nothing or changes how the text
-// around it is ordered: the bidi embeddings, overrides, isolates and marks,
-// zero-width spaces and joiners other than ZWJ/ZWNJ (which emoji sequences and
-// some scripts need), the soft hyphen, the BOM and the Hangul fillers.
+// around it is ordered: every format character (unicode.Cf: the bidi
+// embeddings, overrides, isolates and marks, zero-width spaces, the word
+// joiner and invisible operators, the soft hyphen, the BOM, the deprecated
+// format controls, the tags) but ZWJ/ZWNJ (which emoji sequences and some
+// scripts need), the combining grapheme joiner, the Hangul fillers and the
+// Braille blank.
 func invisibleRune(r rune) bool {
 	switch {
-	case unicode.Is(unicode.Bidi_Control, r), // embeddings, overrides, isolates, LRM, RLM, ALM
-		r == 0x200B, r >= 0x2060 && r <= 0x2064, r == 0xFEFF, r == 0x180E, // zero-width space, word joiner, invisible operators, BOM, Mongolian vowel separator
-		r == 0x00AD, r == 0x034F, // soft hyphen, combining grapheme joiner
-		r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0: // Hangul fillers
+	case r == 0x200C, r == 0x200D: // ZWNJ, ZWJ
+		return false
+	case unicode.Is(unicode.Cf, r),
+		r == 0x034F,                                        // combining grapheme joiner
+		r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0, // Hangul fillers
+		r == 0x2800: // Braille pattern blank
 		return true
 	}
 	return false
 }
 
-// visibleRune is a letter, number, symbol or punctuation.
+// visibleRune is a letter, number, symbol or punctuation that shows something
+// (the Hangul fillers are letters, the Braille blank a symbol).
 func visibleRune(r rune) bool {
 	return unicode.In(r, unicode.L, unicode.N, unicode.S, unicode.P) && !invisibleRune(r)
 }

@@ -102,6 +102,16 @@ func TestShareRevocationsAreDurable(t *testing.T) {
 	}
 	durable("share a collection", func() error { return c.SetCollectionShares(ctx, col.ID, owner, []int64{user, other}) })
 	durable("unshare a viewer", func() error { return c.SetCollectionShares(ctx, col.ID, owner, []int64{user}) })
+	// Its items are a collections-access member's reach: adding one gives,
+	// taking one off (or replacing them) takes away.
+	shelf, err := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/shelf"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := Ref{LibraryID: shelf.ID, Path: "Author/Book"}
+	ordinary("add an item", func() error { return c.AddCollectionItem(ctx, col.ID, owner, book, nil, nil) })
+	durable("take an item off", func() error { return c.RemoveCollectionItem(ctx, col.ID, owner, book) })
+	durable("replace the items", func() error { return c.SetCollectionItems(ctx, col.ID, owner, []Ref{}, nil, nil) })
 	durable("a viewer leaves", func() error { return c.DeleteCollection(ctx, col.ID, user) })
 	durable("delete the collection", func() error { return c.DeleteCollection(ctx, col.ID, owner) })
 }

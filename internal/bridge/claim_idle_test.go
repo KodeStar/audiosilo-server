@@ -136,8 +136,13 @@ func TestDeletedUsersPrivateSubscribeIsNotClaimed(t *testing.T) {
 	if _, err := q.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, gone); err != nil {
 		t.Fatal(err)
 	}
+	durable := q.db.DurableCommits()
 	if claim, err := q.ClaimFor(ctx, q.token, nil, 0); claim != nil || err != nil {
 		t.Fatalf("claim = %+v, %v; want none", claim, err)
+	}
+	// Failing it leased nothing, so it paid no fsync (server#260).
+	if got := q.db.DurableCommits() - durable; got != 0 {
+		t.Fatalf("a claim that only failed a lost request made %d durable commits, want 0", got)
 	}
 	got, err := q.Job(ctx, lost.ID)
 	if err != nil || got.State != StateFailed || !strings.Contains(string(got.Result), "request_expired") {

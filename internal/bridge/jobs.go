@@ -1173,7 +1173,7 @@ func (s *Service) claimTx(ctx context.Context, withTx func(context.Context, stri
 // claimDue reports whether a claim has anything to write, read on the reader
 // pool: a lease that ran out (expireTx's, of any kind), a private follow request
 // whose feed URL this server no longer holds (expirePrivateTx's), or a job
-// nextQueued would hand out for kinds (hand). A paired Bridge long-polls on two loops,
+// nextQueued would hand out for kinds that isn't such a request (hand). A paired Bridge long-polls on two loops,
 // 4 to 6 claims a minute when idle; without this each took the one writer and
 // moved the content generation (store.DB.ContentGeneration), emptying every cache keyed
 // on it, to change nothing. ErrNotPaired as the claim's own check, which the
@@ -1184,15 +1184,23 @@ func (s *Service) claimDue(ctx context.Context, token int64, kinds []string, min
 	if err := bridgeTokenLive(ctx, s.db, token); err != nil {
 		return false, false, err
 	}
-	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
-	if err != nil || id != 0 {
-		return id != 0, id != 0, err
-	}
-	if lapsed, err := s.leaseLapsed(ctx, s.ts()); err != nil || lapsed {
-		return lapsed, false, err
-	}
 	lost, err := s.lostPrivateRequests(ctx, s.db)
-	return len(lost) > 0, false, err
+	if err != nil {
+		return false, false, err
+	}
+	id, err := s.nextQueued(ctx, s.db, kinds, minPriority)
+	switch {
+	case err != nil:
+		return false, false, err
+	case id != 0 && !slices.Contains(lost, id):
+		return true, true, nil
+	case id != 0 || len(lost) > 0:
+		// The next job is a lost request: failing it leases nothing, and the
+		// ordinary commit's look after it finds the job behind it, if any.
+		return true, false, nil
+	}
+	lapsed, err := s.leaseLapsed(ctx, s.ts())
+	return lapsed, false, err
 }
 
 // bridgeTokenLive answers ErrNotPaired once token is no longer the paired

@@ -385,8 +385,8 @@ func TestSignOutEverywhereEndsMembersOnOwnersDevices(t *testing.T) {
 	}
 }
 
-// Denied: a change that ends nothing of the owner's (a first password, an
-// edit with no password) leaves the members alone too.
+// Denied: a change that ends nothing of the owner's (an edit with no
+// password) leaves the members alone too.
 func TestNoPasswordChangeKeepsMembers(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)

@@ -81,8 +81,16 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 	case next == nil:
 		next, err = a.folderNext(ctx, lib, scope, book, false)
 	case next.Next == nil: // the end of the series
-		var pending *nextBook
-		if pending, err = a.folderNext(ctx, lib, scope, book, true); pending != nil {
+		// Looking for a pending folder is extra: failing to, the series' answer
+		// stands (as /meta degrades), rather than failing the request.
+		pending, ferr := a.folderNext(ctx, lib, scope, book, true)
+		switch {
+		case ferr != nil:
+			if ctx.Err() == nil {
+				a.log.Warn("next book: pending folder after a series end not read", "err", ferr,
+					"library", lib.ID, "path", book.RelPath)
+			}
+		case pending != nil:
 			next = pending
 		}
 	}

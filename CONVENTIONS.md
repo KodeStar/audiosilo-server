@@ -698,9 +698,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   set or cleared, account disabled/demoted/deleted, auth code revoked, rotated,
   replaced or used, a pairing token used, Bridge pair code issued, pair/unpair), a write
   that takes share access away (a grant revoked, a path rule removed, a share deleted or made
-  read-only, a library deleted, a collection's viewer removed or the collection deleted:
+  read-only, a library deleted, a collection's viewer removed, a book taken off a collection
+  (a collections-access member's reach) or the collection deleted:
   `catalog.RevokeShare`, `RemoveSharePath`, `DeleteShare`, `UpdateShare`'s `read_only`,
-  `DeleteLibrary`, `SetCollectionShares`, `DeleteCollection`; S260-REVOKE, server#260)
+  `DeleteLibrary`, `SetCollectionShares`, `RemoveCollectionItem`, `SetCollectionItems`,
+  `DeleteCollection`; S260-REVOKE, server#260)
   or a Bridge claim that leases a job uses `WithDurableTx`/`ExecDurable` (FULL for
   that commit, about one fsync), and a new one of those kinds must too; an account edit
   that ends nothing (`UpdateUser` with only `can_add_members` or re-enabling, `UpdateMember` a
@@ -2391,9 +2393,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; the account limiter, as
   `gateSelfService`'s, charged after the API-key, demo and member refusals;
   403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
-  a name is 1-40 characters with no control or invisible character (`auth.invisibleRune`: bidi
-  controls and marks, zero-width spaces, the BOM, fillers; ZWJ/ZWNJ and right-to-left scripts are
-  fine) and something visible, server#190;
+  a name is 1-40 characters with no control or invisible character (`auth.invisibleRune`: every
+  format character, so bidi controls and marks, zero-width spaces, the BOM and tags, plus the Hangul
+  fillers and the Braille blank; ZWJ/ZWNJ, an emoji flag's tag sequence (`hidesText`) and
+  right-to-left scripts are fine) and something visible, server#190;
   username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
   `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
   `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
