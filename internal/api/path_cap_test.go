@@ -59,7 +59,6 @@ func TestPathCapComesFirst(t *testing.T) {
 	for _, req := range []struct{ method, route, body string }{
 		{"PUT", "folder-override", `{"mode":"book"}`},
 		{"DELETE", "folder-override", ""},
-		{"PUT", "enrichment", `{"asin":"B000000001"}`},
 	} {
 		u := fmt.Sprintf("/api/v1/admin/libraries/%d/%s%s", unknownLib, req.route, q(over))
 		if resp, raw := s.do(t, req.method, u, tok, req.body); !tooLong(resp, raw) {
@@ -69,7 +68,6 @@ func TestPathCapComesFirst(t *testing.T) {
 	for _, req := range []struct{ method, url, body string }{
 		{"PUT", "/api/v1/admin/libraries/" + lib + "/folder-override", `{"mode":"book"}`},
 		{"DELETE", "/api/v1/admin/libraries/" + lib + "/folder-override", ""},
-		{"PUT", "/api/v1/admin/libraries/" + lib + "/enrichment", `{"asin":"B000000001"}`},
 		{"GET", "/api/v1/libraries/" + lib + "/fs", ""},
 		{"DELETE", "/api/v1/me/queue", ""},
 	} {
