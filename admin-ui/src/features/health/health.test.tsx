@@ -208,6 +208,22 @@ describe('library health', () => {
     expect(screen.queryByText(/0xcbcc3c000/)).not.toBeInTheDocument();
   });
 
+  it('says a file that was not read could not be read, and why, with no Details', async () => {
+    const stuck = {
+      ...broken,
+      scan_error: 'unreadable' as const,
+      scan_error_detail: "too many reads are stuck on this share, so it wasn't tried",
+    };
+    mockFetch(routes({ 'GET /admin/books': () => ({ body: { books: [stuck] } }) }));
+    renderApp('/health?issue=scan_error');
+    expect(
+      await screen.findByText(
+        "07.mp3 couldn't be read: too many reads are stuck on this share, so it wasn't tried",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
+  });
+
   it('reads an unreadable book again and says whether that fixed it', async () => {
     const calls = mockFetch(
       routes({
