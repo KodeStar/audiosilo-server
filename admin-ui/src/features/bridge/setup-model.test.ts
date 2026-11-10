@@ -147,10 +147,20 @@ describe('what generating waits on', () => {
     expect(generateNeed(status({ online: false, setup: s }), 1)).toBeUndefined();
     expect(generateNeed(status(), 1)).toBeUndefined();
     expect(generateNeed(undefined, 1)).toBeUndefined();
-    // An optional step not done is never a need.
+    // An optional step generating doesn't use is never a need.
     expect(
-      generateNeed(status({ setup: setup([item('agent', false, false)]) }), 1),
+      generateNeed(status({ setup: setup([item('github', false, false)]) }), 1),
     ).toBeUndefined();
+  });
+
+  it('waits on the agent even where the checklist makes it optional (bridge#36)', () => {
+    const optional = setup([item('paired', true), item('agent', false, false)]);
+    expect(generateNeed(status({ setup: optional }), 1)).toBe('agent');
+    // The checklist still counts it optional: setup is complete without it.
+    expect(setupComplete(optional)).toBe(true);
+    expect(generateNeed(status({ setup: setup([item('agent', true, false)]) }), 1)).toBeUndefined();
+    // Speech recognition likewise, should the checklist ever make it optional.
+    expect(generateNeed(status({ setup: setup([item('asr', false, false)]) }), 1)).toBe('asr');
   });
 });
 

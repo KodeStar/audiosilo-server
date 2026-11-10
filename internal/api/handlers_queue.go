@@ -93,7 +93,11 @@ func listRemoveRef(w http.ResponseWriter, r *http.Request) (catalog.Ref, bool) {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return catalog.Ref{}, false
 	}
-	path := catalog.CleanRelPath(r.URL.Query().Get("path"))
+	raw := r.URL.Query().Get("path")
+	if pathTooLong(w, raw) {
+		return catalog.Ref{}, false
+	}
+	path := catalog.CleanRelPath(raw)
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return catalog.Ref{}, false

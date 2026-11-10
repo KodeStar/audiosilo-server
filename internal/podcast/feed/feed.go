@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 const MaxReadBytes = 32 << 20
@@ -124,9 +125,13 @@ func ValidFetch(f *Fetch) bool {
 // one non-hidden segment. A line break is refused too, as the Bridge never
 // names a folder with one and a podcast.poll path may not hold one.
 func ShowPath(p string) bool {
-	return p != "" && p != "." && p != ".." && !strings.HasPrefix(p, ".") && !strings.ContainsAny(p, "/\\\x00\r\n")
+	return p != "" && len(p) <= relpath.MaxBytes && p != "." && p != ".." && !strings.HasPrefix(p, ".") &&
+		!strings.ContainsAny(p, "/\\\x00\r\n")
 }
 func EpisodePath(show, p string) bool {
+	if len(p) > relpath.MaxBytes {
+		return false
+	}
 	parts := strings.Split(p, "/")
 	if !ShowPath(show) || len(parts) != 2 || parts[0] != show || !ShowPath(parts[1]) || path.Clean(p) != p {
 		return false

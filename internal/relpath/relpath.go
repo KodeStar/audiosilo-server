@@ -21,6 +21,12 @@ func Clean(p string) string {
 	return strings.Trim(path.Clean("/"+filepath.ToSlash(p)), "/")
 }
 
+// MaxBytes is the longest library-relative path, as sent, any route may name
+// (server#289, catalog.MaxPathBytes): a longer one is no file's on Linux
+// (PATH_MAX is 4096, and the library's root comes first) or macOS (1024), and
+// it would be stored as is wherever a path keys a row.
+const MaxBytes = 4096
+
 // Within reports whether p is root itself or lies below it on a segment
 // boundary ("Author/Book" holds "Author/Book/01.mp3", never "Author/Book 2"), and
 // "" (the library root) holds everything. Both paths must already be clean

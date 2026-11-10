@@ -174,6 +174,26 @@ func TestBridgeBookFacts(t *testing.T) {
 	}
 }
 
+// The Bridge's book read caps its path first (server#291): one byte over
+// catalog.MaxPathBytes is 400 "path is too long" even on an unknown library
+// (not its 404); a path at the cap gets the route's ordinary answer.
+func TestBridgeBookPathCap(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	atCap := "Long/" + strings.Repeat("a", catalog.MaxPathBytes-len("Long/"))
+	get := func(lib int64, p string) (*http.Response, string) {
+		return b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book?path=%s", lib, url.QueryEscape(p)), b.bridgeTok, "")
+	}
+	for _, lib := range []int64{b.lib.ID, 999999} {
+		if resp, body := get(lib, atCap+"b"); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "path is too long") {
+			t.Fatalf("library %d, over the cap: %d %s, want 400", lib, resp.StatusCode, body)
+		}
+	}
+	if resp, body := get(b.lib.ID, atCap); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"no_book"`) {
+		t.Fatalf("at the cap: %d %s, want 404 no_book", resp.StatusCode, body)
+	}
+}
+
 // The work id is the metadata cache's: none before the book is looked up (no
 // upstream call from the Bridge's route), then the cached one.
 func TestBridgeBookFactsWorkID(t *testing.T) {

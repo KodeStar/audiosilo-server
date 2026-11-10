@@ -1115,3 +1115,112 @@ func TestBridgeProgressFeedSyncedAgain(t *testing.T) {
 		}
 	}
 }
+
+// A title still a preorder takes no part in the sync (bridge#60): the poll may
+// match it to another edition on disk, and Audible holds no place for an
+// unreleased ASIN. Neither its titles in audible.sync's params, nor a place
+// for it, nor its book's place in the feed; released, all three, the book's
+// existing place offered again past the cursor.
+func TestAudibleSyncLeavesPreordersOut(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	end := s.feed(t, "")
+	if len(end.Rows) != 1 || end.Rows[0].ASIN != cradleASIN {
+		t.Fatalf("feed = %+v", end.Rows)
+	}
+	poll := func(id, state string) {
+		t.Helper()
+		if code, out := s.putTitles(t, testAccount, id, true,
+			title(mistbornASIN, "The Final Empire", "available", s.lib.ID, mistbornBook),
+			title(cradleASIN, "Unsouled", state, s.lib.ID, cradleBook)); code != http.StatusOK {
+			t.Fatalf("titles: %d %s", code, out)
+		}
+	}
+	poll("p2", "preorder")
+	titles, err := s.cat.AudibleSyncTitles(ctx, testAccount)
+	if err != nil || len(titles) != 1 || titles[0].ASIN != mistbornASIN {
+		t.Fatalf("sync titles with a preorder = %+v, %v", titles, err)
+	}
+	wantSync(t, s.postResults(t, place("aud-c", s.lib.ID, cradleBook, 900, time.Minute))[0], "rejected", "not_synced")
+	if p := s.patProgress(t, cradleBook); p.Position != 30 {
+		t.Fatalf("a preorder's place moved the book: %+v", p)
+	}
+	if f := s.feed(t, ""); len(f.Rows) != 0 {
+		t.Fatalf("feed with the title a preorder = %+v", f.Rows)
+	}
+	// Released: it syncs again, and the book's place, unchanged since the feed
+	// last read it, is offered again past that cursor (the re-match trigger).
+	poll("p3", "available")
+	if titles, err := s.cat.AudibleSyncTitles(ctx, testAccount); err != nil || len(titles) != 2 {
+		t.Fatalf("sync titles once released = %+v, %v", titles, err)
+	}
+	if f := s.feed(t, "&since="+url.QueryEscape(end.Next)); len(f.Rows) != 1 || f.Rows[0].ASIN != cradleASIN || f.Rows[0].Position != 30 {
+		t.Fatalf("feed once released = %+v", f.Rows)
+	}
+	wantSync(t, s.postResults(t, place("aud-c3", s.lib.ID, cradleBook, 900, time.Minute))[0], "applied", "")
+}
+
+// One length rule both ways (server#303): with the book's indexed duration
+// unknown, Audible's place is checked against the person's own row's stored
+// duration, as the feed checks a push; both unknown agree.
+func TestAudibleListeningRuntimeUnknownBook(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `UPDATE books SET duration = 0 WHERE library_id = ?`, s.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantSync(t, s.patListens(t, "pat-m", mistbornBook, 0, 20, "0"), "applied", "")
+	wantSync(t, s.patListens(t, "pat-c", cradleBook, 0, 30, "0"), "applied", "")
+	for path, d := range map[string]float64{mistbornBook: 20000, cradleBook: 0} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE progress SET duration = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+			d, s.patID, s.lib.ID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := s.postResults(t,
+		place("aud-m", s.lib.ID, mistbornBook, 900, time.Minute),
+		place("aud-c", s.lib.ID, cradleBook, 900, time.Minute))
+	wantSync(t, res[0], "rejected", "duration_mismatch")
+	wantSync(t, res[1], "applied", "")
+	if p := s.patProgress(t, mistbornBook); p.Position != 20 {
+		t.Fatalf("a place the row's length disagrees with moved the book: %+v", p)
+	}
+}
+
+// A sync claimed before a fresh sign-in that comes back refused does not mark
+// the account refused again (server#303): the sign-in ended the refusal after
+// the claim. One claimed after the refusal last ended still does.
+func TestAudibleSyncRefusalBeforeSignIn(t *testing.T) {
+	t.Parallel()
+	s := newAudibleSyncEnv(t)
+	ctx := context.Background()
+	claimedAt := func(job bridge.Job, at time.Time) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx, `UPDATE bridge_jobs SET claimed_at = ? WHERE id = ?`,
+			at.UTC().Format(time.RFC3339), job.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	s.queueSync(t, now)
+	job := s.claim(t, bridge.KindAudibleSync)
+	claimedAt(job, now.Add(-time.Minute)) // claimed a minute before the sign-in below
+	if code, out := s.putAccount(t, testAccount, s.patID, s.lib.ID); code != http.StatusOK {
+		t.Fatalf("sign in again: %d %s", code, out)
+	}
+	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt != nil {
+		t.Fatalf("a refusal from before the sign-in marked the account: %+v", a)
+	}
+
+	s.queueSync(t, now.Add(16*time.Minute))
+	job = s.claim(t, bridge.KindAudibleSync)
+	claimedAt(job, now.Add(time.Minute)) // after the sign-in
+	s.finish(t, job, bridge.StateFailed, `{"code":"audible_refused"}`, "audible_refused")
+	if a, _ := s.cat.AudibleAccount(ctx, testAccount); a.RefusedAt == nil {
+		t.Fatalf("a refusal after the sign-in left the account unmarked: %+v", a)
+	}
+}

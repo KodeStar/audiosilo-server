@@ -460,4 +460,34 @@ describe('bridge page', () => {
     expect(await screen.findByText(/Scheduled by the server/)).toBeInTheDocument();
     expect(screen.getAllByText(/Asked by a deleted account/)).toHaveLength(1);
   });
+
+  it("words a failed Audible check's code, and keeps the Bridge's text for one it doesn't know", async () => {
+    const failed = (id: number, code: string, error: string) =>
+      job({
+        id,
+        kind: 'audible.poll',
+        requested_by: null,
+        state: 'failed',
+        result: { code },
+        error,
+      });
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              failed(8, 'audible_sign_in', 'Audible refused the sign-in (raw)'),
+              failed(9, 'something_new', 'Something new went wrong'),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    expect(
+      await screen.findByText(/didn't accept the account's sign-in just now/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Audible refused the sign-in (raw)')).not.toBeInTheDocument();
+    expect(screen.getByText('Something new went wrong')).toBeInTheDocument();
+  });
 });

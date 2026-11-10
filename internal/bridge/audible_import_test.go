@@ -134,6 +134,7 @@ func TestAudibleImportCode(t *testing.T) {
 	}{
 		{Job{State: StateFailed, Result: json.RawMessage(`{"code":"exists","message":"a different file"}`)}, "exists"},
 		{Job{State: StateFailed, Error: "disk_full: 2 GB free, 5 GB needed"}, "disk_full"},
+		{Job{State: StateFailed, Error: "drm_free: only an MP3"}, "drm_free"},
 		{Job{State: StateFailed, Error: "something else"}, ""},
 		{Job{State: StateNeedsAttention, Progress: json.RawMessage(`{"park":{"code":"audible_refused"}}`)}, "audible_refused"},
 		{Job{State: StateDone, Result: json.RawMessage(`{"code":"exists"}`)}, ""},

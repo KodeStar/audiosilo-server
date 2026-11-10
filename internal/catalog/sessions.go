@@ -204,14 +204,18 @@ func insertSession(ctx context.Context, tx *sql.Tx, hb Heartbeat, startedAt, las
 }
 
 // extendSession carries session id on to lastAt (its last save never moves
-// back: a span replayed out of order keeps the later end) at endPos (taken only
-// when lastAt is not before the session's own), adding listened seconds. hb's
-// client is already the token's newest app (a save without the header carries
-// the stored one), so it is written as is.
+// back: a span replayed out of order keeps the later end) at endPos, length
+// and speed (each taken only when lastAt is not before the session's own: an
+// older span's, synced late, says nothing of where the session is now,
+// server#284), adding listened seconds. hb's client is already the token's
+// newest app (a save without the header carries the stored one), so it is
+// written as is.
 func extendSession(ctx context.Context, tx *sql.Tx, id int64, hb Heartbeat, lastAt string, endPos, add float64) error {
 	_, err := tx.ExecContext(ctx,
 		`UPDATE listening_sessions SET last_at = MAX(last_at, ?1),
-		        end_pos = CASE WHEN ?1 >= last_at THEN ?2 ELSE end_pos END, duration = ?3, speed = ?4,
+		        end_pos = CASE WHEN ?1 >= last_at THEN ?2 ELSE end_pos END,
+		        duration = CASE WHEN ?1 >= last_at THEN ?3 ELSE duration END,
+		        speed = CASE WHEN ?1 >= last_at THEN ?4 ELSE speed END,
 		        listened = listened + ?5, finished = MAX(finished, ?6), transcoded = MAX(transcoded, ?7),
 		        client_app = ?8, client_version = ?9, client_platform = ?10
 		  WHERE id = ?11`,

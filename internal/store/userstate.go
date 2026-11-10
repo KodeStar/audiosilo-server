@@ -93,10 +93,11 @@ var userStateTables = map[string]tableRule{
 	// account mapped, re-mapped or removed (its other columns, its rows) moves
 	// the generation; its first complete poll sets policy_since (Phase 4b), and
 	// its sync's times (Phase 4c: sync_queued_at, last_sync_at, refused_at, set by
-	// the scheduler and an ended audible.sync every 15 minutes) are free too.
+	// the scheduler and an ended audible.sync every 15 minutes, and
+	// refusal_ended_at, 0071, set by a complete poll) are free too.
 	"audible_titles": {rows: true},
 	"audible_accounts": {free: []string{"last_poll_at", "last_queued_at", "policy_since", "sync_queued_at",
-		"last_sync_at", "refused_at"}},
+		"last_sync_at", "refused_at", "refusal_ended_at"}},
 	// A token's touch (auth.Service.resolve): the token cache holds the row,
 	// and drops the touched one itself. Any other change (a revoke, a new
 	// token) moves the generation.

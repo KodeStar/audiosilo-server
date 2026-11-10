@@ -313,7 +313,7 @@ func (c *Catalog) PutAudibleAccount(ctx context.Context, id string, in AudibleAc
 			 VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 			 ON CONFLICT(account) DO UPDATE SET label = excluded.label, marketplace = excluded.marketplace,
 			     user_id = excluded.user_id, library_id = excluded.library_id,
-			     refused_at = NULL, updated_at = excluded.updated_at`,
+			     refused_at = NULL, refusal_ended_at = excluded.updated_at, updated_at = excluded.updated_at`,
 			id, in.Label, in.Marketplace, in.UserID, in.LibraryID, in.Policy, now, now, now); err != nil {
 			return err
 		}
@@ -763,7 +763,7 @@ func (c *Catalog) PutAudibleTitles(ctx context.Context, account, pollID string, 
 			now, account, pollID); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ?1, refused_at = NULL,
+		_, err = tx.ExecContext(ctx, `UPDATE audible_accounts SET last_poll_at = ?1, refused_at = NULL, refusal_ended_at = ?1,
 			    policy_since = CASE WHEN last_poll_at IS NULL THEN ?1 ELSE policy_since END WHERE account = ?2`, now, account)
 		return err
 	})

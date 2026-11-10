@@ -561,3 +561,46 @@ func TestRemuxerWarmBounded(t *testing.T) {
 		t.Fatalf("%d warms left, %d runs; want none", len(m.warming), runs.Load())
 	}
 }
+
+// A run its timeout kills is remembered as a refusal (server#289), with its
+// hint, so the next request doesn't start it from zero; the server going
+// away (runCtx) is not the file's and is not remembered.
+func TestFileCacheTimeoutIsARefusal(t *testing.T) {
+	t.Parallel()
+	var runs atomic.Int32
+	m, src := fakeRemuxer(t, func(_, _ string) error { panic("replaced below") })
+	m.spec.timeout = 20 * time.Millisecond
+	m.run = func(ctx context.Context, _ string, _ []string, _ *os.File) error {
+		runs.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx := context.Background()
+	for range 2 {
+		if _, _, err := m.Open(ctx, ctx, "ffmpeg", src); !errors.Is(err, ErrRefused) {
+			t.Fatalf("open = %v, want ErrRefused", err)
+		}
+	}
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("%d runs, want the timeout remembered after one", n)
+	}
+	if left := m.RefusedFor(src); left <= 0 || left > cacheRefusalTTL {
+		t.Fatalf("refused for %v, want the refusal's hint", left)
+	}
+
+	// The server going away mid-run: not remembered.
+	g, gsrc := fakeRemuxer(t, func(_, _ string) error { panic("replaced below") })
+	g.spec.timeout = time.Hour
+	runCtx, cancel := context.WithCancel(ctx)
+	g.run = func(ctx context.Context, _ string, _ []string, _ *os.File) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, _, err := g.Open(ctx, runCtx, "ffmpeg", gsrc); err == nil || errors.Is(err, ErrRefused) {
+		t.Fatalf("open with the server going away = %v, want a failure that is not a refusal", err)
+	}
+	if left := g.RefusedFor(gsrc); left != 0 {
+		t.Fatalf("a shutdown was remembered for %v", left)
+	}
+}

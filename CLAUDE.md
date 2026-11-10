@@ -320,7 +320,10 @@ matching, Recorded community match) in CONVENTIONS.md). `0070` adds `book_matche
 `offered_isbn` (server#330: the identifiers the match offered, ticked or not, `''` for none or a match
 recorded before it, no backfill; a refresh never fills the offered one back) and
 `match_run_items.unchanged` (server#332: the scopes a refresh item had nothing to change under when
-recorded; an apply under one leaves it out unread, `''` for an item recorded before it).
+recorded; an apply under one leaves it out unread, `''` for an item recorded before it). `0071` recreates the
+`audible_titles` re-match trigger so a released preorder offers its book's place again (bridge#60: a
+`preorder` title takes no part in the sync) and adds `audible_accounts.refusal_ended_at` (server#303: when a
+mapping or complete poll last ended the sync's refusal; see Audible sync in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

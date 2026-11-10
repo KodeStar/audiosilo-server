@@ -113,13 +113,15 @@ export function billingKnown(status: Pick<BridgeStatus, 'setup' | 'estimates'>):
 export type GenerateNeed = 'asr' | 'agent' | 'libraries';
 
 /**
- * The first required step still to do that generating for a book in this
- * library needs, in the checklist's order: speech recognition, the agent's
- * credential, or this library's mapping (the libraries step counts only when
- * this library is the one the Bridge can't write to yet). Undefined without an
- * online Bridge's checklist, or when nothing it needs is missing (budget and
- * GitHub never stop a run here: the budget is a cap, GitHub only for
- * contributing).
+ * The first step still to do that generating for a book in this library
+ * needs, in the checklist's order: speech recognition, the agent's credential,
+ * or this library's mapping (the libraries step counts only when this library
+ * is the one the Bridge can't write to yet). These count whether or not the
+ * checklist marks them required: a Bridge where one is optional (the agent,
+ * bridge#36: it runs other jobs without one) still can't generate without it,
+ * and the job would park. Undefined without an online Bridge's checklist, or
+ * when nothing it needs is missing (budget and GitHub never stop a run here:
+ * the budget is a cap, GitHub only for contributing).
  */
 export function generateNeed(
   status: Pick<BridgeStatus, 'online' | 'setup' | 'libraries'> | undefined,
@@ -127,7 +129,7 @@ export function generateNeed(
 ): GenerateNeed | undefined {
   if (!status?.online || !status.setup) return undefined;
   for (const item of status.setup.items) {
-    if (!item.required || item.done) continue;
+    if (item.done) continue;
     if (item.id === 'asr' || item.id === 'agent') return item.id;
     if (item.id === 'libraries') {
       const mapping = status.libraries.find((l) => l.id === libraryId)?.mapping ?? null;

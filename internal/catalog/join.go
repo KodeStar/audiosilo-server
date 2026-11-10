@@ -122,6 +122,14 @@ func (c *Catalog) JoinDurableState(ctx context.Context, libraryID int64, into st
 				return fmt.Errorf("join listening state: %w", err)
 			}
 		}
+		// An Audible title matched to a part is the joined book's (one match a
+		// title, so moved rather than copied), once the parts' places have
+		// landed on it (moveAudibleTitles).
+		for _, p := range parts {
+			if err := moveAudibleTitles(ctx, tx, libraryID, p.Path, into); err != nil {
+				return fmt.Errorf("join audible titles: %w", err)
+			}
+		}
 		return nil
 	})
 }
@@ -165,12 +173,6 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			  ON CONFLICT(library_id, path) DO UPDATE SET
 			      asin = CASE WHEN book_enrichment.asin = '' THEN excluded.asin ELSE book_enrichment.asin END,
 			      isbn = CASE WHEN book_enrichment.isbn = '' THEN excluded.isbn ELSE book_enrichment.isbn END`,
-				[]any{into, libraryID, p.Path}},
-			// An Audible title matched to the part is the joined book's (one match
-			// a title, so moved rather than copied, as moveBookState moves it).
-			{`UPDATE audible_titles SET match_path = ?1 WHERE match_library_id = ?2 AND match_path = ?3`,
-				[]any{into, libraryID, p.Path}},
-			{`UPDATE audible_titles SET contest_path = ?1 WHERE contest_library_id = ?2 AND contest_path = ?3`,
 				[]any{into, libraryID, p.Path}},
 		}
 		for _, st := range stmts {

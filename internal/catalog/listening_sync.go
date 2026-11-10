@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 // Sync v2 (Track W1, migration 0061): players post what they listened to as
@@ -69,11 +71,11 @@ const (
 	// MaxClockOffset bounds a batch's clock_offset (seconds).
 	MaxClockOffset = 1e9
 	// MaxPathBytes is the longest path, as sent, a sync event or any
-	// path-addressed route (the API's pathInScope) may name (server#289): a
-	// longer one is no file's on Linux (PATH_MAX is 4096, and the library's
-	// root comes first) or macOS (1024), and it would be stored as is on the
-	// progress, event, session, history and bookmark rows.
-	MaxPathBytes = 4096
+	// path-addressed route (the API's pathInScope, pathTooLong) may name
+	// (server#289, relpath.MaxBytes): a longer one is no file's, and it would
+	// be stored as is on the progress, event, session, history and bookmark
+	// rows.
+	MaxPathBytes = relpath.MaxBytes
 	// syncRejectAge: an event older than this (corrected) is rejected too_old.
 	syncRejectAge = 90 * 24 * time.Hour
 	// SyncRetention is how long stored events are kept (PruneListeningEvents):
@@ -627,6 +629,9 @@ func (s *syncRun) apply(ctx context.Context, p syncPrepared) (SyncResult, error)
 	} else {
 		res, err = s.finish(ctx, p)
 	}
+	if err == nil && p.ev.Kind == EventFinish && !s.b.FurthestOnly {
+		err = s.finishSession(ctx, p)
+	}
 	if err != nil {
 		return res, err
 	}
@@ -1016,6 +1021,24 @@ func (s *syncRun) recordSpan(ctx context.Context, p syncPrepared, listened float
 		return insertSession(ctx, s.tx, hb, formatSessionTime(p.started), ended, p.from, p.to, listened)
 	}
 	return extendSession(ctx, s.tx, open.id, hb, ended, p.to, listened)
+}
+
+// finishSession marks the token's session on the book finished for a finish
+// event (server#284), as a PUT saying finished marks the session it lands in
+// (RecordHeartbeat): the session that was open when the device finished, the
+// newest one begun by the finish whose last span ended at most SessionGap
+// before it. Whatever the row did with the finish (applied, or older than its
+// last finish-state change): the listener finished the book in that session.
+// A finish with no such session (Mark finished on a book not played lately)
+// opens none, so it adds no session that never listened.
+func (s *syncRun) finishSession(ctx context.Context, p syncPrepared) error {
+	hb := Heartbeat{UserID: s.b.UserID, Ref: p.target.Key, TokenID: s.b.TokenID}
+	open, err := latestSession(ctx, s.tx, hb, p.ended)
+	if err != nil || open == nil || p.ended.Sub(parseSessionTime(open.lastAt)) > SessionGap {
+		return err
+	}
+	_, err = s.tx.ExecContext(ctx, `UPDATE listening_sessions SET finished = 1 WHERE id = ?`, open.id)
+	return err
 }
 
 // recordHistory adds a span to the user's listening history: it extends a row

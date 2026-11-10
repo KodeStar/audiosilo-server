@@ -162,24 +162,22 @@ type AudibleImportParams struct {
 // The audible.import result's and failure's codes the console names (the
 // Bridge's; a failed job's code is AudibleImportCode's reading).
 const (
-	ImportNotReleased    = "not_released"
-	ImportNoRights       = "no_rights"
-	ImportAudibleRefused = "audible_refused"
-	// ImportAudibleSignIn: Audible refused the account's sign-in for now
-	// (transient: the Bridge tries again), not the device (audible_refused). An
-	// audible.sync failing with it is an ordinary failure: the account is not
-	// marked refused.
-	ImportAudibleSignIn     = "audible_sign_in"
+	ImportNotReleased       = "not_released"
+	ImportNoRights          = "no_rights"
+	ImportAudibleRefused    = "audible_refused"
 	ImportNotWritable       = "not_writable"
 	ImportExists            = "exists"
 	ImportDiskFull          = "disk_full"
 	ImportOfflineURLExpired = "offline_url_expired"
 	ImportUnknownAccount    = "unknown_account"
+	// ImportDRMFree: Audible offers the title only as a DRM-free MP3, which
+	// the Bridge doesn't back up yet (bridge#46).
+	ImportDRMFree = "drm_free"
 )
 
 // AudibleImportCodes are the codes an audible.import failure may name.
-var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused, ImportAudibleSignIn,
-	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
+var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused,
+	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount, ImportDRMFree}
 
 var asinPattern = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 
@@ -461,6 +459,14 @@ const AudibleSyncEvery = 15 * time.Minute
 // queued until the Bridge maps the account again.
 const SyncAudibleRefused = ImportAudibleRefused
 
+// SyncAudibleSignIn: Audible refused the account's sign-in for now
+// (transient: the Bridge tries again), not the device (audible_refused). An
+// audible.sync failing with it is an ordinary failure: the account is not
+// marked refused. An import never names it (its refused sign-in is
+// audible_refused, server#303), so the console words it for no backup; a
+// poll's failure may name it, and the server folds no poll's code.
+const SyncAudibleSignIn = "audible_sign_in"
+
 // AudibleSyncTitle is one title an audible.sync reads: its ASIN, the book on
 // this server it is matched to (library and book path, the progress key the
 // Bridge's events name) and Audible's runtime in seconds (0 unknown), which
@@ -486,9 +492,6 @@ const (
 	// titles (about 120 bytes each); AudibleSync leaves out the last titles of
 	// a list that would be longer.
 	maxAudibleSyncParamsBytes = 1 << 20
-	// maxSyncPathBytes is the longest book path a title may name (the
-	// catalog's MaxPathBytes).
-	maxSyncPathBytes = 4096
 )
 
 // audibleSyncParams checks audible.sync's params strictly: an account id, and
@@ -511,7 +514,7 @@ func audibleSyncParams(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, invalid("titles: each asin must be an ASIN, once")
 		case t.LibraryID <= 0:
 			return nil, invalid("titles: library_id is required")
-		case t.Path == "" || len(t.Path) > maxSyncPathBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
+		case t.Path == "" || len(t.Path) > relpath.MaxBytes || (t.Path != "." && relpath.Clean(t.Path) != t.Path):
 			return nil, invalid("titles: path must be a clean book path")
 		case t.RuntimeS < 0:
 			return nil, invalid("titles: runtime_s must not be negative")

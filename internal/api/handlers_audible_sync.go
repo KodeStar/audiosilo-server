@@ -68,7 +68,8 @@ func (a *API) audibleSyncFor(w http.ResponseWriter, r *http.Request, account, op
 
 // userPathResolver is scopedPathIn for a person who is not the caller (an
 // Audible account's): their scope in the library (none, or no such library, is
-// 403), then pathInScope.
+// 403), then pathInScope. syncTargets has already set aside a path over the
+// cap.
 func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncResolver {
 	return func(libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 		scope, ok := scopeIn(scopes, libraryID)
@@ -93,7 +94,8 @@ func (a *API) userPathResolver(r *http.Request, scopes []catalog.Scope) syncReso
 // named "Audible (<label>)", recording no listening and nothing against the
 // bridge token. An event on a book that is none of the account's synced titles
 // is rejected not_synced, one whose titles' Audible runtimes all disagree with
-// the indexed book's duration duration_mismatch (catalog.AudibleSyncBooks), one
+// the book's length (the indexed duration, else the person's row's)
+// duration_mismatch (catalog.AudibleSyncBooks), one
 // outside the person's access no_access. 200 the
 // Sync v2 answer {server_time, results, progress}; 400 a bad envelope (as POST
 // /me/listening/sync's, sent_at required); 413 too_large; 403 sync_off,

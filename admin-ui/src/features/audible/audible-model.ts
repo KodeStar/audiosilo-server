@@ -75,13 +75,49 @@ export const IMPORT_CODES = [
   'not_released',
   'no_rights',
   'audible_refused',
-  'audible_sign_in',
   'not_writable',
   'exists',
   'disk_full',
   'offline_url_expired',
   'unknown_account',
+  'drm_free',
 ] as const;
+
+/**
+ * The codes a failed Check now (audible.poll) or place sync (audible.sync) may
+ * name, each worded as `audible.pollCode.<code>`: Audible refused the device
+ * (sign in again) or the sign-in for now (the next check tries again).
+ */
+export const POLL_CODES = ['audible_refused', 'audible_sign_in'] as const;
+
+/**
+ * The words for an Audible job's failure code in the Bridge's jobs list (an
+ * i18n key), undefined for a job of another kind or a code the console
+ * doesn't know (its error is shown as the Bridge wrote it). The code is the
+ * result's, else (a backup's, as the server's bridge.AudibleImportCode reads
+ * it) one its error starts with ("drm_free: ...").
+ */
+export function audibleJobReason(job: {
+  kind: string;
+  result?: Record<string, unknown> | null;
+  error?: string;
+}): string | undefined {
+  const known = (codes: readonly string[]) => {
+    const code = typeof job.result?.code === 'string' ? job.result.code : '';
+    if (code) return codes.includes(code) ? code : undefined;
+    const err = job.error ?? '';
+    return codes.find((c) => err === c || err.startsWith(`${c}:`));
+  };
+  if (job.kind === 'audible.import') {
+    const code = known(IMPORT_CODES);
+    return code ? `audible.code.${code}` : undefined;
+  }
+  if (job.kind === 'audible.poll' || job.kind === 'audible.sync') {
+    const code = known(POLL_CODES);
+    return code ? `audible.pollCode.${code}` : undefined;
+  }
+  return undefined;
+}
 
 /** Whether a title's backup is waiting or running (a pending request included). */
 export function importOpen(x: Pick<AudibleTitle, 'import'>): boolean {
@@ -114,12 +150,20 @@ export function canBackUp(x: AudibleTitle): boolean {
 
 /**
  * Whether a title's place can sync with Audible (Phase 4c): it is on this
- * server (a match not marked "Not this book") and still the account's, not
+ * server (a match not marked "Not this book"), still the account's and
+ * released (not a preorder: the server's syncTitleSQL, bridge#60), not
  * ignored, and not marked "Don't sync this book". The account's own sync
  * switch is separate.
  */
 export function canSync(x: AudibleTitle): boolean {
-  return x.match !== null && !x.rejected && x.state !== 'gone' && !x.ignored && !x.no_sync;
+  return (
+    x.match !== null &&
+    !x.rejected &&
+    x.state !== 'gone' &&
+    x.state !== 'preorder' &&
+    !x.ignored &&
+    !x.no_sync
+  );
 }
 
 /** How a title's backup reads: its i18n key, the status dot, and its code's words. */

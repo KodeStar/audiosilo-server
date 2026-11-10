@@ -403,8 +403,30 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, mergeNewest); err != nil {
 			return fmt.Errorf("move listening state: %w", err)
 		}
-		return nil
+		return moveAudibleTitles(ctx, tx, libraryID, oldPath, newPath)
 	})
+}
+
+// moveAudibleTitles moves the Audible titles matched to the book at from
+// (migration 0063), and those left contested over it (0065), to into. It runs
+// in the per-user transaction AFTER the progress has moved (server#303): the
+// re-match trigger (0066, 0071) offers the account's person's row at into to
+// Audible, so it is already the carried place (merged with a row an earlier
+// book left at into by the carry's rule, mergeNewest or mergeFurthest), never
+// that left-behind row as it stood before the carry, and a carry that fails
+// leaves the titles where they were (the next poll matches them afresh). A
+// person with no place on the moved book still has a left-behind row at into
+// offered, as the player shows it for the moved book.
+func moveAudibleTitles(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
+		into, libraryID, from); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
+		into, libraryID, from)
+	return err
 }
 
 // carryListeningState hands every listener's state on one path (part.Path) to
@@ -649,7 +671,8 @@ func mergeFurthest(a, b UserProgress) UserProgress {
 
 // moveBookState carries the book's own path-keyed state (enrichment, ignored
 // issues, an admin's metadata edits, a custom cover, its recorded community
-// match) from oldPath to newPath.
+// match) from oldPath to newPath. Its Audible titles move with the per-user
+// state instead (moveAudibleTitles).
 func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
 		return err
@@ -670,18 +693,6 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	// So do the Health issues an admin ignored for it.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE OR REPLACE issue_ignores SET path = ? WHERE library_id = ? AND path = ?`,
-		newPath, libraryID, oldPath); err != nil {
-		return err
-	}
-	// So do the Audible titles matched to it (migration 0063), and those left
-	// contested over it (0065).
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE audible_titles SET match_path = ? WHERE match_library_id = ? AND match_path = ?`,
-		newPath, libraryID, oldPath); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE audible_titles SET contest_path = ? WHERE contest_library_id = ? AND contest_path = ?`,
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}
