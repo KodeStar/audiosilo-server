@@ -2820,7 +2820,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   tombstone and no publication journal. Show and attachment listings extend the feed signature, so
   audio and CHAP changes are noticed with unchanged feed stats; targeted rescans force a refresh, as
   does a show with fewer episode rows than its `episode_count` (`PodcastEpisodeRows`: an older server
-  scanned the library as books), and every scan removes the library's books rows that are no episode
+  scanned the library as books; a row counts only while its `indexed_at` (`0073`, NULL before it) is
+  its books row's, so one that older scan rewrote in place counts as missing), and every scan removes the library's books rows that are no episode
   (`PruneNonEpisodeBooks`, that older scan's folder books). A scan prunes only shows indexed before it
   listed the root, so one the Bridge indexes meanwhile stays. Missing
   episodes remain indexed, with `episode` on `/item`, fetch/status handling on `/stream`, and empty
@@ -2829,6 +2830,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   serial follows its numbers) for episode pages and their cursor (an older four-value cursor is 400),
   `/fs`, `/next`, the Keep window and the fetch candidates (these put undated episodes last).
   Artwork belongs to the show.
+  A library kind this server does not know (`catalog.KnownKind`; a newer server's, left by a
+  rollback) is never scanned as books: `Scan` fails with `library.ErrUnknownKind` and a targeted index
+  refuses any library that isn't `books` (`resolveBook`, `ErrNotIndexable`).
   `catalog.Caller.Podcasts` comes from this request's credential via `api.callerOf(ctx)` and
   `auth.SeesPodcasts`: Admin console and AudioSilo/dev allowed; released players need
   `PodcastPlayerMinVersion` (2.2.0, the first with podcast views; numeric X.Y.Z, a pre-release

@@ -228,3 +228,98 @@ func TestPodcastScanRestoresEpisodesLostToARollback(t *testing.T) {
 		t.Fatalf("unchanged: %+v %v", res, err)
 	}
 }
+
+// server#182: an older server run on this database (a rollback) can rewrite an
+// episode's books row in place instead of removing it. Its podcast_episodes
+// row stays, so only the two indexed_at stamps tell, and the next scan
+// re-indexes the show.
+func TestPodcastScanRestoresEpisodesRewrittenByARollback(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	dir := filepath.Join(root, "Example Show")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../podcast/testdata/feed-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "feed.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Podcasts", Root: root, Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, "a-probe-that-must-never-run", slog.Default())
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 3 {
+		t.Fatalf("scan: %+v %v", res, err)
+	}
+	var id int64
+	var title string
+	if err := db.QueryRowContext(ctx, `SELECT b.id, b.title FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE b.library_id=? ORDER BY b.id LIMIT 1`, lib.ID).Scan(&id, &title); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET title='rewritten by an older server', indexed_at='2099-01-01T00:00:00Z' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 2 {
+		t.Fatalf("after the rewrite: %d %v", n, err)
+	}
+	if _, err := s.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := db.QueryRowContext(ctx, `SELECT title FROM books WHERE id=?`, id).Scan(&got); err != nil || got != title {
+		t.Fatalf("title %q (want %q) %v", got, title, err)
+	}
+	if n, err := cat.PodcastEpisodeRows(ctx, lib.ID, "Example Show"); err != nil || n != 3 {
+		t.Fatalf("after the next scan: %d %v", n, err)
+	}
+	// An episode row from before 0073 (no stamp) counts as indexed.
+	if _, err := db.ExecContext(ctx, `UPDATE podcast_episodes SET indexed_at=NULL WHERE book_id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Scan(ctx, *lib); err != nil || res.Added != 0 || res.Updated != 0 {
+		t.Fatalf("unchanged: %+v %v", res, err)
+	}
+}
+
+// server#182: a library of a kind this server does not know (left by a newer
+// version after a rollback) is refused, never scanned as books.
+func TestScanRefusesAnUnknownLibraryKind(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Author", "Book"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Author", "Book", "01.mp3"), []byte("not really audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Books", Root: root, Kind: catalog.KindBooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewScanner(cat, "a-probe-that-must-never-run", slog.Default())
+	unknown := *lib
+	unknown.Kind = "ebooks"
+	if _, err := s.Scan(ctx, unknown); !errors.Is(err, ErrUnknownKind) {
+		t.Fatalf("scan: %v", err)
+	}
+	if _, err := s.IndexPath(ctx, unknown, "Author/Book"); !errors.Is(err, ErrNotIndexable) {
+		t.Fatalf("index path: %v", err)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE library_id=?`, lib.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("books indexed: %d %v", n, err)
+	}
+	if catalog.KnownKind("ebooks") || !catalog.KnownKind(catalog.KindBooks) || !catalog.KnownKind(catalog.KindPodcasts) {
+		t.Fatal("KnownKind")
+	}
+}

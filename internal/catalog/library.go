@@ -350,6 +350,10 @@ const (
 	KindPodcasts = "podcasts"
 )
 
+// KnownKind reports whether kind is one this server knows: a library of
+// another (a newer AudioSilo's, after a rollback) is left alone (server#182).
+func KnownKind(kind string) bool { return kind == KindBooks || kind == KindPodcasts }
+
 // inBookLibrary keeps a books row (alias b) of a books-kind library only:
 // podcast episodes are out of every cross-library book aggregate and the admin
 // book tools. It stays a correlated EXISTS: an IN list lets the planner lead

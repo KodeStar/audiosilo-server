@@ -231,6 +231,12 @@ var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan 
 // library's ignore rules skip.
 var ErrNotIndexable = errors.New("path is not an indexable book")
 
+// ErrUnknownKind is a scan of a library whose kind this server doesn't know (a
+// newer AudioSilo's, run on this database before a rollback): it is left alone,
+// never scanned as books, which would prune what the newer server indexed
+// there (server#182).
+var ErrUnknownKind = errors.New("this server doesn't know the library's kind; left alone")
+
 // ErrNotAllowed means the book a path resolves to lies outside what the caller may
 // reach (IndexPathWithin): a disc folder of a joined book, say, for a caller
 // granted only the disc. Nothing was indexed.
@@ -273,6 +279,9 @@ func primaryPath(b *catalog.Book) string {
 // and logged by then.
 func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult, err error) {
 	res := &ScanResult{}
+	if !catalog.KnownKind(lib.Kind) {
+		return res, fmt.Errorf("%w: %q", ErrUnknownKind, lib.Kind)
+	}
 	s.mu.Lock()
 	s.progress[lib.ID] = ScanProgress{Running: true}
 	s.mu.Unlock()
@@ -2029,7 +2038,7 @@ func (s *Scanner) indexBook(ctx context.Context, lib catalog.Library, book *cata
 // full scan would (IndexPathWithin's rules), with the signatures of its metadata
 // files, but nothing read from its audio and nothing indexed.
 func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
-	if lib.Kind == catalog.KindPodcasts {
+	if lib.Kind != catalog.KindBooks { // a podcast library, or one of a kind this server doesn't know
 		return nil, ErrNotIndexable
 	}
 	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
