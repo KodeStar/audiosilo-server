@@ -170,11 +170,14 @@ const (
 	ImportDiskFull          = "disk_full"
 	ImportOfflineURLExpired = "offline_url_expired"
 	ImportUnknownAccount    = "unknown_account"
+	// ImportDRMFree: Audible offers the title only as a DRM-free MP3, which
+	// the Bridge doesn't back up yet (bridge#46).
+	ImportDRMFree = "drm_free"
 )
 
 // AudibleImportCodes are the codes an audible.import failure may name.
 var AudibleImportCodes = []string{ImportNotReleased, ImportNoRights, ImportAudibleRefused,
-	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount}
+	ImportNotWritable, ImportExists, ImportDiskFull, ImportOfflineURLExpired, ImportUnknownAccount, ImportDRMFree}
 
 var asinPattern = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 

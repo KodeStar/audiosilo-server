@@ -13,8 +13,10 @@ import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { settingsWith } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
+import en from '@/i18n/locales/en.json';
 import {
   accountName,
+  audibleJobReason,
   backupRunning,
   canBackUp,
   canSync,
@@ -542,6 +544,33 @@ describe('audible backups', () => {
         title({ needs_attention: true, import: { job_id: null, state: 'pending', code: '' } }),
       )?.key,
     ).toBe('audible.import.attention');
+  });
+
+  it("words the Bridge's newer Audible failure codes (drm_free, a check's refusals)", () => {
+    const strings = en as Record<string, string>;
+    expect(
+      importStatus(title({ import: { job_id: 4, state: 'failed', code: 'drm_free' } }))?.code,
+    ).toBe('audible.code.drm_free');
+    const job = (kind: string, code: unknown) => ({ kind, result: { code } });
+    expect(audibleJobReason(job('audible.import', 'drm_free'))).toBe('audible.code.drm_free');
+    expect(audibleJobReason(job('audible.poll', 'audible_refused'))).toBe(
+      'audible.pollCode.audible_refused',
+    );
+    expect(audibleJobReason(job('audible.poll', 'audible_sign_in'))).toBe(
+      'audible.pollCode.audible_sign_in',
+    );
+    for (const key of [
+      'audible.code.drm_free',
+      'audible.pollCode.audible_refused',
+      'audible.pollCode.audible_sign_in',
+    ]) {
+      expect(strings[key]).toBeTruthy();
+    }
+    // Unknown codes, other kinds, and no result keep the Bridge's own text.
+    expect(audibleJobReason(job('audible.poll', 'something_new'))).toBeUndefined();
+    expect(audibleJobReason(job('audible.poll', 'drm_free'))).toBeUndefined();
+    expect(audibleJobReason(job('sidecars.generate', 'audible_refused'))).toBeUndefined();
+    expect(audibleJobReason({ kind: 'audible.poll', result: null })).toBeUndefined();
   });
 
   it('backs a title up, and says a preorder waits for its release', async () => {

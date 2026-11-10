@@ -11,6 +11,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDateTime, formatNumber, formatRelative, formatTook } from '@/lib/format';
+import { audibleJobReason } from '@/features/audible/audible-model';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
 import {
@@ -141,6 +142,8 @@ function JobRow({
   const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
+  // An Audible job's known failure code, worded (the Bridge's own text otherwise).
+  const reason = audibleJobReason(job);
   const details = hasContent(job.result) || hasContent(job.params);
 
   const meta = [
@@ -258,7 +261,9 @@ function JobRow({
         (job.cancel_requested && isServerCancelReason(job.error)) ? (
         <CancelledStatus job={job} />
       ) : job.error ? (
-        <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
+        <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">
+          {reason ? t(reason) : job.error}
+        </p>
       ) : null}
       {summary ? <ResultLine summary={summary} lang={lang} /> : null}
       {open ? (

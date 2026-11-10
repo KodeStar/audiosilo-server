@@ -80,7 +80,34 @@ export const IMPORT_CODES = [
   'disk_full',
   'offline_url_expired',
   'unknown_account',
+  'drm_free',
 ] as const;
+
+/**
+ * The codes a failed Check now (audible.poll) may name, each worded as
+ * `audible.pollCode.<code>`: Audible refused the device (sign in again) or
+ * the sign-in for now (the next check tries again).
+ */
+export const POLL_CODES = ['audible_refused', 'audible_sign_in'] as const;
+
+/**
+ * The words for an Audible job's failure code in the Bridge's jobs list (an
+ * i18n key), undefined for a job of another kind or a code the console
+ * doesn't know (its error is shown as the Bridge wrote it).
+ */
+export function audibleJobReason(job: {
+  kind: string;
+  result?: Record<string, unknown> | null;
+}): string | undefined {
+  const code = typeof job.result?.code === 'string' ? job.result.code : '';
+  if (job.kind === 'audible.import' && (IMPORT_CODES as readonly string[]).includes(code)) {
+    return `audible.code.${code}`;
+  }
+  if (job.kind === 'audible.poll' && (POLL_CODES as readonly string[]).includes(code)) {
+    return `audible.pollCode.${code}`;
+  }
+  return undefined;
+}
 
 /** Whether a title's backup is waiting or running (a pending request included). */
 export function importOpen(x: Pick<AudibleTitle, 'import'>): boolean {
