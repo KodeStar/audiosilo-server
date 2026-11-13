@@ -6,8 +6,11 @@
 # certs). See Dockerfile for how a pinned web build is baked in.
 #
 # PERMISSIONS: set PUID/PGID to the user that should own /data (the entrypoint
-# chowns it and runs the server as that user, so it works with any volume
-# ownership). Unraid: PUID=99 PGID=100. Generic Linux: your `id -u` / `id -g`.
+# chowns it, and AUDIOSILO_BACKUP_DIR when set, and runs the server as that user,
+# so it works with any volume ownership). Unraid: PUID=99 PGID=100. Synology:
+# often 1026/100. Generic Linux: your `id -u` / `id -g`. A folder the server's
+# user can't use (a NAS share that refuses the chown) is named in the container
+# log with the fix.
 services:
   audiosilo:
     image: ghcr.io/kodestar/audiosilo-server:latest

@@ -91,7 +91,8 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY NOTICE /usr/share/doc/audiosilo/NOTICE
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Default to uid/gid 1000; override with PUID/PGID to match your data dir's owner
-# (Unraid: 99/100). The entrypoint chowns /data and drops to that user.
+# (Unraid: 99/100). The entrypoint chowns /data (and AUDIOSILO_BACKUP_DIR), checks
+# the folders as that user (scripts/test-entrypoint.sh) and drops to it.
 ENV AUDIOSILO_WEB_DIR=/app/web \
     PUID=1000 \
     PGID=1000

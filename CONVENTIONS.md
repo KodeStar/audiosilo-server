@@ -3327,6 +3327,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
   an earlier session of that person; an admin's `RevokeDevice` or Sign out everywhere
   (`SignOutEverywhere`), a new password or disabling the account forgets it.
+- **Folder permissions (server#368, `internal/fsaccess`, `docker-entrypoint.sh`)**: a folder the server's
+  user may not use is said once, the same way everywhere: the path, the user the server runs as
+  (`fsaccess.User`, "uid:gid"; none on Windows), the folder's owner (`syscall.Stat_t`, unix only) and the
+  fix (`fsaccess.Hint`: in a container `PUID`/`PGID` set to the owner; never `PUID=0` for a root-owned
+  folder, then "make the server's user its owner"; the right owner refused by the mode: "give it access";
+  outside a container: run as the owner). Never classify by `os.ErrPermission` on SQLite's error (its
+  "unable to open database file" wraps none): probe with a file of our own first (`CheckWrite`: create and
+  remove `.audiosilo-write-check-*`, and open each named file that exists read-write). Uses: the launcher
+  checks the data folder and `config.yaml`, `audiosilo.db`, `-wal`, `-shm` before `config.Load` and
+  `store.Open` (start-up error "the data folder isn't usable: ..."), warns at start when the backups
+  folder exists and refuses (`backup.Service.CheckFolder`); a backup checks its folder before `VACUUM INTO`
+  so a refused one is `permission_denied` with `Result.Detail` (not on the wire) carried into the
+  `backup_failed` event's `detail` and the notification's text; a scan stops on a library root it can stat
+  but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker entrypoint words
+  the same as root (after `chown -R` of `/data` and of `AUDIOSILO_BACKUP_DIR` when absolute and not `/`)
+  and under `--user`: a write check of the data and backups folders and a read check of every other
+  mount (MountHints' rule) as the server's user, warning and carrying on; `scripts/test-entrypoint.sh`
+  (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
   a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
   account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the

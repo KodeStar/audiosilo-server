@@ -167,8 +167,11 @@ set `AUDIOSILO_PUBLIC_URL` (used to build QR/invite links) and, optionally,
 `AUDIOSILO_LAN_URL` (the server's home-network address, e.g. `http://192.168.1.20:8080`,
 which the apps switch to when they can reach it). Set **`PUID`/`PGID`** to
 the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u`/
-`id -g`) - the entrypoint chowns the data dir and runs the server as that user, so
-it works regardless of how the mounted volume is owned. Update - server or the
+`id -g`; Synology: often `1026`/`100`) - the entrypoint chowns the data dir (and
+`AUDIOSILO_BACKUP_DIR` when set) and runs the server as that user, so it works
+regardless of how the mounted volume is owned. Where a chown is refused (a NAS share
+with ACLs) the container log names each folder the server's user can't write (data,
+backups) or read (the audiobooks), the user, the folder's owner and the fix. Update - server or the
 bundled player - is always a new image: `docker compose pull && docker compose up -d`.
 
 ## Testing & CI
