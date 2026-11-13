@@ -208,6 +208,24 @@ func (c *client) lookup(ctx context.Context, asin, isbn string) (*upstreamLookup
 	default:
 		return nil, ErrNotFound
 	}
+	return c.lookupQuery(ctx, q)
+}
+
+// lookupLibrivox resolves a LibriVox project id to the work and the recording
+// that IS that project via GET /api/v1/lookup?librivox_id= (asked alone: beside
+// an asin or isbn metaserve looks those up instead). Returns ErrNotFound when
+// there is no such project (and for an id that isn't one).
+func (c *client) lookupLibrivox(ctx context.Context, id int) (*upstreamLookup, error) {
+	if id <= 0 {
+		return nil, ErrNotFound
+	}
+	q := url.Values{}
+	q.Set("librivox_id", strconv.Itoa(id))
+	return c.lookupQuery(ctx, q)
+}
+
+// lookupQuery is one GET /api/v1/lookup with the query q.
+func (c *client) lookupQuery(ctx context.Context, q url.Values) (*upstreamLookup, error) {
 	var out upstreamLookup
 	if err := c.getJSON(ctx, "/api/v1/lookup?"+q.Encode(), &out); err != nil {
 		return nil, err
@@ -224,11 +242,27 @@ func (c *client) work(ctx context.Context, id string) (*upstreamWorkDetail, erro
 	return &out, nil
 }
 
-// searchWorks runs a ranked full-text work search via GET /api/v1/works/search.
-func (c *client) searchWorks(ctx context.Context, q string, limit int) (*upstreamSearch, error) {
+// searchFilter narrows a work search: Source to the works with a recording from
+// that source ("librivox"), Lang to a language tag ("en", "pt-br"); "" for
+// none. metaserve answers an unknown source or a malformed tag with a 400, so
+// the caller checks both first.
+type searchFilter struct {
+	Source string
+	Lang   string
+}
+
+// searchWorks runs a ranked full-text work search via GET /api/v1/works/search,
+// narrowed by f.
+func (c *client) searchWorks(ctx context.Context, q string, limit int, f searchFilter) (*upstreamSearch, error) {
 	v := url.Values{}
 	v.Set("q", q)
 	v.Set("limit", strconv.Itoa(limit))
+	if f.Source != "" {
+		v.Set("source", f.Source)
+	}
+	if f.Lang != "" {
+		v.Set("lang", f.Lang)
+	}
 	var out upstreamSearch
 	if err := c.getJSON(ctx, "/api/v1/works/search?"+v.Encode(), &out); err != nil {
 		return nil, err
@@ -357,12 +391,17 @@ type upstreamASIN struct {
 	ASIN   string `json:"asin"`
 }
 
-// upstreamSearch is GET works/search: ranked work hits (the card fields are not
-// needed here; each hit's full document is fetched by id).
+// upstreamSearch is GET works/search: ranked work hits, each a work card (the
+// match reads only the id and cover and fetches the full document by id; the
+// LibriVox search lists the card).
 type upstreamSearch struct {
 	Results []struct {
-		ID       string  `json:"id"`
-		CoverURL *string `json:"cover_url"`
+		ID          string              `json:"id"`
+		Title       string              `json:"title"`
+		Authors     []upstreamPersonRef `json:"authors"`
+		Language    string              `json:"language"`
+		ReleaseDate string              `json:"release_date"`
+		CoverURL    *string             `json:"cover_url"`
 	} `json:"results"`
 }
 

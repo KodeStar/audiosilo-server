@@ -860,7 +860,7 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 		})
 	}
 	if text != "" {
-		first.Go(func() { search, findErr = s.client.searchWorks(ctx, text, maxMatchCandidates) })
+		first.Go(func() { search, findErr = s.client.searchWorks(ctx, text, maxMatchCandidates, searchFilter{}) })
 	}
 	first.Wait()
 
