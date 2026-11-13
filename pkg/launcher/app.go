@@ -29,6 +29,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -62,6 +63,10 @@ type Options struct {
 	metaReleases releaseSource
 }
 
+// dataFiles are the files in the data folder the server opens to write at
+// start-up: the start checks each that exists.
+var dataFiles = []string{"config.yaml", "audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
+
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
 // performs first-run bootstrap (admin + auth code banner), starts the background
 // scan, and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
@@ -81,7 +86,14 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	if err := os.MkdirAll(abs, 0o700); err != nil {
-		return err
+		return fmt.Errorf("the data folder isn't usable: %w", fsaccess.Wrap(abs, true, err))
+	}
+	// A data folder (or a config or database in it) the server may not write to
+	// stops the start here, saying so with the server's user, the folder's owner
+	// and the fix, rather than as SQLite's "unable to open database file"
+	// (server#368).
+	if err := fsaccess.CheckWrite(abs, dataFiles...); err != nil {
+		return fmt.Errorf("the data folder isn't usable: %w", err)
 	}
 
 	cfg, firstRun, err := config.Load(abs)
@@ -198,7 +210,10 @@ func Run(ctx context.Context, opts Options) error {
 	// Backups (Settings > Backups): on their schedule, and when an admin asks.
 	backups := backup.New(db, abs, cfg.Backups.Dir, log)
 	backups.SetSettings(cfg.Backups.Schedule, cfg.Backups.Keep)
-	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error) }
+	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error, r.Detail) }
+	if err := backups.CheckFolder(); err != nil {
+		log.Warn("backups will fail", "err", err)
+	}
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)

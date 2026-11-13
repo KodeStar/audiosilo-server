@@ -7,12 +7,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -427,6 +429,34 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	}
 	if indexed() != 2 {
 		t.Fatalf("index was pruned despite empty root: %d remain", indexed())
+	}
+}
+
+// A root the server can reach but not list (owned by another user, as a NAS
+// share can be) is unavailable, worded with the server's user and the fix, not
+// an empty library scanned OK (server#368).
+func TestScannerNamesAnUnlistableRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Book", "book.m4b"))
+	if err := os.Chmod(root, 0o300); err != nil { // reachable, not listable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "NAS", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = scanner.Scan(ctx, *lib)
+	if !errors.Is(err, ErrLibraryUnavailable) || !fsaccess.IsPermission(err) {
+		t.Fatalf("err = %v, want unavailable for a permission reason", err)
+	}
+	if want := "the server can't read " + root + ": permission denied. The server runs as user " + fsaccess.User(); !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
 	}
 }
 

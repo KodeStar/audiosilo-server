@@ -19,6 +19,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -334,5 +335,40 @@ func TestBannerNamesConsoleAndConnectPage(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("banner lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+// A data folder the server may not write to, or a database in it the server may
+// not open to write, stops the start with the folder, the server's user and the
+// fix, before SQLite's "unable to open database file" (server#368). A writable
+// one starts: TestRunMirrorMode.
+func TestRunRefusesAnUnwritableDataFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	ctx := context.Background()
+
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+	err := Run(ctx, Options{DataDir: ro, Log: discardLog()})
+	want := "the data folder isn't usable: the server can't write to " + ro + ": permission denied. The server runs as user " + fsaccess.User()
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("read-only folder: err = %v, want it to start %q", err, want)
+	}
+
+	data := t.TempDir()
+	db := filepath.Join(data, "audiosilo.db")
+	if err := os.WriteFile(db, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: data, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the server can't write to "+db+": permission denied") {
+		t.Fatalf("read-only database: err = %v", err)
+	}
+	if _, statErr := os.Stat(config.Path(data)); statErr == nil {
+		t.Fatal("a config was written before the check")
 	}
 }

@@ -2178,7 +2178,7 @@
   "backups.day": "Tag",
   "backups.time": "Uhrzeit",
   "backups.failure.disk_full": "Der Datenträger ist voll. Gib etwas Speicherplatz frei; das nächste Backup läuft planmäßig.",
-  "backups.failure.permission_denied": "Der Server kann nicht in seinen Backup-Ordner schreiben. Prüfe die Berechtigungen des Ordners.",
+  "backups.failure.permission_denied": "Der Server kann nicht in seinen Backup-Ordner schreiben: Er gehört einem anderen Benutzer, oder seine Berechtigungen sperren den Benutzer des Servers aus. Setze in Docker PUID und PGID auf den Besitzer des Ordners, oder gib dem Benutzer des Servers Lese- und Schreibrechte. Server > Protokolle nennt den Ordner und beide Benutzer.",
   "backups.failure.failed": "Die Ursache steht unter Server > Protokolle.",
   "backups.restore.action": "Wiederherstellen...",
   "backups.restore.title": "Dieses Backup wiederherstellen?",

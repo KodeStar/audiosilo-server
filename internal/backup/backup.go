@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -102,6 +103,11 @@ type Result struct {
 	Name    string    `json:"name,omitempty"`
 	// Error is a short, plain reason ("" when OK); details are in the log.
 	Error string `json:"error,omitempty"`
+	// Detail is the cause in a sentence when the folder refused the server (the
+	// folder, the user the server runs as, its owner and the fix: fsaccess), for
+	// the notification; "" otherwise. Not sent to the console, whose words for
+	// Error stand on their own.
+	Detail string `json:"-"`
 }
 
 // Status is what the console shows about backups now.
@@ -332,6 +338,9 @@ func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 	res := Result{At: s.now(), OK: err == nil, Trigger: trigger, Name: b.Name}
 	if err != nil {
 		res.Error = reason(err)
+		if res.Error == "permission_denied" {
+			res.Detail = err.Error()
+		}
 		s.log.Warn("backup failed", "trigger", trigger, "err", err)
 	} else {
 		s.log.Info("backup made", "name", b.Name, "bytes", b.Size)
@@ -355,6 +364,12 @@ func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 // token hashes), then renamed into place, so a half-written file is never listed.
 func (s *Service) write(ctx context.Context, kind string, copyTo func(context.Context, string) error) (Backup, error) {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return Backup{}, fsaccess.Wrap(s.dir, true, err)
+	}
+	// SQLite words a folder it may not write to as "unable to open database
+	// file": try a file of our own first, so the failure names the folder, the
+	// server's user and the fix (server#368).
+	if err := fsaccess.CheckWrite(s.dir); err != nil {
 		return Backup{}, err
 	}
 	at := s.now().UTC().Truncate(time.Second)
@@ -382,6 +397,16 @@ func (s *Service) write(ctx context.Context, kind string, copyTo func(context.Co
 		return Backup{}, err
 	}
 	return Backup{Name: name, Size: fi.Size(), CreatedAt: at, Kind: kind}, nil
+}
+
+// CheckFolder reports whether the backups folder, when it exists, takes a new
+// file from the server (nil when it doesn't exist yet: the first backup makes
+// it), so the start-up log can warn before a backup fails.
+func (s *Service) CheckFolder() error {
+	if _, err := os.Stat(s.dir); err != nil {
+		return nil
+	}
+	return fsaccess.CheckWrite(s.dir)
 }
 
 // reason is a backup failure in a few plain words for the console.
