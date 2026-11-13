@@ -12,8 +12,8 @@
 # container (the audiobooks) can be read. For one that can't, it prints the folder,
 # the user, the folder's owner and the fix (server#368). It warns and carries on:
 # the server's own start-up error says the same about the data folder. Each check
-# of a mounted folder is given $WAIT seconds: a share whose server is gone counts
-# as one the server can't use, and never holds the start.
+# of a mounted folder is given $WAIT seconds: a share whose server is gone is said
+# not to answer, and never holds the start.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -134,19 +134,30 @@ library_mounts() {
   return 0
 }
 
+# Says why folder $1 failed a check that ended with status $2. One cut off by
+# timeout (BusyBox ends it with SIGTERM, 143; GNU's timeout says 124) is a share
+# that didn't answer, not a folder that refuses the server's user: no owner
+# advice for it. $3 and $4 are explain's access and failed chown.
+report() {
+  case "$2" in
+    124 | 143)
+      say "WARNING: $1 didn't answer within $WAIT seconds: a network share that is slow, or whose server is gone."
+      ;;
+    *) explain "$1" "$3" "$4" ;;
+  esac
+}
+
 # Checks that the server's user can write to folder $1 ($2: its chown failed). A
-# folder that isn't there yet is the server's to make; one that doesn't say
-# within $WAIT whether it is there (timeout's 143 from BusyBox, 124 from GNU)
-# counts as one the server can't use.
+# folder that isn't there yet is the server's to make.
 check_write() {
   rc=0
   is_dir "$1" || rc=$?
   case "$rc" in
-    0) if can_write "$1"; then return 0; fi ;;
+    0) can_write "$1" || rc=$? ;;
     124 | 143) ;;
     *) return 0 ;;
   esac
-  explain "$1" "read and write" "$2"
+  if [ "$rc" -ne 0 ]; then report "$1" "$rc" "read and write" "$2"; fi
 }
 
 # Checks each folder as the server's user and explains the ones it can't use.
@@ -154,9 +165,11 @@ check_folders() {
   check_write "$DATA" "$DATA_CHOWN_FAILED"
   if [ -n "$BACKUPS" ]; then check_write "$BACKUPS" "$BACKUPS_CHOWN_FAILED"; fi
   library_mounts | while read -r m; do
-    if ! can_read "$m"; then
-      explain "$m" "read" ""
-      say "  Until it can, a library in that folder shows as offline."
+    rc=0
+    can_read "$m" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      report "$m" "$rc" "read" ""
+      say "  Until then, a library in that folder shows as offline."
     fi
   done
   return 0

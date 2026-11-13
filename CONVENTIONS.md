@@ -3353,7 +3353,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a
   link to it). Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead
   hard mount can block for minutes (not the data folder's `chown -R`, which a large folder may need
-  longer for); a check cut off counts as a folder the server can't use. BusyBox's `timeout`
+  longer for); a check cut off is said not to have answered, with no owner advice. BusyBox's `timeout`
   leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
   stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
