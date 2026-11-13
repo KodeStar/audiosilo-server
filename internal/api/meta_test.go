@@ -32,10 +32,15 @@ type mockMetaserve struct {
 	// (without it the route 404s, as on a metaserve that predates it).
 	chapters string
 	// series, when set, is the body of series/{id} (else the two-book Mars rail).
-	series   string
+	series string
+	// work, when set, is the body of works/the-martian (else martianWorkBody).
+	work     string
 	mu       sync.Mutex
 	gotMatch url.Values
 }
+
+// martianWorkBody is the mock's works/the-martian answer.
+const martianWorkBody = `{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"asin":[{"region":"us","asin":"B00B5HZGUG"},{"region":"uk","asin":"B00B5HZGUG"}],"isbn":["9780553418026"],"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`
 
 func (m *mockMetaserve) handler() http.Handler {
 	mux := http.NewServeMux()
@@ -70,7 +75,11 @@ func (m *mockMetaserve) handler() http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"asin":[{"region":"us","asin":"B00B5HZGUG"},{"region":"uk","asin":"B00B5HZGUG"}],"isbn":["9780553418026"],"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`))
+		body := m.work
+		if body == "" {
+			body = martianWorkBody
+		}
+		_, _ = w.Write([]byte(body))
 	})
 	// Search knows one work; a "down" query is an outage, "nothing" no hits.
 	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
@@ -680,5 +689,48 @@ func TestMetaPersistentCache(t *testing.T) {
 	row, err := e.cat.GetMetaCache(context.Background(), "a:B00FLIJJSY")
 	if err != nil || row == nil || !strings.Contains(string(row.Payload), `"the-martian"`) || row.Source != e.cfg.Metadata.BaseURL {
 		t.Fatalf("meta_cache row = %+v, %v", row, err)
+	}
+}
+
+// TestMetaLibrivoxRecording: a LibriVox recording's project id and links reach
+// the recording of GET /libraries/{id}/meta as librivox {id, url, zip_url}; a
+// recording that is not one carries no librivox key at all.
+func TestMetaLibrivoxRecording(t *testing.T) {
+	t.Parallel()
+	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
+		`"id":"rec1","librivox_id":47,"archive_id":"martian_lv","links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/","zip":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3&file=/martian_lv.zip","rss":"https://librivox.org/rss/47"},`, 1)
+	if lv == martianWorkBody {
+		t.Fatal("fixture replace did not apply")
+	}
+	for name, tc := range map[string]struct {
+		work string
+		want string
+	}{
+		"librivox": {lv, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/","zip_url":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3\u0026file=/martian_lv.zip"}`},
+		"retail":   {martianWorkBody, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newMetaEnvMock(t, true, &mockMetaserve{work: tc.work})
+			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+			tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+			path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("Andy Weir/The Martian")
+			resp, body := e.do(t, "GET", path, tok, "")
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("meta = %d %s", resp.StatusCode, body)
+			}
+			if tc.want == "" {
+				if strings.Contains(body, `"librivox"`) {
+					t.Fatalf("a retail recording carried a librivox block: %s", body)
+				}
+				return
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Fatalf("meta missing %s: %s", tc.want, body)
+			}
+			if strings.Contains(body, "archive_id") || strings.Contains(body, "librivox.org/rss") {
+				t.Fatalf("only id, url and zip_url are passed through: %s", body)
+			}
+		})
 	}
 }

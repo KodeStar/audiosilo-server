@@ -195,6 +195,19 @@ type MetaRecording struct {
 	CoverURL    string          `json:"cover_url,omitempty"`
 	// ChapterCount is the recording's chapter count; omitted when 0/unknown.
 	ChapterCount int `json:"chapter_count,omitempty"`
+	// Librivox is set only on a LibriVox recording (see librivoxOf). Additive
+	// (LibriVox L5).
+	Librivox *MetaLibrivox `json:"librivox,omitempty"`
+}
+
+// MetaLibrivox is where a LibriVox recording is published: its project id, its
+// catalogue page and the zip of its files. URL and ZipURL are metaserve's own
+// links, each kept only when it is an absolute http(s) URL; neither is ever
+// built from the id (LibriVox's pages are slug-based).
+type MetaLibrivox struct {
+	ID     int    `json:"id"`
+	URL    string `json:"url,omitempty"`
+	ZipURL string `json:"zip_url,omitempty"`
 }
 
 // MetaSeriesWork is one entry of a series rail. It carries its own web_url so the
@@ -717,7 +730,33 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 		Publisher:    chosen.Publisher,
 		CoverURL:     chosen.CoverURL,
 		ChapterCount: chosen.ChapterCount,
+		Librivox:     librivoxOf(chosen),
 	}
+}
+
+// librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox
+// project, with each link dropped unless it is an absolute http(s) URL, so a
+// client can open it as it stands.
+func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
+	if rec.LibrivoxID <= 0 {
+		return nil
+	}
+	lv := &MetaLibrivox{ID: rec.LibrivoxID}
+	if rec.Links != nil {
+		lv.URL = absoluteHTTPURL(rec.Links.Librivox)
+		lv.ZipURL = absoluteHTTPURL(rec.Links.Zip)
+	}
+	return lv
+}
+
+// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
+// host, else "" (a relative path, javascript:, data: and the like).
+func absoluteHTTPURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	return raw
 }
 
 // seriesRails builds one rail per ordering FAMILY the work belongs to (capped
