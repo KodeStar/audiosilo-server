@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
@@ -39,7 +40,8 @@ func matchRow(t *testing.T, c *Catalog, libID int64, path string) (work, recordi
 // recording (accepted, set by the requesting admin), replacing a stale row at
 // that path (a deleted book's leftover, another work) and never touching
 // another path's; a result that disagrees with the job, names no indexed book,
-// or a job with no recording records nothing.
+// or a job with no recording records nothing. Only a recorded match wakes the
+// OnBookChange listeners (the rescan woke them before the match was there).
 func TestFoldLibrivoxFetch(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -59,6 +61,8 @@ func TestFoldLibrivoxFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	anchorBook(t, c, ctx, lib.ID, neighbour, "neighbour-work")
+	var heard atomic.Int32
+	c.OnBookChange(func() { heard.Add(1) })
 
 	// Refused: a result naming another library, another project, the root, a
 	// path that is no indexed book; a job with no recording, or not done.
@@ -89,6 +93,9 @@ func TestFoldLibrivoxFetch(t *testing.T) {
 	if w, r, how, _, _, _ := matchRow(t, c, lib.ID, placed); w != "old-work" || r != "old-rec" || how != MatchHowAuto {
 		t.Fatalf("a refused fold wrote %s %s %s", w, r, how)
 	}
+	if n := heard.Load(); n != 0 {
+		t.Fatalf("a fold that recorded nothing woke the listeners %d times", n)
+	}
 
 	if err := c.FoldLibrivoxFetch(ctx, fetchJob(lib.ID, lib.ID, placed, uid, "lv192")); err != nil {
 		t.Fatal(err)
@@ -96,6 +103,9 @@ func TestFoldLibrivoxFetch(t *testing.T) {
 	w, r, how, setBy, offered, ok := matchRow(t, c, lib.ID, placed)
 	if !ok || w != "johnny-crows-garden" || r != "lv192" || how != MatchHowAccepted || setBy != uid || offered != "" {
 		t.Fatalf("placed = %s %s %s %v %q %t", w, r, how, setBy, offered, ok)
+	}
+	if n := heard.Load(); n != 1 {
+		t.Fatalf("a recorded match woke the listeners %d times, want once", n)
 	}
 	if w, r, _, _, _, _ := matchRow(t, c, lib.ID, neighbour); w != "neighbour-work" || r != "rec-1" {
 		t.Fatalf("the neighbour's match changed: %s %s", w, r)

@@ -3719,7 +3719,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.FoldLibrivoxFetch` from `OnEnded`, a content write): the result must name the job's
   own library and project and a book indexed in a books library (else `ErrFetchNotIndexed`,
   logged); it writes the book's `book_matches` row (`how` accepted, `set_by` the requesting admin,
-  no run, no offered identifiers) through `writeAnchor`, replacing a stale row at that path (the
+  no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners), replacing a stale row at that path (the
   Bridge placed into a vacant folder: a deleted book's leftover) and never another path's; a job
   whose params name no recording writes nothing. `/meta` then answers the book from its recorded
   match (LibriVox L5) with no change. Known limits: a fold lost between the job's commit and the

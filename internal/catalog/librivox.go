@@ -29,7 +29,9 @@ var ErrFetchNotIndexed = errors.New("the LibriVox fetch's book is not indexed")
 // result must name the job's own library and project and a book indexed there
 // (the Bridge rescans before it reports done), else ErrFetchNotIndexed. A job
 // that isn't a done librivox.fetch, or whose params name no recording, changes
-// nothing. A content write (matches feed the admin lists and Health).
+// nothing. A content write (matches feed the admin lists and Health), and the
+// OnBookChange listeners hear of it: the rescan woke them before the match was
+// there.
 func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if j.Kind != bridge.KindLibrivoxFetch || j.State != bridge.StateDone || j.LibraryID == nil {
 		return nil
@@ -49,7 +51,7 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if j.RequestedBy != nil {
 		editor = j.RequestedBy.ID
 	}
-	return c.db.WithTx(ctx, "FoldLibrivoxFetch", func(tx *sql.Tx) error {
+	err = c.db.WithTx(ctx, "FoldLibrivoxFetch", func(tx *sql.Tx) error {
 		var one int
 		err := tx.QueryRowContext(ctx, `SELECT 1 FROM books b JOIN libraries l ON l.id = b.library_id
 			 WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?`, r.LibraryID, r.Path, KindBooks).Scan(&one)
@@ -62,6 +64,10 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 		a := &MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID, How: MatchHowAccepted}
 		return writeAnchor(ctx, tx, Ref{LibraryID: r.LibraryID, Path: r.Path}, a, nil, editor, c.ts())
 	})
+	if err == nil {
+		c.changed()
+	}
+	return err
 }
 
 // RecordingBooks are the indexed books recorded as recording recordingID of
