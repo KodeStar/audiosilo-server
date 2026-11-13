@@ -96,17 +96,18 @@ func (s *Service) LibrivoxWork(ctx context.Context, id string) (*LibrivoxWork, e
 	}
 	for i := range d.Recordings {
 		r := &d.Recordings[i]
-		if r.LibrivoxID <= 0 || r.ID == "" {
+		lv := librivoxOf(r)
+		if lv == nil || r.ID == "" {
 			continue
 		}
 		out.Recordings = append(out.Recordings, LibrivoxRecording{
 			RecordingID:  r.ID,
-			LibrivoxID:   r.LibrivoxID,
+			LibrivoxID:   lv.ID,
 			Narrators:    toPersonRefs(r.Narrators),
 			RuntimeMin:   r.RuntimeMin,
 			ChapterCount: r.ChapterCount,
 			CoverURL:     absoluteHTTPURL(r.CoverURL),
-			URL:          absoluteHTTPURL(r.Links.Librivox),
+			URL:          lv.URL,
 		})
 	}
 	return out, nil

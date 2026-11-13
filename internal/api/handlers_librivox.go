@@ -70,7 +70,7 @@ func (a *API) handleLibrivoxSearch(w http.ResponseWriter, r *http.Request) {
 	hits, err := a.meta.LibrivoxSearch(r.Context(), q, strings.ToLower(lang), limit)
 	if err != nil {
 		a.log.Warn("librivox search failed", "err", err)
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
+		writeLookupFailed(w)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": hits})
@@ -115,7 +115,7 @@ func (a *API) handleLibrivoxWork(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.log.Warn("librivox work failed", "err", err, "work", id)
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
+		writeLookupFailed(w)
 		return
 	}
 	projects := make([]int, 0, len(work.Recordings))
@@ -183,7 +183,7 @@ func (a *API) handleLibrivoxFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.log.Warn("librivox lookup failed", "err", err, "librivox_id", req.LibrivoxID)
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
+		writeLookupFailed(w)
 		return
 	}
 	in, err := a.cat.RecordingBooks(r.Context(), workID, recordingID)

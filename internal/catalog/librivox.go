@@ -42,7 +42,7 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 		return nil
 	}
 	if r.LibraryID != *j.LibraryID || r.LibraryID != p.LibraryID || r.LibrivoxID != p.LibrivoxID ||
-		r.Path == "." || !bridgeBookPath(r.Path) {
+		!cleanLibPath(r.Path) {
 		return ErrFetchNotIndexed
 	}
 	var editor any
@@ -75,6 +75,6 @@ func (c *Catalog) RecordingBooks(ctx context.Context, workID, recordingID string
 	return queryRows(ctx, c.db, func(rows *sql.Rows, r *Ref) error { return rows.Scan(&r.LibraryID, &r.Path) },
 		`SELECT m.library_id, m.path FROM book_matches m
 		   JOIN books b ON b.library_id = m.library_id AND b.rel_path = m.path
-		  WHERE m.work_id = ? AND m.recording_id = ? AND m.recording_id <> ''
+		  WHERE m.work_id = ? AND m.recording_id = ?
 		  ORDER BY m.library_id, m.path`, workID, recordingID)
 }
