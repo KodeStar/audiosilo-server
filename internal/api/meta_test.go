@@ -755,12 +755,7 @@ func TestMetaRecordedMatch(t *testing.T) {
 	}
 	get := func(t *testing.T, e *testEnv, libID int64, path string) string {
 		t.Helper()
-		tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
-		resp, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(libID, 10)+"/meta?path="+escape(path), tok, "")
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("meta = %d %s", resp.StatusCode, body)
-		}
-		return body
+		return getGenerated(t, e, libID, path, "", adminSession(t, e)).raw
 	}
 
 	t.Run("no ids, recorded match", func(t *testing.T) {
@@ -812,11 +807,15 @@ func TestMetaRecordedMatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		anchor(t, e, libID, "Other/Secret", "the-martian", "rec1")
-		kid, _ := e.auth.CreateUser(context.Background(), "kid", "kid-password", auth.RoleUser)
-		share, _ := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only"})
-		e.cat.AddSharePath(context.Background(), share.ID, catalog.PathRule{LibraryID: libID, Path: "LibriVox"})
-		e.cat.GrantShare(context.Background(), kid.ID, share.ID)
-		tok, _ := e.auth.IssueToken(context.Background(), kid.ID, auth.KindSession, "t", 0)
+		kid, tok := newUserWithSession(t, e, "kid", false)
+		share, err := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only",
+			Paths: []catalog.PathRule{{LibraryID: libID, Path: "LibriVox"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.cat.GrantShare(context.Background(), kid, share.ID); err != nil {
+			t.Fatal(err)
+		}
 		libPath := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path="
 		if resp, body := e.do(t, "GET", libPath+escape("LibriVox/The Martian"), tok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"librivox"`) {
 			t.Fatalf("in-scope meta = %d %s, want the recorded match", resp.StatusCode, body)
