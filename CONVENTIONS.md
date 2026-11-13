@@ -289,8 +289,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
   or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
-  transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
-  false, so clients hide the UI); no asin/isbn or no upstream match -> `200
+  transport-only. **From the recorded match** (LibriVox L5): a book with no asin/isbn, or whose
+  identifier upstream doesn't know (`ErrNotFound`), answers from its `book_matches` row
+  (`catalog.BookMatchAt`, `bookEnvelope`) through `meta.Service.EnrichMatch` (works/{id} via
+  `fetchWork`, the recording it names treated as a lookup-named one, no lookup), cached exactly as
+  `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
+  `url.PathEscape`d); a book its identifiers match never reads its match. Degradation: disabled -> 404 (and the `metadata` capability is
+  false, so clients hide the UI); no asin/isbn match and no recorded match -> `200
   {"matched": false}` (with a `work` of the book's own when the Bridge generated
   characters, recaps or a description for it: `meta.Answer`); upstream unreachable -> 502, unless
   the book has generated content (this server's own), answered as unmatched with
@@ -1760,7 +1765,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **Recorded community match** (LibraForge E6, server#320, `0069` `book_matches`: `library_id, path,
   work_id, recording_id, how (auto|accepted), run_id, set_by, set_at`, PK `(library_id, path)`, no FK to
   the index or the runs): the work (and recording) a book was matched to, whether or not the match gave
-  it an ASIN or ISBN. Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
+  it an ASIN or ISBN. `/meta` answers from it when the book's identifiers don't match
+  (`EnrichMatch`, see Community metadata lookup). Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
   `MatchAnchor`; `EditBooks` refuses it): the match dialog's
   accept (`PATCH .../book` `match: {work_id, recording_id}` with the ticked fields, or alone for a book
   with no ASIN or ISBN whose pick isn't its recorded match; the dialog starts from the recorded match

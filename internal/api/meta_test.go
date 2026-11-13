@@ -732,3 +732,97 @@ func TestMetaLibrivoxRecording(t *testing.T) {
 		}
 	})
 }
+
+// TestMetaRecordedMatch: a book its identifiers don't match (it has none, or
+// upstream doesn't know them) answers /meta from its recorded community match
+// (the console's), LibriVox block included; one with no match stays unmatched;
+// a book its ASIN matches ignores its recorded match; and the route's scope
+// check still comes first.
+func TestMetaRecordedMatch(t *testing.T) {
+	t.Parallel()
+	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
+		`"id":"rec1","librivox_id":47,"links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/"},`, 1)
+	if lv == martianWorkBody {
+		t.Fatal("fixture replace did not apply")
+	}
+	anchor := func(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
+		t.Helper()
+		if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(t *testing.T, e *testEnv, libID int64, path string) string {
+		t.Helper()
+		tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+		resp, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(libID, 10)+"/meta?path="+escape(path), tok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("meta = %d %s", resp.StatusCode, body)
+		}
+		return body
+	}
+
+	t.Run("no ids, recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		body := get(t, e, libID, "LibriVox/The Martian")
+		for _, want := range []string{`"matched":true`, `"recording":{"id":"rec1"`, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/"}`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("meta missing %s: %s", want, body)
+			}
+		}
+	})
+	t.Run("no ids, no match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"matched":false`) {
+			t.Fatalf("meta = %s, want unmatched", body)
+		}
+	})
+	t.Run("unknown ASIN, recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: http.StatusNotFound, work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "B0UNKNOWN")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"librivox":{"id":47`) {
+			t.Fatalf("meta = %s, want the recorded match", body)
+		}
+	})
+	t.Run("matched ASIN ignores the recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{})
+		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+		// The mock knows no "artemis" work: had the match been asked, the
+		// answer would be unmatched.
+		anchor(t, e, libID, "Andy Weir/The Martian", "artemis", "")
+		if body := get(t, e, libID, "Andy Weir/The Martian"); !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
+			t.Fatalf("meta = %s, want the ASIN's work", body)
+		}
+	})
+	t.Run("scope", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Other/Secret", Title: "Secret", Author: "Other", AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+		anchor(t, e, libID, "Other/Secret", "the-martian", "rec1")
+		kid, _ := e.auth.CreateUser(context.Background(), "kid", "kid-password", auth.RoleUser)
+		share, _ := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only"})
+		e.cat.AddSharePath(context.Background(), share.ID, catalog.PathRule{LibraryID: libID, Path: "LibriVox"})
+		e.cat.GrantShare(context.Background(), kid.ID, share.ID)
+		tok, _ := e.auth.IssueToken(context.Background(), kid.ID, auth.KindSession, "t", 0)
+		libPath := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path="
+		if resp, body := e.do(t, "GET", libPath+escape("LibriVox/The Martian"), tok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"librivox"`) {
+			t.Fatalf("in-scope meta = %d %s, want the recorded match", resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "GET", libPath+escape("Other/Secret"), tok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("out-of-scope meta = %d %s, want 403", resp.StatusCode, body)
+		}
+	})
+}

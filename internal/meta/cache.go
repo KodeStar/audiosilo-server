@@ -49,8 +49,8 @@ const maxLookupEntries = 1024
 const maxSeriesEntries = 256
 
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
-// asin/isbn enrichment, a work-id fetch, an identifier's lookup and a series'
-// facts - can never read each other's entries. Every key in the cache is minted through
+// asin/isbn enrichment, a recorded match's enrichment, a work-id fetch, an
+// identifier's lookup and a series' facts - can never read each other's entries. Every key in the cache is minted through
 // keyspace.key, so these prefixes are declared in exactly one place.
 type keyspace string
 
@@ -58,6 +58,9 @@ const (
 	nsASIN keyspace = "a:"
 	nsISBN keyspace = "i:"
 	nsWork keyspace = "w:"
+	// nsMatch holds a recorded community match's enrichment (EnrichMatch),
+	// keyed by its work and recording ids (matchKey).
+	nsMatch keyspace = "m:"
 	// nsLookup holds an identifier's lookup answer, keyed by its enrichment key
 	// ("l:a:<asin>" / "l:i:<isbn>").
 	nsLookup keyspace = "l:"

@@ -366,6 +366,49 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	if key == "" {
 		return nil, ErrNotFound
 	}
+	return s.enrich(ctx, key, func(cctx context.Context) (*Enrichment, bool, error) {
+		return s.compose(cctx, asin, isbn)
+	})
+}
+
+// EnrichMatch composes the enrichment of a book's recorded community match
+// (catalog book_matches): workID and the recording it names, recordingID ("" for
+// none, which picks as a lookup without one would). It is how a book with no
+// ASIN or ISBN, or one the lookup does not know, is enriched. The work comes
+// from works/{id} (fetchWork, as Work and the upcoming job read it; mirror mode
+// answers it from the local copy like every other request), and recordingID is
+// treated as a lookup-named recording: it is the admin's match, not a guess.
+//
+// It caches exactly as Enrich does, in its own key space (matchKey), so an
+// answer never collides with an identifier's: ErrNotFound when the work is
+// unknown upstream (a stored "no match" too), the cached transport error, a
+// stored positive answer through an outage. The returned *Enrichment is shared
+// and immutable, as Enrich's.
+func (s *Service) EnrichMatch(ctx context.Context, workID, recordingID string) (*Enrichment, error) {
+	workID, recordingID = strings.TrimSpace(workID), strings.TrimSpace(recordingID)
+	if workID == "" {
+		return nil, ErrNotFound
+	}
+	return s.enrich(ctx, matchKey(workID, recordingID), func(cctx context.Context) (*Enrichment, bool, error) {
+		detail, err := s.fetchWork(cctx, workID)
+		if err != nil {
+			return nil, false, err
+		}
+		env, complete := s.composeWork(cctx, detail, recordingID)
+		return env, complete, nil
+	})
+}
+
+// matchKey mints EnrichMatch's cache key: the work and recording ids, each
+// path-escaped so the "/" between them can't be part of either.
+func matchKey(workID, recordingID string) string {
+	return nsMatch.key(url.PathEscape(workID) + "/" + url.PathEscape(recordingID))
+}
+
+// enrich is Enrich's and EnrichMatch's resolution of one key: memory, then the
+// persistent store, then compose under the fan-out deadline, caching each
+// outcome as Enrich documents.
+func (s *Service) enrich(ctx context.Context, key string, compose func(context.Context) (*Enrichment, bool, error)) (*Enrichment, error) {
 	// A hit resolves to the memoised outcome directly: err is nil for a positive
 	// result, ErrNotFound for a cached "no match", or the cached transport error.
 	if result, hit, err := cacheGet[Enrichment](s.cache, key); hit {
@@ -389,7 +432,7 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	// failure below, so a degraded upstream is not re-hammered per cold book.
 	cctx, cancel := context.WithTimeout(ctx, s.composeBudget)
 	defer cancel()
-	result, complete, err := s.compose(cctx, asin, isbn)
+	result, complete, err := compose(cctx)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		if keepStored(s, key, stored, err) {
@@ -495,24 +538,30 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 		}
 		return nil, false, err
 	}
+	env, complete := s.composeWork(ctx, detail, lookup.RecordingID)
+	return env, complete, nil
+}
 
-	rec := pickRecording(detail.Recordings, lookup.RecordingID)
+// composeWork builds the envelope of detail as recording recordingID (the one a
+// lookup named, or a recorded match's; "" for none) with its series rails.
+// complete is false when a rail fetch failed.
+func (s *Service) composeWork(ctx context.Context, detail *upstreamWorkDetail, recordingID string) (*Enrichment, bool) {
+	rec := pickRecording(detail.Recordings, recordingID)
 	// The rails' editions go by the recording the book is known to be: the one
-	// the lookup named (or the work's only one), never pickRecording's guess of
-	// the first, which could hand every book of the work one recording's edition.
+	// named (or the work's only one), never pickRecording's guess of the first,
+	// which could hand every book of the work one recording's edition.
 	recID := ""
-	if rec != nil && (rec.ID == lookup.RecordingID || len(detail.Recordings) == 1) {
+	if rec != nil && (rec.ID == recordingID || len(detail.Recordings) == 1) {
 		recID = rec.ID
 	}
 	rails, complete := s.seriesRails(ctx, detail, recID)
-	env := &Enrichment{
+	return &Enrichment{
 		Matched:   true,
 		Work:      s.toWork(detail),
 		Recording: rec,
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
-	}
-	return env, complete, nil
+	}, complete
 }
 
 // Work fetches a single work document by its metadata-site work id. It is the
