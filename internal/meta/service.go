@@ -749,13 +749,22 @@ func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
 }
 
 // absoluteHTTPURL returns raw when it is an absolute http or https URL with a
-// host, else "" (a relative path, javascript:, data: and the like).
+// host (httpURL), else "".
 func absoluteHTTPURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+	if httpURL(raw) == nil {
 		return ""
 	}
 	return raw
+}
+
+// httpURL is raw parsed when it is an absolute http or https URL with a host,
+// else nil (a relative path, javascript:, data: and the like).
+func httpURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil
+	}
+	return u
 }
 
 // seriesRails builds one rail per ordering FAMILY the work belongs to (capped
