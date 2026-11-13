@@ -1464,7 +1464,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				"library", lib.Name, "path", absOf(lib, rel), "err", walkErr)
 			if rl != nil {
 				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-					e.Path, e.Detail = rel, pathErrText(walkErr)
+					e.Path, e.Detail = rel, fsaccess.Cause(walkErr)
 				})
 			}
 			return nil
@@ -1482,7 +1482,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 					log.Warn("could not list a .audiosilo folder", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
 					if rl != nil {
 						rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-							e.Path, e.Detail = rel, pathErrText(lerr)
+							e.Path, e.Detail = rel, fsaccess.Cause(lerr)
 						})
 					}
 				case len(files) > 0:

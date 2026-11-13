@@ -50,16 +50,17 @@ func (e *Error) Error() string {
 	if e.Write {
 		verb = "write to"
 	}
-	msg := fmt.Sprintf("the server can't %s %s: %s", verb, e.Path, cause(e.Err))
+	msg := fmt.Sprintf("the server can't %s %s: %s", verb, e.Path, Cause(e.Err))
 	if errors.Is(e.Err, fs.ErrPermission) {
 		msg += ". " + Hint(e.Path, e.Write)
 	}
 	return msg
 }
 
-// cause is the system's own words for err, without the path a PathError
-// repeats.
-func cause(err error) string {
+// Cause is the system's own words for err without the absolute path a PathError
+// names ("permission denied", not "open /srv/books/x.mp3: permission denied"):
+// the caller names the path its own way.
+func Cause(err error) string {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		return pe.Err.Error()
@@ -110,6 +111,8 @@ func Hint(path string, write bool) string {
 	if user == "" {
 		return fmt.Sprintf("Give the account the server runs as %s access to the %s.", access, noun)
 	}
+	give := fmt.Sprintf("give user %s %s access to the %s", user, access, noun)
+	giveFirst := "G" + give[1:] // the clause opening a sentence
 	var b strings.Builder
 	fmt.Fprintf(&b, "The server runs as user %s", user)
 	ouid, ogid, known := ownerOf(path)
@@ -121,19 +124,16 @@ func Hint(path string, write bool) string {
 	switch {
 	case known && ouid == uid:
 		// The right owner: the mode refuses it.
-		fmt.Fprintf(&b, "Give user %s %s access to the %s (its permissions refuse it).", user, access, noun)
+		fmt.Fprintf(&b, "%s (its permissions refuse it).", giveFirst)
 	case known && ouid == 0:
 		// Never advise running the server as root.
-		fmt.Fprintf(&b, "Give user %s %s access to the %s, for example by making %s its owner on the host.",
-			user, access, noun, user)
+		fmt.Fprintf(&b, "%s, for example by making %s its owner on the host.", giveFirst, user)
 	case InContainer() && known:
-		fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or give user %s %s access to the %s.",
-			ouid, ogid, noun, user, access, noun)
+		fmt.Fprintf(&b, "Set PUID=%d and PGID=%d (the %s's owner) on the container, or %s.", ouid, ogid, noun, give)
 	case InContainer():
-		fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or give user %s %s access to the %s.",
-			noun, user, access, noun)
+		fmt.Fprintf(&b, "Set PUID and PGID on the container to the %s's owner, or %s.", noun, give)
 	default:
-		fmt.Fprintf(&b, "Run the server as the %s's owner, or give user %s %s access to the %s.", noun, user, access, noun)
+		fmt.Fprintf(&b, "Run the server as the %s's owner, or %s.", noun, give)
 	}
 	return b.String()
 }
