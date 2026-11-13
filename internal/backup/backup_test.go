@@ -771,6 +771,13 @@ func TestUnwritableFolderIsNamed(t *testing.T) {
 	if st := svc.Status(); st.Last == nil || st.Last.Error != "permission_denied" {
 		t.Fatalf("status = %+v", st)
 	}
+	// A folder the server can't list says so too (the console's list fails; the log has it).
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.List(); err == nil || !strings.HasPrefix(err.Error(), "the server can't read "+dir+": permission denied. The server runs as user") {
+		t.Fatalf("List = %v", err)
+	}
 
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)

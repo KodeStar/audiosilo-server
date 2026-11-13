@@ -64,8 +64,10 @@ type Options struct {
 }
 
 // dataFiles are the files in the data folder the server opens to write at
-// start-up: the start checks each that exists.
-var dataFiles = []string{"config.yaml", "audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
+// start-up: the start checks each that exists. Not config.yaml: a read-only one
+// (mounted so, or edited as root) starts, as before, and only a setting saved
+// from the console fails.
+var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
 
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
 // performs first-run bootstrap (admin + auth code banner), starts the background
@@ -88,8 +90,8 @@ func Run(ctx context.Context, opts Options) error {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return fmt.Errorf("the data folder isn't usable: %w", fsaccess.Wrap(abs, true, err))
 	}
-	// A data folder (or a config or database in it) the server may not write to
-	// stops the start here, saying so with the server's user, the folder's owner
+	// A data folder (or a database in it) the server may not write to, or a
+	// config it may not read, stops the start here, saying so with the server's user, the folder's owner
 	// and the fix, rather than as SQLite's "unable to open database file"
 	// (server#368).
 	if err := fsaccess.CheckWrite(abs, dataFiles...); err != nil {
@@ -97,6 +99,9 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	cfg, firstRun, err := config.Load(abs)
+	if fsaccess.IsPermission(err) {
+		return fmt.Errorf("the data folder isn't usable: %w", fsaccess.Wrap(config.Path(abs), false, err))
+	}
 	if err != nil {
 		return err
 	}

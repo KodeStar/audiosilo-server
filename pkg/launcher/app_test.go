@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -370,5 +371,49 @@ func TestRunRefusesAnUnwritableDataFolder(t *testing.T) {
 	}
 	if _, statErr := os.Stat(config.Path(data)); statErr == nil {
 		t.Fatal("a config was written before the check")
+	}
+
+	// A config the server may not read is named the same way.
+	locked := t.TempDir()
+	if err := os.WriteFile(config.Path(locked), []byte("bind: 127.0.0.1:0\n"), 0o200); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: locked, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the server can't read "+config.Path(locked)+": permission denied. The server runs as user") {
+		t.Fatalf("unreadable config: err = %v", err)
+	}
+}
+
+// A read-only config.yaml (mounted so, or edited as root) still starts: only
+// a setting saved from the console needs to write it.
+func TestRunStartsWithAReadOnlyConfig(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	data := t.TempDir()
+	addr := freeAddr(t)
+	cfgYAML := fmt.Sprintf("server_id: %q\nbind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\n", "srv_readonly_config_test", addr)
+	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog(), FFprobePath: "", FFmpegPath: ""}) }()
+	waitFor(t, "the server", func() bool {
+		resp, err := http.Get("http://" + addr + "/api/v1/healthz")
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop")
 	}
 }

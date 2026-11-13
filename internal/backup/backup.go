@@ -476,7 +476,7 @@ func (s *Service) List() ([]Backup, error) {
 		return []Backup{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fsaccess.Wrap(s.dir, false, err) // the log names the folder and the fix
 	}
 	out := []Backup{}
 	for _, e := range entries {
