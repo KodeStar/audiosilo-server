@@ -697,40 +697,38 @@ func TestMetaPersistentCache(t *testing.T) {
 // recording that is not one carries no librivox key at all.
 func TestMetaLibrivoxRecording(t *testing.T) {
 	t.Parallel()
-	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
-		`"id":"rec1","librivox_id":47,"archive_id":"martian_lv","links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/","zip":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3&file=/martian_lv.zip","rss":"https://librivox.org/rss/47"},`, 1)
-	if lv == martianWorkBody {
-		t.Fatal("fixture replace did not apply")
+	meta := func(t *testing.T, work string) string {
+		t.Helper()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: work})
+		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+		tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+		path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("Andy Weir/The Martian")
+		resp, body := e.do(t, "GET", path, tok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("meta = %d %s", resp.StatusCode, body)
+		}
+		return body
 	}
-	for name, tc := range map[string]struct {
-		work string
-		want string
-	}{
-		"librivox": {lv, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/","zip_url":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3\u0026file=/martian_lv.zip"}`},
-		"retail":   {martianWorkBody, ""},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			e := newMetaEnvMock(t, true, &mockMetaserve{work: tc.work})
-			libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
-			tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
-			path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("Andy Weir/The Martian")
-			resp, body := e.do(t, "GET", path, tok, "")
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("meta = %d %s", resp.StatusCode, body)
-			}
-			if tc.want == "" {
-				if strings.Contains(body, `"librivox"`) {
-					t.Fatalf("a retail recording carried a librivox block: %s", body)
-				}
-				return
-			}
-			if !strings.Contains(body, tc.want) {
-				t.Fatalf("meta missing %s: %s", tc.want, body)
-			}
-			if strings.Contains(body, "archive_id") || strings.Contains(body, "librivox.org/rss") {
-				t.Fatalf("only id, url and zip_url are passed through: %s", body)
-			}
-		})
-	}
+	t.Run("librivox", func(t *testing.T) {
+		t.Parallel()
+		lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
+			`"id":"rec1","librivox_id":47,"archive_id":"martian_lv","links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/","zip":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3&file=/martian_lv.zip","rss":"https://librivox.org/rss/47"},`, 1)
+		if lv == martianWorkBody {
+			t.Fatal("fixture replace did not apply")
+		}
+		body := meta(t, lv)
+		want := `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/","zip_url":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3\u0026file=/martian_lv.zip"}`
+		if !strings.Contains(body, want) {
+			t.Fatalf("meta missing %s: %s", want, body)
+		}
+		if strings.Contains(body, "archive_id") || strings.Contains(body, "librivox.org/rss") {
+			t.Fatalf("only id, url and zip_url are passed through: %s", body)
+		}
+	})
+	t.Run("retail", func(t *testing.T) {
+		t.Parallel()
+		if body := meta(t, martianWorkBody); strings.Contains(body, `"librivox"`) {
+			t.Fatalf("a retail recording carried a librivox block: %s", body)
+		}
+	})
 }

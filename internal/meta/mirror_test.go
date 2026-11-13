@@ -31,7 +31,13 @@ type fakeMirror struct {
 
 func newFakeMirror(t *testing.T) *fakeMirror {
 	t.Helper()
-	db, err := query.Open(querytest.Build(t, t.TempDir()), "data-test")
+	return newFakeMirrorAt(t, querytest.Build(t, t.TempDir()))
+}
+
+// newFakeMirrorAt is a fakeMirror over the artifact at path.
+func newFakeMirrorAt(t *testing.T, path string) *fakeMirror {
+	t.Helper()
+	db, err := query.Open(path, "data-test")
 	if err != nil {
 		t.Fatal(err)
 	}

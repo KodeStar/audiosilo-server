@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-meta/pkg/query"
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
 
 	"github.com/kodestar/audiosilo-server/internal/mirrortest"
@@ -20,6 +19,9 @@ const (
 	lvZip  = "https://archive.org/compress/martian_lv/formats=64KBPS%20MP3&file=/martian_lv.zip"
 )
 
+// wantLibrivox is the block the LibriVox fixtures below answer with.
+var wantLibrivox = MetaLibrivox{ID: 47, URL: lvPage, ZipURL: lvZip}
+
 // martianLibrivox is martianWork with the matched recording (rec2) a LibriVox
 // one, as metaserve states it: the project id, its Internet Archive item and
 // its links (rss and text too, which the server does not pass on).
@@ -27,8 +29,8 @@ var martianLibrivox = strings.Replace(martianWork, `{"id":"rec2",`,
 	`{"id":"rec2","librivox_id":47,"archive_id":"martian_lv","links":{"librivox":"`+lvPage+`","zip":"`+lvZip+`","rss":"https://librivox.org/rss/47","text":"https://www.gutenberg.org/ebooks/1"},`, 1)
 
 // TestLibrivoxPassThrough: a LibriVox recording's id and links reach the
-// matched recording as librivox {id, url, zip_url}, and nothing else of the
-// LibriVox layer does.
+// matched recording as its Librivox block (the wire's keys, and that nothing
+// else of the LibriVox layer rides along, are api's TestMetaLibrivoxRecording).
 func TestLibrivoxPassThrough(t *testing.T) {
 	if martianLibrivox == martianWork {
 		t.Fatal("fixture replace did not apply")
@@ -42,18 +44,8 @@ func TestLibrivoxPassThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := MetaLibrivox{ID: 47, URL: lvPage, ZipURL: lvZip}
-	if env.Recording == nil || env.Recording.Librivox == nil || *env.Recording.Librivox != want {
-		t.Fatalf("recording = %+v, want librivox %+v", env.Recording, want)
-	}
-	body, _ := json.Marshal(env.Recording)
-	if !strings.Contains(string(body), `"librivox":{"id":47,"url":"`+lvPage+`","zip_url":"`) {
-		t.Fatalf("recording JSON = %s", body)
-	}
-	for _, s := range []string{"archive_id", "rss", "gutenberg"} {
-		if strings.Contains(string(body), s) {
-			t.Fatalf("recording JSON carries %q: %s", s, body)
-		}
+	if env.Recording == nil || env.Recording.Librivox == nil || *env.Recording.Librivox != wantLibrivox {
+		t.Fatalf("recording = %+v, want librivox %+v", env.Recording, wantLibrivox)
 	}
 }
 
@@ -83,17 +75,17 @@ func TestLibrivoxOf(t *testing.T) {
 		rec  upstreamRecording
 		want *MetaLibrivox
 	}{
-		"no id":           {upstreamRecording{Links: &upstreamRecordingLinks{Librivox: lvPage}}, nil},
-		"negative id":     {upstreamRecording{LibrivoxID: -1, Links: &upstreamRecordingLinks{Librivox: lvPage}}, nil},
+		"no id":           {upstreamRecording{Links: upstreamRecordingLinks{Librivox: lvPage}}, nil},
+		"negative id":     {upstreamRecording{LibrivoxID: -1, Links: upstreamRecordingLinks{Librivox: lvPage}}, nil},
 		"id, no links":    {upstreamRecording{LibrivoxID: 9}, &MetaLibrivox{ID: 9}},
-		"both links":      {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: lvPage, Zip: lvZip}}, &MetaLibrivox{ID: 9, URL: lvPage, ZipURL: lvZip}},
-		"plain http":      {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "http://librivox.org/x/"}}, &MetaLibrivox{ID: 9, URL: "http://librivox.org/x/"}},
-		"javascript":      {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "javascript:alert(1)", Zip: lvZip}}, &MetaLibrivox{ID: 9, ZipURL: lvZip}},
-		"relative":        {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "/the-martian/", Zip: "martian.zip"}}, &MetaLibrivox{ID: 9}},
-		"scheme-relative": {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "//librivox.org/x/"}}, &MetaLibrivox{ID: 9}},
-		"no host":         {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "https:///x/"}}, &MetaLibrivox{ID: 9}},
-		"other schemes":   {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "ftp://librivox.org/x/", Zip: "data:text/html,hi"}}, &MetaLibrivox{ID: 9}},
-		"unparseable":     {upstreamRecording{LibrivoxID: 9, Links: &upstreamRecordingLinks{Librivox: "https://librivox.org/%zz"}}, &MetaLibrivox{ID: 9}},
+		"both links":      {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: lvPage, Zip: lvZip}}, &MetaLibrivox{ID: 9, URL: lvPage, ZipURL: lvZip}},
+		"plain http":      {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "http://librivox.org/x/"}}, &MetaLibrivox{ID: 9, URL: "http://librivox.org/x/"}},
+		"javascript":      {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "javascript:alert(1)", Zip: lvZip}}, &MetaLibrivox{ID: 9, ZipURL: lvZip}},
+		"relative":        {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "/the-martian/", Zip: "martian.zip"}}, &MetaLibrivox{ID: 9}},
+		"scheme-relative": {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "//librivox.org/x/"}}, &MetaLibrivox{ID: 9}},
+		"no host":         {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https:///x/"}}, &MetaLibrivox{ID: 9}},
+		"other schemes":   {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "ftp://librivox.org/x/", Zip: "data:text/html,hi"}}, &MetaLibrivox{ID: 9}},
+		"unparseable":     {upstreamRecording{LibrivoxID: 9, Links: upstreamRecordingLinks{Librivox: "https://librivox.org/%zz"}}, &MetaLibrivox{ID: 9}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := librivoxOf(&tc.rec)
@@ -121,7 +113,7 @@ func TestLibrivoxSurvivesStore(t *testing.T) {
 	if got := e.m.lookupHits.Load(); got != 1 {
 		t.Fatalf("lookups = %d, want the restart served from the store", got)
 	}
-	if lv := env.Recording.Librivox; lv == nil || *lv != (MetaLibrivox{ID: 47, URL: lvPage, ZipURL: lvZip}) {
+	if lv := env.Recording.Librivox; lv == nil || *lv != wantLibrivox {
 		t.Fatalf("persisted recording lost librivox: %+v", env.Recording)
 	}
 }
@@ -149,17 +141,10 @@ func TestMirrorLibrivox(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	db, err := query.Open(path, "data-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	m := &fakeMirror{h: query.NewHandler(func() *query.DB { return db }, query.HandlerOptions{})}
-	m.ready.Store(true)
 
 	remote, remoteHits := mirrortest.Remote(t)
 	s := NewService(remote.URL, nil)
-	s.SetMirror(m, nil)
+	s.SetMirror(newFakeMirrorAt(t, path), nil)
 	env, err := s.Enrich(context.Background(), querytest.ASIN, "")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +152,7 @@ func TestMirrorLibrivox(t *testing.T) {
 	if env.Recording == nil || env.Recording.ID != querytest.ASINRecording {
 		t.Fatalf("recording = %+v", env.Recording)
 	}
-	if lv := env.Recording.Librivox; lv == nil || *lv != (MetaLibrivox{ID: 47, URL: lvPage, ZipURL: lvZip}) {
+	if lv := env.Recording.Librivox; lv == nil || *lv != wantLibrivox {
 		t.Fatalf("mirror recording librivox = %+v", lv)
 	}
 	if n := remoteHits.Load(); n != 0 {

@@ -741,12 +741,11 @@ func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
 	if rec.LibrivoxID <= 0 {
 		return nil
 	}
-	lv := &MetaLibrivox{ID: rec.LibrivoxID}
-	if rec.Links != nil {
-		lv.URL = absoluteHTTPURL(rec.Links.Librivox)
-		lv.ZipURL = absoluteHTTPURL(rec.Links.Zip)
+	return &MetaLibrivox{
+		ID:     rec.LibrivoxID,
+		URL:    absoluteHTTPURL(rec.Links.Librivox),
+		ZipURL: absoluteHTTPURL(rec.Links.Zip),
 	}
-	return lv
 }
 
 // absoluteHTTPURL returns raw when it is an absolute http or https URL with a

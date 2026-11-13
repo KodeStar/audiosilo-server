@@ -338,8 +338,8 @@ type upstreamRecording struct {
 	// LibrivoxID is the LibriVox project id this recording IS (0 when it is
 	// not a LibriVox recording), and Links where it is published; metaserve
 	// omits both on every other recording (pkg/query RecordingDetail).
-	LibrivoxID int                     `json:"librivox_id"`
-	Links      *upstreamRecordingLinks `json:"links"`
+	LibrivoxID int                    `json:"librivox_id"`
+	Links      upstreamRecordingLinks `json:"links"`
 }
 
 // upstreamRecordingLinks is the part of a recording's links the server reads:

@@ -457,7 +457,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `meta.Answer`, never claims the credit); `MetaRecording`
   carries `chapter_count` and, on a LibriVox recording only (`librivox_id > 0`), `librivox`
   `{id, url, zip_url}` (`librivoxOf`: metaserve's `links.librivox`/`links.zip`, each kept only
-  as an absolute http(s) URL, never built from the id; LibriVox L5). `Service.CachedWorkID` answers an identifier's work id
+  as an absolute http(s) URL, never built from the id; LibriVox L5).
+  `Service.CachedWorkID` answers an identifier's work id
   from the cache alone: memory, else its enrichment's stored row, fresh or stale
   (never the upstream), so placement does not flip with a restart or an eviction.
   **Owned entries (`local`)**: every rail entry, main view and each
