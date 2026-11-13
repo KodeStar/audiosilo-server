@@ -4,9 +4,13 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
 import { toastError } from '@/lib/errors';
-import { JOB_POLL_MS, jobPollMs } from './librivox-model';
+import { jobPollMs } from './librivox-model';
 
-/** The LibriVox works matching q (none asked for a blank one). */
+/**
+ * The LibriVox works matching q (none asked for a blank one). Catalogue data
+ * with no local state: a minute old is fresh enough for a refocus or a retyped
+ * query.
+ */
 export function useLibrivoxSearch(q: string, enabled: boolean) {
   const query = q.trim();
   return useQuery({
@@ -14,20 +18,19 @@ export function useLibrivoxSearch(q: string, enabled: boolean) {
     queryFn: () => api.librivoxSearch(query),
     enabled: enabled && query !== '',
     placeholderData: keepPreviousData,
+    staleTime: 60_000,
   });
 }
 
 /**
- * One work's LibriVox recordings, asked again every few seconds while one of
- * them has an open job (its state, then where it landed).
+ * One work's LibriVox recordings. Not polled: each row follows its own job
+ * (useTrackedJob) and asks for the work again when that job ends.
  */
 export function useLibrivoxWork(id: string | undefined) {
   return useQuery({
     queryKey: keys.librivoxWork(id ?? ''),
     queryFn: () => api.librivoxWork(id ?? ''),
     enabled: Boolean(id),
-    refetchInterval: (q) =>
-      q.state.data?.recordings.some((r) => r.job !== null) ? JOB_POLL_MS : false,
   });
 }
 
@@ -54,8 +57,10 @@ export function useAddLibrivox(workId: string) {
     setBusy(librivoxId);
     try {
       const { job } = await api.librivoxFetch(libraryId, librivoxId);
-      qc.setQueryData(keys.bridgeJob(job.id), job);
+      // The lists first: the job's own key sits under theirs, and the answer
+      // just seeded is fresh.
       void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+      qc.setQueryData(keys.bridgeJob(job.id), job);
       return job;
     } catch (err) {
       toastError(t('librivox.add.failed'), err);
