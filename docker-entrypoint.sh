@@ -11,7 +11,9 @@
 # and the backups folder can be written and that each other folder mounted into the
 # container (the audiobooks) can be read. For one that can't, it prints the folder,
 # the user, the folder's owner and the fix (server#368). It warns and carries on:
-# the server's own start-up error says the same about the data folder.
+# the server's own start-up error says the same about the data folder. Each check
+# of a mounted folder is given $WAIT seconds: a share whose server is gone counts
+# as one the server can't use, and never holds the start.
 #
 # If the container is started with an explicit non-root user (docker `--user` /
 # compose `user:`), we skip the chown/drop, run the same checks and exec as that
@@ -35,13 +37,25 @@ data_dir() {
   printf '%s' "$d"
 }
 
-# Whether $1 is an absolute folder other than / (never chown the whole system).
+# $1 without its trailing slashes ("/backups/" is "/backups", as mountinfo names it).
+trim() {
+  p="$1"
+  while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+  printf '%s' "$p"
+}
+
+# Whether $1 is an absolute folder other than the container's root, however that
+# is spelled ("//", "/.", "/data/..", a link to it): never chown the whole system.
 usable_path() {
   case "$1" in
-    / | "") return 1 ;;
-    /*) return 0 ;;
+    /*) ;;
+    *) return 1 ;;
   esac
-  return 1
+  case "$1/" in
+    */../*) return 1 ;; # may step back up to /, even before the folder exists
+  esac
+  if timeout "$WAIT" test "$1" -ef /; then return 1; fi
+  return 0
 }
 
 # The fix for folder $1 the server's user can't $2 ("read" or "read and write").
@@ -59,11 +73,13 @@ explain() {
     say "  Changing its owner to $RUN_AS failed (a NAS share with ACLs or a read-only mount refuses it)."
   fi
   give="give user $RUN_AS $access access to the folder on the host"
-  case "$owner" in
-    "$RUN_AS" | "")
+  case "${owner%%:*}" in
+    "${RUN_AS%%:*}" | "")
+      # The server's user owns it (its mode or an ACL refuses it, as
+      # fsaccess.Hint says), or the owner can't be read.
       say "  Fix: $give."
       ;;
-    0:*)
+    0)
       # Never advise running the server as root.
       say "  Fix: $give, for example by making $RUN_AS its owner."
       ;;
@@ -77,9 +93,14 @@ explain() {
   esac
 }
 
-# Whether the server's user can make a file in folder $1.
+# Whether $1 is a folder, asked within $WAIT.
+is_dir() { timeout "$WAIT" test -d "$1"; }
+
+# Whether the server's user can make a file in folder $1, within $WAIT. The file
+# is mktemp's, never a name known ahead: in a shared folder a link planted at
+# such a name would have the check empty the file it points at.
 can_write() {
-  as_user sh -c 't="$1/.audiosilo-write-check.$$"; : >"$t" && rm -f "$t"' sh "$1" >/dev/null 2>&1
+  as_user timeout "$WAIT" sh -c 't=$(mktemp "$1/.audiosilo-write-check.XXXXXX") && rm -f "$t"' sh "$1" >/dev/null 2>&1
 }
 
 # Whether the server's user can list folder $1 (a file mounted in passes): the
@@ -113,14 +134,25 @@ library_mounts() {
   return 0
 }
 
+# Checks that the server's user can write to folder $1 ($2: its chown failed). A
+# folder that isn't there yet is the server's to make; one that doesn't say
+# within $WAIT whether it is there (timeout's 143 from BusyBox, 124 from GNU)
+# counts as one the server can't use.
+check_write() {
+  rc=0
+  is_dir "$1" || rc=$?
+  case "$rc" in
+    0) if can_write "$1"; then return 0; fi ;;
+    124 | 143) ;;
+    *) return 0 ;;
+  esac
+  explain "$1" "read and write" "$2"
+}
+
 # Checks each folder as the server's user and explains the ones it can't use.
 check_folders() {
-  if [ -d "$DATA" ] && ! can_write "$DATA"; then
-    explain "$DATA" "read and write" "$DATA_CHOWN_FAILED"
-  fi
-  if [ -n "$BACKUPS" ] && [ -d "$BACKUPS" ] && ! can_write "$BACKUPS"; then
-    explain "$BACKUPS" "read and write" "$BACKUPS_CHOWN_FAILED"
-  fi
+  check_write "$DATA" "$DATA_CHOWN_FAILED"
+  if [ -n "$BACKUPS" ]; then check_write "$BACKUPS" "$BACKUPS_CHOWN_FAILED"; fi
   library_mounts | while read -r m; do
     if ! can_read "$m"; then
       explain "$m" "read" ""
@@ -130,10 +162,23 @@ check_folders() {
   return 0
 }
 
+# Ends the watcher BusyBox's timeout leaves behind each command for up to a second.
+# As PID 1 this script is the watchers' parent, and the server it becomes reaps
+# no child it didn't start: one still alive at the hand-over would stay under it
+# as a zombie for good. Waiting on pgrep is what lets this shell collect them.
+# (Not PID 1, under docker's --init: that init reaps them, and nothing is done.)
+reap_watchers() {
+  [ "$$" = 1 ] || return 0
+  pkill -P 1 -x timeout 2>/dev/null || true
+  n=0
+  while [ "$n" -lt 50 ] && pgrep -P 1 -x timeout >/dev/null 2>&1; do n=$((n + 1)); done
+  return 0
+}
+
 WAIT=5 # seconds a check of a mounted folder may take
-DATA=$(data_dir "$@")
-BACKUPS=""
-if usable_path "${AUDIOSILO_BACKUP_DIR:-}"; then BACKUPS="$AUDIOSILO_BACKUP_DIR"; fi
+DATA=$(trim "$(data_dir "$@")")
+BACKUPS=$(trim "${AUDIOSILO_BACKUP_DIR:-}")
+if ! usable_path "$BACKUPS"; then BACKUPS=""; fi
 DATA_CHOWN_FAILED=""
 BACKUPS_CHOWN_FAILED=""
 
@@ -147,14 +192,17 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "$RUN_AS" "$DATA" 2>/dev/null || DATA_CHOWN_FAILED=1
   fi
   if [ -n "$BACKUPS" ]; then
-    # The folder and AudioSilo's own backups in it, never the rest: it may be a
-    # share other apps keep their backups in too.
-    mkdir -p "$BACKUPS" 2>/dev/null || true
-    { chown "$RUN_AS" "$BACKUPS" &&
-      find "$BACKUPS" -maxdepth 1 \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) -exec chown "$RUN_AS" {} + ; } \
-      2>/dev/null || BACKUPS_CHOWN_FAILED=1
+    # The folder and AudioSilo's own backup files in it, never the rest (it may be
+    # a share other apps keep their backups in too) and never what a link in it
+    # points at: files only, and chown -h. Each step bounded, as the checks are:
+    # the share's server may be gone, and the server starts without its backups.
+    timeout "$WAIT" mkdir -p "$BACKUPS" 2>/dev/null || true
+    { timeout "$WAIT" chown "$RUN_AS" "$BACKUPS" &&
+      timeout "$WAIT" find "$BACKUPS/" -maxdepth 1 -type f \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) \
+        -exec chown -h "$RUN_AS" {} + ; } 2>/dev/null || BACKUPS_CHOWN_FAILED=1
   fi
   check_folders
+  reap_watchers
   exec su-exec "$RUN_AS" "$@"
 fi
 
@@ -162,4 +210,5 @@ RUN_AS="$(id -u):$(id -g)"
 AS_ROOT=""
 as_user() { "$@"; }
 check_folders
+reap_watchers
 exec "$@"

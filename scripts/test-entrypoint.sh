@@ -98,6 +98,21 @@ owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
 expect "backups chown spares other files" "$owners" \
   "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
 
+# 5c. Nor does what a link in the backups folder points at, whatever the link is
+#     called: a share others can write to must not get root to re-own their pick.
+docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
+  'ln -s other.tar /v/audiosilo-link.db && ln -s other /v/.audiosilo-link && chown -R -h 0:0 /v'
+run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$BK:/backups" >/dev/null
+owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
+  'stat -c "%n %u:%g" /v/other /v/other.tar /v/audiosilo-20261101-030000Z-scheduled.db')
+expect "backups chown follows no link" "$owners" \
+  "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
+
+# 5d. A trailing slash names the same folder: chowned, and not read again as a
+#     folder of books.
+out=$(run -e AUDIOSILO_BACKUP_DIR=/backups/ -v "$DATA:/data" -v "$NAS:/backups:ro")
+expect "backups folder with a trailing slash" "$out" "WARNING: the server can't write to /backups:" "!shows as offline"
+
 # 6. A backups folder that refuses the chown is named the same way.
 out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$NAS:/backups:ro")
 expect "unwritable backups folder" "$out" "WARNING: the server can't write to /backups" "PUID=1026 and PGID=100"
@@ -115,6 +130,34 @@ expect "readable audiobooks" "$out" "!WARNING"
 out=$(run --user 1000:1000 -v "$NAS:/data")
 expect "--user" "$out" "ran as 1000:1000" \
   "run the container as the folder's owner \(user: \"1026:100\"\)" "!PUID"
+
+# 9. A folder the server's user owns but may not write to (its mode refuses it)
+#    gets no PUID advice, whatever its group: the user is right already.
+OWN=$(vol own 1000:100 500)
+out=$(run --user 1000:1000 -v "$OWN:/data")
+expect "own folder refused by its mode" "$out" \
+  "the folder belongs to 1000:100\." "Fix: give user 1000:1000 read and write access" "!PUID" "!user: "
+
+# 10. Another spelling of / is never chowned (it would re-own the whole
+#     container, the mounted books included): --data //, /. or /data/.., and the
+#     same for AUDIOSILO_BACKUP_DIR.
+for d in // /. /data/..; do
+  out=$(docker run --rm -e AUDIOSILO_BACKUP_DIR="$d" -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" \
+    -v "$DATA:/data" -v "$BOOKS:/audiobooks" "$RUN_ID" \
+    sh /usr/local/bin/docker-entrypoint.sh sh -c 'stat -c "%n %u:%g" / /etc /audiobooks' --data "$d" 2>&1 || true)
+  expect "the root spelled $d" "$out" "^/ 0:0$" "^/etc 0:0$" "^/audiobooks 0:0$"
+done
+
+# 11. No watcher of a bounded check is left behind for the server to carry as a
+#     zombie (a shell builtin looks: nothing here may reap one).
+leftover='for f in /proc/[0-9]*/comm; do read -r c <"$f" || continue; if [ "$c" = timeout ]; then echo LEFTOVER; fi; done; echo looked'
+for u in "" "--user 1000:1000"; do
+  # shellcheck disable=SC2086 # $u is zero or two words
+  out=$(docker run --rm $u -e AUDIOSILO_BACKUP_DIR=/backups -v "$EP:/usr/local/bin/docker-entrypoint.sh:ro" \
+    -v "$DATA:/data" -v "$BK:/backups" -v "$BOOKS:/audiobooks:ro" "$RUN_ID" \
+    sh /usr/local/bin/docker-entrypoint.sh sh -c "$leftover" --data /data 2>&1 || true)
+  expect "no watcher left ${u:-as root}" "$out" "^looked$" "!LEFTOVER"
+done
 
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failed"; exit 1; }
 echo "all passed"

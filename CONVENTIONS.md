@@ -3337,18 +3337,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   remove `.audiosilo-write-check-*`, and open each named file that exists read-write). Uses: the launcher
   checks the data folder and `audiosilo.db`, `-wal`, `-shm` before `config.Load` and `store.Open`, and
   words a `config.yaml` it may not read (start-up error "the data folder isn't usable: ..."; a read-only
-  but readable `config.yaml` still starts), and warns at start when the backups folder exists and
-  refuses (`backup.Service.CheckFolder`, off the start path); a backup checks its folder before `VACUUM INTO`
+  but readable `config.yaml` still starts when it names `server_id`, and one that can't take the id
+  minted for it is worded the same way), and warns at start when the backups folder exists and
+  refuses, or can't be looked at (`backup.Service.CheckFolder`, off the start path); a backup checks
+  its folder before `VACUUM INTO`, and wraps a refusal at any later step (the chmod, the rename),
   so a refused one is `permission_denied` with `Result.Detail` (not on the wire) carried into the
   `backup_failed` event's `detail` and the notification's text; a scan stops on a library root it can stat
   but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker entrypoint words
   the same as root (after `chown -R` of `/data`, and of `AUDIOSILO_BACKUP_DIR` when absolute and not `/`
   only the folder and its `audiosilo-*.db` / `.audiosilo-*` files: a backups share may hold other apps'
-  files) and under `--user` (where its fix names compose's `user:`, while the server's own hint still
-  says PUID/PGID): a write check of the data and backups folders and a read check of every other mount
-  (MountHints' rule; each check and `stat` bounded by `timeout 5`, as a dead hard mount can block for
-  minutes) as the server's user, warning and carrying on; `scripts/test-entrypoint.sh`
-  (Docker) is its test, not run in CI.
+  files, so regular files only and `chown -h`, never what a link there points at) and under `--user`
+  (where its fix names compose's `user:`, while the server's own hint still says PUID/PGID): a write
+  check of the data and backups folders (a `mktemp` file, never a name known ahead) and a read check of
+  every other mount (MountHints' rule) as the server's user, warning and carrying on. `usable_path` is
+  what keeps a chown off the container's root however it is spelled (`//`, `/.`, a `..` in the path, a
+  link to it). Every check, `stat` and step on the backups folder is bounded by `timeout 5`, as a dead
+  hard mount can block for minutes (not the data folder's `chown -R`, which a large folder may need
+  longer for); a check cut off counts as a folder the server can't use. BusyBox's `timeout`
+  leaves a watcher behind each command: `reap_watchers` ends them before the hand-over, or each would
+  stay a zombie under the server. `scripts/test-entrypoint.sh` (Docker) is its test, not run in CI.
 - **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
   a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
   account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the
