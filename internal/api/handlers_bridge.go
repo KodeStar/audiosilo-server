@@ -55,6 +55,12 @@ func (a *API) SetBridge(b *bridge.Service) {
 				a.log.Warn("audible: recording a backup failed", "job", job.ID, "err", err)
 			}
 		}
+		if job.Kind == bridge.KindLibrivoxFetch {
+			// A done LibriVox fetch's book is recorded as its recording.
+			if err := a.cat.FoldLibrivoxFetch(ctx, job); err != nil {
+				a.log.Warn("librivox: recording a fetched book failed", "job", job.ID, "err", err)
+			}
+		}
 		if job.Kind == bridge.KindAudibleSync {
 			// The account's last sync, or Audible refusing it.
 			if err := a.cat.FoldAudibleSync(ctx, job); err != nil {
@@ -544,6 +550,12 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 			if t, err := a.cat.AudibleTitle(ctx, p.Account, p.ASIN); err == nil {
 				ev.Title = t.Title
 			}
+		}
+	}
+	if job.Kind == bridge.KindLibrivoxFetch && ev.Path == "" {
+		// A fetch names no book until it is placed: the book its result names.
+		if _, r, err := bridge.LibrivoxFetchOf(*job); err == nil {
+			ev.Path = r.Path
 		}
 	}
 	if job.LibraryID != nil {

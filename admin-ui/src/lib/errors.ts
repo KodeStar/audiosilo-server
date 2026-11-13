@@ -107,6 +107,8 @@ const BY_CODE: Record<string, string> = {
   // read-along job for a book with no ebook.
   readalong_open: 'errors.readalongOpen',
   no_ebook: 'errors.noEbook',
+  // Library > LibriVox: the recording is on this server already.
+  in_library: 'errors.librivoxInLibrary',
 };
 
 /** A failure as one sentence for a toast or a field. */

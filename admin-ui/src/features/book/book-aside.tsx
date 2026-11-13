@@ -4,7 +4,13 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, Headphones, LibraryBig, Plus, Share2, Sparkles, Unlink } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateIssues, settleBookEdit, useLibraries, useServerInfo } from '@/api/hooks';
+import {
+  invalidateIssues,
+  settleBookEdit,
+  useBookMeta,
+  useLibraries,
+  useServerInfo,
+} from '@/api/hooks';
 import type { AdminBookDetail, BookShare } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -129,10 +135,21 @@ function IdRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
-/** The "how" line's key: with no ASIN or ISBN it says the store listing is
- * what the book is matched by. */
-function howKey(how: 'auto' | 'accepted', hasIdentifier: boolean) {
-  if (hasIdentifier) {
+/**
+ * The "how" line's key. A LibriVox recording says so (it has no store
+ * listing); otherwise, with no ASIN or ISBN, it says the store listing is what
+ * the book is matched by. Until the book's /meta answer says which, the line
+ * stays neutral.
+ */
+function howKey(
+  how: 'auto' | 'accepted',
+  hasIdentifier: boolean,
+  recording: 'librivox' | 'retail' | 'unknown' = 'retail',
+) {
+  if (recording === 'librivox') {
+    return how === 'auto' ? 'book.community.howAutoLibrivox' : 'book.community.howAcceptedLibrivox';
+  }
+  if (hasIdentifier || recording === 'unknown') {
     return how === 'auto' ? 'book.community.howAutoMatched' : 'book.community.howAcceptedMatched';
   }
   return how === 'auto' ? 'book.community.howAuto' : 'book.community.howAccepted';
@@ -160,6 +177,17 @@ function CommunityCard({
   // alone), and unlinkable.
   const work = detail.community_match;
   const hasIdentifier = Boolean(asin || isbn);
+  // Which recording the match is, from the book's /meta answer (shared with the
+  // Story card): a LibriVox one names its project.
+  const meta = useBookMeta(detail.book, Boolean(work && server.data?.capabilities.metadata));
+  const metaRecording = meta.data?.recording;
+  const recordingKind = metaRecording?.librivox
+    ? !work?.recording_id || metaRecording.id === work.recording_id
+      ? 'librivox'
+      : 'retail'
+    : meta.isPending
+      ? 'unknown'
+      : 'retail';
   // An Unlink takes back the community's overrides (locked, source community),
   // leaving what is under one (the files' value); any other value stays (an
   // admin's edit, or an enrichment, which reads as community but isn't an
@@ -247,7 +275,9 @@ function CommunityCard({
           </dl>
           {work ? (
             <p className="text-[12.5px] text-muted-foreground">
-              {t(howKey(work.how, hasIdentifier), { time: formatRelative(work.matched_at, lang) })}
+              {t(howKey(work.how, hasIdentifier, recordingKind), {
+                time: formatRelative(work.matched_at, lang),
+              })}
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

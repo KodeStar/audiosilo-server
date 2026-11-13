@@ -2128,6 +2128,8 @@ export interface MetaRecording {
   release_date?: string;
   publisher?: string;
   cover_url?: string;
+  /** Set only on a LibriVox recording (meta.MetaLibrivox): its project and pages. */
+  librivox?: { id: number; url?: string; zip_url?: string };
 }
 
 /** meta.MetaSeriesWork: one entry of a series rail. */
@@ -2591,6 +2593,42 @@ export interface BridgeJob {
   updated_at: string;
   claimed_at: string | null;
   finished_at: string | null;
+}
+
+/** One work of GET /admin/librivox/search: a work with at least one LibriVox recording. */
+export interface LibrivoxHit {
+  work_id: string;
+  title: string;
+  authors: MetaPersonRef[];
+  /** Its language tag ("en"). */
+  language: string;
+  /** The earliest release date of its recordings (YYYY, YYYY-MM or YYYY-MM-DD), "" for none. */
+  release_date: string;
+}
+
+/** One LibriVox recording of GET /admin/librivox/work. */
+export interface LibrivoxRecording {
+  recording_id: string;
+  /** The LibriVox project it is. */
+  librivox_id: number;
+  narrators: MetaPersonRef[];
+  runtime_min: number;
+  /** Its sections (0 when unknown). */
+  chapter_count: number;
+  /** An absolute http(s) URL, else "". */
+  cover_url: string;
+  /** Its LibriVox catalogue page (an absolute http(s) URL), else "". */
+  url: string;
+  /** The books on this server recorded as this recording. */
+  in_library: BookRef[];
+  /** Its open librivox.fetch job in any library, else null. */
+  job: { id: number; state: BridgeJobState } | null;
+}
+
+/** GET /admin/librivox/work: a work and its LibriVox recordings only. */
+export interface LibrivoxWork {
+  work: { id: string; title: string; authors: MetaPersonRef[]; language: string };
+  recordings: LibrivoxRecording[];
 }
 
 /** GET /admin/bridge/jobs: newest first; next_before continues it. */

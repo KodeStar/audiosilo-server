@@ -19,7 +19,7 @@ export const DESTINATIONS: readonly Destination[] = [
     key: 'library',
     route: '/library/{-$section}',
     icon: LibraryBig,
-    sections: ['books', 'authors', 'series', 'narrators', 'folders', 'libraries'],
+    sections: ['books', 'authors', 'series', 'narrators', 'folders', 'libraries', 'librivox'],
   },
   {
     key: 'people',

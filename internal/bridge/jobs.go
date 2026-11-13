@@ -196,6 +196,8 @@ var kinds = map[string]kindSpec{
 		promotes: true, maxParams: maxAudibleSyncParamsBytes},
 	KindAudibleImport: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: audibleImportParams,
 		module: ModuleAudible, internal: true, suffix: audibleImportSuffix},
+	KindLibrivoxFetch: {needsLibrary: true, book: bookNone, writes: true, libraryKind: libraryBooks, params: librivoxFetchParams,
+		internal: true, suffix: librivoxFetchSuffix},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, libraryKind: libraryBooks, params: sidecarsParams,
 		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen,
 			KindReadalong: ErrReadalongOpen},

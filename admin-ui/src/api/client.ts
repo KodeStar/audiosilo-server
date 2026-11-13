@@ -22,6 +22,8 @@ import type {
   BridgeJobRequest,
   BridgePairCode,
   BridgeStatus,
+  LibrivoxHit,
+  LibrivoxWork,
   NotifyTarget,
   NotifyTargetInput,
   NotifyTargetsEnvelope,
@@ -452,6 +454,8 @@ export const api = {
     ),
   /** Queued (cancelled at once) or running (asked to stop); 409 finished once it ended. */
   cancelBridgeJob: (id: number) => request<BridgeJob>('POST', `/admin/bridge/jobs/${id}/cancel`),
+  /** One Bridge job by id (404 once it is gone). */
+  bridgeJob: (id: number) => request<BridgeJob>('GET', `/admin/bridge/jobs/${id}`),
   /**
    * Queues a job: `created` is false when the open job already queued for that
    * kind, library and path came back instead (200, not 201). 409 kind_unavailable
@@ -461,6 +465,29 @@ export const api = {
     const res = await send('/admin/bridge/jobs', { method: 'POST', body: req });
     return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
   },
+
+  // Add from LibriVox (Library > LibriVox): the community metadata's LibriVox
+  // works and recordings, and the Bridge's librivox.fetch. 404 metadata_off
+  // while community metadata is off.
+  /** LibriVox works matching q, best first. */
+  librivoxSearch: (q: string) =>
+    request<{ results: LibrivoxHit[] }>(
+      'GET',
+      `/admin/librivox/search${bookQuery({ q, limit: 20 })}`,
+    ),
+  /** A work's LibriVox recordings, where each is on this server and its open job. 404 not_found. */
+  librivoxWork: (id: string) =>
+    request<LibrivoxWork>('GET', `/admin/librivox/work${bookQuery({ id })}`),
+  /**
+   * Adds a LibriVox project to a books library: 202 with the queued job (or
+   * the open one). 409 in_library, kind_unavailable, library_not_writable;
+   * 404 not_found.
+   */
+  librivoxFetch: (libraryId: number, librivoxId: number) =>
+    request<{ job: BridgeJob }>('POST', '/admin/librivox/fetch', {
+      library_id: libraryId,
+      librivox_id: librivoxId,
+    }),
 
   // Audible (Settings > Bridge's Audible accounts, Settings > Audible): read-only;
   // the accounts are signed in and mapped on the Bridge's own page.

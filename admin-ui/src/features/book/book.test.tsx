@@ -508,8 +508,9 @@ describe('a book matched to a store listing (server#320)', () => {
     expect(await screen.findByText('Matched')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: /a-guild-book/ });
     expect(link).toHaveAttribute('href', 'https://meta.audiosilo.app/work?id=a-guild-book');
+    // Once its /meta answer shows the recording is no LibriVox one.
     expect(
-      screen.getByText(/No ASIN or ISBN: matched to its store listing by a bulk match/),
+      await screen.findByText(/No ASIN or ISBN: matched to its store listing by a bulk match/),
     ).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Unlink' }));
@@ -561,6 +562,41 @@ describe('a book matched to a store listing (server#320)', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    ['accepted', /^Matched to its LibriVox recording \d/],
+    ['auto', /^Matched to its LibriVox recording by a bulk match/],
+  ] as const)(
+    'says a %s LibriVox match is matched to its LibriVox recording',
+    async (how, line) => {
+      // The book's /meta answer names the recording a LibriVox one (LibriVox L6).
+      mockFetch(
+        routes(listingDetail(how), {
+          'GET /libraries/1/meta': {
+            body: { matched: true, recording: { id: 'r1', narrators: [], librivox: { id: 192 } } },
+          },
+        }),
+      );
+      renderApp(URL);
+      expect(await screen.findByText(line)).toBeInTheDocument();
+      expect(screen.queryByText(/store listing/)).toBeNull();
+    },
+  );
+
+  it('keeps the store listing line when /meta names another recording', async () => {
+    mockFetch(
+      routes(listingDetail('accepted'), {
+        'GET /libraries/1/meta': {
+          body: { matched: true, recording: { id: 'r2', narrators: [], librivox: { id: 192 } } },
+        },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(/No ASIN or ISBN: matched to its store listing \d/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/LibriVox/)).toBeNull();
+  });
+
   /** A matched book with the given identifiers and a recorded match (server#338). */
   function matchedDetail(ids: { asin?: string; isbn?: string }, own = false): AdminBookDetail {
     const detail = listingDetail('accepted');
@@ -590,9 +626,13 @@ describe('a book matched to a store listing (server#320)', () => {
     expect(screen.getByText('Recording')).toBeInTheDocument();
     expect(screen.getByText('r1')).toBeInTheDocument();
     const identified = Boolean(ids.asin || ids.isbn);
-    expect(screen.queryByText(/No ASIN or ISBN: matched to its store listing/) !== null).toBe(
-      !identified,
-    );
+    if (identified) {
+      expect(screen.queryByText(/No ASIN or ISBN: matched to its store listing/)).toBeNull();
+    } else {
+      expect(
+        await screen.findByText(/No ASIN or ISBN: matched to its store listing/),
+      ).toBeInTheDocument();
+    }
     if (identified) expect(screen.getByText(/^Matched \d/)).toBeInTheDocument();
     if (ids.asin) expect(screen.getAllByText(ids.asin).length).toBeGreaterThan(0);
     if (ids.isbn) expect(screen.getAllByText(ids.isbn).length).toBeGreaterThan(0);

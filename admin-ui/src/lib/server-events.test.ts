@@ -160,6 +160,16 @@ describe('Bridge job events', () => {
       describeEvent(ev('bridge_job_failed', { ...job, state: 'needs_attention', detail: 'why' }))
         .body,
     ).toEqual({ key: 'events.detail', values: { detail: 'why' } });
+    // A LibriVox fetch's park codes have words of their own; another kind's
+    // job with the same code reads as any unknown park.
+    const parked = { ...job, state: 'needs_attention', code: 'not_writable' };
+    expect(
+      describeEvent(ev('bridge_job_failed', { ...parked, job_kind: 'librivox.fetch' })).body,
+    ).toEqual({ key: 'librivox.code.not_writable', values: { code: 'not_writable' } });
+    expect(describeEvent(ev('bridge_job_failed', parked)).body).toEqual({
+      key: 'bridge.park.unknown',
+      values: { code: 'not_writable' },
+    });
   });
 
   it('words a failed job with its detail, as bad', () => {

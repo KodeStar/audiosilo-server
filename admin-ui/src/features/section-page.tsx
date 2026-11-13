@@ -29,6 +29,10 @@ const FoldersPage = lazyScreen(() =>
 const LibrariesPage = lazyScreen(() =>
   import('@/features/libraries/libraries-page').then((m) => m.LibrariesPage),
 );
+/** Library > LibriVox: add a LibriVox recording through the Bridge (LibriVox L6). */
+const LibrivoxPage = lazyScreen(() =>
+  import('@/features/librivox/librivox-page').then((m) => m.LibrivoxPage),
+);
 const PeoplePage = lazyScreen(() =>
   import('@/features/people/people-page').then((m) => m.PeoplePage),
 );
@@ -76,6 +80,7 @@ export const PAGES: Record<DestinationKey, Record<string, Screen>> = {
     narrators: NarratorsPage,
     folders: FoldersPage,
     libraries: LibrariesPage,
+    librivox: LibrivoxPage,
   },
   people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage, devices: DevicesPage },
   activity: { overview: ActivityPage, live: LivePage, sessions: SessionsPage, year: YearPage },
