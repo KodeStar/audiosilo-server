@@ -1813,9 +1813,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
-  a repick (`CommunityASINBooks`), the Bridge's estimate, the player's `/meta` (identifier-keyed: a
-  store-listing book shows no community content in the player yet) and the console's chapter check,
-  Series rail and Suggest corrections. Path-keyed state: a move carries it with the book's edits as one
+  a repick (`CommunityASINBooks`), the Bridge's estimate, `/next`'s community rail and the console's chapter check,
+  Series rail and Suggest corrections. `/meta` reads the row when the book has no identifier or its
+  lookup is a not-found (`meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no
