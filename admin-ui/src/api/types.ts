@@ -2128,6 +2128,8 @@ export interface MetaRecording {
   release_date?: string;
   publisher?: string;
   cover_url?: string;
+  /** Set only on a LibriVox recording (meta.MetaLibrivox): its project and pages. */
+  librivox?: { id: number; url?: string; zip_url?: string };
 }
 
 /** meta.MetaSeriesWork: one entry of a series rail. */

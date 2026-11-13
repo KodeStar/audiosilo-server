@@ -827,6 +827,8 @@
   "book.community.recording": "Enregistrement",
   "book.community.howAutoMatched": "Associé par une association groupée {{time}}.",
   "book.community.howAcceptedMatched": "Associé {{time}}.",
+  "book.community.howAutoLibrivox": "Associé à son enregistrement LibriVox par une association groupée {{time}}.",
+  "book.community.howAcceptedLibrivox": "Associé à son enregistrement LibriVox {{time}}.",
   "book.community.unlinkBodyKeeps": "La correspondance part avec tout ce qu’elle a écrit : les valeurs et la couverture de la communauté. Son propre ASIN ou ISBN reste, il apparaît donc toujours comme associé, et une actualisation peut à nouveau remplir les informations de la communauté. Vos propres modifications restent. Impossible d’annuler.",
   "book.corrections.title": "Corrections",
   "book.corrections.pitch": "Vous avez modifié des champs que la communauté a autrement. Proposez vos valeurs, afin que d’autres serveurs les reçoivent aussi.",

@@ -827,6 +827,8 @@
   "book.community.recording": "Grabación",
   "book.community.howAutoMatched": "Asociado por una asociación masiva {{time}}.",
   "book.community.howAcceptedMatched": "Asociado {{time}}.",
+  "book.community.howAutoLibrivox": "Asociado a su grabación de LibriVox por una asociación masiva {{time}}.",
+  "book.community.howAcceptedLibrivox": "Asociado a su grabación de LibriVox {{time}}.",
   "book.community.unlinkBodyKeeps": "La coincidencia se va con todo lo que escribió: los valores y la portada de la comunidad. Su propio ASIN o ISBN se mantiene, así que sigue apareciendo como asociado, y una actualización puede volver a rellenar los datos de la comunidad. Tus propias ediciones se mantienen. No se puede deshacer.",
   "book.corrections.title": "Correcciones",
   "book.corrections.pitch": "Editaste campos que la comunidad tiene de otra forma. Sugiere tus valores, así otros servidores también los tendrán.",

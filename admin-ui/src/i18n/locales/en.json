@@ -786,6 +786,8 @@
   "book.community.recording": "Recording",
   "book.community.howAutoMatched": "Matched by a bulk match {{time}}.",
   "book.community.howAcceptedMatched": "Matched {{time}}.",
+  "book.community.howAutoLibrivox": "Matched to its LibriVox recording by a bulk match {{time}}.",
+  "book.community.howAcceptedLibrivox": "Matched to its LibriVox recording {{time}}.",
   "book.community.unlinkBodyKeeps": "The match goes with everything it wrote: the community’s values and cover. Its own ASIN or ISBN stays, so it still shows as matched, and a refresh can fill in the community’s details again. Your own edits stay. There is no undo.",
   "book.corrections.title": "Corrections",
   "book.corrections.pitch": "You edited fields the community has differently. Suggest your values, so other servers get them too.",

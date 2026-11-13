@@ -827,6 +827,8 @@
   "book.community.recording": "Registrazione",
   "book.community.howAutoMatched": "Abbinato da un abbinamento in blocco {{time}}.",
   "book.community.howAcceptedMatched": "Abbinato {{time}}.",
+  "book.community.howAutoLibrivox": "Abbinato alla sua registrazione LibriVox da un abbinamento in blocco {{time}}.",
+  "book.community.howAcceptedLibrivox": "Abbinato alla sua registrazione LibriVox {{time}}.",
   "book.community.unlinkBodyKeeps": "La corrispondenza se ne va con tutto ciò che ha scritto: i valori e la copertina della community. Il suo ASIN o ISBN resta, quindi risulta ancora abbinato, e un aggiornamento può compilare di nuovo i dati della community. Le tue modifiche restano. Non si può annullare.",
   "book.corrections.title": "Correzioni",
   "book.corrections.pitch": "Hai modificato campi che la community ha in modo diverso. Suggerisci i tuoi valori, così anche altri server li avranno.",

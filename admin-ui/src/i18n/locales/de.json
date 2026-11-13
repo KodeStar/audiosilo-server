@@ -786,6 +786,8 @@
   "book.community.recording": "Aufnahme",
   "book.community.howAutoMatched": "{{time}} per Massenabgleich abgeglichen.",
   "book.community.howAcceptedMatched": "{{time}} abgeglichen.",
+  "book.community.howAutoLibrivox": "{{time}} per Massenabgleich mit seiner LibriVox-Aufnahme abgeglichen.",
+  "book.community.howAcceptedLibrivox": "{{time}} mit seiner LibriVox-Aufnahme abgeglichen.",
   "book.community.unlinkBodyKeeps": "Mit der Zuordnung geht alles, was sie geschrieben hat: die Werte und das Cover der Community. Die eigene ASIN oder ISBN des Buchs bleibt, daher gilt es weiter als abgeglichen, und eine Aktualisierung kann die Angaben der Community wieder eintragen. Deine eigenen Änderungen bleiben. Rückgängig machen geht nicht.",
   "book.corrections.title": "Korrekturen",
   "book.corrections.pitch": "Du hast Felder bearbeitet, die die Community anders hat. Schlage deine Werte vor, damit andere Server sie auch bekommen.",
