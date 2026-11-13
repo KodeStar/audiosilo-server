@@ -209,7 +209,10 @@ function WorkCard({ id }: { id: string }) {
       />
       {note ? (
         <p id={noteId} className="border-b px-5 py-3 text-[13px] text-muted-foreground">
-          {t(`librivox.bridge.${note}`)} {note === 'unpaired' ? <BridgeSettingsLink /> : null}
+          {t(`librivox.bridge.${note}`)}{' '}
+          {note === 'unpaired' ? (
+            <BridgeSettingsLink>{t('librivox.bridge.pair')}</BridgeSettingsLink>
+          ) : null}
         </p>
       ) : null}
       {recordings.length === 0 ? (

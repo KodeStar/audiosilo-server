@@ -3845,6 +3845,7 @@
   "librivox.bridge.unpaired": "Adicionar um livro precisa de um Bridge pareado.",
   "librivox.bridge.unsupported": "O Bridge ainda não adiciona livros do LibriVox. Atualize-o para a versão mais recente.",
   "librivox.bridge.offline": "O Bridge está offline. Um livro adicionado espera até ele voltar.",
+  "librivox.bridge.pair": "Abrir as configurações do Bridge",
   "librivox.recording.sections_one": "{{n}} seção",
   "librivox.recording.sections_many": "{{n}} seções",
   "librivox.recording.sections_other": "{{n}} seções",
