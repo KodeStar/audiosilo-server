@@ -373,17 +373,14 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 
 // EnrichMatch composes the enrichment of a book's recorded community match
 // (catalog book_matches): workID and the recording it names, recordingID ("" for
-// none, which picks as a lookup without one would). It is how a book with no
-// ASIN or ISBN, or one the lookup does not know, is enriched. The work comes
-// from works/{id} (fetchWork, as Work and the upcoming job read it; mirror mode
+// none, which picks as a lookup without one would). The work comes from
+// works/{id} (fetchWork, as Work and the upcoming job read it; mirror mode
 // answers it from the local copy like every other request), and recordingID is
 // treated as a lookup-named recording: it is the admin's match, not a guess.
 //
-// It caches exactly as Enrich does, in its own key space (matchKey), so an
-// answer never collides with an identifier's: ErrNotFound when the work is
-// unknown upstream (a stored "no match" too), the cached transport error, a
-// stored positive answer through an outage. The returned *Enrichment is shared
-// and immutable, as Enrich's.
+// It is cached and returned exactly as Enrich's answer (the shared enrich), in
+// its own key space (matchKey), so it never collides with an identifier's. A
+// work unknown upstream is ErrNotFound, a cached "no match".
 func (s *Service) EnrichMatch(ctx context.Context, workID, recordingID string) (*Enrichment, error) {
 	workID, recordingID = strings.TrimSpace(workID), strings.TrimSpace(recordingID)
 	if workID == "" {

@@ -50,8 +50,9 @@ const maxSeriesEntries = 256
 
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
 // asin/isbn enrichment, a recorded match's enrichment, a work-id fetch, an
-// identifier's lookup and a series' facts - can never read each other's entries. Every key in the cache is minted through
-// keyspace.key, so these prefixes are declared in exactly one place.
+// identifier's lookup and a series' facts - can never read each other's
+// entries. Every key in the cache is minted through keyspace.key, so these
+// prefixes are declared in exactly one place.
 type keyspace string
 
 const (

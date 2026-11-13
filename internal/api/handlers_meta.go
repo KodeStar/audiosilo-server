@@ -165,10 +165,8 @@ func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog
 	if book, ok = a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book"); !ok {
 		return nil, "", nil, nil, nil, false
 	}
-	err := meta.ErrNotFound
-	if book.ASIN != "" || book.ISBN != "" {
-		env, err = a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
-	}
+	// ErrNotFound too for a book with no identifier.
+	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
 	if errors.Is(err, meta.ErrNotFound) {
 		// Unknown by its identifiers: the console's match, when it has one.
 		m, merr := a.cat.BookMatchAt(r.Context(), lib.ID, book.RelPath)
@@ -176,10 +174,9 @@ func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog
 			a.writeCatalogError(w, merr, "load community match for meta failed", "could not load book", "library", lib.ID, "path", path)
 			return nil, "", nil, nil, nil, false
 		}
-		if m == nil || m.WorkID == "" {
-			return lib, path, book, nil, nil, true
+		if m != nil {
+			env, err = a.meta.EnrichMatch(r.Context(), m.WorkID, m.RecordingID)
 		}
-		env, err = a.meta.EnrichMatch(r.Context(), m.WorkID, m.RecordingID)
 	}
 	switch {
 	case errors.Is(err, meta.ErrNotFound):
