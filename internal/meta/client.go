@@ -335,9 +335,11 @@ type upstreamRecording struct {
 	ChapterCount int            `json:"chapter_count"`
 	ASIN         []upstreamASIN `json:"asin"`
 	ISBN         []string       `json:"isbn"`
-	// LibrivoxID is the LibriVox project id this recording IS (0 when it is
-	// not a LibriVox recording), and Links where it is published; metaserve
-	// omits both on every other recording (pkg/query RecordingDetail).
+	// LibrivoxID is the LibriVox project id this recording IS, omitted (0) on
+	// every other recording, and Links where it is published (pkg/query
+	// RecordingDetail). Links is omitted when a recording states none, but is
+	// not LibriVox's alone (a store recording's carries its product page), so
+	// only LibrivoxID says a recording is a LibriVox one.
 	LibrivoxID int                    `json:"librivox_id"`
 	Links      upstreamRecordingLinks `json:"links"`
 }
