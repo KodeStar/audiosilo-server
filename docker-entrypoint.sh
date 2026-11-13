@@ -1,8 +1,8 @@
 #!/bin/sh
 # Run the server as PUID:PGID (default 1000:1000) so SQLite can write the data dir
 # no matter how the host-mounted volume is owned - the usual NAS pain point. The
-# container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR when it is
-# set) and drop privileges; the server itself never runs as root. On NAS setups set
+# container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR's folder
+# and the backups in it, when it is set) and drop privileges; the server itself never runs as root. On NAS setups set
 # PUID/PGID to the owner of your appdata (Unraid: PUID=99 PGID=100; Synology: often
 # 1026:100; or run `id` for your user).
 #
@@ -48,7 +48,7 @@ usable_path() {
 # $3 is set when this entrypoint failed to change the folder's owner.
 explain() {
   dir="$1" access="$2" chowned="$3"
-  owner=$(stat -c '%u:%g' "$dir" 2>/dev/null || true)
+  owner=$(timeout "$WAIT" stat -c '%u:%g' "$dir" 2>/dev/null || true)
   if [ "$access" = "read" ]; then verb="read"; else verb="write to"; fi
   if [ -n "$owner" ]; then
     say "WARNING: the server can't $verb $dir: it runs as user $RUN_AS and the folder belongs to $owner."
@@ -81,9 +81,11 @@ can_write() {
   as_user sh -c 't="$1/.audiosilo-write-check.$$"; : >"$t" && rm -f "$t"' sh "$1" >/dev/null 2>&1
 }
 
-# Whether the server's user can list folder $1.
+# Whether the server's user can list folder $1 (a file mounted in passes). Bounded:
+# a hard-mounted share whose server is gone can block for minutes, and a slow
+# answer counts as unreadable rather than holding the start.
 can_read() {
-  as_user ls "$1" >/dev/null 2>&1
+  as_user timeout "$WAIT" sh -c '[ ! -d "$1" ] || ls "$1"' sh "$1" >/dev/null 2>&1
 }
 
 # The folders mounted into the container that may hold books: not the system's
@@ -104,7 +106,7 @@ library_mounts() {
         "$DATA" | "$DATA"/*) continue ;;
       esac
       if [ -n "$BACKUPS" ] && [ "$point" = "$BACKUPS" ]; then continue; fi
-      if [ -d "$point" ]; then printf '%s\n' "$point"; fi
+      printf '%s\n' "$point"
     done
   return 0
 }
@@ -126,6 +128,7 @@ check_folders() {
   return 0
 }
 
+WAIT=5 # seconds a check of a mounted folder may take
 DATA=$(data_dir "$@")
 BACKUPS=""
 if usable_path "${AUDIOSILO_BACKUP_DIR:-}"; then BACKUPS="$AUDIOSILO_BACKUP_DIR"; fi
@@ -142,8 +145,12 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "$RUN_AS" "$DATA" 2>/dev/null || DATA_CHOWN_FAILED=1
   fi
   if [ -n "$BACKUPS" ]; then
+    # The folder and AudioSilo's own backups in it, never the rest: it may be a
+    # share other apps keep their backups in too.
     mkdir -p "$BACKUPS" 2>/dev/null || true
-    chown -R "$RUN_AS" "$BACKUPS" 2>/dev/null || BACKUPS_CHOWN_FAILED=1
+    { chown "$RUN_AS" "$BACKUPS" &&
+      find "$BACKUPS" -maxdepth 1 \( -name 'audiosilo-*.db' -o -name '.audiosilo-*' \) -exec chown "$RUN_AS" {} + ; } \
+      2>/dev/null || BACKUPS_CHOWN_FAILED=1
   fi
   check_folders
   exec su-exec "$RUN_AS" "$@"

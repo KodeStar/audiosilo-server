@@ -88,6 +88,16 @@ expect "backups folder chowned" "$out" "!WARNING"
 owner=$(docker run --rm -v "$BK:/v" "$RUN_ID" stat -c '%u:%g' /v)
 expect "backups folder owner" "$owner" "^1000:1000$"
 
+# 5b. Only the backups folder and AudioSilo's backups in it change owner: the
+#     share may hold other apps' backups.
+docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
+  'mkdir -p /v/other && touch /v/other.tar /v/audiosilo-20261101-030000Z-scheduled.db && chown -R 0:0 /v'
+run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$BK:/backups" >/dev/null
+owners=$(docker run --rm -v "$BK:/v" "$RUN_ID" sh -c \
+  'stat -c "%n %u:%g" /v/other /v/other.tar /v/audiosilo-20261101-030000Z-scheduled.db')
+expect "backups chown spares other files" "$owners" \
+  "^/v/other 0:0$" "^/v/other.tar 0:0$" "^/v/audiosilo-20261101-030000Z-scheduled.db 1000:1000$"
+
 # 6. A backups folder that refuses the chown is named the same way.
 out=$(run -e AUDIOSILO_BACKUP_DIR=/backups -v "$DATA:/data" -v "$NAS:/backups:ro")
 expect "unwritable backups folder" "$out" "WARNING: the server can't write to /backups" "PUID=1026 and PGID=100"
