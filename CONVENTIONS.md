@@ -3337,8 +3337,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   remove `.audiosilo-write-check-*`, and open each named file that exists read-write). Uses: the launcher
   checks the data folder and `audiosilo.db`, `-wal`, `-shm` before `config.Load` and `store.Open`, and
   words a `config.yaml` it may not read (start-up error "the data folder isn't usable: ..."; a read-only
-  but readable `config.yaml` still starts), warns at start when the backups
-  folder exists and refuses (`backup.Service.CheckFolder`); a backup checks its folder before `VACUUM INTO`
+  but readable `config.yaml` still starts), and warns at start when the backups folder exists and
+  refuses (`backup.Service.CheckFolder`, off the start path); a backup checks its folder before `VACUUM INTO`
   so a refused one is `permission_denied` with `Result.Detail` (not on the wire) carried into the
   `backup_failed` event's `detail` and the notification's text; a scan stops on a library root it can stat
   but not list (`CheckRead`: unavailable, not an empty library scanned OK). The Docker entrypoint words

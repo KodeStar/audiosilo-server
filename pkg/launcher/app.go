@@ -87,20 +87,21 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(abs, 0o700); err != nil {
-		return fmt.Errorf("the data folder isn't usable: %w", fsaccess.Wrap(abs, true, err))
-	}
 	// A data folder (or a database in it) the server may not write to, or a
-	// config it may not read, stops the start here, saying so with the server's user, the folder's owner
-	// and the fix, rather than as SQLite's "unable to open database file"
-	// (server#368).
+	// config it may not read, stops the start here, saying so with the server's
+	// user, the folder's owner and the fix, rather than as SQLite's "unable to
+	// open database file" (server#368).
+	unusable := func(err error) error { return fmt.Errorf("the data folder isn't usable: %w", err) }
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return unusable(fsaccess.Wrap(abs, true, err))
+	}
 	if err := fsaccess.CheckWrite(abs, dataFiles...); err != nil {
-		return fmt.Errorf("the data folder isn't usable: %w", err)
+		return unusable(err)
 	}
 
 	cfg, firstRun, err := config.Load(abs)
 	if fsaccess.IsPermission(err) {
-		return fmt.Errorf("the data folder isn't usable: %w", fsaccess.Wrap(config.Path(abs), false, err))
+		return unusable(fsaccess.Wrap(config.Path(abs), false, err))
 	}
 	if err != nil {
 		return err
@@ -216,9 +217,12 @@ func Run(ctx context.Context, opts Options) error {
 	backups := backup.New(db, abs, cfg.Backups.Dir, log)
 	backups.SetSettings(cfg.Backups.Schedule, cfg.Backups.Keep)
 	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error, r.Detail) }
-	if err := backups.CheckFolder(); err != nil {
-		log.Warn("backups will fail", "err", err)
-	}
+	go func() {
+		// Off the start path: the folder may be a network share slow to answer.
+		if err := backups.CheckFolder(); err != nil {
+			log.Warn("backups will fail", "err", err)
+		}
+	}()
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)

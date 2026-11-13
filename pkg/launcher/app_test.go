@@ -398,7 +398,7 @@ func TestRunStartsWithAReadOnlyConfig(t *testing.T) {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog(), FFprobePath: "", FFmpegPath: ""}) }()
+	go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog()}) }()
 	waitFor(t, "the server", func() bool {
 		resp, err := http.Get("http://" + addr + "/api/v1/healthz")
 		if err != nil {

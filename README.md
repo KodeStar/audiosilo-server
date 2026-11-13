@@ -171,8 +171,9 @@ the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u
 `AUDIOSILO_BACKUP_DIR` when set) and runs the server as that user, so it works
 regardless of how the mounted volume is owned. Where a chown is refused (a NAS share
 with ACLs) the container log names each folder the server's user can't write (data,
-backups) or read (the audiobooks), the user, the folder's owner and the fix. Update - server or the
-bundled player - is always a new image: `docker compose pull && docker compose up -d`.
+backups) or read (the audiobooks), the user, the folder's owner and the fix. Update -
+server or the bundled player - is always a new image:
+`docker compose pull && docker compose up -d`.
 
 ## Testing & CI
 
