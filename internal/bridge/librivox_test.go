@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // librivox.fetch: strict params built by the server, a writing job (a books
@@ -62,6 +63,17 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 	}
 	if open, err := q.OpenLibrivoxFetches(ctx, nil); err != nil || open == nil || len(open) != 0 {
 		t.Fatalf("no projects = %#v, %v", open, err)
+	}
+	// A fetch whose lease ran out on its last attempt has failed: the read
+	// settles it first, as the other reads of the open jobs do.
+	for attempt := 1; attempt <= MaxAttempts; attempt++ {
+		if j, err := q.claim(ctx, q.token, []string{KindLibrivoxFetch}); err != nil || j == nil || j.ID != second.ID {
+			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
+		}
+		q.advance(Lease + time.Second)
+	}
+	if open, err := q.OpenLibrivoxFetches(ctx, []int{193}); err != nil || len(open) != 0 {
+		t.Fatalf("a fetch whose last lease ran out is still open: %+v, %v", open, err)
 	}
 
 	for name, raw := range map[string]string{

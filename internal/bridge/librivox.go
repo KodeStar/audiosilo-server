@@ -104,11 +104,16 @@ func LibrivoxFetchOf(j Job) (p LibrivoxFetchParams, r LibrivoxFetchResult, err e
 }
 
 // OpenLibrivoxFetches are the open librivox.fetch jobs of the projects ids,
-// in any library, by project: the newest one of each.
+// in any library, by project: the newest one of each. A lease that ran out is
+// settled first, as every read of the open jobs does (expireDue), so a fetch
+// that failed on its last attempt is not listed as open.
 func (s *Service) OpenLibrivoxFetches(ctx context.Context, ids []int) (map[int]*Job, error) {
 	out := map[int]*Job{}
 	if len(ids) == 0 {
 		return out, nil
+	}
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
 	}
 	raw, _ := json.Marshal(ids)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.kind = ? AND j.finished_at IS NULL
