@@ -10,8 +10,8 @@ import (
 // via catalog), so a restarted server answers warm and a positive answer outlives
 // an upstream outage. It holds a subset of the memory cache, under the same keys
 // and TTLs:
-//   - enrichments (a:/i:): positive, "no match" and incomplete envelopes (the
-//     last for errorTTL only, as in memory);
+//   - enrichments (a:/i:, and m: for a recorded match's): positive, "no match"
+//     and incomplete envelopes (the last for errorTTL only, as in memory);
 //   - works (w:): positive answers only (a work id is the caller's choice, so its
 //     misses would let any signed-in user grow the table), except that a later
 //     "no match" replaces a stored work's row;

@@ -39,8 +39,9 @@ import (
 // A work's community positions are numbered on its own scale (position_scale); on a
 // book split finer than that, they are answered translated onto this book's chapters
 // (meta.OnRecording), per request and never cached, so every client's gate
-// and spoilers=hide below compare like with like. The cache is keyed by identifier,
-// and two books sharing an ASIN can differ in their chapters.
+// and spoilers=hide below compare like with like. The cache is keyed by identifier
+// (or by the recorded match), and two books sharing an ASIN can differ in their
+// chapters.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a

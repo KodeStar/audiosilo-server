@@ -24,7 +24,7 @@ const cacheCap = 2048
 // maxWorkEntries bounds the share of the cache the work key space may occupy.
 // The work id is the ONLY freely enumerable cache key on this feature (any
 // signed-in caller picks it: GET /meta/work?id=), so without a per-key-space
-// quota a flood of distinct ids would evict every enrichment entry (a:/i:) and
+// quota a flood of distinct ids would evict every enrichment entry (a:/i:/m:) and
 // turn each book view back into a full upstream fan-out. A few hundred entries
 // comfortably covers a reader walking a series' rails, while leaving the bulk of
 // cacheCap to the enrichment key spaces.
