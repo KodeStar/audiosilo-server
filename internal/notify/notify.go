@@ -449,6 +449,8 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 		"The book's corrections went to the community for review. The book page links them."},
 	bridge.KindReadalong: {"Read-along", "Read-along made",
 		"It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration."},
+	bridge.KindLibrivoxFetch: {"Adding from LibriVox", "Added from LibriVox",
+		"It is in the library now, matched to its LibriVox recording."},
 	bridge.KindVerify: {label: "Bridge check"},
 }
 

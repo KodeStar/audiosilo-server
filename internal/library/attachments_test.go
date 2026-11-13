@@ -808,3 +808,50 @@ func TestIndexPathMovesEveryListenersFolderFavourite(t *testing.T) {
 		}
 	}
 }
+
+// TestScannerToleratesLibrivoxFile: a book the Bridge added from LibriVox
+// (librivox.fetch, LibriVox L6) carries .audiosilo/librivox.json, which this
+// server does not read yet. Its book is indexed once with no attachments and no
+// scan error, and the Bridge's staging folder beside it (a dot-led
+// .audiosilo-librivox-<id> folder with a part file) is never a book; a rescan
+// changes nothing.
+func TestScannerToleratesLibrivoxFile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	past := time.Now().Add(-time.Hour)
+	const book = "L. Leslie Brooke/Johnny Crow's Garden"
+	for _, name := range []string{"01 - Part One.m4b", "02 - Part Two.m4b"} {
+		copyFixtureM4B(t, filepath.Join(root, filepath.FromSlash(book), name))
+	}
+	writeAt(t, root, book+"/.audiosilo/librivox.json",
+		`{"version":1,"librivox_id":192,"work_id":"johnny-crows-garden","recording_id":"lv192","archive_id":"johnny_crow_lv"}`, past)
+	copyFixtureM4B(t, filepath.Join(root, "L. Leslie Brooke", ".audiosilo-librivox-193", "01 - Next.m4b"))
+	writeAt(t, root, "L. Leslie Brooke/.audiosilo-librivox-193/02 - Next.mp3.part", "partial", past)
+
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if got := bookPaths(t, cat, lib.ID); !slices.Equal(got, []string{book}) {
+		t.Fatalf("books = %q, want the placed book alone", got)
+	}
+	if a := attachmentsAt(t, cat, lib.ID, book); a != nil {
+		t.Fatalf("attachments = %+v, want none (librivox.json is not read)", a)
+	}
+	var scanErr string
+	if err := db.QueryRowContext(ctx, `SELECT scan_error FROM books WHERE library_id = ? AND rel_path = ?`, lib.ID, book).Scan(&scanErr); err != nil || scanErr != "" {
+		t.Fatalf("scan_error = %q (%v)", scanErr, err)
+	}
+	before := indexedAt(t, db, lib.ID, book)
+	res, err := scanner.Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Added+res.Updated+res.Removed != 0 || indexedAt(t, db, lib.ID, book) != before {
+		t.Fatalf("a rescan changed something: %+v", res)
+	}
+}

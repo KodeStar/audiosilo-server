@@ -685,6 +685,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeCancel)))
 	mux.Handle("GET /api/v1/admin/bridge/estimate", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeEstimate)))
 
+	// Add from LibriVox (LibriVox L6, handlers_librivox.go): a LibriVox work
+	// search and a work's recordings from the community metadata, and the
+	// Bridge's librivox.fetch. Admin only, 404 metadata_off while it is off.
+	mux.Handle("GET /api/v1/admin/librivox/search", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxSearch)))
+	mux.Handle("GET /api/v1/admin/librivox/work", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxWork)))
+	mux.Handle("POST /api/v1/admin/librivox/fetch", a.requireAdmin(http.HandlerFunc(a.handleLibrivoxFetch)))
+
 	// The Bridge's own routes: a bridge token only, and a bridge token nowhere
 	// else (requireBridge).
 	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(a.handleBridgeStatus))

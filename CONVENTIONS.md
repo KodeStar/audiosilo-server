@@ -3681,6 +3681,49 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   account card's Sync row says off, on and when it last synced, paused with the account, or stopped since Audible
   refused the account; a scheduled sync's job reads "Syncing places with Audible", scheduled by the server; a title
   on this server has Don't sync / Sync again (`title-actions.tsx`, `canSync`) and a Not synced badge.
+- **Add from LibriVox (LibriVox L6, `librivox.fetch`, `api/handlers_librivox.go`, `bridge/librivox.go`,
+  `catalog/librivox.go`, `meta/librivox.go`)**: an admin adds a LibriVox recording to a books library
+  from the community metadata database (never librivox.org); the Bridge downloads and places it. No
+  module, no toggle and no `/server` flag: the routes are admin only (`requireAdmin`: a listener's
+  session or key 403; no token, bridge, cast and feed tokens 401) and answer 404 `metadata_off`
+  while the lookup is off; the console offers it when the Bridge's `features` list `librivox` (the
+  family of `librivox.fetch`, so an old server never shows it). **Routes**: `GET
+  /admin/librivox/search?q=&lang=&limit=` (metaserve `works/search?source=librivox`, `lang` one
+  tag, `limit` 1-50, default 20, each checked here so metaserve's 400 never reads as an outage:
+  `{results:[{work_id,title,authors,language,release_date}]}`), `GET /admin/librivox/work?id=`
+  (the work's LibriVox recordings only, those with a `librivox_id`, through `fetchWork`, never
+  `pickRecording`: `{work:{id,title,authors,language}, recordings:[{recording_id, librivox_id,
+  narrators, runtime_min, chapter_count, cover_url, url, in_library:[{library_id,path}], job:{id,
+  state}|null}]}`; `in_library` is `catalog.RecordingBooks`, indexed books whose `book_matches`
+  row names that exact, non-empty recording of that work; `job` the newest open fetch of the
+  project in any library, `bridge.Service.OpenLibrivoxFetches`) and `POST /admin/librivox/fetch
+  {library_id, librivox_id}` (202 `{job}`, the open one for the same library and project on a
+  repeat; 400 a malformed body, 404 library not found, 404 `not_found` for a project metaserve
+  doesn't know, 409 `in_library {library_id, path}` when the recording is on this server in any
+  library, 409 `not_book_library`, then the queue's `kind_unavailable` (no Bridge, or one that
+  doesn't run it; an offline one still queues) and `library_not_writable`; 502 metadata down;
+  audited `bridge.job` when queued). **The job**: `librivox.fetch` is internal, `writes`, a books
+  library's, not quiet (a done one is "Added from LibriVox: <title>", named by its result's
+  path), no module; params `{librivox_id, work_id, recording_id, library_id}` are the server's,
+  strict, the work and recording resolved at queue time by `lookup?librivox_id=` asked alone
+  (`meta.Service.LibrivoxRecordingOf`; a lookup with no recording is not found, never a work's
+  first recording); deduped per `|<librivox_id>` within the library. The Bridge reads the
+  project's manifest from its own metadata service, places `Author/Title/NN - Section.mp3` and
+  `cover.jpg` through a dot-led staging folder beside it (the scan skips it), writes
+  `.audiosilo/librivox.json` (`{version, librivox_id, work_id, recording_id, archive_id}`, not
+  read here yet: `knownAttachment` skips it, so the book has no attachments and no scan error;
+  `library.TestScannerToleratesLibrivoxFile`), rescans and reports `{library_id, path,
+  librivox_id, files, bytes}`. Failure codes `LibrivoxFetchCodes` (`not_writable`, `exists`,
+  `disk_full`, `not_found`, `archive_unavailable`, `metadata_off`). **Done**
+  (`catalog.FoldLibrivoxFetch` from `OnEnded`, a content write): the result must name the job's
+  own library and project and a book indexed in a books library (else `ErrFetchNotIndexed`,
+  logged); it writes the book's `book_matches` row (`how` accepted, `set_by` the requesting admin,
+  no run, no offered identifiers) through `writeAnchor`, replacing a stale row at that path (the
+  Bridge placed into a vacant folder: a deleted book's leftover) and never another path's; a job
+  whose params name no recording writes nothing. `/meta` then answers the book from its recorded
+  match (LibriVox L5) with no change. Known limits: a fold lost between the job's commit and the
+  fold (a crash), and Clear community matches, drop the identity until the server reads
+  `librivox.json` (a follow-up). **Console**: Library > LibriVox (`features/librivox/`).
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
   zero audio files while books are still indexed. This protects the index - and
