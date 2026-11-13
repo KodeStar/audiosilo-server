@@ -37,7 +37,7 @@ export function bridgeNote(
   return status?.online ? undefined : 'offline';
 }
 
-/** The failure codes a librivox.fetch may name (bridge.LibrivoxFetchCodes). */
+/** The failure codes a librivox.fetch may name (the Bridge's). */
 export const FETCH_CODES = [
   'not_writable',
   'exists',
@@ -50,7 +50,7 @@ export const FETCH_CODES = [
 /**
  * The i18n key of a librivox.fetch's known failure code, else undefined: a
  * park's code, else the result's code, else an error that starts with one
- * ("exists: ..."), as the server reads it (bridge.LibrivoxFetchCode).
+ * ("exists: ...").
  */
 export function fetchReason(
   job: Pick<BridgeJob, 'kind' | 'state' | 'progress' | 'result' | 'error'>,

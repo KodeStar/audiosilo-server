@@ -3713,8 +3713,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `.audiosilo/librivox.json` (`{version, librivox_id, work_id, recording_id, archive_id}`, not
   read here yet: `knownAttachment` skips it, so the book has no attachments and no scan error;
   `library.TestScannerToleratesLibrivoxFile`), rescans and reports `{library_id, path,
-  librivox_id, files, bytes}`. Failure codes `LibrivoxFetchCodes` (`not_writable`, `exists`,
-  `disk_full`, `not_found`, `archive_unavailable`, `metadata_off`). **Done**
+  librivox_id, files, bytes}`. Failure codes (the Bridge's; the console words them, `FETCH_CODES` in
+  `features/librivox/librivox-model.ts`): `not_writable`, `exists`, `disk_full`, `not_found`,
+  `archive_unavailable`, `metadata_off`. **Done**
   (`catalog.FoldLibrivoxFetch` from `OnEnded`, a content write): the result must name the job's
   own library and project and a book indexed in a books library (else `ErrFetchNotIndexed`,
   logged); it writes the book's `book_matches` row (`how` accepted, `set_by` the requesting admin,

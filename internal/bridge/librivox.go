@@ -103,33 +103,6 @@ func LibrivoxFetchOf(j Job) (p LibrivoxFetchParams, r LibrivoxFetchResult, err e
 	return p, r, err
 }
 
-// The librivox.fetch failure codes the console names (the Bridge's).
-const (
-	LibrivoxNotWritable        = "not_writable"
-	LibrivoxExists             = "exists"
-	LibrivoxDiskFull           = "disk_full"
-	LibrivoxNotFound           = "not_found"
-	LibrivoxArchiveUnavailable = "archive_unavailable"
-	LibrivoxMetadataOff        = "metadata_off"
-)
-
-// LibrivoxFetchCodes are the codes a librivox.fetch failure may name.
-var LibrivoxFetchCodes = []string{LibrivoxNotWritable, LibrivoxExists, LibrivoxDiskFull, LibrivoxNotFound,
-	LibrivoxArchiveUnavailable, LibrivoxMetadataOff}
-
-// LibrivoxFetchCode is the code an ended or parked librivox.fetch names, ""
-// for none: a park's code, else the result's "code", else an error that starts
-// with one of LibrivoxFetchCodes. Cleaned and bounded.
-func LibrivoxFetchCode(j Job) string {
-	switch j.State {
-	case StateNeedsAttention:
-		return j.ParkCode()
-	case StateFailed, StateCancelled:
-		return failureCode(j, LibrivoxFetchCodes)
-	}
-	return ""
-}
-
 // OpenLibrivoxFetches are the open librivox.fetch jobs of the projects ids,
 // in any library, by project: the newest one of each.
 func (s *Service) OpenLibrivoxFetches(ctx context.Context, ids []int) (map[int]*Job, error) {

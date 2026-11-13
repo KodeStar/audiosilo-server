@@ -80,22 +80,3 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 		}
 	}
 }
-
-// A failed fetch's code: the result's, else a coded error; a park's code.
-func TestLibrivoxFetchCode(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		j    Job
-		want string
-	}{
-		{Job{State: StateFailed, Result: json.RawMessage(`{"code":"exists","message":"taken"}`)}, "exists"},
-		{Job{State: StateFailed, Error: "archive_unavailable: archive.org answered 503"}, "archive_unavailable"},
-		{Job{State: StateFailed, Error: "something else"}, ""},
-		{Job{State: StateNeedsAttention, Progress: json.RawMessage(`{"park":{"code":"disk_full"}}`)}, "disk_full"},
-		{Job{State: StateDone, Result: json.RawMessage(`{"code":"exists"}`)}, ""},
-	} {
-		if got := LibrivoxFetchCode(tc.j); got != tc.want {
-			t.Errorf("%+v: %q, want %q", tc.j, got, tc.want)
-		}
-	}
-}
