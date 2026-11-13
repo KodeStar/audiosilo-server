@@ -83,7 +83,7 @@ func LibrivoxFetch(p LibrivoxFetchParams, requestedBy int64) NewJob {
 
 // LibrivoxFetchResult is a done librivox.fetch's result: the placed book's
 // indexed path (as the Bridge's rescan answered it), the project, and how many
-// section files and bytes were written.
+// files and bytes the book's folder holds (the sections and the cover).
 type LibrivoxFetchResult struct {
 	LibraryID  int64  `json:"library_id"`
 	Path       string `json:"path"`
