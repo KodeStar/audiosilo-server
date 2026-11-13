@@ -7,7 +7,7 @@ import {
   KIND_READALONG,
   parkKey,
 } from '@/features/bridge/generate-model';
-import { LIBRIVOX_KIND } from '@/features/librivox/librivox-model';
+import { LIBRIVOX_KIND, fetchParkKey } from '@/features/librivox/librivox-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -212,7 +212,10 @@ function describeBridgeJob(
     const code = str(d.code);
     return {
       title: { key: 'events.bridge_job_failed.attention', values: { name } },
-      body: code ? { key: parkKey(code), values: { code } } : detailBody,
+      // A LibriVox fetch's park codes have words of their own.
+      body: code
+        ? { key: fetchParkKey(jobKind, code) ?? parkKey(code), values: { code } }
+        : detailBody,
       tone: 'warn',
       link,
     };

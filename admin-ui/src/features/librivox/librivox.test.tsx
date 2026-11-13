@@ -20,6 +20,7 @@ import {
   FETCH_CODES,
   addBlock,
   bridgeNote,
+  fetchParkKey,
   fetchReason,
   jobGone,
   jobPollMs,
@@ -165,11 +166,14 @@ describe('librivox model', () => {
     expect(jobPollMs(job({ state: 'done' }))).toBe(false);
   });
 
-  it('tells a job that is gone from one that could not be read', () => {
+  it('tells a job that is gone from one that could not be read, and words a park code', () => {
     expect(jobGone(new ApiError(404, 'job not found'))).toBe(true);
     expect(jobGone(new ApiError(502, 'bad gateway'))).toBe(false);
     expect(jobGone(new Error('offline'))).toBe(false);
     expect(jobGone(null)).toBe(false);
+    expect(fetchParkKey('librivox.fetch', 'not_writable')).toBe('librivox.code.not_writable');
+    expect(fetchParkKey('librivox.fetch', 'odd')).toBeUndefined();
+    expect(fetchParkKey('audible.import', 'not_writable')).toBeUndefined();
   });
 });
 

@@ -98,3 +98,10 @@ export function jobGone(err: unknown): boolean {
  * first answer can still miss it.
  */
 export const DONE_RECHECK_MS = 2000;
+
+/** The i18n key of a known park code of a librivox.fetch, else undefined (the bell's wording). */
+export function fetchParkKey(kind: string, code: string): string | undefined {
+  return kind === LIBRIVOX_KIND && (FETCH_CODES as readonly string[]).includes(code)
+    ? `librivox.code.${code}`
+    : undefined;
+}
