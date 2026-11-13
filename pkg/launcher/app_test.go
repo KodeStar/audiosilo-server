@@ -373,6 +373,16 @@ func TestRunRefusesAnUnwritableDataFolder(t *testing.T) {
 		t.Fatal("a config was written before the check")
 	}
 
+	// A read-only config that names no server_id can't take the one minted for it.
+	noID := t.TempDir()
+	if err := os.WriteFile(config.Path(noID), []byte("bind: 127.0.0.1:0\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: noID, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the data folder isn't usable: the server can't write to "+config.Path(noID)+": permission denied. The server runs as user") {
+		t.Fatalf("read-only config without a server_id: err = %v", err)
+	}
+
 	// A config the server may not read is named the same way.
 	locked := t.TempDir()
 	if err := os.WriteFile(config.Path(locked), []byte("bind: 127.0.0.1:0\n"), 0o200); err != nil {

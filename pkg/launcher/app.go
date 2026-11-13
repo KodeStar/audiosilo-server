@@ -65,8 +65,9 @@ type Options struct {
 
 // dataFiles are the files in the data folder the server opens to write at
 // start-up: the start checks each that exists. Not config.yaml: a read-only one
-// (mounted so, or edited as root) starts, as before, and only a setting saved
-// from the console fails.
+// (mounted so, or edited as root) starts, as before, when it names the server_id
+// (one minted at start has to be saved), and only a setting saved from the
+// console fails.
 var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
 
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
@@ -165,7 +166,10 @@ func Run(ctx context.Context, opts Options) error {
 	// just minted a server_id for an install that predates it.
 	if firstRun || mintedServerID {
 		if err := cfg.Save(); err != nil {
-			return err
+			// A read-only config.yaml starts only when it already names the
+			// server_id: say which file refused the write (and, when the system
+			// refused permission, the fix).
+			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
 		}
 	}
 
