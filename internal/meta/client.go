@@ -335,6 +335,20 @@ type upstreamRecording struct {
 	ChapterCount int            `json:"chapter_count"`
 	ASIN         []upstreamASIN `json:"asin"`
 	ISBN         []string       `json:"isbn"`
+	// LibrivoxID is the LibriVox project id this recording IS, omitted (0) on
+	// every other recording, and Links where it is published (pkg/query
+	// RecordingDetail). Links is omitted when a recording states none, but is
+	// not LibriVox's alone (a store recording's carries its product page), so
+	// only LibrivoxID says a recording is a LibriVox one.
+	LibrivoxID int                    `json:"librivox_id"`
+	Links      upstreamRecordingLinks `json:"links"`
+}
+
+// upstreamRecordingLinks is the part of a recording's links the server reads:
+// the LibriVox catalogue page and the zip of its files (model.RecordingLinks).
+type upstreamRecordingLinks struct {
+	Librivox string `json:"librivox"`
+	Zip      string `json:"zip"`
 }
 
 // upstreamASIN is one of a recording's ASINs; Audible ASINs are per marketplace.

@@ -512,7 +512,7 @@
   "settings.description": "Come si comporta questo server. Ogni impostazione indica se si applica subito o dopo un riavvio.",
   "settings.error": "Impossibile caricare le impostazioni",
   "settings.metadata.title": "Metadati della community",
-  "settings.metadata.description": "Descrizioni, serie, personaggi e riassunti dal servizio di metadati della community. I player inviano solo l'ASIN o l'ISBN di un libro; l'associazione invia anche titolo, autore e serie come li indicano tag e cartelle, durata, narratori e lingua, e qualsiasi ASIN o ISBN nei suoi tag. Mai chi sta ascoltando.",
+  "settings.metadata.description": "Descrizioni, serie, personaggi e riassunti dal servizio di metadati della community. I player inviano solo l'ASIN o l'ISBN di un libro, o la voce della community a cui è stato associato; l'associazione invia anche titolo, autore e serie come li indicano tag e cartelle, durata, narratori e lingua, e qualsiasi ASIN o ISBN nei suoi tag. Mai chi sta ascoltando.",
   "settings.metadata.toggle": "Cerca i metadati della community",
   "settings.metadata.toggleBody": "I lettori mostrano i dettagli aggiuntivi solo finché questa opzione è attiva. Disattivarla blocca ogni richiesta in uscita.",
   "settings.metadata.unavailable": "Nessun servizio di metadati configurato",

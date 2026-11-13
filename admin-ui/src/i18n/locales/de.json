@@ -492,7 +492,7 @@
   "settings.description": "Wie sich dieser Server verhält. Jede Einstellung zeigt, ob sie sofort oder nach einem Neustart gilt.",
   "settings.error": "Die Einstellungen konnten nicht geladen werden",
   "settings.metadata.title": "Community-Metadaten",
-  "settings.metadata.description": "Beschreibungen, Reihen, Figuren und Zusammenfassungen vom Community-Metadatendienst. Player senden nur die ASIN oder ISBN eines Buchs; beim Zuordnen gehen auch Titel, Autor und Reihe mit, wie Tags und Ordnernamen sie angeben, dazu Länge, Sprecher und Sprache sowie eine ASIN oder ISBN aus seinen Tags. Nie, wer zuhört.",
+  "settings.metadata.description": "Beschreibungen, Reihen, Figuren und Zusammenfassungen vom Community-Metadatendienst. Player senden nur die ASIN oder ISBN eines Buchs oder den Community-Eintrag, dem es zugeordnet wurde; beim Zuordnen gehen auch Titel, Autor und Reihe mit, wie Tags und Ordnernamen sie angeben, dazu Länge, Sprecher und Sprache sowie eine ASIN oder ISBN aus seinen Tags. Nie, wer zuhört.",
   "settings.metadata.toggle": "Community-Metadaten abrufen",
   "settings.metadata.toggleBody": "Player zeigen die zusätzlichen Details nur, solange dies an ist. Ausschalten stoppt jede ausgehende Anfrage.",
   "settings.metadata.unavailable": "Kein Metadatendienst eingerichtet",

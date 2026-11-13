@@ -289,8 +289,15 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
   or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
-  transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
-  false, so clients hide the UI); no asin/isbn or no upstream match -> `200
+  transport-only. **From the recorded match** (LibriVox L5): a book with no asin/isbn, or whose
+  identifier upstream doesn't know (`ErrNotFound`), answers from its `book_matches` row
+  (`catalog.BookMatchAt`, `bookEnvelope`) through `meta.Service.EnrichMatch` (works/{id} via
+  `workDetail`, `fetchWork`'s read without its `workSem` slot (the id comes from a book the server
+  holds, as `compose`'s), the recording it names treated as a lookup-named one, no lookup), cached
+  exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
+  `url.PathEscape`d); a book its identifiers match never reads its match. Degradation: disabled ->
+  404 (and the `metadata` capability is false, so clients hide the UI); no asin/isbn match and no
+  recorded match -> `200
   {"matched": false}` (with a `work` of the book's own when the Bridge generated
   characters, recaps or a description for it: `meta.Answer`); upstream unreachable -> 502, unless
   the book has generated content (this server's own), answered as unmatched with
@@ -455,7 +462,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   COMMUNITY content has characters/recaps/recap_summary/community_description:
   `carriesCommunityContent`; generated content, laid in after it by
   `meta.Answer`, never claims the credit); `MetaRecording`
-  carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
+  carries `chapter_count` and, on a LibriVox recording only (`librivox_id > 0`), `librivox`
+  `{id, url, zip_url}` (`librivoxOf`: metaserve's `links.librivox`/`links.zip`, each kept only
+  as an absolute http(s) URL, never built from the id; LibriVox L5).
+  `Service.CachedWorkID` answers an identifier's work id
   from the cache alone: memory, else its enrichment's stored row, fresh or stale
   (never the upstream), so placement does not flip with a restart or an eviction.
   **Owned entries (`local`)**: every rail entry, main view and each
@@ -1757,8 +1767,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   **Recorded community match** (LibraForge E6, server#320, `0069` `book_matches`: `library_id, path,
   work_id, recording_id, how (auto|accepted), run_id, set_by, set_at`, PK `(library_id, path)`, no FK to
   the index or the runs): the work (and recording) a book was matched to, whether or not the match gave
-  it an ASIN or ISBN. Written only by a community edit, in its own transaction (`catalog.BookEdit.Match`,
-  `MatchAnchor`; `EditBooks` refuses it): the match dialog's
+  it an ASIN or ISBN. `/meta` answers from it when the book's identifiers don't match
+  (`EnrichMatch`, see Community metadata lookup). Written only by a community edit, in its own
+  transaction (`catalog.BookEdit.Match`, `MatchAnchor`; `EditBooks` refuses it): the match dialog's
   accept (`PATCH .../book` `match: {work_id, recording_id}` with the ticked fields, or alone for a book
   with no ASIN or ISBN whose pick isn't its recorded match; the dialog starts from the recorded match
   when the search lists it; how `accepted`; refused in a bulk edit) and an apply (`Writes.Anchor`, which `Plan` sets under every
@@ -1802,9 +1813,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   facet, Health's Not matched (so `UnmatchedBooks`, a run's books), Activity's `identified` (the wire
   name stays), the series' naming and a refresh's `MatchedBooks`. What needs an identifier tests
   asin/isbn itself and stays identifier-only: community chapters, the unknown-ASIN report, upcoming,
-  a repick (`CommunityASINBooks`), the Bridge's estimate, the player's `/meta` (identifier-keyed: a
-  store-listing book shows no community content in the player yet) and the console's chapter check,
-  Series rail and Suggest corrections. Path-keyed state: a move carries it with the book's edits as one
+  a repick (`CommunityASINBooks`), the Bridge's estimate, `/next`'s community rail and the console's chapter check,
+  Series rail and Suggest corrections. `/meta` reads the row when the book has no identifier or its
+  lookup is a not-found (`meta.Service.EnrichMatch`, see Community metadata lookup). Path-keyed state: a move carries it with the book's edits as one
   set, a join copies the first part's, a rescan or rebuild keeps it, `ClearCommunityMatches` drops it
   (counted in `books`); the book page carries it as `community_match {work_id, recording_id, how,
   matched_at, web_url}` (omitted when none), a review's change as `match` (the console lists it when no

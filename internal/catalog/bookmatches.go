@@ -140,6 +140,13 @@ func writeAnchor(ctx context.Context, tx *sql.Tx, ref Ref, a, was *MatchAnchor, 
 	return err
 }
 
+// BookMatchAt is the recorded community match of the book at (libraryID,
+// path), nil when it has none (/meta's fallback for a book its identifiers
+// don't match).
+func (c *Catalog) BookMatchAt(ctx context.Context, libraryID int64, path string) (*BookMatch, error) {
+	return bookAnchor(ctx, c.db, libraryID, path)
+}
+
 // bookAnchor reads the anchor at (libraryID, path), nil when it has none.
 func bookAnchor(ctx context.Context, q querier, libraryID int64, path string) (*BookMatch, error) {
 	var m BookMatch

@@ -24,7 +24,7 @@ const cacheCap = 2048
 // maxWorkEntries bounds the share of the cache the work key space may occupy.
 // The work id is the ONLY freely enumerable cache key on this feature (any
 // signed-in caller picks it: GET /meta/work?id=), so without a per-key-space
-// quota a flood of distinct ids would evict every enrichment entry (a:/i:) and
+// quota a flood of distinct ids would evict every enrichment entry (a:/i:/m:) and
 // turn each book view back into a full upstream fan-out. A few hundred entries
 // comfortably covers a reader walking a series' rails, while leaving the bulk of
 // cacheCap to the enrichment key spaces.
@@ -49,15 +49,19 @@ const maxLookupEntries = 1024
 const maxSeriesEntries = 256
 
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
-// asin/isbn enrichment, a work-id fetch, an identifier's lookup and a series'
-// facts - can never read each other's entries. Every key in the cache is minted through
-// keyspace.key, so these prefixes are declared in exactly one place.
+// asin/isbn enrichment, a recorded match's enrichment, a work-id fetch, an
+// identifier's lookup and a series' facts - can never read each other's
+// entries. Every key in the cache is minted through keyspace.key, so these
+// prefixes are declared in exactly one place.
 type keyspace string
 
 const (
 	nsASIN keyspace = "a:"
 	nsISBN keyspace = "i:"
 	nsWork keyspace = "w:"
+	// nsMatch holds a recorded community match's enrichment (EnrichMatch),
+	// keyed by its work and recording ids (matchKey).
+	nsMatch keyspace = "m:"
 	// nsLookup holds an identifier's lookup answer, keyed by its enrichment key
 	// ("l:a:<asin>" / "l:i:<isbn>").
 	nsLookup keyspace = "l:"

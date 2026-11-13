@@ -195,6 +195,19 @@ type MetaRecording struct {
 	CoverURL    string          `json:"cover_url,omitempty"`
 	// ChapterCount is the recording's chapter count; omitted when 0/unknown.
 	ChapterCount int `json:"chapter_count,omitempty"`
+	// Librivox is set only on a LibriVox recording (see librivoxOf). Additive
+	// (LibriVox L5).
+	Librivox *MetaLibrivox `json:"librivox,omitempty"`
+}
+
+// MetaLibrivox is where a LibriVox recording is published: its project id, its
+// catalogue page and the zip of its files. URL and ZipURL are metaserve's own
+// links, each kept only when it is an absolute http(s) URL; neither is ever
+// built from the id (LibriVox's pages are slug-based).
+type MetaLibrivox struct {
+	ID     int    `json:"id"`
+	URL    string `json:"url,omitempty"`
+	ZipURL string `json:"zip_url,omitempty"`
 }
 
 // MetaSeriesWork is one entry of a series rail. It carries its own web_url so the
@@ -353,6 +366,49 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	if key == "" {
 		return nil, ErrNotFound
 	}
+	return s.enrich(ctx, key, func(cctx context.Context) (*Enrichment, bool, error) {
+		return s.compose(cctx, asin, isbn)
+	})
+}
+
+// EnrichMatch composes the enrichment of a book's recorded community match
+// (catalog book_matches): workID and the recording it names, recordingID ("" for
+// none, which picks as a lookup without one would). The work comes from
+// works/{id} (workDetail; mirror mode answers it from the local copy like every
+// other request), and recordingID is treated as a lookup-named recording: it is
+// the admin's match, not a guess. Like compose's own work read it takes no
+// workSem slot: the id comes from a book this server holds, not from a caller,
+// and a queue of caller-chosen reads (GET /meta/work, the match dialog) must not
+// be able to spend a player's compose budget and leave a cached failure behind.
+//
+// It is cached and returned exactly as Enrich's answer (the shared enrich), in
+// its own key space (matchKey), so it never collides with an identifier's. A
+// work unknown upstream is ErrNotFound, a cached "no match".
+func (s *Service) EnrichMatch(ctx context.Context, workID, recordingID string) (*Enrichment, error) {
+	workID, recordingID = strings.TrimSpace(workID), strings.TrimSpace(recordingID)
+	if workID == "" {
+		return nil, ErrNotFound
+	}
+	return s.enrich(ctx, matchKey(workID, recordingID), func(cctx context.Context) (*Enrichment, bool, error) {
+		detail, err := s.workDetail(cctx, workID)
+		if err != nil {
+			return nil, false, err
+		}
+		env, complete := s.composeWork(cctx, detail, recordingID)
+		return env, complete, nil
+	})
+}
+
+// matchKey mints EnrichMatch's cache key: the work and recording ids, each
+// path-escaped so the "/" between them can't be part of either.
+func matchKey(workID, recordingID string) string {
+	return nsMatch.key(url.PathEscape(workID) + "/" + url.PathEscape(recordingID))
+}
+
+// enrich is Enrich's and EnrichMatch's resolution of one key: memory, then the
+// persistent store, then compose under the fan-out deadline, caching each
+// outcome as Enrich documents.
+func (s *Service) enrich(ctx context.Context, key string, compose func(context.Context) (*Enrichment, bool, error)) (*Enrichment, error) {
 	// A hit resolves to the memoised outcome directly: err is nil for a positive
 	// result, ErrNotFound for a cached "no match", or the cached transport error.
 	if result, hit, err := cacheGet[Enrichment](s.cache, key); hit {
@@ -376,7 +432,7 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	// failure below, so a degraded upstream is not re-hammered per cold book.
 	cctx, cancel := context.WithTimeout(ctx, s.composeBudget)
 	defer cancel()
-	result, complete, err := s.compose(cctx, asin, isbn)
+	result, complete, err := compose(cctx)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		if keepStored(s, key, stored, err) {
@@ -482,24 +538,30 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 		}
 		return nil, false, err
 	}
+	env, complete := s.composeWork(ctx, detail, lookup.RecordingID)
+	return env, complete, nil
+}
 
-	rec := pickRecording(detail.Recordings, lookup.RecordingID)
+// composeWork builds the envelope of detail as recording recordingID (the one a
+// lookup named, or a recorded match's; "" for none) with its series rails.
+// complete is false when a rail fetch failed.
+func (s *Service) composeWork(ctx context.Context, detail *upstreamWorkDetail, recordingID string) (*Enrichment, bool) {
+	rec := pickRecording(detail.Recordings, recordingID)
 	// The rails' editions go by the recording the book is known to be: the one
-	// the lookup named (or the work's only one), never pickRecording's guess of
-	// the first, which could hand every book of the work one recording's edition.
+	// named (or the work's only one), never pickRecording's guess of the first,
+	// which could hand every book of the work one recording's edition.
 	recID := ""
-	if rec != nil && (rec.ID == lookup.RecordingID || len(detail.Recordings) == 1) {
+	if rec != nil && (rec.ID == recordingID || len(detail.Recordings) == 1) {
 		recID = rec.ID
 	}
 	rails, complete := s.seriesRails(ctx, detail, recID)
-	env := &Enrichment{
+	return &Enrichment{
 		Matched:   true,
 		Work:      s.toWork(detail),
 		Recording: rec,
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
-	}
-	return env, complete, nil
+	}, complete
 }
 
 // Work fetches a single work document by its metadata-site work id. It is the
@@ -619,9 +681,9 @@ func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
 	}
 }
 
-// fetchWork is one uncached works/{id} GET, bounded by workSlot (only uncached
-// fetches queue there, and a caller that goes away while queued never issues its
-// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+// fetchWork is one uncached works/{id} GET (workDetail), bounded by workSlot
+// (only uncached fetches queue there, and a caller that goes away while queued
+// never issues its GET at all).
 func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
 	release, err := s.workSlot(ctx)
 	if err != nil {
@@ -629,6 +691,13 @@ func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail
 	}
 	// Deferred so a panic can never leak a slot.
 	defer release()
+	return s.workDetail(ctx, id)
+}
+
+// workDetail is one works/{id} GET for an id that was not read off a lookup
+// (a caller's, through fetchWork, or a recorded match's, EnrichMatch).
+// ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+func (s *Service) workDetail(ctx context.Context, id string) (*upstreamWorkDetail, error) {
 	detail, err := s.client.work(ctx, id)
 	if err != nil {
 		return nil, err
@@ -717,7 +786,41 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 		Publisher:    chosen.Publisher,
 		CoverURL:     chosen.CoverURL,
 		ChapterCount: chosen.ChapterCount,
+		Librivox:     librivoxOf(chosen),
 	}
+}
+
+// librivoxOf is a recording's LibriVox block: nil unless it names a LibriVox
+// project, with each link dropped unless it is an absolute http(s) URL, so a
+// client can open it as it stands.
+func librivoxOf(rec *upstreamRecording) *MetaLibrivox {
+	if rec.LibrivoxID <= 0 {
+		return nil
+	}
+	return &MetaLibrivox{
+		ID:     rec.LibrivoxID,
+		URL:    absoluteHTTPURL(rec.Links.Librivox),
+		ZipURL: absoluteHTTPURL(rec.Links.Zip),
+	}
+}
+
+// absoluteHTTPURL returns raw when it is an absolute http or https URL with a
+// host (httpURL), else "".
+func absoluteHTTPURL(raw string) string {
+	if httpURL(raw) == nil {
+		return ""
+	}
+	return raw
+}
+
+// httpURL is raw parsed when it is an absolute http or https URL with a host,
+// else nil (a relative path, javascript:, data: and the like).
+func httpURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil
+	}
+	return u
 }
 
 // seriesRails builds one rail per ordering FAMILY the work belongs to (capped

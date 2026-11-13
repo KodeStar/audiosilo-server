@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -32,10 +33,15 @@ type mockMetaserve struct {
 	// (without it the route 404s, as on a metaserve that predates it).
 	chapters string
 	// series, when set, is the body of series/{id} (else the two-book Mars rail).
-	series   string
+	series string
+	// work, when set, is the body of works/the-martian (else martianWorkBody).
+	work     string
 	mu       sync.Mutex
 	gotMatch url.Values
 }
+
+// martianWorkBody is the mock's works/the-martian answer.
+const martianWorkBody = `{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"asin":[{"region":"us","asin":"B00B5HZGUG"},{"region":"uk","asin":"B00B5HZGUG"}],"isbn":["9780553418026"],"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`
 
 func (m *mockMetaserve) handler() http.Handler {
 	mux := http.NewServeMux()
@@ -70,7 +76,11 @@ func (m *mockMetaserve) handler() http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"asin":[{"region":"us","asin":"B00B5HZGUG"},{"region":"uk","asin":"B00B5HZGUG"}],"isbn":["9780553418026"],"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`))
+		body := m.work
+		if body == "" {
+			body = martianWorkBody
+		}
+		_, _ = w.Write([]byte(body))
 	})
 	// Search knows one work; a "down" query is an outage, "nothing" no hits.
 	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
@@ -681,4 +691,158 @@ func TestMetaPersistentCache(t *testing.T) {
 	if err != nil || row == nil || !strings.Contains(string(row.Payload), `"the-martian"`) || row.Source != e.cfg.Metadata.BaseURL {
 		t.Fatalf("meta_cache row = %+v, %v", row, err)
 	}
+}
+
+// TestMetaLibrivoxRecording: a LibriVox recording's project id and links reach
+// the recording of GET /libraries/{id}/meta as librivox {id, url, zip_url}; a
+// recording that is not one carries no librivox key at all.
+func TestMetaLibrivoxRecording(t *testing.T) {
+	t.Parallel()
+	meta := func(t *testing.T, work string) string {
+		t.Helper()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: work})
+		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+		tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+		path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("Andy Weir/The Martian")
+		resp, body := e.do(t, "GET", path, tok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("meta = %d %s", resp.StatusCode, body)
+		}
+		return body
+	}
+	t.Run("librivox", func(t *testing.T) {
+		t.Parallel()
+		lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
+			`"id":"rec1","librivox_id":47,"archive_id":"martian_lv","links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/","zip":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3&file=/martian_lv.zip","rss":"https://librivox.org/rss/47"},`, 1)
+		if lv == martianWorkBody {
+			t.Fatal("fixture replace did not apply")
+		}
+		body := meta(t, lv)
+		want := `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/","zip_url":"https://archive.org/compress/martian_lv/formats=64KBPS%20MP3\u0026file=/martian_lv.zip"}`
+		if !strings.Contains(body, want) {
+			t.Fatalf("meta missing %s: %s", want, body)
+		}
+		if strings.Contains(body, "archive_id") || strings.Contains(body, "librivox.org/rss") {
+			t.Fatalf("only id, url and zip_url are passed through: %s", body)
+		}
+	})
+	t.Run("retail", func(t *testing.T) {
+		t.Parallel()
+		if body := meta(t, martianWorkBody); strings.Contains(body, `"librivox"`) {
+			t.Fatalf("a retail recording carried a librivox block: %s", body)
+		}
+	})
+}
+
+// TestMetaRecordedMatch: a book its identifiers don't match (it has none, or
+// upstream doesn't know them) answers /meta from its recorded community match
+// (the console's), LibriVox block included; one with no match stays unmatched;
+// a book its ASIN matches ignores its recorded match; and the route's scope
+// check still comes first.
+func TestMetaRecordedMatch(t *testing.T) {
+	t.Parallel()
+	lv := strings.Replace(martianWorkBody, `"id":"rec1",`,
+		`"id":"rec1","librivox_id":47,"links":{"librivox":"https://librivox.org/the-martian-by-andy-weir/"},`, 1)
+	if lv == martianWorkBody {
+		t.Fatal("fixture replace did not apply")
+	}
+	anchor := func(t *testing.T, e *testEnv, libID int64, path, work, recording string) {
+		t.Helper()
+		if err := e.cat.EditBook(context.Background(), libID, path, catalog.BookEdit{
+			Match: &catalog.MatchAnchor{WorkID: work, RecordingID: recording}, Source: catalog.SourceCommunity,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(t *testing.T, e *testEnv, libID int64, path string) string {
+		t.Helper()
+		return getGenerated(t, e, libID, path, "", adminSession(t, e)).raw
+	}
+
+	t.Run("no ids, recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		body := get(t, e, libID, "LibriVox/The Martian")
+		for _, want := range []string{`"matched":true`, `"recording":{"id":"rec1"`, `"librivox":{"id":47,"url":"https://librivox.org/the-martian-by-andy-weir/"}`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("meta missing %s: %s", want, body)
+			}
+		}
+	})
+	t.Run("no ids, no match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"matched":false`) {
+			t.Fatalf("meta = %s, want unmatched", body)
+		}
+	})
+	t.Run("unknown ASIN, recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{lookupCode: http.StatusNotFound, work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "B0UNKNOWN")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"librivox":{"id":47`) {
+			t.Fatalf("meta = %s, want the recorded match", body)
+		}
+	})
+	t.Run("cover", func(t *testing.T) {
+		t.Parallel()
+		// /meta/cover reads the same envelope: the match's recording's cover is
+		// handed out (the fetch itself is stubbed to fail: 502, not the 404 of
+		// a cover the envelope doesn't carry), and an unmatched book's is not.
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		e.api.fetchCover = func(context.Context, string, int64) ([]byte, error) { return nil, errors.New("no fetch in this test") }
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "LibriVox/Other", Title: "Other", Author: "LibriVox", AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		tok := adminSession(t, e)
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "cover_unavailable") {
+			t.Fatalf("matched book's cover = %d %s, want it handed out (502 cover_unavailable from the stubbed fetch)", resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/Other", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
+		}
+	})
+	t.Run("matched ASIN ignores the recorded match", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{})
+		libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+		// The mock knows no "artemis" work: had the match been asked, the
+		// answer would be unmatched.
+		anchor(t, e, libID, "Andy Weir/The Martian", "artemis", "")
+		if body := get(t, e, libID, "Andy Weir/The Martian"); !strings.Contains(body, `"matched":true,"work":{"id":"the-martian"`) {
+			t.Fatalf("meta = %s, want the ASIN's work", body)
+		}
+	})
+	t.Run("scope", func(t *testing.T) {
+		t.Parallel()
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Other/Secret", Title: "Secret", Author: "Other", AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+		anchor(t, e, libID, "Other/Secret", "the-martian", "rec1")
+		kid, tok := newUserWithSession(t, e, "kid", false)
+		share, err := e.cat.CreateShare(context.Background(), catalog.Share{Name: "LibriVox only",
+			Paths: []catalog.PathRule{{LibraryID: libID, Path: "LibriVox"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.cat.GrantShare(context.Background(), kid, share.ID); err != nil {
+			t.Fatal(err)
+		}
+		libPath := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path="
+		if resp, body := e.do(t, "GET", libPath+escape("LibriVox/The Martian"), tok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"librivox"`) {
+			t.Fatalf("in-scope meta = %d %s, want the recorded match", resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "GET", libPath+escape("Other/Secret"), tok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("out-of-scope meta = %d %s, want 403", resp.StatusCode, body)
+		}
+	})
 }

@@ -492,7 +492,7 @@
   "settings.description": "How this server behaves. Each setting says whether it applies at once or after a restart.",
   "settings.error": "Settings couldn't load",
   "settings.metadata.title": "Community metadata",
-  "settings.metadata.description": "Descriptions, series, characters and recaps from the community metadata service. Players send only a book's ASIN or ISBN; matching also sends its title, author and series as its tags and folder names give them, its length, narrators and language, and any ASIN or ISBN in its tags. Never who is listening.",
+  "settings.metadata.description": "Descriptions, series, characters and recaps from the community metadata service. Players send only a book's ASIN or ISBN, or the community entry it was matched to; matching also sends its title, author and series as its tags and folder names give them, its length, narrators and language, and any ASIN or ISBN in its tags. Never who is listening.",
   "settings.metadata.toggle": "Look up community metadata",
   "settings.metadata.toggleBody": "Players show the extra details only while this is on. Turning it off stops every outbound request.",
   "settings.metadata.unavailable": "No metadata service is configured",

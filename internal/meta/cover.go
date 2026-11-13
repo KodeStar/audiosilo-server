@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
 	"time"
 
@@ -74,8 +73,8 @@ func newCoverClient(allowed func(netip.AddrPort) bool) *http.Client {
 // non-200 answer, ctx ending while it waited for a fetch slot). What the bytes are
 // is the caller's to check.
 func (s *Service) FetchCover(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || len(rawURL) > maxCoverURLLen {
+	u := httpURL(rawURL)
+	if u == nil || len(rawURL) > maxCoverURLLen {
 		return nil, ErrCoverURL
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

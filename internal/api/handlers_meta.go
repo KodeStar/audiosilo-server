@@ -12,15 +12,16 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// handleMeta resolves a book's asin/isbn against the community metadata API and
-// returns a composed enrichment envelope. Transport-only: scope + path resolution
+// handleMeta resolves a book's asin/isbn (else its recorded community match, see
+// bookEnvelope) against the community metadata API and returns a composed
+// enrichment envelope. Transport-only: scope + path resolution
 // reuse authorizedPath/bookForPath (exactly like item), the composition and cache
 // live in internal/meta.
 //
 // Responses:
 //   - metadata disabled: 404 (clients gate on the `metadata` capability, so they
 //     never request this).
-//   - book has neither asin nor isbn, or the lookup found no match: 200 {"matched": false}.
+//   - neither the book's asin/isbn nor its recorded match (if any) matches: 200 {"matched": false}.
 //   - upstream unreachable/error: 502, unless the book has generated content
 //     (below), which is this server's own: then it answers as unmatched with it.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
@@ -38,8 +39,9 @@ import (
 // A work's community positions are numbered on its own scale (position_scale); on a
 // book split finer than that, they are answered translated onto this book's chapters
 // (meta.OnRecording), per request and never cached, so every client's gate
-// and spoilers=hide below compare like with like. The cache is keyed by identifier,
-// and two books sharing an ASIN can differ in their chapters.
+// and spoilers=hide below compare like with like. The cache is keyed by identifier
+// (or by the recorded match), and two books sharing an ASIN can differ in their
+// chapters.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -146,11 +148,14 @@ func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.En
 
 // bookEnvelope is the shared start of the routes over a book's /meta envelope
 // (handleMeta, handleMetaCover): the ?path= in the caller's scope, the book at it,
-// and its envelope from the shared cache (meta.Service.Enrich). env is nil when
-// the book can't be matched (no ASIN or ISBN, or none upstream), and lookupErr
-// set (logged) when the lookup failed: the caller answers that (a 502, unless it
-// has something of its own to serve). ok is false when it wrote the error
-// (403/404 for the path).
+// and its envelope from the shared cache. The book's ASIN or ISBN answers first
+// (meta.Service.Enrich); a book with neither, or whose identifier upstream does
+// not know, answers from its recorded community match instead (book_matches, the
+// console's match: meta.Service.EnrichMatch), so a LibriVox download, which
+// rarely carries either, still gets its work. env is nil when neither matches,
+// and lookupErr set (logged) when a lookup failed: the caller answers that (a
+// 502, unless it has something of its own to serve). ok is false when it wrote
+// the error (403/404 for the path, 500 when the match can't be read).
 func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book,
 	env *meta.Enrichment, lookupErr error, ok bool) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
@@ -161,10 +166,19 @@ func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog
 	if book, ok = a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book"); !ok {
 		return nil, "", nil, nil, nil, false
 	}
-	if book.ASIN == "" && book.ISBN == "" {
-		return lib, path, book, nil, nil, true
-	}
+	// ErrNotFound too for a book with no identifier.
 	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
+	if errors.Is(err, meta.ErrNotFound) {
+		// Unknown by its identifiers: the console's match, when it has one.
+		m, merr := a.cat.BookMatchAt(r.Context(), lib.ID, book.RelPath)
+		if merr != nil {
+			a.writeCatalogError(w, merr, "load community match for meta failed", "could not load book", "library", lib.ID, "path", path)
+			return nil, "", nil, nil, nil, false
+		}
+		if m != nil {
+			env, err = a.meta.EnrichMatch(r.Context(), m.WorkID, m.RecordingID)
+		}
+	}
 	switch {
 	case errors.Is(err, meta.ErrNotFound):
 		return lib, path, book, nil, nil, true
