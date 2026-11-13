@@ -512,7 +512,7 @@
   "settings.description": "Le comportement de ce serveur. Chaque réglage indique s'il s'applique immédiatement ou après un redémarrage.",
   "settings.error": "Impossible de charger les réglages",
   "settings.metadata.title": "Métadonnées communautaires",
-  "settings.metadata.description": "Descriptions, séries, personnages et résumés issus du service de métadonnées communautaires. Les lecteurs n'envoient que l'ASIN ou l'ISBN d'un livre ; l'association envoie aussi son titre, son auteur et sa série, tels que ses étiquettes et ses dossiers les donnent, sa durée, ses narrateurs et sa langue, ainsi que tout ASIN ou ISBN de ses étiquettes. Jamais qui écoute.",
+  "settings.metadata.description": "Descriptions, séries, personnages et résumés issus du service de métadonnées communautaires. Les lecteurs n'envoient que l'ASIN ou l'ISBN d'un livre, ou l'entrée communautaire à laquelle il a été associé ; l'association envoie aussi son titre, son auteur et sa série, tels que ses étiquettes et ses dossiers les donnent, sa durée, ses narrateurs et sa langue, ainsi que tout ASIN ou ISBN de ses étiquettes. Jamais qui écoute.",
   "settings.metadata.toggle": "Rechercher les métadonnées communautaires",
   "settings.metadata.toggleBody": "Les lecteurs n'affichent les détails supplémentaires que lorsque cette option est activée. La désactiver arrête toute requête sortante.",
   "settings.metadata.unavailable": "Aucun service de métadonnées n'est configuré",

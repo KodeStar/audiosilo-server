@@ -512,7 +512,7 @@
   "settings.description": "Como este servidor se comporta. Cada definição indica se se aplica de imediato ou após um reinício.",
   "settings.error": "Não foi possível carregar as definições",
   "settings.metadata.title": "Metadados da comunidade",
-  "settings.metadata.description": "Descrições, séries, personagens e resumos do serviço de metadados da comunidade. Os leitores enviam apenas o ASIN ou o ISBN de um livro; a associação envia também o título, o autor e a série, tal como as etiquetas e as pastas os indicam, a duração, os narradores e o idioma, e qualquer ASIN ou ISBN das suas etiquetas. Nunca quem está a ouvir.",
+  "settings.metadata.description": "Descrições, séries, personagens e resumos do serviço de metadados da comunidade. Os leitores enviam apenas o ASIN ou o ISBN de um livro, ou a entrada da comunidade a que foi associado; a associação envia também o título, o autor e a série, tal como as etiquetas e as pastas os indicam, a duração, os narradores e o idioma, e qualquer ASIN ou ISBN das suas etiquetas. Nunca quem está a ouvir.",
   "settings.metadata.toggle": "Procurar metadados da comunidade",
   "settings.metadata.toggleBody": "Os leitores só mostram os detalhes extra enquanto isto estiver ativado. Desativar trava todos os pedidos de saída.",
   "settings.metadata.unavailable": "Nenhum serviço de metadados configurado",

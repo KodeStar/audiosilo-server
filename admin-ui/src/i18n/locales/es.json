@@ -512,7 +512,7 @@
   "settings.description": "Cómo se comporta este servidor. Cada ajuste indica si se aplica al instante o tras un reinicio.",
   "settings.error": "No se pudieron cargar los ajustes",
   "settings.metadata.title": "Metadatos de la comunidad",
-  "settings.metadata.description": "Descripciones, series, personajes y resúmenes del servicio de metadatos de la comunidad. Los reproductores solo envían el ASIN o el ISBN de un libro; al asociar también se envían su título, autor y serie, según sus etiquetas y carpetas, su duración, narradores e idioma, y cualquier ASIN o ISBN de sus etiquetas. Nunca quién escucha.",
+  "settings.metadata.description": "Descripciones, series, personajes y resúmenes del servicio de metadatos de la comunidad. Los reproductores solo envían el ASIN o el ISBN de un libro, o la entrada de la comunidad a la que se asoció; al asociar también se envían su título, autor y serie, según sus etiquetas y carpetas, su duración, narradores e idioma, y cualquier ASIN o ISBN de sus etiquetas. Nunca quién escucha.",
   "settings.metadata.toggle": "Consultar metadatos de la comunidad",
   "settings.metadata.toggleBody": "Los reproductores muestran los detalles extra solo mientras esto está activado. Al desactivarlo se detienen todas las solicitudes salientes.",
   "settings.metadata.unavailable": "No hay ningún servicio de metadatos configurado",
