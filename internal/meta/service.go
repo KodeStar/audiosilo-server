@@ -374,9 +374,12 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 // EnrichMatch composes the enrichment of a book's recorded community match
 // (catalog book_matches): workID and the recording it names, recordingID ("" for
 // none, which picks as a lookup without one would). The work comes from
-// works/{id} (fetchWork, as Work and the upcoming job read it; mirror mode
-// answers it from the local copy like every other request), and recordingID is
-// treated as a lookup-named recording: it is the admin's match, not a guess.
+// works/{id} (workDetail; mirror mode answers it from the local copy like every
+// other request), and recordingID is treated as a lookup-named recording: it is
+// the admin's match, not a guess. Like compose's own work read it takes no
+// workSem slot: the id comes from a book this server holds, not from a caller,
+// and a queue of caller-chosen reads (GET /meta/work, the match dialog) must not
+// be able to spend a player's compose budget and leave a cached failure behind.
 //
 // It is cached and returned exactly as Enrich's answer (the shared enrich), in
 // its own key space (matchKey), so it never collides with an identifier's. A
@@ -387,7 +390,7 @@ func (s *Service) EnrichMatch(ctx context.Context, workID, recordingID string) (
 		return nil, ErrNotFound
 	}
 	return s.enrich(ctx, matchKey(workID, recordingID), func(cctx context.Context) (*Enrichment, bool, error) {
-		detail, err := s.fetchWork(cctx, workID)
+		detail, err := s.workDetail(cctx, workID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -678,9 +681,9 @@ func (s *Service) workSlot(ctx context.Context) (release func(), err error) {
 	}
 }
 
-// fetchWork is one uncached works/{id} GET, bounded by workSlot (only uncached
-// fetches queue there, and a caller that goes away while queued never issues its
-// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+// fetchWork is one uncached works/{id} GET (workDetail), bounded by workSlot
+// (only uncached fetches queue there, and a caller that goes away while queued
+// never issues its GET at all).
 func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
 	release, err := s.workSlot(ctx)
 	if err != nil {
@@ -688,6 +691,13 @@ func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail
 	}
 	// Deferred so a panic can never leak a slot.
 	defer release()
+	return s.workDetail(ctx, id)
+}
+
+// workDetail is one works/{id} GET for an id that was not read off a lookup
+// (a caller's, through fetchWork, or a recorded match's, EnrichMatch).
+// ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+func (s *Service) workDetail(ctx context.Context, id string) (*upstreamWorkDetail, error) {
 	detail, err := s.client.work(ctx, id)
 	if err != nil {
 		return nil, err

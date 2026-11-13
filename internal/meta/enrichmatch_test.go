@@ -54,6 +54,24 @@ func TestEnrichMatch(t *testing.T) {
 	}
 }
 
+// TestEnrichMatchTakesNoWorkSlot: a recorded match's work id comes from a book
+// the server holds, as Enrich's, so its read never queues behind the
+// caller-chosen work fetches (workSem): with every slot taken it still answers,
+// where a queued read would run out its compose budget and cache the wait as an
+// upstream failure.
+func TestEnrichMatchTakesNoWorkSlot(t *testing.T) {
+	srv := httptest.NewServer(fullMock().handler())
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	svc.composeBudget = 2 * time.Second
+	for range cap(svc.workSem) {
+		svc.workSem <- struct{}{}
+	}
+	if env, err := svc.EnrichMatch(context.Background(), "the-martian", "rec1"); err != nil || env.Work.ID != "the-martian" {
+		t.Fatalf("with every work slot taken = %+v, %v; want the match", env, err)
+	}
+}
+
 // TestEnrichMatchCached: a second ask is the cache's, in a key space of its
 // own (the same work by ASIN is its own entry), and an unknown work is a cached
 // "no match".

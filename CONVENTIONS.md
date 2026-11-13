@@ -292,8 +292,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   transport-only. **From the recorded match** (LibriVox L5): a book with no asin/isbn, or whose
   identifier upstream doesn't know (`ErrNotFound`), answers from its `book_matches` row
   (`catalog.BookMatchAt`, `bookEnvelope`) through `meta.Service.EnrichMatch` (works/{id} via
-  `fetchWork`, the recording it names treated as a lookup-named one, no lookup), cached exactly as
-  `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
+  `workDetail`, `fetchWork`'s read without its `workSem` slot (the id comes from a book the server
+  holds, as `compose`'s), the recording it names treated as a lookup-named one, no lookup), cached
+  exactly as `Enrich` (shared `enrich`) under its own key space `m:<work id>/<recording id>` (each part
   `url.PathEscape`d); a book its identifiers match never reads its match. Degradation: disabled ->
   404 (and the `metadata` capability is false, so clients hide the UI); no asin/isbn match and no
   recorded match -> `200
