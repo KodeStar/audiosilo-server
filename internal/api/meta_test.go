@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -785,6 +786,26 @@ func TestMetaRecordedMatch(t *testing.T) {
 		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
 		if body := get(t, e, libID, "LibriVox/The Martian"); !strings.Contains(body, `"librivox":{"id":47`) {
 			t.Fatalf("meta = %s, want the recorded match", body)
+		}
+	})
+	t.Run("cover", func(t *testing.T) {
+		t.Parallel()
+		// /meta/cover reads the same envelope: the match's recording's cover is
+		// handed out (the fetch itself is stubbed to fail: 502, not the 404 of
+		// a cover the envelope doesn't carry), and an unmatched book's is not.
+		e := newMetaEnvMock(t, true, &mockMetaserve{work: lv})
+		e.api.fetchCover = func(context.Context, string, int64) ([]byte, error) { return nil, errors.New("no fetch in this test") }
+		libID := seedBook(t, e, "LibriVox/The Martian", "")
+		if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "LibriVox/Other", Title: "Other", Author: "LibriVox", AddedAt: "2020-01-01"}); err != nil {
+			t.Fatal(err)
+		}
+		anchor(t, e, libID, "LibriVox/The Martian", "the-martian", "rec1")
+		tok := adminSession(t, e)
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/The Martian", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "cover_unavailable") {
+			t.Fatalf("matched book's cover = %d %s, want it handed out (502 cover_unavailable from the stubbed fetch)", resp.StatusCode, body)
+		}
+		if resp, body := e.do(t, "GET", metaCoverPath(libID, "LibriVox/Other", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("unmatched book's cover = %d %s, want 404", resp.StatusCode, body)
 		}
 	})
 	t.Run("matched ASIN ignores the recorded match", func(t *testing.T) {
