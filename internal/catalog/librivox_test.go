@@ -156,4 +156,13 @@ func TestRecordingBooks(t *testing.T) {
 			t.Fatalf("RecordingBooks(%q) = %#v, %v, want none", rec, got, err)
 		}
 	}
+	// The work's recordings in one read: each recording's books, a work-level
+	// match under no recording.
+	by, err := c.WorkRecordingBooks(ctx, "w")
+	if err != nil || len(by) != 2 || len(by["lv192"]) != 2 || len(by["lv193"]) != 1 || by["lv193"][0] != (Ref{lib.ID, "A/OtherRec"}) {
+		t.Fatalf("WorkRecordingBooks = %+v, %v", by, err)
+	}
+	if by, err := c.WorkRecordingBooks(ctx, ""); err != nil || by == nil || len(by) != 0 {
+		t.Fatalf("WorkRecordingBooks of no work = %#v, %v", by, err)
+	}
 }

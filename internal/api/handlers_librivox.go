@@ -85,7 +85,7 @@ type librivoxJobRef struct {
 
 // librivoxRecording is one LibriVox recording of GET /admin/librivox/work:
 // the metadata service's, plus the books on this server recorded as it
-// (catalog.RecordingBooks) and its open fetch in any library (null for none).
+// (catalog.WorkRecordingBooks) and its open fetch in any library (null for none).
 type librivoxRecording struct {
 	meta.LibrivoxRecording
 	InLibrary []catalog.Ref   `json:"in_library"`
@@ -130,12 +130,16 @@ func (a *API) handleLibrivoxWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	here, err := a.cat.WorkRecordingBooks(r.Context(), work.Work.ID)
+	if err != nil {
+		a.writeCatalogError(w, err, "librivox work: books failed", "could not read the library")
+		return
+	}
 	recs := make([]librivoxRecording, 0, len(work.Recordings))
 	for _, rec := range work.Recordings {
-		in, err := a.cat.RecordingBooks(r.Context(), work.Work.ID, rec.RecordingID)
-		if err != nil {
-			a.writeCatalogError(w, err, "librivox work: books failed", "could not read the library")
-			return
+		in := here[rec.RecordingID]
+		if in == nil {
+			in = []catalog.Ref{} // the wire's in_library is a list, empty for none
 		}
 		out := librivoxRecording{LibrivoxRecording: rec, InLibrary: in}
 		if j := open[rec.LibrivoxID]; j != nil {

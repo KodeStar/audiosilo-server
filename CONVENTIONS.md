@@ -3694,7 +3694,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the work's LibriVox recordings only, those with a `librivox_id`, through `fetchWork`, never
   `pickRecording`: `{work:{id,title,authors,language}, recordings:[{recording_id, librivox_id,
   narrators, runtime_min, chapter_count, cover_url, url, in_library:[{library_id,path}], job:{id,
-  state}|null}]}`; `in_library` is `catalog.RecordingBooks`, indexed books whose `book_matches`
+  state}|null}]}`; `in_library` is `catalog.WorkRecordingBooks`, indexed books whose `book_matches`
   row names that exact, non-empty recording of that work; `job` the newest open fetch of the
   project in any library, `bridge.Service.OpenLibrivoxFetches`) and `POST /admin/librivox/fetch
   {library_id, librivox_id}` (202 `{job}`, the open one for the same library and project on a

@@ -75,12 +75,43 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 // then path: where a LibriVox recording already is on this server. A
 // work-level match (no recording) is never one.
 func (c *Catalog) RecordingBooks(ctx context.Context, workID, recordingID string) ([]Ref, error) {
-	if workID == "" || recordingID == "" {
+	if recordingID == "" {
 		return []Ref{}, nil
 	}
-	return queryRows(ctx, c.db, func(rows *sql.Rows, r *Ref) error { return rows.Scan(&r.LibraryID, &r.Path) },
-		`SELECT m.library_id, m.path FROM book_matches m
+	by, err := c.WorkRecordingBooks(ctx, workID)
+	if err != nil {
+		return nil, err
+	}
+	if in := by[recordingID]; in != nil {
+		return in, nil
+	}
+	return []Ref{}, nil
+}
+
+// WorkRecordingBooks are RecordingBooks for every recording of work workID,
+// by recording id, in one read (book_matches has no index by work, so a work's
+// recordings are not asked for one at a time). A recording with no book has no
+// entry.
+func (c *Catalog) WorkRecordingBooks(ctx context.Context, workID string) (map[string][]Ref, error) {
+	out := map[string][]Ref{}
+	if workID == "" {
+		return out, nil
+	}
+	type row struct {
+		recording string
+		ref       Ref
+	}
+	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *row) error {
+		return rows.Scan(&r.recording, &r.ref.LibraryID, &r.ref.Path)
+	}, `SELECT m.recording_id, m.library_id, m.path FROM book_matches m
 		   JOIN books b ON b.library_id = m.library_id AND b.rel_path = m.path
-		  WHERE m.work_id = ? AND m.recording_id = ?
-		  ORDER BY m.library_id, m.path`, workID, recordingID)
+		  WHERE m.work_id = ? AND m.recording_id <> ''
+		  ORDER BY m.library_id, m.path`, workID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.recording] = append(out[r.recording], r.ref)
+	}
+	return out, nil
 }
