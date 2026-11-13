@@ -153,14 +153,21 @@ export function showFinishCard(
 
 /**
  * Whether the console sends the admin to the flow: a server that hasn't
- * finished it, once per browser session, from anywhere but the flow itself.
+ * finished it, once per browser session, from the Overview only (a plain visit
+ * to /admin). A deep link (the flow's own links open in a new tab, a bookmark,
+ * a page reloaded) opens the page it names (server#365).
  */
 export function shouldRedirect(
   state: SetupState | undefined,
   pathname: string,
   redirectedThisSession: boolean,
 ): boolean {
-  return !!state && !state.finished && !redirectedThisSession && !isSetupPath(pathname);
+  return !!state && !state.finished && !redirectedThisSession && isHomePath(pathname);
+}
+
+/** The Overview, where a plain visit to /admin lands. */
+export function isHomePath(pathname: string): boolean {
+  return pathname === '/' || pathname === '';
 }
 
 export function isSetupPath(pathname: string): boolean {

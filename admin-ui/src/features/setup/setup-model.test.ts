@@ -203,9 +203,14 @@ describe('the Finish setting up card', () => {
 });
 
 describe('shouldRedirect', () => {
-  it('sends an unfinished server to the flow once a session, from anywhere else', () => {
+  it('sends an unfinished server to the flow once a session, from the Overview', () => {
     expect(shouldRedirect(state(), '/', false)).toBe(true);
-    expect(shouldRedirect(state(), '/library/libraries', false)).toBe(true);
+    expect(shouldRedirect(state(), '', false)).toBe(true);
+  });
+
+  it('never from a deep link (server#365)', () => {
+    expect(shouldRedirect(state(), '/server', false)).toBe(false);
+    expect(shouldRedirect(state(), '/library/libraries', false)).toBe(false);
   });
 
   it('not from the flow itself, not twice, not once finished, not before it loads', () => {
