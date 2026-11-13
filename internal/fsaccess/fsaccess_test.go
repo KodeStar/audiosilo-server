@@ -67,6 +67,11 @@ func TestErrorWording(t *testing.T) {
 	if got := ro.Error(); got != "the server can't write to /backups: read-only file system" {
 		t.Fatalf("got %q", got)
 	}
+	// A rename's two paths are left out, as a PathError's one is.
+	mv := Wrap("/backups", true, &os.LinkError{Op: "rename", Old: "/backups/.a.tmp", New: "/backups/a.db", Err: errors.New("cross-device link")})
+	if got := mv.Error(); got != "the server can't write to /backups: cross-device link" {
+		t.Fatalf("got %q", got)
+	}
 	if Wrap("/x", false, nil) != nil {
 		t.Fatal("nil wrapped as an error")
 	}

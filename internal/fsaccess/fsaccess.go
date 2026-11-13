@@ -57,13 +57,17 @@ func (e *Error) Error() string {
 	return msg
 }
 
-// Cause is the system's own words for err without the absolute path a PathError
-// names ("permission denied", not "open /srv/books/x.mp3: permission denied"):
-// the caller names the path its own way.
+// Cause is the system's own words for err without the absolute paths a PathError
+// or a LinkError (a rename) names ("permission denied", not "open
+// /srv/books/x.mp3: permission denied"): the caller names the path its own way.
 func Cause(err error) string {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		return pe.Err.Error()
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err.Error()
 	}
 	return err.Error()
 }
