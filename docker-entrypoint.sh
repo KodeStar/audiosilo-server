@@ -2,9 +2,9 @@
 # Run the server as PUID:PGID (default 1000:1000) so SQLite can write the data dir
 # no matter how the host-mounted volume is owned - the usual NAS pain point. The
 # container starts as root only to chown /data (and AUDIOSILO_BACKUP_DIR's folder
-# and the backups in it, when it is set) and drop privileges; the server itself never runs as root. On NAS setups set
-# PUID/PGID to the owner of your appdata (Unraid: PUID=99 PGID=100; Synology: often
-# 1026:100; or run `id` for your user).
+# and the backups in it, when it is set) and drop privileges; the server itself
+# never runs as root. On NAS setups set PUID/PGID to the owner of your appdata
+# (Unraid: PUID=99 PGID=100; Synology: often 1026:100; or run `id` for your user).
 #
 # A chown can fail without saying so (a NAS share with ACLs, a read-only mount), so
 # the entrypoint then checks, as the user the server runs as, that the data folder
@@ -58,19 +58,20 @@ explain() {
   if [ -n "$chowned" ]; then
     say "  Changing its owner to $RUN_AS failed (a NAS share with ACLs or a read-only mount refuses it)."
   fi
+  give="give user $RUN_AS $access access to the folder on the host"
   case "$owner" in
     "$RUN_AS" | "")
-      say "  Fix: give user $RUN_AS $access access to the folder on the host."
+      say "  Fix: $give."
       ;;
     0:*)
       # Never advise running the server as root.
-      say "  Fix: give user $RUN_AS $access access to the folder on the host, for example by making $RUN_AS its owner."
+      say "  Fix: $give, for example by making $RUN_AS its owner."
       ;;
     *)
       if [ -n "$AS_ROOT" ]; then
-        say "  Fix: set PUID=${owner%%:*} and PGID=${owner#*:} (the folder's owner) on the container, or give user $RUN_AS $access access to the folder on the host."
+        say "  Fix: set PUID=${owner%%:*} and PGID=${owner#*:} (the folder's owner) on the container, or $give."
       else
-        say "  Fix: run the container as the folder's owner (user: \"$owner\"), or give user $RUN_AS $access access to the folder on the host."
+        say "  Fix: run the container as the folder's owner (user: \"$owner\"), or $give."
       fi
       ;;
   esac
@@ -81,11 +82,12 @@ can_write() {
   as_user sh -c 't="$1/.audiosilo-write-check.$$"; : >"$t" && rm -f "$t"' sh "$1" >/dev/null 2>&1
 }
 
-# Whether the server's user can list folder $1 (a file mounted in passes). Bounded:
-# a hard-mounted share whose server is gone can block for minutes, and a slow
-# answer counts as unreadable rather than holding the start.
+# Whether the server's user can list folder $1 (a file mounted in passes): the
+# first entry is enough, however many the folder holds. Bounded: a hard-mounted
+# share whose server is gone can block for minutes, and a slow answer counts as
+# unreadable rather than holding the start.
 can_read() {
-  as_user timeout "$WAIT" sh -c '[ ! -d "$1" ] || ls "$1"' sh "$1" >/dev/null 2>&1
+  as_user timeout "$WAIT" find "$1" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1
 }
 
 # The folders mounted into the container that may hold books: not the system's
@@ -95,12 +97,12 @@ library_mounts() {
   [ -r /proc/self/mountinfo ] || return 0
   awk '{ for (i = 6; i <= NF; i++) if ($i == "-") { print $(i + 1), $5; break } }' /proc/self/mountinfo |
     while read -r fstype point; do
-      point=$(printf '%b' "$point") # mountinfo escapes a space as \040
       case "$fstype" in
         proc | sysfs | devtmpfs | devpts | tmpfs | ramfs | cgroup | cgroup2 | mqueue | securityfs | debugfs | \
           tracefs | pstore | bpf | fusectl | configfs | hugetlbfs | autofs | binfmt_misc | nsfs | rpc_pipefs | \
           efivarfs | selinuxfs | squashfs | overlay) continue ;;
       esac
+      point=$(printf '%b' "$point") # mountinfo escapes a space as \040
       case "$point" in
         / | /proc | /sys | /tmp | /dev | /run | /boot | /snap | /proc/* | /sys/* | /dev/* | /run/* | /etc/* | /boot/* | /snap/*) continue ;;
         "$DATA" | "$DATA"/*) continue ;;
