@@ -1,5 +1,5 @@
 import type { BridgeJob, BridgeStatus } from '@/api/types';
-import { isOpen, text } from '@/features/bridge/bridge-model';
+import { JOBS_POLL_OPEN_MS, isOpen, text } from '@/features/bridge/bridge-model';
 
 // Library > LibriVox (LibriVox L6): what the page decides, kept out of the
 // components so the rules are tested on their own.
@@ -79,8 +79,6 @@ export function librivoxProject(job: Pick<BridgeJob, 'kind' | 'params'>): number
 }
 
 /** How often a tracked job is asked again: every few seconds while it is open. */
-export const JOB_POLL_MS = 3000;
-
 export function jobPollMs(job: Pick<BridgeJob, 'state'> | undefined): number | false {
-  return job && isOpen(job.state) ? JOB_POLL_MS : false;
+  return job && isOpen(job.state) ? JOBS_POLL_OPEN_MS : false;
 }

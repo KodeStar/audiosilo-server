@@ -469,11 +469,11 @@ export const api = {
   // Add from LibriVox (Library > LibriVox): the community metadata's LibriVox
   // works and recordings, and the Bridge's librivox.fetch. 404 metadata_off
   // while community metadata is off.
-  /** LibriVox works matching q, best first (lang: one language tag). */
-  librivoxSearch: (q: string, lang = '', limit = 20) =>
+  /** LibriVox works matching q, best first. */
+  librivoxSearch: (q: string) =>
     request<{ results: LibrivoxHit[] }>(
       'GET',
-      `/admin/librivox/search${bookQuery({ q, lang: lang || undefined, limit })}`,
+      `/admin/librivox/search${bookQuery({ q, limit: 20 })}`,
     ),
   /** A work's LibriVox recordings, where each is on this server and its open job. 404 not_found. */
   librivoxWork: (id: string) =>

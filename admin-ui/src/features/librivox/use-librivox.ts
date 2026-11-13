@@ -52,9 +52,9 @@ export function useTrackedJob(id: number | undefined) {
 export function useAddLibrivox(workId: string) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [busy, setBusy] = useState<number>();
+  const [busy, setBusy] = useState(false);
   const add = async (libraryId: number, librivoxId: number) => {
-    setBusy(librivoxId);
+    setBusy(true);
     try {
       const { job } = await api.librivoxFetch(libraryId, librivoxId);
       // The lists first: the job's own key sits under theirs, and the answer
@@ -66,7 +66,7 @@ export function useAddLibrivox(workId: string) {
       toastError(t('librivox.add.failed'), err);
       return undefined;
     } finally {
-      setBusy(undefined);
+      setBusy(false);
       void qc.invalidateQueries({ queryKey: keys.librivoxWork(workId) });
     }
   };

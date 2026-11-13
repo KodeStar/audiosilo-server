@@ -7,7 +7,6 @@ import {
   BookOpenText,
   CloudDownload,
   CloudOff,
-  ExternalLink,
   LoaderCircle,
   Search,
 } from 'lucide-react';
@@ -26,10 +25,10 @@ import { bookRoute } from '@/lib/book-route';
 import { formatDuration, formatList, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { isOpen, progressOf } from '@/features/bridge/bridge-model';
-import { BridgeSettingsLink } from '@/features/bridge/generate-parts';
+import { BridgeSettingsLink, ExternalTextLink } from '@/features/bridge/generate-parts';
 import { useBridge } from '@/features/bridge/use-bridge';
 import { CardEmpty } from '@/features/settings/card-empty';
-import { addBlock, bridgeNote, fetchReason, type AddBlock } from './librivox-model';
+import { bridgeNote, fetchReason, type AddBlock } from './librivox-model';
 import { useAddLibrivox, useLibrivoxSearch, useLibrivoxWork, useTrackedJob } from './use-librivox';
 
 /**
@@ -44,7 +43,6 @@ export function LibrivoxPage() {
   const { t } = useTranslation();
   const server = useServerInfo();
   const metadataOn = server.data?.capabilities.metadata;
-  const [q, setQ] = useState('');
   const [workId, setWorkId] = useState<string>();
 
   return (
@@ -64,13 +62,7 @@ export function LibrivoxPage() {
         </Notice>
       ) : (
         <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <SearchCard
-            q={q}
-            onQ={setQ}
-            enabled={metadataOn === true}
-            selected={workId}
-            onSelect={setWorkId}
-          />
+          <SearchCard enabled={metadataOn === true} selected={workId} onSelect={setWorkId} />
           {workId ? (
             <WorkCard key={workId} id={workId} />
           ) : (
@@ -89,19 +81,16 @@ export function LibrivoxPage() {
 }
 
 function SearchCard({
-  q,
-  onQ,
   enabled,
   selected,
   onSelect,
 }: {
-  q: string;
-  onQ: (q: string) => void;
   enabled: boolean;
   selected?: string;
   onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const [q, setQ] = useState('');
   const search = useLibrivoxSearch(q, enabled);
   const hits = search.data?.results ?? [];
   return (
@@ -110,7 +99,7 @@ function SearchCard({
       <div className="px-5 py-3">
         <SearchBox
           value={q}
-          onChange={onQ}
+          onChange={setQ}
           label={t('librivox.search.label')}
           placeholder={t('librivox.search.placeholder')}
           clearLabel={t('librivox.search.clear')}
@@ -191,8 +180,9 @@ function WorkCard({ id }: { id: string }) {
   const work = useLibrivoxWork(id);
   const bridge = useBridge();
   const noteId = useId();
-  const block = addBlock(bridge.data, bridge.isError);
   const note = bridgeNote(bridge.data, bridge.isError);
+  // An offline Bridge is a note, not a block: the job waits for it.
+  const block = note === 'offline' ? undefined : note;
 
   if (work.isError)
     return (
@@ -217,10 +207,7 @@ function WorkCard({ id }: { id: string }) {
       />
       {note ? (
         <p id={noteId} className="border-b px-5 py-3 text-[13px] text-muted-foreground">
-          {t(`librivox.bridge.${note}`)}{' '}
-          {note === 'unpaired' ? (
-            <BridgeSettingsLink>{t('librivox.bridge.pair')}</BridgeSettingsLink>
-          ) : null}
+          {t(`librivox.bridge.${note}`)} {note === 'unpaired' ? <BridgeSettingsLink /> : null}
         </p>
       ) : null}
       {recordings.length === 0 ? (
@@ -295,31 +282,26 @@ function RecordingRow({
   const here = r.in_library.length > 0;
   const progress = job && open ? progressOf(job.progress) : {};
   const reason = job ? fetchReason(job) : undefined;
-  const status: { tone: StatusTone; text: string } | undefined = open
-    ? {
-        tone: 'warn',
-        // A parked fetch says why (the disk is full, the library is read-only).
-        text:
-          state === 'needs_attention' && reason
-            ? t(reason)
-            : [
-                progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`),
-                progress.total
-                  ? t('bridge.jobs.count', {
-                      done: formatNumber(progress.done ?? 0, lang),
-                      total: formatNumber(progress.total, lang),
-                    })
-                  : '',
-              ]
-                .filter(Boolean)
-                .join(' · '),
-      }
-    : job && !here && (state === 'failed' || state === 'cancelled')
-      ? {
-          tone: 'bad',
-          text: reason ? t(reason) : job.error || t(`bridge.state.${job.state}`),
-        }
-      : undefined;
+  const status = ((): { tone: StatusTone; text: string } | undefined => {
+    if (open) {
+      // A parked fetch says why (the disk is full, the library is read-only).
+      if (state === 'needs_attention' && reason) return { tone: 'warn', text: t(reason) };
+      const count = progress.total
+        ? t('bridge.jobs.count', {
+            done: formatNumber(progress.done ?? 0, lang),
+            total: formatNumber(progress.total, lang),
+          })
+        : '';
+      const label = progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
+      return { tone: 'warn', text: [label, count].filter(Boolean).join(' · ') };
+    }
+    if (job && !here && (state === 'failed' || state === 'cancelled'))
+      return {
+        tone: 'bad',
+        text: reason ? t(reason) : job.error || t(`bridge.state.${job.state}`),
+      };
+    return undefined;
+  })();
 
   return (
     <li className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-3.5">
@@ -331,15 +313,7 @@ function RecordingRow({
         </b>
         <span className="font-mono text-[12px] text-muted-foreground">{facts.join(' · ')}</span>
         {r.url ? (
-          <a
-            href={r.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
-            {t('librivox.recording.page')}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          <ExternalTextLink href={r.url}>{t('librivox.recording.page')}</ExternalTextLink>
         ) : null}
         {status ? (
           <StatusText tone={status.tone} colored className="text-[12.5px] font-semibold">
@@ -379,14 +353,14 @@ function RecordingRow({
             ) : null}
             <Button
               size="sm"
-              disabled={Boolean(block) || open || busy === r.librivox_id || libraryId === undefined}
+              disabled={Boolean(block) || open || busy || libraryId === undefined}
               aria-describedby={block ? describedBy : undefined}
               onClick={() => {
                 if (libraryId === undefined) return;
                 void add(libraryId, r.librivox_id).then((j) => j && setFollowed(j.id));
               }}
             >
-              {busy === r.librivox_id ? (
+              {busy ? (
                 <LoaderCircle className="animate-spin" aria-hidden="true" />
               ) : (
                 <CloudDownload aria-hidden="true" />

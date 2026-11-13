@@ -13,9 +13,9 @@ import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
+import { JOBS_POLL_OPEN_MS } from '@/features/bridge/bridge-model';
 import {
   FETCH_CODES,
-  JOB_POLL_MS,
   addBlock,
   bridgeNote,
   fetchReason,
@@ -158,7 +158,7 @@ describe('librivox model', () => {
     expect(librivoxProject(job({ params: { librivox_id: 0 } }))).toBeUndefined();
     expect(librivoxProject(job({ kind: 'audible.import' }))).toBeUndefined();
     expect(jobPollMs(undefined)).toBe(false);
-    expect(jobPollMs(job({ state: 'running' }))).toBe(JOB_POLL_MS);
+    expect(jobPollMs(job({ state: 'running' }))).toBe(JOBS_POLL_OPEN_MS);
     expect(jobPollMs(job({ state: 'done' }))).toBe(false);
   });
 });

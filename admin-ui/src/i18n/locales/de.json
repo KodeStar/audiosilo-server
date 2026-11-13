@@ -3651,7 +3651,6 @@
   "librivox.bridge.unpaired": "Zum Hinzufügen eines Buchs brauchst du eine gekoppelte Bridge.",
   "librivox.bridge.unsupported": "Deine Bridge kann noch keine LibriVox-Bücher hinzufügen. Aktualisiere sie auf die neueste Version.",
   "librivox.bridge.offline": "Deine Bridge ist offline. Ein hinzugefügtes Buch wartet, bis sie wieder da ist.",
-  "librivox.bridge.pair": "Bridge-Einstellungen öffnen",
   "librivox.recording.sections_one": "{{n}} Abschnitt",
   "librivox.recording.sections_other": "{{n}} Abschnitte",
   "librivox.recording.project": "Projekt {{id}}",

@@ -2593,17 +2593,11 @@ export interface BridgeJob {
   finished_at: string | null;
 }
 
-/** A person named on a LibriVox work or recording (the community metadata's id and name). */
-export interface LibrivoxPerson {
-  id: string;
-  name: string;
-}
-
 /** One work of GET /admin/librivox/search: a work with at least one LibriVox recording. */
 export interface LibrivoxHit {
   work_id: string;
   title: string;
-  authors: LibrivoxPerson[];
+  authors: MetaPersonRef[];
   /** Its language tag ("en"). */
   language: string;
   /** The earliest release date of its recordings (YYYY, YYYY-MM or YYYY-MM-DD), "" for none. */
@@ -2615,7 +2609,7 @@ export interface LibrivoxRecording {
   recording_id: string;
   /** The LibriVox project it is. */
   librivox_id: number;
-  narrators: LibrivoxPerson[];
+  narrators: MetaPersonRef[];
   runtime_min: number;
   /** Its sections (0 when unknown). */
   chapter_count: number;
@@ -2631,7 +2625,7 @@ export interface LibrivoxRecording {
 
 /** GET /admin/librivox/work: a work and its LibriVox recordings only. */
 export interface LibrivoxWork {
-  work: { id: string; title: string; authors: LibrivoxPerson[]; language: string };
+  work: { id: string; title: string; authors: MetaPersonRef[]; language: string };
   recordings: LibrivoxRecording[];
 }
 
