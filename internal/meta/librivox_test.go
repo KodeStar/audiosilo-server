@@ -2,7 +2,6 @@ package meta
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -123,24 +122,8 @@ func TestLibrivoxSurvivesStore(t *testing.T) {
 // LibriVox recording, so the test states the LibriVox layer on its ASIN
 // recording in the artifact's own columns before opening it.
 func TestMirrorLibrivox(t *testing.T) {
-	path := querytest.Build(t, t.TempDir())
-	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := raw.Exec(`UPDATE recordings SET librivox_id=47, archive_id='martian_lv', link_librivox=?, link_zip=?, link_rss='https://librivox.org/rss/47' WHERE work_id=? AND id=?`,
-		lvPage, lvZip, querytest.ASINWork, querytest.ASINRecording)
-	if err != nil {
-		_ = raw.Close()
-		t.Fatal(err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		_ = raw.Close()
-		t.Fatalf("updated %d recordings, want 1", n)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	path := mirrortest.Artifact(t, "UPDATE recordings SET librivox_id=47, archive_id='martian_lv', link_librivox='"+lvPage+
+		"', link_zip='"+lvZip+"', link_rss='https://librivox.org/rss/47' WHERE work_id='"+querytest.ASINWork+"' AND id='"+querytest.ASINRecording+"'")
 
 	remote, remoteHits := mirrortest.Remote(t)
 	s := NewService(remote.URL, nil)

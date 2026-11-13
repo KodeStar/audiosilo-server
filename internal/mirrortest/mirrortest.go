@@ -19,7 +19,7 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
 	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
-	_ "modernc.org/sqlite" // FixtureRewritten
+	_ "modernc.org/sqlite" // Artifact
 )
 
 // Fixture is a data release's assets over querytest's real artifact. schema,
@@ -37,6 +37,18 @@ func Fixture(tb testing.TB, schema int) map[string][]byte {
 // the fixture's catalogue is fixed, and a test can want another shape of it.
 func FixtureRewritten(tb testing.TB, stmts ...string) map[string][]byte {
 	tb.Helper()
+	raw, err := os.ReadFile(Artifact(tb, stmts...))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return releasetest.DataAssets(tb, raw)
+}
+
+// Artifact is the path of querytest's real artifact, built in a directory of the
+// test's own, with these statements run on it first (FixtureRewritten's, for a
+// test that opens the file itself).
+func Artifact(tb testing.TB, stmts ...string) string {
+	tb.Helper()
 	path := querytest.Build(tb, tb.TempDir())
 	if len(stmts) > 0 {
 		db, err := sql.Open("sqlite", path)
@@ -52,11 +64,7 @@ func FixtureRewritten(tb testing.TB, stmts ...string) map[string][]byte {
 			tb.Fatal(err)
 		}
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return releasetest.DataAssets(tb, raw)
+	return path
 }
 
 // HamletScale is FixtureRewritten's statements for querytest's community work as a
