@@ -52,9 +52,15 @@ type StoredEntry struct {
 
 // storeVersion is the format of a persisted payload: the JSON of this build's
 // Enrichment / MetaWork. Bump it when a change to those shapes, or to what
-// compose puts in them, means an old row would serve an envelope this build
-// would not produce (a new field that a row written before it would lack, for
-// the whole positive TTL or, during an outage, indefinitely).
+// compose puts in them, means an old row would serve an envelope that is WRONG
+// for this build: a field renamed or re-typed, a value whose meaning changed,
+// or a new field a client or the server relies on being there. A bump discards
+// every row at once, the cache-only readers' too (CachedWorkID's placement,
+// Coverages, the stale answer an outage falls back on), so an additive,
+// optional field whose absence is itself a valid answer takes none (series
+// works' release_date, a recording's librivox): a row written before it lacks
+// the field until it refreshes, within positiveTTL, or once the upstream is
+// back after an outage.
 const storeVersion = 1
 
 // storeTimeout bounds one store read on the request path (reads never wait on
