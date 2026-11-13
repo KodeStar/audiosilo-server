@@ -7,6 +7,7 @@ import {
   KIND_READALONG,
   parkKey,
 } from '@/features/bridge/generate-model';
+import { LIBRIVOX_KIND } from '@/features/librivox/librivox-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -154,6 +155,7 @@ const FINISHED_OWN = new Map<string, string>([
   [KIND_DESCRIBE, 'events.bridge_job_finished.describe'],
   [KIND_DETECT, 'events.bridge_job_finished.detect'],
   [KIND_READALONG, 'events.bridge_job_finished.readalong'],
+  [LIBRIVOX_KIND, 'events.bridge_job_finished.librivox'],
 ]);
 
 /**

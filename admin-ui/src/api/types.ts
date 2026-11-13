@@ -2593,6 +2593,48 @@ export interface BridgeJob {
   finished_at: string | null;
 }
 
+/** A person named on a LibriVox work or recording (the community metadata's id and name). */
+export interface LibrivoxPerson {
+  id: string;
+  name: string;
+}
+
+/** One work of GET /admin/librivox/search: a work with at least one LibriVox recording. */
+export interface LibrivoxHit {
+  work_id: string;
+  title: string;
+  authors: LibrivoxPerson[];
+  /** Its language tag ("en"). */
+  language: string;
+  /** The earliest release date of its recordings (YYYY, YYYY-MM or YYYY-MM-DD), "" for none. */
+  release_date: string;
+}
+
+/** One LibriVox recording of GET /admin/librivox/work. */
+export interface LibrivoxRecording {
+  recording_id: string;
+  /** The LibriVox project it is. */
+  librivox_id: number;
+  narrators: LibrivoxPerson[];
+  runtime_min: number;
+  /** Its sections (0 when unknown). */
+  chapter_count: number;
+  /** An absolute http(s) URL, else "". */
+  cover_url: string;
+  /** Its LibriVox catalogue page (an absolute http(s) URL), else "". */
+  url: string;
+  /** The books on this server recorded as this recording. */
+  in_library: BookRef[];
+  /** Its open librivox.fetch job in any library, else null. */
+  job: { id: number; state: BridgeJobState } | null;
+}
+
+/** GET /admin/librivox/work: a work and its LibriVox recordings only. */
+export interface LibrivoxWork {
+  work: { id: string; title: string; authors: LibrivoxPerson[]; language: string };
+  recordings: LibrivoxRecording[];
+}
+
 /** GET /admin/bridge/jobs: newest first; next_before continues it. */
 export interface BridgeJobPage {
   jobs: BridgeJob[];

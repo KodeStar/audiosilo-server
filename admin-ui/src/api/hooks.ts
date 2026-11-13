@@ -73,6 +73,11 @@ export const keys = {
   audibleTitleLists: ['admin', 'audible', 'titles'] as const,
   audibleTitles: (account: string, state: string, matched: string, q: string) =>
     ['admin', 'audible', 'titles', account, state, matched, q] as const,
+  /** Library > LibriVox: a search, and one work's recordings. */
+  librivoxSearch: (q: string) => ['admin', 'librivox', 'search', q] as const,
+  librivoxWork: (id: string) => ['admin', 'librivox', 'work', id] as const,
+  /** One Bridge job by id (under bridgeJobLists, so queueing or cancelling refreshes it). */
+  bridgeJob: (id: number) => ['admin', 'bridge', 'jobs', 'one', id] as const,
   /** Settings > Modules (a settings save or a Bridge status change moves it). */
   modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */

@@ -12,6 +12,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDateTime, formatNumber, formatRelative, formatTook } from '@/lib/format';
 import { audibleJobReason } from '@/features/audible/audible-model';
+import { fetchReason, librivoxProject } from '@/features/librivox/librivox-model';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
 import {
@@ -142,8 +143,9 @@ function JobRow({
   const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
-  // An Audible job's known failure code, worded (the Bridge's own text otherwise).
-  const reason = audibleJobReason(job);
+  const project = librivoxProject(job);
+  // An Audible or LibriVox job's known failure code, worded (the Bridge's own text otherwise).
+  const reason = audibleJobReason(job) ?? fetchReason(job);
   const details = hasContent(job.result) || hasContent(job.params);
 
   const meta = [
@@ -202,6 +204,13 @@ function JobRow({
                 <>
                   {' · '}
                   <span className="font-mono text-[12px]">{asin}</span>
+                </>
+              ) : project ? (
+                <>
+                  {' · '}
+                  <span className="font-mono text-[12px]">
+                    {t('librivox.recording.project', { id: project })}
+                  </span>
                 </>
               ) : (
                 <span className="text-muted-foreground"> · {t('bridge.jobs.wholeLibrary')}</span>
