@@ -264,9 +264,12 @@ function RecordingRow({
   const [picked, setPicked] = useState<number>();
   const libraryId = picked ?? libraries[0]?.id;
   const { add, busy } = useAddLibrivox(workId);
-  // The job this row follows: the one it queued, else the work's open one.
-  const [queued, setQueued] = useState<number>();
-  const tracked = useTrackedJob(queued ?? r.job?.id);
+  // The job this row follows: the last one it queued or saw open on the work,
+  // kept once the work stops naming it (it only names open jobs), so a failed
+  // fetch still says why.
+  const [followed, setFollowed] = useState(r.job?.id);
+  if (r.job && r.job.id !== followed) setFollowed(r.job.id);
+  const tracked = useTrackedJob(followed);
   const job = tracked.data;
   const open = job ? isOpen(job.state) : r.job !== null;
   const state = job?.state;
@@ -295,17 +298,21 @@ function RecordingRow({
   const status: { tone: StatusTone; text: string } | undefined = open
     ? {
         tone: 'warn',
-        text: [
-          progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`),
-          progress.total
-            ? t('bridge.jobs.count', {
-                done: formatNumber(progress.done ?? 0, lang),
-                total: formatNumber(progress.total, lang),
-              })
-            : '',
-        ]
-          .filter(Boolean)
-          .join(' · '),
+        // A parked fetch says why (the disk is full, the library is read-only).
+        text:
+          state === 'needs_attention' && reason
+            ? t(reason)
+            : [
+                progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`),
+                progress.total
+                  ? t('bridge.jobs.count', {
+                      done: formatNumber(progress.done ?? 0, lang),
+                      total: formatNumber(progress.total, lang),
+                    })
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' · '),
       }
     : job && !here && (state === 'failed' || state === 'cancelled')
       ? {
@@ -376,7 +383,7 @@ function RecordingRow({
               aria-describedby={block ? describedBy : undefined}
               onClick={() => {
                 if (libraryId === undefined) return;
-                void add(libraryId, r.librivox_id).then((j) => j && setQueued(j.id));
+                void add(libraryId, r.librivox_id).then((j) => j && setFollowed(j.id));
               }}
             >
               {busy === r.librivox_id ? (

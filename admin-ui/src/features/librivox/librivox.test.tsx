@@ -183,11 +183,10 @@ describe('Library > LibriVox', () => {
   });
 
   it('searches, opens a work and adds a recording to the chosen library', async () => {
-    let state: BridgeJob['state'] = 'queued';
     const calls = mockFetch(
       routes({
         'POST /admin/librivox/fetch': { status: 202, body: { job: job() } },
-        'GET /admin/bridge/jobs/41': () => ({ body: job({ state }) }),
+        'GET /admin/bridge/jobs/41': { body: job() },
       }),
     );
     const { user, list } = await openWork();
@@ -216,7 +215,6 @@ describe('Library > LibriVox', () => {
     // The queued job shows, and Add waits for it.
     expect(await within(row).findByText(/Queued/i)).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Add' })).toBeDisabled();
-    state = 'done';
   });
 
   it('links a recording that is already in a library to its book, with no Add', async () => {
@@ -280,11 +278,16 @@ describe('Library > LibriVox', () => {
     expect(await within(list).findByRole('link', { name: 'In library' })).toBeInTheDocument();
   });
 
-  it("names a failed fetch's reason on its recording", async () => {
-    mockFetch(
+  it("keeps naming a failed fetch's reason once the work stops naming its job", async () => {
+    let asked = 0;
+    const calls = mockFetch(
       routes({
-        'GET /admin/librivox/work': {
-          body: work([recording({ job: { id: 41, state: 'running' } })]),
+        // The work names only open jobs: once the fetch failed, none.
+        'GET /admin/librivox/work': () => {
+          asked += 1;
+          return {
+            body: work([recording({ job: asked === 1 ? { id: 41, state: 'running' } : null })]),
+          };
         },
         'GET /admin/bridge/jobs/41': {
           body: job({ state: 'failed', error: 'disk_full: no space left on device' }),
@@ -293,6 +296,28 @@ describe('Library > LibriVox', () => {
     );
     const { list } = await openWork();
     expect(await within(list).findByText("The library's disk is full.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/admin/librivox/work').length).toBeGreaterThan(1),
+    );
+    expect(within(list).getByText("The library's disk is full.")).toBeInTheDocument();
     expect(within(list).getByRole('button', { name: 'Add' })).toBeEnabled();
+  });
+
+  it("names a parked fetch's reason and holds Add while it waits", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/librivox/work': {
+          body: work([recording({ job: { id: 41, state: 'needs_attention' } })]),
+        },
+        'GET /admin/bridge/jobs/41': {
+          body: job({ state: 'needs_attention', progress: { park: { code: 'not_writable' } } }),
+        },
+      }),
+    );
+    const { list } = await openWork();
+    expect(
+      await within(list).findByText("The Bridge can't write to this library."),
+    ).toBeInTheDocument();
+    expect(within(list).getByRole('button', { name: 'Add' })).toBeDisabled();
   });
 });
