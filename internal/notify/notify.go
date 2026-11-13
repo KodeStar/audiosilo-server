@@ -569,8 +569,9 @@ func webhookBody(ev catalog.ServerEvent, m message, srv Server) map[string]any {
 }
 
 // internalData are event facts the console's bell shows but no destination is
-// sent: a failed scan's detail is the tool's or the OS's own message, which can
-// name a folder on the server.
+// sent as data: a failed scan's detail is the tool's or the OS's own message,
+// which can name a folder on the server. (A failed backup's detail is the
+// message's own text when its folder refused the server: backupReason.)
 var internalData = []string{"detail"}
 
 // outbound is an event's data without its internal facts.

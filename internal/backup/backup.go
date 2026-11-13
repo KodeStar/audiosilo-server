@@ -335,10 +335,15 @@ func (s *Service) begin(trigger string) bool {
 // make writes the backup begin marked, records the outcome and clears running.
 func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 	b, err := s.write(ctx, trigger, s.db.VacuumInto)
+	if fsaccess.IsPermission(err) {
+		// Whichever step the folder refused (the check, the chmod, the rename),
+		// the words are the same: the folder, the server's user, the fix.
+		err = fsaccess.Wrap(s.dir, true, err)
+	}
 	res := Result{At: s.now(), OK: err == nil, Trigger: trigger, Name: b.Name}
 	if err != nil {
 		res.Error = reason(err)
-		if res.Error == "permission_denied" {
+		if fsaccess.IsPermission(err) {
 			res.Detail = err.Error()
 		}
 		s.log.Warn("backup failed", "trigger", trigger, "err", err)
