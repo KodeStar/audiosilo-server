@@ -22,7 +22,7 @@ import {
   reachOffers,
   folderLost,
   resumeStep,
-  shouldRedirect,
+  redirectDecision,
   showFinishCard,
   skippedSteps,
   unlockedPatch,
@@ -202,22 +202,23 @@ describe('the Finish setting up card', () => {
   });
 });
 
-describe('shouldRedirect', () => {
-  it('sends an unfinished server to the flow once a session, from the Overview', () => {
-    expect(shouldRedirect(state(), '/', false)).toBe(true);
-    expect(shouldRedirect(state(), '', false)).toBe(true);
+describe('redirectDecision', () => {
+  it('sends an unfinished server to the flow from the Overview', () => {
+    expect(redirectDecision(state(), '/', false)).toBe('go');
+    expect(redirectDecision(state(), '', false)).toBe('go');
   });
 
-  it('never from a deep link (server#365)', () => {
-    expect(shouldRedirect(state(), '/server', false)).toBe(false);
-    expect(shouldRedirect(state(), '/library/libraries', false)).toBe(false);
+  it('leaves a deep link, and the flow itself, where it is (server#365)', () => {
+    expect(redirectDecision(state(), '/server', false)).toBe('stay');
+    expect(redirectDecision(state(), '/library/libraries', false)).toBe('stay');
+    expect(redirectDecision(state(), '/setup', false)).toBe('stay');
   });
 
-  it('not from the flow itself, not twice, not once finished, not before it loads', () => {
-    expect(shouldRedirect(state(), '/setup', false)).toBe(false);
-    expect(shouldRedirect(state(), '/', true)).toBe(false);
-    expect(shouldRedirect(state({ finished: true }), '/', false)).toBe(false);
-    expect(shouldRedirect(undefined, '/', false)).toBe(false);
+  it('decides once a session, not once finished, not before the state loads', () => {
+    expect(redirectDecision(state(), '/', true)).toBe('none');
+    expect(redirectDecision(state(), '/server', true)).toBe('none');
+    expect(redirectDecision(state({ finished: true }), '/', false)).toBe('none');
+    expect(redirectDecision(undefined, '/', false)).toBe('none');
   });
 });
 

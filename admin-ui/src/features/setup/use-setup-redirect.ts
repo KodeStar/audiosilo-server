@@ -1,9 +1,12 @@
 import { useEffect } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useSetup } from '@/api/hooks';
-import { shouldRedirect } from './setup-model';
+import { redirectDecision } from './setup-model';
 
-/** Set once the console has sent this browser session to the flow. */
+/**
+ * Set once this browser session's first page has decided: sent to the flow, or
+ * left where it was.
+ */
 const REDIRECTED_KEY = 'audiosilo.setup.redirected';
 
 /**
@@ -24,7 +27,7 @@ function markRedirected() {
   try {
     sessionStorage.setItem(REDIRECTED_KEY, '1');
   } catch {
-    // not kept past this page: the next page load sends the admin to the flow again
+    // not kept past this page: the next page load decides again
     redirectedHere = true;
   }
 }
@@ -40,14 +43,11 @@ export function useSetupRedirect() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   useEffect(() => {
-    if (!state || state.finished) return;
-    const go = shouldRedirect(state, pathname, redirectedThisSession());
-    // The first page the session shows with the state loaded decides: the
-    // Overview goes to the flow, any other page (a deep link such as the flow's
-    // own "Open the import" in a new tab, or the flow itself) stays. Either way
-    // the session is marked, so moving on to the Overview from there, or
-    // leaving the flow with "Finish later", never pulls the admin back.
+    const decision = redirectDecision(state, pathname, redirectedThisSession());
+    if (decision === 'none') return;
+    // Either way the session is marked, so moving on to the Overview from a deep
+    // link, or leaving the flow with "Finish later", never pulls the admin back.
     markRedirected();
-    if (go) void navigate({ to: '/setup', replace: true });
+    if (decision === 'go') void navigate({ to: '/setup', replace: true });
   }, [state, pathname, navigate]);
 }
