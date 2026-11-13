@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { ApiError } from '@/api/client';
 import { setToken } from '@/api/token';
 import type {
   BridgeJob,
@@ -15,10 +16,12 @@ import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 import { JOBS_POLL_OPEN_MS } from '@/features/bridge/bridge-model';
 import {
+  DONE_RECHECK_MS,
   FETCH_CODES,
   addBlock,
   bridgeNote,
   fetchReason,
+  jobGone,
   jobPollMs,
   librivoxProject,
 } from './librivox-model';
@@ -161,6 +164,13 @@ describe('librivox model', () => {
     expect(jobPollMs(job({ state: 'running' }))).toBe(JOBS_POLL_OPEN_MS);
     expect(jobPollMs(job({ state: 'done' }))).toBe(false);
   });
+
+  it('tells a job that is gone from one that could not be read', () => {
+    expect(jobGone(new ApiError(404, 'job not found'))).toBe(true);
+    expect(jobGone(new ApiError(502, 'bad gateway'))).toBe(false);
+    expect(jobGone(new Error('offline'))).toBe(false);
+    expect(jobGone(null)).toBe(false);
+  });
 });
 
 describe('Library > LibriVox', () => {
@@ -301,6 +311,67 @@ describe('Library > LibriVox', () => {
     );
     expect(within(list).getByText("The library's disk is full.")).toBeInTheDocument();
     expect(within(list).getByRole('button', { name: 'Add' })).toBeEnabled();
+  });
+
+  it('asks the work once more a moment after a fetch is done, for a book recorded just after', async () => {
+    // The job reads done before the server has recorded the book: the ask at
+    // the job's end still misses it, the one a moment later finds it.
+    let asked = 0;
+    let doneAt = 0;
+    mockFetch(
+      routes({
+        'GET /admin/librivox/work': () => {
+          asked += 1;
+          const late = doneAt !== 0 && Date.now() - doneAt >= DONE_RECHECK_MS - 200;
+          return {
+            body: work([
+              recording({
+                job: asked === 1 ? { id: 41, state: 'running' } : null,
+                in_library: late ? [{ library_id: 1, path: 'x' }] : [],
+              }),
+            ]),
+          };
+        },
+        'GET /admin/bridge/jobs/41': () => {
+          doneAt ||= Date.now();
+          return { body: job({ state: 'done' }) };
+        },
+      }),
+    );
+    const { list } = await openWork();
+    // Asked at the job's end: not there yet, so Add is back for now.
+    await waitFor(() => expect(asked).toBeGreaterThan(1));
+    expect(within(list).queryByRole('link', { name: 'In library' })).not.toBeInTheDocument();
+    expect(
+      await within(list).findByRole(
+        'link',
+        { name: 'In library' },
+        { timeout: DONE_RECHECK_MS + 3000 },
+      ),
+    ).toBeInTheDocument();
+  }, 15_000);
+
+  it('keeps the rows when asking the work again fails, and lets go of a job that is gone', async () => {
+    let asked = 0;
+    mockFetch(
+      routes({
+        'GET /admin/librivox/work': () => {
+          asked += 1;
+          return asked === 1
+            ? { body: work([recording({ job: { id: 41, state: 'running' } })]) }
+            : asked === 2
+              ? { status: 404, body: { error: 'no such work', code: 'not_found' } }
+              : { body: work() };
+        },
+        // Gone with its library.
+        'GET /admin/bridge/jobs/41': { status: 404, body: { error: 'job not found' } },
+      }),
+    );
+    const { list } = await openWork();
+    // The job is gone: the work is asked again, which fails; the row stays.
+    await waitFor(() => expect(asked).toBeGreaterThan(1));
+    expect(within(list).getByText('Read by Kara Shallenberg')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load this book's recordings/)).not.toBeInTheDocument();
   });
 
   it("names a parked fetch's reason and holds Add while it waits", async () => {

@@ -28,7 +28,7 @@ import { isOpen, progressOf } from '@/features/bridge/bridge-model';
 import { BridgeSettingsLink, ExternalTextLink } from '@/features/bridge/generate-parts';
 import { useBridge } from '@/features/bridge/use-bridge';
 import { CardEmpty } from '@/features/settings/card-empty';
-import { bridgeNote, fetchReason, type AddBlock } from './librivox-model';
+import { DONE_RECHECK_MS, bridgeNote, fetchReason, jobGone, type AddBlock } from './librivox-model';
 import { useAddLibrivox, useLibrivoxSearch, useLibrivoxWork, useTrackedJob } from './use-librivox';
 
 /**
@@ -184,7 +184,9 @@ function WorkCard({ id }: { id: string }) {
   // An offline Bridge is a note, not a block: the job waits for it.
   const block = note === 'offline' ? undefined : note;
 
-  if (work.isError)
+  // Only with nothing to show: a failed ask for the work again (after an Add, or
+  // when a job ends) keeps the rows, and with them the job each one follows.
+  if (work.isError && !work.data)
     return (
       <QueryError
         title={t('librivox.work.error')}
@@ -221,7 +223,7 @@ function WorkCard({ id }: { id: string }) {
           {recordings.map((r) => (
             <RecordingRow
               key={r.recording_id}
-              workId={w.id}
+              workId={id}
               recording={r}
               block={block}
               describedBy={note ? noteId : undefined}
@@ -239,6 +241,7 @@ function RecordingRow({
   block,
   describedBy,
 }: {
+  /** The id the work was asked by (its query's key), which a retired id's answer no longer carries. */
   workId: string;
   recording: LibrivoxRecording;
   block?: AddBlock;
@@ -257,13 +260,25 @@ function RecordingRow({
   const [followed, setFollowed] = useState(r.job?.id);
   if (r.job && r.job.id !== followed) setFollowed(r.job.id);
   const tracked = useTrackedJob(followed);
-  const job = tracked.data;
+  // A job that is gone (deleted with its library) is followed no more: the row
+  // goes by what the work says.
+  const gone = jobGone(tracked.error);
+  const job = gone ? undefined : tracked.data;
   const open = job ? isOpen(job.state) : r.job !== null;
   const state = job?.state;
-  // A job that ends moves the recording (done: it is in the library now).
+  const ended = gone || (state !== undefined && !isOpen(state));
+  // A job that ends (or is gone) moves the recording (done: it is in the
+  // library now), so the work is asked again. The server records a done
+  // fetch's book just after the job reads done, so a done one asks once more a
+  // moment later: the first answer can still miss the book.
   useEffect(() => {
-    if (state && !isOpen(state)) void qc.invalidateQueries({ queryKey: keys.librivoxWork(workId) });
-  }, [state, qc, workId]);
+    if (!ended) return;
+    const ask = () => void qc.invalidateQueries({ queryKey: keys.librivoxWork(workId) });
+    ask();
+    if (state !== 'done') return;
+    const timer = setTimeout(ask, DONE_RECHECK_MS);
+    return () => clearTimeout(timer);
+  }, [ended, state, qc, workId]);
 
   const readers = formatList(
     r.narrators.map((n) => n.name),

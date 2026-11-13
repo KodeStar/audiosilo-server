@@ -3724,7 +3724,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   whose params name no recording writes nothing. `/meta` then answers the book from its recorded
   match (LibriVox L5) with no change. Known limits: a fold lost between the job's commit and the
   fold (a crash), and Clear community matches, drop the identity until the server reads
-  `librivox.json` (a follow-up). **Console**: Library > LibriVox (`features/librivox/`).
+  `librivox.json` (a follow-up); Add again finds the placed folder (the Bridge adopts one holding
+  the project's `librivox.json`) and records it. **Console**: Library > LibriVox
+  (`features/librivox/`): a row follows its job by id, asks the work again when it ends and, for
+  a done one, once more a moment later (`DONE_RECHECK_MS`: the fold commits just after the job
+  reads done), and a job that is gone (404) is followed no more.
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
   zero audio files while books are still indexed. This protects the index - and

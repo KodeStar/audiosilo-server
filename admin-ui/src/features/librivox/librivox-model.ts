@@ -1,3 +1,4 @@
+import { ApiError } from '@/api/client';
 import type { BridgeJob, BridgeStatus } from '@/api/types';
 import { JOBS_POLL_OPEN_MS, isOpen, text } from '@/features/bridge/bridge-model';
 
@@ -82,3 +83,18 @@ export function librivoxProject(job: Pick<BridgeJob, 'kind' | 'params'>): number
 export function jobPollMs(job: Pick<BridgeJob, 'state'> | undefined): number | false {
   return job && isOpen(job.state) ? JOBS_POLL_OPEN_MS : false;
 }
+
+/**
+ * Whether a tracked job's read failed because the job is gone (deleted with
+ * its library): it is followed no more, and never asked for again.
+ */
+export function jobGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
+/**
+ * How long after a fetch reads done its work is asked once more: the server
+ * records the placed book as the recording just after the job ends, so the
+ * first answer can still miss it.
+ */
+export const DONE_RECHECK_MS = 2000;
