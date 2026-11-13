@@ -771,6 +771,21 @@ func TestUnwritableFolderIsNamed(t *testing.T) {
 	if st := svc.Status(); st.Last == nil || st.Last.Error != "permission_denied" {
 		t.Fatalf("status = %+v", st)
 	}
+	// A folder the server may not even look at (its parent refuses it) fails the
+	// start-up check too, rather than passing as not made yet.
+	hidden := filepath.Join(dir, "inner")
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(hidden, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(e.db, e.dataDir, hidden, nil).CheckFolder(); !fsaccess.IsPermission(err) {
+		t.Fatalf("CheckFolder behind a closed parent = %v, want a permission error", err)
+	}
 	// A folder the server can't list says so too (the console's list fails; the log has it).
 	if err := os.Chmod(dir, 0o300); err != nil {
 		t.Fatal(err)

@@ -406,10 +406,14 @@ func (s *Service) write(ctx context.Context, kind string, copyTo func(context.Co
 
 // CheckFolder reports whether the backups folder, when it exists, takes a new
 // file from the server (nil when it doesn't exist yet: the first backup makes
-// it), so the start-up log can warn before a backup fails.
+// it), so the start-up log can warn before a backup fails. A folder the server
+// may not even look at (a parent refuses it) is reported too.
 func (s *Service) CheckFolder() error {
 	if _, err := os.Stat(s.dir); err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fsaccess.Wrap(s.dir, true, err)
 	}
 	return fsaccess.CheckWrite(s.dir)
 }
