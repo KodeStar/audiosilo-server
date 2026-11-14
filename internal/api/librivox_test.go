@@ -269,6 +269,13 @@ func TestLibrivoxFetchNotifications(t *testing.T) {
 	if len(failed) != 1 || failed[0].Data["title"] != "The Martian" || failed[0].Data["path"] != "" {
 		t.Fatalf("failed event = %+v", failed)
 	}
+
+	// A done fetch whose result can't be read names no book either: still its work.
+	b.finish(t, add(49), bridge.StateDone, `{"path":5}`, "")
+	done = events(notify.KindBridgeJobFinished)
+	if len(done) != 4 || done[0].Data["title"] != "The Martian" || done[0].Data["path"] != "" || done[0].Data["librivox_match"] != nil {
+		t.Fatalf("unreadable result's event = %+v", done)
+	}
 }
 
 // The refusals: a malformed body, an unknown or podcast library, a project the

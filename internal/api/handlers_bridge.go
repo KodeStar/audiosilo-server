@@ -555,9 +555,11 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 	var fetchTitle string
 	if job.Kind == bridge.KindLibrivoxFetch {
 		// A fetch names no book until it is placed: the book its result names.
-		if p, r, err := bridge.LibrivoxFetchOf(*job); err == nil {
+		p, r, err := bridge.LibrivoxFetchOf(*job)
+		// The params' title stands even when a done job's result can't be read.
+		fetchTitle = p.Title
+		if err == nil {
 			ev.Path = cmp.Or(ev.Path, r.Path)
-			fetchTitle = p.Title
 			if job.State == bridge.StateDone {
 				// The fold (OnEnded) ran before this, so the match is settled.
 				ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
