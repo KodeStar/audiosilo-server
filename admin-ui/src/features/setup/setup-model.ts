@@ -1,9 +1,11 @@
 import { ApiError } from '@/api/client';
+import { scanActive } from '@/api/hooks';
 import {
   METADATA_SOURCES,
   MIN_PASSWORD,
   PREVIEW_FIELDS,
   SETUP_STEPS,
+  type AdminLibrary,
   type AdminSettings,
   type Library,
   type MetadataSource,
@@ -42,6 +44,14 @@ export function stepIndex(id: SetupStepId): number {
  */
 export function folderSatisfied(hasLibraries: boolean): boolean {
   return hasLibraries;
+}
+
+/**
+ * Whether a library of books is scanning or waiting to (the abs step holds the
+ * import until it's done: the import matches against the books the scan finds).
+ */
+export function booksScanning(libraries: readonly AdminLibrary[]): boolean {
+  return libraries.some((l) => isBookLibrary(l) && scanActive(l));
 }
 
 /** Whether the server has a library of books: a podcast library holds no audiobooks, so it isn't the folder step's. */

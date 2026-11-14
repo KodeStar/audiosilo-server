@@ -34,6 +34,7 @@ import { Field, FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
+import { UnmatchedPrompt } from '@/features/health/unmatched-prompt';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { counted, formatDate, formatHours, formatNumber, formatRelative } from '@/lib/format';
@@ -47,6 +48,7 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
+  hasApplied,
   identifierOnlyBooks,
   importEmpty,
   importIdentifiers,
@@ -72,14 +74,47 @@ import {
  */
 export function ImportTopic() {
   const { t } = useTranslation();
-  const imports = useImports();
   return (
     <>
       <Notice tone="info" icon={History} title={t('imports.intro.title')}>
         <p>{t('imports.intro.what')}</p>
         <p className="mt-1.5">{t('imports.intro.match')}</p>
       </Notice>
-      <ConnectCard />
+      <ImportFlow />
+    </>
+  );
+}
+
+/**
+ * The import itself: the connect card (steps 1 and 2), then each open import's
+ * review card and the past imports. Settings > Import shows it under its
+ * notice, and the setup flow's abs step inline (`compact`).
+ *
+ * Once an import is applied, the past imports' card offers Match automatically
+ * (UnmatchedPrompt: shown only while books are unmatched, and it never starts a
+ * run itself); `offerMatch` shows that offer before any import is applied.
+ */
+export function ImportFlow({
+  compact = false,
+  blocked,
+  offerMatch = false,
+}: {
+  /**
+   * Inside the setup flow: no "Step n of 3" counter (the flow has its own), and
+   * the match offer opens Health in a new tab, so the flow stays open.
+   */
+  compact?: boolean;
+  /** Why Connect is off for now (the setup flow: the first scan is still running). */
+  blocked?: string;
+  /** Offer Match automatically even without an applied import (the setup flow, once scanned). */
+  offerMatch?: boolean;
+}) {
+  const { t } = useTranslation();
+  const imports = useImports();
+  const applied = hasApplied(imports.data ?? []);
+  return (
+    <>
+      <ConnectCard compact={compact} blocked={blocked} />
       {imports.isError ? (
         <QueryError
           title={t('imports.error')}
@@ -89,8 +124,9 @@ export function ImportTopic() {
       ) : !imports.data ? (
         <div className="skel h-[160px] rounded-xl" role="status" aria-label={t('common.loading')} />
       ) : (
-        <ImportLists list={imports.data} />
+        <ImportLists list={imports.data} matchOffer={applied} newTab={compact} />
       )}
+      {offerMatch && !applied ? <UnmatchedPrompt newTab={compact} /> : null}
     </>
   );
 }
@@ -103,7 +139,7 @@ interface Connection {
 }
 
 /** Steps 1 and 2: connect, then map accounts to people and start. */
-function ConnectCard() {
+function ConnectCard({ compact, blocked }: { compact: boolean; blocked?: string }) {
   const { t } = useTranslation();
   const [conn, setConn] = useState<Connection | null>(null);
   // The address (never the token) comes back when going back a step.
@@ -119,9 +155,11 @@ function ConnectCard() {
             : t('imports.connect.description')
         }
         action={
-          <span className="text-[12px] font-semibold text-muted-foreground">
-            {t('imports.step', { n: conn ? 2 : 1, of: 3 })}
-          </span>
+          compact ? undefined : (
+            <span className="text-[12px] font-semibold text-muted-foreground">
+              {t('imports.step', { n: conn ? 2 : 1, of: 3 })}
+            </span>
+          )
         }
       />
       {conn ? (
@@ -137,7 +175,7 @@ function ConnectCard() {
           }}
         />
       ) : (
-        <ConnectForm initialUrl={lastUrl} onConnected={setConn} />
+        <ConnectForm initialUrl={lastUrl} blocked={blocked} onConnected={setConn} />
       )}
     </Card>
   );
@@ -161,9 +199,12 @@ function connectErrorField(err: unknown): 'url' | 'token' | undefined {
 
 function ConnectForm({
   initialUrl,
+  blocked,
   onConnected,
 }: {
   initialUrl: string;
+  /** Why Connect is off for now; the fields stay editable. */
+  blocked?: string;
   onConnected: (c: Connection) => void;
 }) {
   const { t } = useTranslation();
@@ -174,7 +215,7 @@ function ConnectForm({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy) return;
+    if (busy || blocked) return;
     const next: typeof errors = {};
     if (!url.trim()) next.url = t('imports.connect.urlRequired');
     if (!token.trim()) next.token = t('imports.connect.tokenRequired');
@@ -237,8 +278,22 @@ function ConnectForm({
       </Field>
       <p className="text-[12.5px] text-muted-foreground">{t('imports.connect.tokenSafe')}</p>
       <FormError>{errors.form}</FormError>
-      <div className="flex justify-end">
-        <Button type="submit" disabled={busy}>
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        {blocked ? (
+          <span
+            id="abs-connect-blocked"
+            role="status"
+            className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground"
+          >
+            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            {blocked}
+          </span>
+        ) : null}
+        <Button
+          type="submit"
+          disabled={busy || !!blocked}
+          aria-describedby={blocked ? 'abs-connect-blocked' : undefined}
+        >
           {busy ? (
             <LoaderCircle className="animate-spin" aria-hidden="true" />
           ) : (
@@ -470,8 +525,20 @@ function CutoffFields({
   );
 }
 
-/** Step 3 (each open import as a review card) and the history of decided ones. */
-function ImportLists({ list }: { list: Import[] }) {
+/**
+ * Step 3 (each open import as a review card) and the history of decided ones;
+ * with `matchOffer` (an import is applied) the history card offers Match
+ * automatically.
+ */
+function ImportLists({
+  list,
+  matchOffer,
+  newTab,
+}: {
+  list: Import[];
+  matchOffer: boolean;
+  newTab: boolean;
+}) {
   const { t } = useTranslation();
   const { open, done } = splitImports(list);
   return (
@@ -493,6 +560,7 @@ function ImportLists({ list }: { list: Import[] }) {
             title={t('imports.history.title')}
             description={t('imports.history.description')}
           />
+          {matchOffer ? <UnmatchedPrompt className="mx-5 mt-4 mb-1" newTab={newTab} /> : null}
           <ul className="flex flex-col divide-y" aria-label={t('imports.history.title')}>
             {done.map((imp) => (
               <ImportRow key={imp.id} imp={imp} />

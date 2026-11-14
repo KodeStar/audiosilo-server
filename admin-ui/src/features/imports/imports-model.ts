@@ -205,6 +205,11 @@ export function splitImports(list: Import[]): { open: Import[]; done: Import[] }
   return { open, done };
 }
 
+/** Whether any import in the list is applied (the match offer follows one). */
+export function hasApplied(list: readonly Pick<Import, 'status'>[]): boolean {
+  return list.some((i) => i.status === 'applied');
+}
+
 /** The import an apply for this person would replace: their applied one from the same source. */
 export function replacedBy(imp: Import, list: Import[]): Import | undefined {
   return list.find(

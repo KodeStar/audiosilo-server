@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { Import, ImportDetail, ImportSummary } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { activity, samDetail, users } from '@/test/fixtures';
+import { activity, issuesSummary, samDetail, users } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -569,6 +569,54 @@ describe('import: review', () => {
     expect(
       within(dialog).getByText(/This replaces the Audiobookshelf history imported for sam on/),
     ).toBeInTheDocument();
+  });
+});
+
+describe('import: the match offer', () => {
+  /** Health's summary with `n` books not matched. */
+  const unmatched = (n: number) => {
+    const s = issuesSummary();
+    s.categories.push({ kind: 'unmatched', count: n, ignored: 0, samples: [] });
+    return { body: s };
+  };
+
+  it('offers Match automatically once an import is applied, and starts nothing', async () => {
+    let applied = false;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': unmatched(3),
+        'GET /admin/imports': () => ({
+          body: {
+            imports: [
+              applied ? imp({ status: 'applied', applied_at: new Date().toISOString() }) : imp(),
+            ],
+          },
+        }),
+        'GET /admin/imports/7': { body: detail() },
+        'POST /admin/imports/7/apply': () => {
+          applied = true;
+          return { body: imp({ status: 'applied', applied_at: new Date().toISOString() }) };
+        },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const user = userEvent.setup();
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    // Before the apply: no offer (the books aren't any closer to a match yet).
+    expect(screen.queryByText('3 books not matched')).not.toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Apply for sam' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply import' }));
+
+    // After the refetch the import is in the history, and the offer with it.
+    const history = await screen.findByRole('region', { name: 'Past imports' });
+    expect(await within(history).findByText('3 books not matched')).toBeInTheDocument();
+    const link = within(history).getByRole('link', { name: 'Match automatically' });
+    expect(link).toHaveAttribute('href', expect.stringMatching(/\/health\?issue=unmatched$/));
+    expect(link).not.toHaveAttribute('target');
+    expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/admin/match-runs'))).toBe(
+      false,
+    );
   });
 });
 

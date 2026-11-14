@@ -12,6 +12,7 @@ import type {
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   admin,
+  issuesSummary,
   libraries,
   settingsWith,
   settingsWithMetadata,
@@ -107,7 +108,7 @@ describe('the first-run redirect', () => {
   });
 
   it('opens a deep link in a fresh session, and the Overview after it (server#365)', async () => {
-    // The ABS step's "Open the import" opens a new tab: a fresh session, signed in.
+    // A link the flow opens in a new tab (the Overview card's): a fresh session, signed in.
     const calls = mockFetch(flowRoutes({}, { 'GET /admin/users': { body: { users: [] } } }));
     const { router } = renderApp('/server?topic=import');
     expect(
@@ -1068,6 +1069,119 @@ describe('the phone step explains signing in (server#369)', () => {
     expect(invite).toHaveAttribute('href', '/admin/people?invite=true');
     expect(invite).toHaveAttribute('target', '_blank');
     expect(screen.getByText('Step 9 of 9')).toBeVisible();
+  });
+});
+
+describe('the Audiobookshelf import inside the abs step (server#366)', () => {
+  const idle = libraries()[0].scan;
+  /** Health's summary with three books not matched. */
+  const unmatched = () => {
+    const s = issuesSummary();
+    s.categories.push({ kind: 'unmatched', count: 3, ignored: 0, samples: [] });
+    return { body: s };
+  };
+
+  it('holds Connect while the first scan runs, then offers Match automatically', async () => {
+    let scanning = true;
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done' } },
+        {
+          'GET /admin/libraries': () => ({
+            body: {
+              libraries: libraries([
+                { scan: scanning ? { ...idle, running: true, total: 40, done: 12 } : idle },
+              ]),
+            },
+          }),
+          'GET /admin/issues': unmatched(),
+          'GET /admin/users': { body: { users: [] } },
+        },
+      ),
+    );
+    renderApp('/setup?step=abs');
+    await screen.findByRole('heading', { name: 'Coming from Audiobookshelf?' });
+    // The import is right here, not in another tab, without its own step counter.
+    const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    expect(screen.queryByText('Step 1 of 3')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open the import' })).not.toBeInTheDocument();
+    expect(
+      within(connect).getByText(/Wait for the scan to finish/, { selector: '[role="status"]' }),
+    ).toBeVisible();
+    const button = within(connect).getByRole('button', { name: 'Connect' });
+    expect(button).toBeDisabled();
+    const user = userEvent.setup();
+    await user.type(
+      within(connect).getByRole('textbox', { name: 'Audiobookshelf address' }),
+      'http://192.168.1.20:13378',
+    );
+    await user.type(within(connect).getByLabelText('API token'), 'abs-token');
+    await user.keyboard('{Enter}');
+    expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(false);
+    expect(screen.queryByRole('link', { name: 'Match automatically' })).not.toBeInTheDocument();
+
+    // The scan ends: Connect works, and the offer opens Health in a new tab.
+    scanning = false;
+    await waitFor(() => expect(button).toBeEnabled(), { timeout: 3000 });
+    expect(within(connect).queryByText(/Wait for the scan to finish/)).not.toBeInTheDocument();
+    const offer = await screen.findByRole('link', { name: 'Match automatically' });
+    expect(offer).toHaveAttribute('href', '/admin/health?issue=unmatched');
+    expect(offer).toHaveAttribute('target', '_blank');
+    expect(screen.getByText('3 books not matched')).toBeVisible();
+    expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/admin/match-runs'))).toBe(
+      false,
+    );
+
+    await user.click(button);
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === '/admin/imports/abs/users')).toBe(true),
+    );
+  });
+
+  it('offers Match automatically once an import is applied, and Continue still ends the step', async () => {
+    const calls = mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done' } },
+        {
+          // No library yet (the folder came from config, say): only the applied import offers it.
+          'GET /admin/libraries': { body: { libraries: [] } },
+          'GET /admin/issues': unmatched(),
+          'GET /admin/imports': {
+            body: {
+              imports: [
+                {
+                  id: 7,
+                  user_id: 2,
+                  username: 'sam',
+                  source: 'abs',
+                  source_url: 'http://192.168.1.20:13378',
+                  source_user: 'samantha',
+                  status: 'applied',
+                  cutoff: null,
+                  cutoff_utc_offset: 0,
+                  created_at: '2026-11-14T10:00:00Z',
+                  applied_at: '2026-11-14T10:05:00Z',
+                  error: '',
+                  error_code: '',
+                  summary: null,
+                },
+              ],
+            },
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=abs');
+    const history = await screen.findByRole('region', { name: 'Past imports' });
+    expect(await within(history).findByText('3 books not matched')).toBeVisible();
+    expect(within(history).getByRole('link', { name: 'Match automatically' })).toHaveAttribute(
+      'target',
+      '_blank',
+    );
+    // One offer, not a second one under the import.
+    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
   });
 });
 
