@@ -95,6 +95,16 @@ func (s *Service) NoteOwnPassword(ctx context.Context, id int64) error {
 	})
 }
 
+// NoteResetPassword records that reset-admin gave admin id a new password,
+// printed to its terminal, not the log: as NoteOwnPassword, someone holds a
+// working password (the hint ends) and, for the first-run admin, the password
+// in the log is gone (printed_password false: the console's account step no
+// longer says it came from the log). reset-admin revokes the first-run auth
+// code beside it too.
+func (s *Service) NoteResetPassword(ctx context.Context, id int64) error {
+	return s.NoteOwnPassword(ctx, id)
+}
+
 // noteFirstAdmin applies note to the row, when there is one and note changes
 // it. The common case (nothing to change) is one read; a change reads the row
 // again and writes it in one transaction, so two notes at once (a sign-in

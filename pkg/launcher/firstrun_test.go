@@ -419,6 +419,58 @@ func TestResetAdminEndsTheSignInHint(t *testing.T) {
 	}
 }
 
+// A reset of the first-run admin replaces the password in the log (the new one
+// went to the terminal), so the console's account step stops saying it came
+// from there (GET /admin/setup printed_password). Another admin's reset leaves
+// the first-run admin's as it was.
+func TestResetAdminEndsThePrintedPassword(t *testing.T) {
+	ctx := context.Background()
+	path := storetest.Path(t)
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	authSvc := auth.New(db, time.Now)
+	if _, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, io.Discard, discardLog()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authSvc.CreateUser(ctx, "alex", "alex-password", auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := authSvc.Authenticate(ctx, "alex", "alex-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := authSvc.FirstAdminWaiting(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("no first-run admin: %v, %v", first, err)
+	}
+	printed := func() bool {
+		t.Helper()
+		p, err := authSvc.PrintedPassword(ctx, first.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if !printed() {
+		t.Fatal("no printed password before the reset")
+	}
+	if err := ResetAdmin(ctx, filepath.Dir(path), admin.Username, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !printed() {
+		t.Error("alex's reset ended the first-run admin's printed password")
+	}
+	if err := ResetAdmin(ctx, filepath.Dir(path), first.Username, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if printed() {
+		t.Error("printed_password still true after the first-run admin's reset")
+	}
+}
+
 // A session the running server already checked. reset-admin's write is another
 // process's, which the server's token cache can't see, so the session ends
 // when its row is next read: at the server's next content write, or a minute
