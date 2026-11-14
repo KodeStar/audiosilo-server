@@ -367,6 +367,46 @@ describe('bridge page', () => {
     expect(within(jobs).getByText('Project 193')).toBeInTheDocument();
   });
 
+  it('keeps the last step of a failed or cancelled job, where it stopped (server#386)', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 11,
+                kind: 'librivox.fetch',
+                params: { librivox_id: 192, work_id: 'w', recording_id: 'r', library_id: 1 },
+                state: 'failed',
+                error: 'archive.org stopped answering',
+                progress: {
+                  step: 'download',
+                  message: 'Downloading section 2 of 3',
+                  done: 2,
+                  total: 3,
+                },
+                finished_at: '2026-10-15T12:01:00Z',
+              }),
+              job({
+                id: 12,
+                kind: 'bridge.verify',
+                state: 'cancelled',
+                progress: { step: 'stat', message: 'Checking 3 files' },
+                finished_at: '2026-10-15T12:02:00Z',
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(
+      await within(jobs).findByText('Last step: Downloading section 2 of 3 · 2 of 3'),
+    ).toBeInTheDocument();
+    expect(within(jobs).getByText('Last step: Checking 3 files')).toBeInTheDocument();
+  });
+
   it('unpairs after saying what happens', async () => {
     let unpaired = false;
     const calls = mockFetch(

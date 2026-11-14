@@ -21,7 +21,7 @@ import {
   hasContent,
   jobActions,
   kindName,
-  openProgress,
+  listedProgress,
   resultSummary,
   serverScheduled,
   stateLook,
@@ -140,7 +140,7 @@ function JobRow({
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
-  const progress: ReturnType<typeof openProgress> = generate ? {} : openProgress(job);
+  const progress: ReturnType<typeof listedProgress> = generate ? {} : listedProgress(job);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
   const project = librivoxProject(job);
@@ -225,7 +225,9 @@ function JobRow({
           {progress.text || progress.total ? (
             <span className="text-[12.5px] text-muted-foreground">
               {[
-                progress.text,
+                progress.text && progress.last
+                  ? t('bridge.jobs.lastStep', { step: progress.text })
+                  : progress.text,
                 progress.total
                   ? t('bridge.jobs.count', {
                       done: formatNumber(progress.done ?? 0, lang),

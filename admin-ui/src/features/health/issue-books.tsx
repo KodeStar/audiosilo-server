@@ -16,7 +16,9 @@ import {
 } from '@/features/library/books/use-selection';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted } from '@/lib/format';
+import { addBookUrl } from '@/lib/meta-site';
 import { joinLibraryPath } from '@/lib/paths';
+import { AddItLink } from '@/features/book/add-to-community';
 import { detectAvailable } from '@/features/bridge/generate-model';
 import { AllClear } from './all-clear';
 import { DetectChaptersDialog } from './detect-chapters-dialog';
@@ -208,6 +210,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                     <span className="max-md:sr-only">{t('health.ignore')}</span>
                   </Button>
                 )}
+                {kind === 'unknown_asin' && !ignored ? (
+                  // Add it to the community database, by its ASIN (server#370).
+                  <AddItLink
+                    button
+                    title={b.title || b.path}
+                    href={addBookUrl({ asin: b.asin, title: b.title, author: b.author })}
+                  />
+                ) : null}
                 {ownFix ? (
                   <FixButton
                     fix={ownFix}

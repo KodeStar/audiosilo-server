@@ -23,6 +23,15 @@ var (
 	dictKeyRE   = regexp.MustCompile(`"([^"]+)":`)
 )
 
+// dictKeys are the translation keys one language block of i18n-dict.js defines.
+func dictKeys(block string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range dictKeyRE.FindAllStringSubmatch(block, -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
 // writeFile is a tiny helper that creates name (with parents) under dir.
 func writeFile(t *testing.T, dir, name, body string) {
 	t.Helper()
@@ -224,19 +233,12 @@ func TestI18nAssets(t *testing.T) {
 	if len(names) < 2 {
 		t.Fatalf("could not split i18n-dict.js into language blocks (found %d)", len(names))
 	}
-	keysFor := func(block string) map[string]bool {
-		out := map[string]bool{}
-		for _, m := range dictKeyRE.FindAllStringSubmatch(block, -1) {
-			out[m[1]] = true
-		}
-		return out
-	}
-	ref, base := names[0][1], keysFor(blocks[1]) // the first block is the reference (en)
+	ref, base := names[0][1], dictKeys(blocks[1]) // the first block is the reference (en)
 	if len(base) == 0 {
 		t.Fatalf("the %q i18n language block defines no keys", ref)
 	}
 	for i := 1; i < len(names); i++ {
-		lang, got := names[i][1], keysFor(blocks[i+1])
+		lang, got := names[i][1], dictKeys(blocks[i+1])
 		for k := range base {
 			if !got[k] {
 				t.Errorf("i18n-dict.js: %q is missing key %q", lang, k)
@@ -665,6 +667,48 @@ func TestReaderDocument(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s with no reader.html = %d, want 404", p, resp.StatusCode)
+		}
+	}
+}
+
+// TestConnectPageNamesWhatExists: every string the connect page's script or
+// markup asks the dictionary for is in it (a plural by its .one form), and every
+// element the script looks up by id is in the page, so a typed code's wording
+// (server#386, retext) can't name a key or an element that isn't there.
+func TestConnectPageNamesWhatExists(t *testing.T) {
+	t.Parallel()
+	js, html := readFile(t, "assets/connect.js"), readFile(t, "assets/index.html")
+	// Split yields the text before the first block, then one piece per block: en first.
+	blocks := langBlockRE.Split(readFile(t, "assets/i18n-dict.js"), -1)
+	if len(blocks) < 3 {
+		t.Fatal("could not find the language blocks")
+	}
+	en := dictKeys(blocks[1])
+	var keys []string
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`asI18n\.t\("([^"]+)"`),
+		regexp.MustCompile(`retext\("[^"]+", "([^"]+)"\)`),
+	} {
+		for _, m := range re.FindAllStringSubmatch(js, -1) {
+			keys = append(keys, m[1])
+		}
+	}
+	for _, m := range regexp.MustCompile(`data-i18n="([^"]+)"`).FindAllStringSubmatch(html, -1) {
+		keys = append(keys, m[1])
+	}
+	for _, k := range []string{"connect.phoneHeadingTyped", "connect.phoneBodyTyped", "connect.reopenHintTyped"} {
+		if !strings.Contains(js, `"`+k+`"`) {
+			t.Errorf("connect.js no longer words a typed code with %q", k)
+		}
+	}
+	for _, k := range keys {
+		if !en[k] && !en[k+".one"] {
+			t.Errorf("the connect page asks for %q, which the dictionary lacks", k)
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?:getElementById|retext)\("([^"]+)"`).FindAllStringSubmatch(js, -1) {
+		if !strings.Contains(html, `id="`+m[1]+`"`) {
+			t.Errorf("connect.js looks up #%s, which index.html lacks", m[1])
 		}
 	}
 }

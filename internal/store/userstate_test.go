@@ -109,6 +109,14 @@ func TestUserStateWritesLeaveTheContentGeneration(t *testing.T) {
 	still("progress report", exec(`UPDATE bridge_jobs SET lease_until = 'later', progress = '{"step":2}' WHERE id = 1`))
 	moved("job error", exec(`UPDATE bridge_jobs SET progress = '{"step":3}', error = 'oops' WHERE id = 1`))
 	moved("job finished", exec(`UPDATE bridge_jobs SET state = 'done' WHERE id = 1`))
+	// The unknown-ASIN report's memory (server#370): Health reads which ASINs
+	// are unknown, so a new row, a removed one or a changed answer is content;
+	// a lookup or send that only renews its times is not.
+	moved("ASIN looked up", exec(`INSERT INTO unknown_asin_reports(asin, checked_at, unknown) VALUES('B0ABCDEFGH', 'a', 1)`))
+	still("ASIN checked again", exec(`UPDATE unknown_asin_reports SET checked_at = 'b', unknown = 1 WHERE asin = 'B0ABCDEFGH'`))
+	still("ASIN sent", exec(`UPDATE unknown_asin_reports SET sent_at = 'c' WHERE asin = 'B0ABCDEFGH'`))
+	moved("ASIN now known", exec(`UPDATE unknown_asin_reports SET checked_at = 'd', unknown = 0 WHERE asin = 'B0ABCDEFGH'`))
+	moved("ASIN forgotten", exec(`DELETE FROM unknown_asin_reports WHERE asin = 'B0ABCDEFGH'`))
 	// A default write moves it whatever it writes.
 	moved("default progress update", func() error {
 		_, err := db.ExecContext(ctx, saveProgress, 4.0)

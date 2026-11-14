@@ -162,6 +162,18 @@ it('lists what needs attention on the overview', async () => {
   expect(within(card).queryByText('Long books without chapters')).not.toBeInTheDocument();
 });
 
+it('offers Match automatically on the overview for the books not matched (server#370)', async () => {
+  const summary = issuesSummary();
+  summary.categories.push({ kind: 'unmatched', count: 1, ignored: 0, samples: [] });
+  mockFetch(signedInRoutes({ 'GET /admin/issues': { body: summary } }));
+  renderApp('/');
+  expect(await screen.findByText('1 book not matched')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Match automatically' })).toHaveAttribute(
+    'href',
+    '/admin/health?issue=unmatched',
+  );
+});
+
 it('says all is well on the overview when nothing needs attention', async () => {
   const clear = issuesSummary();
   clear.categories = clear.categories.map((c) => ({ ...c, count: 0 }));
