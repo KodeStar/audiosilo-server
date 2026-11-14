@@ -1504,8 +1504,12 @@ func TestSetupWizard(t *testing.T) {
 
 	// A server that never enabled setup exposes no /setup surface: the same
 	// redirect as a closed wizard (never a 404, which the console's sign-in
-	// page probe would log), and POST still refuses.
-	a2 := New(config.Default(t.TempDir()), auth.New(db, time.Now), cat, scanner, "", slog.Default())
+	// page probe would log), and POST still refuses. Its own database, with no
+	// admin: the refusals must come from the wizard being off, not from an admin
+	// already existing.
+	db2 := storetest.Open(t)
+	cat2 := catalog.New(db2, time.Now)
+	a2 := New(config.Default(t.TempDir()), auth.New(db2, time.Now), cat2, library.NewScanner(cat2, "", slog.Default()), "", slog.Default())
 	srv2 := httptest.NewServer(a2.Handler())
 	t.Cleanup(srv2.Close)
 	resp, err := noFollow.Get(srv2.URL + "/setup")
@@ -1521,7 +1525,10 @@ func TestSetupWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode == http.StatusCreated {
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("POST /setup with wizard disabled = %d, want 409", resp.StatusCode)
+	}
+	if ok, _ := auth.New(db2, time.Now).AdminExists(ctx); ok {
 		t.Fatal("POST /setup with wizard disabled created an admin")
 	}
 }
