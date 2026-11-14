@@ -3173,6 +3173,7 @@
   "bridge.jobs.libraryId": "Bibliothèque {{id}}",
   "bridge.jobs.wholeLibrary": "toute la bibliothèque",
   "bridge.jobs.count": "{{done}} sur {{total}}",
+  "bridge.jobs.lastStep": "Dernière étape : {{step}}",
   "bridge.jobs.by": "Demandée par {{name}}",
   "bridge.jobs.byNobody": "Demandée par un compte supprimé",
   "bridge.jobs.byServer": "Planifiée par le serveur",

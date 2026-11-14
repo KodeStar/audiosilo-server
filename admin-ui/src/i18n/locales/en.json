@@ -3007,6 +3007,7 @@
   "bridge.jobs.libraryId": "Library {{id}}",
   "bridge.jobs.wholeLibrary": "whole library",
   "bridge.jobs.count": "{{done}} of {{total}}",
+  "bridge.jobs.lastStep": "Last step: {{step}}",
   "bridge.jobs.by": "Asked by {{name}}",
   "bridge.jobs.byNobody": "Asked by a deleted account",
   "bridge.jobs.byServer": "Scheduled by the server",

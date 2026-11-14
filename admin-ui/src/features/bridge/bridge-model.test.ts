@@ -9,6 +9,7 @@ import {
   codeExchanged,
   holdParams,
   isOpen,
+  listedProgress,
   jobActions,
   JOBS_POLL_IDLE_MS,
   JOBS_POLL_OPEN_MS,
@@ -246,5 +247,28 @@ describe('serverScheduled', () => {
     expect(serverScheduled('podcast.subscribe')).toBe(false);
     expect(serverScheduled('sidecars.generate')).toBe(false);
     expect(serverScheduled('bridge.verify')).toBe(false);
+  });
+});
+
+describe('listedProgress', () => {
+  const progress = { step: 'download', message: 'Downloading 2 of 3', done: 2, total: 3 };
+  it("shows an open job's step, and a failed or cancelled job's last one (server#386)", () => {
+    expect(listedProgress({ state: 'running', progress })).toEqual({
+      text: 'Downloading 2 of 3',
+      done: 2,
+      total: 3,
+    });
+    for (const state of ['failed', 'cancelled'] as const) {
+      expect(listedProgress({ state, progress })).toEqual({
+        text: 'Downloading 2 of 3',
+        done: 2,
+        total: 3,
+        last: true,
+      });
+    }
+    expect(listedProgress({ state: 'failed', progress: {} })).toEqual({});
+  });
+  it("drops a done job's last step", () => {
+    expect(listedProgress({ state: 'done', progress })).toEqual({});
   });
 });

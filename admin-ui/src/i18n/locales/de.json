@@ -3007,6 +3007,7 @@
   "bridge.jobs.libraryId": "Bibliothek {{id}}",
   "bridge.jobs.wholeLibrary": "ganze Bibliothek",
   "bridge.jobs.count": "{{done}} von {{total}}",
+  "bridge.jobs.lastStep": "Letzter Schritt: {{step}}",
   "bridge.jobs.by": "Angefordert von {{name}}",
   "bridge.jobs.byNobody": "Angefordert von einem gelöschten Konto",
   "bridge.jobs.byServer": "Vom Server geplant",

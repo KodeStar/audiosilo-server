@@ -192,6 +192,21 @@ export function openProgress(
   return isOpen(job.state) ? progressOf(job.progress) : {};
 }
 
+/**
+ * A job's progress as the jobs list shows it (server#386): what an open job is
+ * doing, and the last step a failed or cancelled one reported (`last`: the
+ * clue to where it stopped, which the server keeps); nothing for a done job,
+ * whose last step is no longer what it is doing.
+ */
+export function listedProgress(
+  job: Pick<BridgeJob, 'state' | 'progress'>,
+): ReturnType<typeof progressOf> & { last?: true } {
+  if (isOpen(job.state)) return progressOf(job.progress);
+  if (job.state !== 'failed' && job.state !== 'cancelled') return {};
+  const p = progressOf(job.progress);
+  return p.text || p.total ? { ...p, last: true } : p;
+}
+
 /** A result's facts the page words (bridge.verify's), each only when present. */
 interface ResultSummary {
   /** Files checked, and how many matched the size the server recorded. */
