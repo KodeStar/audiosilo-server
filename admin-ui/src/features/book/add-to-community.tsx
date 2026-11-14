@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
-import { ExternalLink } from 'lucide-react';
+import { BookPlus } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
 import { ExternalTextLink } from '@/features/bridge/generate-parts';
 import { cn } from '@/lib/utils';
@@ -37,8 +37,10 @@ export function AddItLink({
       aria-label={label}
       className={buttonVariants({ variant: 'ghost', size: 'sm' })}
     >
+      {/* A book with a plus, not the new-tab arrow: in a row it sits beside the
+          book page's own new-tab link, and below md it is the only thing shown. */}
+      <BookPlus aria-hidden="true" />
       <span className="max-md:hidden">{t('book.match.addIt')}</span>
-      <ExternalLink aria-hidden="true" />
     </a>
   );
 }
