@@ -1666,7 +1666,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		  WHERE id = ?12`,
 			c.Password != nil, hash, household, owner, kind, access, roleArg, c.Disabled, c.CanAddMembers,
 			other, s.ts(), id, c.Username); err != nil {
-			if store.IsUniqueViolation(err) {
+			if c.Username != nil && store.IsUniqueViolation(err) {
 				return ErrUsernameTaken
 			}
 			return err
