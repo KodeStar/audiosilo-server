@@ -989,6 +989,62 @@ describe('the account step (server#369)', () => {
     expect(puts(calls)).toEqual([]);
   });
 
+  it('a wrong current password leaves a new name unsent', async () => {
+    const calls = mockFetch(
+      accountRoutes(true, {
+        'POST /auth/password': {
+          status: 401,
+          body: { error: 'current password is incorrect', code: 'current_password_incorrect' },
+        },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'kode');
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'wrong');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText("That isn't the password you signed in with.")).toBeVisible();
+    expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([]);
+    expect(puts(calls)).toEqual([]);
+  });
+
+  it('a name refused after the password changed sends the password once', async () => {
+    let taken = true;
+    const calls = mockFetch(
+      accountRoutes(true, {
+        'PATCH /admin/users/1': (req) =>
+          taken
+            ? { status: 409, body: { error: 'username already taken', code: 'username_taken' } }
+            : { body: { ...admin, ...(req.body as object) } },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'sam');
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'from-the-log');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText(/Someone already has that name/)).toBeVisible();
+    expect(sent(calls, 'POST', '/auth/password')).toHaveLength(1);
+    taken = false;
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'kode');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(sent(calls, 'POST', '/auth/password')).toHaveLength(1);
+    expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([
+      { username: 'sam' },
+      { username: 'kode' },
+    ]);
+  });
+
   it('a name someone has shows under the field, and nothing else is sent', async () => {
     const calls = mockFetch(
       accountRoutes(false, {

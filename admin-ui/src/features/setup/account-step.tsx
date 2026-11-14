@@ -50,19 +50,9 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
     const plan = accountPlan(draft, me.username, printed);
     setErrors(Object.fromEntries(Object.entries(plan.errors).map(([f, k]) => [f, t(k)])));
     if (Object.keys(plan.errors).length) throw new StepStop();
-    if (plan.rename) {
-      try {
-        const u = await api.updateUser(me.id, { username: plan.rename });
-        // The console names the admin as the server now does.
-        updateUser({ ...me, username: u.username });
-        invalidatePeople(qc);
-      } catch (err) {
-        if (err instanceof ApiError && USERNAME_CODES.includes(err.code ?? '')) {
-          fail('username', errorMessage(err, t));
-        }
-        throw err;
-      }
-    }
+    // The password first: its current-password check is the one a typo
+    // fails, and a refusal then leaves the name as it was (a rename can't be
+    // checked before it is made).
     if (plan.password) {
       try {
         await api.setOwnPassword(plan.password.next, plan.password.current);
@@ -75,10 +65,23 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
         }
         throw err;
       }
-      // Done: a retry (a later refusal) doesn't send it again, and the step
-      // (now, or opened again with Back) no longer asks for one.
+      // Done: a retry (the rename's refusal below) doesn't send it again, and
+      // the step (now, or opened again with Back) no longer asks for one.
       notePasswordChosen(qc);
       setDraft((d) => ({ ...d, password: '', repeat: '', current: '' }));
+    }
+    if (plan.rename) {
+      try {
+        const u = await api.updateUser(me.id, { username: plan.rename });
+        // The console names the admin as the server now does.
+        updateUser({ ...me, username: u.username });
+        invalidatePeople(qc);
+      } catch (err) {
+        if (err instanceof ApiError && USERNAME_CODES.includes(err.code ?? '')) {
+          fail('username', errorMessage(err, t));
+        }
+        throw err;
+      }
     }
     await leave('done');
   };
