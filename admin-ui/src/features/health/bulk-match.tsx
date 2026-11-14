@@ -716,7 +716,7 @@ function ItemList({
   return (
     <>
       {/* Not found: what that means for the books, and how to fill the gap (server#370). */}
-      {outcome === 'none' ? <NotInDatabase books /> : null}
+      {outcome === 'none' ? <NotInDatabase /> : null}
       <ul
         className="divide-y rounded-[12px] border"
         aria-label={t(`health.bulkMatch.tab.${outcome}`)}

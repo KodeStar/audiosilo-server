@@ -42,25 +42,24 @@ export function AddItLink({
  * What a book the community database doesn't hold reads (server#370): that it
  * still plays as normal, and the two ways to fill the gap: add it on the
  * community site (`href`: AddItLink), and the setting that sends the database
- * the ASINs it doesn't know (Settings > Metadata). `books` words it for a list.
+ * the ASINs it doesn't know (Settings > Metadata). Without `href` it is worded
+ * for a list of books, whose rows each have their own link.
  */
 export function NotInDatabase({
   href,
   title,
-  books = false,
   className,
 }: {
-  /** The Add it link, for one book; none for a list (each row has its own). */
+  /** The Add it link, for one book; none for a list. */
   href?: string;
   title?: string;
-  books?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
   return (
     <div className={cn('flex flex-col gap-1.5 text-[13px] text-muted-foreground', className)}>
       <p>
-        {t(books ? 'book.match.notInDatabaseBooks' : 'book.match.notInDatabase')}
+        {t(href ? 'book.match.notInDatabase' : 'book.match.notInDatabaseBooks')}
         {href ? (
           <>
             {' '}

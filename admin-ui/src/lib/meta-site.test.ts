@@ -4,10 +4,8 @@ describe('addBookUrl', () => {
   const add = 'https://meta.audiosilo.app/add';
   const q = (url: string) => new URL(url).searchParams.get('q');
 
-  it("prefills an ASIN typed, else the book's own, which open that record", () => {
-    expect(q(addBookUrl({ typedAsin: 'b0typed001', asin: 'B0OWNASIN1', title: 'T' }))).toBe(
-      'B0TYPED001',
-    );
+  it('prefills an ASIN, which opens that record, before any words', () => {
+    expect(q(addBookUrl({ asin: 'B0OWNASIN1', title: 'T' }))).toBe('B0OWNASIN1');
     expect(q(addBookUrl({ asin: ' b0ownasin1 ', query: 'words', title: 'T' }))).toBe('B0OWNASIN1');
   });
 

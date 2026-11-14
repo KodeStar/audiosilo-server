@@ -332,8 +332,7 @@ function MatchBody({
           picked={picked}
           bookSeconds={b.duration}
           addUrl={addBookUrl({
-            typedAsin: by.asin,
-            asin: b.asin,
+            asin: by.asin || b.asin,
             query: by.q,
             title: b.title,
             author: b.author,
