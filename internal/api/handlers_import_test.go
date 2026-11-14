@@ -645,6 +645,37 @@ func TestImportFailures(t *testing.T) {
 	e.checkNoToken(t, bad)
 }
 
+// TestImportCertificate: an https Audiobookshelf whose certificate this server
+// doesn't trust is a 502 abs_certificate on connect, and a failed import with
+// that code when the background fetch meets it.
+func TestImportCertificate(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	selfSigned := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"app":"audiobookshelf","serverVersion":"2.37.1","isInit":true}`))
+	}))
+	defer selfSigned.Close()
+
+	var errBody map[string]string
+	e.call(t, "POST", "/admin/imports/abs/users", e.adminTok,
+		fmt.Sprintf(`{"url":%q,"token":"x"}`, selfSigned.URL), 502, &errBody)
+	if errBody["code"] != importer.CodeCertificate || errBody["error"] == "" {
+		t.Errorf("connect = %v", errBody)
+	}
+
+	var started struct {
+		Imports []catalog.Import `json:"imports"`
+	}
+	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":"x","users":[{"abs_user_id":%q,"user_id":%d}]}`,
+		selfSigned.URL, abstest.AlexID, e.alexID), 202, &started)
+	e.api.imports.Wait()
+	var d catalog.ImportDetail
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", started.Imports[0].ID), e.adminTok, "", 200, &d)
+	if d.Status != catalog.ImportFailed || d.ErrorCode != importer.CodeCertificate || d.Error == "" {
+		t.Errorf("failed import = %+v", d.Import)
+	}
+}
+
 // TestImportRoutesAreAdminOnly: every import route refuses a non-admin.
 func TestImportRoutesAreAdminOnly(t *testing.T) {
 	t.Parallel()

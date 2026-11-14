@@ -2308,7 +2308,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/imports/abs {url, token, users:[{abs_user_id, abs_username?, user_id}], cutoff?}` records one import per
   mapping (`abs_username` names its source until the fetch reads ABS's own) (status `fetching`; 409 `import_running` while that user has one fetching or applying) and
   fetches in the background on `baseCtx`; then `review` (or `failed` with `error_code`
-  abs_unreachable | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
+  abs_unreachable | abs_certificate | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
   cutoff, so the console shows and compares it in server time),
   `GET /admin/imports/{id}` (+ `unmatched_items`, most listened first, <= 500), `PATCH` `{cutoff}` (re-plans
   from the stored payload, `import_payloads`, gzipped and versioned; deleted once applied), `POST .../apply` (one transaction: the person's previous applied ABS import is
@@ -2318,7 +2318,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `checkToken`). The ABS client: GETs only, http/https only, no credentials, query or fragment in the
   URL, `/status` (sent without the token) must identify ABS before the token goes anywhere, redirects
   only to the same host (at most 5, never https -> http), every response size-capped, header and
-  whole-request timeouts, every error a fixed sentence (never an ABS body). It does NOT block private
+  whole-request timeouts, every error a fixed sentence (never an ABS body). An https certificate the
+  server doesn't trust (self-signed, another name, expired: `tls.CertificateVerificationError` or an
+  x509 verification error) is `abs_certificate` (502 on connect, from `/status` too, never `not_abs`),
+  so the console points at ABS's plain http:// address; there is no switch to trust one. https to an
+  http-only port (`tls.RecordHeaderError`) stays `abs_unreachable`. It does NOT block private
   or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route
   is admin-only. Matching
   (`match.go`): path components from the end (same relative path, or a unique suffix either way; the

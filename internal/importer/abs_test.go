@@ -2,11 +2,14 @@ package importer
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/importer/abstest"
@@ -158,6 +161,66 @@ func TestClientUnreachable(t *testing.T) {
 	srv.Close()
 	_, err := clientFor(t, url, "x").Status(context.Background())
 	wantCode(t, err, CodeUnreachable)
+}
+
+// absStatus answers /status as an Audiobookshelf server would.
+func absStatus(w http.ResponseWriter, _ *http.Request) {
+	_, _ = w.Write([]byte(`{"app":"audiobookshelf","serverVersion":"9","isInit":true}`))
+}
+
+// TestClientCertificate: an https ABS whose certificate this server doesn't
+// trust (self-signed, or for another name) is abs_certificate from Status and
+// Connect alike, never not_abs or abs_unreachable, and nothing is sent past the
+// handshake. https to a plain http port stays abs_unreachable.
+func TestClientCertificate(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		absStatus(w, r)
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	// Untrusted (the platform's verifier or Go's: only the code is compared).
+	_, err := clientFor(t, srv.URL, "x").Status(ctx)
+	wantCode(t, err, CodeCertificate)
+	if err.Error() == "" {
+		t.Error("the certificate error has no sentence")
+	}
+	_, _, err = New(nil, nil, nil, nil, nil).Connect(ctx, srv.URL, abstest.AdminToken)
+	wantCode(t, err, CodeCertificate)
+	if n := requests.Load(); n != 0 {
+		t.Errorf("%d requests got past the handshake", n)
+	}
+
+	// Trusted, at the address the certificate names: connects (the control).
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	trusting := func(raw string) *Client {
+		c := clientFor(t, raw, "x")
+		c.http.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		return c
+	}
+	if v, err := trusting(srv.URL).Status(ctx); err != nil || v != "9" {
+		t.Fatalf("trusted: %q, %v", v, err)
+	}
+	// Trusted, but not for this name (the certificate covers 127.0.0.1, not localhost).
+	_, err = trusting(strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)).Status(ctx)
+	wantCode(t, err, CodeCertificate)
+	var hostname x509.HostnameError
+	if !errors.As(err, &hostname) {
+		t.Errorf("cause = %v, want a hostname mismatch", errors.Unwrap(err))
+	}
+
+	// https to a plain http server: no certificate was ever shown.
+	plain := httptest.NewServer(http.HandlerFunc(absStatus))
+	defer plain.Close()
+	_, err = clientFor(t, strings.Replace(plain.URL, "http://", "https://", 1), "x").Status(ctx)
+	wantCode(t, err, CodeUnreachable)
+	// And plain http itself is unchanged.
+	if v, err := clientFor(t, plain.URL, "x").Status(ctx); err != nil || v != "9" {
+		t.Fatalf("http: %q, %v", v, err)
+	}
 }
 
 // TestClientRedirects: a redirect on the same host is followed (an http server
