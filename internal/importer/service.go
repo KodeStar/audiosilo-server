@@ -271,15 +271,18 @@ func (s *Service) fetch(ctx context.Context, c *Client, imps []catalog.Import) {
 		return
 	}
 	byItem := newItemIndex(items)
+	identified := identifiedItems(items, byItem)
 	for _, imp := range imps {
-		if err := s.fetchOne(ctx, c, imp, byItem, books); err != nil {
+		if err := s.fetchOne(ctx, c, imp, byItem, identified, books); err != nil {
 			fail(imp, err)
 		}
 	}
 }
 
-// fetchOne fetches and plans one import.
-func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, items *itemIndex, books *bookIndex) error {
+// fetchOne fetches and plans one import. identified is the server's books with
+// an identifier (Payload.Identified).
+func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, items *itemIndex, identified []Item,
+	books *bookIndex) error {
 	u, own, err := c.userDetail(ctx, imp.SourceID)
 	if err != nil {
 		return err
@@ -289,6 +292,7 @@ func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, i
 		return err
 	}
 	p := buildPayload(u, sessions, items)
+	p.Identified = identified
 	st, err := s.cat.ImportStateFor(ctx, imp.ID)
 	if err != nil {
 		return err
@@ -334,7 +338,16 @@ func (s *Service) review(ctx context.Context, st *catalog.ImportState, p *Payloa
 	if err != nil {
 		return catalog.ImportPlan{}, err
 	}
-	return plan(p, matches, *st, s.loc, s.now()).Plan, nil
+	return planAll(p, matches, books, *st, s.loc, s.now()).Plan, nil
+}
+
+// planAll is plan with the identifiers p carries (identifiersFor): everything a
+// review shows and an apply writes.
+func planAll(p *Payload, matches map[string]Match, books *bookIndex, st catalog.ImportState, loc *time.Location,
+	now time.Time) *catalog.ImportWrite {
+	w := plan(p, matches, st, loc, now)
+	w.Hints, w.Plan.Summary.Identifiers = identifiersFor(p, books)
+	return w
 }
 
 // reviewing loads import id, which must be in review: its state (read once) and
@@ -384,7 +397,7 @@ func (s *Service) SetCutoff(ctx context.Context, id int64, c Cutoff) (*catalog.I
 
 // Apply writes a reviewed import (catalog.ApplyImport: replacing the person's
 // previous one from the same source). The books are matched again now, so a
-// book added since the review is found. Sessions older than the retention go
+// book added (or matched) since the review is found (or left out of the hints). Sessions older than the retention go
 // straight into day totals (catalog.ImportWrite.RollUpBefore).
 func (s *Service) Apply(ctx context.Context, id int64) (*catalog.Import, error) {
 	st, p, err := s.reviewing(ctx, id)
@@ -405,7 +418,7 @@ func (s *Service) Apply(ctx context.Context, id int64) (*catalog.Import, error) 
 		rollUp = now.Add(-s.retention())
 	}
 	return s.cat.ApplyImport(ctx, id, func(st catalog.ImportState) (*catalog.ImportWrite, error) {
-		w := plan(p, matches, st, s.loc, now)
+		w := planAll(p, matches, books, st, s.loc, now)
 		w.RollUpBefore, w.Zone = rollUp, s.loc
 		return w, nil
 	})

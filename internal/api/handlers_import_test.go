@@ -86,6 +86,8 @@ func newImportEnv(t *testing.T) *importEnv {
 		{LibraryID: books.ID, RelPath: "Mary Shelley/Frankenstein", Title: "Frankenstein", Author: "Mary Shelley", Duration: 4501},
 		{LibraryID: books.ID, RelPath: "Émile Zola/Germinal", Title: "Germinal", Author: "Émile Zola", Duration: 6000},
 		{LibraryID: kids.ID, RelPath: "Beatrix Potter/The Tale of Peter Rabbit", Title: "The Tale of Peter Rabbit", Author: "Beatrix Potter", Duration: 480},
+		// Not alex's to see, and no history of alex's: it still takes ABS's ASIN as a match hint.
+		{LibraryID: kids.ID, RelPath: "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone", Title: "Harry Potter and the Philosopher's Stone", Author: "J.K. Rowling", Duration: 4800},
 	} {
 		b.IsFolder, b.AddedAt = true, "2026-01-01T00:00:00Z"
 		if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
@@ -167,6 +169,12 @@ func TestImportFromABS(t *testing.T) {
 		s.Sessions != 32 || s.Listened <= 0 {
 		t.Fatalf("summary = %+v", *s)
 	}
+	// Every ABS book with an ASIN that pairs with a book here, whoever's history and
+	// library it is in, carries it as a match hint: the four in Books, and the
+	// Harry Potter in Kids.
+	if s.Identifiers == nil || *s.Identifiers != (catalog.ImportIdentifiers{Books: 5, ASIN: 5}) {
+		t.Fatalf("identifiers = %+v", s.Identifiers)
+	}
 	reasons := map[string]int{}
 	for _, u := range d.UnmatchedItems {
 		reasons[u.Reason]++
@@ -194,6 +202,10 @@ func TestImportFromABS(t *testing.T) {
 	}
 	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", id), e.adminTok, "", 409, nil)
 	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 409, nil)
+	hp := e.hintOf(t, "Kids", "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone")
+	if hp.HintASIN != "B017V568SY" || hp.ASIN != "" {
+		t.Errorf("Harry Potter after the apply: hint %q, ASIN %q; want the hint alone", hp.HintASIN, hp.ASIN)
+	}
 
 	// Alex's own stats now show the listening and the three finished books.
 	var stats struct {
@@ -242,11 +254,35 @@ func TestImportFromABS(t *testing.T) {
 	if stats.Stats.Totals.Listened != 0 || stats.Stats.Totals.Finished != 0 {
 		t.Errorf("stats after undo = %+v", stats.Stats.Totals)
 	}
+	if hp := e.hintOf(t, "Kids", "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"); hp.HintASIN != "" {
+		t.Errorf("the undo left the hint %q", hp.HintASIN)
+	}
 	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", id), e.adminTok, "", 409, nil)
 	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 204, nil)
 	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 404, nil)
 
 	e.checkNoToken(t, abstest.AdminToken)
+}
+
+// hintOf reads the book at path in the library named lib, with its match hint.
+func (e *importEnv) hintOf(t *testing.T, lib, path string) *catalog.Book {
+	t.Helper()
+	ctx := context.Background()
+	libs, err := e.cat.ListLibraries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range libs {
+		if l.Name == lib {
+			b, err := e.cat.GetBookByPath(ctx, l.ID, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+	}
+	t.Fatalf("no library %q", lib)
+	return nil
 }
 
 // startAlex starts an import of the recorded alex into Alex and waits for its

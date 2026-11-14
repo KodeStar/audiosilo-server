@@ -10,6 +10,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // Payload is one ABS user's history, normalized: what an import keeps (gzipped
@@ -22,6 +24,11 @@ type Payload struct {
 	Sessions  []Session  `json:"sessions"`
 	Progress  []Progress `json:"progress"`
 	Bookmarks []Bookmark `json:"bookmarks"`
+	// Identified is every book ABS has with a valid ASIN or ISBN, whoever's
+	// history it is in (identifiedItems): what the import carries as match hints
+	// (identifiersFor). Absent from a payload stored before it (server#366): that
+	// import carries none.
+	Identified []Item `json:"identified,omitempty"`
 }
 
 // payloadVersion is Payload.V: a stored payload of another version (a shape this
@@ -110,6 +117,30 @@ func newItemIndex(items []absItem) *itemIndex {
 	return x
 }
 
+// item is it as a payload keeps it.
+func (x *itemIndex) item(it *absItem) Item {
+	title, author, series, seq := it.Media.Metadata.describe()
+	return Item{ID: it.ID, RelPath: it.RelPath, FullPath: it.Path, IsFile: it.IsFile,
+		Siblings: x.siblings[folderOf(it)],
+		Title:    title, Author: author, Series: series, Sequence: seq,
+		ASIN: strings.TrimSpace(it.Media.Metadata.ASIN), ISBN: strings.TrimSpace(it.Media.Metadata.ISBN),
+		Duration: it.Media.Duration}
+}
+
+// identifiedItems is every item of the server's (items, in ABS's order, x their
+// index) with a valid ASIN or ISBN (catalog.BookHint.Normalized), nil for none:
+// Payload.Identified, the same for every user a fetch reads.
+func identifiedItems(items []absItem, x *itemIndex) []Item {
+	var out []Item
+	for i := range items {
+		it := &items[i]
+		if _, ok := (catalog.BookHint{ASIN: it.Media.Metadata.ASIN, ISBN: it.Media.Metadata.ISBN}).Normalized(); ok {
+			out = append(out, x.item(it))
+		}
+	}
+	return out
+}
+
 // buildPayload normalizes what was fetched for one user: their book sessions,
 // progress and bookmarks, and the items those name (all of the server's items,
 // in items, are needed to count each one's siblings). A session on an item ABS
@@ -128,12 +159,7 @@ func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Pa
 		}
 		it, ok := items.byID[id]
 		if ok {
-			title, author, series, seq := it.Media.Metadata.describe()
-			p.Items = append(p.Items, Item{ID: id, RelPath: it.RelPath, FullPath: it.Path, IsFile: it.IsFile,
-				Siblings: items.siblings[folderOf(it)],
-				Title:    title, Author: author, Series: series, Sequence: seq,
-				ASIN: strings.TrimSpace(it.Media.Metadata.ASIN), ISBN: strings.TrimSpace(it.Media.Metadata.ISBN),
-				Duration: it.Media.Duration})
+			p.Items = append(p.Items, items.item(it))
 		}
 		known[id] = ok
 		return ok
