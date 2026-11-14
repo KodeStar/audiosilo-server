@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { ExternalLink } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
+import { ExternalTextLink } from '@/features/bridge/generate-parts';
 import { cn } from '@/lib/utils';
 
 /**
@@ -20,20 +21,24 @@ export function AddItLink({
   button?: boolean;
 }) {
   const { t } = useTranslation();
+  const label = t('book.match.addItAria', { title });
+  if (!button) {
+    return (
+      <ExternalTextLink href={href} aria-label={label} className="text-[length:inherit]">
+        {t('book.match.addIt')}
+      </ExternalTextLink>
+    );
+  }
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label={t('book.match.addItAria', { title })}
-      className={
-        button
-          ? buttonVariants({ variant: 'ghost', size: 'sm' })
-          : 'inline-flex items-center gap-1 font-semibold text-brand-ink hover:underline'
-      }
+      aria-label={label}
+      className={buttonVariants({ variant: 'ghost', size: 'sm' })}
     >
-      <span className={cn(button && 'max-md:hidden')}>{t('book.match.addIt')}</span>
-      <ExternalLink aria-hidden="true" className={cn(!button && 'size-3.5')} />
+      <span className="max-md:hidden">{t('book.match.addIt')}</span>
+      <ExternalLink aria-hidden="true" />
     </a>
   );
 }
