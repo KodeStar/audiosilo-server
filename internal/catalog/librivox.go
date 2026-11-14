@@ -53,8 +53,7 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if strings.TrimSpace(p.WorkID) == "" || strings.TrimSpace(p.RecordingID) == "" {
 		return nil
 	}
-	if r.LibraryID != *j.LibraryID || r.LibraryID != p.LibraryID || r.LibrivoxID != p.LibrivoxID ||
-		!cleanLibPath(r.Path) {
+	if r.LibraryID != *j.LibraryID || !fetchResultFits(p, r) {
 		return ErrFetchNotIndexed
 	}
 	var editor any
@@ -109,23 +108,36 @@ const (
 // notification says: LibrivoxMatched as the job's recording, LibrivoxKept when
 // the Bridge adopted a book matched to something else (an admin's rematch,
 // which the fold keeps), LibrivoxUnmatched when it is neither (the fold
-// failed), "" when the match can't be read. A result that names another
-// library or project than the job's is one the fold refused, so it is
-// LibrivoxUnmatched whatever is matched at the path it names.
+// failed), "" when the match can't be read. A result the fold refused (it
+// names another library or project than the job's, or no book indexed in a
+// books library) is LibrivoxUnmatched whatever match is recorded at the path
+// it names: a deleted book's stays there.
 func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) string {
-	if r.LibraryID != p.LibraryID || r.LibrivoxID != p.LibrivoxID {
+	if !fetchResultFits(p, r) {
 		return LibrivoxUnmatched
 	}
-	m, err := bookAnchor(ctx, c.db, r.LibraryID, r.Path)
+	var work, recording sql.NullString
+	err := c.db.QueryRowContext(ctx, `SELECT m.work_id, m.recording_id FROM books b
+		  JOIN libraries l ON l.id = b.library_id
+		  LEFT JOIN book_matches m ON m.library_id = b.library_id AND m.path = b.rel_path
+		 WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?`, r.LibraryID, r.Path, KindBooks).Scan(&work, &recording)
 	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return LibrivoxUnmatched
 	case err != nil:
 		return ""
-	case m != nil && m.WorkID == p.WorkID && m.RecordingID == p.RecordingID:
+	case work.Valid && work.String == p.WorkID && recording.String == p.RecordingID:
 		return LibrivoxMatched
-	case m != nil && r.Adopted != nil && *r.Adopted:
+	case work.Valid && r.Adopted != nil && *r.Adopted:
 		return LibrivoxKept
 	}
 	return LibrivoxUnmatched
+}
+
+// fetchResultFits is whether a librivox.fetch's result names its params' own
+// library and project and a clean path: one that doesn't is never folded.
+func fetchResultFits(p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) bool {
+	return r.LibraryID == p.LibraryID && r.LibrivoxID == p.LibrivoxID && cleanLibPath(r.Path)
 }
 
 // dropLeftoverIdentity removes the ASIN and ISBN a deleted book left at ref

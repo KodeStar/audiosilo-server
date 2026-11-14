@@ -312,9 +312,9 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 }
 
 // TestLibrivoxFetchMatchRefusedResult: a result that names another library or
-// project than the job's is one the fold refused, so the notification never
-// reads it as matched, even when the book it names is matched as the job's
-// recording.
+// project than the job's, or a path with no book indexed, is one the fold
+// refused, so the notification never reads it as matched, even when the path
+// it names holds a match as the job's recording (a deleted book's stays).
 func TestLibrivoxFetchMatchRefusedResult(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -330,6 +330,11 @@ func TestLibrivoxFetchMatchRefusedResult(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	const gone = "L. Leslie Brooke/Deleted Since"
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_at)
+		VALUES(?, ?, 'johnny-crows-garden', 'lv192', 'accepted', 't')`, lib.ID, gone); err != nil {
+		t.Fatal(err)
+	}
 	p := bridge.LibrivoxFetchParams{LibrivoxID: 192, WorkID: "johnny-crows-garden", RecordingID: "lv192", LibraryID: lib.ID}
 	for name, tc := range map[string]struct {
 		r    bridge.LibrivoxFetchResult
@@ -338,6 +343,8 @@ func TestLibrivoxFetchMatchRefusedResult(t *testing.T) {
 		"the job's own":   {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 192}, LibrivoxMatched},
 		"another library": {bridge.LibrivoxFetchResult{LibraryID: other.ID, Path: path, LibrivoxID: 192}, LibrivoxUnmatched},
 		"another project": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 193}, LibrivoxUnmatched},
+		"no book indexed": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: gone, LibrivoxID: 192}, LibrivoxUnmatched},
+		"an unclean path": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: "../" + path, LibrivoxID: 192}, LibrivoxUnmatched},
 	} {
 		if got := c.LibrivoxFetchMatch(ctx, p, tc.r); got != tc.want {
 			t.Errorf("%s: %q, want %q", name, got, tc.want)
