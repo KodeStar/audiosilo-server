@@ -862,8 +862,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
   library's authors/narrators/series: `books` and its side tables, `libraries`; scopes computed
   per request from shares, grants and members' `collection_shares`, into the key) and the
-  admin's `/admin/books` first page and facets read no user state; Health `/admin/issues` reads `progress` row counts (the duplicate ranking), hence
-  `progress`'s row rule, and its offline libraries' listener counts are computed per request
+  admin's `/admin/books` first page and facets read no user state but `unknown_asin_reports`
+  (`?issue=unknown_asin`); Health `/admin/issues` reads `progress` row counts (the duplicate
+  ranking), hence `progress`'s row rule, and which `unknown_asin_reports` rows are `unknown` (its
+  `unknown_asin` kind), hence that table's rule (rows and `unknown` watched, `checked_at` and
+  `sent_at` free), and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
   either, dropped from the cache by the touching request. A new cache whose answer reads a
@@ -2180,7 +2183,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
-  out of the summary while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
+  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`; left out of the
+  summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
   category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
