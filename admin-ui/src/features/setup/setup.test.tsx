@@ -967,29 +967,7 @@ describe('the account step (server#369)', () => {
     expect(sent(calls, 'POST', '/auth/password')).toEqual([]);
   });
 
-  it('a wrong current password keeps the session and says so under the field', async () => {
-    const calls = mockFetch(
-      accountRoutes(true, {
-        'POST /auth/password': {
-          status: 401,
-          body: { error: 'current password is incorrect', code: 'current_password_incorrect' },
-        },
-      }),
-    );
-    renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Your account' });
-    const user = userEvent.setup();
-    await user.type(screen.getByLabelText('New password'), 'a-new-password');
-    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
-    await user.type(screen.getByLabelText('Current password'), 'wrong');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-    expect(await screen.findByText("That isn't the password you signed in with.")).toBeVisible();
-    expect(getToken()).toBe('stored');
-    expect(screen.getByRole('heading', { name: 'Your account' })).toBeVisible();
-    expect(puts(calls)).toEqual([]);
-  });
-
-  it('a wrong current password leaves a new name unsent', async () => {
+  it('a wrong current password keeps the session, says so under the field and leaves a new name unsent', async () => {
     const calls = mockFetch(
       accountRoutes(true, {
         'POST /auth/password': {
@@ -1008,6 +986,8 @@ describe('the account step (server#369)', () => {
     await user.type(screen.getByLabelText('Current password'), 'wrong');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
     expect(await screen.findByText("That isn't the password you signed in with.")).toBeVisible();
+    expect(getToken()).toBe('stored');
+    expect(screen.getByRole('heading', { name: 'Your account' })).toBeVisible();
     expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([]);
     expect(puts(calls)).toEqual([]);
   });
