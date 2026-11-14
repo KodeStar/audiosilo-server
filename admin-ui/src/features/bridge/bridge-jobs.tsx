@@ -19,10 +19,9 @@ import {
   BRIDGE_JOB_STATES,
   backupAsin,
   hasContent,
-  isOpen,
   jobActions,
   kindName,
-  progressOf,
+  openProgress,
   resultSummary,
   serverScheduled,
   stateLook,
@@ -141,10 +140,7 @@ function JobRow({
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
-  // Its step only while it is open: a finished job's last one ("Asking the
-  // server to index the book") is no longer what it is doing.
-  const progress: ReturnType<typeof progressOf> =
-    generate || !isOpen(job.state) ? {} : progressOf(job.progress);
+  const progress: ReturnType<typeof openProgress> = generate ? {} : openProgress(job);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
   const project = librivoxProject(job);

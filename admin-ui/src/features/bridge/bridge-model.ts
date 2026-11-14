@@ -182,6 +182,16 @@ export function progressOf(progress: unknown): { text?: string; done?: number; t
   };
 }
 
+/**
+ * A job's progress only while it is open: a finished job's last step ("Asking
+ * the server to index the book") is no longer what it is doing.
+ */
+export function openProgress(
+  job: Pick<BridgeJob, 'state' | 'progress'>,
+): ReturnType<typeof progressOf> {
+  return isOpen(job.state) ? progressOf(job.progress) : {};
+}
+
 /** A result's facts the page words (bridge.verify's), each only when present. */
 interface ResultSummary {
   /** Files checked, and how many matched the size the server recorded. */
