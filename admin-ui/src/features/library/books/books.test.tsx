@@ -52,7 +52,7 @@ describe('books: browsing', () => {
       'href',
       '/admin/health?issue=unmatched',
     );
-    await act(() => router.navigate({ to: '/library', search: { author: 'Brandon Sanderson' } }));
+    await act(() => router.navigate({ to: '/library', search: { q: 'mort' } } as never));
     await waitFor(() => expect(screen.queryByText('12 books not matched')).toBeNull());
   });
 
