@@ -2,9 +2,9 @@ package auth
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
+
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // The first-run admin (server#369): a headless start with no admin makes one,
@@ -38,32 +38,14 @@ func (s *Service) MarkFirstAdmin(ctx context.Context, id int64) error {
 }
 
 // readFirstAdmin is the row; ok is false without one (or with one that doesn't
-// read, which counts as none).
+// read, which counts as none: a real row names its admin).
 func (s *Service) readFirstAdmin(ctx context.Context) (fa firstAdmin, ok bool, err error) {
-	var raw string
-	err = s.db.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = ?`, firstAdminKey).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return firstAdmin{}, false, nil
-	}
-	if err != nil {
-		return firstAdmin{}, false, err
-	}
-	if json.Unmarshal([]byte(raw), &fa) != nil {
-		return firstAdmin{}, false, nil
-	}
-	return fa, true, nil
+	fa, err = store.GetState[firstAdmin](ctx, s.db, firstAdminKey)
+	return fa, err == nil && fa.UserID != 0, err
 }
 
 func (s *Service) putFirstAdmin(ctx context.Context, fa firstAdmin) error {
-	value, err := json.Marshal(fa)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO server_state(key, value, updated_at) VALUES(?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		firstAdminKey, string(value), s.ts())
-	return err
+	return store.PutState(ctx, s.db, firstAdminKey, fa, s.ts())
 }
 
 // FirstAdminWaiting returns the admin the server made at first start while no

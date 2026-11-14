@@ -3378,8 +3378,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `choice` and a snooze's `returns_at`, not when nothing changed. The answer is server-wide and **taken
   on trust**: nothing is checked, nothing is sent anywhere, and it unlocks nothing (a donation stays a
   gift). Stored in `server_state` (migration 0040: key/value server facts that are not config.yaml
-  settings) through the generic `catalog/server_state.go` accessors `getServerState` (an unreadable value
-  counts as none) and `putServerState`; key `support_card`, value `{"choice":"donated"}` or
+  settings) through the generic accessors `store.GetState` (an unreadable value counts as none) and
+  `store.PutState` (`catalog/server_state.go` names them `getServerState` and `putServerState`); key `support_card`, value `{"choice":"donated"}` or
   `{"choice":"snoozed","until":<formatSessionTime>}`. `SetSupportChoice` reads and writes in one
   transaction so a donation is never downgraded by a later snooze. Due when not donated, no snooze
   running, and the server's age (the earliest non-demo `users.created_at`, so a restored backup keeps its
