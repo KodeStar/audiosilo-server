@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -107,12 +108,27 @@ func sameFile(a, b string) bool {
 	return err == nil && os.SameFile(sa, sb)
 }
 
-// plainWord is a word a POSIX shell takes as it is.
-var plainWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+// plainWord is a word a POSIX shell takes as it is; plainWindowsWord one
+// Windows' shells do (a path's backslashes are plain there).
+var (
+	plainWord        = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+	plainWindowsWord = regexp.MustCompile(`^[A-Za-z0-9_@+=:,./\\-]+$`)
+)
 
-// shellQuote is s as one POSIX shell word: as it is when plain, else in single
-// quotes.
-func shellQuote(s string) string {
+// shellQuote is s as one word of the shell the admin types the command into
+// on this system (quoteWord).
+func shellQuote(s string) string { return quoteWord(runtime.GOOS, s) }
+
+// quoteWord is s as one shell word on goos: as it is when plain, else in
+// single quotes for a POSIX shell, in double quotes on Windows (cmd.exe takes
+// a single quote as part of the word, and a path there holds no double quote).
+func quoteWord(goos, s string) string {
+	if goos == "windows" {
+		if plainWindowsWord.MatchString(s) {
+			return s
+		}
+		return `"` + s + `"`
+	}
 	if plainWord.MatchString(s) {
 		return s
 	}

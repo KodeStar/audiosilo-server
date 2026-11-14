@@ -138,6 +138,22 @@ func TestResetAdminCommand(t *testing.T) {
 }
 
 // passwordIn reads the password ResetAdmin printed.
+// On Windows a path's backslashes are plain and a word with a space takes
+// double quotes: cmd.exe reads a single quote as part of the word.
+func TestQuoteWord(t *testing.T) {
+	for _, tc := range []struct{ goos, in, want string }{
+		{"linux", "/data", "/data"},
+		{"linux", "/srv/audio silo", "'/srv/audio silo'"},
+		{"linux", "/srv/it's", `'/srv/it'\''s'`},
+		{"windows", `C:\AudioSilo\audiosilo.exe`, `C:\AudioSilo\audiosilo.exe`},
+		{"windows", `C:\Program Files\AudioSilo\data`, `"C:\Program Files\AudioSilo\data"`},
+	} {
+		if got := quoteWord(tc.goos, tc.in); got != tc.want {
+			t.Errorf("quoteWord(%s, %q) = %q, want %q", tc.goos, tc.in, got, tc.want)
+		}
+	}
+}
+
 var passwordLine = regexp.MustCompile(`(?m)^  (\S+)$`)
 
 func passwordIn(t *testing.T, out string) string {
