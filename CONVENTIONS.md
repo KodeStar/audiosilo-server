@@ -3770,7 +3770,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stays, and touches nothing else; absent replaces the row and touches nothing else (the L6
   rule). A job whose params name no recording writes nothing. `/meta` then answers the book from
   its recorded match (LibriVox L5) with no change. Its notification (`notifyBridgeJob`, after the
-  fold) carries `librivox_match` (`matched`, `kept`, `unmatched`; `notify.Librivox*`) from the
+  fold) carries `librivox_match` (`matched`, `kept`, `unmatched`; `catalog.LibrivoxFetchMatch`) from the
   book's match now, and claims the recording only when matched. Known limits: a fold lost
   between the job's commit and the fold (a crash), and Clear community matches, drop the
   identity until the server reads `librivox.json` (a follow-up); Add again finds the placed

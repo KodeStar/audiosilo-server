@@ -463,9 +463,9 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 // librivoxMatchText is a finished librivox.fetch's message by how its book is
 // matched (the event's librivox_match); none known keeps the kind's own.
 var librivoxMatchText = map[string]string{
-	LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
-	LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
-	LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
+	catalog.LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
+	catalog.LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
+	catalog.LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
 		"Add it again from Library > LibriVox to match it.",
 }
 
@@ -762,23 +762,10 @@ type BridgeJob struct {
 	// how much lined up.
 	Coverage *float64
 	// LibrivoxMatch is how a finished librivox.fetch's book is matched now
-	// (LibrivoxMatched, LibrivoxKept, LibrivoxUnmatched; "" when not known), so
-	// its message claims the recording only when the book is matched to it.
+	// (catalog.LibrivoxFetchMatch; "" when not known), so its message claims
+	// the recording only when the book is matched to it.
 	LibrivoxMatch string
 }
-
-// A finished librivox.fetch's book, as BridgeJob.LibrivoxMatch (the event's
-// librivox_match) says it is matched.
-const (
-	// LibrivoxMatched: to the LibriVox recording it was added as.
-	LibrivoxMatched = "matched"
-	// LibrivoxKept: the Bridge adopted a book already in the library, which
-	// keeps the match it had (an admin's).
-	LibrivoxKept = "kept"
-	// LibrivoxUnmatched: to nothing it was added as (recording its match
-	// failed); adding it again matches it.
-	LibrivoxUnmatched = "unmatched"
-)
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
 // or into failed or needs_attention (bridge_job_failed). The caller reports each

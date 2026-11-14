@@ -232,7 +232,7 @@ func TestLibrivoxFetchNotifications(t *testing.T) {
 	// The fold fails (no book indexed at the path): the event doesn't claim a match.
 	b.finish(t, add(47), bridge.StateDone, result(47, "Nobody/Not Here", ""), "")
 	done := events(notify.KindBridgeJobFinished)
-	if len(done) != 1 || done[0].Data["librivox_match"] != notify.LibrivoxUnmatched || done[0].Data["title"] != "The Martian" {
+	if len(done) != 1 || done[0].Data["librivox_match"] != catalog.LibrivoxUnmatched || done[0].Data["title"] != "The Martian" {
 		t.Fatalf("unmatched event = %+v", done)
 	}
 
@@ -246,14 +246,14 @@ func TestLibrivoxFetchNotifications(t *testing.T) {
 		t.Fatalf("adopted book's match = %+v, %v; want the admin's kept", m, err)
 	}
 	done = events(notify.KindBridgeJobFinished)
-	if len(done) != 2 || done[0].Data["librivox_match"] != notify.LibrivoxKept {
+	if len(done) != 2 || done[0].Data["librivox_match"] != catalog.LibrivoxKept {
 		t.Fatalf("kept event = %+v", done)
 	}
 
 	// A newly placed book is matched as its recording.
 	b.finish(t, add(48), bridge.StateDone, result(48, cradleBook, `,"adopted":false`), "")
 	done = events(notify.KindBridgeJobFinished)
-	if len(done) != 3 || done[0].Data["librivox_match"] != notify.LibrivoxMatched {
+	if len(done) != 3 || done[0].Data["librivox_match"] != catalog.LibrivoxMatched {
 		t.Fatalf("matched event = %+v", done)
 	}
 

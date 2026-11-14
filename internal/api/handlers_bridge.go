@@ -552,12 +552,16 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 			}
 		}
 	}
-	var fetch *librivoxFetch
+	var fetchTitle string
 	if job.Kind == bridge.KindLibrivoxFetch {
 		// A fetch names no book until it is placed: the book its result names.
 		if p, r, err := bridge.LibrivoxFetchOf(*job); err == nil {
-			fetch = &librivoxFetch{p, r}
 			ev.Path = cmp.Or(ev.Path, r.Path)
+			fetchTitle = p.Title
+			if job.State == bridge.StateDone {
+				// The fold (OnEnded) ran before this, so the match is settled.
+				ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
+			}
 		}
 	}
 	if job.LibraryID != nil {
@@ -574,39 +578,9 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 			}
 		}
 	}
-	if fetch != nil {
-		// One that placed no book is named by the work it was adding.
-		ev.Title = cmp.Or(ev.Title, fetch.params.Title)
-		if job.State == bridge.StateDone {
-			ev.LibrivoxMatch = a.librivoxMatch(ctx, fetch)
-		}
-	}
+	// A fetch that placed no book is named by the work it was adding.
+	ev.Title = cmp.Or(ev.Title, fetchTitle)
 	a.rt.Notify.BridgeJobEnded(ctx, ev)
-}
-
-// librivoxFetch is a librivox.fetch's params and result.
-type librivoxFetch struct {
-	params bridge.LibrivoxFetchParams
-	result bridge.LibrivoxFetchResult
-}
-
-// librivoxMatch is how a done librivox.fetch's book is matched now, which its
-// notification says (the fold, OnEnded, ran before it): notify.LibrivoxMatched
-// as the job's recording, notify.LibrivoxKept when the Bridge adopted a book
-// matched to something else (an admin's rematch, which the fold keeps),
-// notify.LibrivoxUnmatched when it is neither (the fold failed), "" when the
-// match can't be read.
-func (a *API) librivoxMatch(ctx context.Context, f *librivoxFetch) string {
-	m, err := a.cat.BookMatchAt(ctx, f.result.LibraryID, f.result.Path)
-	switch {
-	case err != nil:
-		return ""
-	case m != nil && m.WorkID == f.params.WorkID && m.RecordingID == f.params.RecordingID:
-		return notify.LibrivoxMatched
-	case m != nil && f.result.Adopted != nil && *f.result.Adopted:
-		return notify.LibrivoxKept
-	}
-	return notify.LibrivoxUnmatched
 }
 
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,

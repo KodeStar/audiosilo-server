@@ -91,6 +91,38 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	return err
 }
 
+// How a finished librivox.fetch's book is matched, as LibrivoxFetchMatch says
+// it (the bridge_job_finished event's librivox_match).
+const (
+	// LibrivoxMatched: to the LibriVox recording it was added as.
+	LibrivoxMatched = "matched"
+	// LibrivoxKept: the Bridge adopted a book already in the library, which
+	// keeps the match it had (an admin's).
+	LibrivoxKept = "kept"
+	// LibrivoxUnmatched: to nothing it was added as (recording its match
+	// failed); adding it again matches it.
+	LibrivoxUnmatched = "unmatched"
+)
+
+// LibrivoxFetchMatch is how the book of a done librivox.fetch (params p,
+// result r) is matched now, once FoldLibrivoxFetch has run, which the job's
+// notification says: LibrivoxMatched as the job's recording, LibrivoxKept when
+// the Bridge adopted a book matched to something else (an admin's rematch,
+// which the fold keeps), LibrivoxUnmatched when it is neither (the fold
+// failed), "" when the match can't be read.
+func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) string {
+	m, err := bookAnchor(ctx, c.db, r.LibraryID, r.Path)
+	switch {
+	case err != nil:
+		return ""
+	case m != nil && m.WorkID == p.WorkID && m.RecordingID == p.RecordingID:
+		return LibrivoxMatched
+	case m != nil && r.Adopted != nil && *r.Adopted:
+		return LibrivoxKept
+	}
+	return LibrivoxUnmatched
+}
+
 // dropLeftoverIdentity removes the ASIN and ISBN a deleted book left at ref
 // (its book_overrides rows for them, whoever set them, and its
 // book_enrichment row) and rebuilds the effective metadata of book id, the new

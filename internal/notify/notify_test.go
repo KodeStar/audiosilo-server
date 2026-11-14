@@ -677,21 +677,21 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 func TestBridgeLibrivoxJobWording(t *testing.T) {
 	t.Parallel()
 	s, cat, ctx := newService(t)
-	for i, match := range []string{LibrivoxMatched, LibrivoxKept, LibrivoxUnmatched, ""} {
+	for i, match := range []string{catalog.LibrivoxMatched, catalog.LibrivoxKept, catalog.LibrivoxUnmatched, ""} {
 		s.BridgeJobEnded(ctx, BridgeJob{ID: int64(i + 1), Kind: bridge.KindLibrivoxFetch, State: bridge.StateDone,
 			Library: "Classics", LibraryID: 1, Path: "Brooke/Johnny Crow's Garden", Title: "Johnny Crow's Garden",
 			LibrivoxMatch: match})
 	}
 	s.BridgeJobEnded(ctx, BridgeJob{ID: 9, Kind: bridge.KindLibrivoxFetch, State: bridge.StateFailed,
-		Library: "Classics", LibraryID: 1, Title: "Johnny Crow's Garden", LibrivoxMatch: LibrivoxUnmatched})
+		Library: "Classics", LibraryID: 1, Title: "Johnny Crow's Garden", LibrivoxMatch: catalog.LibrivoxUnmatched})
 	done, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
 	if err != nil || len(done) != 4 {
 		t.Fatalf("finished events = %+v, %v", done, err)
 	}
 	want := map[any]string{
-		LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
-		LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
-		LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
+		catalog.LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
+		catalog.LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
+		catalog.LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
 			"Add it again from Library > LibriVox to match it.",
 		nil: "It is in the library now.",
 	}
