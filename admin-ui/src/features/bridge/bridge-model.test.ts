@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/api/client';
 import type { BridgeJobState } from '@/api/types';
 import {
   BRIDGE_JOB_STATES,
@@ -7,10 +8,13 @@ import {
   bridgeServerUrl,
   COMPOSE_SERVER_URL,
   codeExchanged,
+  failureCode,
   holdParams,
   isOpen,
   listedProgress,
   jobActions,
+  jobGone,
+  jobPollMs,
   JOBS_POLL_IDLE_MS,
   JOBS_POLL_OPEN_MS,
   jobsPollMs,
@@ -270,5 +274,32 @@ describe('listedProgress', () => {
   });
   it("drops a done job's last step", () => {
     expect(listedProgress({ state: 'done', progress })).toEqual({});
+  });
+});
+
+describe('failureCode', () => {
+  const codes = ['exists', 'disk_full'] as const;
+  it("reads a job's known code from its result, else its error (server#386)", () => {
+    expect(failureCode({ result: { code: 'exists' }, error: 'disk_full' }, codes)).toBe('exists');
+    expect(failureCode({ result: { code: ' disk_full ' } }, codes)).toBe('disk_full');
+    expect(failureCode({ result: {}, error: 'disk_full: no space left' }, codes)).toBe('disk_full');
+    expect(failureCode({ result: null, error: 'exists' }, codes)).toBe('exists');
+  });
+  it('names nothing it does not know, even when the error would', () => {
+    expect(failureCode({ result: { code: 'mystery' }, error: 'exists' }, codes)).toBeUndefined();
+    expect(failureCode({ error: 'exists_not' }, codes)).toBeUndefined();
+    expect(failureCode({}, codes)).toBeUndefined();
+  });
+});
+
+describe('tracked jobs', () => {
+  it('polls only an open job, and stops for one that is gone', () => {
+    expect(jobPollMs(undefined)).toBe(false);
+    expect(jobPollMs({ state: 'running' })).toBe(JOBS_POLL_OPEN_MS);
+    expect(jobPollMs({ state: 'done' })).toBe(false);
+    expect(jobGone(new ApiError(404, 'job not found'))).toBe(true);
+    expect(jobGone(new ApiError(502, 'bad gateway'))).toBe(false);
+    expect(jobGone(new Error('offline'))).toBe(false);
+    expect(jobGone(null)).toBe(false);
   });
 });

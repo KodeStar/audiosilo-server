@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next';
 import type { AudibleAccount, AudibleTitle, AudibleTitleState } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
-import { isOpen } from '@/features/bridge/bridge-model';
+import { failureCode, isOpen } from '@/features/bridge/bridge-model';
 
 // Audible (Bridge Phase 4a): the accounts the Bridge signed in to and the titles
 // each owns, read-only in the console (accounts are signed in and mapped on the
@@ -102,18 +102,12 @@ export function audibleJobReason(job: {
   result?: Record<string, unknown> | null;
   error?: string;
 }): string | undefined {
-  const known = (codes: readonly string[]) => {
-    const code = typeof job.result?.code === 'string' ? job.result.code : '';
-    if (code) return codes.includes(code) ? code : undefined;
-    const err = job.error ?? '';
-    return codes.find((c) => err === c || err.startsWith(`${c}:`));
-  };
   if (job.kind === 'audible.import') {
-    const code = known(IMPORT_CODES);
+    const code = failureCode(job, IMPORT_CODES);
     return code ? `audible.code.${code}` : undefined;
   }
   if (job.kind === 'audible.poll' || job.kind === 'audible.sync') {
-    const code = known(POLL_CODES);
+    const code = failureCode(job, POLL_CODES);
     return code ? `audible.pollCode.${code}` : undefined;
   }
   return undefined;

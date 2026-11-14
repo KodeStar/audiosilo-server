@@ -5,7 +5,6 @@ import { ApiError, api } from '@/api/client';
 import { keys } from '@/api/hooks';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { jobGone, jobPollMs } from './librivox-model';
 
 /**
  * The LibriVox works matching q (none asked for a blank one). Catalogue data
@@ -32,20 +31,6 @@ export function useLibrivoxWork(id: string | undefined) {
     queryKey: keys.librivoxWork(id ?? ''),
     queryFn: () => api.librivoxWork(id ?? ''),
     enabled: Boolean(id),
-  });
-}
-
-/**
- * A job this page queued or saw, by id, asked again every few seconds while it
- * is open, and no more once it is gone (a 404: the last answer would read as
- * open for ever).
- */
-export function useTrackedJob(id: number | undefined) {
-  return useQuery({
-    queryKey: keys.bridgeJob(id ?? 0),
-    queryFn: () => api.bridgeJob(id ?? 0),
-    enabled: id !== undefined,
-    refetchInterval: (q) => (jobGone(q.state.error) ? false : jobPollMs(q.state.data)),
   });
 }
 
