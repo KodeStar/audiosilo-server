@@ -1886,7 +1886,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
   it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
   off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
-  neither of its own: a hint the community knows whose length fits is an identifier hit (confident
+  neither of its own, each field an Audiobookshelf import's hint first (`book_hints`, `0074`,
+  `Book.HintASIN`/`HintISBN`: ABS's identifiers carried by a listening import, see Listening imports;
+  joined into a run's subjects by `matchSubjectJoin` and read by `GetBook` for the dialog), else the
+  tag's: a hint the community knows whose length fits is an identifier hit (confident
   while the book's title and series agree with it, above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
   Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
   identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
@@ -2335,7 +2338,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   import had moved it is then stamped now (`keepRewound`), as a standalone undo stamps it, so a
   device holding the old import's row adopts the rewind. `catalog.InterruptImports` (launcher, at start): fetching ->
   failed `interrupted`, applying -> review. `PruneSessions` rolls imported sessions up per import.
-  Audited `import.start|apply|undo`.
+  Audited `import.start|apply|undo`. **Identifiers as match hints** (server#366, `importer/identifiers.go`,
+  `catalog/hints.go`, `0074` `book_hints`): every import also carries ABS's ASIN/ISBN for the whole ABS
+  server, whoever's history it is: the payload's `identified` list (every ABS book with a valid ASIN or
+  ISBN, `identifiedItems`; absent from an older payload, which carries none; payload `v` stays 1) is
+  paired by `identifiersFor` with an all-access matcher, by path then title and author only (never the
+  identifier tier, which reads our own ids), skipping a gone item, a book split into discs here, a
+  book two identified ABS books pair with (contested, judged among the identified ones only) and a book
+  already matched here (`Book.Matched`, `matchedExpr`: counted). The review, a cutoff change and the
+  apply all plan them (`planAll`), so the summary's additive `identifiers {books, asin, isbn, by_title,
+  already_matched}` (absent from an import planned before it) matches what the apply writes:
+  `ImportWrite.Hints`, normalized and validated (`BookHint.Normalized`), one row per book and source,
+  owned by the import (`import_id`; the last import applied owns a row, so an earlier import's undo
+  leaves the hints a later one wrote, and the later one's undo takes them, even another person's). An
+  undo (and a re-import's taking back of the previous one) deletes the import's rows. A hint is never
+  the book's ASIN/ISBN and never on the wire: Match sends it (Admin catalog API, Tag identifiers are
+  hints). The console's review row: "ASIN or ISBN for matching".
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
   Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the

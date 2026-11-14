@@ -124,7 +124,7 @@ internal/upcoming/    upcoming releases (Track U1): Classify (pure: preorder, re
 internal/coverage/    the opt-in daily report of unknown Audible ASINs (LibraForge C3, metadata.report_unknown): Runner (Run/Wake/RunOnce: candidates from catalog.UnknownASINCandidates, meta.Service.KnownASIN lookups (only a 404 is unknown), the POST via meta.Service.ReportUnknownASINs, quiet week on not_offered); see Unknown ASIN report in CONVENTIONS.md
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of matched books by their ASIN/ISBN, else their recorded community work), records each book's best candidate for review, and applies the admin's picks under a scope, recording the match (`book_matches`) with the fields (plan.go is the one statement of what each scope writes; Classify's E6 rule applies a store listing with no ASIN/ISBN unasked on firmer ground)
-internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
+internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go), ABS's ASIN/ISBN carried as match hints for every book it pairs, all-access (identifiers.go, `book_hints`) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
 internal/mirrortest/  mirror-mode test support (tests only): the data releases published on audiosilo-meta's releasetest GitHub fake (querytest's artifact, a schema_version rewrite, a realistic release list), a remote metadata service that counts and answers 500 (Remote), and Eventually
@@ -322,7 +322,11 @@ recorded before it, no backfill; a refresh never fills the offered one back) and
 recorded; an apply under one leaves it out unread, `''` for an item recorded before it). `0071` recreates the
 `audible_titles` re-match trigger so a released preorder offers its book's place again (bridge#60: a
 `preorder` title takes no part in the sync) and adds `audible_accounts.refusal_ended_at` (server#303: when a
-mapping or complete poll last ended the sync's refusal; see Audible sync in CONVENTIONS.md).
+mapping or complete poll last ended the sync's refusal; see Audible sync in CONVENTIONS.md). `0074` adds `book_hints`
+(server#366: identifiers another app gave a book, source `abs` from an applied listening import, as
+match hints only, never `books.asin` and never on the wire; durable, path-keyed, no FK to the index,
+moved and joined with the book, owned by the import that wrote it (`import_id`, deleted by its undo);
+see Listening imports in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
