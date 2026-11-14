@@ -293,3 +293,38 @@ func TestSetupAccountStep(t *testing.T) {
 		t.Fatalf("PUT account = %d %s", resp.StatusCode, body)
 	}
 }
+
+// A first_admin row that can't be read never refuses the setup flow: GET
+// /admin/setup answers printed_password false (the account step then asks for
+// nothing), and the rest of the envelope as usual.
+func TestSetupPrintedPasswordUnreadable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+		t.Fatal(err)
+	}
+	if !printedPassword(t, e, adminTok) {
+		t.Fatal("printed_password false for the first-run admin")
+	}
+	// A NULL value fails the row's read (server_state.value is NOT NULL, so
+	// the table is rebuilt without it for the test); setup_state still reads.
+	for _, q := range []string{
+		`ALTER TABLE server_state RENAME TO server_state_old`,
+		`CREATE TABLE server_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL)`,
+		`INSERT INTO server_state SELECT key, value, updated_at FROM server_state_old`,
+		`DROP TABLE server_state_old`,
+		`UPDATE server_state SET value = NULL WHERE key = 'first_admin'`,
+	} {
+		if _, err := e.db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := e.auth.PrintedPassword(ctx, e.adminID); err == nil {
+		t.Fatal("the test's row reads: it checks nothing")
+	}
+	if printedPassword(t, e, adminTok) {
+		t.Error("printed_password true when the row can't be read")
+	}
+}
