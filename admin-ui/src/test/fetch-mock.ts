@@ -31,7 +31,10 @@ export function mockFetch(routes: Record<string, MockRoute>) {
       body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
     };
     calls.push(req);
-    const route = routes[`${req.method} ${req.path}`];
+    // The sign-in page asks whether /setup is open: closed unless a test says so.
+    const route =
+      routes[`${req.method} ${req.path}`] ??
+      (req.method === 'HEAD' && req.path === '/setup' ? { status: 404 } : undefined);
     if (!route) {
       console.error(`unmocked fetch: ${req.method} ${req.path}`);
       return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 });

@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   RefreshCw,
   TriangleAlert,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { api } from '@/api/client';
@@ -31,7 +32,7 @@ import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
 
 /**
- * Step 5: coming from Audiobookshelf. Points to the listening import (in a new
+ * Step 6: coming from Audiobookshelf. Points to the listening import (in a new
  * tab, so the flow stays open) and says ABS metadata.json files are read. An
  * info-only step: Continue records it done (someone who never used
  * Audiobookshelf has nothing left to do here), Skip skipped.
@@ -78,10 +79,11 @@ function connectUrl(p: PairToken): string {
 }
 
 /**
- * Step 7: connect a phone. The pairing QR (a single-use token for this admin,
- * ten minutes), the web player in a new tab with its own token, whether
- * ffmpeg is there for formats a browser can't play, and where household
- * members are added.
+ * Step 9, the last: connect a phone. The pairing QR (a single-use token for
+ * this admin, ten minutes), how signing in works (the code, the log's auth code
+ * or the password in the app, an invite for everyone else, server#369), the
+ * web player in a new tab with its own token, whether ffmpeg is there for
+ * formats a browser can't play, and where household members are added.
  */
 export function PhoneStep({ settings, leave, back, last }: StepProps) {
   const { t } = useTranslation();
@@ -170,6 +172,8 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
           </div>
         </div>
 
+        <SignInNotes />
+
         {webPlayer ? <WebPlayerButton /> : null}
 
         <div className="flex flex-col gap-2 text-[13px]">
@@ -191,6 +195,37 @@ export function PhoneStep({ settings, leave, back, last }: StepProps) {
         last={last}
       />
     </>
+  );
+}
+
+/**
+ * How people sign in to the app: this admin by the code above (or the log's
+ * auth code, or their password), everyone else by an invite of their own, with
+ * no password needed. Invite someone opens People's invite in a new tab.
+ */
+function SignInNotes() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border px-4 py-3.5">
+      <b className="font-semibold">{t('setup.phone.signIn')}</b>
+      <ul className="ml-5 flex list-disc flex-col gap-1.5 text-[13.5px] text-muted-foreground">
+        <li>{t('setup.phone.signInYou')}</li>
+        <li>{t('setup.phone.signInOthers')}</li>
+      </ul>
+      <div>
+        <Link
+          to="/people/{-$section}"
+          params={{ section: undefined }}
+          search={{ invite: true }}
+          target="_blank"
+          rel="noreferrer"
+          className={buttonVariants({ variant: 'outline', size: 'sm' })}
+        >
+          <UserPlus aria-hidden="true" />
+          {t('setup.phone.invite')}
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -264,7 +299,7 @@ export function BridgeStep({ libraries, leave, back, last }: StepProps) {
       <StepFooter
         back={back}
         onSkip={() => leave('skipped')}
-        // The primary button (Finish setup) counts the step as done, paired or
+        // The primary button (Continue) counts the step as done, paired or
         // not: the Bridge is optional, and Skip is there to say "later" (ADMIN-05).
         onContinue={() => leave('done')}
         last={last}

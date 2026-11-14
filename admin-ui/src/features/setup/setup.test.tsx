@@ -1,15 +1,16 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { setToken } from '@/api/token';
+import { getToken, setToken } from '@/api/token';
 import type {
   AdminLibrary,
+  AdminSettings,
   LibraryPreview,
   SetupEnvelope,
   SetupPatch,
   SetupState,
 } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { libraries, settingsWith, setupEnvelope, systemStatus } from '@/test/fixtures';
+import { admin, libraries, settingsWith, setupEnvelope, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -51,7 +52,11 @@ function flowRoutes(
   over: Record<string, MockRoute> = {},
   env: Partial<SetupEnvelope> = {},
 ) {
-  const state: SetupState = { finished: false, dismissed: false, steps: {}, ...start };
+  // The account step (first) is behind the admin unless a test marks it. The
+  // steps object stays the test's own, so a test can change it meanwhile.
+  const steps = start.steps ?? {};
+  if (!('account' in steps)) steps.account = 'done';
+  const state: SetupState = { finished: false, dismissed: false, ...start, steps };
   return signedInRoutes({
     'GET /admin/setup': () => ({ body: setupEnvelope(state, env) }),
     'PUT /admin/setup': (req) => {
@@ -65,6 +70,15 @@ function flowRoutes(
     ...over,
   });
 }
+
+/** A pairing the phone step can show (a link a phone reaches). */
+const pairOk = {
+  body: {
+    pairing_token: 'p1',
+    server_id: 's1',
+    web_url: 'https://books.example.com/web/connect?token=p1&sid=s1',
+  },
+};
 
 const puts = (calls: ReturnType<typeof mockFetch>) =>
   calls.filter((c) => c.method === 'PUT' && c.path === '/admin/setup').map((c) => c.body);
@@ -423,7 +437,7 @@ describe('a folder chosen in another browser (ADMIN-02)', () => {
     expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
     expect(screen.getByText('Choose the folder again')).toBeVisible();
     const steps = screen.getByRole('navigation', { name: 'Setup steps' });
-    expect(within(steps).queryByText(', done')).toBeNull();
+    expect(within(steps).getByRole('link', { name: /Books folder/ })).not.toHaveTextContent('done');
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText('Books folder'), '/audiobooks');
@@ -552,23 +566,25 @@ describe('the end of the flow', () => {
     workers: [],
   };
 
-  it('Finish on the Bridge step marks the flow finished and opens Overview', async () => {
+  it('the Bridge step is no longer the last: Continue goes on to the phone', async () => {
     const calls = mockFetch(
-      flowRoutes(
-        {},
-        {
-          'GET /admin/bridge': { body: bridgeUnpaired },
-        },
-      ),
+      flowRoutes({}, { 'GET /admin/bridge': { body: bridgeUnpaired }, 'POST /auth/pair': pairOk }),
     );
-    const { router } = renderApp('/setup?step=bridge');
-    expect(
-      await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/),
-    ).toBeVisible();
+    renderApp('/setup?step=bridge');
+    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Connect a phone' })).toBeVisible();
+    expect(puts(calls)).toEqual([{ steps: { bridge: 'done' } }]);
+  });
+
+  it('Finish on the phone step marks the flow finished and opens Overview', async () => {
+    const calls = mockFetch(flowRoutes({}, { 'POST /auth/pair': pairOk }));
+    const { router } = renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     // Reached by a jump: every step without a mark goes down as skipped,
-    // the folder too, since no library was made. Finish counts the Bridge
+    // the folder too, since no library was made. Finish counts the phone
     // step as done, so the card doesn't ask for it at once (ADMIN-05).
     expect(puts(calls)).toEqual([
       {
@@ -579,29 +595,29 @@ describe('the end of the flow', () => {
           reach: 'skipped',
           abs: 'skipped',
           backups: 'skipped',
-          phone: 'skipped',
-          bridge: 'done',
+          bridge: 'skipped',
+          phone: 'done',
         },
         finished: true,
       },
     ]);
     const card = await screen.findByRole('region', { name: 'Finish setting up' });
     expect(within(card).getByRole('link', { name: /Where are your books/ })).toBeVisible();
-    expect(within(card).queryByRole('link', { name: /Add a Bridge/ })).toBeNull();
+    expect(within(card).queryByRole('link', { name: /Connect a phone/ })).toBeNull();
   });
 
-  it('Skip and finish on the Bridge step still leaves it to do later', async () => {
+  it('Skip and finish on the phone step still leaves it to do later', async () => {
     const calls = mockFetch(
       flowRoutes(
         { steps: { folder: 'done', naming: 'done', metadata: 'done' } },
-        { 'GET /admin/bridge': { body: bridgeUnpaired } },
+        { 'POST /auth/pair': pairOk },
       ),
     );
-    const { router } = renderApp('/setup?step=bridge');
-    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    const { router } = renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Skip and finish' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(puts(calls)[0]).toMatchObject({ steps: { bridge: 'skipped' }, finished: true });
+    expect(puts(calls)[0]).toMatchObject({ steps: { phone: 'skipped' }, finished: true });
   });
 
   it("gives the compose snippet a volume for each library's root (ADMIN-07)", async () => {
@@ -626,16 +642,16 @@ describe('the end of the flow', () => {
     const calls = mockFetch(
       flowRoutes(
         { steps: { folder: 'done', naming: 'done', metadata: 'done', reach: 'skipped' } },
-        { 'GET /admin/bridge': { body: bridgeUnpaired } },
+        { 'POST /auth/pair': pairOk },
       ),
     );
-    const { router } = renderApp('/setup?step=bridge');
-    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    const { router } = renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(puts(calls)).toEqual([
       {
-        steps: { abs: 'skipped', backups: 'skipped', phone: 'skipped', bridge: 'done' },
+        steps: { abs: 'skipped', backups: 'skipped', bridge: 'skipped', phone: 'done' },
         finished: true,
       },
     ]);
@@ -805,27 +821,9 @@ describe('the 2.4.0 fixes', () => {
 
   it("Finish reads the marks again, so another tab's are kept (R-10)", async () => {
     const steps: SetupState['steps'] = {};
-    const calls = mockFetch(
-      flowRoutes(
-        { steps },
-        {
-          'GET /admin/bridge': {
-            body: {
-              paired: false,
-              paired_by: null,
-              pairing: null,
-              online: false,
-              kinds: [],
-              features: [],
-              libraries: [],
-              workers: [],
-            },
-          },
-        },
-      ),
-    );
-    const { router } = renderApp('/setup?step=bridge');
-    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    const calls = mockFetch(flowRoutes({ steps }, { 'POST /auth/pair': pairOk }));
+    const { router } = renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     // Another tab finishes the backups step meanwhile.
     steps.backups = 'done';
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
@@ -843,23 +841,12 @@ describe('the 2.4.0 fixes', () => {
           'GET /admin/settings': {
             body: settingsWith({ restart_pending: ['metadata.mode'] } as object),
           },
-          'GET /admin/bridge': {
-            body: {
-              paired: false,
-              paired_by: null,
-              pairing: null,
-              online: false,
-              kinds: [],
-              features: [],
-              libraries: [],
-              workers: [],
-            },
-          },
+          'POST /auth/pair': pairOk,
         },
       ),
     );
-    const { router } = renderApp('/setup?step=bridge');
-    await screen.findByText(/image: ghcr.io\/kodestar\/audiosilo-bridge:latest/);
+    const { router } = renderApp('/setup?step=phone');
+    await screen.findByRole('img', { name: 'Pairing QR code for your phone' });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Finish setup' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(
@@ -872,5 +859,232 @@ describe('the 2.4.0 fixes', () => {
       await screen.findByText('Restart AudioSilo to finish applying your changes'),
     ).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open Settings' })).toBeVisible();
+  });
+});
+
+describe('the account step (server#369)', () => {
+  /** The flow with the account step not yet seen, and the env's printed_password. */
+  const accountRoutes = (printed: boolean, over: Record<string, MockRoute> = {}) =>
+    flowRoutes(
+      { steps: { account: undefined } },
+      {
+        'PATCH /admin/users/1': (req) => ({
+          body: { ...admin, ...(req.body as object) },
+        }),
+        'POST /auth/password': { status: 204 },
+        ...over,
+      },
+      { printed_password: printed },
+    );
+  const sent = (calls: ReturnType<typeof mockFetch>, method: string, path: string) =>
+    calls.filter((c) => c.method === method && c.path === path).map((c) => c.body);
+
+  it('opens a fresh server at Your account, before the books folder', async () => {
+    mockFetch(accountRoutes(true));
+    const { router } = renderApp('/');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/setup'));
+    expect(await screen.findByRole('heading', { name: 'Your account' })).toBeVisible();
+    expect(screen.getByText('Step 1 of 9')).toBeVisible();
+  });
+
+  it('renames the admin and sets their own password, then goes on to the folder', async () => {
+    const calls = mockFetch(accountRoutes(true));
+    renderApp('/setup');
+    expect(await screen.findByText('Your password came from the server log')).toBeVisible();
+    const user = userEvent.setup();
+    const name = screen.getByLabelText('Username');
+    expect(name).toHaveValue('chris');
+    await user.clear(name);
+    await user.type(name, ' kode ');
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'from-the-log');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([{ username: 'kode' }]);
+    expect(sent(calls, 'POST', '/auth/password')).toEqual([
+      { password: 'a-new-password', current_password: 'from-the-log' },
+    ]);
+    expect(puts(calls)).toEqual([{ steps: { account: 'done' } }]);
+    // The console names the admin as the server now does.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByLabelText('Username')).toHaveValue('kode');
+  });
+
+  it('asks for a new password while the admin still has the printed one', async () => {
+    const calls = mockFetch(accountRoutes(true));
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    expect(
+      await screen.findByText(/Choose a new password, or keep the one from the log/),
+    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Your account' })).toBeVisible();
+    expect(calls.some((c) => c.method !== 'GET' && c.method !== 'HEAD')).toBe(false);
+  });
+
+  it('checks the new password before asking the server', async () => {
+    const calls = mockFetch(accountRoutes(false));
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('New password'), 'short');
+    await user.type(screen.getByLabelText('New password again'), 'shorter');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText('Use at least 8 characters.')).toBeVisible();
+    expect(screen.getByText("The two passwords don't match.")).toBeVisible();
+    expect(screen.getByText('Enter the password you signed in with.')).toBeVisible();
+    expect(sent(calls, 'POST', '/auth/password')).toEqual([]);
+  });
+
+  it('lets an admin who chose their password (the setup page) change only the name', async () => {
+    const calls = mockFetch(accountRoutes(false));
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    expect(screen.queryByText('Your password came from the server log')).toBeNull();
+    expect(screen.getByText(/Leave it empty to keep your current password/)).toBeVisible();
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'kode');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Where are your books?' });
+    expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([{ username: 'kode' }]);
+    expect(sent(calls, 'POST', '/auth/password')).toEqual([]);
+  });
+
+  it('a wrong current password keeps the session and says so under the field', async () => {
+    const calls = mockFetch(
+      accountRoutes(true, {
+        'POST /auth/password': {
+          status: 401,
+          body: { error: 'current password is incorrect', code: 'current_password_incorrect' },
+        },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('New password'), 'a-new-password');
+    await user.type(screen.getByLabelText('New password again'), 'a-new-password');
+    await user.type(screen.getByLabelText('Current password'), 'wrong');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText("That isn't the password you signed in with.")).toBeVisible();
+    expect(getToken()).toBe('stored');
+    expect(screen.getByRole('heading', { name: 'Your account' })).toBeVisible();
+    expect(puts(calls)).toEqual([]);
+  });
+
+  it('a name someone has shows under the field, and nothing else is sent', async () => {
+    const calls = mockFetch(
+      accountRoutes(false, {
+        'PATCH /admin/users/1': {
+          status: 409,
+          body: { error: 'username already taken', code: 'username_taken' },
+        },
+      }),
+    );
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('Username'));
+    await user.type(screen.getByLabelText('Username'), 'sam');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByText(/Someone already has that name/)).toBeVisible();
+    expect(puts(calls)).toEqual([]);
+  });
+
+  it('Skip keeps the name and the password', async () => {
+    const calls = mockFetch(accountRoutes(true));
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Your account' });
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: 'Keep chris and this password' }));
+    await screen.findByRole('heading', { name: 'Where are your books?' });
+    expect(puts(calls)).toEqual([{ steps: { account: 'skipped' } }]);
+    expect(sent(calls, 'PATCH', '/admin/users/1')).toEqual([]);
+  });
+});
+
+describe('the phone step explains signing in (server#369)', () => {
+  it('says how the admin and everyone else sign in, with a way to invite', async () => {
+    mockFetch(flowRoutes({}, { 'POST /auth/pair': pairOk }));
+    renderApp('/setup?step=phone');
+    expect(await screen.findByText('How signing in works')).toBeVisible();
+    expect(screen.getByText(/the auth code from the server log/)).toBeVisible();
+    expect(screen.getByText(/They don't need a password/)).toBeVisible();
+    const invite = screen.getByRole('link', { name: 'Invite someone' });
+    expect(invite).toHaveAttribute('href', '/admin/people?invite=true');
+    expect(invite).toHaveAttribute('target', '_blank');
+    expect(screen.getByText('Step 9 of 9')).toBeVisible();
+  });
+});
+
+describe('the marketplace nearest the admin (server#192)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const metadataRoutes = (metadata: Partial<AdminSettings['metadata']>, over = {}) => {
+    const s = settingsWith();
+    s.metadata = { ...s.metadata, ...metadata };
+    return flowRoutes(
+      {},
+      {
+        'GET /admin/settings': { body: s },
+        'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }),
+        ...over,
+      },
+    );
+  };
+  const patches = (calls: ReturnType<typeof mockFetch>) =>
+    calls.filter((c) => c.method === 'PATCH' && c.path === '/admin/settings').map((c) => c.body);
+
+  it('preselects it from the browser when none was ever chosen, and saves it on Continue', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB', 'en']);
+    const calls = mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('uk');
+    expect(screen.getByText(/Picked from your browser's language and time zone/)).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(patches(calls)).toEqual([{ metadata: { region: 'uk' } }]);
+  });
+
+  it('saves the preselection even when it is the US store, so it counts as chosen', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['nl-NL']);
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Amsterdam',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    const calls = mockFetch(metadataRoutes({ region_chosen: false }));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('us');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(patches(calls)).toEqual([{ metadata: { region: 'us' } }]);
+  });
+
+  it.each([
+    ['one already chosen', { region_chosen: true }],
+    ['an older server that says nothing', {}],
+  ])('keeps the saved value for %s', async (_, metadata) => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB']);
+    const calls = mockFetch(metadataRoutes(metadata));
+    renderApp('/setup?step=metadata');
+    expect(await screen.findByLabelText('Audible marketplace')).toHaveValue('');
+    expect(screen.queryByText(/Picked from your browser/)).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'How will people reach the server?' });
+    expect(patches(calls)).toEqual([]);
+  });
+
+  it('never preselects over a marketplace the environment sets', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB']);
+    const s = settingsWith();
+    s.metadata = { ...s.metadata, region: 'de', region_chosen: true };
+    s.locked = { 'metadata.region': 'AUDIOSILO_METADATA_REGION' };
+    mockFetch(flowRoutes({}, { 'GET /admin/settings': { body: s } }));
+    renderApp('/setup?step=metadata');
+    const select = await screen.findByLabelText('Audible marketplace');
+    expect(select).toHaveValue('de');
+    expect(select).toBeDisabled();
   });
 });

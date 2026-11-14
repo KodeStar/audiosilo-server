@@ -28,6 +28,7 @@ import { restartList } from '@/features/settings/settings-model';
 import { readStorage, removeStorage, writeStorage } from '@/lib/storage';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { AccountStep } from './account-step';
 import { AbsStep, BridgeStep, PhoneStep } from './connect-steps';
 import { FolderStep } from './folder-step';
 import { NamingStep } from './naming-step';
@@ -47,14 +48,15 @@ import { ScanStatus } from './step-parts';
 import type { StepProps } from './step-actions';
 
 const STEP: Record<SetupStepId, (p: StepProps) => React.ReactNode> = {
+  account: AccountStep,
   folder: FolderStep,
   naming: NamingStep,
   metadata: MetadataStep,
   reach: ReachStep,
   abs: AbsStep,
   backups: BackupsStep,
-  phone: PhoneStep,
   bridge: BridgeStep,
+  phone: PhoneStep,
 };
 
 /** Where this browser keeps the library the flow hasn't created yet. */
@@ -62,9 +64,9 @@ const DRAFT_KEY = 'audiosilo.setup.draft';
 
 /**
  * "Set up your server" (FIRST-RUN-PLAN.md Phase F1): the console's first-run
- * flow as a full page, outside the shell. Eight steps in order, each with Back
- * and Skip; `?step=` deep-links one (the Overview card's links), and without
- * it the flow resumes at the first step not yet done or skipped. Each step
+ * flow as a full page, outside the shell. Nine steps in order (the admin's own
+ * account first, the phone last), each with Back and Skip; `?step=` deep-links
+ * one (the Overview card's links), and without it the flow resumes at the first step not yet done or skipped. Each step
  * writes through the APIs Settings and Libraries use, then marks itself
  * (PUT /admin/setup); the last one marks the flow finished.
  */

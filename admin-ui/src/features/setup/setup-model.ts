@@ -494,3 +494,62 @@ function isHostName(s: string): boolean {
   if (s === '' || s.length > 253) return false;
   return s.split('.').every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l));
 }
+
+// --- The admin's own account ---------------------------------------------------
+
+/** The shortest password the server takes (auth.MinPasswordLen). */
+export const MIN_PASSWORD = 8;
+
+/** The Your account step's fields as typed. */
+export interface AccountDraft {
+  username: string;
+  password: string;
+  repeat: string;
+  current: string;
+}
+
+export type AccountField = keyof AccountDraft;
+
+/** What Continue on the Your account step sends, or why it can't yet. */
+export interface AccountPlan {
+  /** The new username; null keeps the current one. */
+  rename: string | null;
+  /** The new password with the current one; null keeps the password. */
+  password: { next: string; current: string } | null;
+  /** Each field's refusal, as an i18n key; empty when the plan can go. */
+  errors: Partial<Record<AccountField, string>>;
+}
+
+/**
+ * The step's rules (server#369): a username (spaces at either end dropped, as
+ * a sign-in drops them); a new password is optional unless the admin still has
+ * the one the server printed (`printed`), and then at least MIN_PASSWORD
+ * characters, typed twice, with the current one (the server asks for it).
+ */
+export function accountPlan(d: AccountDraft, username: string, printed: boolean): AccountPlan {
+  const errors: AccountPlan['errors'] = {};
+  const name = d.username.trim();
+  if (!name) errors.username = 'setup.account.usernameEmpty';
+  let password: AccountPlan['password'] = null;
+  if (d.password === '') {
+    if (printed) errors.password = 'setup.account.passwordNeeded';
+  } else {
+    if (d.password.length < MIN_PASSWORD) errors.password = 'errors.passwordTooShort';
+    if (d.repeat !== d.password) errors.repeat = 'setup.account.mismatch';
+    if (d.current === '') errors.current = 'setup.account.currentNeeded';
+    password = { next: d.password, current: d.current };
+  }
+  return { rename: name && name !== username ? name : null, password, errors };
+}
+
+// --- The marketplace nearest the admin -------------------------------------------
+
+/**
+ * Whether the console may offer the marketplace nearest the admin
+ * (server#192): only while the server says metadata.region was never chosen
+ * (not in config.yaml, not by the environment, never saved here; an older
+ * server says nothing, so nothing is offered) and the console may change it.
+ */
+export function offerRegion(settings: AdminSettings): boolean {
+  return settings.metadata.region_chosen === false && editable(settings, 'metadata.region');
+}

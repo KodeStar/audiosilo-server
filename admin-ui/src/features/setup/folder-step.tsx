@@ -17,7 +17,7 @@ import { StepFooter } from './step-parts';
 import { StepStop, previewQuery, type StepProps } from './step-actions';
 
 /**
- * Step 1: the books folder. A typed path (the server's mount points offered as
+ * Step 2: the books folder. A typed path (the server's mount points offered as
  * suggestions) checked by the preview: what it found, or why it can't be read,
  * in words that catch the Docker host-path mistake. The library is created
  * later, after its naming and region (decision 5); here it becomes the draft.

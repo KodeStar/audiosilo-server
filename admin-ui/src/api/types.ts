@@ -558,6 +558,12 @@ export interface AdminSettings {
     base_url: string;
     /** The Audible marketplace whose ASIN a match takes (one of MATCH_REGIONS; "" = the US store's). */
     region: string;
+    /**
+     * The marketplace was chosen: in config.yaml, by the environment or saved
+     * here ("No preference" too). False: never chosen, so the console may offer
+     * the nearest one (server#192). Absent from an older server.
+     */
+    region_chosen?: boolean;
     /** Where lookups are answered (a restart setting): the service, or a local copy of its data. */
     mode: MetadataMode;
     /** The service exists (base_url was valid when the server started), so the switch can turn on. */
@@ -1411,6 +1417,8 @@ export interface UserDetail {
  * access; `managed_by: null` ("Make independent") clears all three.
  */
 export type UserPatch = {
+  /** A new username (not "": 400 username_required; another account's: 409 username_taken). */
+  username?: string;
   role?: User['role'];
   password?: string;
   disabled?: boolean;
@@ -2857,14 +2865,15 @@ export interface ReadalongEstimate {
  * GET/PUT /admin/setup's `steps` use.
  */
 export const SETUP_STEPS = [
+  'account',
   'folder',
   'naming',
   'metadata',
   'reach',
   'abs',
   'backups',
-  'phone',
   'bridge',
+  'phone',
 ] as const;
 export type SetupStepId = (typeof SETUP_STEPS)[number];
 
@@ -2917,6 +2926,12 @@ export interface SetupEnvelope {
   config_libraries: string[];
   /** Folders mounted into the server (Linux only; [] elsewhere), as suggestions for the folder. */
   mount_hints: string[];
+  /**
+   * The signed-in admin still has the password the server printed in its log
+   * at first start (server#369): the Your account step asks for a new one.
+   * Absent from an older server.
+   */
+  printed_password?: boolean;
 }
 
 /** A sample book's names as one source reads them ("" = that source has none). */
