@@ -44,9 +44,10 @@ type PairingPayload struct {
 	// for recovery codes, /auth/pair and demo tokens (and nil = unlimited).
 	CodeExpiresAt string `json:"code_expires_at,omitempty"`
 	UsesRemaining *int   `json:"uses_remaining,omitempty"`
-	// Admin is set (and true) when an invite being redeemed pairs an admin's
-	// account, so the connect page offers the console only to an admin. Absent
-	// for a listener's invite and for every other pairing.
+	// Admin is set (and true) when the code being redeemed (/auth/redeem: an
+	// invite, or a recovery code) pairs an admin's account, so the connect page
+	// offers the console only to an admin. Absent for a listener's code and for
+	// every other pairing (/auth/pair, the demo).
 	Admin bool `json:"admin,omitempty"`
 	// Addresses is the server's home and away addresses (the `addresses`
 	// capability), also carried by URI and WebURL as home=/away= params; nil when
