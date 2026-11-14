@@ -88,22 +88,22 @@ export function ImportTopic() {
 /**
  * The import itself: the connect card (steps 1 and 2), then each open import's
  * review card and the past imports. Settings > Import shows it under its
- * notice, and the setup flow's abs step inline (`compact`).
+ * notice, and the setup flow's abs step inline (`embedded`).
  *
  * Once an import is applied, the past imports' card offers Match automatically
  * (UnmatchedPrompt: shown only while books are unmatched, and it never starts a
  * run itself); `offerMatch` shows that offer before any import is applied.
  */
 export function ImportFlow({
-  compact = false,
+  embedded = false,
   blocked,
   offerMatch = false,
 }: {
   /**
-   * Inside the setup flow: no "Step n of 3" counter (the flow has its own), and
-   * the match offer opens Health in a new tab, so the flow stays open.
+   * Hosted in a flow that has its own steps and must stay open (setup): no
+   * "Step n of 3" counter, and the match offer opens Health in a new tab.
    */
-  compact?: boolean;
+  embedded?: boolean;
   /** Why Connect is off for now (the setup flow: the first scan is still running). */
   blocked?: string;
   /** Offer Match automatically even without an applied import (the setup flow, once scanned). */
@@ -114,7 +114,7 @@ export function ImportFlow({
   const applied = hasApplied(imports.data ?? []);
   return (
     <>
-      <ConnectCard compact={compact} blocked={blocked} />
+      <ConnectCard embedded={embedded} blocked={blocked} />
       {imports.isError ? (
         <QueryError
           title={t('imports.error')}
@@ -124,9 +124,9 @@ export function ImportFlow({
       ) : !imports.data ? (
         <div className="skel h-[160px] rounded-xl" role="status" aria-label={t('common.loading')} />
       ) : (
-        <ImportLists list={imports.data} matchOffer={applied} newTab={compact} />
+        <ImportLists list={imports.data} matchOffer={applied} newTab={embedded} />
       )}
-      {offerMatch && !applied ? <UnmatchedPrompt newTab={compact} /> : null}
+      {offerMatch && !applied ? <UnmatchedPrompt newTab={embedded} /> : null}
     </>
   );
 }
@@ -139,7 +139,7 @@ interface Connection {
 }
 
 /** Steps 1 and 2: connect, then map accounts to people and start. */
-function ConnectCard({ compact, blocked }: { compact: boolean; blocked?: string }) {
+function ConnectCard({ embedded, blocked }: { embedded: boolean; blocked?: string }) {
   const { t } = useTranslation();
   const [conn, setConn] = useState<Connection | null>(null);
   // The address (never the token) comes back when going back a step.
@@ -155,7 +155,7 @@ function ConnectCard({ compact, blocked }: { compact: boolean; blocked?: string 
             : t('imports.connect.description')
         }
         action={
-          compact ? undefined : (
+          embedded ? undefined : (
             <span className="text-[12px] font-semibold text-muted-foreground">
               {t('imports.step', { n: conn ? 2 : 1, of: 3 })}
             </span>

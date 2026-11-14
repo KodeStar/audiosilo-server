@@ -52,7 +52,7 @@ export function AbsStep({ libraries, leave, back, last }: StepProps) {
           <li>{t('setup.abs.metadata')}</li>
         </ul>
         <ImportFlow
-          compact
+          embedded
           blocked={scanning ? t('setup.abs.waitScan') : undefined}
           offerMatch={!scanning && hasBookLibrary(libraries)}
         />
