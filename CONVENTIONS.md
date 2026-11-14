@@ -2322,7 +2322,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   server doesn't trust (self-signed, another name, expired: `tls.CertificateVerificationError`, which
   wraps every x509 verification error) is `abs_certificate` (502 on connect, from `/status` too, never `not_abs`),
   so the console points at ABS's plain http:// address; there is no switch to trust one. https to an
-  http-only port (`tls.RecordHeaderError`) stays `abs_unreachable`. It does NOT block private
+  http-only port (`http.ErrSchemeMismatch`) stays `abs_unreachable`. It does NOT block private
   or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route
   is admin-only. Matching
   (`match.go`): path components from the end (same relative path, or a unique suffix either way; the
