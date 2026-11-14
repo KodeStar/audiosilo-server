@@ -560,7 +560,7 @@ export const api = {
 
   // Listening import (Settings > Import). The Audiobookshelf token rides in the
   // request body only; the server never stores or returns it.
-  /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / not_abs / abs_unauthorized). */
+  /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / abs_certificate / not_abs / abs_unauthorized). */
   absUsers: (url: string, token: string) =>
     request<{ version: string; users: AbsUser[] }>('POST', '/admin/imports/abs/users', {
       url,

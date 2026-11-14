@@ -209,6 +209,7 @@ describe('summary', () => {
     expect(unmatchedReasonKey('no_match')).toBe('imports.unmatched.reason.no_match');
     expect(unmatchedReasonKey('split_discs')).toBe('imports.unmatched.reason.split_discs');
     expect(failureHintKey('abs_unauthorized')).toBe('imports.failure.abs_unauthorized');
+    expect(failureHintKey('abs_certificate')).toBe('imports.failure.abs_certificate');
     expect(failureHintKey('interrupted')).toBe('imports.failure.interrupted');
     expect(failureHintKey('something_new')).toBe('imports.failure.fetch_failed');
   });

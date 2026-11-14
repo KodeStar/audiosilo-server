@@ -183,6 +183,7 @@ export function unmatchedReasonKey(reason: UnmatchedItem['reason']): string {
 
 const FAILURE_CODES = [
   'abs_unreachable',
+  'abs_certificate',
   'abs_unauthorized',
   'not_abs',
   'interrupted',

@@ -149,6 +149,7 @@ function connectErrorField(err: unknown): 'url' | 'token' | undefined {
   switch (err.code) {
     case 'invalid_url':
     case 'abs_unreachable':
+    case 'abs_certificate':
     case 'not_abs':
       return 'url';
     case 'abs_unauthorized':
