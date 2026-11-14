@@ -284,6 +284,15 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.auth.GetUser(r.Context(), id)
+	// An admin who set their own password here (People's password dialog on
+	// their own account) chose it, as POST /auth/password's caller does: the
+	// first-run admin's printed password is gone and the start's hint ends
+	// (auth/firstrun.go). One another admin set for them is not their choice.
+	if req.Password != nil && *req.Password != "" && u.ID == userFrom(r.Context()).ID && u.Role == auth.RoleAdmin {
+		if err := a.auth.NoteOwnPassword(r.Context(), u.ID); err != nil {
+			a.log.Warn("noting the admin's own password failed", "err", err)
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return

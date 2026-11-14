@@ -128,6 +128,29 @@ func TestSetupPrintedPassword(t *testing.T) {
 	}
 }
 
+// The console's People dialog changes the admin's own password through PATCH
+// /admin/users/{id}: their own choice as much as POST /auth/password's, so the
+// printed password is gone and the hint ends.
+func TestOwnPasswordByPatchReplacesThePrintedOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	if err := e.auth.MarkFirstAdmin(ctx, e.adminID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(e.adminID, 10), adminTok,
+		`{"password":"my-own-password"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("own password = %d %s", resp.StatusCode, body)
+	}
+	if printedPassword(t, e, adminTok) {
+		t.Error("printed_password still true after the admin set their own in People")
+	}
+	if u, _ := e.auth.FirstAdminWaiting(ctx); u != nil {
+		t.Error("the hint is still waiting after the admin set their own password")
+	}
+}
+
 // A member's own password change is no admin's: the hint stays.
 func TestMemberPasswordKeepsTheHint(t *testing.T) {
 	t.Parallel()
