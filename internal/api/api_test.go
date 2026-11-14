@@ -1439,8 +1439,8 @@ func TestDeleteUserHandler(t *testing.T) {
 // TestSetupWizard covers the first-run /setup flow: it serves while no admin
 // exists, rejects a wrong token (403) without creating anything, creates the
 // admin on a valid token (201), and then self-closes (409 + the page redirects
-// to /admin). A server that never enabled the wizard exposes no /setup surface
-// (404).
+// to /admin). A server that never enabled the wizard exposes no /setup surface:
+// the page redirects to /admin, as a closed one does.
 func TestSetupWizard(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1502,7 +1502,9 @@ func TestSetupWizard(t *testing.T) {
 		t.Fatalf("GET /setup after completion = %d (Location %q), want 303 → /admin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
-	// A server that never enabled setup exposes no /setup surface.
+	// A server that never enabled setup exposes no /setup surface: the same
+	// redirect as a closed wizard (never a 404, which the console's sign-in
+	// page probe would log), and POST still refuses.
 	a2 := New(config.Default(t.TempDir()), auth.New(db, time.Now), cat, scanner, "", slog.Default())
 	srv2 := httptest.NewServer(a2.Handler())
 	t.Cleanup(srv2.Close)
@@ -1511,8 +1513,16 @@ func TestSetupWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /setup with wizard disabled = %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin" {
+		t.Fatalf("GET /setup with wizard disabled = %d (Location %q), want 303 → /admin", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	resp, err = noFollow.Post(srv2.URL+"/setup", "application/json", strings.NewReader(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusCreated {
+		t.Fatal("POST /setup with wizard disabled created an admin")
 	}
 }
 

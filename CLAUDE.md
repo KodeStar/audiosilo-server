@@ -62,7 +62,8 @@ The wizard creates the admin account only and hands over to the console's "Set u
 server" flow (`/admin`; see First-run setup in CONVENTIONS.md); the `library_name` +
 `library_root` pair the archived manager sent was retired in v2.7.0 (400). The token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
-and the wizard **self-closes the moment an admin exists** (404 when never enabled).
+and the wizard **self-closes the moment an admin exists** (`GET /setup` then redirects to `/admin`, as
+when never enabled: one answer, so the console's sign-in page probes it without a 404).
 `API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL.
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
