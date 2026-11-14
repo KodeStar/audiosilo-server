@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
-	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -196,11 +195,6 @@ func writeRestoreMarker(t *testing.T, dir, body string) {
 	if err := os.WriteFile(filepath.Join(dir, "restore.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if body[0] == '{' && body[1] == '"' {
-		if p, err := backup.RestorePending(dir); err != nil || p == nil {
-			t.Fatalf("the test's marker doesn't read as a pending restore: %v, %v", p, err)
-		}
-	}
 }
 
 // codeLine is the banner's auth code line.
@@ -231,18 +225,13 @@ func TestResetAdminRevokesTheFirstRunCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The admin's own invite from the console, and a second admin.
-	invite, err := running.CreateInvite(ctx, admin.User.ID, "my phone", 5, 24*time.Hour)
+	// Another unlimited, never-expiring code of the admin's under another
+	// label, and a second admin.
+	other, err := running.CreateAuthCode(ctx, admin.User.ID, "my phone", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := running.CreateUser(ctx, "alex", "alex-password", auth.RoleAdmin); err != nil {
-		t.Fatal(err)
-	}
-	// CreateInvite supersedes the admin's active invites, the printed one
-	// included; mint the printed shape again as ensureAdmin does.
-	printed, err = running.CreateAuthCode(ctx, admin.User.ID, auth.InitialAdminCodeLabel, 0, 0)
-	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,8 +256,8 @@ func TestResetAdminRevokesTheFirstRunCode(t *testing.T) {
 	if _, err := running.ResolveAuthCode(ctx, printed); err == nil {
 		t.Error("the printed code still pairs after reset-admin")
 	}
-	if _, err := running.ResolveAuthCode(ctx, invite.Code); err != nil {
-		t.Errorf("the admin's own invite went too: %v", err)
+	if _, err := running.ResolveAuthCode(ctx, other); err != nil {
+		t.Errorf("the admin's other code went too: %v", err)
 	}
 	// Nothing left to revoke: a second reset says nothing of it.
 	out.Reset()
@@ -524,17 +513,17 @@ func TestResetAdminRefusals(t *testing.T) {
 	// A restore waiting for the next start would replace the database, and
 	// the new password with it: refused, nothing changed. So is a marker that
 	// doesn't read (the start reports and drops it).
-	for _, marker := range []struct{ name, body string }{
-		{"a restore waiting", `{"name":"audiosilo-2026-11-14.db","requested_by":"admin"}`},
-		{"an unreadable restore marker", `{not json`},
+	for _, marker := range []struct{ name, body, want string }{
+		{"a restore waiting", `{"name":"audiosilo-2026-11-14.db","requested_by":"admin"}`, "a restore of audiosilo-2026-11-14.db is waiting"},
+		{"an unreadable restore marker", `{not json`, "reading the restore waiting in"},
 	} {
 		t.Run(marker.name, func(t *testing.T) {
 			dir, running := resetDir(t, "admin")
 			writeRestoreMarker(t, dir, marker.body)
 			var out bytes.Buffer
 			err := ResetAdmin(ctx, dir, "", &out)
-			if err == nil || !strings.Contains(err.Error(), "restore") || !strings.Contains(err.Error(), "start the server once") {
-				t.Fatalf("err = %v, want the restore refusal", err)
+			if err == nil || !strings.Contains(err.Error(), marker.want) || !strings.Contains(err.Error(), "start the server once") {
+				t.Fatalf("err = %v, want %q", err, marker.want)
 			}
 			if out.Len() > 0 {
 				t.Errorf("printed %q on a refusal", out.String())
