@@ -32,12 +32,12 @@ func TestSignInHintUntilAnAdminSignsIn(t *testing.T) {
 	ctx := context.Background()
 	authSvc := auth.New(storetest.Open(t), time.Now)
 	var banner bytes.Buffer
-	created, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner)
+	created, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner, discardLog())
 	if err != nil || !created || !strings.Contains(banner.String(), "Admin password") {
 		t.Fatalf("ensureAdmin = %v, %v; banner:\n%s", created, err, banner.String())
 	}
 	// The next start made nothing, and says the admin hasn't signed in.
-	if again, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner); err != nil || again {
+	if again, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner, discardLog()); err != nil || again {
 		t.Fatalf("second ensureAdmin = %v, %v; want no new admin", again, err)
 	}
 	got := hintFor(t, authSvc)

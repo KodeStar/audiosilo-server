@@ -190,7 +190,7 @@ func Run(ctx context.Context, opts Options) error {
 		if !exists {
 			setupToken = randomSecret(18)
 		}
-	} else if created, err = ensureAdmin(ctx, cfg, authSvc, os.Stdout); err != nil {
+	} else if created, err = ensureAdmin(ctx, cfg, authSvc, os.Stdout, log); err != nil {
 		return err
 	}
 	if !created {
@@ -424,7 +424,7 @@ func resolveTool(name string) string {
 // yet, printing the credentials exactly once. It keys off the database (whether an
 // admin exists), not config-file existence, so a pre-supplied config.yaml does not
 // suppress first-run admin creation.
-func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service, w io.Writer) (created bool, err error) {
+func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service, w io.Writer, log *slog.Logger) (created bool, err error) {
 	exists, err := authSvc.AdminExists(ctx)
 	if err != nil || exists {
 		return false, err
@@ -434,16 +434,18 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 	if err != nil {
 		return false, err
 	}
-	// Until an admin signs in with a password, later starts say the password
-	// was printed here (signInHint).
-	if err := authSvc.MarkFirstAdmin(ctx, admin.ID); err != nil {
-		return false, err
-	}
 	code, err := authSvc.CreateAuthCode(ctx, admin.ID, "initial admin code", 0, 0)
 	if err != nil {
 		return false, err
 	}
 	writeBanner(w, cfg, password, code)
+	// Until an admin signs in with a password, later starts say the password
+	// was printed here (signInHint). After the banner, and never a reason not
+	// to start: the admin exists now, and a start that stopped here would
+	// leave its password printed nowhere.
+	if err := authSvc.MarkFirstAdmin(ctx, admin.ID); err != nil {
+		log.Warn("recording the first-run admin failed: later starts won't repeat the sign-in hint", "err", err)
+	}
 	return true, nil
 }
 
