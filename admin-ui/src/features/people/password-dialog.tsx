@@ -67,7 +67,12 @@ export function PasswordDialog({
         )}
       >
         {open ? (
-          <PasswordForm user={user} promote={promote} onDone={() => onOpenChange(false)} />
+          <PasswordForm
+            user={user}
+            self={self}
+            promote={promote}
+            onDone={() => onOpenChange(false)}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -76,16 +81,18 @@ export function PasswordDialog({
 
 function PasswordForm({
   user,
+  self,
   promote,
   onDone,
 }: {
   user: User;
+  /** The account is the signed-in admin's own. */
+  self: boolean;
   promote: boolean;
   onDone: () => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const self = useCurrentUser().id === user.id;
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { password: '', confirm: '' },
