@@ -143,9 +143,10 @@ func ScopesFor(mode string) []string {
 func QueryFor(b *catalog.Book, region, libraryLanguage string) meta.MatchQuery {
 	asin, isbn := b.ASIN, b.ISBN
 	if asin == "" && isbn == "" {
-		asin, isbn = b.HintASIN, cmp.Or(b.HintISBN, b.TagISBN)
-		if asin == "" && b.HintISBN == "" {
-			asin = b.TagASIN
+		if b.HintISBN != "" {
+			asin, isbn = b.HintASIN, b.HintISBN
+		} else {
+			asin, isbn = cmp.Or(b.HintASIN, b.TagASIN), b.TagISBN
 		}
 	}
 	return meta.MatchQuery{
