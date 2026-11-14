@@ -242,9 +242,23 @@ describe('inviteReach', () => {
     });
     // Plain http (home HTTP on the self-signed port) shows no certificate.
     expect(inviteReach('http://nas.local:8443/connect', true).certificate).toBe(false);
-    // Another TLS mode (autocert, or off behind a proxy) has a real one, at an IP too.
-    expect(inviteReach('https://192.168.1.20:8443/connect', false).certificate).toBe(false);
     expect(inviteReach('https://localhost:8443/connect', true).certificate).toBe(false);
+  });
+  it('warns about https at an IP address whatever the TLS mode, and not about a name without self-signed', () => {
+    // TLS off behind a proxy with its own certificate, or autocert reached by address.
+    expect(inviteReach('https://192.168.1.20/connect', false)).toEqual({
+      ...none,
+      home: true,
+      certificate: true,
+    });
+    expect(inviteReach('https://203.0.113.7:8443/connect', false).certificate).toBe(true);
+    expect(inviteReach('https://192.168.1.20:8443/connect', true).certificate).toBe(true);
+    // A name on a server that isn't self-signed has a real certificate.
+    expect(inviteReach('https://books.example.com/connect', false).certificate).toBe(false);
+    expect(inviteReach('https://nas.local/connect', false).certificate).toBe(false);
+    // Plain http at an IP shows no certificate, and localhost is this computer's own.
+    expect(inviteReach('http://192.168.1.20:8080/connect', false).certificate).toBe(false);
+    expect(inviteReach('https://127.0.0.1:8443/connect', false).certificate).toBe(false);
   });
   it('reads the running TLS mode from the settings, unknown while a change waits for a restart', () => {
     const saved = (tls_mode: 'off' | 'selfsigned' | 'autocert', restart_pending: string[] = []) =>
@@ -253,7 +267,7 @@ describe('inviteReach', () => {
     expect(runsSelfSigned(saved('selfsigned'))).toBe(true);
     expect(runsSelfSigned(saved('autocert'))).toBe(false);
     expect(runsSelfSigned(saved('off', ['network.bind']))).toBe(false);
-    // Saved but not running yet: the address stands in (inviteReach).
+    // Saved but not running yet: only the address is left to go by (inviteReach).
     expect(runsSelfSigned(saved('off', ['network.tls_mode']))).toBeUndefined();
     expect(runsSelfSigned(saved('selfsigned', ['network.tls_mode']))).toBeUndefined();
   });

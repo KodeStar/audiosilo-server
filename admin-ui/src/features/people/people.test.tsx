@@ -199,9 +199,15 @@ describe('people', () => {
       'https://books.example.com/connect#code=X',
       false,
     ],
-    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', false],
+    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', true],
+    [
+      'a server behind a proxy, at a name',
+      'off',
+      'https://books.example.com/connect#code=X',
+      false,
+    ],
   ] as const)(
-    'warns about the certificate by the TLS mode, not the address (%s, server#386)',
+    'warns about the certificate of a self-signed server or an IP address (%s, server#386)',
     async (_, mode, link, warns) => {
       mockFetch(
         routes({
