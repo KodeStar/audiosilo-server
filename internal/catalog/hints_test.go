@@ -8,20 +8,7 @@ import (
 // writes only hints, and returns its id.
 func (f *importFixture) applyHints(t *testing.T, userID int64, hints ...BookHint) int64 {
 	t.Helper()
-	imps, err := f.c.CreateImports(f.ctx, []Import{{UserID: userID, Source: ImportSourceABS, SourceURL: "http://abs"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := imps[0].ID
-	if err := f.c.FinishImportFetch(f.ctx, id, "abs", []byte("payload"), ImportPlan{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.c.ApplyImport(f.ctx, id, func(ImportState) (*ImportWrite, error) {
-		return &ImportWrite{Hints: hints}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return id
+	return f.applyWrite(t, userID, &ImportWrite{Hints: hints})
 }
 
 // hintOf is the book at ref's ABS hint as the match dialog reads it (GetBook),

@@ -8,7 +8,7 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
-  identifiersOnly,
+  identifierOnlyBooks,
   importEmpty,
   importIdentifiers,
   initialMap,
@@ -181,13 +181,13 @@ describe('summary', () => {
   it('can be applied for identifiers alone, with no listening history', () => {
     const none = summary({ sessions: 0, progress: 0, finished: 0, bookmarks: 0, estimated: 0 });
     const ids = { books: 4, asin: 4, isbn: 0, by_title: 0, already_matched: 0 };
-    expect(identifiersOnly({ ...none, identifiers: ids })).toBe(true);
+    expect(identifierOnlyBooks({ ...none, identifiers: ids })).toBe(4);
     expect(importEmpty({ ...none, identifiers: ids })).toBe(false);
     // Only books already matched: nothing to bring over.
     expect(importEmpty({ ...none, identifiers: { ...ids, books: 0, already_matched: 2 } })).toBe(
       true,
     );
-    expect(identifiersOnly({ ...summary(), identifiers: ids })).toBe(false); // history too
+    expect(identifierOnlyBooks({ ...summary(), identifiers: ids })).toBe(0); // history too
   });
 
   it('tells the identifiers only when the summary has any to tell', () => {

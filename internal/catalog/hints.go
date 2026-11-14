@@ -20,9 +20,10 @@ import (
 // own source's: ImportWrite.Hints).
 const HintSourceABS = ImportSourceABS
 
-// bookHintWhere is the WHERE clause (on book_hints h) of the hint of the books row
-// a query reads, the source its ?2.
-const bookHintWhere = `WHERE h.library_id = books.library_id AND h.path = books.rel_path AND h.source = ?2`
+// bookHintWhere is the WHERE clause (on book_hints h) of the Audiobookshelf hint
+// of the books row a query reads (matchSubjectJoin's condition, for a query
+// that can't alias books).
+const bookHintWhere = `WHERE h.library_id = books.library_id AND h.path = books.rel_path AND h.source = '` + HintSourceABS + `'`
 
 // BookHint is the identifiers a hint gives a book.
 type BookHint struct {

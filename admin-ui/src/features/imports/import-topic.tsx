@@ -47,7 +47,7 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
-  identifiersOnly,
+  identifierOnlyBooks,
   importEmpty,
   importIdentifiers,
   initialMap,
@@ -521,6 +521,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
   const titleId = `import-${imp.id}-title`;
   const title = t('imports.row.title', { source: imp.source_user, user: imp.username });
   const replaced = replacedBy(imp, all);
+  const onlyIdentifiers = imp.summary ? identifierOnlyBooks(imp.summary) : 0;
 
   return (
     <Card aria-labelledby={titleId}>
@@ -595,11 +596,8 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
         description={
           !imp.summary
             ? undefined
-            : identifiersOnly(imp.summary)
-              ? t(
-                  'imports.apply.identifiersOnly',
-                  counted(imp.summary.identifiers?.books ?? 0, lang),
-                )
+            : onlyIdentifiers > 0
+              ? t('imports.apply.identifiersOnly', counted(onlyIdentifiers, lang))
               : t('imports.apply.body', {
                   hours: formatHours(imp.summary.listened, lang),
                   ...counted(imp.summary.sessions, lang),
@@ -619,9 +617,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           toast.add({
             title: t('imports.apply.done', { user: imp.username }),
             description: t(
-              imp.summary && identifiersOnly(imp.summary)
-                ? 'imports.apply.doneIdentifiers'
-                : 'imports.apply.doneBody',
+              onlyIdentifiers > 0 ? 'imports.apply.doneIdentifiers' : 'imports.apply.doneBody',
             ),
             type: 'success',
           });
@@ -657,6 +653,7 @@ function SummaryView({
   const lang = i18n.resolvedLanguage ?? 'en';
   const n = (v: number) => formatNumber(v, lang);
   const matched = matchedTotal(s);
+  const onlyIdentifiers = identifierOnlyBooks(s);
   const tiers = matchTiers(s)
     .map((x) => t(`imports.summary.tier.${x.tier}`, { n: n(x.count) }))
     .join(', ');
@@ -706,9 +703,9 @@ function SummaryView({
         <Notice tone="warn" icon={TriangleAlert} title={t('imports.summary.emptyTitle')}>
           {t('imports.summary.emptyBody')}
         </Notice>
-      ) : identifiersOnly(s) ? (
+      ) : onlyIdentifiers > 0 ? (
         <Notice tone="info" icon={Info} title={t('imports.summary.identifiersOnlyTitle')}>
-          {t('imports.summary.identifiersOnlyBody', counted(s.identifiers?.books ?? 0, lang))}
+          {t('imports.summary.identifiersOnlyBody', counted(onlyIdentifiers, lang))}
         </Notice>
       ) : (
         <p className="flex flex-wrap items-baseline gap-x-2">

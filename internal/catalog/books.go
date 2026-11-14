@@ -984,7 +984,7 @@ func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 		`SELECT `+bookCols+`, description, chapters_source, tag_asin, tag_isbn, tag_language,
 		        COALESCE((SELECT h.asin FROM book_hints h `+bookHintWhere+`), ''),
 		        COALESCE((SELECT h.isbn FROM book_hints h `+bookHintWhere+`), '')
-		   FROM books WHERE id = ?1`, id, HintSourceABS).
+		   FROM books WHERE id = ?`, id).
 		Scan(append(dest, &b.Description, &b.ChaptersSource, &b.TagASIN, &b.TagISBN, &b.TagLanguage,
 			&b.HintASIN, &b.HintISBN)...)
 	if errors.Is(err, sql.ErrNoRows) {
