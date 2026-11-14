@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { KeyRound } from 'lucide-react';
 import { ApiError, WRONG_CURRENT_PASSWORD, api } from '@/api/client';
-import { invalidatePeople } from '@/api/hooks';
+import { invalidatePeople, notePasswordChosen } from '@/api/hooks';
 import { MIN_PASSWORD } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Field } from '@/components/ui/field';
@@ -75,7 +75,9 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
         }
         throw err;
       }
-      // Done: a retry (a later refusal) doesn't send it again.
+      // Done: a retry (a later refusal) doesn't send it again, and the step
+      // (now, or opened again with Back) no longer asks for one.
+      notePasswordChosen(qc);
       setDraft((d) => ({ ...d, password: '', repeat: '', current: '' }));
     }
     await leave('done');

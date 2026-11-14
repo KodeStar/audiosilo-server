@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateDevices, invalidatePeople } from '@/api/hooks';
+import { invalidateDevices, invalidatePeople, notePasswordChosen } from '@/api/hooks';
 import { MIN_PASSWORD, type User } from '@/api/types';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
@@ -85,6 +85,7 @@ function PasswordForm({
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const self = useCurrentUser().id === user.id;
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { password: '', confirm: '' },
@@ -102,6 +103,8 @@ function PasswordForm({
       invalidatePeople(qc);
       // A change signs them out of their devices (server#281): the lists move too.
       invalidateDevices(qc);
+      // Their own password, chosen here: the setup flow's account step stops asking.
+      if (self) notePasswordChosen(qc);
       toast.add({
         title: promote
           ? t('user.account.nowAdmin', { name: user.username })

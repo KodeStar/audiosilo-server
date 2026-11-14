@@ -917,6 +917,11 @@ describe('the account step (server#369)', () => {
     expect(screen.getByRole('button', { name: 'Back' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByLabelText('Username')).toHaveValue('kode');
+    // The password is their own now: the step no longer asks for one.
+    expect(screen.queryByText('Your password came from the server log')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Where are your books?' })).toBeVisible();
+    expect(sent(calls, 'POST', '/auth/password')).toHaveLength(1);
   });
 
   it('asks for a new password while the admin still has the printed one', async () => {
