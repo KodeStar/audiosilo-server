@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -67,31 +68,49 @@ func (s *Service) FirstAdminWaiting(ctx context.Context) (*User, error) {
 // start's hint. It writes only the first time (a write moves the content
 // generation), and nothing on a server without the row.
 func (s *Service) NoteAdminSignIn(ctx context.Context) error {
-	fa, ok, err := s.readFirstAdmin(ctx)
-	if err != nil || !ok || fa.SignedIn {
-		return err
-	}
-	fa.SignedIn = true
-	return s.putFirstAdmin(ctx, fa)
+	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) { fa.SignedIn = true })
 }
 
 // NoteOwnPassword records that admin id set their own password: signed in (as
 // NoteAdminSignIn), and, when id is the first-run admin, the printed password
 // replaced. Writes only what changes.
 func (s *Service) NoteOwnPassword(ctx context.Context, id int64) error {
-	fa, ok, err := s.readFirstAdmin(ctx)
-	if err != nil || !ok {
+	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) {
+		fa.SignedIn = true
+		if fa.UserID == id {
+			fa.ChosePassword = true
+		}
+	})
+}
+
+// noteFirstAdmin applies note to the row, when there is one and note changes
+// it. The common case (nothing to change) is one read; a change reads the row
+// again and writes it in one transaction, so two notes at once (a sign-in
+// beside a password change) never lose one another's fact.
+func (s *Service) noteFirstAdmin(ctx context.Context, note func(*firstAdmin)) error {
+	changed := func(fa firstAdmin) (firstAdmin, bool) {
+		next := fa
+		note(&next)
+		return next, fa.UserID != 0 && next != fa
+	}
+	fa, _, err := s.readFirstAdmin(ctx)
+	if err != nil {
 		return err
 	}
-	next := fa
-	next.SignedIn = true
-	if fa.UserID == id {
-		next.ChosePassword = true
-	}
-	if next == fa {
+	if _, ok := changed(fa); !ok {
 		return nil
 	}
-	return s.putFirstAdmin(ctx, next)
+	return s.db.WithTx(ctx, "NoteFirstAdmin", func(tx *sql.Tx) error {
+		fa, err := store.GetState[firstAdmin](ctx, tx, firstAdminKey)
+		if err != nil {
+			return err
+		}
+		next, ok := changed(fa)
+		if !ok {
+			return nil
+		}
+		return store.PutState(ctx, tx, firstAdminKey, next, s.ts())
+	})
 }
 
 // PrintedPassword reports whether admin id still has the password the server
