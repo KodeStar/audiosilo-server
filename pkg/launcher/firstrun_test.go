@@ -269,6 +269,37 @@ func TestResetAdminRevokesTheFirstRunCode(t *testing.T) {
 	}
 }
 
+// A revocation that fails after the password is set still prints the
+// password (the old one is gone) and then reports the failure.
+func TestResetAdminPrintsThePasswordWhenTheRevokeFails(t *testing.T) {
+	ctx := context.Background()
+	dir, running := resetDir(t, "admin")
+	admin, err := running.Authenticate(ctx, "admin", "old-password-admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := running.CreateAuthCode(ctx, admin.ID, auth.InitialAdminCodeLabel, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(ctx, filepath.Join(dir, "audiosilo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx,
+		`CREATE TRIGGER no_code_delete BEFORE DELETE ON auth_codes BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = ResetAdmin(ctx, dir, "", &out)
+	if err == nil || !strings.Contains(err.Error(), "revoking the first-run auth code failed") {
+		t.Fatalf("err = %v, want the revoke's failure", err)
+	}
+	if _, err := running.Authenticate(ctx, "admin", passwordIn(t, out.String())); err != nil {
+		t.Errorf("the printed password doesn't sign in: %v", err)
+	}
+}
+
 // A first start whose first_admin row can't be written still prints its
 // banner and starts: the row only feeds the later hint (a warning says so).
 func TestEnsureAdminWhenTheFirstAdminRowFails(t *testing.T) {

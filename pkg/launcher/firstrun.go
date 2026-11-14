@@ -207,11 +207,9 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 		return err
 	}
 	// The auth code the first start printed sits in the same log as the
-	// password this replaces: it goes too.
-	revoked, err := authSvc.RevokeInitialAdminCode(ctx, u.ID)
-	if err != nil {
-		return fmt.Errorf("the password is set, but revoking the first-run auth code failed (revoke it in the console, People > Invites): %w", err)
-	}
+	// password this replaces: it goes too. A failure is reported after the
+	// password is printed: the old one is gone, so this one must be shown.
+	revoked, revokeErr := authSvc.RevokeInitialAdminCode(ctx, u.ID)
 	// Whoever ran this holds a working admin password now, so later starts stop
 	// pointing at the first start's, which this may have replaced
 	// (auth.NoteAdminSignIn). A failed note only leaves the hint up.
@@ -221,6 +219,9 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	p("Sign in to the admin console with it. Every session that used the old password\n")
 	p("is signed out (a running server may answer one it already checked for up to a\n")
 	p("minute; restart the server to end them at once).\n")
+	if revokeErr != nil {
+		return fmt.Errorf("the password is set, but revoking the first-run auth code failed (revoke it in the console, People > Invites): %w", revokeErr)
+	}
 	if revoked {
 		p("\nThe auth code printed at first start no longer works either: invite a device\n")
 		p("from People in the console.\n")
