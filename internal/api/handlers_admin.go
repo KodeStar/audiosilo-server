@@ -77,14 +77,10 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if req.Username == "" {
-		writeError(w, http.StatusBadRequest, "username is required")
-		return
-	}
-	// CreateUser enforces the password rules (required for admins, optional
-	// otherwise); writeUserError maps its typed errors to the right status and
-	// never echoes a raw DB error (a duplicate username must not leak the SQLite
-	// constraint string).
+	// CreateUser enforces the username rule (400 username_required) and the
+	// password rules (required for admins, optional otherwise); writeUserError
+	// maps its typed errors to the right status and never echoes a raw DB error
+	// (a duplicate username must not leak the SQLite constraint string).
 	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
 	if err != nil {
 		a.writeUserError(w, err, "could not create user")
@@ -284,6 +280,10 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.auth.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
 	// An admin who set their own password here (People's password dialog on
 	// their own account) chose it, as POST /auth/password's caller does: the
 	// first-run admin's printed password is gone and the start's hint ends
@@ -292,10 +292,6 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		if err := a.auth.NoteOwnPassword(r.Context(), u.ID); err != nil {
 			a.log.Warn("noting the admin's own password failed", "err", err)
 		}
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load user")
-		return
 	}
 	// The password itself never: only that it changed (or was cleared).
 	details := map[string]any{}
