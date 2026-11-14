@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/dialog';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { AddItLink, NotInDatabase } from '@/features/book/add-to-community';
 import { MatchDialog } from '@/features/book/match-dialog';
 import { keepShiftClickFromSelectingText, shiftHeld } from '@/features/library/books/use-selection';
 import { scoreTone } from '@/features/book/match-model';
@@ -61,6 +62,7 @@ import {
   formatRelative,
   seriesLabel,
 } from '@/lib/format';
+import { addBookUrl } from '@/lib/meta-site';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -713,6 +715,8 @@ function ItemList({
   }
   return (
     <>
+      {/* Not found: what that means for the books, and how to fill the gap (server#370). */}
+      {outcome === 'none' ? <NotInDatabase books /> : null}
       <ul
         className="divide-y rounded-[12px] border"
         aria-label={t(`health.bulkMatch.tab.${outcome}`)}
@@ -957,6 +961,13 @@ function ItemRow({
               <span className="max-md:hidden">{t('health.bulkMatch.matchByHandShort')}</span>
               <Sparkles aria-hidden="true" className="md:hidden" />
             </Button>
+            {item.outcome === 'none' && !status ? (
+              <AddItLink
+                button
+                title={title}
+                href={addBookUrl({ title: item.book.title, author: item.book.author })}
+              />
+            ) : null}
             {/* The book page in a new tab, to listen or look closer without leaving the review. */}
             <Link
               {...bookRoute(item.library_id, item.path)}

@@ -472,6 +472,53 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
   });
 
+  it('says a book not found still plays, links to add it prefilled, and points at the report (server#370)', async () => {
+    const missing: MatchRunItem = {
+      ...confident,
+      id: 14,
+      path: 'Someone/Obscure',
+      outcome: 'none',
+      score: 0,
+      book: { title: 'Obscure Tale', author: 'Some One' },
+      changes: {},
+    };
+    mockFetch(
+      routes([run({ counts: { ...run().counts, none: 1 } })], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'none' ? [missing] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /Not found/ }));
+    expect(
+      await within(dialog).findByText(
+        'These books are not in the community database yet. They still play as normal.',
+      ),
+    ).toBeInTheDocument();
+    const add = within(dialog).getByRole('link', {
+      name: 'Add Obscure Tale to the community database at meta.audiosilo.app (opens in a new tab)',
+    });
+    expect(add).toHaveAttribute(
+      'href',
+      'https://meta.audiosilo.app/add?q=Obscure%20Tale%20Some%20One',
+    );
+    expect(add).toHaveAttribute('target', '_blank');
+    expect(
+      within(dialog).getByRole('link', { name: 'Help complete the community database' }),
+    ).toHaveAttribute('href', '/admin/server?topic=metadata');
+    // A confident match has no Add it.
+    await user.click(within(dialog).getByRole('button', { name: /Confident/ }));
+    await within(dialog).findByRole('list', { name: 'Confident' });
+    expect(within(dialog).queryByRole('link', { name: /to the community database/ })).toBeNull();
+  });
+
   it('says when the community holds only a dramatization of a plain book', async () => {
     const held: MatchRunItem = {
       ...confident,
