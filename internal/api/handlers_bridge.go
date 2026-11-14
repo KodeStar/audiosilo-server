@@ -552,10 +552,18 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 			}
 		}
 	}
-	if job.Kind == bridge.KindLibrivoxFetch && ev.Path == "" {
+	if job.Kind == bridge.KindLibrivoxFetch {
 		// A fetch names no book until it is placed: the book its result names.
-		if _, r, err := bridge.LibrivoxFetchOf(*job); err == nil {
-			ev.Path = r.Path
+		p, r, err := bridge.LibrivoxFetchOf(*job)
+		// Until then (a fetch that placed no book, a done job whose result can't
+		// be read) it is named by the work it was adding: the params' title.
+		ev.Title = p.Title
+		if err == nil {
+			ev.Path = cmp.Or(ev.Path, r.Path)
+			if job.State == bridge.StateDone {
+				// The fold (OnEnded) ran before this, so the match is settled.
+				ev.LibrivoxMatch = a.cat.LibrivoxFetchMatch(ctx, p, r)
+			}
 		}
 	}
 	if job.LibraryID != nil {
@@ -565,7 +573,7 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		}
 		if ev.Path != "" {
 			if book, err := a.cat.GetBookByPath(ctx, ev.LibraryID, ev.Path); err == nil {
-				ev.Title = book.Title
+				ev.Title = cmp.Or(book.Title, ev.Title)
 				// Whether the chapters a detect job found are the ones listeners
 				// get (the Bridge rescans before it reports done).
 				ev.ChaptersSource = cmp.Or(book.ChaptersSource, catalog.ChaptersFromFiles)

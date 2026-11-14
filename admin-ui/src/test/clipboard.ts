@@ -14,3 +14,11 @@ export function stubExecCommand(impl: (command: string) => boolean) {
 export function unstubExecCommand() {
   Reflect.deleteProperty(document, 'execCommand');
 }
+
+/**
+ * Stand in for the Web Share API (jsdom has none): `share` becomes
+ * navigator.share. Pass undefined to take it out again.
+ */
+export function stubShare(share: unknown) {
+  Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+}

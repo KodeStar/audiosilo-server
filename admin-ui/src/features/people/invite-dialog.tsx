@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Info, Send, UserPlus } from 'lucide-react';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useLibraries, useShares } from '@/api/hooks';
 import type { AuthCode, InviteCreated, User } from '@/api/types';
 import { Notice } from '@/components/notice';
@@ -25,7 +25,13 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { InviteCard } from './invite-card';
 import { grantAccess } from './grant-access';
-import { accessValue, inviteStatus, isLibraryGrant, parseAccessChoice } from './people-model';
+import {
+  MIN_PASSWORD,
+  accessValue,
+  inviteStatus,
+  isLibraryGrant,
+  parseAccessChoice,
+} from './people-model';
 
 const USES = [1, 3, 5, 10, 0] as const; // 0 = unlimited
 const DAYS = [1, 7, 30, 0] as const; // 0 = never
@@ -103,6 +109,8 @@ export function InviteResultContent({ invite }: { invite: ShownInvite }) {
 interface Values {
   name: string;
   access: string;
+  /** Optional: a new person's web player password ("" for none). */
+  password: string;
   uses: string;
   days: string;
 }
@@ -156,7 +164,11 @@ function InviteForm({
     { value: 'none', title: t('invite.access.none'), description: t('invite.access.noneBody') },
   ];
 
-  const form = useForm<Values>({ defaultValues: { name: '', access: '', uses: '5', days: '1' } });
+  // A week: long enough for someone to get round to it (a day lapsed before
+  // many people opened their link).
+  const form = useForm<Values>({
+    defaultValues: { name: '', access: '', password: '', uses: '5', days: '7' },
+  });
   // A new person's account, once created: retrying after a failed invite reuses
   // it instead of tripping over its own username.
   const createdUser = useRef<User>(undefined);
@@ -184,11 +196,18 @@ function InviteForm({
         form.setError('name', { message: t('invite.nameRequired') });
         return;
       }
+      if (v.password !== '' && v.password.length < MIN_PASSWORD) {
+        form.setError('password', { message: t('errors.passwordTooShort') });
+        return;
+      }
       try {
-        target = await api.createUser({ username: name, password: '', role: 'user' });
+        target = await api.createUser({ username: name, password: v.password, role: 'user' });
         createdUser.current = target;
       } catch (err) {
-        form.setError('name', { message: errorMessage(err, t) });
+        // A password the server refuses is the password field's; anything else the name's.
+        const field =
+          err instanceof ApiError && err.code === 'password_too_short' ? 'password' : 'name';
+        form.setError(field, { message: errorMessage(err, t) });
         return;
       }
       try {
@@ -219,6 +238,7 @@ function InviteForm({
   };
 
   const nameError = errors.name?.message;
+  const passwordError = errors.password?.message;
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
       <DialogBody className="flex flex-col gap-4">
@@ -237,6 +257,21 @@ function InviteForm({
                 aria-invalid={nameError ? true : undefined}
                 aria-describedby={describedBy('invite-name', !!nameError, true)}
                 {...form.register('name')}
+              />
+            </Field>
+            <Field
+              htmlFor="invite-password"
+              label={t('invite.password')}
+              description={t('invite.passwordHint', { count: MIN_PASSWORD })}
+              error={passwordError}
+            >
+              <Input
+                id="invite-password"
+                type="password"
+                autoComplete="new-password"
+                aria-invalid={passwordError ? true : undefined}
+                aria-describedby={describedBy('invite-password', !!passwordError, true)}
+                {...form.register('password')}
               />
             </Field>
             <div className="flex flex-col gap-1.5">

@@ -113,17 +113,26 @@ func (s *Service) LibrivoxWork(ctx context.Context, id string) (*LibrivoxWork, e
 	return out, nil
 }
 
+// LibrivoxProject is what a LibriVox project id resolves to: the community
+// work and the recording that IS that project, and the work's title.
+type LibrivoxProject struct {
+	WorkID      string
+	RecordingID string
+	Title       string
+}
+
 // LibrivoxRecordingOf resolves LibriVox project id to the community work and
 // the recording that IS that project (lookup?librivox_id=): the identity a
-// librivox.fetch records for the book it places. ErrNotFound when the
-// catalogue holds no such project, or answers without a work or a recording.
-func (s *Service) LibrivoxRecordingOf(ctx context.Context, id int) (workID, recordingID string, err error) {
+// librivox.fetch records for the book it places, with the work's title (what
+// the job is called until it places a book). ErrNotFound when the catalogue
+// holds no such project, or answers without a work or a recording.
+func (s *Service) LibrivoxRecordingOf(ctx context.Context, id int) (LibrivoxProject, error) {
 	l, err := s.client.lookupLibrivox(ctx, id)
 	if err != nil {
-		return "", "", err
+		return LibrivoxProject{}, err
 	}
 	if l.Work == nil || strings.TrimSpace(l.Work.ID) == "" || strings.TrimSpace(l.RecordingID) == "" {
-		return "", "", ErrNotFound
+		return LibrivoxProject{}, ErrNotFound
 	}
-	return l.Work.ID, l.RecordingID, nil
+	return LibrivoxProject{WorkID: l.Work.ID, RecordingID: l.RecordingID, Title: l.Work.Title}, nil
 }

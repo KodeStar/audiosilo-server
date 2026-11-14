@@ -44,10 +44,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the admin's **Copy invite** button mints an auth code and shares
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
   reaches the server or its logs. The connect page auto-redeems a fragment code,
-  showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
+  showing a QR plus **Open in app** / **Open web player** buttons, and **Admin section**
+  only when the redeem says the invite is an admin's (the payload's additive `admin`,
+  set by `/auth/redeem` alone); on a phone or tablet (`connect.js` `isPhone`) it leads
+  with "Get the app, then come back to this link", the store links and the web player
+  instead of a QR the phone can't scan. The App Store / Google Play / APK links (the
+  APK is the player's GitHub `releases/latest` page, never a file) are static in
+  `index.html` (shown before any redeem) and in the payload's `links` (`ios`,
+  `android`, additive `apk`; `qr.go` `appStoreURL` etc.,
+  `TestConnectPageStoreLinks` keeps the two the same). `buildPairing`
   emits two carriers for the pairing token: `web_url`
-  (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
-  App Link when the domain is claimed, else the embedded web player) and `uri`
+  (`<base>/web/connect?token=` - encoded in the QR; the app's own scanner (Scan a QR
+  code) reads it, a phone's camera opens the embedded web player: the store apps claim
+  no domain, so a Universal/App Link only works for a build named in `app_links`) and `uri`
   (`audiosilo://connect?...` - custom scheme, launches an installed app on any
   domain). Both end with `sid=<server_id>` (after `home=`/`away=`; also the payload's
   `server_id`), so an app falling back to the link's http home checks `GET /server`'s
@@ -64,7 +73,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
   `web_url`, whose base may be another origin). Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
-  `handlers_admin.go`); explicit values override.
+  `handlers_admin.go`); explicit values override (the console's invite dialog asks
+  for 7 days unless changed).
 - **Home and away addresses (`addresses` capability)**: a server
   has an **away** address (`public_url`, works from anywhere) and may have a **home** one
   (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
@@ -3733,28 +3743,42 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   doesn't run it; an offline one still queues) and `library_not_writable`; 502 metadata down;
   audited `bridge.job` when queued). **The job**: `librivox.fetch` is internal, `writes`, a books
   library's, not quiet (a done one is "Added from LibriVox: <title>", named by its result's
-  path), no module; params `{librivox_id, work_id, recording_id, library_id}` are the server's,
-  strict, the work and recording resolved at queue time by `lookup?librivox_id=` asked alone
-  (`meta.Service.LibrivoxRecordingOf`; a lookup with no recording is not found, never a work's
-  first recording); deduped per `|<librivox_id>` within the library. The Bridge reads the
+  path; one that placed no book, failed or parked, by the params' `title`), no module; params
+  `{librivox_id, work_id, recording_id, library_id, title?}` are the server's, strict (the ids of
+  the Bridge's slug shape, `metaID`, so a bad one is refused at queue time; `title` the work's,
+  one bounded line, additive: the Bridge ignores it), the work, recording and title resolved at
+  queue time by `lookup?librivox_id=` asked alone (`meta.Service.LibrivoxRecordingOf`; a lookup
+  with no recording is not found, never a work's first recording); deduped per `|<librivox_id>`
+  within the library. The Bridge reads the
   project's manifest from its own metadata service, places `Author/Title/NN - Section.mp3` and
   `cover.jpg` through a dot-led staging folder beside it (the scan skips it), writes
   `.audiosilo/librivox.json` (`{version, librivox_id, work_id, recording_id, archive_id}`, not
   read here yet: `knownAttachment` skips it, so the book has no attachments and no scan error;
   `library.TestScannerToleratesLibrivoxFile`), rescans and reports `{library_id, path,
-  librivox_id, files, bytes}`. Failure codes (the Bridge's; the console words them, `FETCH_CODES` in
+  librivox_id, files, bytes, adopted?}` (`adopted`, additive (server#379): true when it adopted a
+  folder an earlier fetch placed, false for a new one, absent from an older Bridge). Failure codes (the Bridge's; the console words them, `FETCH_CODES` in
   `features/librivox/librivox-model.ts`): `not_writable`, `exists`, `disk_full`, `not_found`,
   `archive_unavailable`, `metadata_off`. **Done**
   (`catalog.FoldLibrivoxFetch` from `OnEnded`, a content write): the result must name the job's
   own library and project and a book indexed in a books library (else `ErrFetchNotIndexed`,
   logged); it writes the book's `book_matches` row (`how` accepted, `set_by` the requesting admin,
-  no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners), replacing a stale row at that path (the
-  Bridge placed into a vacant folder: a deleted book's leftover) and never another path's; a job
-  whose params name no recording writes nothing. `/meta` then answers the book from its recorded
-  match (LibriVox L5) with no change. Known limits: a fold lost between the job's commit and the
-  fold (a crash), and Clear community matches, drop the identity until the server reads
-  `librivox.json` (a follow-up); Add again finds the placed folder (the Bridge adopts one holding
-  the project's `librivox.json`) and records it. **Console**: Library > LibriVox
+  no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners)
+  and never another path's, by `adopted`: false (a vacant folder, so what is at the path is a
+  deleted book's leftover) replaces the row and drops the path's ASIN/ISBN overrides (any source)
+  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match;
+  true (an earlier fetch's book) inserts only when the path has no row, so an admin's rematch
+  stays, and touches nothing else; absent replaces the row and touches nothing else (the L6
+  rule). A job whose params name no recording writes nothing. `/meta` then answers the book from
+  its recorded match (LibriVox L5) with no change. Its notification (`notifyBridgeJob`, after the
+  fold) carries `librivox_match` (`matched`, `kept`, `unmatched`; `catalog.LibrivoxFetchMatch`) from the
+  book's match now (`unmatched` too for a result the fold refused: another library or project
+  than the job's, or no book indexed at its path), and claims the recording only when matched
+  (an `unmatched` one goes out as a warning, the bell's tone for it). Known limits: a fold lost
+  between the job's commit and the fold (a crash), and Clear community matches, drop the
+  identity until the server reads `librivox.json` (a follow-up); Add again finds the placed
+  folder (the Bridge adopts one holding the project's `librivox.json`) and records it, but only
+  while the path holds no match: an adopted fold is insert-only, so a match recorded there since
+  (a bulk run's, or a deleted book's leftover a lost fold never replaced) stays, `kept`. **Console**: Library > LibriVox
   (`features/librivox/`): a row follows its job by id, asks the work again when it ends and, for
   a done one, once more a moment later (`DONE_RECHECK_MS`: the fold commits just after the job
   reads done), and a job that is gone (404) is followed no more.

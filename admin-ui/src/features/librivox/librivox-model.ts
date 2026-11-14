@@ -79,6 +79,15 @@ export function librivoxProject(job: Pick<BridgeJob, 'kind' | 'params'>): number
   return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : undefined;
 }
 
+/**
+ * The title of the work a librivox.fetch adds (its params' title, sent by
+ * servers since server#380), for the job list; undefined for none.
+ */
+export function librivoxTitle(job: Pick<BridgeJob, 'kind' | 'params'>): string | undefined {
+  if (job.kind !== LIBRIVOX_KIND) return undefined;
+  return text(job.params?.title);
+}
+
 /** How often a tracked job is asked again: every few seconds while it is open. */
 export function jobPollMs(job: Pick<BridgeJob, 'state'> | undefined): number | false {
   return job && isOpen(job.state) ? JOBS_POLL_OPEN_MS : false;

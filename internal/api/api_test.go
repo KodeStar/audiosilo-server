@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
+	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 type testEnv struct {
@@ -204,6 +206,78 @@ func TestUnauthenticatedRejected(t *testing.T) {
 	e := newTestEnv(t)
 	if resp, _ := e.do(t, "GET", "/api/v1/libraries", "", ""); resp.StatusCode != 401 {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestRedeemPayloadAppAndRole (server#367): a redeemed invite carries where to
+// get the app (App Store, Google Play, the APK's release page) and says
+// whether it pairs an admin, so the connect page offers the console only to
+// one: an admin's invite answers admin true, a listener's leaves it out.
+func TestRedeemPayloadAppAndRole(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	listener, err := e.auth.CreateUser(ctx, "listener", "", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := e.auth.CreateInvite(ctx, listener.ID, "", 3, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type payload struct {
+		Admin *bool `json:"admin"`
+		Links struct {
+			Web, Admin, IOS, Android, APK string
+		} `json:"links"`
+	}
+	redeem := func(code string) payload {
+		t.Helper()
+		resp, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("redeem: %d %s", resp.StatusCode, body)
+		}
+		var p payload
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	admin := redeem(e.authCode)
+	if admin.Admin == nil || !*admin.Admin {
+		t.Fatalf("an admin's invite: admin = %v, want true", admin.Admin)
+	}
+	if l := admin.Links; l.IOS != appStoreURL || l.Android != googlePlayURL || l.APK != apkReleaseURL ||
+		!strings.HasSuffix(l.Web, "/web") || !strings.HasSuffix(l.Admin, "/admin") {
+		t.Fatalf("links = %+v", l)
+	}
+	if !strings.HasPrefix(appStoreURL, "https://apps.apple.com/") || !strings.HasPrefix(googlePlayURL, "https://play.google.com/") ||
+		!strings.HasSuffix(apkReleaseURL, "/releases/latest") {
+		t.Fatal("the store links must be the stores' own https pages")
+	}
+	if got := redeem(invite.Code); got.Admin != nil {
+		t.Fatalf("a listener's invite: admin = %v, want it absent", *got.Admin)
+	}
+}
+
+// TestConnectPageStoreLinks: the connect page shows where to get the app
+// before any redeem, with the same links the pairing payload carries, and
+// keeps the console's button hidden until a redeem says the invite is an
+// admin's (connect.js).
+func TestConnectPageStoreLinks(t *testing.T) {
+	t.Parallel()
+	b, err := web.Asset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+	for _, u := range []string{appStoreURL, googlePlayURL, apkReleaseURL} {
+		if !strings.Contains(html, `href="`+u+`"`) {
+			t.Errorf("index.html does not link %s", u)
+		}
+	}
+	if !regexp.MustCompile(`id="link-admin" class="[^"]*\bhidden\b`).MatchString(html) {
+		t.Error("the console's button must start hidden")
 	}
 }
 

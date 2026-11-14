@@ -14,9 +14,7 @@ import { Input } from '@/components/ui/input';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
-
-/** The server's rule (auth.ErrPasswordTooShort); checked here first so the field can say so. */
-const MIN_PASSWORD = 8;
+import { MIN_PASSWORD } from './people-model';
 
 const schema = z
   .object({

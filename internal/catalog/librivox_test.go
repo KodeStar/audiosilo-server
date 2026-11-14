@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -164,5 +165,189 @@ func TestRecordingBooks(t *testing.T) {
 	}
 	if by, err := c.WorkRecordingBooks(ctx, ""); err != nil || by == nil || len(by) != 0 {
 		t.Fatalf("WorkRecordingBooks of no work = %#v, %v", by, err)
+	}
+}
+
+// adoptedFetch is fetchJob with the result's adopted field: "" leaves it out
+// (an older Bridge), else "true" or "false".
+func adoptedFetch(libID int64, path string, by int64, adopted string) bridge.Job {
+	j := fetchJob(libID, libID, path, by, "lv192")
+	if adopted != "" {
+		j.Result = json.RawMessage(fmt.Sprintf(`{"library_id":%d,"path":%q,"librivox_id":192,"files":3,"bytes":1000,"adopted":%s}`,
+			libID, path, adopted))
+	}
+	return j
+}
+
+// TestFoldLibrivoxFetchAdopted (server#379): how the fold treats what is
+// already at the book's path, by the result's adopted. A newly placed book
+// (false) drops a deleted book's leftover ASIN and ISBN (its overrides,
+// whoever set them, and its enrichment), so /meta no longer asks them before
+// the match, and keeps every other edit; an adopted folder (true) keeps the
+// match recorded there (an admin's rematch) and its identifiers, and is
+// recorded when it has none (a fold that was lost); an older Bridge's result
+// (no adopted) replaces the match and touches nothing else, as before.
+func TestFoldLibrivoxFetchAdopted(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	uid := seedUser(t, c, ctx)
+	const path = "L. Leslie Brooke/Johnny Crow's Garden"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, path)); err != nil {
+		t.Fatal(err)
+	}
+	// What a deleted book left at the path: an edited ASIN, a community ISBN,
+	// an enrichment row and an edited title.
+	leftovers := func(t *testing.T) {
+		t.Helper()
+		for _, q := range []string{
+			`DELETE FROM book_overrides`, `DELETE FROM book_enrichment`, `DELETE FROM book_matches`,
+			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'asin', 'B0LEFTOVER', 'edited', 't')`,
+			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'isbn', '9780000000002', 'community', 't')`,
+			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'title', 'Edited Title', 'edited', 't')`,
+			`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_by, set_at)
+			 VALUES(?1, ?2, 'rematched-work', 'rematched-rec', 'accepted', NULL, 't')`,
+		} {
+			if _, err := c.db.ExecContext(ctx, q, lib.ID, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		setEnrichment(t, c, lib.ID, path, "B0ENRICHED", "") // refreshes the book's effective metadata
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "B0LEFTOVER" || b.ISBN != "9780000000002" {
+			t.Fatalf("leftovers not in effect: %q %q", b.ASIN, b.ISBN)
+		}
+	}
+	overrides := func() map[string]storedOverride {
+		o, err := queryOverrides(ctx, c.db, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	enriched := func() int {
+		var n int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM book_enrichment WHERE library_id = ? AND path = ?`, lib.ID, path).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("placed", func(t *testing.T) {
+		leftovers(t)
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "false")); err != nil {
+			t.Fatal(err)
+		}
+		if w, r, _, _, _, _ := matchRow(t, c, lib.ID, path); w != "johnny-crows-garden" || r != "lv192" {
+			t.Fatalf("match = %s %s, want the recording", w, r)
+		}
+		if o := overrides(); len(o) != 1 || o["title"].Value != "Edited Title" {
+			t.Fatalf("overrides = %v, want only the title", o)
+		}
+		if n := enriched(); n != 0 {
+			t.Fatalf("enrichment rows = %d, want none", n)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "" || b.ISBN != "" || b.Title != "Edited Title" {
+			t.Fatalf("book = %q %q %q, want no identifiers and the title kept", b.ASIN, b.ISBN, b.Title)
+		}
+	})
+	t.Run("placed over a leftover enrichment alone", func(t *testing.T) {
+		leftovers(t)
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM book_overrides WHERE field IN ('asin', 'isbn')`); err != nil {
+			t.Fatal(err)
+		}
+		b := mustBook(t, c, ctx, lib.ID, path)
+		if err := c.db.WithTx(ctx, "test", func(tx *sql.Tx) error { return refreshEffective(ctx, tx, b.ID) }); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "B0ENRICHED" {
+			t.Fatalf("the enrichment's ASIN is not in effect: %q", b.ASIN)
+		}
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "false")); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "" || enriched() != 0 {
+			t.Fatalf("ASIN %q, enrichment rows %d: the leftover enrichment stayed", b.ASIN, enriched())
+		}
+	})
+	t.Run("adopted keeps a rematch", func(t *testing.T) {
+		leftovers(t)
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "true")); err != nil {
+			t.Fatal(err)
+		}
+		if w, r, _, _, _, _ := matchRow(t, c, lib.ID, path); w != "rematched-work" || r != "rematched-rec" {
+			t.Fatalf("match = %s %s, want the admin's rematch", w, r)
+		}
+		if o := overrides(); len(o) != 3 || enriched() != 1 {
+			t.Fatalf("overrides = %v, enrichment %d: an adopted folder's were touched", o, enriched())
+		}
+	})
+	t.Run("adopted with no match is recorded", func(t *testing.T) {
+		leftovers(t)
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM book_matches`); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "true")); err != nil {
+			t.Fatal(err)
+		}
+		if w, r, how, setBy, _, _ := matchRow(t, c, lib.ID, path); w != "johnny-crows-garden" || r != "lv192" ||
+			how != MatchHowAccepted || setBy != uid {
+			t.Fatalf("match = %s %s %s %v, want the recording", w, r, how, setBy)
+		}
+		if o := overrides(); len(o) != 3 {
+			t.Fatalf("overrides = %v: an adopted folder's were touched", o)
+		}
+	})
+	t.Run("an older Bridge", func(t *testing.T) {
+		leftovers(t)
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "")); err != nil {
+			t.Fatal(err)
+		}
+		if w, r, _, _, _, _ := matchRow(t, c, lib.ID, path); w != "johnny-crows-garden" || r != "lv192" {
+			t.Fatalf("match = %s %s, want the recording (replaced, as before)", w, r)
+		}
+		if o := overrides(); len(o) != 3 || enriched() != 1 {
+			t.Fatalf("overrides = %v, enrichment %d: an older Bridge's fold touched them", o, enriched())
+		}
+	})
+}
+
+// TestLibrivoxFetchMatchRefusedResult: a result that names another library or
+// project than the job's, or a path with no book indexed, is one the fold
+// refused, so the notification never reads it as matched, even when the path
+// it names holds a match as the job's recording (a deleted book's stays).
+func TestLibrivoxFetchMatchRefusedResult(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
+	const path = "L. Leslie Brooke/Johnny Crow's Garden"
+	for _, id := range []int64{lib.ID, other.ID} {
+		if _, err := c.UpsertBook(ctx, scannedBook(id, path)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_at)
+			VALUES(?, ?, 'johnny-crows-garden', 'lv192', 'accepted', 't')`, id, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const gone = "L. Leslie Brooke/Deleted Since"
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_at)
+		VALUES(?, ?, 'johnny-crows-garden', 'lv192', 'accepted', 't')`, lib.ID, gone); err != nil {
+		t.Fatal(err)
+	}
+	p := bridge.LibrivoxFetchParams{LibrivoxID: 192, WorkID: "johnny-crows-garden", RecordingID: "lv192", LibraryID: lib.ID}
+	for name, tc := range map[string]struct {
+		r    bridge.LibrivoxFetchResult
+		want string
+	}{
+		"the job's own":   {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 192}, LibrivoxMatched},
+		"another library": {bridge.LibrivoxFetchResult{LibraryID: other.ID, Path: path, LibrivoxID: 192}, LibrivoxUnmatched},
+		"another project": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 193}, LibrivoxUnmatched},
+		"no book indexed": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: gone, LibrivoxID: 192}, LibrivoxUnmatched},
+		"an unclean path": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: "../" + path, LibrivoxID: 192}, LibrivoxUnmatched},
+	} {
+		if got := c.LibrivoxFetchMatch(ctx, p, tc.r); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
 	}
 }

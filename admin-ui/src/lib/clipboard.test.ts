@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
-import { copyText, copyWithToast } from './clipboard';
+import { stubExecCommand, stubShare, unstubExecCommand } from '@/test/clipboard';
+import { copyText, copyWithToast, shareOrCopy } from './clipboard';
 import { toast } from './toast';
 
 describe('copyWithToast', () => {
@@ -77,5 +77,41 @@ describe('copyText', () => {
     expect(await copyText('x')).toBe(false);
     expect(document.querySelector('textarea')).toBeNull();
     expect(document.activeElement).toBe(button);
+  });
+});
+
+describe('shareOrCopy', () => {
+  const data = {
+    title: 'Invite',
+    text: 'Come and listen.',
+    url: 'https://books.example.com/connect',
+  };
+  afterEach(() => {
+    stubShare(undefined);
+    unstubExecCommand();
+    vi.restoreAllMocks();
+  });
+
+  it('hands it to the share sheet, and closing that is no failure', async () => {
+    const exec = stubExecCommand(() => true);
+    const share = vi.fn().mockRejectedValue(new DOMException('closed', 'AbortError'));
+    stubShare(share);
+    await shareOrCopy(data, 'Invite message');
+    expect(share).toHaveBeenCalledWith(data);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('copies the text and the link when there is no share sheet, or it refuses', async () => {
+    let copied = '';
+    stubExecCommand(() => {
+      copied = (document.activeElement as HTMLTextAreaElement).value;
+      return true;
+    });
+    await shareOrCopy(data, 'Invite message');
+    expect(copied).toBe('Come and listen.\nhttps://books.example.com/connect');
+    copied = '';
+    stubShare(vi.fn().mockRejectedValue(new DOMException('no', 'NotAllowedError')));
+    await shareOrCopy(data, 'Invite message');
+    expect(copied).toBe('Come and listen.\nhttps://books.example.com/connect');
   });
 });

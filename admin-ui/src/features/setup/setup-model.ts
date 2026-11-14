@@ -336,8 +336,15 @@ export function isHomeHost(hostport: string): boolean {
   return !name.includes('.');
 }
 
+/** Whether a Host ("host", "host:port", "[v6]:port") is an IP address rather than a name. */
+export function isIPHost(hostport: string): boolean {
+  const host = hostOf(hostport);
+  if (host === null) return false;
+  return ipv4(host) !== null || (host.includes(':') && ipv6(host) !== null);
+}
+
 /** A loopback Host (localhost, 127.0.0.0/8, ::1): an address only this machine reaches. */
-function isLoopbackHost(hostport: string): boolean {
+export function isLoopbackHost(hostport: string): boolean {
   const host = hostOf(hostport);
   if (host === null) return false;
   const name = host.toLowerCase().replace(/\.$/, '');

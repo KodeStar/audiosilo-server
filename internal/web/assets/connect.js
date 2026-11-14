@@ -45,11 +45,12 @@ async function redeem(code) {
       showError(redeemFailure(resp, data));
       return;
     }
-    // The QR encodes data.web_url: scanning opens the app (when it claims this
-    // domain) or the embedded web player, which exchanges the pairing token. A
-    // token redeemed from an invite honors the invite's uses/expiry, so each
-    // device being set up can scan the same QR; uses_remaining reports that
-    // budget (absent = unlimited or not invite-derived).
+    // The QR encodes data.web_url: the app's own scanner (Scan a QR code) pairs
+    // the app with it; a phone's camera opens the embedded web player, which
+    // exchanges the pairing token. A token redeemed from an invite honors the
+    // invite's uses/expiry, so each device being set up can scan the same QR;
+    // uses_remaining reports that budget (absent = unlimited or not
+    // invite-derived).
     document.getElementById("qr").src = data.qr_png_data_uri;
     if (data.uses_remaining != null) {
       const note = document.getElementById("uses-note");
@@ -58,6 +59,9 @@ async function redeem(code) {
     }
     if (data.uri) setLink("link-app", data.uri, asI18n.t("connect.openApp"));
     if (data.web_url) setLink("link-web", data.web_url, asI18n.t("connect.openWeb"));
+    // The console only for an admin's invite (a listener has no use for it).
+    document.getElementById("link-admin").classList.toggle("hidden", data.admin !== true);
+    if (isPhone()) showPhone();
     form.classList.add("hidden");
     document.getElementById("intro").classList.add("hidden");
     result.classList.remove("hidden");
@@ -70,6 +74,30 @@ form.addEventListener("submit", (e) => {
   e.preventDefault();
   redeem(codeInput.value.trim());
 });
+
+// isPhone: a phone or tablet, the device the app would run on. A QR shown there
+// can't be scanned by the phone holding it, so the page leads with getting the
+// app instead.
+function isPhone() {
+  const ua = navigator.userAgentData;
+  if (ua && ua.mobile === true) return true;
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return true;
+  // iPadOS reports a Mac; a touch screen tells it apart.
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
+// showPhone lays the result out for the phone holding it: "get the app, then
+// come back to this link" with the store links under it, and the web player
+// first; no self-scan QR.
+function showPhone() {
+  const lead = document.getElementById("phone-lead");
+  lead.classList.remove("hidden");
+  lead.after(document.getElementById("get-app"));
+  document.getElementById("scan-block").classList.add("hidden");
+  document.getElementById("reopen-hint").classList.add("hidden");
+  const web = document.getElementById("link-web");
+  web.parentElement.prepend(web);
+}
 
 function setLink(id, href, label) {
   const el = document.getElementById(id);

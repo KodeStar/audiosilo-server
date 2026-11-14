@@ -24,7 +24,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDuration, formatList, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { isOpen, progressOf } from '@/features/bridge/bridge-model';
+import { isOpen, openProgress } from '@/features/bridge/bridge-model';
 import { BridgeSettingsLink, ExternalTextLink } from '@/features/bridge/generate-parts';
 import { useBridge } from '@/features/bridge/use-bridge';
 import { CardEmpty } from '@/features/settings/card-empty';
@@ -298,7 +298,7 @@ function RecordingRow({
     t('librivox.recording.project', { id: r.librivox_id }),
   ].filter(Boolean);
   const here = r.in_library.length > 0;
-  const progress = job && open ? progressOf(job.progress) : {};
+  const progress = job ? openProgress(job) : {};
   const reason = job ? fetchReason(job) : undefined;
   const status = ((): { tone: StatusTone; text: string } | undefined => {
     if (open) {
@@ -311,7 +311,18 @@ function RecordingRow({
           })
         : '';
       const label = progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
-      return { tone: 'warn', text: [label, count].filter(Boolean).join(' · ') };
+      // With several libraries, which one it is going into (the open job is
+      // the project's in any library, so not always the one picked here).
+      const into =
+        libraries.length > 1 && job?.library_id != null
+          ? libraries.find((l) => l.id === job.library_id)?.name
+          : undefined;
+      return {
+        tone: 'warn',
+        text: [into ? t('librivox.recording.addingTo', { library: into }) : '', label, count]
+          .filter(Boolean)
+          .join(' · '),
+      };
     }
     if (job && !here && (state === 'failed' || state === 'cancelled'))
       return {
