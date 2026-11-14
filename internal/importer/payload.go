@@ -16,7 +16,9 @@ import (
 
 // Payload is one ABS user's history, normalized: what an import keeps (gzipped
 // JSON, catalog.ImportPayload) so a review's cutoff change and the apply never
-// fetch again. It names only the books the user has history for, and nothing
+// fetch again. Its history names only the books the user has history for;
+// Identified names every ABS book with an identifier, whoever's (the token's
+// view of ABS, read only by the admin's review and apply). Nothing in it is
 // secret. Times are epoch milliseconds, positions and listening seconds.
 type Payload struct {
 	V         int        `json:"v"`

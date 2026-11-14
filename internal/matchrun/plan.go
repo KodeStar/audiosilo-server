@@ -42,12 +42,13 @@ import (
 // closest recording of a work can still be another edition: the unabridged book
 // of a work that holds only its dramatization).
 // An identifier hit (the ASIN or ISBN the query sent named the work: in a run
-// always a tag hint, a book with its own being no run's subject) needs no lead:
+// always a hint, an Audiobookshelf import's or a tag's, a book with its own
+// being no run's subject) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
 // that is a guard, not a case a run meets. An identifier hit is the book only while
 // the book's own title and series agree with it (identifierAgrees, server#306): a
-// tag ASIN can name another book, Chamber of Secrets carrying Philosopher's Stone's.
+// hint can name another book, Chamber of Secrets' tags carrying Philosopher's Stone's ASIN.
 //
 // A match with no ASIN or ISBN to attach (a store listing the community holds
 // without one: LibraForge E6) is applied unasked on firmer ground instead
