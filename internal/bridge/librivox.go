@@ -49,8 +49,8 @@ const maxLibrivoxTitle = 300
 // librivoxFetchParams checks librivox.fetch's params strictly: a positive
 // project id, a work and a recording (community ids, model.ValidSlug as
 // contribute and upcoming check them: the identity the fold records; checked
-// at queue time only, so a job queued before is never refused later), a library and an optional title (bounded, no
-// control characters).
+// at queue time only, so a job queued before is never refused later), a
+// library and an optional title (bounded, no control characters).
 func librivoxFetchParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p LibrivoxFetchParams
 	if err := decodeStrict(raw, &p); err != nil {

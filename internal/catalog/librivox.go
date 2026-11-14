@@ -26,15 +26,15 @@ var ErrFetchNotIndexed = errors.New("the LibriVox fetch's book is not indexed")
 // with the work and recording the server resolved when it queued the job. What
 // it does at the book's path depends on how the Bridge got the folder
 // (LibrivoxFetchResult.Folder):
-//   - placed (bridge.FolderPlaced): the folder was vacant, so every row already at that path
-//     is a deleted book's leftover: the match is replaced, and a leftover ASIN
-//     or ISBN (book_overrides, book_enrichment), which /meta would ask before
-//     the match, goes;
-//   - adopted (bridge.FolderAdopted): the folder is an earlier fetch's book, so a match already
-//     recorded there (an admin's rematch) stays and nothing else is touched; a
-//     book with none (a fold that was lost) is recorded;
-//   - not said (bridge.FolderUnsaid, an older Bridge): the match is replaced and nothing else is
-//     touched.
+//   - placed (bridge.FolderPlaced): the folder was vacant, so every row already
+//     at that path is a deleted book's leftover: the match is replaced, and a
+//     leftover ASIN or ISBN (book_overrides, book_enrichment), which /meta
+//     would ask before the match, goes;
+//   - adopted (bridge.FolderAdopted): the folder is an earlier fetch's book, so
+//     a match already recorded there (an admin's rematch) stays and nothing
+//     else is touched; a book with none (a fold that was lost) is recorded;
+//   - not said (bridge.FolderUnsaid, an older Bridge): the match is replaced
+//     and nothing else is touched.
 //
 // No other path is touched. The result must name the job's own library and
 // project and a book indexed there (the Bridge rescans before it reports done),

@@ -8,12 +8,11 @@ import { counted } from '@/lib/format';
 
 /**
  * "N books not matched - Match automatically" (server#370), for the pages an
- * admin looks at first (Overview, Library > Books): Match automatically was
- * reachable only from Health > Not matched. It counts what that category counts
- * (the same summary, so the two never disagree: ignored books are left out) and
- * opens it there, where the card says what a run sends before it starts. Shown
- * only while there are such books; the server lists none while community
- * metadata is off.
+ * admin looks at first (Overview, Library > Books). It counts what Health's
+ * Not matched category counts (the same summary: ignored books are left out)
+ * and opens that category, where the card says what a run sends before it
+ * starts. Shown only while there are such books; the server lists none while
+ * community metadata is off.
  */
 export function UnmatchedPrompt({ className }: { className?: string }) {
   const { t, i18n } = useTranslation();
