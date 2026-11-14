@@ -635,14 +635,7 @@ func TestIssueUnknownASIN(t *testing.T) {
 	}
 	listed := func() []string {
 		t.Helper()
-		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Issue: IssueUnknownASIN}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []string
-		for _, b := range page.Books {
-			out = append(out, b.Path)
-		}
+		out := listAll(t, c, ctx, AdminListOptions{Filter: BookFilter{Issue: IssueUnknownASIN}})
 		slices.Sort(out)
 		return out
 	}
