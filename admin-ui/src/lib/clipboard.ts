@@ -87,4 +87,3 @@ export async function shareOrCopy(
   }
   await copyWithToast(`${data.text}\n${data.url}`, what);
 }
-
