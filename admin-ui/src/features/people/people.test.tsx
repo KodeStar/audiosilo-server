@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
 import type { AdminUser } from '@/api/types';
-import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
+import { stubExecCommand, stubShare, unstubExecCommand } from '@/test/clipboard';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   activity,
@@ -35,6 +35,19 @@ function routes(over: Record<string, MockRoute> = {}) {
   });
 }
 
+/** The account the invite tests create. */
+const uncleRay = { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined };
+
+/** Opens People > Invite someone and types the new person's name. */
+async function inviteUncleRay() {
+  renderApp('/people');
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
+  await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+  return { user, dialog };
+}
+
 beforeEach(() => setToken('stored'));
 
 describe('people', () => {
@@ -60,19 +73,12 @@ describe('people', () => {
   it('invites someone new: account, access and invite in one go, then the QR card', async () => {
     const calls = mockFetch(
       routes({
-        'POST /admin/users': {
-          status: 201,
-          body: { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined },
-        },
+        'POST /admin/users': { status: 201, body: uncleRay },
         'POST /admin/library-access': { status: 204 },
         'POST /admin/users/9/authcode': { status: 201, body: created },
       }),
     );
-    renderApp('/people');
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
-    await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+    const { user, dialog } = await inviteUncleRay();
     await user.click(await within(dialog).findByRole('radio', { name: /All libraries/ }));
     // A week unless changed.
     expect(within(dialog).getByLabelText('Expires after')).toHaveValue('7');
@@ -111,18 +117,11 @@ describe('people', () => {
   it('sets an optional password with the account, checked for length first', async () => {
     const calls = mockFetch(
       routes({
-        'POST /admin/users': {
-          status: 201,
-          body: { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined },
-        },
+        'POST /admin/users': { status: 201, body: uncleRay },
         'POST /admin/users/9/authcode': { status: 201, body: created },
       }),
     );
-    renderApp('/people');
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
-    await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+    const { user, dialog } = await inviteUncleRay();
     const password = within(dialog).getByLabelText('Password (optional)');
     await user.type(password, 'short');
     await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
@@ -143,10 +142,7 @@ describe('people', () => {
   it('shares the invite, or copies the message where the browser has no share sheet', async () => {
     mockFetch(
       routes({
-        'POST /admin/users': {
-          status: 201,
-          body: { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined },
-        },
+        'POST /admin/users': { status: 201, body: uncleRay },
         'POST /admin/users/9/authcode': {
           status: 201,
           body: { ...created, invite_url: 'https://192.168.1.20:8443/connect#code=ABCD-1234' },
@@ -154,13 +150,9 @@ describe('people', () => {
       }),
     );
     const share = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    stubShare(share);
     try {
-      renderApp('/people');
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
-      const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
-      await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+      const { user, dialog } = await inviteUncleRay();
       await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
       const ready = await screen.findByRole('dialog', { name: 'Invite ready for Uncle Ray' });
       // A home address over https at an IP: both warnings, before it is sent.
@@ -175,7 +167,7 @@ describe('people', () => {
         url: 'https://192.168.1.20:8443/connect#code=ABCD-1234',
       });
       // No share sheet: the message and the link are copied instead.
-      Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
+      stubShare(undefined);
       let copied = '';
       stubExecCommand(() => {
         copied = (document.activeElement as HTMLTextAreaElement).value;
@@ -187,7 +179,7 @@ describe('people', () => {
         /Uncle Ray.*\nhttps:\/\/192\.168\.1\.20:8443\/connect#code=ABCD-1234$/s,
       );
     } finally {
-      Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
+      stubShare(undefined);
       unstubExecCommand();
     }
   });

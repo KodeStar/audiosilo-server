@@ -80,7 +80,7 @@ form.addEventListener("submit", (e) => {
 // app instead.
 function isPhone() {
   const ua = navigator.userAgentData;
-  if (ua && typeof ua.mobile === "boolean" && ua.mobile) return true;
+  if (ua && ua.mobile === true) return true;
   if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return true;
   // iPadOS reports a Mac; a touch screen tells it apart.
   return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;

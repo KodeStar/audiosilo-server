@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
+import { stubExecCommand, stubShare, unstubExecCommand } from '@/test/clipboard';
 import { copyText, copyWithToast, shareOrCopy } from './clipboard';
 import { toast } from './toast';
 
@@ -86,10 +86,8 @@ describe('shareOrCopy', () => {
     text: 'Come and listen.',
     url: 'https://books.example.com/connect',
   };
-  const setShare = (share: unknown) =>
-    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
   afterEach(() => {
-    setShare(undefined);
+    stubShare(undefined);
     unstubExecCommand();
     vi.restoreAllMocks();
   });
@@ -97,7 +95,7 @@ describe('shareOrCopy', () => {
   it('hands it to the share sheet, and closing that is no failure', async () => {
     const exec = stubExecCommand(() => true);
     const share = vi.fn().mockRejectedValue(new DOMException('closed', 'AbortError'));
-    setShare(share);
+    stubShare(share);
     await shareOrCopy(data, 'Invite message');
     expect(share).toHaveBeenCalledWith(data);
     expect(exec).not.toHaveBeenCalled();
@@ -112,7 +110,7 @@ describe('shareOrCopy', () => {
     await shareOrCopy(data, 'Invite message');
     expect(copied).toBe('Come and listen.\nhttps://books.example.com/connect');
     copied = '';
-    setShare(vi.fn().mockRejectedValue(new DOMException('no', 'NotAllowedError')));
+    stubShare(vi.fn().mockRejectedValue(new DOMException('no', 'NotAllowedError')));
     await shareOrCopy(data, 'Invite message');
     expect(copied).toBe('Come and listen.\nhttps://books.example.com/connect');
   });
