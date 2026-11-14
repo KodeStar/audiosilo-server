@@ -39,7 +39,8 @@ const maxMatchCandidates = 6
 
 // MatchQuery describes the book being matched. Text is what the admin typed and
 // ASIN/ISBN an identifier they gave; when all three are empty BookASIN/BookISBN
-// are looked up (the book's own identifiers, else its tag hints: matchrun.QueryFor).
+// are looked up (the book's own identifiers, else its hints, an Audiobookshelf
+// import's or its tags': matchrun.QueryFor).
 // Title, Series, SeriesIndex and Author are the book's
 // (tagged or edited) facts, Path and IsFolder its library path, which is read for
 // facts of its own (metadata.ReadPathLayout); all of them, with Duration, find and score
@@ -153,7 +154,7 @@ type MatchCandidate struct {
 }
 
 // IdentifierHit reports whether the identifier the query sent (the book's own
-// ASIN or ISBN, or a tag hint) found the work.
+// ASIN or ISBN, or a hint: an Audiobookshelf import's or a tag's) found the work.
 func (c MatchCandidate) IdentifierHit() bool {
 	return c.Reasons != nil && c.Reasons.Identifier != ""
 }
@@ -398,7 +399,7 @@ func DefaultRecording(c *MatchCandidate, seconds float64, region string, narrato
 // narrator reads another recording of c that fits (server#325: swapping to it gained
 // no book on the LibraForge benchmark, and swapping within NarratedRuntimeOff too lost
 // one whose hint was right). A match run calls it, where an identifier is always a
-// tag's hint; never on the book's own identifier (a refresh, a repick), which names
+// hint (an Audiobookshelf import's or a tag's); never on the book's own identifier (a refresh, a repick), which names
 // the recording the book is. rec nil (the work holds only a dramatization the book
 // isn't) stays nil. The identifier vouched for rec alone, so a plain book
 // (MatchCandidate.PlainBook) gives way to a dramatization only as when nothing named
