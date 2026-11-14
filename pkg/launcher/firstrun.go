@@ -168,6 +168,13 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
 	}
 	if len(pending) > 0 {
+	// A file that isn't this server's database (an empty one a failed start
+	// left, another program's) is refused before anything opens it for writing:
+	// opening it would migrate it. One a newer release made is the server's to
+	// warn about; it is opened as the server opens it.
+	if _, err := store.Inspect(ctx, dbPath, false); err != nil && !errors.Is(err, store.ErrNewerDatabase) {
+		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
+	}
 		return fmt.Errorf("the database at %s is from an older release: start the server once (it upgrades the database), then run reset-admin again", dbPath)
 	}
 	db, err := store.Open(ctx, dbPath, store.WithLogger(slog.New(slog.DiscardHandler)))

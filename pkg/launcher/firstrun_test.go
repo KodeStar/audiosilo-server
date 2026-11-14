@@ -361,3 +361,20 @@ func TestResetAdminRefusesAnOlderDatabase(t *testing.T) {
 		t.Fatalf("err = %v, want the older-release refusal", err)
 	}
 }
+	// A file that isn't an AudioSilo database is refused as it is, not
+	// migrated into one.
+	t.Run("an empty file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "audiosilo.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if !errors.Is(err, store.ErrNotADatabase) {
+			t.Fatalf("err = %v, want ErrNotADatabase", err)
+		}
+		if fi, err := os.Stat(path); err != nil || fi.Size() != 0 {
+			t.Errorf("the file was written to: %v, %v", fi, err)
+		}
+	})
+
