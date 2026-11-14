@@ -266,6 +266,25 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 			t.Fatalf("book = %q %q %q, want no identifiers and the title kept", b.ASIN, b.ISBN, b.Title)
 		}
 	})
+	t.Run("placed over a leftover enrichment alone", func(t *testing.T) {
+		leftovers(t)
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM book_overrides WHERE field IN ('asin', 'isbn')`); err != nil {
+			t.Fatal(err)
+		}
+		b := mustBook(t, c, ctx, lib.ID, path)
+		if err := c.db.WithTx(ctx, "test", func(tx *sql.Tx) error { return refreshEffective(ctx, tx, b.ID) }); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "B0ENRICHED" {
+			t.Fatalf("the enrichment's ASIN is not in effect: %q", b.ASIN)
+		}
+		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "false")); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "" || enriched() != 0 {
+			t.Fatalf("ASIN %q, enrichment rows %d: the leftover enrichment stayed", b.ASIN, enriched())
+		}
+	})
 	t.Run("adopted keeps a rematch", func(t *testing.T) {
 		leftovers(t)
 		if err := c.FoldLibrivoxFetch(ctx, adoptedFetch(lib.ID, path, uid, "true")); err != nil {
