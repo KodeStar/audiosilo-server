@@ -16,6 +16,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -36,7 +37,7 @@ func signInHint(ctx context.Context, cfg *config.Config, authSvc *auth.Service, 
 		return
 	}
 	container := ""
-	if inContainer() {
+	if fsaccess.InContainer() {
 		container = "docker exec " + execUser(os.Getuid(), os.Getgid()) + "<container> "
 	}
 	writeSignInHint(w, baseURL(cfg), u.Username, resetAdminCommand(cfg.DataDir, executable(), exec.LookPath), container)
@@ -116,19 +117,6 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// containerMarkers are the files Docker and Podman put in a container's root.
-var containerMarkers = []string{"/.dockerenv", "/run/.containerenv"}
-
-// inContainer reports whether the server runs in a container (Docker, Podman).
-func inContainer() bool {
-	for _, f := range containerMarkers {
-		if _, err := os.Stat(f); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // UsageError is a reset-admin refusal about how it was asked (no such admin,

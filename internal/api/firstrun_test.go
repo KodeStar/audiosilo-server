@@ -112,9 +112,7 @@ func TestSetupPrintedPassword(t *testing.T) {
 	// A wrong current password: 401 with its own code (not a session that
 	// ended), and nothing changes.
 	resp, body := e.do(t, "POST", "/api/v1/auth/password", adminTok, `{"password":"my-own-password","current_password":"wrong"}`)
-	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(body, `"code":"`+codeCurrentPasswordIncorrect+`"`) {
-		t.Fatalf("wrong current password = %d %s", resp.StatusCode, body)
-	}
+	wantCode(t, "wrong current password", resp, body, http.StatusUnauthorized, codeCurrentPasswordIncorrect)
 	if !printedPassword(t, e, adminTok) {
 		t.Fatal("a refused change replaced the printed password")
 	}

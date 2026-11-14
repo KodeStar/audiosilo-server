@@ -93,8 +93,8 @@ var (
 	// exists, so the transport layer can map it to 409 instead of echoing the raw
 	// SQLite unique-constraint string.
 	ErrUsernameTaken = errors.New("username already taken")
-	// ErrUsernameRequired is returned when a rename (UserChanges.Username)
-	// names no username.
+	// ErrUsernameRequired is returned when a new account or a rename
+	// (UserChanges.Username) names no username.
 	ErrUsernameRequired = errors.New("username is required")
 )
 
@@ -218,7 +218,7 @@ func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, e
 
 func (s *Service) createUser(ctx context.Context, username, password, role string, isDemo bool) (*User, error) {
 	if username == "" {
-		return nil, errors.New("username is required")
+		return nil, ErrUsernameRequired
 	}
 	if role != RoleAdmin {
 		role = RoleUser

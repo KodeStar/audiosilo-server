@@ -258,8 +258,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			"managed_by needs member_kind and member_access, and they come only with it")
 		return
 	}
-	// A reset of a password the person had ends their sessions, all but the
-	// admin's own when it is their own account (auth.UpdateUser).
+	// The name before a rename, for the audit.
 	var was string
 	if req.Username != nil {
 		before := a.lookupUser(w, r, id)
@@ -268,6 +267,8 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		was = before.Username
 	}
+	// A reset of a password the person had ends their sessions, all but the
+	// admin's own when it is their own account (auth.UpdateUser).
 	change := auth.UserChanges{
 		Username: req.Username, Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
 		KeepToken: credentialFrom(r.Context()).ID,

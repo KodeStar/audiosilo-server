@@ -83,15 +83,12 @@ func resetAdmin(args []string, dataDir string, stdout, stderr io.Writer) int {
 		username = args[0]
 	}
 	err := launcher.ResetAdmin(context.Background(), dataDir, username, stdout)
-	var usage *launcher.UsageError
-	switch {
-	case err == nil:
+	if err == nil {
 		return 0
-	case errors.As(err, &usage):
-		_, _ = fmt.Fprintln(stderr, "audiosilo: reset-admin:", err)
-		return 2
-	default:
-		_, _ = fmt.Fprintln(stderr, "audiosilo: reset-admin:", err)
-		return 1
 	}
+	_, _ = fmt.Fprintln(stderr, "audiosilo: reset-admin:", err)
+	if usage := (*launcher.UsageError)(nil); errors.As(err, &usage) {
+		return 2
+	}
+	return 1
 }
