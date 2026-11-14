@@ -172,18 +172,22 @@ export function groupDevices(devices: readonly Device[] | undefined) {
  * What an invite link's address means for who can open it, so the invite card
  * can warn before it is sent: `loopback` (localhost: only this computer),
  * `home` (a home-network address: only on the same network), and
- * `certificate` (https while the server uses its self-signed certificate:
- * the browser warns about it first, at an IP address or a name like
- * nas.local alike). `selfSigned` is whether the server runs in self-signed
+ * `certificate` (https the browser warns about first), by its reason so the
+ * card can say which: `selfsigned` while the server uses its self-signed
+ * certificate (at an IP address or a name like nas.local alike), else
+ * `address` for https at an IP address, which rarely has a certificate
+ * browsers trust (a proxy's own self-signed one in front of a server with TLS
+ * off), else false. `selfSigned` is whether the server runs in self-signed
  * TLS mode (unknown while settings load or a TLS mode change waits for a
- * restart: runsSelfSigned). https at an IP address warns whatever the mode,
- * as such an address rarely has a certificate browsers trust (a proxy's own
- * self-signed one in front of a server with TLS off). A reverse proxy in front
- * of a self-signed server (its own certificate on the public name) still reads
- * as self-signed.
+ * restart: runsSelfSigned). A reverse proxy in front of a self-signed server
+ * (its own certificate on the public name) still reads as self-signed.
  * None for a public name, or a link that isn't one.
  */
-export type InviteReach = { loopback: boolean; home: boolean; certificate: boolean };
+export type InviteReach = {
+  loopback: boolean;
+  home: boolean;
+  certificate: false | 'selfsigned' | 'address';
+};
 
 /**
  * Whether the running server uses its self-signed certificate, as the saved
@@ -205,10 +209,11 @@ export function inviteReach(link: string, selfSigned?: boolean): InviteReach {
     return { loopback: false, home: false, certificate: false };
   }
   const loopback = isLoopbackHost(url.host);
+  const https = !loopback && url.protocol === 'https:';
   return {
     loopback,
     home: !loopback && isHomeHost(url.host),
     certificate:
-      !loopback && url.protocol === 'https:' && (selfSigned === true || isIPHost(url.host)),
+      https && selfSigned === true ? 'selfsigned' : https && isIPHost(url.host) ? 'address' : false,
   };
 }

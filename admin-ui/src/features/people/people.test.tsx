@@ -186,12 +186,16 @@ describe('people', () => {
     }
   });
 
+  const SELF_SIGNED =
+    'This server uses a self-signed certificate, so their browser will warn about it the first time. They can continue past the warning, or you can give the server a public address with a real certificate.';
+  const AT_ADDRESS =
+    'The link is https at an IP address, which rarely has a certificate browsers trust. They can continue past the warning, or you can give the server a public address with a real certificate.';
   it.each([
     [
       'a self-signed server, at a name',
       'selfsigned',
       'https://nas.local:8443/connect#code=X',
-      true,
+      SELF_SIGNED,
     ],
     [
       'an autocert server, at its name',
@@ -199,7 +203,13 @@ describe('people', () => {
       'https://books.example.com/connect#code=X',
       false,
     ],
-    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', true],
+    ['a server behind a proxy, at an IP', 'off', 'https://192.168.1.20/connect#code=X', AT_ADDRESS],
+    [
+      'a self-signed server, at an IP',
+      'selfsigned',
+      'https://192.168.1.20:8443/connect#code=X',
+      SELF_SIGNED,
+    ],
     [
       'a server behind a proxy, at a name',
       'off',
@@ -207,8 +217,8 @@ describe('people', () => {
       false,
     ],
   ] as const)(
-    'warns about the certificate of a self-signed server or an IP address (%s, server#386)',
-    async (_, mode, link, warns) => {
+    'warns about the certificate of a self-signed server or an IP address, saying why (%s, server#386)',
+    async (_, mode, link, says) => {
       mockFetch(
         routes({
           'GET /admin/settings': {
@@ -224,8 +234,11 @@ describe('people', () => {
       await waitFor(() =>
         expect(
           within(ready).queryByText('Their browser will warn about the certificate') !== null,
-        ).toBe(warns),
+        ).toBe(says !== false),
       );
+      for (const text of [SELF_SIGNED, AT_ADDRESS]) {
+        expect(within(ready).queryByText(text) !== null).toBe(text === says);
+      }
     },
   );
 

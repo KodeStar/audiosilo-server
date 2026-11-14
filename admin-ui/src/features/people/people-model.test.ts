@@ -219,13 +219,13 @@ describe('inviteReach', () => {
     expect(inviteReach('https://192.168.1.20:8443/connect#code=X')).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'address',
     });
-    expect(inviteReach('https://203.0.113.7/connect')).toEqual({ ...none, certificate: true });
+    expect(inviteReach('https://203.0.113.7/connect')).toEqual({ ...none, certificate: 'address' });
     expect(inviteReach('https://[fd00::5]:8443/connect')).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'address',
     });
     // A name with a real certificate is fine, home or not.
     expect(inviteReach('https://nas.local/connect').certificate).toBe(false);
@@ -234,11 +234,11 @@ describe('inviteReach', () => {
     expect(inviteReach('https://nas.local:8443/connect', true)).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'selfsigned',
     });
     expect(inviteReach('https://books.example.com/connect', true)).toEqual({
       ...none,
-      certificate: true,
+      certificate: 'selfsigned',
     });
     // Plain http (home HTTP on the self-signed port) shows no certificate.
     expect(inviteReach('http://nas.local:8443/connect', true).certificate).toBe(false);
@@ -249,10 +249,10 @@ describe('inviteReach', () => {
     expect(inviteReach('https://192.168.1.20/connect', false)).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'address',
     });
-    expect(inviteReach('https://203.0.113.7:8443/connect', false).certificate).toBe(true);
-    expect(inviteReach('https://192.168.1.20:8443/connect', true).certificate).toBe(true);
+    expect(inviteReach('https://203.0.113.7:8443/connect', false).certificate).toBe('address');
+    expect(inviteReach('https://192.168.1.20:8443/connect', true).certificate).toBe('selfsigned');
     // A name on a server that isn't self-signed has a real certificate.
     expect(inviteReach('https://books.example.com/connect', false).certificate).toBe(false);
     expect(inviteReach('https://nas.local/connect', false).certificate).toBe(false);

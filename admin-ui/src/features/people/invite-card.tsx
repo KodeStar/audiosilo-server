@@ -73,7 +73,11 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
       ) : null}
       {reach.certificate ? (
         <Notice tone="warn" icon={ShieldAlert} title={t('invite.reach.certificateTitle')}>
-          {t('invite.reach.certificate')}
+          {t(
+            reach.certificate === 'selfsigned'
+              ? 'invite.reach.certificateSelfSigned'
+              : 'invite.reach.certificateAddress',
+          )}
         </Notice>
       ) : null}
       <CopyField id="invite-link" label={t('invite.link')} value={url} />
