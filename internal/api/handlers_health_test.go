@@ -499,3 +499,63 @@ func TestRescanBook(t *testing.T) {
 		t.Fatalf("rescan of a path outside the library = %d %s, want a 4xx", resp.StatusCode, body)
 	}
 }
+
+// TestIssuesUnknownASIN (server#370): "unknown ASIN" is a category only while
+// the unknown-ASIN report runs (its lookups are what find such a book), its
+// list is an admin's alone, and a book the report finds unknown after the
+// summary was cached is counted at once (its rows are content to Health).
+func TestIssuesUnknownASIN(t *testing.T) {
+	t.Parallel()
+	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.ReportUnknown = true })
+	adminTok, memberTok, _ := adminAndMember(t, e)
+	libID, _ := seedCatalog(t, e)
+	ctx := context.Background()
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: "Unknown/Book", Title: "Unknown", ASIN: "B0UNKNOWN1"}); err != nil {
+		t.Fatal(err)
+	}
+	unknownCount := func() (int, bool) {
+		t.Helper()
+		resp, body := e.do(t, "GET", "/api/v1/admin/issues", adminTok, "")
+		var got issuesResp
+		if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &got) != nil {
+			t.Fatalf("issues = %d %s", resp.StatusCode, body)
+		}
+		for _, c := range got.Categories {
+			if c.Kind == catalog.IssueUnknownASIN {
+				return c.Count, true
+			}
+		}
+		return 0, false
+	}
+	if n, ok := unknownCount(); !ok || n != 0 {
+		t.Fatalf("before any lookup: unknown_asin = %d (listed %v), want 0 listed", n, ok)
+	}
+	if err := e.cat.SaveASINChecks(ctx, []catalog.ASINCheck{{ASIN: "B0UNKNOWN1", Unknown: true}}, "2026-11-14T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := unknownCount(); n != 1 {
+		t.Fatalf("after the lookup: unknown_asin = %d, want 1 (a cached summary?)", n)
+	}
+	list := "/api/v1/admin/books?issue=" + catalog.IssueUnknownASIN
+	if resp, body := e.do(t, "GET", list, adminTok, ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"path":"Unknown/Book"`) {
+		t.Fatalf("admin list = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "GET", list, memberTok, ""); resp.StatusCode != http.StatusForbidden || strings.Contains(body, "Unknown/Book") {
+		t.Fatalf("member list = %d %s, want 403", resp.StatusCode, body)
+	}
+	ignore := `{"kind":"unknown_asin","books":[{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"Unknown/Book"}]}`
+	if resp, body := e.do(t, "POST", "/api/v1/admin/issues/ignore", adminTok, ignore); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("ignore = %d %s", resp.StatusCode, body)
+	}
+	if n, _ := unknownCount(); n != 0 {
+		t.Fatalf("after the ignore: unknown_asin = %d, want 0", n)
+	}
+
+	// With the report off the category is gone, not an all-clear 0.
+	if r, b := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"report_unknown":false}}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("report off = %d %s", r.StatusCode, b)
+	}
+	if _, ok := unknownCount(); ok {
+		t.Fatal("unknown_asin is listed with the report off")
+	}
+}

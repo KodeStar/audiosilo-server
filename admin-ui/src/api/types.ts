@@ -1121,6 +1121,7 @@ export const ISSUE_KINDS = [
   'duplicate',
   'no_cover',
   'unmatched',
+  'unknown_asin',
   'series_spellings',
   'no_chapters',
   'detailed_chapters',
