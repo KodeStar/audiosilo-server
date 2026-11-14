@@ -38,6 +38,10 @@ func TestMigration0074BookHints(t *testing.T) {
 	if err := db.writer.QueryRow(`SELECT isbn FROM book_hints WHERE source = 'abs'`).Scan(&isbn); err != nil || isbn != "" {
 		t.Fatalf("isbn = %q, %v; want '' by default", isbn, err)
 	}
+	if _, err := db.writer.Exec(`INSERT INTO book_hints(library_id, path, source, asin, import_id, set_at)
+		VALUES(1, 'B/Book', 'abs', 'B0HINT0002', NULL, 't')`); err == nil {
+		t.Fatal("a NULL import_id was accepted: 0 is none")
+	}
 	if _, err := db.writer.Exec(`DELETE FROM libraries WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
