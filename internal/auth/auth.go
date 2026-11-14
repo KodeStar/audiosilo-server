@@ -543,8 +543,9 @@ type tokenRow struct {
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
 // real token presented where its kind is not accepted. A valid session, API key,
-// bridge or feed token is answered from s.tokens until the next content write or its
-// own touch (tokencache.go), its expiry still checked against the clock each time.
+// bridge or feed token is answered from s.tokens until the next content write, its
+// own touch or maxCachedTokenAge (tokencache.go), its expiry still checked against
+// the clock each time.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
@@ -556,8 +557,8 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	// write that lands after it leaves what is cached here unused, and a touch
 	// that lands after it (which drops the row it changed, leaving the
 	// generation) has this read's row dropped too.
-	gen, mark := s.db.ContentGeneration(), s.tokens.Mark()
-	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) {
+	gen, mark, read := s.db.ContentGeneration(), s.tokens.Mark(), s.now()
+	if c, ok := s.tokens.Get(gen, hash); ok && slices.Contains(kinds, c.row.kind) && c.fresh(read) {
 		if s.pastExpiry(c.expires) {
 			return nil, tokenRow{}, ErrInvalidToken
 		}
@@ -600,7 +601,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		}
 	case KindPairing: // used once, by an exchange: not worth holding
 	default:
-		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires})
+		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires, read: read})
 	}
 	return &u, row, nil
 }

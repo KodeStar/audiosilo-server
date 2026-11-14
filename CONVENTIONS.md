@@ -862,7 +862,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `progress`'s row rule, and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
-  either, dropped from the cache by the touching request. A new cache whose answer reads a
+  either, dropped from the cache by the touching request (its rows are also read again once a minute
+  old, `maxCachedTokenAge`: the generation never sees another process's write, which `reset-admin`
+  beside a running server is). A new cache whose answer reads a
   user-state table needs a key of its own, or that table out of the list.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
@@ -3847,9 +3849,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
   rule: every session, pairing code and remembered browser ends) and prints it once. A running server
   takes the new password at once; a session it already checked is answered from its token cache (which
-  another process's write can't empty) until that server's next content write or the session's own
-  last-seen touch, a minute of use at most and the request that makes it
-  (`TestResetAdminEndsARunningServersSessions`). A reset also ends the sign-in hint (`NoteAdminSignIn`: the
+  another process's write can't empty) until that server's next content write, or a minute after it last
+  read the row (`auth.maxCachedTokenAge`, `TestResetAdminEndsARunningServersSessions`); a restart ends
+  them at once. A reset also ends the sign-in hint (`NoteAdminSignIn`: the
   hint names the first start's password), and the hint never names a first-run admin since disabled or
   demoted.
   **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no

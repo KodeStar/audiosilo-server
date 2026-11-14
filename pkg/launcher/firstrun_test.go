@@ -281,24 +281,22 @@ func TestResetAdminEndsTheSignInHint(t *testing.T) {
 
 // A session the running server already checked. reset-admin's write is another
 // process's, which the server's token cache can't see, so the session ends
-// when its row is next read: at the server's next content write, or once the
-// session's own last-seen touch (a minute after the last) drops it from the
-// cache, the request that makes the touch being the last one answered.
+// when its row is next read: at the server's next content write, or a minute
+// after the server last read it (auth's maxCachedTokenAge), used or not.
 func TestResetAdminEndsARunningServersSessions(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
 		// then is what the running server does after the reset.
-		then func(t *testing.T, running *auth.Service, secret string, clock *time.Time)
+		then func(t *testing.T, running *auth.Service, clock *time.Time)
 	}{
-		{"its next write", func(t *testing.T, running *auth.Service, _ string, _ *time.Time) {
+		{"its next write", func(t *testing.T, running *auth.Service, _ *time.Time) {
 			if _, err := running.CreateUser(ctx, "user-sam", "", auth.RoleUser); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"the session's next touch", func(_ *testing.T, running *auth.Service, secret string, clock *time.Time) {
+		{"a minute", func(_ *testing.T, _ *auth.Service, clock *time.Time) {
 			*clock = clock.Add(time.Minute)
-			_, _ = running.ResolveToken(ctx, secret, auth.KindSession)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,7 +328,7 @@ func TestResetAdminEndsARunningServersSessions(t *testing.T) {
 			if err := ResetAdmin(ctx, filepath.Dir(path), "", io.Discard); err != nil {
 				t.Fatal(err)
 			}
-			tc.then(t, running, secret, &clock)
+			tc.then(t, running, &clock)
 			if _, err := running.ResolveToken(ctx, secret, auth.KindSession); !errors.Is(err, auth.ErrInvalidToken) {
 				t.Errorf("the old session after %s: err = %v, want ErrInvalidToken", tc.name, err)
 			}

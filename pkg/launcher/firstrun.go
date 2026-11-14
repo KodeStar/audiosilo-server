@@ -151,8 +151,8 @@ func (e *UsageError) Error() string { return e.msg }
 // waits its turn): that server checks the new password at once, since a
 // sign-in reads the database, but its token cache can't see this process's
 // write, so a session it already checked is refused only once its row is read
-// again: at the server's next content write, or after the session's own
-// last-seen touch (within a minute of use, and the request that makes it). It touches
+// again: at the server's next content write, or a minute after it last read
+// the row (auth's maxCachedTokenAge). It touches
 // nothing else: no config.yaml written, no folder made, a file that isn't an
 // AudioSilo database (an empty one included) refused before it is opened for
 // writing, and a database an older release left (migrations pending) refused
@@ -204,8 +204,8 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("New password for the admin account %q:\n\n  %s\n\n", u.Username, password)
 	p("Sign in to the admin console with it. Every session that used the old password\n")
-	p("is signed out (a running server may answer one it already checked for a minute\n")
-	p("more; restart the server to end them at once).\n")
+	p("is signed out (a running server may answer one it already checked for up to a\n")
+	p("minute; restart the server to end them at once).\n")
 	return nil
 }
 
