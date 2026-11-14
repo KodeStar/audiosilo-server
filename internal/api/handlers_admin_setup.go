@@ -27,6 +27,11 @@ type setupEnvelope struct {
 	// still be shown: the flow is not finished, or its folder step was skipped
 	// (reopened from the Overview card). [] otherwise: only that step offers them.
 	MountHints []string `json:"mount_hints"`
+	// PrintedPassword is whether the signed-in admin still has the password
+	// the server printed in its log at first start (auth.PrintedPassword): the
+	// Your account step then asks for a new one. False for an admin who chose
+	// theirs (the --setup wizard, or since).
+	PrintedPassword bool `json:"printed_password"`
 }
 
 // setupRequest is the request as the server saw it. The server never trusts
@@ -63,8 +68,14 @@ func (a *API) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 	if !st.Finished || st.Steps["folder"] == catalog.SetupStepSkipped {
 		hints = a.mountHints(cfg.DataDir)
 	}
+	// A failed read is no reason to refuse the whole flow: the account step
+	// then asks for nothing (a new password stays optional).
+	printed, err := a.auth.PrintedPassword(r.Context(), userFrom(r.Context()).ID)
+	if err != nil {
+		a.log.Warn("setup: reading the first-run admin failed", "err", err)
+	}
 	writeJSON(w, http.StatusOK, setupEnvelope{
-		State: st, Request: req, ConfigLibraries: names, MountHints: hints,
+		State: st, Request: req, ConfigLibraries: names, MountHints: hints, PrintedPassword: printed,
 	})
 }
 

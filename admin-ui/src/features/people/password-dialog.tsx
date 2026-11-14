@@ -5,8 +5,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateDevices, invalidatePeople } from '@/api/hooks';
-import type { User } from '@/api/types';
+import { invalidateDevices, invalidatePeople, notePasswordChosen } from '@/api/hooks';
+import { MIN_PASSWORD, type User } from '@/api/types';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
 import { describedBy } from '@/lib/a11y';
@@ -14,7 +14,6 @@ import { Input } from '@/components/ui/input';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
-import { MIN_PASSWORD } from './people-model';
 
 const schema = z
   .object({
@@ -68,7 +67,12 @@ export function PasswordDialog({
         )}
       >
         {open ? (
-          <PasswordForm user={user} promote={promote} onDone={() => onOpenChange(false)} />
+          <PasswordForm
+            user={user}
+            self={self}
+            promote={promote}
+            onDone={() => onOpenChange(false)}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -77,10 +81,13 @@ export function PasswordDialog({
 
 function PasswordForm({
   user,
+  self,
   promote,
   onDone,
 }: {
   user: User;
+  /** The account is the signed-in admin's own. */
+  self: boolean;
   promote: boolean;
   onDone: () => void;
 }) {
@@ -103,6 +110,8 @@ function PasswordForm({
       invalidatePeople(qc);
       // A change signs them out of their devices (server#281): the lists move too.
       invalidateDevices(qc);
+      // Their own password, chosen here: the setup flow's account step stops asking.
+      if (self) notePasswordChosen(qc);
       toast.add({
         title: promote
           ? t('user.account.nowAdmin', { name: user.username })

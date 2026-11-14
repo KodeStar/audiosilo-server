@@ -1,7 +1,8 @@
 import { ApiError } from '@/api/client';
 import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
-import { settingsWith } from '@/test/fixtures';
+import { settingsWith, settingsWithMetadata } from '@/test/fixtures';
 import {
+  accountPlan,
   addressMismatch,
   compareField,
   disagreements,
@@ -12,6 +13,7 @@ import {
   isLoopbackUrl,
   hasBookLibrary,
   normalizeAddress,
+  offerRegion,
   phoneLink,
   isSetupStep,
   mergePatches,
@@ -47,13 +49,18 @@ describe('folderLost', () => {
   });
 });
 
-// resumeStep as the page calls it: lost is folderLost of the same marks.
-const resume = (marks: SetupMarks, facts: typeof fresh, requested?: SetupStepId) =>
-  resumeStep(marks, folderLost(marks, facts), requested);
+// resumeStep as the page calls it: lost is folderLost of the same marks. The
+// account step (first) is marked unless a test says otherwise.
+const resume = (marks: SetupMarks, facts: typeof fresh, requested?: SetupStepId) => {
+  const all: SetupMarks = { account: 'done', ...marks };
+  return resumeStep(all, folderLost(all, facts), requested);
+};
 
 describe('resumeStep', () => {
-  it('opens a fresh server at the folder step', () => {
+  it('opens a fresh server at the account step, then the folder (server#369)', () => {
+    expect(resumeStep({}, false)).toBe('account');
     expect(resume({}, fresh)).toBe('folder');
+    expect(resume({ account: 'skipped' }, fresh)).toBe('folder');
   });
 
   it('picks up at the first step without a mark', () => {
@@ -98,20 +105,23 @@ describe('resumeStep', () => {
       reach: 'done',
       abs: 'skipped',
       backups: 'done',
-      phone: 'done',
       bridge: 'skipped',
+      phone: 'done',
     } as const;
-    expect(resume(all, fresh)).toBe('bridge');
+    expect(resume(all, fresh)).toBe('phone');
   });
 });
 
 describe('nextStep and previousStep', () => {
-  it('walks the steps in order while the flow runs, and ends after the Bridge', () => {
+  it('walks the steps in order while the flow runs: the account first, the phone last', () => {
+    expect(nextStep('account', state())).toBe('folder');
     expect(nextStep('folder', state())).toBe('naming');
-    expect(nextStep('phone', state())).toBe('bridge');
-    expect(nextStep('bridge', state())).toBeNull();
+    expect(nextStep('backups', state())).toBe('bridge');
+    expect(nextStep('bridge', state())).toBe('phone');
+    expect(nextStep('phone', state())).toBeNull();
     expect(previousStep('naming')).toBe('folder');
-    expect(previousStep('folder')).toBeNull();
+    expect(previousStep('folder')).toBe('account');
+    expect(previousStep('account')).toBeNull();
   });
 
   it('after the flow, goes through the steps still skipped, then back to Overview', () => {
@@ -149,24 +159,34 @@ describe('the Finish setting up card', () => {
   const skipped = { folder: 'done', abs: 'skipped', bridge: 'skipped' } as const;
 
   it('Finish marks every step without a mark as skipped, so the card lists them', () => {
-    const marks = { folder: 'skipped', naming: 'done', reach: 'done' } as const;
-    const sent = finishMarks(marks, 'bridge', 'done', false);
+    const marks = { account: 'done', folder: 'skipped', naming: 'done', reach: 'done' } as const;
+    const sent = finishMarks(marks, 'phone', 'done', false);
     expect(sent).toEqual({
       metadata: 'skipped',
       abs: 'skipped',
       backups: 'skipped',
-      phone: 'skipped',
-      bridge: 'done',
+      bridge: 'skipped',
+      phone: 'done',
     });
     const after = state({ finished: true, steps: { ...marks, ...sent } });
-    expect(skippedSteps(after, false)).toEqual(['folder', 'metadata', 'abs', 'backups', 'phone']);
-    // A stepper jump straight to the end leaves even the folder on the card.
+    expect(skippedSteps(after, false)).toEqual(['folder', 'metadata', 'abs', 'backups', 'bridge']);
+    // A stepper jump straight to the end leaves even the account and folder on the card.
     expect(
       skippedSteps(
-        state({ finished: true, steps: finishMarks({}, 'bridge', 'skipped', false) }),
+        state({ finished: true, steps: finishMarks({}, 'phone', 'skipped', false) }),
         false,
       ),
-    ).toEqual(['folder', 'naming', 'metadata', 'reach', 'abs', 'backups', 'phone', 'bridge']);
+    ).toEqual([
+      'account',
+      'folder',
+      'naming',
+      'metadata',
+      'reach',
+      'abs',
+      'backups',
+      'bridge',
+      'phone',
+    ]);
   });
 
   it('a library on the server satisfies the folder step: Finish marks it done, the card leaves it out', () => {
@@ -491,5 +511,75 @@ describe('phoneLink', () => {
     expect(isLoopbackUrl('http://[::1]:8080')).toBe(true);
     expect(isLoopbackUrl('http://192.168.1.20')).toBe(false);
     expect(isLoopbackUrl('not a url')).toBe(false);
+  });
+});
+
+describe('accountPlan (server#369)', () => {
+  const draft = (over: Partial<Parameters<typeof accountPlan>[0]> = {}) => ({
+    username: 'admin',
+    password: '',
+    repeat: '',
+    current: '',
+    ...over,
+  });
+
+  it('sends nothing for an unchanged account the admin chose', () => {
+    expect(accountPlan(draft(), 'admin', false)).toEqual({
+      rename: null,
+      password: null,
+      errors: {},
+    });
+  });
+
+  it('asks for a new password while the admin has the printed one', () => {
+    expect(accountPlan(draft(), 'admin', true).errors).toEqual({
+      password: 'setup.account.passwordNeeded',
+    });
+  });
+
+  it('renames with the spaces at either end dropped, and refuses an empty name', () => {
+    expect(accountPlan(draft({ username: '  kode ' }), 'admin', false).rename).toBe('kode');
+    expect(accountPlan(draft({ username: ' admin ' }), 'admin', false).rename).toBeNull();
+    // A name that has spaces already is renamed only by an edit, never by Continue alone.
+    expect(accountPlan(draft({ username: 'alex ' }), 'alex ', false).rename).toBeNull();
+    expect(accountPlan(draft({ username: 'alex' }), 'alex ', false).rename).toBe('alex');
+    expect(accountPlan(draft({ username: '   ' }), 'admin', false).errors).toEqual({
+      username: 'setup.account.usernameEmpty',
+    });
+  });
+
+  it('checks a new password: long enough, typed twice, with the current one', () => {
+    expect(
+      accountPlan(draft({ password: 'short', repeat: 'other' }), 'admin', true).errors,
+    ).toEqual({
+      password: 'errors.passwordTooShort',
+      repeat: 'user.password.mismatch',
+      current: 'setup.account.currentNeeded',
+    });
+    expect(
+      accountPlan(
+        draft({ password: 'long-enough', repeat: 'long-enough', current: 'from-log' }),
+        'admin',
+        true,
+      ),
+    ).toEqual({
+      rename: null,
+      password: { next: 'long-enough', current: 'from-log' },
+      errors: {},
+    });
+  });
+});
+
+describe('offerRegion (server#192)', () => {
+  it('offers only while the server says the marketplace was never chosen', () => {
+    expect(offerRegion(settingsWithMetadata({ region_chosen: false }))).toBe(true);
+    expect(offerRegion(settingsWithMetadata({ region_chosen: true }))).toBe(false);
+    // An older server says nothing: nothing is offered.
+    expect(offerRegion(settingsWithMetadata({}))).toBe(false);
+  });
+
+  it('never offers one the environment sets', () => {
+    const locked = { 'metadata.region': 'AUDIOSILO_METADATA_REGION' };
+    expect(offerRegion(settingsWithMetadata({ region_chosen: false }, locked))).toBe(false);
   });
 });

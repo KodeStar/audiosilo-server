@@ -18,6 +18,7 @@ import { SettingBadges } from '@/features/settings/settings-form';
 import { BACKUP_KEEP_RANGE, METADATA_MODES, outOfRange } from '@/features/settings/settings-model';
 import { ScheduleInput } from '@/features/settings/schedule-input';
 import { errorMessage } from '@/lib/errors';
+import { browserNearestRegion } from '@/lib/nearest-region';
 import { regionOptions } from '@/lib/regions';
 import { toast } from '@/lib/toast';
 import {
@@ -25,6 +26,7 @@ import {
   editable,
   mergePatches,
   normalizeAddress,
+  offerRegion,
   proxyToTrust,
   reachOffers,
   seenAs,
@@ -63,10 +65,12 @@ function useCreateDraftLibrary({ draft, setDraft, onCreated }: StepProps) {
 }
 
 /**
- * Step 3: community metadata. On or off (the server's main outbound traffic),
+ * The metadata step: community metadata. On or off (the server's main outbound traffic),
  * the marketplace, and the service or a local copy. Then the library is
  * created, so its first scan and first matches use them; Skip keeps the
- * settings as they are and still creates it.
+ * settings as they are and still creates it. A marketplace never chosen starts
+ * at the one nearest the admin (server#192), and Continue saves it even when
+ * it is the saved value, so it counts as chosen.
  */
 export function MetadataStep(props: StepProps) {
   const { settings, leave, back, last, draft } = props;
@@ -76,14 +80,19 @@ export function MetadataStep(props: StepProps) {
   const create = useCreateDraftLibrary(props);
   const m = settings.metadata;
   const [enabled, setEnabled] = useState(m.enabled && m.available);
-  const [region, setRegion] = useState(m.region);
+  const offered = offerRegion(settings);
+  const [suggested] = useState(() => (offered ? browserNearestRegion() : null));
+  const [region, setRegion] = useState(suggested ?? m.region);
   const [mode, setMode] = useState<MetadataMode>(m.mode);
 
   const onContinue = async () => {
     // Without the service the switch shows off but can't be changed: the saved
-    // setting stays as it is, for when the service is configured.
-    const draft = m.available ? { enabled, region, mode } : { region, mode };
-    await save(unlockedPatch(settings, 'metadata', draft));
+    // setting stays as it is, for when the service is configured. The
+    // marketplace only while the switch shows it.
+    const draft = m.available ? { enabled, mode } : { mode };
+    let patch = unlockedPatch(settings, 'metadata', enabled ? { ...draft, region } : draft);
+    if (enabled && offered) patch = { ...patch, metadata: { ...patch?.metadata, region } };
+    await save(patch);
     await create();
     await leave('done');
   };
@@ -117,7 +126,14 @@ export function MetadataStep(props: StepProps) {
                 title={t('settings.metadata.region')}
                 badges={<SettingBadges settings={settings} id="metadata.region" />}
                 htmlFor="setup-region"
-                description={t('setup.metadata.regionBody')}
+                description={
+                  <>
+                    {t('setup.metadata.regionBody')}
+                    {suggested && region === suggested ? (
+                      <span className="mt-1 block">{t('setup.metadata.regionSuggested')}</span>
+                    ) : null}
+                  </>
+                }
                 descriptionId="setup-region-desc"
               >
                 <NativeSelect
@@ -173,7 +189,7 @@ export function MetadataStep(props: StepProps) {
 }
 
 /**
- * Step 4: how people reach the server. The address this browser uses, offered
+ * The reach step: how people reach the server. The address this browser uses, offered
  * as the public or the home address (pairing QR codes are built from them); a
  * reverse proxy whose address isn't trusted yet, offered for trusted_proxies;
  * and the HTTPS mode with what it means for phones (restart settings, marked).
@@ -426,7 +442,7 @@ function AddressInput({
 }
 
 /**
- * Step 6: backups and updates. The schedule and how many to keep (the
+ * The backups step: backups and updates. The schedule and how many to keep (the
  * defaults: daily at 03:00, the newest 7), the folder they go to (set only in
  * config, so shown), and the daily update check (another outbound call).
  */

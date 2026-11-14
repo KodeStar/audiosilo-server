@@ -409,8 +409,9 @@ func (a *API) Handler() http.Handler {
 	// The Bridge trades a pairing code for its token (handlers_bridge.go).
 	mux.HandleFunc("POST /api/v1/bridge/pair", a.handleBridgeExchange)
 
-	// First-run setup wizard (public; self-disables once an admin exists and 404s
-	// unless the launcher enabled it via EnableSetup). Token-guarded on POST.
+	// First-run setup wizard (public; off unless the launcher enabled it via
+	// EnableSetup, and self-disables once an admin exists: either way the page
+	// redirects to /admin and POST is 409). Token-guarded on POST.
 	mux.HandleFunc("GET /setup", a.handleSetupPage)
 	mux.HandleFunc("POST /setup", a.handleSetup)
 
