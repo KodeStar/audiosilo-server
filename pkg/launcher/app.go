@@ -178,7 +178,10 @@ func Run(ctx context.Context, opts Options) error {
 	//     credentials banner, keyed off the database (not config-file existence).
 	//   - setup mode (desktop / --setup): leave the admin to the browser wizard;
 	//     when none exists yet, mint a one-time setup token and enable /setup.
+	// Either way, a later start while the admin the banner named has never
+	// signed in says so again, with the way to a new password (server#369).
 	var setupToken string
+	created := false
 	if opts.Setup {
 		exists, err := authSvc.AdminExists(ctx)
 		if err != nil {
@@ -187,8 +190,11 @@ func Run(ctx context.Context, opts Options) error {
 		if !exists {
 			setupToken = randomSecret(18)
 		}
-	} else if err := ensureAdmin(ctx, cfg, authSvc); err != nil {
+	} else if created, err = ensureAdmin(ctx, cfg, authSvc, os.Stdout); err != nil {
 		return err
+	}
+	if !created {
+		signInHint(ctx, cfg, authSvc, os.Stdout, log)
 	}
 
 	// Sync libraries declared in config into the database, then scan them in the
@@ -418,25 +424,27 @@ func resolveTool(name string) string {
 // yet, printing the credentials exactly once. It keys off the database (whether an
 // admin exists), not config-file existence, so a pre-supplied config.yaml does not
 // suppress first-run admin creation.
-func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service) error {
+func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service, w io.Writer) (created bool, err error) {
 	exists, err := authSvc.AdminExists(ctx)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
+	if err != nil || exists {
+		return false, err
 	}
 	password := randomSecret(18)
 	admin, err := authSvc.CreateUser(ctx, "admin", password, auth.RoleAdmin)
 	if err != nil {
-		return err
+		return false, err
+	}
+	// Until an admin signs in with a password, later starts say the password
+	// was printed here (signInHint).
+	if err := authSvc.MarkFirstAdmin(ctx, admin.ID); err != nil {
+		return false, err
 	}
 	code, err := authSvc.CreateAuthCode(ctx, admin.ID, "initial admin code", 0, 0)
 	if err != nil {
-		return err
+		return false, err
 	}
-	writeBanner(os.Stdout, cfg, password, code)
-	return nil
+	writeBanner(w, cfg, password, code)
+	return true, nil
 }
 
 // writeBanner writes the first-run credentials banner: the console (where the

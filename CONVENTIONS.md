@@ -39,7 +39,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   it: a rollback) and warns once, naming them; a restore refuses one (`Inspect`, `ErrNewerDatabase`).
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
-  first-run banner prints them once and is the only place they appear.
+  first-run banner prints them once and is the only place they appear (`reset-admin` prints a
+  new admin password once, the same way; the later starts' reminder never prints a secret).
 - **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
   the admin's **Copy invite** button mints an auth code and shares
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
@@ -3794,13 +3795,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   desktop manager sent was retired in v2.7.0, so a body carrying either is 400 and creates nothing). The console's flow then runs on the ordinary admin
   APIs; the server holds only its progress and a folder preview. Admin only, console only (no
   capability). **State**: `server_state` key `setup_state`, `{finished, dismissed, steps: {id:
-  "done"|"skipped"}}`, ids `catalog.SetupSteps` (`folder naming metadata reach abs backups phone
-  bridge`); no row = a fresh server, not finished; migration `0053` marks a server with a library or a
+  "done"|"skipped"}}`, ids `catalog.SetupSteps` (`account folder naming metadata reach abs backups bridge
+  phone`, v2.7.0: the account first, the phone last); no row = a fresh server, not finished; migration `0053` marks a server with a library or a
   second non-demo, non-member account finished and dismissed. `GET /admin/setup` -> `{state, request:
-  {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints}`: `request` is the direct
+  {host, scheme, proxied, peer?, peer_trusted}, config_libraries, mount_hints, printed_password}`: `request` is the direct
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
-  `config_libraries` the names the config declares (config.yaml); `mount_hints` (only while not finished or
+  `config_libraries` the names the config declares (config.yaml); `printed_password` true while the caller
+  is the banner's admin and has not chosen their own password (`auth.PrintedPassword`); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
@@ -3823,3 +3825,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   columns stay the resolved names, narrator included.
   `suggested` is the source with fewer, the tags on a tie. Read-only: never a file's contents, never an
   index write (in the audit test's `notAudited`).
+  **Account step** (server#369, the first step): the console renames the admin with `PATCH
+  /admin/users/{id}` `{username}` (400 `username_required`, 409 `username_taken`, audited with
+  `username_was`; the session stays) and changes the password with the caller's own `POST /auth/password`
+  (its wrong current password is 401 `current_password_incorrect`, which the console never treats as a lost
+  session). **The sign-in hint** (`auth/firstrun.go`): the banner's `ensureAdmin` writes `server_state`
+  `first_admin` `{user_id, signed_in, chose_password}`; while `signed_in` is false every later start prints
+  a framed reminder (`launcher.signInHint`: the console address, the username, and the `reset-admin`
+  command, as `docker exec -u <uid>:<gid> <container> ...` inside a container, the server's own ids so the
+  command never makes a root-owned file in the data folder). Any admin's password sign-in
+  (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`) ends it; each writes once.
+  No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
+  reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one and
+  one with pending migrations), picks the only admin or the named one (exit 2 with the admins listed
+  otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
+  rule: every session, pairing code and remembered browser ends) and prints it once. A running server
+  takes the new password at once; a session it holds cached may carry on until its next write.
+  **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no
+  region was ever set here, in config.yaml or by the environment (`server_state`
+  `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"
+  included); the metadata step preselects the browser's nearest store (`lib/nearest-region.ts`: languages,
+  then time zone) and Settings offers it (`RegionSuggestion`).

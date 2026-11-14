@@ -34,7 +34,9 @@ scripts/build-admin.sh               # the admin console's gate + build (Node 24
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
 `--ffmpeg` (`""` disables on-the-fly transcoding), `--setup` (first-run **web
-setup wizard** instead of the auto-admin banner - see below).
+setup wizard** instead of the auto-admin banner - see below). Commands: `version`,
+`reset-admin [username]` (a new admin password, printed once: lost first-run password; flags go
+before the command, `audiosilo --data /data reset-admin`; see First-run setup in CONVENTIONS.md).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
@@ -276,6 +278,8 @@ below. `0050` adds `book_attachments.description` (the Bridge's checked `descrip
 checked `chapters.json`, Phase 1d, a chapter source of its own: see Generated chapters; `''` for none).
 `0053` inserts `server_state('setup_state')` as finished and dismissed on a server that already has a
 library or a second account (not a demo or member), so an upgraded server never shows the first-run flow.
+`server_state` also holds `first_admin` (the banner's admin until they sign in: the start-up hint) and
+`metadata_region_chosen` (server#192), both written by code, no migration.
 `0055` adds `books.file_order` (a folder book's file order key, `catalog.FileOrderKey` bit-cast to a
 signed integer) and `file_order_indexed_at` (the index it was recorded with; NULL or another index's,
 an older server's re-index, = not recorded, filled by the next scan without a re-index; derived; see

@@ -197,6 +197,7 @@ func (a *API) memberCollectionsOf(ctx context.Context, u *auth.User) ([]catalog.
 // field ("leave it"), null ("Make independent") and an id ("Assign to someone")
 // differ.
 type userPatch struct {
+	Username      *string         `json:"username"`
 	Role          *string         `json:"role"`
 	Password      *string         `json:"password"`
 	Disabled      *bool           `json:"disabled"`
@@ -221,8 +222,10 @@ func (p userPatch) owner() (present bool, id int64, ok bool) {
 	return true, id, true
 }
 
-// handleUpdateUser patches an account in place: role, password, disabled state
-// and the household member fields (any subset). It replaces the old
+// handleUpdateUser patches an account in place: username, role, password,
+// disabled state and the household member fields (any subset). A username is
+// the rule a new account's is: not "" (400 username_required), not another
+// account's (409 username_taken). It replaces the old
 // delete-and-recreate dance and the separate disable endpoint. auth.UpdateUser
 // applies the whole body in one transaction, checking all of it first, so a
 // refused field changes nothing. The password counts before the role, so
@@ -257,8 +260,16 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// A reset of a password the person had ends their sessions, all but the
 	// admin's own when it is their own account (auth.UpdateUser).
+	var was string
+	if req.Username != nil {
+		before := a.lookupUser(w, r, id)
+		if before == nil {
+			return
+		}
+		was = before.Username
+	}
 	change := auth.UserChanges{
-		Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
+		Username: req.Username, Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
 		KeepToken: credentialFrom(r.Context()).ID,
 	}
 	if assign {
@@ -278,6 +289,9 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// The password itself never: only that it changed (or was cleared).
 	details := map[string]any{}
+	if req.Username != nil && was != u.Username {
+		details["username_was"] = was
+	}
 	if req.Role != nil {
 		details["role"] = u.Role
 	}
@@ -372,6 +386,8 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeError(w, http.StatusNotFound, "user not found")
 	case errors.Is(err, auth.ErrUsernameTaken):
 		writeErrorCode(w, http.StatusConflict, codeUsernameTaken, "username already taken")
+	case errors.Is(err, auth.ErrUsernameRequired):
+		writeErrorCode(w, http.StatusBadRequest, codeUsernameRequired, err.Error())
 	case errors.Is(err, auth.ErrLastAdmin):
 		writeErrorCode(w, http.StatusConflict, codeLastAdmin, err.Error())
 	case errors.Is(err, auth.ErrAdminNeedsPassword):

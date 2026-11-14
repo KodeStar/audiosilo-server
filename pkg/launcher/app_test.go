@@ -38,7 +38,7 @@ func TestEnsureAdminKeysOffDatabase(t *testing.T) {
 	authSvc := auth.New(db, time.Now)
 	cfg := config.Default(t.TempDir())
 
-	if err := ensureAdmin(ctx, cfg, authSvc); err != nil {
+	if _, err := ensureAdmin(ctx, cfg, authSvc, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := authSvc.AdminExists(ctx); !ok {
@@ -50,7 +50,7 @@ func TestEnsureAdminKeysOffDatabase(t *testing.T) {
 	}
 
 	// Idempotent: a second call (e.g. a normal restart) must not create another.
-	if err := ensureAdmin(ctx, cfg, authSvc); err != nil {
+	if _, err := ensureAdmin(ctx, cfg, authSvc, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if users, _ := authSvc.ListUsers(ctx); len(users) != 1 {

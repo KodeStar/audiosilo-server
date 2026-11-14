@@ -7,7 +7,8 @@
 # every start, shows as locked in the console, and is never written into this
 # file. Command-line flags are: --data (data dir), --ffprobe / --ffmpeg (tool
 # paths; "" disables each), and --setup (first-run web setup wizard):
-# `audiosilo --data ./data`.
+# `audiosilo --data ./data`. Lost the first-run admin password? `audiosilo --data
+# ./data reset-admin` prints a new one.
 
 # The server's display name: shown in the apps when someone connects, on invites
 # and in the admin console. Empty = "AudioSilo".

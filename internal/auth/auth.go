@@ -93,6 +93,9 @@ var (
 	// exists, so the transport layer can map it to 409 instead of echoing the raw
 	// SQLite unique-constraint string.
 	ErrUsernameTaken = errors.New("username already taken")
+	// ErrUsernameRequired is returned when a rename (UserChanges.Username)
+	// names no username.
+	ErrUsernameRequired = errors.New("username is required")
 )
 
 // MinPasswordLen is the minimum length for a non-empty account password.
@@ -1467,6 +1470,11 @@ func (s *Service) SetPassword(ctx context.Context, id int64, password string, ke
 // UserChanges is a change to an account (the admin's PATCH /admin/users/{id}):
 // nil leaves a field.
 type UserChanges struct {
+	// Username renames the account (the console's Your account step): not ""
+	// (ErrUsernameRequired), not another account's (ErrUsernameTaken), the
+	// rules a new account's name follows. Sessions, codes and everything else
+	// key on the account's id, so they stay.
+	Username *string
 	// Password sets a password, or clears it with "".
 	Password *string
 	// Role is RoleAdmin or anything else (RoleUser).
@@ -1514,7 +1522,8 @@ type HouseholdChange struct {
 // demotion: ErrLastAdmin; to admin only with a password, ErrAdminNeedsPassword,
 // and never a member, ErrMemberNotAdmin), the disabled state (not the last
 // enabled admin: ErrLastAdmin) and the admin's can_add_members switch. An
-// unknown account is ErrNotFound. The write is one UPDATE; a new password, a
+// unknown account is ErrNotFound. A rename to "" is ErrUsernameRequired, to
+// another account's name ErrUsernameTaken. The write is one UPDATE; a new password, a
 // disabled account and a kid's assignment forget the person's browsers.
 // Replacing or clearing a password the account had (a change or a reset, not a
 // first password) also ends the person's sessions, all but c.KeepToken, with the
@@ -1522,6 +1531,9 @@ type HouseholdChange struct {
 // (endSessions): whoever knew the old one is signed out wherever they used it.
 // What stays, and why, is endSessions'.
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
+	if c.Username != nil && *c.Username == "" {
+		return ErrUsernameRequired
+	}
 	hash := ""
 	if c.Password != nil {
 		if err := validatePassword(*c.Password); err != nil {
@@ -1629,7 +1641,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		} else if h != nil {
 			household = 2
 		}
-		other := c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil
+		other := c.Username != nil || c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil
 		if !other && household == 0 {
 			return nil
 		}
@@ -1649,10 +1661,14 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		        role            = COALESCE(?7, role),
 		        disabled        = COALESCE(?8, disabled),
 		        can_add_members = COALESCE(?9, can_add_members),
+		        username        = COALESCE(?13, username),
 		        updated_at      = CASE WHEN ?10 OR (?3 = 2 AND managed_by IS NOT NULL) THEN ?11 ELSE updated_at END
 		  WHERE id = ?12`,
 			c.Password != nil, hash, household, owner, kind, access, roleArg, c.Disabled, c.CanAddMembers,
-			other, s.ts(), id); err != nil {
+			other, s.ts(), id, c.Username); err != nil {
+			if store.IsUniqueViolation(err) {
+				return ErrUsernameTaken
+			}
 			return err
 		}
 		if c.Password != nil || c.Disabled != nil && *c.Disabled {
