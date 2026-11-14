@@ -2332,7 +2332,7 @@
   "backups.day": "Jour",
   "backups.time": "Heure",
   "backups.failure.disk_full": "Le disque est plein. Libérez de l'espace : la prochaine sauvegarde s'exécutera comme prévu.",
-  "backups.failure.permission_denied": "Le serveur ne peut pas écrire dans son dossier de sauvegardes. Vérifiez les permissions du dossier.",
+  "backups.failure.permission_denied": "Le serveur ne peut pas écrire dans son dossier de sauvegardes : il appartient à un autre utilisateur, ou ses permissions refusent celui du serveur. Dans Docker, réglez PUID et PGID sur le propriétaire du dossier, ou donnez à l'utilisateur du serveur l'accès en lecture et en écriture. Serveur > Journaux indique le dossier et les deux utilisateurs.",
   "backups.failure.failed": "Consultez Serveur > Journaux pour en connaître la cause.",
   "backups.restore.action": "Restaurer...",
   "backups.restore.title": "Restaurer cette sauvegarde ?",

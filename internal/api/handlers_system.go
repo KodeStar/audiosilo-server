@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/backup"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -76,16 +76,11 @@ var installKind = sync.OnceValue(func() string {
 	switch {
 	case Version == "dev":
 		return installSource
-	case fileExists("/.dockerenv") || fileExists("/run/.containerenv"):
+	case fsaccess.InContainer():
 		return installDocker
 	}
 	return installBinary
 })
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
 
 // Tool is ffmpeg or ffprobe as Health > System shows it.
 type Tool struct {

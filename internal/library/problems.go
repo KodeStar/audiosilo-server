@@ -3,12 +3,12 @@ package library
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"strings"
 	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -34,7 +34,7 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 	case size == 0:
 		b.ScanError = problemEmptyFile
 	case md != nil && md.OpenErr != nil:
-		b.ScanError, b.ScanErrorDetail = problemUnreadable, pathErrText(md.OpenErr)
+		b.ScanError, b.ScanErrorDetail = problemUnreadable, fsaccess.Cause(md.OpenErr)
 	case md.ReadRefused():
 		// Not read at all: too many reads hang already (metadata.ReadRefused).
 		b.ScanError, b.ScanErrorDetail = problemUnreadable, readRefusedDetail
@@ -154,17 +154,6 @@ func soleFileProblem(b *catalog.Book, sig catalog.Signature) bool {
 // soleFile reports whether a book has one audio file (a file book, or a folder
 // holding one).
 func soleFile(b *catalog.Book) bool { return !b.IsFolder || len(b.Files) == 1 }
-
-// pathErrText is an OS error's own words without the absolute path it names
-// ("permission denied", not "open /srv/books/x.mp3: permission denied"): the
-// console shows the library-relative file beside it.
-func pathErrText(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
-}
 
 // Folder-holds-several-books detection. A folder with audio is one book, which is
 // right for almost every library; the exception worth flagging is a folder that

@@ -2178,7 +2178,7 @@
   "backups.day": "Day",
   "backups.time": "Time",
   "backups.failure.disk_full": "The disk is full. Free some space; the next backup runs on schedule.",
-  "backups.failure.permission_denied": "The server can't write to its backups folder. Check the folder's permissions.",
+  "backups.failure.permission_denied": "The server can't write to its backups folder: the folder belongs to another user, or its permissions shut the server out. In Docker, set PUID and PGID to the folder's owner, or give the server's user read and write access to it. Server > Logs names the folder and both users.",
   "backups.failure.failed": "See Server > Logs for the cause.",
   "backups.restore.action": "Restore...",
   "backups.restore.title": "Restore this backup?",

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -389,7 +390,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Link, m.Tags = str("url"), []string{"package"}
 	case KindBackupFailed:
 		m.Title = "A backup failed"
-		m.Text = backupReason(str("error"))
+		m.Text = backupReason(str("error"), str("detail"))
 		m.Link, m.Tags, m.Priority, m.Color = link("/server?topic=backups"), []string{"warning"}, 4, colorBad
 	case KindBridgeJobFinished:
 		m.Title = bridgeJobLabel(str("job_kind")) + " finished: " + bridgeJobBook(ev)
@@ -498,14 +499,25 @@ func bridgeParkReason(code string) string {
 	return "See the job in Settings > Bridge."
 }
 
-func backupReason(code string) string {
+// backupReason is a failed backup's message: detail (the folder, the server's
+// user, its owner and the fix) when the folder refused the server.
+func backupReason(code, detail string) string {
 	switch code {
 	case "disk_full":
 		return "The disk is full. Free some space; the next backup runs on schedule."
 	case "permission_denied":
-		return "The server can't write to its backups folder."
+		if detail != "" {
+			return upperFirst(detail)
+		}
+		return "The server can't write to its backups folder. Check the folder's owner and permissions: Server > Logs names the folder and the user the server runs as."
 	}
 	return "See Server > Logs for the cause."
+}
+
+// upperFirst is s with its first letter a capital, as a sentence starts.
+func upperFirst(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // titleLines is an event's "titles" one a line, then "and N more" when count
@@ -557,8 +569,9 @@ func webhookBody(ev catalog.ServerEvent, m message, srv Server) map[string]any {
 }
 
 // internalData are event facts the console's bell shows but no destination is
-// sent: a failed scan's detail is the tool's or the OS's own message, which can
-// name a folder on the server.
+// sent as data: a failed scan's detail is the tool's or the OS's own message,
+// which can name a folder on the server. (A failed backup's detail is the
+// message's own text when its folder refused the server: backupReason.)
 var internalData = []string{"detail"}
 
 // outbound is an event's data without its internal facts.
@@ -695,12 +708,17 @@ func (s *Service) UpdateFound(ctx context.Context, version, name, url string) {
 }
 
 // BackupFailed reports a backup that failed (trigger: scheduled or manual; reason
-// is backup.Result's short code).
-func (s *Service) BackupFailed(ctx context.Context, trigger, reason string) {
+// is backup.Result's short code, detail its Detail: the folder, the server's user,
+// the folder's owner and the fix when the folder refused the server, else "").
+func (s *Service) BackupFailed(ctx context.Context, trigger, reason, detail string) {
 	if s == nil {
 		return
 	}
-	s.Emit(ctx, Event{Kind: KindBackupFailed, Data: map[string]any{"trigger": trigger, "error": reason}})
+	data := map[string]any{"trigger": trigger, "error": reason}
+	if detail != "" {
+		data["detail"] = detail
+	}
+	s.Emit(ctx, Event{Kind: KindBackupFailed, Data: data})
 }
 
 // BridgeJob is a Bridge job that just finished, failed or parked, for

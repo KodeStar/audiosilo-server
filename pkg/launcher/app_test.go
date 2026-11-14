@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +20,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -334,5 +336,94 @@ func TestBannerNamesConsoleAndConnectPage(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("banner lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+// A data folder the server may not write to, or a database in it the server may
+// not open to write, stops the start with the folder, the server's user and the
+// fix, before SQLite's "unable to open database file" (server#368). A writable
+// one starts: TestRunMirrorMode.
+func TestRunRefusesAnUnwritableDataFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	ctx := context.Background()
+
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+	err := Run(ctx, Options{DataDir: ro, Log: discardLog()})
+	want := "the data folder isn't usable: the server can't write to " + ro + ": permission denied. The server runs as user " + fsaccess.User()
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("read-only folder: err = %v, want it to start %q", err, want)
+	}
+
+	data := t.TempDir()
+	db := filepath.Join(data, "audiosilo.db")
+	if err := os.WriteFile(db, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: data, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the server can't write to "+db+": permission denied") {
+		t.Fatalf("read-only database: err = %v", err)
+	}
+	if _, statErr := os.Stat(config.Path(data)); statErr == nil {
+		t.Fatal("a config was written before the check")
+	}
+
+	// A read-only config that names no server_id can't take the one minted for it.
+	noID := t.TempDir()
+	if err := os.WriteFile(config.Path(noID), []byte("bind: 127.0.0.1:0\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: noID, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the data folder isn't usable: the server can't write to "+config.Path(noID)+": permission denied. The server runs as user") {
+		t.Fatalf("read-only config without a server_id: err = %v", err)
+	}
+
+	// A config the server may not read is named the same way.
+	locked := t.TempDir()
+	if err := os.WriteFile(config.Path(locked), []byte("bind: 127.0.0.1:0\n"), 0o200); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, Options{DataDir: locked, Log: discardLog()})
+	if err == nil || !strings.Contains(err.Error(), "the server can't read "+config.Path(locked)+": permission denied. The server runs as user") {
+		t.Fatalf("unreadable config: err = %v", err)
+	}
+}
+
+// A read-only config.yaml (mounted so, or edited as root) still starts: only
+// a setting saved from the console needs to write it.
+func TestRunStartsWithAReadOnlyConfig(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	data := t.TempDir()
+	addr := freeAddr(t)
+	cfgYAML := fmt.Sprintf("server_id: %q\nbind: %q\ntls:\n  mode: \"off\"\nupdate_check: false\n", "srv_readonly_config_test", addr)
+	if err := os.WriteFile(config.Path(data), []byte(cfgYAML), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, Options{DataDir: data, Log: discardLog()}) }()
+	waitFor(t, "the server", func() bool {
+		resp, err := http.Get("http://" + addr + "/api/v1/healthz")
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop")
 	}
 }

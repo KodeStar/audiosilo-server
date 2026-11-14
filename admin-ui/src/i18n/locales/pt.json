@@ -2332,7 +2332,7 @@
   "backups.day": "Dia",
   "backups.time": "Hora",
   "backups.failure.disk_full": "O disco está cheio. Liberte espaço; a próxima cópia de segurança corre conforme agendado.",
-  "backups.failure.permission_denied": "O servidor não consegue escrever na sua pasta de cópias de segurança. Verifique as permissões da pasta.",
+  "backups.failure.permission_denied": "O servidor não consegue escrever na sua pasta de cópias de segurança: pertence a outro utilizador, ou as suas permissões recusam o do servidor. No Docker, defina PUID e PGID para o dono da pasta, ou dê ao utilizador do servidor acesso de leitura e escrita. Servidor > Registos indica a pasta e ambos os utilizadores.",
   "backups.failure.failed": "Consulte Servidor > Registos para saber a causa.",
   "backups.restore.action": "Restaurar...",
   "backups.restore.title": "Restaurar esta cópia de segurança?",

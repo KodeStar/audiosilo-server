@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type {
@@ -81,6 +81,26 @@ describe('the first-run redirect', () => {
     await userEvent.setup().click(screen.getByRole('link', { name: 'Finish later' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     await screen.findAllByRole('navigation', { name: 'Primary' });
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('opens a deep link in a fresh session, and the Overview after it (server#365)', async () => {
+    // The ABS step's "Open the import" opens a new tab: a fresh session, signed in.
+    const calls = mockFetch(flowRoutes({}, { 'GET /admin/users': { body: { users: [] } } }));
+    const { router } = renderApp('/server?topic=import');
+    expect(
+      await screen.findByText('Bring listening history over from Audiobookshelf'),
+    ).toBeVisible();
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/setup')).toBe(true));
+    // The state has loaded and the page stayed.
+    await screen.findByText('Bring listening history over from Audiobookshelf');
+    expect(router.state.location.pathname).toBe('/server');
+    expect(router.state.location.search).toEqual({ topic: 'import' });
+
+    // Moving on to the Overview from there doesn't pull the admin into the flow.
+    await act(() => router.navigate({ to: '/' }));
+    await screen.findAllByRole('navigation', { name: 'Primary' });
+    await screen.findByRole('region', { name: 'Server' });
     expect(router.state.location.pathname).toBe('/');
   });
 

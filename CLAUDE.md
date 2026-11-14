@@ -131,6 +131,7 @@ internal/mirrortest/  mirror-mode test support (tests only): the data releases p
 internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDiskFreeSpaceEx): Health > System's roots and the mirror's disk guard
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
+internal/fsaccess/    a folder the server's user can't read or write, worded with the path, the user, the folder's owner and the fix (CheckWrite, CheckRead, Hint; see Folder permissions)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute: the `setup` block's, else the estimates'; setup.go: the lenient, bounded onboarding checklist and the reply's `accepts`) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`, Phase 2b's `sidecars.contribute` and `meta.correct`, contribute.go: their strict params, `ModuleFor`, and Phase 3c's `readalong.align`, Phase 4a's `audible.poll`, 4b's `audible.import` and 4c's `audible.sync` in audible.go, LibriVox L6's `librivox.fetch` in librivox.go), dedupe, priority claim with a lease (a queued job whose managed module is off held: `ModuleOn`), long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
@@ -378,6 +379,7 @@ keep this index in step (one line per topic).
   - Health issues (`catalog/issues.go`, `api/handlers_health.go`)
   - Server settings, system status, updates, logs (admin redesign Phase 5a)
   - Backups, audit log, notifications (admin redesign Phase 5b)
+  - Folder permissions (server#368, `internal/fsaccess`, the Docker entrypoint's checks)
   - Support card
   - Library export
   - Library admin

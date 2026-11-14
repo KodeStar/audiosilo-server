@@ -2332,7 +2332,7 @@
   "backups.day": "Giorno",
   "backups.time": "Ora",
   "backups.failure.disk_full": "Il disco è pieno. Libera dello spazio: il prossimo backup verrà eseguito come previsto.",
-  "backups.failure.permission_denied": "Il server non può scrivere nella sua cartella dei backup. Controlla i permessi della cartella.",
+  "backups.failure.permission_denied": "Il server non può scrivere nella sua cartella dei backup: appartiene a un altro utente, oppure i suoi permessi escludono quello del server. In Docker, imposta PUID e PGID sul proprietario della cartella, oppure dai all'utente del server l'accesso in lettura e scrittura. Server > Log indica la cartella ed entrambi gli utenti.",
   "backups.failure.failed": "Consulta Server > Log per la causa.",
   "backups.restore.action": "Ripristina...",
   "backups.restore.title": "Ripristinare questo backup?",

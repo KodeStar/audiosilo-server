@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -732,5 +734,73 @@ func TestBeforeUpgradeRetries(t *testing.T) {
 	made := start()
 	if _, err := os.Stat(filepath.Join(s.dir, made)); err != nil {
 		t.Fatalf("the copy just made was pruned: %v", err)
+	}
+}
+
+// A backups folder the server may not write to fails as permission_denied, its
+// detail naming the folder, the server's user and the fix (SQLite alone says
+// "unable to open database file": server#368), and the start-up check says so
+// before a backup is tried. A writable one passes the check.
+func TestUnwritableFolderIsNamed(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't refuse this user")
+	}
+	e := newEnv(t)
+	if err := e.svc.CheckFolder(); err != nil {
+		t.Fatalf("no backups folder yet: %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "backups")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	svc := New(e.db, e.dataDir, dir, nil)
+	if err := svc.CheckFolder(); !fsaccess.IsPermission(err) {
+		t.Fatalf("CheckFolder = %v, want a permission error", err)
+	}
+	var heard *Result
+	svc.OnFailure = func(r Result) { heard = &r }
+	if _, err := svc.Create(context.Background(), KindManual); err == nil {
+		t.Fatal("backup into a read-only folder succeeded")
+	}
+	want := "the server can't write to " + dir + ": permission denied. The server runs as user " + fsaccess.User()
+	if heard == nil || heard.Error != "permission_denied" || !strings.HasPrefix(heard.Detail, want) {
+		t.Fatalf("failure heard = %+v, want permission_denied and a detail starting %q", heard, want)
+	}
+	if st := svc.Status(); st.Last == nil || st.Last.Error != "permission_denied" {
+		t.Fatalf("status = %+v", st)
+	}
+	// A folder the server may not even look at (its parent refuses it) fails the
+	// start-up check too, rather than passing as not made yet.
+	hidden := filepath.Join(dir, "inner")
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(hidden, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(e.db, e.dataDir, hidden, nil).CheckFolder(); !fsaccess.IsPermission(err) {
+		t.Fatalf("CheckFolder behind a closed parent = %v, want a permission error", err)
+	}
+	// A folder the server can't list says so too (the console's list fails; the log has it).
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.List(); err == nil || !strings.HasPrefix(err.Error(), "the server can't read "+dir+": permission denied. The server runs as user") {
+		t.Fatalf("List = %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CheckFolder(); err != nil {
+		t.Fatalf("writable folder: %v", err)
+	}
+	if _, err := svc.Create(context.Background(), KindManual); err != nil {
+		t.Fatalf("backup into a writable folder: %v", err)
 	}
 }

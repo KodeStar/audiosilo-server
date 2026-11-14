@@ -2332,7 +2332,7 @@
   "backups.day": "Día",
   "backups.time": "Hora",
   "backups.failure.disk_full": "El disco está lleno. Libera espacio; la próxima copia se hará según lo programado.",
-  "backups.failure.permission_denied": "El servidor no puede escribir en su carpeta de copias de seguridad. Revisa los permisos de la carpeta.",
+  "backups.failure.permission_denied": "El servidor no puede escribir en su carpeta de copias de seguridad: pertenece a otro usuario, o sus permisos rechazan al del servidor. En Docker, pon PUID y PGID al propietario de la carpeta, o da al usuario del servidor permiso de lectura y escritura. Servidor > Registros indica la carpeta y ambos usuarios.",
   "backups.failure.failed": "Consulta Servidor > Registros para ver la causa.",
   "backups.restore.action": "Restaurar...",
   "backups.restore.title": "¿Restaurar esta copia de seguridad?",

@@ -29,6 +29,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -62,6 +63,13 @@ type Options struct {
 	metaReleases releaseSource
 }
 
+// dataFiles are the files in the data folder the server opens to write at
+// start-up: the start checks each that exists. Not config.yaml: a read-only one
+// (mounted so, or edited as root) starts, as before, when it names the server_id
+// (one minted at start has to be saved), and only a setting saved from the
+// console fails.
+var dataFiles = []string{"audiosilo.db", "audiosilo.db-wal", "audiosilo.db-shm"}
+
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
 // performs first-run bootstrap (admin + auth code banner), starts the background
 // scan, and serves HTTP(S) until ctx is cancelled. It blocks until shutdown.
@@ -80,11 +88,22 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// A data folder (or a database in it) the server may not write to, or a
+	// config it may not read, stops the start here, saying so with the server's
+	// user, the folder's owner and the fix, rather than as SQLite's "unable to
+	// open database file" (server#368).
+	unusable := func(err error) error { return fmt.Errorf("the data folder isn't usable: %w", err) }
 	if err := os.MkdirAll(abs, 0o700); err != nil {
-		return err
+		return unusable(fsaccess.Wrap(abs, true, err))
+	}
+	if err := fsaccess.CheckWrite(abs, dataFiles...); err != nil {
+		return unusable(err)
 	}
 
 	cfg, firstRun, err := config.Load(abs)
+	if fsaccess.IsPermission(err) {
+		return unusable(fsaccess.Wrap(config.Path(abs), false, err))
+	}
 	if err != nil {
 		return err
 	}
@@ -147,7 +166,10 @@ func Run(ctx context.Context, opts Options) error {
 	// just minted a server_id for an install that predates it.
 	if firstRun || mintedServerID {
 		if err := cfg.Save(); err != nil {
-			return err
+			// A read-only config.yaml starts only when it already names the
+			// server_id: say which file refused the write (and, when the system
+			// refused permission, the fix).
+			return unusable(fsaccess.Wrap(config.Path(abs), true, err))
 		}
 	}
 
@@ -198,7 +220,13 @@ func Run(ctx context.Context, opts Options) error {
 	// Backups (Settings > Backups): on their schedule, and when an admin asks.
 	backups := backup.New(db, abs, cfg.Backups.Dir, log)
 	backups.SetSettings(cfg.Backups.Schedule, cfg.Backups.Keep)
-	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error) }
+	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error, r.Detail) }
+	go func() {
+		// Off the start path: the folder may be a network share slow to answer.
+		if err := backups.CheckFolder(); err != nil {
+			log.Warn("backups will fail", "err", err)
+		}
+	}()
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)

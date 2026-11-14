@@ -352,7 +352,7 @@ func TestNilServiceIsSafe(t *testing.T) {
 	s.Emit(context.Background(), Event{Kind: KindBookAdded})
 	s.SignedIn(context.Background(), "a", "b", "c", true)
 	s.UpdateFound(context.Background(), "v1", "", "")
-	s.BackupFailed(context.Background(), "scheduled", "failed")
+	s.BackupFailed(context.Background(), "scheduled", "failed", "")
 	s.ScanFinished(context.Background(), library.RunReport{Status: catalog.RunFailed})
 	s.BridgeJobEnded(context.Background(), BridgeJob{State: "done"})
 }
@@ -696,5 +696,35 @@ func TestBooksReleased(t *testing.T) {
 	one.Data = map[string]any{"count": float64(1), "titles": []any{"Leviathan Falls (The Expanse #9)"}}
 	if m := compose(one, s.server()); m.Title != "1 new release in your series" || m.Text != "Leviathan Falls (The Expanse #9)" {
 		t.Fatalf("one release = %+v", m)
+	}
+}
+
+// A failed backup's message names the folder's owner problem when the folder
+// refused the server (the detail backup.Result carries, kept in the event), and
+// stays generic for an event without one (server#368).
+func TestBackupFailedNamesTheOwnerProblem(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	detail := "the server can't write to /backups: permission denied. The server runs as user 1000:1000 and the folder belongs to 1026:100. Set PUID=1026 and PGID=100 (the folder's owner) on the container, or give user 1000:1000 read and write access to the folder."
+	s.BackupFailed(ctx, "scheduled", "permission_denied", detail)
+	s.BackupFailed(ctx, "manual", "disk_full", "")
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events = %v, %v", events, err)
+	}
+	byErr := map[string]catalog.ServerEvent{}
+	for _, ev := range events {
+		byErr[ev.Data["error"].(string)] = ev
+	}
+	if _, ok := byErr["disk_full"].Data["detail"]; ok {
+		t.Fatal("an empty detail was stored")
+	}
+	m := compose(byErr["permission_denied"], s.server())
+	if want := "The server can't write to /backups: permission denied. The server runs as user 1000:1000"; !strings.HasPrefix(m.Text, want) {
+		t.Fatalf("text = %q, want it to start %q", m.Text, want)
+	}
+	old := catalog.ServerEvent{Kind: KindBackupFailed, Data: map[string]any{"error": "permission_denied"}}
+	if m := compose(old, s.server()); !strings.Contains(m.Text, "Server > Logs names the folder") {
+		t.Fatalf("text without a detail = %q", m.Text)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/pool"
@@ -319,6 +320,12 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	if info, statErr := os.Stat(lib.Root); statErr != nil || !info.IsDir() {
 		return res, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
+	}
+	// A root the server may reach but not list (a folder another user owns, as on
+	// a NAS share) would read as an empty library: stop, naming the folder, the
+	// server's user and the fix (server#368).
+	if err := fsaccess.CheckRead(lib.Root); err != nil {
+		return res, fmt.Errorf("%w: %w", ErrLibraryUnavailable, err)
 	}
 
 	if lib.Kind == catalog.KindPodcasts {
@@ -1457,7 +1464,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 				"library", lib.Name, "path", absOf(lib, rel), "err", walkErr)
 			if rl != nil {
 				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-					e.Path, e.Detail = rel, pathErrText(walkErr)
+					e.Path, e.Detail = rel, fsaccess.Cause(walkErr)
 				})
 			}
 			return nil
@@ -1475,7 +1482,7 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 					log.Warn("could not list a .audiosilo folder", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
 					if rl != nil {
 						rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-							e.Path, e.Detail = rel, pathErrText(lerr)
+							e.Path, e.Detail = rel, fsaccess.Cause(lerr)
 						})
 					}
 				case len(files) > 0:
