@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -584,9 +585,18 @@ type ImportWrite struct {
 }
 
 // hasListening reports whether w writes any listening for the person (its hints
-// aside).
+// aside): a session, a day, a bookmark, or a progress row it creates or moves on
+// (position, finish, finish date). A row whose only change is an earlier start
+// date is no listening, as the review's summary counts it (progress, finished)
+// and the console's historyEmpty reads it.
 func (w *ImportWrite) hasListening() bool {
-	return len(w.Sessions) > 0 || len(w.Days) > 0 || len(w.Progress) > 0 || len(w.Bookmarks) > 0
+	if len(w.Sessions) > 0 || len(w.Days) > 0 || len(w.Bookmarks) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(w.Progress, func(p ImportProgress) bool {
+		return p.Prior == nil || p.Wrote.Position != p.Prior.Position ||
+			p.Wrote.Finished != p.Prior.Finished || p.Wrote.FinishedAt != p.Prior.FinishedAt
+	})
 }
 
 // rollUp splits w's sessions for imp into the ones written as sessions and the
@@ -619,8 +629,8 @@ const ImportClientApp = "Audiobookshelf"
 // write, writes it and marks the import applied. A failure puts it back in
 // review. ErrNotFound, or ErrImportNotReady unless it was in review;
 // ErrImportNoListening, with nothing written, when build writes no listening
-// (session, day, progress or bookmark) and there is a previous import to take
-// back: that would only lose the person's imported listening.
+// (hasListening) and there is a previous import to take back: that would only
+// lose the person's imported listening.
 //
 // The previous import's progress rows go back exactly as they were before it
 // (restoredProgress: their own updated_at), so the new import merges into the

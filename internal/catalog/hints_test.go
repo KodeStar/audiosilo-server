@@ -52,6 +52,58 @@ func TestImportHintsOnlyKeepsApplied(t *testing.T) {
 	if n := f.count(t, `SELECT COUNT(*) FROM book_hints WHERE import_id = ?`, second); n != 0 {
 		t.Errorf("the refused import wrote %d hints", n)
 	}
+
+	// A progress row whose only change is an earlier start date is no
+	// listening either (the review's summary doesn't count it).
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
+		UpdatedAt: day(2, 12).Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.c.ApplyImport(f.ctx, second, func(st ImportState) (*ImportWrite, error) {
+		prior := st.Progress[f.other]
+		wrote := prior
+		wrote.StartedAt, wrote.Version = "2020-01-01T00:00:00Z", prior.Version+1
+		return &ImportWrite{Progress: []ImportProgress{{Prior: &prior, Wrote: wrote}}}, nil
+	})
+	if !errors.Is(err, ErrImportNoListening) {
+		t.Fatalf("start-date-only apply = %v, want ErrImportNoListening", err)
+	}
+	if d, _ := f.c.GetImport(f.ctx, first); d.Status != ImportApplied {
+		t.Errorf("first after the start-date-only refusal = %s, want applied", d.Status)
+	}
+}
+
+// TestImportWriteHasListening: listening is a session, a day, a bookmark or a
+// progress row created or moved on, as the review's summary counts it; hints
+// and a start date moved earlier are not.
+func TestImportWriteHasListening(t *testing.T) {
+	t.Parallel()
+	prior := Progress{Position: 600, Duration: 3600, StartedAt: "2026-02-01T00:00:00Z"}
+	with := func(change func(*Progress)) []ImportProgress {
+		wrote := prior
+		change(&wrote)
+		return []ImportProgress{{Prior: &prior, Wrote: wrote}}
+	}
+	for _, c := range []struct {
+		name string
+		w    ImportWrite
+		want bool
+	}{
+		{"nothing", ImportWrite{}, false},
+		{"hints only", ImportWrite{Hints: []BookHint{{ASIN: "B0HINT0001"}}}, false},
+		{"a session", ImportWrite{Sessions: []ImportSession{{Listened: 60}}}, true},
+		{"a day", ImportWrite{Days: []ImportDay{{Listened: 60}}}, true},
+		{"a bookmark", ImportWrite{Bookmarks: []Bookmark{{Position: 10}}}, true},
+		{"a new progress row", ImportWrite{Progress: []ImportProgress{{Wrote: prior}}}, true},
+		{"a start date only", ImportWrite{Progress: with(func(p *Progress) { p.StartedAt = "2020-01-01T00:00:00Z" })}, false},
+		{"moved on", ImportWrite{Progress: with(func(p *Progress) { p.Position = 1200 })}, true},
+		{"finished", ImportWrite{Progress: with(func(p *Progress) { p.Finished = true })}, true},
+		{"a finish date filled in", ImportWrite{Progress: with(func(p *Progress) { p.FinishedAt = "2026-03-01T00:00:00Z" })}, true},
+	} {
+		if got := c.w.hasListening(); got != c.want {
+			t.Errorf("%s: hasListening = %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 // hintOf is the book at ref's ABS hint as the match dialog reads it (GetBook),
