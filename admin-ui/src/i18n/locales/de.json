@@ -3297,7 +3297,7 @@
   "setup.mark.done": "erledigt",
   "setup.mark.skipped": "übersprungen",
   "setup.account.printed": "Dein Passwort stammt aus dem Serverprotokoll",
-  "setup.account.printedBody": "Der Server hat es beim ersten Start erzeugt, und jeder, der dieses Protokoll lesen kann, kann es verwenden. Wähle ein eigenes.",
+  "setup.account.printedBody": "Der Server hat es beim ersten Start erzeugt, und jeder, der dieses Protokoll lesen kann, kann es verwenden. Wähle ein eigenes. Ein neues Passwort beendet den daneben ausgegebenen Auth-Code nicht, der die Apps weiterhin als dich anmeldet: Sobald deine Geräte eingerichtet sind, widerrufe ihn unter Personen > Einladungen.",
   "setup.account.username": "Benutzername",
   "setup.account.usernameBody": "Damit meldest du dich an, hier und in den Apps.",
   "setup.account.passwordOptional": "Leer lassen, um dein aktuelles Passwort zu behalten. Mindestens {{count}} Zeichen.",

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/fsaccess"
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -175,6 +176,14 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if _, err := store.Inspect(ctx, dbPath, false); err != nil && !errors.Is(err, store.ErrNewerDatabase) {
 		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
 	}
+	// A restore waiting for the next start replaces this database, and the
+	// password with it: refused, so the password printed is never one that
+	// stops working at the next start.
+	if restore, err := backup.RestorePending(abs); err != nil {
+		return fmt.Errorf("reading the restore waiting in %s: %w (start the server once, which reports and drops it, then run reset-admin again)", abs, err)
+	} else if restore != nil {
+		return fmt.Errorf("a restore of %s is waiting for the next start, which replaces this database (and a password set now): start the server once to apply it, or cancel it in the console (Settings > Backups), then run reset-admin again", restore.Name)
+	}
 	pending, err := store.PendingMigrations(ctx, dbPath)
 	if err != nil {
 		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
@@ -197,6 +206,12 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if err := authSvc.SetPassword(ctx, u.ID, password, 0); err != nil {
 		return err
 	}
+	// The auth code the first start printed sits in the same log as the
+	// password this replaces: it goes too.
+	revoked, err := authSvc.RevokeInitialAdminCode(ctx, u.ID)
+	if err != nil {
+		return fmt.Errorf("the password is set, but revoking the first-run auth code failed (revoke it in the console, People > Invites): %w", err)
+	}
 	// Whoever ran this holds a working admin password now, so later starts stop
 	// pointing at the first start's, which this may have replaced
 	// (auth.NoteAdminSignIn). A failed note only leaves the hint up.
@@ -206,6 +221,10 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	p("Sign in to the admin console with it. Every session that used the old password\n")
 	p("is signed out (a running server may answer one it already checked for up to a\n")
 	p("minute; restart the server to end them at once).\n")
+	if revoked {
+		p("\nThe auth code printed at first start no longer works either: invite a device\n")
+		p("from People in the console.\n")
+	}
 	return nil
 }
 

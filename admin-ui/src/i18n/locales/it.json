@@ -3482,7 +3482,7 @@
   "setup.mark.done": "fatto",
   "setup.mark.skipped": "saltato",
   "setup.account.printed": "La tua password viene dal registro del server",
-  "setup.account.printedBody": "L'ha inventata il server al primo avvio, e chiunque possa leggere quel registro può usarla. Scegline una tua.",
+  "setup.account.printedBody": "L'ha inventata il server al primo avvio, e chiunque possa leggere quel registro può usarla. Scegline una tua. Una nuova password non annulla il codice di autenticazione stampato accanto, che continua ad accedere alle app come te: quando i tuoi dispositivi sono pronti, revocalo in Persone > Inviti.",
   "setup.account.username": "Nome utente",
   "setup.account.usernameBody": "Quello che scrivi per accedere, qui e nelle app.",
   "setup.account.passwordOptional": "Lasciala vuota per tenere la password attuale. Almeno {{count}} caratteri.",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -185,6 +187,124 @@ func passwordIn(t *testing.T, out string) string {
 		t.Fatalf("no password in:\n%s", out)
 	}
 	return m[1]
+}
+
+// writeRestoreMarker leaves a restore waiting in dir as the console's Restore
+// does (backup.RequestRestore's marker file).
+func writeRestoreMarker(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "restore.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if body[0] == '{' && body[1] == '"' {
+		if p, err := backup.RestorePending(dir); err != nil || p == nil {
+			t.Fatalf("the test's marker doesn't read as a pending restore: %v, %v", p, err)
+		}
+	}
+}
+
+// codeLine is the banner's auth code line.
+var codeLine = regexp.MustCompile(`Auth code\s+:\s+(\S+)`)
+
+// reset-admin revokes the auth code the first start printed beside the
+// password (same log, same exposure), and says so; the admin's other invites
+// stay. Another admin's reset leaves the first admin's code alone.
+func TestResetAdminRevokesTheFirstRunCode(t *testing.T) {
+	ctx := context.Background()
+	path := storetest.Path(t)
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	running := auth.New(db, time.Now)
+	var banner bytes.Buffer
+	if _, err := ensureAdmin(ctx, config.Default(t.TempDir()), running, &banner, discardLog()); err != nil {
+		t.Fatal(err)
+	}
+	m := codeLine.FindStringSubmatch(banner.String())
+	if m == nil {
+		t.Fatalf("no auth code in the banner:\n%s", banner.String())
+	}
+	printed := m[1]
+	admin, err := running.ResolveAuthCode(ctx, printed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The admin's own invite from the console, and a second admin.
+	invite, err := running.CreateInvite(ctx, admin.User.ID, "my phone", 5, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := running.CreateUser(ctx, "alex", "alex-password", auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	// CreateInvite supersedes the admin's active invites, the printed one
+	// included; mint the printed shape again as ensureAdmin does.
+	printed, err = running.CreateAuthCode(ctx, admin.User.ID, auth.InitialAdminCodeLabel, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := ResetAdmin(ctx, filepath.Dir(path), "alex", &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "auth code") {
+		t.Errorf("alex's reset speaks of a code:\n%s", out.String())
+	}
+	if _, err := running.ResolveAuthCode(ctx, printed); err != nil {
+		t.Fatalf("alex's reset revoked admin's first-run code: %v", err)
+	}
+
+	out.Reset()
+	if err := ResetAdmin(ctx, filepath.Dir(path), "admin", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "auth code printed at first start no longer works") {
+		t.Errorf("output doesn't say the code was revoked:\n%s", out.String())
+	}
+	if _, err := running.ResolveAuthCode(ctx, printed); err == nil {
+		t.Error("the printed code still pairs after reset-admin")
+	}
+	if _, err := running.ResolveAuthCode(ctx, invite.Code); err != nil {
+		t.Errorf("the admin's own invite went too: %v", err)
+	}
+	// Nothing left to revoke: a second reset says nothing of it.
+	out.Reset()
+	if err := ResetAdmin(ctx, filepath.Dir(path), "admin", &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "auth code") {
+		t.Errorf("a second reset speaks of a code:\n%s", out.String())
+	}
+}
+
+// A first start whose first_admin row can't be written still prints its
+// banner and starts: the row only feeds the later hint (a warning says so).
+func TestEnsureAdminWhenTheFirstAdminRowFails(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	if _, err := db.ExecContext(ctx,
+		`CREATE TRIGGER no_first_admin BEFORE INSERT ON server_state WHEN NEW.key = 'first_admin'
+		 BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	authSvc := auth.New(db, time.Now)
+	var banner, logs bytes.Buffer
+	created, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil || !created {
+		t.Fatalf("ensureAdmin = %v, %v; want the admin made despite the row", created, err)
+	}
+	if !strings.Contains(banner.String(), "Admin password") || !strings.Contains(banner.String(), "Auth code") {
+		t.Errorf("no banner:\n%s", banner.String())
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "recording the first-run admin failed") {
+		t.Errorf("no warning logged:\n%s", logs.String())
+	}
+	if got := hintFor(t, authSvc); got != "" {
+		t.Errorf("a hint without the row:\n%s", got)
+	}
 }
 
 // resetDir is a data folder with a migrated database and the accounts named
@@ -400,6 +520,30 @@ func TestResetAdminRefusals(t *testing.T) {
 			t.Errorf("the file was written to: %v, %v", fi, err)
 		}
 	})
+
+	// A restore waiting for the next start would replace the database, and
+	// the new password with it: refused, nothing changed. So is a marker that
+	// doesn't read (the start reports and drops it).
+	for _, marker := range []struct{ name, body string }{
+		{"a restore waiting", `{"name":"audiosilo-2026-11-14.db","requested_by":"admin"}`},
+		{"an unreadable restore marker", `{not json`},
+	} {
+		t.Run(marker.name, func(t *testing.T) {
+			dir, running := resetDir(t, "admin")
+			writeRestoreMarker(t, dir, marker.body)
+			var out bytes.Buffer
+			err := ResetAdmin(ctx, dir, "", &out)
+			if err == nil || !strings.Contains(err.Error(), "restore") || !strings.Contains(err.Error(), "start the server once") {
+				t.Fatalf("err = %v, want the restore refusal", err)
+			}
+			if out.Len() > 0 {
+				t.Errorf("printed %q on a refusal", out.String())
+			}
+			if _, err := running.Authenticate(ctx, "admin", "old-password-admin"); err != nil {
+				t.Errorf("the password changed on a refusal: %v", err)
+			}
+		})
+	}
 
 	t.Run("a disabled admin", func(t *testing.T) {
 		dir, running := resetDir(t, "admin", "alex")

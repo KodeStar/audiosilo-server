@@ -3845,9 +3845,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
   reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one,
   a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
-  migrations), picks the only admin or the named one (exit 2 with the admins listed
+  migrations, and one a restore waiting for the next start would replace: `backup.RestorePending`), picks the only admin or the named one (exit 2 with the admins listed
   otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
-  rule: every session, pairing code and remembered browser ends) and prints it once. A running server
+  rule: every session, pairing code and remembered browser ends), revokes the auth code the first start
+  printed beside the password (`auth.RevokeInitialAdminCode`: that admin's unlimited, never-expiring
+  invite labelled `auth.InitialAdminCodeLabel`, so an install from before `first_admin` is covered too;
+  the output says so when there was one) and prints the password once. The console's account step keeps
+  the code (the phone step points at it) and says to revoke it in People > Invites. A running server
   takes the new password at once; a session it already checked is answered from its token cache (which
   another process's write can't empty) until that server's next content write, or a minute after it last
   read the row (`auth.maxCachedTokenAge`, `TestResetAdminEndsARunningServersSessions`); a restart ends

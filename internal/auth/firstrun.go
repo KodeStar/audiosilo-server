@@ -17,6 +17,11 @@ import (
 // password in the --setup wizard, has no row, so it never prints the hint and
 // needs no backfill. Never a password: only who the admin is and two facts.
 
+// InitialAdminCodeLabel labels the auth code the first start prints beside the
+// admin's password (pkg/launcher ensureAdmin): unlimited uses, no expiry.
+// RevokeInitialAdminCode finds it by it.
+const InitialAdminCodeLabel = "initial admin code"
+
 // firstAdminKey is the row's key in server_state (migration 0040).
 const firstAdminKey = "first_admin"
 
@@ -130,4 +135,27 @@ func (s *Service) PrintedPassword(ctx context.Context, id int64) (bool, error) {
 		return false, err
 	}
 	return fa.UserID == id && !fa.ChosePassword, nil
+}
+
+// RevokeInitialAdminCode deletes admin id's first-run auth code, the one the
+// first start printed in the same log as the password (reset-admin ends it
+// with the password), and reports whether there was one. It is found by its
+// shape: an invite of id's labelled InitialAdminCodeLabel with unlimited uses
+// and no expiry, as only ensureAdmin makes one (an admin's invites carry the
+// label they were given, and the console's always have limits by default).
+// Found that way it covers an install from before the first_admin row too. An
+// admin who rotated it in the console has a code that was never printed: it
+// goes all the same, since its row can't tell. Devices it paired stay signed
+// in unless their sessions end otherwise; its unspent pairing tokens go with it
+// (the tokens.auth_code_id cascade).
+func (s *Service) RevokeInitialAdminCode(ctx context.Context, id int64) (bool, error) {
+	res, err := s.db.ExecDurable(ctx, "RevokeInitialAdminCode",
+		`DELETE FROM auth_codes
+		  WHERE user_id = ? AND kind = ? AND label = ? AND max_uses = 0 AND expires_at IS NULL`,
+		id, CodeInvite, InitialAdminCodeLabel)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }

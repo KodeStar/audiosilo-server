@@ -434,7 +434,7 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 	if err != nil {
 		return false, err
 	}
-	code, err := authSvc.CreateAuthCode(ctx, admin.ID, "initial admin code", 0, 0)
+	code, err := authSvc.CreateAuthCode(ctx, admin.ID, auth.InitialAdminCodeLabel, 0, 0)
 	if err != nil {
 		// The admin exists and its password was printed nowhere: record it
 		// all the same, so the next start points at reset-admin (signInHint)

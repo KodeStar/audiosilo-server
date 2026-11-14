@@ -634,7 +634,14 @@ func (s *Service) CancelRestore() error {
 
 // PendingRestore returns the restore waiting for the next start, if any.
 func (s *Service) PendingRestore() (*PendingRestore, error) {
-	return jsonfile.Read[PendingRestore](filepath.Join(s.dataDir, markerFile))
+	return RestorePending(s.dataDir)
+}
+
+// RestorePending returns the restore waiting in dataDir for the next start, if
+// any, for a caller with no Service (the reset-admin command); an unreadable
+// marker is an error.
+func RestorePending(dataDir string) (*PendingRestore, error) {
+	return jsonfile.Read[PendingRestore](filepath.Join(dataDir, markerFile))
 }
 
 // LastRestore returns how the last restore went, if one was applied or refused.

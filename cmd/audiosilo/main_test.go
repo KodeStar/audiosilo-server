@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,6 +76,7 @@ func TestResetAdminExitCodes(t *testing.T) {
 		{"an unknown name", dataDir("admin"), []string{"reset-admin", "nobody"}, 2, "", `no account named "nobody"`},
 		{"no admin", dataDir(), []string{"reset-admin"}, 1, "", "no admin account yet"},
 		{"no database", t.TempDir(), []string{"reset-admin"}, 1, "", "no database at"},
+		{"a restore waiting", restoreWaiting(t, dataDir("admin")), []string{"reset-admin"}, 1, "", "a restore of"},
 	} {
 		var out, errOut bytes.Buffer
 		code, done := command(tc.args, tc.dir, &out, &errOut)
@@ -88,4 +90,14 @@ func TestResetAdminExitCodes(t *testing.T) {
 			t.Errorf("%s: stderr %q, want %q", tc.name, errOut.String(), tc.errOut)
 		}
 	}
+}
+
+// restoreWaiting leaves a restore waiting in dir for the next start, as the
+// console's Restore does (backup.RequestRestore's marker), and returns dir.
+func restoreWaiting(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "restore.json"), []byte(`{"name":"audiosilo-2026-11-14.db"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

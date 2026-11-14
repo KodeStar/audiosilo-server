@@ -3482,7 +3482,7 @@
   "setup.mark.done": "fait",
   "setup.mark.skipped": "passé",
   "setup.account.printed": "Votre mot de passe vient du journal du serveur",
-  "setup.account.printedBody": "Le serveur l'a créé à son premier démarrage, et toute personne qui peut lire ce journal peut l'utiliser. Choisissez-en un à vous.",
+  "setup.account.printedBody": "Le serveur l'a créé à son premier démarrage, et toute personne qui peut lire ce journal peut l'utiliser. Choisissez-en un à vous. Un nouveau mot de passe ne met pas fin au code d'authentification affiché à côté, qui connecte toujours les applis en votre nom : une fois vos appareils configurés, révoquez-le dans Personnes > Invitations.",
   "setup.account.username": "Nom d'utilisateur",
   "setup.account.usernameBody": "Ce que vous tapez pour vous connecter, ici et dans les apps.",
   "setup.account.passwordOptional": "Laissez vide pour garder votre mot de passe actuel. Au moins {{count}} caractères.",

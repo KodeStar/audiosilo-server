@@ -3482,7 +3482,7 @@
   "setup.mark.done": "feito",
   "setup.mark.skipped": "saltado",
   "setup.account.printed": "A sua palavra-passe veio do registo do servidor",
-  "setup.account.printedBody": "O servidor criou-a ao arrancar pela primeira vez, e quem puder ler esse registo pode usá-la. Escolha uma sua.",
+  "setup.account.printedBody": "O servidor criou-a ao arrancar pela primeira vez, e quem puder ler esse registo pode usá-la. Escolha uma sua. Uma nova palavra-passe não anula o código de autenticação impresso ao lado, que continua a iniciar sessão nas apps em seu nome: quando os seus dispositivos estiverem prontos, revogue-o em Pessoas > Convites.",
   "setup.account.username": "Nome de utilizador",
   "setup.account.usernameBody": "O que escreve para iniciar sessão, aqui e nas apps.",
   "setup.account.passwordOptional": "Deixe vazio para manter a palavra-passe atual. Pelo menos {{count}} caracteres.",

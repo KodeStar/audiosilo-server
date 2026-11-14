@@ -3297,7 +3297,7 @@
   "setup.mark.done": "done",
   "setup.mark.skipped": "skipped",
   "setup.account.printed": "Your password came from the server log",
-  "setup.account.printedBody": "The server made it up when it first started, and anyone who can read that log can use it. Choose one of your own.",
+  "setup.account.printedBody": "The server made it up when it first started, and anyone who can read that log can use it. Choose one of your own. A new password doesn't end the auth code printed beside it, which still signs the apps in as you: once your devices are set up, revoke it in People > Invites.",
   "setup.account.username": "Username",
   "setup.account.usernameBody": "What you type to sign in, here and in the apps.",
   "setup.account.passwordOptional": "Leave it empty to keep your current password. At least {{count}} characters.",

@@ -3482,7 +3482,7 @@
   "setup.mark.done": "hecho",
   "setup.mark.skipped": "omitido",
   "setup.account.printed": "Tu contraseña salió del registro del servidor",
-  "setup.account.printedBody": "El servidor la inventó al arrancar por primera vez, y cualquiera que pueda leer ese registro puede usarla. Elige una tuya.",
+  "setup.account.printedBody": "El servidor la inventó al arrancar por primera vez, y cualquiera que pueda leer ese registro puede usarla. Elige una tuya. Una contraseña nueva no anula el código de autenticación impreso junto a ella, que sigue iniciando sesión en las apps como tú: cuando tengas tus dispositivos listos, revócalo en Personas > Invitaciones.",
   "setup.account.username": "Nombre de usuario",
   "setup.account.usernameBody": "Lo que escribes para iniciar sesión, aquí y en las apps.",
   "setup.account.passwordOptional": "Déjala vacía para conservar tu contraseña actual. Al menos {{count}} caracteres.",
