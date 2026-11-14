@@ -180,7 +180,7 @@ func (a *API) handleLibrivoxFetch(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, "not_book_library", "This action needs a books library.")
 		return
 	}
-	workID, recordingID, err := a.meta.LibrivoxRecordingOf(r.Context(), req.LibrivoxID)
+	project, err := a.meta.LibrivoxRecordingOf(r.Context(), req.LibrivoxID)
 	if errors.Is(err, meta.ErrNotFound) {
 		writeErrorCode(w, http.StatusNotFound, "not_found", "no such LibriVox project in the community metadata")
 		return
@@ -190,7 +190,7 @@ func (a *API) handleLibrivoxFetch(w http.ResponseWriter, r *http.Request) {
 		writeLookupFailed(w)
 		return
 	}
-	in, err := a.cat.RecordingBooks(r.Context(), workID, recordingID)
+	in, err := a.cat.RecordingBooks(r.Context(), project.WorkID, project.RecordingID)
 	if err != nil {
 		a.writeCatalogError(w, err, "librivox fetch: books failed", "could not read the library")
 		return
@@ -205,7 +205,8 @@ func (a *API) handleLibrivoxFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, created, err := a.bridge.Enqueue(r.Context(), bridge.LibrivoxFetch(bridge.LibrivoxFetchParams{
-		LibrivoxID: req.LibrivoxID, WorkID: workID, RecordingID: recordingID, LibraryID: lib.ID,
+		LibrivoxID: req.LibrivoxID, WorkID: project.WorkID, RecordingID: project.RecordingID, LibraryID: lib.ID,
+		Title: project.Title,
 	}, userFrom(r.Context()).ID))
 	if !a.writeBridgeError(w, err, "librivox fetch failed") {
 		return

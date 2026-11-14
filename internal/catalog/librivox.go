@@ -23,15 +23,25 @@ var ErrFetchNotIndexed = errors.New("the LibriVox fetch's book is not indexed")
 
 // FoldLibrivoxFetch records a done librivox.fetch's book as the job's LibriVox
 // recording: its community match (how accepted, set by the admin who asked),
-// with the work and recording the server resolved when it queued the job. The
-// Bridge placed the book in a folder that was vacant, so a row already at that
-// path (a deleted book's leftover) is replaced; no other path is touched. The
-// result must name the job's own library and project and a book indexed there
-// (the Bridge rescans before it reports done), else ErrFetchNotIndexed. A job
-// that isn't a done librivox.fetch, or whose params name no recording, changes
-// nothing. A content write (matches feed the admin lists and Health), and the
-// OnBookChange listeners hear of it: the rescan woke them before the match was
-// there.
+// with the work and recording the server resolved when it queued the job. What
+// it does at the book's path depends on how the Bridge got the folder
+// (LibrivoxFetchResult.Adopted):
+//   - placed (false): the folder was vacant, so every row already at that path
+//     is a deleted book's leftover: the match is replaced, and a leftover ASIN
+//     or ISBN (book_overrides, book_enrichment), which /meta would ask before
+//     the match, goes;
+//   - adopted (true): the folder is an earlier fetch's book, so a match already
+//     recorded there (an admin's rematch) stays and nothing else is touched; a
+//     book with none (a fold that was lost) is recorded;
+//   - not said (an older Bridge): the match is replaced and nothing else is
+//     touched.
+//
+// No other path is touched. The result must name the job's own library and
+// project and a book indexed there (the Bridge rescans before it reports done),
+// else ErrFetchNotIndexed. A job that isn't a done librivox.fetch, or whose
+// params name no recording, changes nothing. A content write (matches feed the
+// admin lists and Health), and the OnBookChange listeners hear of it: the
+// rescan woke them before the match was there.
 func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if j.Kind != bridge.KindLibrivoxFetch || j.State != bridge.StateDone || j.LibraryID == nil {
 		return nil
@@ -51,23 +61,63 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if j.RequestedBy != nil {
 		editor = j.RequestedBy.ID
 	}
+	adopted, placed := r.Adopted != nil && *r.Adopted, r.Adopted != nil && !*r.Adopted
 	err = c.db.WithTx(ctx, "FoldLibrivoxFetch", func(tx *sql.Tx) error {
-		var one int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM books b JOIN libraries l ON l.id = b.library_id
-			 WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?`, r.LibraryID, r.Path, KindBooks).Scan(&one)
+		var id int64
+		err := tx.QueryRowContext(ctx, `SELECT b.id FROM books b JOIN libraries l ON l.id = b.library_id
+			 WHERE b.library_id = ? AND b.rel_path = ? AND l.kind = ?`, r.LibraryID, r.Path, KindBooks).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrFetchNotIndexed
 		}
 		if err != nil {
 			return err
 		}
+		ref := Ref{LibraryID: r.LibraryID, Path: r.Path}
+		if placed {
+			if err := dropLeftoverIdentity(ctx, tx, ref, id); err != nil {
+				return err
+			}
+		}
+		var was *MatchAnchor
+		if adopted {
+			was = &MatchAnchor{} // insert only: a match recorded since stays
+		}
 		a := &MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID, How: MatchHowAccepted}
-		return writeAnchor(ctx, tx, Ref{LibraryID: r.LibraryID, Path: r.Path}, a, nil, editor, c.ts())
+		return writeAnchor(ctx, tx, ref, a, was, editor, c.ts())
 	})
 	if err == nil {
 		c.changed()
 	}
 	return err
+}
+
+// dropLeftoverIdentity removes the ASIN and ISBN a deleted book left at ref
+// (its book_overrides rows for them, whoever set them, and its
+// book_enrichment row) and rebuilds the effective metadata of book id, the new
+// book there, in tx: a newly placed LibriVox book is its recording, never the
+// book that was in its folder before.
+func dropLeftoverIdentity(ctx context.Context, tx *sql.Tx, ref Ref, id int64) error {
+	res, err := tx.ExecContext(ctx, `DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field IN (?, ?)`,
+		ref.LibraryID, ref.Path, FieldASIN, FieldISBN)
+	if err != nil {
+		return err
+	}
+	fields, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	res, err = tx.ExecContext(ctx, `DELETE FROM book_enrichment WHERE library_id = ? AND path = ?`, ref.LibraryID, ref.Path)
+	if err != nil {
+		return err
+	}
+	enriched, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if fields+enriched == 0 {
+		return nil
+	}
+	return refreshEffective(ctx, tx, id)
 }
 
 // RecordingBooks are the indexed books recorded as recording recordingID of

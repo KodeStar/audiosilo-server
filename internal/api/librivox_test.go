@@ -11,6 +11,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // LibriVox L6: Add from LibriVox (handlers_librivox.go).
@@ -154,7 +155,7 @@ func TestLibrivoxFetchFlow(t *testing.T) {
 	}
 	var queued struct{ Job bridge.Job }
 	decodeInto(t, out, &queued)
-	want := fmt.Sprintf(`{"librivox_id":47,"work_id":"the-martian","recording_id":"rec1","library_id":%d}`, b.lib.ID)
+	want := fmt.Sprintf(`{"librivox_id":47,"work_id":"the-martian","recording_id":"rec1","library_id":%d,"title":"The Martian"}`, b.lib.ID)
 	if queued.Job.Kind != bridge.KindLibrivoxFetch || string(queued.Job.Params) != want || queued.Job.RequestedBy == nil {
 		t.Fatalf("job = %+v %s", queued.Job, queued.Job.Params)
 	}
@@ -197,6 +198,76 @@ func TestLibrivoxFetchFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict || codeOf(out) != "in_library" ||
 		!strings.Contains(out, fmt.Sprintf(`"library_id":%d`, b.lib.ID)) || !strings.Contains(out, `"path":"`+mistbornBook+`"`) {
 		t.Fatalf("Add again = %d %s, want 409 in_library", resp.StatusCode, out)
+	}
+}
+
+// TestLibrivoxFetchNotifications (server#379, #380): a done fetch's event says
+// how its book is matched now, after the fold: matched as the recording, kept
+// (the Bridge adopted a book an admin matched to something else, which stays),
+// or unmatched (the fold failed: a path that is no indexed book); a fetch that
+// placed no book is named by the work it was adding.
+func TestLibrivoxFetchNotifications(t *testing.T) {
+	t.Parallel()
+	b := librivoxEnv(t, nil)
+	ctx := context.Background()
+	events := func(kind string) []catalog.ServerEvent {
+		t.Helper()
+		evs, _, err := b.cat.ListServerEvents(ctx, 0, 20, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evs
+	}
+	add := func(project int) bridge.Job {
+		t.Helper()
+		if resp, out := b.do(t, "POST", "/api/v1/admin/librivox/fetch", b.adminTok, librivoxBody(b.lib.ID, project)); resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("add %d: %d %s", project, resp.StatusCode, out)
+		}
+		return b.claim(t, bridge.KindLibrivoxFetch)
+	}
+	result := func(project int, path, adopted string) string {
+		return fmt.Sprintf(`{"library_id":%d,"path":%q,"librivox_id":%d,"files":3,"bytes":1000%s}`, b.lib.ID, path, project, adopted)
+	}
+
+	// The fold fails (no book indexed at the path): the event doesn't claim a match.
+	b.finish(t, add(47), bridge.StateDone, result(47, "Nobody/Not Here", ""), "")
+	done := events(notify.KindBridgeJobFinished)
+	if len(done) != 1 || done[0].Data["librivox_match"] != notify.LibrivoxUnmatched || done[0].Data["title"] != "The Martian" {
+		t.Fatalf("unmatched event = %+v", done)
+	}
+
+	// Add again: the Bridge adopts a book an admin had matched to another work since.
+	if _, err := b.db.ExecContext(ctx, `INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_at)
+		VALUES(?, ?, 'admins-pick', 'admins-rec', 'accepted', 't')`, b.lib.ID, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	b.finish(t, add(47), bridge.StateDone, result(47, mistbornBook, `,"adopted":true`), "")
+	if m, err := b.cat.BookMatchAt(ctx, b.lib.ID, mistbornBook); err != nil || m == nil || m.WorkID != "admins-pick" || m.RecordingID != "admins-rec" {
+		t.Fatalf("adopted book's match = %+v, %v; want the admin's kept", m, err)
+	}
+	done = events(notify.KindBridgeJobFinished)
+	if len(done) != 2 || done[0].Data["librivox_match"] != notify.LibrivoxKept {
+		t.Fatalf("kept event = %+v", done)
+	}
+
+	// A newly placed book is matched as its recording.
+	b.finish(t, add(48), bridge.StateDone, result(48, cradleBook, `,"adopted":false`), "")
+	done = events(notify.KindBridgeJobFinished)
+	if len(done) != 3 || done[0].Data["librivox_match"] != notify.LibrivoxMatched {
+		t.Fatalf("matched event = %+v", done)
+	}
+
+	// A failed fetch placed no book: it is named by its work, not its library.
+	if resp, out := b.do(t, "POST", "/api/v1/admin/librivox/fetch", b.adminTok, librivoxBody(b.lib.ID, 49)); resp.StatusCode != http.StatusConflict || codeOf(out) != "in_library" {
+		t.Fatalf("rec1 is in the library now: %d %s", resp.StatusCode, out)
+	}
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM book_matches WHERE path = ?`, cradleBook); err != nil {
+		t.Fatal(err)
+	}
+	b.finish(t, add(49), bridge.StateFailed, `{"code":"archive_unavailable"}`, "archive_unavailable: archive.org is down")
+	failed := events(notify.KindBridgeJobFailed)
+	if len(failed) != 1 || failed[0].Data["title"] != "The Martian" || failed[0].Data["path"] != "" {
+		t.Fatalf("failed event = %+v", failed)
 	}
 }
 

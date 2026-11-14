@@ -174,10 +174,11 @@ func queryRecorder(t *testing.T, body string) (*Service, *[]string) {
 // console's match search sends neither.
 func TestLibrivoxClientParams(t *testing.T) {
 	t.Parallel()
-	s, got := queryRecorder(t, `{"work":{"id":"w1"},"recording_id":"r1","results":[]}`)
+	s, got := queryRecorder(t, `{"work":{"id":"w1","title":"Johnny Crow's Garden"},"recording_id":"r1","results":[]}`)
 	ctx := context.Background()
-	if w, r, err := s.LibrivoxRecordingOf(ctx, 192); err != nil || w != "w1" || r != "r1" {
-		t.Fatalf("LibrivoxRecordingOf = %q %q %v", w, r, err)
+	if got, err := s.LibrivoxRecordingOf(ctx, 192); err != nil || got.WorkID != "w1" || got.RecordingID != "r1" ||
+		got.Title != "Johnny Crow's Garden" {
+		t.Fatalf("LibrivoxRecordingOf = %+v %v", got, err)
 	}
 	if _, err := s.LibrivoxSearch(ctx, "johnny crow", "", 20); err != nil {
 		t.Fatal(err)
@@ -198,7 +199,7 @@ func TestLibrivoxClientParams(t *testing.T) {
 		t.Fatalf("requests:\n%s\nwant:\n%s", strings.Join(*got, "\n"), strings.Join(want, "\n"))
 	}
 	// An id that is no project is never asked for.
-	if _, _, err := s.LibrivoxRecordingOf(ctx, 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LibrivoxRecordingOf(ctx, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("id 0 = %v, want ErrNotFound", err)
 	}
 	if len(*got) != len(want) {
@@ -218,7 +219,7 @@ func TestLibrivoxRecordingOfNeedsARecording(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _ := queryRecorder(t, body)
-			if _, _, err := s.LibrivoxRecordingOf(context.Background(), 192); !errors.Is(err, ErrNotFound) {
+			if _, err := s.LibrivoxRecordingOf(context.Background(), 192); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("err = %v, want ErrNotFound", err)
 			}
 		})
@@ -292,11 +293,11 @@ func TestMirrorLibrivoxFetchReads(t *testing.T) {
 	s := NewService(remote.URL, nil)
 	s.SetMirror(newFakeMirrorAt(t, path), nil)
 	ctx := context.Background()
-	w, r, err := s.LibrivoxRecordingOf(ctx, 192)
-	if err != nil || w != querytest.ASINWork || r != querytest.ASINRecording {
-		t.Fatalf("mirror lookup = %q %q %v", w, r, err)
+	got, err := s.LibrivoxRecordingOf(ctx, 192)
+	if err != nil || got.WorkID != querytest.ASINWork || got.RecordingID != querytest.ASINRecording || got.Title == "" {
+		t.Fatalf("mirror lookup = %+v %v", got, err)
 	}
-	if _, _, err := s.LibrivoxRecordingOf(ctx, 193); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LibrivoxRecordingOf(ctx, 193); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an unknown project = %v, want ErrNotFound", err)
 	}
 	hits, err := s.LibrivoxSearch(ctx, "Hail Mary", "", 20)

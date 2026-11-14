@@ -409,6 +409,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		if c, ok := ev.Data["coverage"].(float64); ok && str("job_kind") == bridge.KindReadalong {
 			m.Title += fmt.Sprintf(" (%d%% lined up)", int(math.Floor(c*100+1e-9)))
 		}
+		// A LibriVox book claims its recording only when it is matched to it.
+		if str("job_kind") == bridge.KindLibrivoxFetch {
+			if text := librivoxMatchText[str("librivox_match")]; text != "" {
+				m.Text = text
+			}
+		}
 		// A contribute job whose every dimension the community already had
 		// filed nothing, so nothing went for review.
 		if none, _ := ev.Data["shared_nothing"].(bool); none && str("job_kind") == bridge.KindContribute {
@@ -450,9 +456,17 @@ var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 		"The book's corrections went to the community for review. The book page links them."},
 	bridge.KindReadalong: {"Read-along", "Read-along made",
 		"It is saved with the book. Open the book in a compatible AudioSilo player to follow the text with the narration."},
-	bridge.KindLibrivoxFetch: {"Adding from LibriVox", "Added from LibriVox",
-		"It is in the library now, matched to its LibriVox recording."},
-	bridge.KindVerify: {label: "Bridge check"},
+	bridge.KindLibrivoxFetch: {"Adding from LibriVox", "Added from LibriVox", "It is in the library now."},
+	bridge.KindVerify:        {label: "Bridge check"},
+}
+
+// librivoxMatchText is a finished librivox.fetch's message by how its book is
+// matched (the event's librivox_match); none known keeps the kind's own.
+var librivoxMatchText = map[string]string{
+	LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
+	LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
+	LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
+		"Add it again from Library > LibriVox to match it.",
 }
 
 // bridgeJobLabel names a Bridge job's kind in a message title.
@@ -747,7 +761,24 @@ type BridgeJob struct {
 	// bridge.Job.ReadalongCoverage), nil when not known, so its message says
 	// how much lined up.
 	Coverage *float64
+	// LibrivoxMatch is how a finished librivox.fetch's book is matched now
+	// (LibrivoxMatched, LibrivoxKept, LibrivoxUnmatched; "" when not known), so
+	// its message claims the recording only when the book is matched to it.
+	LibrivoxMatch string
 }
+
+// A finished librivox.fetch's book, as BridgeJob.LibrivoxMatch (the event's
+// librivox_match) says it is matched.
+const (
+	// LibrivoxMatched: to the LibriVox recording it was added as.
+	LibrivoxMatched = "matched"
+	// LibrivoxKept: the Bridge adopted a book already in the library, which
+	// keeps the match it had (an admin's).
+	LibrivoxKept = "kept"
+	// LibrivoxUnmatched: to nothing it was added as (recording its match
+	// failed); adding it again matches it.
+	LibrivoxUnmatched = "unmatched"
+)
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
 // or into failed or needs_attention (bridge_job_failed). The caller reports each
@@ -770,6 +801,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	}
 	if j.Kind == bridge.KindReadalong && j.State == bridge.StateDone && j.Coverage != nil {
 		data["coverage"] = *j.Coverage
+	}
+	if j.Kind == bridge.KindLibrivoxFetch && j.State == bridge.StateDone && j.LibrivoxMatch != "" {
+		data["librivox_match"] = j.LibrivoxMatch
 	}
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed

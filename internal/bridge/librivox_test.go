@@ -86,9 +86,33 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 		"no library":        `{"librivox_id":1,"work_id":"w","recording_id":"r"}`,
 		"control character": `{"librivox_id":1,"work_id":"w\n","recording_id":"r","library_id":1}`,
 		"long recording":    `{"librivox_id":1,"work_id":"w","recording_id":"` + strings.Repeat("r", maxWorkIDLen+1) + `","library_id":1}`,
+		// The Bridge's shape of an id (a slug): what it would refuse when it claims the job.
+		"recording no slug": `{"librivox_id":1,"work_id":"w","recording_id":"rec 1","library_id":1}`,
+		"work no slug":      `{"librivox_id":1,"work_id":"-w","recording_id":"r","library_id":1}`,
+		"recording slash":   `{"librivox_id":1,"work_id":"w","recording_id":"a/b","library_id":1}`,
+		"long title":        `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"` + strings.Repeat("t", maxLibrivoxTitle+1) + `"}`,
+		"title line break":  `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"a\nb"}`,
 	} {
 		if _, err := librivoxFetchParams(json.RawMessage(raw)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+	for name, raw := range map[string]string{
+		"no title":   `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1}`,
+		"with title": `{"librivox_id":1,"work_id":"the-martian","recording_id":"lv_47.2","library_id":1,"title":"The Martian"}`,
+	} {
+		if _, err := librivoxFetchParams(json.RawMessage(raw)); err != nil {
+			t.Errorf("%s: %v, want accepted", name, err)
+		}
+	}
+	// LibrivoxFetch keeps a title to one bounded line, so the params it builds pass.
+	j := LibrivoxFetch(LibrivoxFetchParams{LibrivoxID: 1, WorkID: "w", RecordingID: "r", LibraryID: 1,
+		Title: " A\nlong " + strings.Repeat("é", maxLibrivoxTitle) + " "}, 1)
+	var got LibrivoxFetchParams
+	if err := json.Unmarshal(j.Params, &got); err != nil || len(got.Title) > maxLibrivoxTitle || !strings.HasPrefix(got.Title, "A long é") {
+		t.Fatalf("title = %q (%d bytes), %v", got.Title, len(got.Title), err)
+	}
+	if _, err := librivoxFetchParams(j.Params); err != nil {
+		t.Fatalf("LibrivoxFetch's params refused: %v", err)
 	}
 }

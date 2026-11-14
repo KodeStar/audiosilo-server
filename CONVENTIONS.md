@@ -3733,28 +3733,38 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   doesn't run it; an offline one still queues) and `library_not_writable`; 502 metadata down;
   audited `bridge.job` when queued). **The job**: `librivox.fetch` is internal, `writes`, a books
   library's, not quiet (a done one is "Added from LibriVox: <title>", named by its result's
-  path), no module; params `{librivox_id, work_id, recording_id, library_id}` are the server's,
-  strict, the work and recording resolved at queue time by `lookup?librivox_id=` asked alone
-  (`meta.Service.LibrivoxRecordingOf`; a lookup with no recording is not found, never a work's
-  first recording); deduped per `|<librivox_id>` within the library. The Bridge reads the
+  path; one that placed no book, failed or parked, by the params' `title`), no module; params
+  `{librivox_id, work_id, recording_id, library_id, title?}` are the server's, strict (the ids of
+  the Bridge's slug shape, `metaID`, so a bad one is refused at queue time; `title` the work's,
+  one bounded line, additive: the Bridge ignores it), the work, recording and title resolved at
+  queue time by `lookup?librivox_id=` asked alone (`meta.Service.LibrivoxRecordingOf`; a lookup
+  with no recording is not found, never a work's first recording); deduped per `|<librivox_id>`
+  within the library. The Bridge reads the
   project's manifest from its own metadata service, places `Author/Title/NN - Section.mp3` and
   `cover.jpg` through a dot-led staging folder beside it (the scan skips it), writes
   `.audiosilo/librivox.json` (`{version, librivox_id, work_id, recording_id, archive_id}`, not
   read here yet: `knownAttachment` skips it, so the book has no attachments and no scan error;
   `library.TestScannerToleratesLibrivoxFile`), rescans and reports `{library_id, path,
-  librivox_id, files, bytes}`. Failure codes (the Bridge's; the console words them, `FETCH_CODES` in
+  librivox_id, files, bytes, adopted?}` (`adopted`, additive (server#379): true when it adopted a
+  folder an earlier fetch placed, false for a new one, absent from an older Bridge). Failure codes (the Bridge's; the console words them, `FETCH_CODES` in
   `features/librivox/librivox-model.ts`): `not_writable`, `exists`, `disk_full`, `not_found`,
   `archive_unavailable`, `metadata_off`. **Done**
   (`catalog.FoldLibrivoxFetch` from `OnEnded`, a content write): the result must name the job's
   own library and project and a book indexed in a books library (else `ErrFetchNotIndexed`,
   logged); it writes the book's `book_matches` row (`how` accepted, `set_by` the requesting admin,
-  no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners), replacing a stale row at that path (the
-  Bridge placed into a vacant folder: a deleted book's leftover) and never another path's; a job
-  whose params name no recording writes nothing. `/meta` then answers the book from its recorded
-  match (LibriVox L5) with no change. Known limits: a fold lost between the job's commit and the
-  fold (a crash), and Clear community matches, drop the identity until the server reads
-  `librivox.json` (a follow-up); Add again finds the placed folder (the Bridge adopts one holding
-  the project's `librivox.json`) and records it. **Console**: Library > LibriVox
+  no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners)
+  and never another path's, by `adopted`: false (a vacant folder, so what is at the path is a
+  deleted book's leftover) replaces the row and drops the path's ASIN/ISBN overrides (any source)
+  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match;
+  true (an earlier fetch's book) inserts only when the path has no row, so an admin's rematch
+  stays, and touches nothing else; absent replaces the row and touches nothing else (the L6
+  rule). A job whose params name no recording writes nothing. `/meta` then answers the book from
+  its recorded match (LibriVox L5) with no change. Its notification (`notifyBridgeJob`, after the
+  fold) carries `librivox_match` (`matched`, `kept`, `unmatched`; `notify.Librivox*`) from the
+  book's match now, and claims the recording only when matched. Known limits: a fold lost
+  between the job's commit and the fold (a crash), and Clear community matches, drop the
+  identity until the server reads `librivox.json` (a follow-up); Add again finds the placed
+  folder (the Bridge adopts one holding the project's `librivox.json`) and records it. **Console**: Library > LibriVox
   (`features/librivox/`): a row follows its job by id, asks the work again when it ends and, for
   a done one, once more a moment later (`DONE_RECHECK_MS`: the fold commits just after the job
   reads done), and a job that is gone (404) is followed no more.

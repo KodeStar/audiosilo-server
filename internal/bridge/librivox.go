@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -29,18 +30,31 @@ const (
 // LibrivoxFetchParams are librivox.fetch's params, built by the server when it
 // queues the job: the LibriVox project, the community work and recording that
 // project IS (from the metadata service's lookup at queue time: what the done
-// job's book is recorded as), and the books library (the job's library_id
-// too). The Bridge reads them leniently.
+// job's book is recorded as), the books library (the job's library_id too),
+// and the work's title then (additive, server#380: a fetch that never placed
+// a book is named by it in a notification; the Bridge ignores it). The Bridge
+// reads them leniently.
 type LibrivoxFetchParams struct {
 	LibrivoxID  int    `json:"librivox_id"`
 	WorkID      string `json:"work_id"`
 	RecordingID string `json:"recording_id"`
 	LibraryID   int64  `json:"library_id"`
+	Title       string `json:"title,omitempty"`
 }
 
+// metaID is the shape of a community work or recording id, as the Bridge
+// checks librivox.fetch's (a slug): a refusal here is the server's at queue
+// time, not the Bridge's when it claims the job.
+var metaID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
+
+// maxLibrivoxTitle bounds a librivox.fetch's title in bytes (the work's, from
+// the metadata service; LibrivoxFetch shortens a longer one).
+const maxLibrivoxTitle = 300
+
 // librivoxFetchParams checks librivox.fetch's params strictly: a positive
-// project id, a work and a recording (bounded, no control characters, never
-// blank: the identity the fold records) and a library.
+// project id, a work and a recording (ids of the community's shape, the
+// identity the fold records), a library and an optional title (bounded, no
+// control characters).
 func librivoxFetchParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p LibrivoxFetchParams
 	if err := decodeStrict(raw, &p); err != nil {
@@ -49,17 +63,14 @@ func librivoxFetchParams(raw json.RawMessage) (json.RawMessage, error) {
 	switch {
 	case p.LibrivoxID <= 0:
 		return nil, invalid("librivox_id must be a LibriVox project id")
-	case strings.TrimSpace(p.WorkID) == "":
-		return nil, invalid("work_id is required")
-	case strings.TrimSpace(p.RecordingID) == "":
-		return nil, invalid("recording_id is required")
+	case !metaID.MatchString(p.WorkID):
+		return nil, invalid("work_id must be a community work id")
+	case !metaID.MatchString(p.RecordingID):
+		return nil, invalid("recording_id must be a community recording id")
 	case p.LibraryID <= 0:
 		return nil, invalid("library_id is required")
 	}
-	if err := checkText("work_id", p.WorkID, maxWorkIDLen); err != nil {
-		return nil, err
-	}
-	if err := checkText("recording_id", p.RecordingID, maxWorkIDLen); err != nil {
+	if err := checkText("title", p.Title, maxLibrivoxTitle); err != nil {
 		return nil, err
 	}
 	return json.Marshal(p)
@@ -74,8 +85,10 @@ func librivoxFetchSuffix(j NewJob) string {
 }
 
 // LibrivoxFetch is the NewJob that adds p's project to p's library, asked for
-// by admin requestedBy.
+// by admin requestedBy. A title is kept to one line of at most
+// maxLibrivoxTitle bytes.
 func LibrivoxFetch(p LibrivoxFetchParams, requestedBy int64) NewJob {
+	p.Title = strings.TrimSpace(cleanText(p.Title, maxLibrivoxTitle, false))
 	raw, _ := json.Marshal(p)
 	lib := p.LibraryID
 	return NewJob{Kind: KindLibrivoxFetch, LibraryID: &lib, Params: raw, RequestedBy: requestedBy}
@@ -84,12 +97,18 @@ func LibrivoxFetch(p LibrivoxFetchParams, requestedBy int64) NewJob {
 // LibrivoxFetchResult is a done librivox.fetch's result: the placed book's
 // indexed path (as the Bridge's rescan answered it), the project, and how many
 // files and bytes the book's folder holds (the sections and the cover).
+// Adopted (additive, server#379) says whether the Bridge adopted a folder it
+// had placed before (true: an earlier fetch's book, which an admin may have
+// matched or edited since) or placed a new one in a vacant folder (false);
+// nil from a Bridge that doesn't say (catalog.FoldLibrivoxFetch keeps its
+// older rule then).
 type LibrivoxFetchResult struct {
 	LibraryID  int64  `json:"library_id"`
 	Path       string `json:"path"`
 	LibrivoxID int    `json:"librivox_id"`
 	Files      int    `json:"files"`
 	Bytes      int64  `json:"bytes"`
+	Adopted    *bool  `json:"adopted,omitempty"`
 }
 
 // LibrivoxFetchOf reads a job's params and, when it is done, its result.

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -666,6 +667,46 @@ func TestBridgeReadalongJobWording(t *testing.T) {
 	delete(ev.Data, "coverage")
 	if m := compose(ev, s.server()); m.Title != "Read-along made: Alice" {
 		t.Errorf("no coverage = %q", m.Title)
+	}
+}
+
+// A finished LibriVox fetch claims its recording only when its book is
+// matched to it (server#379): the event carries librivox_match, and a book the
+// fold couldn't match, or one adopted with an admin's match, says so instead.
+// A fetch that placed no book is named by the work it was adding.
+func TestBridgeLibrivoxJobWording(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	for i, match := range []string{LibrivoxMatched, LibrivoxKept, LibrivoxUnmatched, ""} {
+		s.BridgeJobEnded(ctx, BridgeJob{ID: int64(i + 1), Kind: bridge.KindLibrivoxFetch, State: bridge.StateDone,
+			Library: "Classics", LibraryID: 1, Path: "Brooke/Johnny Crow's Garden", Title: "Johnny Crow's Garden",
+			LibrivoxMatch: match})
+	}
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 9, Kind: bridge.KindLibrivoxFetch, State: bridge.StateFailed,
+		Library: "Classics", LibraryID: 1, Title: "Johnny Crow's Garden", LibrivoxMatch: LibrivoxUnmatched})
+	done, _, err := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFinished)
+	if err != nil || len(done) != 4 {
+		t.Fatalf("finished events = %+v, %v", done, err)
+	}
+	want := map[any]string{
+		LibrivoxMatched: "It is in the library now, matched to its LibriVox recording.",
+		LibrivoxKept:    "It is in the library now. It was there already and keeps the match it had.",
+		LibrivoxUnmatched: "It is in the library now, but it couldn't be matched to its LibriVox recording. " +
+			"Add it again from Library > LibriVox to match it.",
+		nil: "It is in the library now.",
+	}
+	for _, ev := range done {
+		m := compose(ev, s.server())
+		if m.Title != "Added from LibriVox: Johnny Crow's Garden" || m.Text != want[ev.Data["librivox_match"]] {
+			t.Errorf("%v: %+v", ev.Data["librivox_match"], m)
+		}
+	}
+	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	if len(failed) != 1 || failed[0].Data["librivox_match"] != nil {
+		t.Fatalf("failed events = %+v", failed)
+	}
+	if m := compose(failed[0], s.server()); m.Title != "Adding from LibriVox failed: Johnny Crow's Garden" {
+		t.Errorf("failed = %+v", m)
 	}
 }
 
