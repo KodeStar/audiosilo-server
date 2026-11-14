@@ -13,6 +13,7 @@ import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   admin,
   idle,
+  importRow,
   libraries,
   settingsWith,
   settingsWithMetadata,
@@ -1076,6 +1077,7 @@ describe('the phone step explains signing in (server#369)', () => {
 describe('the Audiobookshelf import inside the abs step (server#366)', () => {
   /** Health's summary with three books not matched. */
   const unmatched = () => ({ body: unmatchedSummary(3) });
+  const appliedImport = importRow({ status: 'applied', applied_at: '2026-11-14T10:05:00Z' });
 
   it('holds Connect while the first scan runs, then offers Match automatically', async () => {
     let scanning = true;
@@ -1141,28 +1143,7 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
           // No library yet (the folder came from config, say): only the applied import offers it.
           'GET /admin/libraries': { body: { libraries: [] } },
           'GET /admin/issues': unmatched(),
-          'GET /admin/imports': {
-            body: {
-              imports: [
-                {
-                  id: 7,
-                  user_id: 2,
-                  username: 'sam',
-                  source: 'abs',
-                  source_url: 'http://192.168.1.20:13378',
-                  source_user: 'samantha',
-                  status: 'applied',
-                  cutoff: null,
-                  cutoff_utc_offset: 0,
-                  created_at: '2026-11-14T10:00:00Z',
-                  applied_at: '2026-11-14T10:05:00Z',
-                  error: '',
-                  error_code: '',
-                  summary: null,
-                },
-              ],
-            },
-          },
+          'GET /admin/imports': { body: { imports: [appliedImport] } },
         },
       ),
     );
@@ -1178,6 +1159,7 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
   });
+
 });
 
 describe('the marketplace nearest the admin (server#192)', () => {

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { Import, ImportDetail, ImportSummary } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { activity, samDetail, unmatchedSummary, users } from '@/test/fixtures';
+import { activity, importRow, samDetail, unmatchedSummary, users } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -44,23 +44,7 @@ const onlyIds = summary({
 });
 
 function imp(over: Partial<Import> = {}): Import {
-  return {
-    id: 7,
-    user_id: 2,
-    username: 'sam',
-    source: 'abs',
-    source_url: 'https://abs.example.com',
-    source_user: 'samantha',
-    status: 'review',
-    cutoff: '2026-06-01T00:00:00Z',
-    cutoff_utc_offset: 0,
-    created_at: new Date().toISOString(),
-    applied_at: null,
-    error: '',
-    error_code: '',
-    summary: summary(),
-    ...over,
-  };
+  return importRow({ cutoff: '2026-06-01T00:00:00Z', summary: summary(), ...over });
 }
 
 function detail(over: Partial<ImportDetail> = {}): ImportDetail {

@@ -10,6 +10,7 @@ import type {
   Invite,
   InviteCreated,
   Device,
+  Import,
   IssuesSummary,
   ListeningSession,
   MetaMirrorStatus,
@@ -550,6 +551,27 @@ export function unmatchedSummary(n: number): IssuesSummary {
   const s = issuesSummary();
   s.categories.push({ kind: 'unmatched', count: n, ignored: 0, samples: [] });
   return s;
+}
+
+/** One row of GET /admin/imports: sam's Audiobookshelf history, in review, not planned yet. */
+export function importRow(over: Partial<Import> = {}): Import {
+  return {
+    id: 7,
+    user_id: 2,
+    username: 'sam',
+    source: 'abs',
+    source_url: 'https://abs.example.com',
+    source_user: 'samantha',
+    status: 'review',
+    cutoff: null,
+    cutoff_utc_offset: 0,
+    created_at: new Date().toISOString(),
+    applied_at: null,
+    error: '',
+    error_code: '',
+    summary: null,
+    ...over,
+  };
 }
 
 /** GET /admin/jobs: nothing running, nothing queued, no schedules. */
