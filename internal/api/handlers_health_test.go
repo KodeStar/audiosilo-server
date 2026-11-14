@@ -544,6 +544,19 @@ func TestIssuesUnknownASIN(t *testing.T) {
 		t.Fatalf("member list = %d %s, want 403", resp.StatusCode, body)
 	}
 	ignore := `{"kind":"unknown_asin","books":[{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"Unknown/Book"}]}`
+	// Ignoring one is an admin's too: a member's or an anonymous try leaves it listed.
+	for who, tok := range map[string]string{"member": memberTok, "anonymous": ""} {
+		want := http.StatusForbidden
+		if tok == "" {
+			want = http.StatusUnauthorized
+		}
+		if resp, body := e.do(t, "POST", "/api/v1/admin/issues/ignore", tok, ignore); resp.StatusCode != want {
+			t.Fatalf("%s ignore = %d %s, want %d", who, resp.StatusCode, body, want)
+		}
+	}
+	if n, _ := unknownCount(); n != 1 {
+		t.Fatalf("after the refused ignores: unknown_asin = %d, want 1", n)
+	}
 	if resp, body := e.do(t, "POST", "/api/v1/admin/issues/ignore", adminTok, ignore); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("ignore = %d %s", resp.StatusCode, body)
 	}
