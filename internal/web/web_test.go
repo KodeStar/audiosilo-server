@@ -668,3 +668,55 @@ func TestReaderDocument(t *testing.T) {
 		}
 	}
 }
+
+// TestConnectPageNamesWhatExists: every string the connect page's script or
+// markup asks the dictionary for is in it (a plural by its .one form), and every
+// element the script looks up by id is in the page, so a typed code's wording
+// (server#386, retext) can't name a key or an element that isn't there.
+func TestConnectPageNamesWhatExists(t *testing.T) {
+	t.Parallel()
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("assets", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	js, html, dict := read("connect.js"), read("index.html"), read("i18n-dict.js")
+	names := langBlockRE.FindAllStringSubmatchIndex(dict, -1)
+	if len(names) < 2 {
+		t.Fatal("could not find the language blocks")
+	}
+	en := map[string]bool{}
+	for _, m := range dictKeyRE.FindAllStringSubmatch(dict[names[0][1]:names[1][0]], -1) {
+		en[m[1]] = true
+	}
+	var keys []string
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`asI18n\.t\("([^"]+)"`),
+		regexp.MustCompile(`retext\("[^"]+", "([^"]+)"\)`),
+	} {
+		for _, m := range re.FindAllStringSubmatch(js, -1) {
+			keys = append(keys, m[1])
+		}
+	}
+	for _, m := range regexp.MustCompile(`data-i18n="([^"]+)"`).FindAllStringSubmatch(html, -1) {
+		keys = append(keys, m[1])
+	}
+	for _, k := range []string{"connect.phoneHeadingTyped", "connect.phoneBodyTyped", "connect.reopenHintTyped"} {
+		if !strings.Contains(js, `"`+k+`"`) {
+			t.Errorf("connect.js no longer words a typed code with %q", k)
+		}
+	}
+	for _, k := range keys {
+		if !en[k] && !en[k+".one"] {
+			t.Errorf("the connect page asks for %q, which the dictionary lacks", k)
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?:getElementById|retext)\("([^"]+)"`).FindAllStringSubmatch(js, -1) {
+		if !strings.Contains(html, `id="`+m[1]+`"`) {
+			t.Errorf("connect.js looks up #%s, which index.html lacks", m[1])
+		}
+	}
+}
