@@ -552,12 +552,12 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 			}
 		}
 	}
-	var fetchTitle string
 	if job.Kind == bridge.KindLibrivoxFetch {
 		// A fetch names no book until it is placed: the book its result names.
 		p, r, err := bridge.LibrivoxFetchOf(*job)
-		// The params' title stands even when a done job's result can't be read.
-		fetchTitle = p.Title
+		// Until then (a fetch that placed no book, a done job whose result can't
+		// be read) it is named by the work it was adding: the params' title.
+		ev.Title = p.Title
 		if err == nil {
 			ev.Path = cmp.Or(ev.Path, r.Path)
 			if job.State == bridge.StateDone {
@@ -573,15 +573,13 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		}
 		if ev.Path != "" {
 			if book, err := a.cat.GetBookByPath(ctx, ev.LibraryID, ev.Path); err == nil {
-				ev.Title = book.Title
+				ev.Title = cmp.Or(book.Title, ev.Title)
 				// Whether the chapters a detect job found are the ones listeners
 				// get (the Bridge rescans before it reports done).
 				ev.ChaptersSource = cmp.Or(book.ChaptersSource, catalog.ChaptersFromFiles)
 			}
 		}
 	}
-	// A fetch that placed no book is named by the work it was adding.
-	ev.Title = cmp.Or(ev.Title, fetchTitle)
 	a.rt.Notify.BridgeJobEnded(ctx, ev)
 }
 
