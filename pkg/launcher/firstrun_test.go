@@ -56,6 +56,27 @@ func TestSignInHintUntilAnAdminSignsIn(t *testing.T) {
 	}
 }
 
+// A first start that made the admin but failed before its banner (the auth
+// code's write) printed the password nowhere: the admin is recorded all the
+// same, so the next start's hint points at reset-admin.
+func TestSignInHintAfterAStartThatFailedBeforeTheBanner(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	if _, err := db.ExecContext(ctx,
+		`CREATE TRIGGER no_auth_codes BEFORE INSERT ON auth_codes BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	authSvc := auth.New(db, time.Now)
+	var banner bytes.Buffer
+	created, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, &banner, discardLog())
+	if err == nil || created || banner.Len() > 0 {
+		t.Fatalf("ensureAdmin = %v, %v; want a failure and no banner, got:\n%s", created, err, banner.String())
+	}
+	if got := hintFor(t, authSvc); !strings.Contains(got, `as "admin"`) || !strings.Contains(got, "reset-admin") {
+		t.Errorf("hint after the failed start lacks the admin or reset-admin:\n%s", got)
+	}
+}
+
 // No hint where no printed password was ever lost: an admin made by the --setup
 // wizard (CreateUser, no MarkFirstAdmin), and an install from before the hint
 // existed, whose admin has no row (the upgrade needs no backfill).

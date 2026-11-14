@@ -436,6 +436,12 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service,
 	}
 	code, err := authSvc.CreateAuthCode(ctx, admin.ID, "initial admin code", 0, 0)
 	if err != nil {
+		// The admin exists and its password was printed nowhere: record it
+		// all the same, so the next start points at reset-admin (signInHint)
+		// rather than saying nothing about an account nobody can sign in to.
+		if markErr := authSvc.MarkFirstAdmin(ctx, admin.ID); markErr != nil {
+			log.Warn("recording the first-run admin failed: later starts won't repeat the sign-in hint", "err", markErr)
+		}
 		return false, err
 	}
 	writeBanner(w, cfg, password, code)

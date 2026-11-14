@@ -3835,7 +3835,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   command, as `docker exec -u <uid>:<gid> <container> ...` inside a container, the server's own ids so the
   command never makes a root-owned file in the data folder; words quoted for the system's shell,
   `quoteWord`: single quotes, double on Windows). The row is written after the banner and a failed write
-  only loses the reminder. Any admin's password sign-in
+  only loses the reminder; a start that made the admin but failed before the banner (the auth code's
+  write) writes it too, so the next start points at `reset-admin` for a password printed nowhere. Any admin's password sign-in
   (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`: `POST /auth/password`, or
   `PATCH /admin/users/{id}` on their own account, the console's People dialog; a password another admin
   or `reset-admin` set is not their own) ends it; each writes once, in one transaction.
