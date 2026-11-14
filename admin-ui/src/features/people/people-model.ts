@@ -13,6 +13,9 @@ import type {
 
 // Pure logic behind the People screens, kept out of components so it's tested.
 
+/** The server's rule (auth.ErrPasswordTooShort); checked here first so the field can say so. */
+export const MIN_PASSWORD = 8;
+
 /** A person page's tabs, in order; the first has no ?tab= in the URL. */
 export const USER_TABS = [
   'listening',

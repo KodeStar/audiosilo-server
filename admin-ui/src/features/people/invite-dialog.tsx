@@ -25,7 +25,13 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { InviteCard } from './invite-card';
 import { grantAccess } from './grant-access';
-import { accessValue, inviteStatus, isLibraryGrant, parseAccessChoice } from './people-model';
+import {
+  MIN_PASSWORD,
+  accessValue,
+  inviteStatus,
+  isLibraryGrant,
+  parseAccessChoice,
+} from './people-model';
 
 const USES = [1, 3, 5, 10, 0] as const; // 0 = unlimited
 const DAYS = [1, 7, 30, 0] as const; // 0 = never
@@ -108,9 +114,6 @@ interface Values {
   uses: string;
   days: string;
 }
-
-/** The server's rule (auth.ErrPasswordTooShort); checked here first so the field can say so. */
-const MIN_PASSWORD = 8;
 
 function InviteForm({
   user,
