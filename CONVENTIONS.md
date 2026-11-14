@@ -2319,8 +2319,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   URL, `/status` (sent without the token) must identify ABS before the token goes anywhere, redirects
   only to the same host (at most 5, never https -> http), every response size-capped, header and
   whole-request timeouts, every error a fixed sentence (never an ABS body). An https certificate the
-  server doesn't trust (self-signed, another name, expired: `tls.CertificateVerificationError` or an
-  x509 verification error) is `abs_certificate` (502 on connect, from `/status` too, never `not_abs`),
+  server doesn't trust (self-signed, another name, expired: `tls.CertificateVerificationError`, which
+  wraps every x509 verification error) is `abs_certificate` (502 on connect, from `/status` too, never `not_abs`),
   so the console points at ABS's plain http:// address; there is no switch to trust one. https to an
   http-only port (`tls.RecordHeaderError`) stays `abs_unreachable`. It does NOT block private
   or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route

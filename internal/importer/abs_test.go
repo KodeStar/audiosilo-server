@@ -233,7 +233,7 @@ func TestClientRedirects(t *testing.T) {
 			http.Redirect(w, r, "/audiobookshelf/status", http.StatusFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"app":"audiobookshelf","serverVersion":"9","isInit":true}`))
+		absStatus(w, r)
 	}))
 	defer same.Close()
 	if v, err := clientFor(t, same.URL, "x").Status(context.Background()); err != nil || v != "9" {

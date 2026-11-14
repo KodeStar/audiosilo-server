@@ -9,7 +9,6 @@ package importer
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,12 +178,8 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, limit i
 // name, or expired. Its own code, so the console can point at the plain http://
 // address; a certificate is never trusted anyway (no "ignore TLS" switch).
 func certificateError(err error) bool {
-	var verify *tls.CertificateVerificationError
-	var authority x509.UnknownAuthorityError
-	var hostname x509.HostnameError
-	var invalid x509.CertificateInvalidError
-	return errors.As(err, &verify) || errors.As(err, &authority) ||
-		errors.As(err, &hostname) || errors.As(err, &invalid)
+	_, ok := errors.AsType[*tls.CertificateVerificationError](err)
+	return ok
 }
 
 // statusError is an unexpected HTTP status, so a caller can fall back on a 403
