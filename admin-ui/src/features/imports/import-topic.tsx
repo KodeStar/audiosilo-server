@@ -126,7 +126,8 @@ export function ImportFlow({
       ) : (
         <ImportLists list={imports.data} matchOffer={applied} newTab={embedded} />
       )}
-      {offerMatch && !applied ? <UnmatchedPrompt newTab={embedded} /> : null}
+      {/* Not while the list loads: an applied import's offer belongs in the history card. */}
+      {offerMatch && !applied && !imports.isPending ? <UnmatchedPrompt newTab={embedded} /> : null}
     </>
   );
 }

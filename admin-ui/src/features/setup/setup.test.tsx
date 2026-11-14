@@ -1160,6 +1160,36 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     await waitFor(() => expect(puts(calls)).toEqual([{ steps: { abs: 'done' } }]));
   });
 
+  it('holds the offer until the imports are read: an applied one shows it in the history only', async () => {
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    mockFetch(
+      flowRoutes(
+        { steps: { folder: 'done', naming: 'done' } },
+        {
+          // A scanned library: the step would offer Match automatically under the form.
+          'GET /admin/libraries': { body: { libraries: libraries() } },
+          'GET /admin/issues': unmatched(),
+          'GET /admin/imports': async () => {
+            await held;
+            return { body: { imports: [appliedImport] } };
+          },
+        },
+      ),
+    );
+    renderApp('/setup?step=abs');
+    await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
+    // The count is here before the imports: no offer yet, it would move when they arrive.
+    await expect(
+      screen.findByRole('link', { name: 'Match automatically' }, { timeout: 250 }),
+    ).rejects.toThrow();
+    answer();
+    const history = await screen.findByRole('region', { name: 'Past imports' });
+    expect(await within(history).findByRole('link', { name: 'Match automatically' })).toBeVisible();
+    expect(screen.getAllByRole('link', { name: 'Match automatically' })).toHaveLength(1);
+  });
 });
 
 describe('the marketplace nearest the admin (server#192)', () => {
