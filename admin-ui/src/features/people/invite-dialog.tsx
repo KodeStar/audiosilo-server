@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Info, Send, UserPlus } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useLibraries, useShares } from '@/api/hooks';
-import type { AuthCode, InviteCreated, User } from '@/api/types';
+import { MIN_PASSWORD, type AuthCode, type InviteCreated, type User } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,13 +25,7 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { InviteCard } from './invite-card';
 import { grantAccess } from './grant-access';
-import {
-  MIN_PASSWORD,
-  accessValue,
-  inviteStatus,
-  isLibraryGrant,
-  parseAccessChoice,
-} from './people-model';
+import { accessValue, inviteStatus, isLibraryGrant, parseAccessChoice } from './people-model';
 
 const USES = [1, 3, 5, 10, 0] as const; // 0 = unlimited
 const DAYS = [1, 7, 30, 0] as const; // 0 = never

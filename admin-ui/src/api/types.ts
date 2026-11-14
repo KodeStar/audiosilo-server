@@ -1956,6 +1956,9 @@ export interface ASINRef {
   asin: string;
 }
 
+/** The shortest password the server takes (auth.MinPasswordLen); checked here first so a field can say so. */
+export const MIN_PASSWORD = 8;
+
 /** The Audible marketplaces (config.Regions, the community metadata's region vocabulary). */
 export const MATCH_REGIONS = [
   'us',

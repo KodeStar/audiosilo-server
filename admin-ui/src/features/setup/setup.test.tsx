@@ -10,7 +10,14 @@ import type {
   SetupState,
 } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { admin, libraries, settingsWith, setupEnvelope, systemStatus } from '@/test/fixtures';
+import {
+  admin,
+  libraries,
+  settingsWith,
+  settingsWithMetadata,
+  setupEnvelope,
+  systemStatus,
+} from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -80,8 +87,9 @@ const pairOk = {
   },
 };
 
-const puts = (calls: ReturnType<typeof mockFetch>) =>
-  calls.filter((c) => c.method === 'PUT' && c.path === '/admin/setup').map((c) => c.body);
+const sent = (calls: ReturnType<typeof mockFetch>, method: string, path: string) =>
+  calls.filter((c) => c.method === method && c.path === path).map((c) => c.body);
+const puts = (calls: ReturnType<typeof mockFetch>) => sent(calls, 'PUT', '/admin/setup');
 
 describe('the first-run redirect', () => {
   it('sends an unfinished server to the flow, outside the shell, once a session', async () => {
@@ -876,8 +884,6 @@ describe('the account step (server#369)', () => {
       },
       { printed_password: printed },
     );
-  const sent = (calls: ReturnType<typeof mockFetch>, method: string, path: string) =>
-    calls.filter((c) => c.method === method && c.path === path).map((c) => c.body);
 
   it('opens a fresh server at Your account, before the books folder', async () => {
     mockFetch(accountRoutes(true));
@@ -891,6 +897,7 @@ describe('the account step (server#369)', () => {
     const calls = mockFetch(accountRoutes(true));
     renderApp('/setup');
     expect(await screen.findByText('Your password came from the server log')).toBeVisible();
+    expect(screen.getByText('At least 8 characters.')).toBeVisible();
     const user = userEvent.setup();
     const name = screen.getByLabelText('Username');
     expect(name).toHaveValue('chris');
@@ -943,7 +950,9 @@ describe('the account step (server#369)', () => {
     renderApp('/setup');
     await screen.findByRole('heading', { name: 'Your account' });
     expect(screen.queryByText('Your password came from the server log')).toBeNull();
-    expect(screen.getByText(/Leave it empty to keep your current password/)).toBeVisible();
+    expect(
+      screen.getByText('Leave it empty to keep your current password. At least 8 characters.'),
+    ).toBeVisible();
     const user = userEvent.setup();
     await user.clear(screen.getByLabelText('Username'));
     await user.type(screen.getByLabelText('Username'), 'kode');
@@ -1023,20 +1032,16 @@ describe('the phone step explains signing in (server#369)', () => {
 
 describe('the marketplace nearest the admin (server#192)', () => {
   afterEach(() => vi.restoreAllMocks());
-  const metadataRoutes = (metadata: Partial<AdminSettings['metadata']>, over = {}) => {
-    const s = settingsWith();
-    s.metadata = { ...s.metadata, ...metadata };
-    return flowRoutes(
+  const metadataRoutes = (metadata: Partial<AdminSettings['metadata']>, over = {}) =>
+    flowRoutes(
       {},
       {
-        'GET /admin/settings': { body: s },
+        'GET /admin/settings': { body: settingsWithMetadata(metadata) },
         'PATCH /admin/settings': (req) => ({ body: settingsWith(req.body as object) }),
         ...over,
       },
     );
-  };
-  const patches = (calls: ReturnType<typeof mockFetch>) =>
-    calls.filter((c) => c.method === 'PATCH' && c.path === '/admin/settings').map((c) => c.body);
+  const patches = (calls: ReturnType<typeof mockFetch>) => sent(calls, 'PATCH', '/admin/settings');
 
   it('preselects it from the browser when none was ever chosen, and saves it on Continue', async () => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB', 'en']);
@@ -1078,9 +1083,10 @@ describe('the marketplace nearest the admin (server#192)', () => {
 
   it('never preselects over a marketplace the environment sets', async () => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB']);
-    const s = settingsWith();
-    s.metadata = { ...s.metadata, region: 'de', region_chosen: true };
-    s.locked = { 'metadata.region': 'AUDIOSILO_METADATA_REGION' };
+    const s = settingsWithMetadata(
+      { region: 'de', region_chosen: true },
+      { 'metadata.region': 'AUDIOSILO_METADATA_REGION' },
+    );
     mockFetch(flowRoutes({}, { 'GET /admin/settings': { body: s } }));
     renderApp('/setup?step=metadata');
     const select = await screen.findByLabelText('Audible marketplace');

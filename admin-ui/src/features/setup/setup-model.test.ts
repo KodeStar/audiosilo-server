@@ -1,6 +1,6 @@
 import { ApiError } from '@/api/client';
 import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
-import { settingsWith } from '@/test/fixtures';
+import { settingsWith, settingsWithMetadata } from '@/test/fixtures';
 import {
   accountPlan,
   addressMismatch,
@@ -550,7 +550,7 @@ describe('accountPlan (server#369)', () => {
       accountPlan(draft({ password: 'short', repeat: 'other' }), 'admin', true).errors,
     ).toEqual({
       password: 'errors.passwordTooShort',
-      repeat: 'setup.account.mismatch',
+      repeat: 'user.password.mismatch',
       current: 'setup.account.currentNeeded',
     });
     expect(
@@ -568,22 +568,15 @@ describe('accountPlan (server#369)', () => {
 });
 
 describe('offerRegion (server#192)', () => {
-  const withMeta = (m: Partial<ReturnType<typeof settingsWith>['metadata']>, locked = {}) => {
-    const s = settingsWith();
-    s.metadata = { ...s.metadata, ...m };
-    s.locked = locked;
-    return s;
-  };
-
   it('offers only while the server says the marketplace was never chosen', () => {
-    expect(offerRegion(withMeta({ region_chosen: false }))).toBe(true);
-    expect(offerRegion(withMeta({ region_chosen: true }))).toBe(false);
+    expect(offerRegion(settingsWithMetadata({ region_chosen: false }))).toBe(true);
+    expect(offerRegion(settingsWithMetadata({ region_chosen: true }))).toBe(false);
     // An older server says nothing: nothing is offered.
-    expect(offerRegion(withMeta({}))).toBe(false);
+    expect(offerRegion(settingsWithMetadata({}))).toBe(false);
   });
 
   it('never offers one the environment sets', () => {
     const locked = { 'metadata.region': 'AUDIOSILO_METADATA_REGION' };
-    expect(offerRegion(withMeta({ region_chosen: false }, locked))).toBe(false);
+    expect(offerRegion(settingsWithMetadata({ region_chosen: false }, locked))).toBe(false);
   });
 });

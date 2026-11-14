@@ -16,6 +16,8 @@ export type SessionState =
 export interface Session {
   state: SessionState;
   signIn: (token: string, user: User) => void;
+  /** The signed-in account as it is now (renamed): the session itself stays. */
+  updateUser: (user: User) => void;
   signOut: () => Promise<void>;
   retry: () => void;
 }

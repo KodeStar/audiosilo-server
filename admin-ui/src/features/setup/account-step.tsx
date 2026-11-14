@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { KeyRound } from 'lucide-react';
 import { ApiError, WRONG_CURRENT_PASSWORD, api } from '@/api/client';
 import { invalidatePeople } from '@/api/hooks';
-import { getToken } from '@/api/token';
+import { MIN_PASSWORD } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { useCurrentUser, useSession } from '@/lib/session';
-import { MIN_PASSWORD, accountPlan, type AccountDraft, type AccountField } from './setup-model';
+import { accountPlan, type AccountDraft, type AccountField } from './setup-model';
 import { StepFooter } from './step-parts';
 import { StepStop, type StepProps } from './step-actions';
 
@@ -19,7 +19,7 @@ import { StepStop, type StepProps } from './step-actions';
 const USERNAME_CODES = ['username_taken', 'username_required'];
 
 /**
- * Step 1: your account (server#369). The admin chooses the username and
+ * The account step, the first: your account (server#369). The admin chooses the username and
  * password they sign in with: the username through the admin user PATCH, the
  * password through the account's own change (which asks for the current one and
  * keeps this session). While the admin still has the password the server
@@ -30,7 +30,7 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const me = useCurrentUser();
-  const { signIn } = useSession();
+  const { updateUser } = useSession();
   const printed = env.printed_password ?? false;
   const [draft, setDraft] = useState<AccountDraft>({
     username: me.username,
@@ -54,7 +54,7 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
       try {
         const u = await api.updateUser(me.id, { username: plan.rename });
         // The console names the admin as the server now does.
-        signIn(getToken() ?? '', { ...me, username: u.username });
+        updateUser({ ...me, username: u.username });
         invalidatePeople(qc);
       } catch (err) {
         if (err instanceof ApiError && USERNAME_CODES.includes(err.code ?? '')) {
@@ -118,9 +118,9 @@ export function AccountStep({ env, leave, back, last }: StepProps) {
         {field(
           'setup-password',
           'password',
-          t('setup.account.password'),
+          t('user.password.new'),
           { type: 'password', autoComplete: 'new-password' },
-          t(printed ? 'setup.account.passwordHint' : 'setup.account.passwordOptional', {
+          t(printed ? 'user.password.hint' : 'setup.account.passwordOptional', {
             count: MIN_PASSWORD,
           }),
         )}

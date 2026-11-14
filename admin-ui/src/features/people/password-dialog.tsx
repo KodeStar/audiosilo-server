@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateDevices, invalidatePeople } from '@/api/hooks';
-import type { User } from '@/api/types';
+import { MIN_PASSWORD, type User } from '@/api/types';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field } from '@/components/ui/field';
 import { describedBy } from '@/lib/a11y';
@@ -14,7 +14,6 @@ import { Input } from '@/components/ui/input';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
-import { MIN_PASSWORD } from './people-model';
 
 const schema = z
   .object({

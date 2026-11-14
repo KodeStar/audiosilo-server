@@ -1,6 +1,7 @@
 import { ApiError } from '@/api/client';
 import {
   METADATA_SOURCES,
+  MIN_PASSWORD,
   PREVIEW_FIELDS,
   SETUP_STEPS,
   type AdminSettings,
@@ -497,9 +498,6 @@ function isHostName(s: string): boolean {
 
 // --- The admin's own account ---------------------------------------------------
 
-/** The shortest password the server takes (auth.MinPasswordLen). */
-export const MIN_PASSWORD = 8;
-
 /** The Your account step's fields as typed. */
 export interface AccountDraft {
   username: string;
@@ -535,7 +533,7 @@ export function accountPlan(d: AccountDraft, username: string, printed: boolean)
     if (printed) errors.password = 'setup.account.passwordNeeded';
   } else {
     if (d.password.length < MIN_PASSWORD) errors.password = 'errors.passwordTooShort';
-    if (d.repeat !== d.password) errors.repeat = 'setup.account.mismatch';
+    if (d.repeat !== d.password) errors.repeat = 'user.password.mismatch';
     if (d.current === '') errors.current = 'setup.account.currentNeeded';
     password = { next: d.password, current: d.current };
   }
