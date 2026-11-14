@@ -80,6 +80,26 @@ func TestFirstAdminState(t *testing.T) {
 	if p, _ := s.PrintedPassword(ctx, admin.ID); p {
 		t.Error("printed password after the admin set their own")
 	}
+	// No longer an admin who can sign in (disabled, demoted): no hint names it.
+	if err := s.MarkFirstAdmin(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.FirstAdminWaiting(ctx); err != nil || u == nil || u.ID != other.ID {
+		t.Fatalf("FirstAdminWaiting = %+v, %v; want the second admin", u, err)
+	}
+	disabled, user := true, RoleUser
+	for name, c := range map[string]UserChanges{"disabled": {Disabled: &disabled}, "demoted": {Role: &user}} {
+		if err := s.UpdateUser(ctx, other.ID, c); err != nil {
+			t.Fatal(err)
+		}
+		if u, err := s.FirstAdminWaiting(ctx); err != nil || u != nil {
+			t.Errorf("FirstAdminWaiting for a %s account = %+v, %v", name, u, err)
+		}
+		enabled, admin := false, RoleAdmin
+		if err := s.UpdateUser(ctx, other.ID, UserChanges{Disabled: &enabled, Role: &admin}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// The account gone: nothing to wait for.
 	if err := s.MarkFirstAdmin(ctx, 9999); err != nil {
 		t.Fatal(err)

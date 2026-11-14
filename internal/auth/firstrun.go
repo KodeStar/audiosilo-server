@@ -51,7 +51,9 @@ func (s *Service) putFirstAdmin(ctx context.Context, fa firstAdmin) error {
 
 // FirstAdminWaiting returns the admin the server made at first start while no
 // admin has signed in with a password yet (the start's hint), else nil. An
-// account gone since is nil too.
+// account gone since is nil too, and so is one no longer an enabled admin: the
+// hint would name an account that can't sign in to the console (and that
+// reset-admin refuses).
 func (s *Service) FirstAdminWaiting(ctx context.Context) (*User, error) {
 	fa, ok, err := s.readFirstAdmin(ctx)
 	if err != nil || !ok || fa.SignedIn {
@@ -61,7 +63,10 @@ func (s *Service) FirstAdminWaiting(ctx context.Context) (*User, error) {
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
-	return u, err
+	if err != nil || u.Role != RoleAdmin || u.Disabled {
+		return nil, err
+	}
+	return u, nil
 }
 
 // NoteAdminSignIn records that an admin signed in with a password, ending the
