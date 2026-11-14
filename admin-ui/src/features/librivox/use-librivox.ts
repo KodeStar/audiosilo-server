@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { keys } from '@/api/hooks';
 import { toastError } from '@/lib/errors';
+import { toast } from '@/lib/toast';
 import { jobGone, jobPollMs } from './librivox-model';
 
 /**
@@ -51,7 +52,8 @@ export function useTrackedJob(id: number | undefined) {
 /**
  * Add: queues the project's fetch into a library. The work is asked again
  * either way (an in_library refusal shows where the recording already is); a
- * refusal is toasted.
+ * refusal is toasted (not_found, a project the metadata no longer lists, in
+ * the console's words).
  */
 export function useAddLibrivox(workId: string) {
   const { t } = useTranslation();
@@ -67,7 +69,17 @@ export function useAddLibrivox(workId: string) {
       qc.setQueryData(keys.bridgeJob(job.id), job);
       return job;
     } catch (err) {
-      toastError(t('librivox.add.failed'), err);
+      // not_found here is the project the metadata no longer lists (the
+      // generic code's sentence would be the server's English one).
+      if (err instanceof ApiError && err.code === 'not_found') {
+        toast.add({
+          title: t('librivox.add.failed'),
+          description: t('librivox.add.notFound'),
+          type: 'error',
+        });
+      } else {
+        toastError(t('librivox.add.failed'), err);
+      }
       return undefined;
     } finally {
       setBusy(false);

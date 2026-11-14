@@ -172,6 +172,37 @@ describe('Bridge job events', () => {
     });
   });
 
+  it("says when a LibriVox book isn't matched to its recording", () => {
+    const done = { job_kind: 'librivox.fetch', state: 'done', title: 'Garden', library: 'Kids' };
+    const plain = describeEvent(ev('bridge_job_finished', done));
+    expect(plain.title).toEqual({
+      key: 'events.bridge_job_finished.librivox',
+      values: { name: 'Garden' },
+    });
+    expect(plain.body).toBeUndefined();
+    expect(
+      describeEvent(ev('bridge_job_finished', { ...done, librivox_match: 'matched' })).body,
+    ).toBeUndefined();
+    const unmatched = describeEvent(
+      ev('bridge_job_finished', { ...done, librivox_match: 'unmatched' }),
+    );
+    expect(unmatched.body).toEqual({ key: 'events.bridge_job_finished.librivoxUnmatched' });
+    expect(unmatched.tone).toBe('warn');
+    const kept = describeEvent(ev('bridge_job_finished', { ...done, librivox_match: 'kept' }));
+    expect(kept.body).toEqual({ key: 'events.bridge_job_finished.librivoxKept' });
+    expect(kept.tone).toBe('info');
+    // Another kind's event never reads it.
+    expect(
+      describeEvent(
+        ev('bridge_job_finished', {
+          ...done,
+          job_kind: 'chapters.detect',
+          librivox_match: 'unmatched',
+        }),
+      ).body,
+    ).toBeUndefined();
+  });
+
   it('words a failed job with its detail, as bad', () => {
     const d = describeEvent(
       ev('bridge_job_failed', { ...job, state: 'failed', code: '', detail: 'ffprobe: exit 1' }),

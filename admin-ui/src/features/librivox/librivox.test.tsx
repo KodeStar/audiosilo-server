@@ -25,6 +25,7 @@ import {
   jobGone,
   jobPollMs,
   librivoxProject,
+  librivoxTitle,
 } from './librivox-model';
 
 // Library > LibriVox (LibriVox L6): search the community database's LibriVox
@@ -158,6 +159,10 @@ describe('librivox model', () => {
 
   it('reads the project from params and polls only an open job', () => {
     expect(librivoxProject(job())).toBe(192);
+    expect(librivoxTitle(job())).toBeUndefined();
+    expect(librivoxTitle(job({ params: { librivox_id: 192, title: ' Garden ' } }))).toBe('Garden');
+    expect(librivoxTitle(job({ params: { title: 7 } }))).toBeUndefined();
+    expect(librivoxTitle(job({ kind: 'audible.import', params: { title: 'x' } }))).toBeUndefined();
     expect(librivoxProject(job({ params: { librivox_id: '192' } }))).toBeUndefined();
     expect(librivoxProject(job({ params: { librivox_id: 0 } }))).toBeUndefined();
     expect(librivoxProject(job({ kind: 'audible.import' }))).toBeUndefined();
@@ -199,8 +204,8 @@ describe('Library > LibriVox', () => {
   it('searches, opens a work and adds a recording to the chosen library', async () => {
     const calls = mockFetch(
       routes({
-        'POST /admin/librivox/fetch': { status: 202, body: { job: job() } },
-        'GET /admin/bridge/jobs/41': { body: job() },
+        'POST /admin/librivox/fetch': { status: 202, body: { job: job({ library_id: 2 }) } },
+        'GET /admin/bridge/jobs/41': { body: job({ library_id: 2 }) },
       }),
     );
     const { user, list } = await openWork();
@@ -226,8 +231,8 @@ describe('Library > LibriVox', () => {
         librivox_id: 192,
       }),
     );
-    // The queued job shows, and Add waits for it.
-    expect(await within(row).findByText(/Queued/i)).toBeInTheDocument();
+    // The queued job shows with the library it goes into, and Add waits for it.
+    expect(await within(row).findByText('Adding to Kids · Queued')).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Add' })).toBeDisabled();
   });
 
@@ -290,6 +295,25 @@ describe('Library > LibriVox', () => {
     await user.click(within(list).getByRole('button', { name: 'Add' }));
     expect(await screen.findByText('That recording is already in a library.')).toBeInTheDocument();
     expect(await within(list).findByRole('link', { name: 'In library' })).toBeInTheDocument();
+  });
+
+  it('words a project the metadata no longer lists in its own words', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/librivox/fetch': {
+          status: 404,
+          body: { error: 'no such LibriVox project in the community metadata', code: 'not_found' },
+        },
+      }),
+    );
+    const { user, list } = await openWork();
+    await user.click(within(list).getByRole('button', { name: 'Add' }));
+    expect(
+      await screen.findByText(
+        "The community metadata doesn't list this LibriVox project any more.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/no such LibriVox project/)).not.toBeInTheDocument();
   });
 
   it("keeps naming a failed fetch's reason once the work stops naming its job", async () => {

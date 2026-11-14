@@ -12,13 +12,14 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDateTime, formatNumber, formatRelative, formatTook } from '@/lib/format';
 import { audibleJobReason } from '@/features/audible/audible-model';
-import { fetchReason, librivoxProject } from '@/features/librivox/librivox-model';
+import { fetchReason, librivoxProject, librivoxTitle } from '@/features/librivox/librivox-model';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
 import {
   BRIDGE_JOB_STATES,
   backupAsin,
   hasContent,
+  isOpen,
   jobActions,
   kindName,
   progressOf,
@@ -140,10 +141,14 @@ function JobRow({
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
   // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
-  const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
+  // Its step only while it is open: a finished job's last one ("Asking the
+  // server to index the book") is no longer what it is doing.
+  const progress: ReturnType<typeof progressOf> =
+    generate || !isOpen(job.state) ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);
   const asin = backupAsin(job);
   const project = librivoxProject(job);
+  const projectTitle = librivoxTitle(job);
   // An Audible or LibriVox job's known failure code, worded (the Bridge's own text otherwise).
   const reason = audibleJobReason(job) ?? fetchReason(job);
   const details = hasContent(job.result) || hasContent(job.params);
@@ -208,9 +213,13 @@ function JobRow({
               ) : project ? (
                 <>
                   {' · '}
-                  <span className="font-mono text-[12px]">
-                    {t('librivox.recording.project', { id: project })}
-                  </span>
+                  {projectTitle ? (
+                    <span>{projectTitle}</span>
+                  ) : (
+                    <span className="font-mono text-[12px]">
+                      {t('librivox.recording.project', { id: project })}
+                    </span>
+                  )}
                 </>
               ) : (
                 <span className="text-muted-foreground"> · {t('bridge.jobs.wholeLibrary')}</span>

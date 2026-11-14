@@ -197,8 +197,23 @@ function describeBridgeJob(
             values: { percent: Math.round(coverageDown(d.coverage) * 100) },
           }
         : undefined;
+    // A LibriVox book the server couldn't match to its recording, or one it
+    // found in the library already with another match, says so (a server that
+    // sends no librivox_match, or "matched", says nothing more).
+    const match = jobKind === LIBRIVOX_KIND ? str(d.librivox_match) : '';
+    const librivox =
+      match === 'unmatched'
+        ? { key: 'events.bridge_job_finished.librivoxUnmatched' }
+        : match === 'kept'
+          ? { key: 'events.bridge_job_finished.librivoxKept' }
+          : undefined;
     return own
-      ? { title: { key: own, values: { name } }, body: unused ?? coverage, tone: 'info', link }
+      ? {
+          title: { key: own, values: { name } },
+          body: unused ?? coverage ?? librivox,
+          tone: match === 'unmatched' ? 'warn' : 'info',
+          link,
+        }
       : {
           title: { key: 'events.bridge_job_finished.title', values: { name } },
           body: kindBody,

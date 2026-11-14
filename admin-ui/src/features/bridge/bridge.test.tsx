@@ -319,6 +319,54 @@ describe('bridge page', () => {
     expect(within(jobs).queryByRole('button', { name: /Cancel job/ })).not.toBeInTheDocument();
   });
 
+  it("drops a finished job's last step and names a LibriVox fetch by its work", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                id: 9,
+                kind: 'librivox.fetch',
+                params: {
+                  librivox_id: 192,
+                  work_id: 'w',
+                  recording_id: 'r',
+                  library_id: 1,
+                  title: "Johnny Crow's Garden",
+                },
+                state: 'done',
+                progress: { step: 'index', message: 'Asking the server to index the book' },
+                result: {
+                  library_id: 1,
+                  path: 'Brooke/Johnny',
+                  librivox_id: 192,
+                  files: 3,
+                  bytes: 1000,
+                },
+                finished_at: '2026-10-15T12:01:00Z',
+              }),
+              job({
+                id: 10,
+                kind: 'librivox.fetch',
+                params: { librivox_id: 193, work_id: 'w', recording_id: 'r2', library_id: 1 },
+                state: 'running',
+                progress: { step: 'download', message: 'Downloading section 2 of 3' },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(within(jobs).getByText("Johnny Crow's Garden")).toBeInTheDocument();
+    expect(within(jobs).queryByText('Asking the server to index the book')).not.toBeInTheDocument();
+    // An open one still says what it is doing; one queued by an older server has no title.
+    expect(within(jobs).getByText('Downloading section 2 of 3')).toBeInTheDocument();
+    expect(within(jobs).getByText('Project 193')).toBeInTheDocument();
+  });
+
   it('unpairs after saying what happens', async () => {
     let unpaired = false;
     const calls = mockFetch(

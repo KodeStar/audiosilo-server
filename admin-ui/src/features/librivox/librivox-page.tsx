@@ -311,7 +311,18 @@ function RecordingRow({
           })
         : '';
       const label = progress.text ?? t(`bridge.state.${state ?? r.job?.state ?? 'queued'}`);
-      return { tone: 'warn', text: [label, count].filter(Boolean).join(' · ') };
+      // With several libraries, which one it is going into (the open job is
+      // the project's in any library, so not always the one picked here).
+      const into =
+        libraries.length > 1 && job?.library_id != null
+          ? libraries.find((l) => l.id === job.library_id)?.name
+          : undefined;
+      return {
+        tone: 'warn',
+        text: [into ? t('librivox.recording.addingTo', { library: into }) : '', label, count]
+          .filter(Boolean)
+          .join(' · '),
+      };
     }
     if (job && !here && (state === 'failed' || state === 'cancelled'))
       return {
