@@ -205,7 +205,6 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'asin', 'B0LEFTOVER', 'edited', 't')`,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'isbn', '9780000000002', 'community', 't')`,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'title', 'Edited Title', 'edited', 't')`,
-			`INSERT INTO book_enrichment(library_id, path, asin, isbn, updated_at) VALUES(?1, ?2, 'B0ENRICHED', '', 't')`,
 			`INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_by, set_at)
 			 VALUES(?1, ?2, 'rematched-work', 'rematched-rec', 'accepted', NULL, 't')`,
 		} {
@@ -213,32 +212,17 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		b := mustBook(t, c, ctx, lib.ID, path)
-		if err := c.db.WithTx(ctx, "test", func(tx *sql.Tx) error { return refreshEffective(ctx, tx, b.ID) }); err != nil {
-			t.Fatal(err)
-		}
+		setEnrichment(t, c, lib.ID, path, "B0ENRICHED", "") // refreshes the book's effective metadata
 		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "B0LEFTOVER" || b.ISBN != "9780000000002" {
 			t.Fatalf("leftovers not in effect: %q %q", b.ASIN, b.ISBN)
 		}
 	}
-	overrides := func() map[string]string {
-		out := map[string]string{}
-		rows, err := c.db.QueryContext(ctx, `SELECT field, value FROM book_overrides WHERE library_id = ? AND path = ?`, lib.ID, path)
+	overrides := func() map[string]storedOverride {
+		o, err := queryOverrides(ctx, c.db, lib.ID, path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var f, v string
-			if err := rows.Scan(&f, &v); err != nil {
-				t.Fatal(err)
-			}
-			out[f] = v
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		return out
+		return o
 	}
 	enriched := func() int {
 		var n int
@@ -256,7 +240,7 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		if w, r, _, _, _, _ := matchRow(t, c, lib.ID, path); w != "johnny-crows-garden" || r != "lv192" {
 			t.Fatalf("match = %s %s, want the recording", w, r)
 		}
-		if o := overrides(); len(o) != 1 || o["title"] != "Edited Title" {
+		if o := overrides(); len(o) != 1 || o["title"].Value != "Edited Title" {
 			t.Fatalf("overrides = %v, want only the title", o)
 		}
 		if n := enriched(); n != 0 {

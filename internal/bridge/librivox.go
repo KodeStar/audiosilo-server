@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 // LibriVox L6: adding a LibriVox recording to a books library. The admin picks
@@ -88,7 +87,7 @@ func librivoxFetchSuffix(j NewJob) string {
 // by admin requestedBy. A title is kept to one line of at most
 // maxLibrivoxTitle bytes.
 func LibrivoxFetch(p LibrivoxFetchParams, requestedBy int64) NewJob {
-	p.Title = strings.TrimSpace(cleanText(p.Title, maxLibrivoxTitle, false))
+	p.Title = CleanText(p.Title, maxLibrivoxTitle)
 	raw, _ := json.Marshal(p)
 	lib := p.LibraryID
 	return NewJob{Kind: KindLibrivoxFetch, LibraryID: &lib, Params: raw, RequestedBy: requestedBy}
