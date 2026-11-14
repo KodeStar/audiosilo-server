@@ -456,9 +456,13 @@ const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, 
 	b.tag_asin, b.tag_isbn, b.tag_language, b.genres, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''),
 	COALESCE(bh.asin, ''), COALESCE(bh.isbn, '')`
 
+// bookMatchJoin joins a book's recorded community match (bm) after `books b`,
+// for a query that reads the match alone.
+const bookMatchJoin = ` LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path`
+
 // matchSubjectJoin is the join matchSubjectCols reads the match and the hint
 // from (one row each at most: the hint's source is pinned).
-const matchSubjectJoin = ` LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path
+const matchSubjectJoin = bookMatchJoin + `
 	LEFT JOIN book_hints bh ON bh.library_id = b.library_id AND bh.path = b.rel_path AND bh.source = '` + HintSourceABS + `'`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
@@ -551,7 +555,7 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
 		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
 		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, '')
-		   FROM books b`+matchSubjectJoin+`
+		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
 		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
 			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,
