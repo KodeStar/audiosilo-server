@@ -162,8 +162,8 @@ app code (they live in the image); only `/data` (db, config, certs) is persisted
 ```sh
 docker compose up -d           # see docker-compose.yml
 docker compose logs            # first run prints the admin password + auth code ONCE
-docker compose exec -u "$PUID:$PGID" audiosilo audiosilo --data /data reset-admin
-                               # lost it: a new admin password (PUID/PGID as set in the compose file;
+docker compose exec -u 1000:1000 audiosilo audiosilo --data /data reset-admin
+                               # lost it: a new admin password (1000:1000 = the compose file's PUID:PGID;
                                # until the admin signs in, each start's log prints the exact command)
 ```
 
