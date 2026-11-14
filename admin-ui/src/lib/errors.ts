@@ -44,6 +44,7 @@ const BY_CODE: Record<string, string> = {
   invalid_url: 'errors.invalidUrl',
   invalid_import: 'errors.invalidImport',
   abs_unreachable: 'errors.absUnreachable',
+  abs_certificate: 'errors.absCertificate',
   not_abs: 'errors.notAbs',
   abs_unauthorized: 'errors.absUnauthorized',
   fetch_failed: 'errors.fetchFailed',

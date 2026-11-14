@@ -12,9 +12,10 @@ import { counted } from '@/lib/format';
  * Not matched category counts (the same summary: ignored books are left out)
  * and opens that category, where the card says what a run sends before it
  * starts. Shown only while there are such books; the server lists none while
- * community metadata is off.
+ * community metadata is off. It never starts a run itself. `newTab` opens Health
+ * in a new tab, for a page that must stay open (the setup flow's abs step).
  */
-export function UnmatchedPrompt({ className }: { className?: string }) {
+export function UnmatchedPrompt({ className, newTab }: { className?: string; newTab?: boolean }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const issues = useIssues();
@@ -31,6 +32,7 @@ export function UnmatchedPrompt({ className }: { className?: string }) {
           to="/health/{-$section}"
           params={{ section: undefined }}
           search={{ issue: 'unmatched' }}
+          {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}
           className={buttonVariants({ variant: 'outline', size: 'sm' })}
         >
           <Sparkles aria-hidden="true" />

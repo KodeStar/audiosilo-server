@@ -1,9 +1,16 @@
 import { ApiError } from '@/api/client';
 import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
-import { settingsWith, settingsWithMetadata } from '@/test/fixtures';
+import {
+  idle,
+  libraries,
+  podcastLibrary,
+  settingsWith,
+  settingsWithMetadata,
+} from '@/test/fixtures';
 import {
   accountPlan,
   addressMismatch,
+  booksScanning,
   compareField,
   disagreements,
   finishMarks,
@@ -449,6 +456,19 @@ describe('how people reach the server', () => {
     expect(reachOffers('nas.local')).toEqual(['lan', 'public']);
     expect(reachOffers('books.example.com')).toEqual(['public']);
     expect(reachOffers('100.64.0.1:8080')).toEqual(['public']);
+  });
+});
+
+describe('booksScanning', () => {
+  it("holds the abs step's import while a books library scans or waits to", () => {
+    expect(booksScanning([])).toBe(false);
+    expect(booksScanning(libraries())).toBe(false);
+    expect(booksScanning(libraries([{ scan: { ...idle, running: true, total: 9 } }]))).toBe(true);
+    expect(booksScanning(libraries([{}, { scan: { ...idle, queued: true } }]))).toBe(true);
+  });
+
+  it('ignores a podcast library scanning', () => {
+    expect(booksScanning([{ ...podcastLibrary, scan: { ...idle, running: true } }])).toBe(false);
   });
 });
 

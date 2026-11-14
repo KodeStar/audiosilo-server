@@ -2400,7 +2400,7 @@ export interface Import {
   applied_at: string | null;
   /** "" unless failed: a safe English sentence. */
   error: string;
-  /** "" unless failed: abs_unreachable | abs_unauthorized | not_abs | interrupted | fetch_failed. */
+  /** "" unless failed: abs_unreachable | abs_certificate | abs_unauthorized | not_abs | interrupted | fetch_failed. */
   error_code: string;
   /** null while fetching, or when it failed before planning. */
   summary: ImportSummary | null;

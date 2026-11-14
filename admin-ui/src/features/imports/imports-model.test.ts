@@ -8,6 +8,7 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
+  hasApplied,
   identifierOnlyBooks,
   importEmpty,
   importIdentifiers,
@@ -209,6 +210,7 @@ describe('summary', () => {
     expect(unmatchedReasonKey('no_match')).toBe('imports.unmatched.reason.no_match');
     expect(unmatchedReasonKey('split_discs')).toBe('imports.unmatched.reason.split_discs');
     expect(failureHintKey('abs_unauthorized')).toBe('imports.failure.abs_unauthorized');
+    expect(failureHintKey('abs_certificate')).toBe('imports.failure.abs_certificate');
     expect(failureHintKey('interrupted')).toBe('imports.failure.interrupted');
     expect(failureHintKey('something_new')).toBe('imports.failure.fetch_failed');
   });
@@ -241,6 +243,12 @@ describe('import lists', () => {
     const { open, done } = splitImports(list);
     expect(open.map((i) => i.id)).toEqual([1, 3, 5]);
     expect(done.map((i) => i.id)).toEqual([2, 4]);
+  });
+
+  it('knows when an import is applied (the match offer follows one)', () => {
+    expect(hasApplied([])).toBe(false);
+    expect(hasApplied([imp({ status: 'review' }), imp({ status: 'undone' })])).toBe(false);
+    expect(hasApplied([imp({ status: 'failed' }), imp({ status: 'applied' })])).toBe(true);
   });
 
   it("finds the person's applied import an apply would replace", () => {

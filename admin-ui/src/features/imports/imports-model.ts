@@ -183,6 +183,7 @@ export function unmatchedReasonKey(reason: UnmatchedItem['reason']): string {
 
 const FAILURE_CODES = [
   'abs_unreachable',
+  'abs_certificate',
   'abs_unauthorized',
   'not_abs',
   'interrupted',
@@ -202,6 +203,11 @@ export function splitImports(list: Import[]): { open: Import[]; done: Import[] }
   const done: Import[] = [];
   for (const i of list) (i.status === 'applied' || i.status === 'undone' ? done : open).push(i);
   return { open, done };
+}
+
+/** Whether any import in the list is applied (the match offer follows one). */
+export function hasApplied(list: readonly Pick<Import, 'status'>[]): boolean {
+  return list.some((i) => i.status === 'applied');
 }
 
 /** The import an apply for this person would replace: their applied one from the same source. */

@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   CircleCheck,
-  ExternalLink,
   Headphones,
   Link2,
   LoaderCircle,
@@ -24,21 +23,26 @@ import { PairDialog } from '@/features/bridge/pair-dialog';
 import { BridgeSetupList } from '@/features/bridge/setup-list';
 import { useBridge, usePairCode } from '@/features/bridge/use-bridge';
 import { playerConnectUrl } from '@/features/book/book-model';
+import { ImportFlow } from '@/features/imports/import-topic';
 import { useCurrentUser } from '@/lib/session';
 import { usePlayerTab } from '@/lib/use-player-tab';
 import { cn } from '@/lib/utils';
-import { phoneLink } from './setup-model';
+import { booksScanning, hasBookLibrary, phoneLink } from './setup-model';
 import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
 
 /**
- * The abs step: coming from Audiobookshelf. Points to the listening import (in a new
- * tab, so the flow stays open) and says ABS metadata.json files are read. An
- * info-only step: Continue records it done (someone who never used
+ * The abs step: coming from Audiobookshelf. The listening import itself, inline
+ * (Settings > Import's ImportFlow), and that ABS metadata.json files are read.
+ * While a library's first scan runs, Connect waits for it (the import matches
+ * against the books the scan finds); once scanned, or once an import is
+ * applied, it offers Match automatically (never started without the admin).
+ * Continue records the step done whatever was imported (someone who never used
  * Audiobookshelf has nothing left to do here), Skip skipped.
  */
-export function AbsStep({ leave, back, last }: StepProps) {
+export function AbsStep({ libraries, leave, back, last }: StepProps) {
   const { t } = useTranslation();
+  const scanning = booksScanning(libraries);
   return (
     <>
       <div className="flex flex-col gap-4">
@@ -47,19 +51,11 @@ export function AbsStep({ leave, back, last }: StepProps) {
           <li>{t('setup.abs.import')}</li>
           <li>{t('setup.abs.metadata')}</li>
         </ul>
-        <div>
-          <Link
-            to="/server/{-$section}"
-            params={{ section: undefined }}
-            search={{ topic: 'import' }}
-            target="_blank"
-            rel="noreferrer"
-            className={buttonVariants({ variant: 'outline' })}
-          >
-            <ExternalLink aria-hidden="true" />
-            {t('setup.abs.open')}
-          </Link>
-        </div>
+        <ImportFlow
+          embedded
+          blocked={scanning ? t('setup.abs.waitScan') : undefined}
+          offerMatch={!scanning && hasBookLibrary(libraries)}
+        />
       </div>
       <StepFooter
         back={back}

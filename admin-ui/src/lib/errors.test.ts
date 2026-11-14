@@ -59,6 +59,7 @@ describe('errorMessage', () => {
       'import_not_applied',
       'import_applied',
       'abs_unreachable',
+      'abs_certificate',
       'abs_unauthorized',
       'not_abs',
       'fetch_failed',

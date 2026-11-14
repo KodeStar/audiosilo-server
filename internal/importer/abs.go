@@ -8,6 +8,7 @@ package importer
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 // Error codes (catalog.Import.ErrorCode, and the users endpoint's 502 codes).
 const (
 	CodeUnreachable  = "abs_unreachable"
+	CodeCertificate  = "abs_certificate"
 	CodeUnauthorized = "abs_unauthorized"
 	CodeNotABS       = "not_abs"
 	CodeFetchFailed  = "fetch_failed"
@@ -48,6 +50,7 @@ func (e *Error) Unwrap() error { return e.err }
 func absErr(code string, cause error) *Error {
 	msg := map[string]string{
 		CodeUnreachable:  "Could not reach the Audiobookshelf server.",
+		CodeCertificate:  "This server does not trust Audiobookshelf's https certificate.",
 		CodeUnauthorized: "Audiobookshelf refused the API token.",
 		CodeNotABS:       "That address is not an Audiobookshelf server.",
 		CodeFetchFailed:  "Audiobookshelf sent something the import could not read.",
@@ -142,6 +145,9 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, limit i
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if certificateError(err) {
+			return absErr(CodeCertificate, err)
+		}
 		return absErr(CodeUnreachable, err)
 	}
 	defer resp.Body.Close()
@@ -165,6 +171,15 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, limit i
 		return absErr(CodeFetchFailed, errors.New("undecodable response"))
 	}
 	return nil
+}
+
+// certificateError reports whether err is the https handshake refusing ABS's
+// certificate: one this server doesn't trust (often self-signed), for another
+// name, or expired. Its own code, so the console can point at the plain http://
+// address; a certificate is never trusted anyway (no "ignore TLS" switch).
+func certificateError(err error) bool {
+	_, ok := errors.AsType[*tls.CertificateVerificationError](err)
+	return ok
 }
 
 // statusError is an unexpected HTTP status, so a caller can fall back on a 403
@@ -192,7 +207,7 @@ func (c *Client) Status(ctx context.Context) (string, error) {
 	}
 	if err := c.get(ctx, "/status", nil, capSmall, false, &st); err != nil {
 		var ae *Error
-		if errors.As(err, &ae) && ae.Code != CodeUnreachable {
+		if errors.As(err, &ae) && ae.Code != CodeUnreachable && ae.Code != CodeCertificate {
 			return "", absErr(CodeNotABS, ae)
 		}
 		return "", err
