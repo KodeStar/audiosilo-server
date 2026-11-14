@@ -22,14 +22,28 @@ describe('sign-in gate', () => {
     });
     renderApp();
     const user = userEvent.setup();
+    // The first-run default (server#369): /setup is closed (fetch-mock's default).
     expect(
-      await screen.findByText('Setting up a new server? Open the setup link from the server log.'),
+      await screen.findByText(
+        /On a new server the username is admin and the password is in the server log/,
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Open the setup link/)).toBeNull();
     await user.type(await screen.findByLabelText('Username'), 'chris');
     await user.type(screen.getByLabelText('Password'), 'secret');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
     expect(getToken()).toBe('new-token');
+  });
+
+  it('points to the setup link instead while /setup is open (--setup, no admin yet)', async () => {
+    const calls = mockFetch({ 'HEAD /setup': { status: 200 } });
+    renderApp();
+    expect(
+      await screen.findByText('Setting up a new server? Open the setup link from the server log.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/On a new server the username is admin/)).toBeNull();
+    expect(calls.find((c) => c.path === '/setup')?.method).toBe('HEAD');
   });
 
   it('explains wrong credentials', async () => {

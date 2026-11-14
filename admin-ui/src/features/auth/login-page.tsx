@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, LoaderCircle } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
@@ -8,10 +8,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LanguageSelect } from '@/components/language-select';
 import { useSession, type SignedOutReason } from '@/lib/session';
+import { setupPageOpen } from './setup-probe';
 
 /**
  * Admin sign-in. Shown in place of the console whenever there is no valid
  * admin session, so the URL the admin asked for is kept and opens after signing in.
+ * Its hint is the first-run default (server#369): the username admin, the
+ * password in the server's log, reset-admin when it's lost; or, while the
+ * server's /setup page is open (--setup, no admin yet), to open that link.
  */
 export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const { t } = useTranslation();
@@ -21,6 +25,14 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(reason ? t(`auth.reason.${reason}`) : null);
   const errorId = useId();
+  const [setupOpen, setSetupOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void setupPageOpen().then((open) => live && setSetupOpen(open));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -55,7 +67,9 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
         <div className="rounded-xl border bg-card p-6 sm:p-8">
           <h1 className="text-[26px] font-bold tracking-[-0.03em]">{t('login.title')}</h1>
           <p className="mt-1.5 text-muted-foreground">{t('login.intro')}</p>
-          <p className="mt-3 text-[13px] text-muted-foreground">{t('login.setupHint')}</p>
+          <p className="mt-3 text-[13px] text-muted-foreground">
+            {t(setupOpen ? 'login.setupHint' : 'login.firstRunHint')}
+          </p>
           <form className="mt-6 flex flex-col gap-4" onSubmit={onSubmit} noValidate>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="login-username">{t('login.username')}</Label>

@@ -291,6 +291,15 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
 
 export const settings: AdminSettings = settingsWith();
 
+/** The settings with some metadata fields set, and the settings the environment locks. */
+export function settingsWithMetadata(
+  metadata: Partial<AdminSettings['metadata']>,
+  locked: AdminSettings['locked'] = {},
+): AdminSettings {
+  const s = settingsWith();
+  return { ...s, metadata: { ...s.metadata, ...metadata }, locked };
+}
+
 export function updateStatus(over: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
     enabled: true,

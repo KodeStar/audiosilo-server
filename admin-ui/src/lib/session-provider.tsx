@@ -79,6 +79,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setToken(token);
         setState({ status: 'signed-in', user });
       },
+      updateUser: (user) => setState({ status: 'signed-in', user }),
       signOut: async () => {
         try {
           await api.logout();

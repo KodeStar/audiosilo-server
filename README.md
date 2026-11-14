@@ -82,6 +82,8 @@ scripts/build-admin.sh
 go build -o bin/audiosilo ./cmd/audiosilo
 
 # First run: prints the admin password + auth code exactly once. Save them.
+# Until the admin first signs in, later starts print a reminder; lost it?
+# `./bin/audiosilo --data ./data reset-admin` prints a new one.
 # Default TLS is a self-signed cert (HTTPS); for plain HTTP locally use TLS off:
 AUDIOSILO_TLS_MODE=off ./bin/audiosilo --data ./data
 
@@ -160,6 +162,9 @@ app code (they live in the image); only `/data` (db, config, certs) is persisted
 ```sh
 docker compose up -d           # see docker-compose.yml
 docker compose logs            # first run prints the admin password + auth code ONCE
+docker compose exec -u 1000:1000 audiosilo audiosilo --data /data reset-admin
+                               # lost it: a new admin password (1000:1000 = the compose file's PUID:PGID;
+                               # until the admin signs in, each start's log prints the exact command)
 ```
 
 Edit `docker-compose.yml` to mount your audiobooks read-only, persist `./data`, and

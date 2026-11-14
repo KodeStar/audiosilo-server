@@ -158,6 +158,8 @@ export function setForbiddenHandler(fn: () => void) {
 }
 
 const LOGIN_PATH = '/auth/login';
+/** The 401 of the account's own password change that refuses the current password typed. */
+export const WRONG_CURRENT_PASSWORD = 'current_password_incorrect';
 
 /** How the console names itself to the server (X-AudioSilo-Client), so the People and Activity
  * screens can tell a console session from a player. It ships inside the server, so it sends no
@@ -191,9 +193,10 @@ async function send(
     headers,
     body: init.raw ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
   });
-  if (init.explicitToken === undefined) checkSession(res.status, path);
-  if (!res.ok) throw await apiError(res);
-  return res;
+  if (res.ok) return res;
+  const err = await apiError(res);
+  if (init.explicitToken === undefined) checkSession(err, path);
+  throw err;
 }
 
 async function apiError(res: Response): Promise<ApiError> {
@@ -235,14 +238,15 @@ async function request<T>(
 }
 
 /** What a 401 or 403 on the stored session means for the app (see the setters). */
-function checkSession(status: number, path: string) {
-  // Any 401 but a failed sign-in ends the session, including one sent with no
-  // token at all: another tab signed out and cleared it.
-  if (status === 401 && path !== LOGIN_PATH) {
+function checkSession(err: ApiError, path: string) {
+  // Any 401 but a failed sign-in or a wrong current password (the session is
+  // fine: the password typed wasn't) ends the session, including one sent with
+  // no token at all: another tab signed out and cleared it.
+  if (err.status === 401 && path !== LOGIN_PATH && err.code !== WRONG_CURRENT_PASSWORD) {
     clearToken();
     onUnauthorized();
   }
-  if (status === 403 && path.startsWith('/admin/')) onForbidden();
+  if (err.status === 403 && path.startsWith('/admin/')) onForbidden();
 }
 
 /** The path query every content endpoint takes (path is the identity, never an id). */
@@ -347,6 +351,13 @@ export const api = {
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
+  /**
+   * Sets the signed-in account's own password (204). `current` is required
+   * while the account has one (401 WRONG_CURRENT_PASSWORD when wrong); the session making the change
+   * stays signed in, the others end.
+   */
+  setOwnPassword: (password: string, current: string) =>
+    request<void>('POST', '/auth/password', { password, current_password: current }),
   /**
    * A single-use pairing token for the signed-in admin, which "Listen in
    * player" hands the web player (403 for an API key). `ttlSeconds` asks for a

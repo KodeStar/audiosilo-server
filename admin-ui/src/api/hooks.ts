@@ -391,6 +391,17 @@ export async function saveSetup(qc: QueryClient, patch: SetupPatch) {
   return state;
 }
 
+/**
+ * The signed-in admin chose their own password (the flow's account step, or
+ * People's dialog on their own account): the setup envelope, read once a
+ * session, stops saying they still have the one the server printed.
+ */
+export function notePasswordChosen(qc: QueryClient) {
+  qc.setQueryData<SetupEnvelope>(keys.setup, (env) =>
+    env ? { ...env, printed_password: false } : env,
+  );
+}
+
 /** Whether the Overview's support card shows (it changes only by days, or an answer). */
 export function useSupportStatus() {
   return useQuery({ queryKey: keys.support, queryFn: api.support, staleTime: 60 * 60_000 });

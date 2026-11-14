@@ -12,6 +12,7 @@ import { toast } from './toast';
 // maps it onto the field itself).
 const BY_CODE: Record<string, string> = {
   username_taken: 'errors.usernameTaken',
+  username_required: 'setup.account.usernameEmpty',
   name_taken: 'errors.nameTaken',
   last_admin: 'errors.lastAdmin',
   admin_needs_password: 'errors.adminNeedsPassword',

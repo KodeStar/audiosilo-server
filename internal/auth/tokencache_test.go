@@ -1,11 +1,15 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // cached reports whether the token cache holds secret's lookup for the current
@@ -151,6 +155,48 @@ func TestTokenCacheChecksExpiry(t *testing.T) {
 	if _, _, err := s.ResolveRequest(ctx, sess, Presence{}, KindSession); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("an expired session = %v, want ErrInvalidToken", err)
 	}
+}
+
+// A write by another process on the same file (reset-admin beside a running
+// server) never moves this handle's content generation, so the cache can't be
+// emptied by it: a row is read again once it is maxCachedTokenAge old, which is
+// when such a write is seen, used in between or not.
+func TestTokenCacheSeesAnotherProcessWithinItsMaxAge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := storetest.Path(t)
+	open := func() *store.DB {
+		db, err := store.Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	now := time.Now()
+	s := New(open(), func() time.Time { return now })
+	other := New(open(), nil)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	sess, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	kept, _ := s.IssueToken(ctx, u.ID, KindSession, "tablet", 0)
+	warm(t, s, sess, KindSession)
+	warm(t, s, kept, KindSession)
+	if err := other.RevokeToken(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(maxCachedTokenAge - time.Second)
+	if !cached(s, sess) {
+		t.Fatal("the other handle's write emptied this one's cache: the test no longer tests the age")
+	}
+	now = now.Add(time.Second)
+	if _, _, err := s.ResolveRequest(ctx, sess, Presence{}, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a session another process revoked, a cache age later = %v, want ErrInvalidToken", err)
+	}
+	// One nobody ended is read again, still valid, and held again.
+	if got, _, err := s.ResolveRequest(ctx, kept, Presence{}, KindSession); err != nil || got.ID != u.ID {
+		t.Fatalf("a valid session a cache age later = %+v, %v", got, err)
+	}
+	warm(t, s, kept, KindSession)
 }
 
 // Cast and pairing tokens are never cached: a cast token's grant and parent are
