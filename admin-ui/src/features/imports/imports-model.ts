@@ -151,9 +151,22 @@ export function importIdentifiers(s: ImportSummary): ImportIdentifiers | null {
   return ids && (ids.books > 0 || ids.already_matched > 0) ? ids : null;
 }
 
-/** Whether an import has nothing to add (no session, progress, finish or bookmark). */
-export function importEmpty(s: ImportSummary): boolean {
+/** Whether an import adds no listening history (no session, progress, finish or bookmark). */
+export function historyEmpty(s: ImportSummary): boolean {
   return !s.sessions && !s.progress && !s.finished && !s.bookmarks && !(s.estimated > 0);
+}
+
+/**
+ * Whether an import brings over only identifiers for matching: no listening history, but
+ * Audiobookshelf's ASIN or ISBN for some books. It can still be applied.
+ */
+export function identifiersOnly(s: ImportSummary): boolean {
+  return historyEmpty(s) && (s.identifiers?.books ?? 0) > 0;
+}
+
+/** Whether an import has nothing to add: no listening history and no identifiers either. */
+export function importEmpty(s: ImportSummary): boolean {
+  return historyEmpty(s) && !identifiersOnly(s);
 }
 
 /** The i18n key of why a book wasn't matched. */

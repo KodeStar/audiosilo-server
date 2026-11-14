@@ -8,6 +8,7 @@ import {
   ChevronRight,
   History,
   Import as ImportIcon,
+  Info,
   LoaderCircle,
   TriangleAlert,
 } from 'lucide-react';
@@ -46,6 +47,7 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
+  identifiersOnly,
   importEmpty,
   importIdentifiers,
   initialMap,
@@ -591,12 +593,17 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
         onOpenChange={setApplying}
         title={t('imports.apply.title', { source: imp.source_user, user: imp.username })}
         description={
-          imp.summary
-            ? t('imports.apply.body', {
-                hours: formatHours(imp.summary.listened, lang),
-                ...counted(imp.summary.sessions, lang),
-              })
-            : undefined
+          !imp.summary
+            ? undefined
+            : identifiersOnly(imp.summary)
+              ? t(
+                  'imports.apply.identifiersOnly',
+                  counted(imp.summary.identifiers?.books ?? 0, lang),
+                )
+              : t('imports.apply.body', {
+                  hours: formatHours(imp.summary.listened, lang),
+                  ...counted(imp.summary.sessions, lang),
+                })
         }
         icon={ImportIcon}
         tone="brand"
@@ -611,7 +618,11 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           }
           toast.add({
             title: t('imports.apply.done', { user: imp.username }),
-            description: t('imports.apply.doneBody'),
+            description: t(
+              imp.summary && identifiersOnly(imp.summary)
+                ? 'imports.apply.doneIdentifiers'
+                : 'imports.apply.doneBody',
+            ),
             type: 'success',
           });
         }}
@@ -694,6 +705,10 @@ function SummaryView({
       {importEmpty(s) ? (
         <Notice tone="warn" icon={TriangleAlert} title={t('imports.summary.emptyTitle')}>
           {t('imports.summary.emptyBody')}
+        </Notice>
+      ) : identifiersOnly(s) ? (
+        <Notice tone="info" icon={Info} title={t('imports.summary.identifiersOnlyTitle')}>
+          {t('imports.summary.identifiersOnlyBody', counted(s.identifiers?.books ?? 0, lang))}
         </Notice>
       ) : (
         <p className="flex flex-wrap items-baseline gap-x-2">

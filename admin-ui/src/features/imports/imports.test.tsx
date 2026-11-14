@@ -454,6 +454,74 @@ describe('import: review', () => {
     expect(within(older).queryByText('ASIN or ISBN for matching')).not.toBeInTheDocument();
   });
 
+  it('applies an import with identifiers for matching and no listening', async () => {
+    const onlyIds = summary({
+      sessions: 0,
+      skipped_after_cutoff: 0,
+      listened: 0,
+      progress: 0,
+      finished: 0,
+      bookmarks: 0,
+      first_listen: null,
+      last_listen: null,
+      identifiers: { books: 5, asin: 5, isbn: 0, by_title: 0, already_matched: 0 },
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/imports': { body: { imports: [imp({ summary: onlyIds })] } },
+        'GET /admin/imports/7': { body: detail({ summary: onlyIds }) },
+        'POST /admin/imports/7/apply': {
+          body: imp({ summary: onlyIds, status: 'applied', applied_at: new Date().toISOString() }),
+        },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const user = userEvent.setup();
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    expect(await within(card).findByText('No listening to import')).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        /Applying brings over Audiobookshelf's ASIN or ISBN for 5 books as match hints/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText('Nothing to import')).not.toBeInTheDocument();
+    const apply = within(card).getByRole('button', { name: 'Apply for sam' });
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        "Brings over Audiobookshelf's ASIN or ISBN for 5 books as match hints, with no listening. You can undo it later.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply import' }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/imports/7/apply')).toBe(
+        true,
+      ),
+    );
+  });
+
+  it('keeps Apply off when there is nothing at all to bring over', async () => {
+    const nothing = summary({
+      sessions: 0,
+      progress: 0,
+      finished: 0,
+      bookmarks: 0,
+      identifiers: { books: 0, asin: 0, isbn: 0, by_title: 0, already_matched: 3 },
+    });
+    mockFetch(
+      routes({
+        'GET /admin/imports': { body: { imports: [imp({ summary: nothing })] } },
+        'GET /admin/imports/7': { body: detail({ summary: nothing }) },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    expect(await within(card).findByText('Nothing to import')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Apply for sam' })).toBeDisabled();
+  });
+
   it('says what an apply replaces', async () => {
     mockFetch(
       routes({

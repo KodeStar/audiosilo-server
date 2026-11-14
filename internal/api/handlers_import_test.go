@@ -285,6 +285,58 @@ func (e *importEnv) hintOf(t *testing.T, lib, path string) *catalog.Book {
 	return nil
 }
 
+// TestImportIdentifiersOnly: jo's history is on two books this server doesn't
+// have, so their import brings no listening, only ABS's identifiers for the books
+// it pairs: it still applies (the hints written, nothing else) and undoes.
+func TestImportIdentifiersOnly(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	var started struct {
+		Imports []catalog.Import `json:"imports"`
+	}
+	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":%q,"users":[{"abs_user_id":%q,"user_id":%d}]}`,
+		e.abs.URL, abstest.AdminToken, abstest.JoID, e.alexID), 202, &started)
+	e.api.imports.Wait()
+	id := started.Imports[0].ID
+	var d catalog.ImportDetail
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 200, &d)
+	s := d.Summary
+	if d.Status != catalog.ImportReview || s == nil || s.Sessions != 0 || s.Progress != 0 || s.Finished != 0 ||
+		s.Bookmarks != 0 || s.Estimated != 0 || s.Identifiers == nil || s.Identifiers.Books != 5 {
+		t.Fatalf("review = %+v %+v", d.Import, s)
+	}
+
+	var imp catalog.Import
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", id), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportApplied || imp.Summary.Identifiers == nil || imp.Summary.Identifiers.Books != 5 {
+		t.Fatalf("applied = %+v", imp)
+	}
+	const hp = "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"
+	if b := e.hintOf(t, "Kids", hp); b.HintASIN != "B017V568SY" {
+		t.Fatalf("hint after the apply = %q", b.HintASIN)
+	}
+	first, err := e.cat.ListeningStart(context.Background(), e.alexID, time.Local)
+	if err != nil || !first.IsZero() {
+		t.Fatalf("listening after an identifier-only apply: %v %v", first, err)
+	}
+	var stats struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	if stats.Stats.Totals.Listened != 0 || stats.Stats.Totals.Finished != 0 {
+		t.Errorf("alex's stats = %+v, want nothing imported", stats.Stats.Totals)
+	}
+
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", id), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportUndone {
+		t.Fatalf("undone = %+v", imp)
+	}
+	if b := e.hintOf(t, "Kids", hp); b.HintASIN != "" {
+		t.Fatalf("hint after the undo = %q", b.HintASIN)
+	}
+	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 204, nil)
+}
+
 // startAlex starts an import of the recorded alex into Alex and waits for its
 // review.
 func (e *importEnv) startAlex(t *testing.T) catalog.ImportDetail {

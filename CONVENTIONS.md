@@ -2353,7 +2353,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   leaves the hints a later one wrote, and the later one's undo takes them, even another person's). An
   undo (and a re-import's taking back of the previous one) deletes the import's rows. A hint is never
   the book's ASIN/ISBN and never on the wire: Match sends it (Admin catalog API, Tag identifiers are
-  hints). The console's review row: "ASIN or ISBN for matching".
+  hints). The console's review row: "ASIN or ISBN for matching"; an import with identifiers and no
+  listening history (`identifiersOnly`) still applies (the server never refused an empty plan; the
+  console's `importEmpty` now means no history and no identifiers) and says it brings only match hints.
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
   Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
