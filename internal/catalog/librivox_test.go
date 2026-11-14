@@ -310,3 +310,37 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		}
 	})
 }
+
+// TestLibrivoxFetchMatchRefusedResult: a result that names another library or
+// project than the job's is one the fold refused, so the notification never
+// reads it as matched, even when the book it names is matched as the job's
+// recording.
+func TestLibrivoxFetchMatchRefusedResult(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/other"})
+	const path = "L. Leslie Brooke/Johnny Crow's Garden"
+	for _, id := range []int64{lib.ID, other.ID} {
+		if _, err := c.UpsertBook(ctx, scannedBook(id, path)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx, `INSERT INTO book_matches(library_id, path, work_id, recording_id, how, set_at)
+			VALUES(?, ?, 'johnny-crows-garden', 'lv192', 'accepted', 't')`, id, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := bridge.LibrivoxFetchParams{LibrivoxID: 192, WorkID: "johnny-crows-garden", RecordingID: "lv192", LibraryID: lib.ID}
+	for name, tc := range map[string]struct {
+		r    bridge.LibrivoxFetchResult
+		want string
+	}{
+		"the job's own":   {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 192}, LibrivoxMatched},
+		"another library": {bridge.LibrivoxFetchResult{LibraryID: other.ID, Path: path, LibrivoxID: 192}, LibrivoxUnmatched},
+		"another project": {bridge.LibrivoxFetchResult{LibraryID: lib.ID, Path: path, LibrivoxID: 193}, LibrivoxUnmatched},
+	} {
+		if got := c.LibrivoxFetchMatch(ctx, p, tc.r); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}

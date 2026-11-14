@@ -3771,10 +3771,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule). A job whose params name no recording writes nothing. `/meta` then answers the book from
   its recorded match (LibriVox L5) with no change. Its notification (`notifyBridgeJob`, after the
   fold) carries `librivox_match` (`matched`, `kept`, `unmatched`; `catalog.LibrivoxFetchMatch`) from the
-  book's match now, and claims the recording only when matched. Known limits: a fold lost
+  book's match now (`unmatched` too for a result naming another library or project than the
+  job's, which the fold refused), and claims the recording only when matched. Known limits: a fold lost
   between the job's commit and the fold (a crash), and Clear community matches, drop the
   identity until the server reads `librivox.json` (a follow-up); Add again finds the placed
-  folder (the Bridge adopts one holding the project's `librivox.json`) and records it. **Console**: Library > LibriVox
+  folder (the Bridge adopts one holding the project's `librivox.json`) and records it, but only
+  while the path holds no match: an adopted fold is insert-only, so a match recorded there since
+  (a bulk run's, or a deleted book's leftover a lost fold never replaced) stays, `kept`. **Console**: Library > LibriVox
   (`features/librivox/`): a row follows its job by id, asks the work again when it ends and, for
   a done one, once more a moment later (`DONE_RECHECK_MS`: the fold commits just after the job
   reads done), and a job that is gone (404) is followed no more.

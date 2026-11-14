@@ -109,8 +109,13 @@ const (
 // notification says: LibrivoxMatched as the job's recording, LibrivoxKept when
 // the Bridge adopted a book matched to something else (an admin's rematch,
 // which the fold keeps), LibrivoxUnmatched when it is neither (the fold
-// failed), "" when the match can't be read.
+// failed), "" when the match can't be read. A result that names another
+// library or project than the job's is one the fold refused, so it is
+// LibrivoxUnmatched whatever is matched at the path it names.
 func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult) string {
+	if r.LibraryID != p.LibraryID || r.LibrivoxID != p.LibrivoxID {
+		return LibrivoxUnmatched
+	}
 	m, err := bookAnchor(ctx, c.db, r.LibraryID, r.Path)
 	switch {
 	case err != nil:
