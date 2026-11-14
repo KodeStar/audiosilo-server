@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { useSaveSettings } from '@/features/settings/use-save-settings';
 import { toastError } from '@/lib/errors';
 import { browserNearestRegion } from '@/lib/nearest-region';
-import { regionName, storeOf } from '@/lib/regions';
+import { regionLabel, regionName } from '@/lib/regions';
 import { offerRegion } from './setup-model';
 
 /**
@@ -21,10 +21,11 @@ export function RegionSuggestion({ settings }: { settings: AdminSettings }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const save = useSaveSettings();
-  const [nearest] = useState(browserNearestRegion);
+  const offered = offerRegion(settings);
+  const [nearest] = useState(() => (offered ? browserNearestRegion() : null));
   const [busy, setBusy] = useState(false);
   // The US store is what "No preference" already takes first: nothing to offer.
-  if (!offerRegion(settings) || nearest === 'us') return null;
+  if (!offered || nearest === null || nearest === 'us') return null;
 
   const choose = async (region: string) => {
     setBusy(true);
@@ -41,7 +42,7 @@ export function RegionSuggestion({ settings }: { settings: AdminSettings }) {
     <div className="flex flex-wrap items-center gap-3 py-4" role="status">
       <MapPin className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="min-w-0 flex-1 basis-60 text-[13px]">
-        {t('setup.region.nearest', { region: `${name} (${storeOf(nearest)})` })}
+        {t('setup.region.nearest', { region: regionLabel(nearest, lang) })}
       </span>
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" disabled={busy} onClick={() => void choose(nearest)}>

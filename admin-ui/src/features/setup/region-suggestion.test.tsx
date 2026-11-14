@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminSettings } from '@/api/types';
 import { mockFetch } from '@/test/fetch-mock';
-import { settingsWith, systemStatus } from '@/test/fixtures';
+import { settingsWithMetadata, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { patchEcho, signedInRoutes } from '@/test/routes';
 
@@ -17,23 +17,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function withMetadata(m: Partial<AdminSettings['metadata']>): AdminSettings {
-  const s = settingsWith();
-  s.metadata = { ...s.metadata, ...m };
-  return s;
-}
-
 function open(settings: AdminSettings) {
   // A save answers as a server would: the marketplace counts as chosen.
   const calls = mockFetch(
     signedInRoutes({
       'GET /admin/system': { body: systemStatus() },
       'GET /admin/settings': { body: settings },
-      'PATCH /admin/settings': (req) => {
-        const echo = patchEcho(settings) as (r: typeof req) => { body: AdminSettings };
-        const { body } = echo(req);
-        return { body: { ...body, metadata: { ...body.metadata, region_chosen: true } } };
-      },
+      'PATCH /admin/settings': patchEcho(settings, {
+        metadata: { ...settings.metadata, region_chosen: true },
+      }),
     }),
   );
   renderApp('/server?topic=metadata');
@@ -46,7 +38,7 @@ const patches = (calls: ReturnType<typeof mockFetch>) =>
 describe('the nearest marketplace in Settings', () => {
   it('offers it once, saving it in one click, with nothing unsaved before', async () => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['en-GB']);
-    const calls = open(withMetadata({ region_chosen: false }));
+    const calls = open(settingsWithMetadata({ region_chosen: false }));
     expect(
       await screen.findByText(
         'No marketplace chosen yet. Nearest to you: United Kingdom (audible.co.uk).',
@@ -63,7 +55,7 @@ describe('the nearest marketplace in Settings', () => {
 
   it('Keep no preference saves the US-first default as a choice', async () => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['de-AT']);
-    const calls = open(withMetadata({ region_chosen: false }));
+    const calls = open(settingsWithMetadata({ region_chosen: false }));
     await screen.findByText(/Nearest to you: Germany \(audible\.de\)/);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Keep no preference' }));
     await waitFor(() => expect(patches(calls)).toEqual([{ metadata: { region: '' } }]));
@@ -76,7 +68,7 @@ describe('the nearest marketplace in Settings', () => {
     ['an admin nearest the US store', { region_chosen: false }, ['en-US']],
   ])('offers nothing for %s', async (_, metadata, langs) => {
     vi.spyOn(navigator, 'languages', 'get').mockReturnValue(langs);
-    open(withMetadata(metadata));
+    open(settingsWithMetadata(metadata));
     expect(await screen.findByRole('combobox', { name: 'Audible marketplace' })).toBeVisible();
     expect(screen.queryByText(/Nearest to you/)).toBeNull();
   });

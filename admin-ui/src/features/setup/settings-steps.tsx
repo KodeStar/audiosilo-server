@@ -65,7 +65,7 @@ function useCreateDraftLibrary({ draft, setDraft, onCreated }: StepProps) {
 }
 
 /**
- * Step 4: community metadata. On or off (the server's main outbound traffic),
+ * The metadata step: community metadata. On or off (the server's main outbound traffic),
  * the marketplace, and the service or a local copy. Then the library is
  * created, so its first scan and first matches use them; Skip keeps the
  * settings as they are and still creates it. A marketplace never chosen starts
@@ -189,7 +189,7 @@ export function MetadataStep(props: StepProps) {
 }
 
 /**
- * Step 5: how people reach the server. The address this browser uses, offered
+ * The reach step: how people reach the server. The address this browser uses, offered
  * as the public or the home address (pairing QR codes are built from them); a
  * reverse proxy whose address isn't trusted yet, offered for trusted_proxies;
  * and the HTTPS mode with what it means for phones (restart settings, marked).
@@ -442,7 +442,7 @@ function AddressInput({
 }
 
 /**
- * Step 7: backups and updates. The schedule and how many to keep (the
+ * The backups step: backups and updates. The schedule and how many to keep (the
  * defaults: daily at 03:00, the newest 7), the folder they go to (set only in
  * config, so shown), and the daily update check (another outbound call).
  */

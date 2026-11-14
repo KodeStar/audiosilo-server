@@ -32,7 +32,7 @@ import { StepFooter } from './step-parts';
 import type { StepProps } from './step-actions';
 
 /**
- * Step 6: coming from Audiobookshelf. Points to the listening import (in a new
+ * The abs step: coming from Audiobookshelf. Points to the listening import (in a new
  * tab, so the flow stays open) and says ABS metadata.json files are read. An
  * info-only step: Continue records it done (someone who never used
  * Audiobookshelf has nothing left to do here), Skip skipped.
@@ -79,7 +79,7 @@ function connectUrl(p: PairToken): string {
 }
 
 /**
- * Step 9, the last: connect a phone. The pairing QR (a single-use token for
+ * The phone step, the last: connect a phone. The pairing QR (a single-use token for
  * this admin, ten minutes), how signing in works (the code, the log's auth code
  * or the password in the app, an invite for everyone else, server#369), the
  * web player in a new tab with its own token, whether ffmpeg is there for
@@ -250,7 +250,7 @@ function WebPlayerButton() {
 }
 
 /**
- * Step 8: add a Bridge (optional). What it does, the compose snippet (a
+ * The bridge step: add a Bridge (optional). What it does, the compose snippet (a
  * volume per library root), and a pairing code through the same dialog as
  * Settings > Bridge. Once a Bridge is paired, its own setup checklist (F2)
  * shows instead.

@@ -39,7 +39,7 @@ interface Target {
 }
 
 /**
- * Step 3: how books are named. A sample of the folder's books as their tags
+ * The naming step: how books are named. A sample of the folder's books as their tags
  * and their folders name them, side by side, with the blanks and the
  * disagreements marked. For the new library the side with fewer blanks is
  * preselected and the pick is its metadata_source. A library that exists
