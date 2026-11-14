@@ -2766,6 +2766,7 @@
   "imports.summary.identifiersOnlyBody_one": "Appliquer reprend l'ASIN ou l'ISBN d'Audiobookshelf pour {{formatted}} livre comme indice d'association, pour qu'Associer automatiquement le trouve. Aucune écoute, progression ni signet n'est ajouté.",
   "imports.summary.identifiersOnlyBody_many": "Appliquer reprend l'ASIN ou l'ISBN d'Audiobookshelf pour {{formatted}} livres comme indices d'association, pour qu'Associer automatiquement les trouve. Aucune écoute, progression ni signet n'est ajouté.",
   "imports.summary.identifiersOnlyBody_other": "Appliquer reprend l'ASIN ou l'ISBN d'Audiobookshelf pour {{formatted}} livres comme indices d'association, pour qu'Associer automatiquement les trouve. Aucune écoute, progression ni signet n'est ajouté.",
+  "imports.summary.keepsApplied": "Cette importation n'a aucune écoute pour {{user}} : l'appliquer annulerait l'importation déjà appliquée. Annulez d'abord celle-ci pour la remplacer.",
   "imports.summary.emptyTitle": "Rien à importer",
   "imports.summary.emptyBody": "Aucun livre avec un historique ne correspond à un livre d'ici, ou ceux qui correspondent sont déjà à jour ici et la limite exclut toutes les sessions. Consultez les livres non associés ou modifiez la limite.",
   "imports.unmatched.title_one": "{{formatted}} livre non associé",

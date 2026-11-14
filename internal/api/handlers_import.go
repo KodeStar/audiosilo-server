@@ -67,6 +67,9 @@ func (a *API) writeImportError(w http.ResponseWriter, err error, op, generic str
 		writeErrorCode(w, http.StatusNotFound, codeImportNotFound, "no such import")
 	case errors.Is(err, catalog.ErrImportNotReady):
 		writeErrorCode(w, http.StatusConflict, codeImportNotReady, "the import is not waiting for review")
+	case errors.Is(err, catalog.ErrImportNoListening):
+		writeErrorCode(w, http.StatusConflict, codeImportNotReady,
+			"this import has no listening for the person; undo the import already applied for them first to replace it")
 	case errors.Is(err, catalog.ErrImportNotApplied):
 		writeErrorCode(w, http.StatusConflict, codeImportNotApplied, "the import is not applied")
 	case errors.Is(err, catalog.ErrImportApplied):
@@ -238,7 +241,9 @@ func (a *API) handleUpdateImport(w http.ResponseWriter, r *http.Request) {
 
 // handleApplyImport serves POST /admin/imports/{id}/apply: writes the import
 // (replacing the person's previous one from Audiobookshelf). 404; 409
-// import_not_ready unless in review.
+// import_not_ready unless in review, and when it writes no listening while the
+// person has a previous applied import (catalog.ErrImportNoListening: undo that
+// one first).
 func (a *API) handleApplyImport(w http.ResponseWriter, r *http.Request) {
 	id, ok := importID(w, r)
 	if !ok {

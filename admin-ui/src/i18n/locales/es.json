@@ -2766,6 +2766,7 @@
   "imports.summary.identifiersOnlyBody_one": "Al aplicar se trae el ASIN o ISBN de Audiobookshelf para {{formatted}} libro como pista para asociar, para que Asociar automáticamente lo encuentre. No se añade escucha, progreso ni marcadores.",
   "imports.summary.identifiersOnlyBody_many": "Al aplicar se traen el ASIN o ISBN de Audiobookshelf para {{formatted}} libros como pistas para asociar, para que Asociar automáticamente los encuentre. No se añade escucha, progreso ni marcadores.",
   "imports.summary.identifiersOnlyBody_other": "Al aplicar se traen el ASIN o ISBN de Audiobookshelf para {{formatted}} libros como pistas para asociar, para que Asociar automáticamente los encuentre. No se añade escucha, progreso ni marcadores.",
+  "imports.summary.keepsApplied": "Esta importación no tiene escucha para {{user}}, así que aplicarla desharía la importación ya aplicada. Deshaz esa primero para sustituirla.",
   "imports.summary.emptyTitle": "Nada que importar",
   "imports.summary.emptyBody": "Ningún libro con historial coincide con uno de aquí, o los que coinciden ya están al día aquí y el corte omite todas las sesiones. Revisa los libros sin emparejar o cambia el corte.",
   "imports.unmatched.title_one": "{{formatted}} libro sin emparejar",

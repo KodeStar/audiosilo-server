@@ -2606,6 +2606,7 @@
   "imports.summary.identifiersOnlyTitle": "Kein Hörverlauf zu importieren",
   "imports.summary.identifiersOnlyBody_one": "Beim Anwenden wird die ASIN oder ISBN aus Audiobookshelf für {{formatted}} Buch als Hinweis für die Zuordnung übernommen, damit Automatisch zuordnen es findet. Hörzeit, Fortschritt und Lesezeichen kommen nicht dazu.",
   "imports.summary.identifiersOnlyBody_other": "Beim Anwenden wird die ASIN oder ISBN aus Audiobookshelf für {{formatted}} Bücher als Hinweis für die Zuordnung übernommen, damit Automatisch zuordnen sie findet. Hörzeit, Fortschritt und Lesezeichen kommen nicht dazu.",
+  "imports.summary.keepsApplied": "Dieser Import hat keinen Hörverlauf für {{user}}, Anwenden würde also den bereits angewendeten Import rückgängig machen. Mach diesen zuerst rückgängig, um ihn zu ersetzen.",
   "imports.summary.emptyTitle": "Nichts zu importieren",
   "imports.summary.emptyBody": "Kein Buch mit Verlauf passt zu einem Buch hier, oder die passenden Bücher sind hier schon aktuell und der Stichtag lässt jede Sitzung weg. Sieh dir die nicht zugeordneten Bücher an oder ändere den Stichtag.",
   "imports.unmatched.title_one": "{{formatted}} Buch nicht zugeordnet",

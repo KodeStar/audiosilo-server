@@ -1,14 +1,57 @@
 package catalog
 
 import (
+	"errors"
 	"testing"
+	"time"
 )
 
 // applyHints applies a new import for userID (from the fixture's ABS) that
-// writes only hints, and returns its id.
+// writes hints and a minute's listening (so it may replace an applied import),
+// and returns its id.
 func (f *importFixture) applyHints(t *testing.T, userID int64, hints ...BookHint) int64 {
 	t.Helper()
-	return f.applyWrite(t, userID, &ImportWrite{Hints: hints})
+	w := f.aDay()
+	w.Hints = hints
+	return f.applyWrite(t, userID, w)
+}
+
+// TestImportHintsOnlyKeepsApplied: an import that writes only hints applies for
+// a person with no applied import, but never replaces one they have: taking
+// that back for a write with no listening would only lose it, so the apply is
+// refused with nothing written, the applied import and its hints as they were.
+func TestImportHintsOnlyKeepsApplied(t *testing.T) {
+	t.Parallel()
+	f := newImportFixture(t)
+	jo := seedUserNamed(t, f.c, f.ctx, "jo")
+	f.applyWrite(t, jo, &ImportWrite{Hints: []BookHint{{Ref: f.other, ASIN: "B0ONLYHINT"}}})
+	if asin, _ := f.hintOf(t, f.other); asin != "B0ONLYHINT" {
+		t.Fatalf("hint-only import with nothing applied before: %q", asin)
+	}
+
+	first := f.applyHints(t, f.user, BookHint{Ref: f.book, ASIN: "B0FIRST001"})
+	second := f.newImport(t, time.Time{})
+	_, err := f.c.ApplyImport(f.ctx, second, func(ImportState) (*ImportWrite, error) {
+		return &ImportWrite{Hints: []BookHint{{Ref: f.book, ASIN: "B0SECOND01"}}}, nil
+	})
+	if !errors.Is(err, ErrImportNoListening) {
+		t.Fatalf("apply = %v, want ErrImportNoListening", err)
+	}
+	if d, _ := f.c.GetImport(f.ctx, first); d.Status != ImportApplied {
+		t.Errorf("first = %s, want applied", d.Status)
+	}
+	if d, _ := f.c.GetImport(f.ctx, second); d.Status != ImportReview {
+		t.Errorf("second = %s, want review", d.Status)
+	}
+	if asin, _ := f.hintOf(t, f.book); asin != "B0FIRST001" {
+		t.Errorf("hint after the refusal = %q", asin)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM listening_daily WHERE import_id = ?`, first); n != 1 {
+		t.Errorf("the first import's listening after the refusal = %d rows, want 1", n)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM book_hints WHERE import_id = ?`, second); n != 0 {
+		t.Errorf("the refused import wrote %d hints", n)
+	}
 }
 
 // hintOf is the book at ref's ABS hint as the match dialog reads it (GetBook),

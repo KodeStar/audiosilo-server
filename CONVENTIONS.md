@@ -2356,8 +2356,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   undo (and a re-import's taking back of the previous one) deletes the import's rows. A hint is never
   the book's ASIN/ISBN and never on the wire: Match sends it (Admin catalog API, Tag identifiers are
   hints). The console's review row: "ASIN or ISBN for matching"; an import with identifiers and no
-  listening history (`identifiersOnly`) still applies (the server never refused an empty plan; the
-  console's `importEmpty` now means no history and no identifiers) and says it brings only match hints.
+  listening history (`identifiersOnly`) still applies (the console's `importEmpty` now means no history
+  and no identifiers) and says it brings only match hints, unless the person has another applied import
+  from the source: an apply takes that one back first, so `ApplyImport` refuses a write with no listening
+  (no session, day, progress or bookmark) then (`ErrImportNoListening`, 409 `import_not_ready`, nothing
+  written) and the console turns Apply off with `wouldOnlyUndo` ("undo that one first").
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
   Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the

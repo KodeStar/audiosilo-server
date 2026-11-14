@@ -345,6 +345,67 @@ func TestImportIdentifiersOnly(t *testing.T) {
 	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 204, nil)
 }
 
+// TestImportIdentifiersOnlyKeepsAppliedImport: Alex already has alex's history
+// applied, so jo's import (identifiers only, no listening) must not replace it:
+// the apply is a 409 that writes nothing and leaves the applied import and its
+// listening as they were. Once that one is undone, jo's applies.
+func TestImportIdentifiersOnlyKeepsAppliedImport(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	first := e.startAlex(t)
+	var imp catalog.Import
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", first.ID), e.adminTok, "", 200, &imp)
+
+	var stats struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	before := stats.Stats.Totals
+	if before.Listened == 0 || before.Sessions == 0 {
+		t.Fatalf("alex's import wrote no listening: %+v", before)
+	}
+	const hp = "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"
+	hint := e.hintOf(t, "Kids", hp).HintASIN
+
+	jo := e.start(t, abstest.JoID)
+	if s := jo.Summary; s.Sessions != 0 || s.Progress != 0 || s.Bookmarks != 0 || s.Estimated != 0 ||
+		s.Identifiers == nil || s.Identifiers.Books == 0 {
+		t.Fatalf("jo's review = %+v", s)
+	}
+	var refused struct{ Code string }
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", jo.ID), e.adminTok, "", 409, &refused)
+	if refused.Code != codeImportNotReady {
+		t.Errorf("code = %q, want %q", refused.Code, codeImportNotReady)
+	}
+
+	var d catalog.ImportDetail
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", jo.ID), e.adminTok, "", 200, &d)
+	if d.Status != catalog.ImportReview {
+		t.Errorf("jo's import after the refusal = %s, want review", d.Status)
+	}
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", first.ID), e.adminTok, "", 200, &d)
+	if d.Status != catalog.ImportApplied {
+		t.Errorf("alex's import after the refusal = %s, want applied", d.Status)
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	if stats.Stats.Totals != before {
+		t.Errorf("stats after the refusal = %+v, want %+v", stats.Stats.Totals, before)
+	}
+	if got := e.hintOf(t, "Kids", hp).HintASIN; got != hint {
+		t.Errorf("hint after the refusal = %q, want %q", got, hint)
+	}
+
+	// Undo alex's first, as the console says: jo's then applies.
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", first.ID), e.adminTok, "", 200, &imp)
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", jo.ID), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportApplied {
+		t.Fatalf("jo's import = %+v", imp)
+	}
+	if got := e.hintOf(t, "Kids", hp).HintASIN; got != "B017V568SY" {
+		t.Errorf("jo's hint = %q", got)
+	}
+}
+
 // startAlex starts an import of the recorded alex into Alex and waits for its
 // review.
 func (e *importEnv) startAlex(t *testing.T) catalog.ImportDetail {

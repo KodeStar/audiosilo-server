@@ -502,6 +502,42 @@ describe('import: review', () => {
     );
   });
 
+  it('keeps Apply off when identifiers alone would undo the applied import', async () => {
+    const onlyIds = summary({
+      sessions: 0,
+      skipped_after_cutoff: 0,
+      listened: 0,
+      progress: 0,
+      finished: 0,
+      bookmarks: 0,
+      first_listen: null,
+      last_listen: null,
+      identifiers: { books: 5, asin: 5, isbn: 0, by_title: 0, already_matched: 0 },
+    });
+    mockFetch(
+      routes({
+        'GET /admin/imports': {
+          body: {
+            imports: [
+              imp({ summary: onlyIds }),
+              imp({ id: 3, status: 'applied', applied_at: '2026-03-02T10:00:00Z' }),
+            ],
+          },
+        },
+        'GET /admin/imports/7': { body: detail({ summary: onlyIds }) },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    expect(
+      await within(card).findByText(
+        'This import has no listening for sam, so applying it would undo the import already applied for them. Undo that one first to replace it.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText(/Applying brings over/)).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Apply for sam' })).toBeDisabled();
+  });
+
   it('keeps Apply off when there is nothing at all to bring over', async () => {
     const nothing = summary({
       sessions: 0,

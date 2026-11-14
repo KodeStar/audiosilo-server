@@ -20,6 +20,7 @@ import {
   sourceHost,
   splitImports,
   unmatchedReasonKey,
+  wouldOnlyUndo,
 } from './imports-model';
 
 const absUser = (abs_id: string, suggested: number | null): AbsUser => ({
@@ -248,5 +249,17 @@ describe('import lists', () => {
     expect(replacedBy(next, [next, old])).toBe(old);
     expect(replacedBy(next, [next, { ...old, user_id: 9 }])).toBeUndefined();
     expect(replacedBy(next, [next, { ...old, status: 'undone' }])).toBeUndefined();
+  });
+
+  it('keeps an apply with no listening from undoing the applied import', () => {
+    const none = summary({ sessions: 0, progress: 0, finished: 0, bookmarks: 0, estimated: 0 });
+    const ids = { books: 4, asin: 4, isbn: 0, by_title: 0, already_matched: 0 };
+    const next = imp({ id: 5, summary: { ...none, identifiers: ids } });
+    const old = imp({ id: 2, status: 'applied', applied_at: '2026-01-01T00:00:00Z' });
+    expect(wouldOnlyUndo(next, [next, old])).toBe(true);
+    expect(wouldOnlyUndo(next, [next])).toBe(false); // nothing applied: it applies
+    expect(wouldOnlyUndo(next, [next, { ...old, status: 'undone' }])).toBe(false);
+    expect(wouldOnlyUndo({ ...next, summary: summary() }, [next, old])).toBe(false); // listening
+    expect(wouldOnlyUndo({ ...next, summary: null }, [next, old])).toBe(false);
   });
 });

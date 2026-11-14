@@ -59,6 +59,7 @@ import {
   sourceHost,
   splitImports,
   unmatchedReasonKey,
+  wouldOnlyUndo,
   type CutoffChoice,
   type UserMap,
 } from './imports-model';
@@ -522,6 +523,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
   const title = t('imports.row.title', { source: imp.source_user, user: imp.username });
   const replaced = replacedBy(imp, all);
   const onlyIdentifiers = imp.summary ? identifierOnlyBooks(imp.summary) : 0;
+  const keepsApplied = wouldOnlyUndo(imp, all);
 
   return (
     <Card aria-labelledby={titleId}>
@@ -558,6 +560,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
         <SummaryView
           imp={imp}
           summary={imp.summary}
+          keepsApplied={keepsApplied}
           unmatched={detail.data?.unmatched_items}
           unmatchedLoading={detail.isLoading}
         />
@@ -574,7 +577,9 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           </Button>
           {imp.status !== 'failed' ? (
             <Button
-              disabled={imp.status !== 'review' || !imp.summary || importEmpty(imp.summary)}
+              disabled={
+                imp.status !== 'review' || !imp.summary || importEmpty(imp.summary) || keepsApplied
+              }
               onClick={() => setApplying(true)}
             >
               {imp.status === 'applying' ? (
@@ -640,11 +645,14 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
 function SummaryView({
   imp,
   summary: s,
+  keepsApplied,
   unmatched,
   unmatchedLoading,
 }: {
   imp: Import;
   summary: ImportSummary;
+  /** Applying would only undo the person's applied import (wouldOnlyUndo): Apply is off. */
+  keepsApplied: boolean;
   /** The unmatched books, once asked for. */
   unmatched: UnmatchedItem[] | undefined;
   unmatchedLoading: boolean;
@@ -704,8 +712,14 @@ function SummaryView({
           {t('imports.summary.emptyBody')}
         </Notice>
       ) : onlyIdentifiers > 0 ? (
-        <Notice tone="info" icon={Info} title={t('imports.summary.identifiersOnlyTitle')}>
-          {t('imports.summary.identifiersOnlyBody', counted(onlyIdentifiers, lang))}
+        <Notice
+          tone={keepsApplied ? 'warn' : 'info'}
+          icon={keepsApplied ? TriangleAlert : Info}
+          title={t('imports.summary.identifiersOnlyTitle')}
+        >
+          {keepsApplied
+            ? t('imports.summary.keepsApplied', { user: imp.username })
+            : t('imports.summary.identifiersOnlyBody', counted(onlyIdentifiers, lang))}
         </Notice>
       ) : (
         <p className="flex flex-wrap items-baseline gap-x-2">

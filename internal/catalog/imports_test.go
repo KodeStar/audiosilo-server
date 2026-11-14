@@ -65,6 +65,13 @@ func (f *importFixture) write(st ImportState) *ImportWrite {
 	return w
 }
 
+// aDay is a write with a minute's listening on the fixture's book and nothing
+// else (ApplyImport refuses a write with no listening that would replace an
+// applied import).
+func (f *importFixture) aDay() *ImportWrite {
+	return &ImportWrite{Days: []ImportDay{{Ref: f.book, Day: "2026-08-25", Listened: 60}}}
+}
+
 func (f *importFixture) apply(t *testing.T, id int64) *Import {
 	t.Helper()
 	imp, err := f.c.ApplyImport(f.ctx, id, func(st ImportState) (*ImportWrite, error) { return f.write(st), nil })
@@ -397,7 +404,7 @@ func TestReimportRestoresProgressExactly(t *testing.T) {
 	// now so a device holding the imported row takes it.
 	third := f.newImport(t, time.Time{})
 	if _, err := f.c.ApplyImport(f.ctx, third, func(ImportState) (*ImportWrite, error) {
-		return &ImportWrite{}, nil
+		return f.aDay(), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +456,7 @@ func TestUndoKeepsEditedBookmarks(t *testing.T) {
 	if got := st.Bookmarks[f.book]; len(got) != 2 || got[0].Note != "Relabelled" || got[1].Note != note {
 		t.Errorf("review bookmarks = %+v", got)
 	}
-	if _, err := f.c.ApplyImport(f.ctx, second, func(ImportState) (*ImportWrite, error) { return &ImportWrite{}, nil }); err != nil {
+	if _, err := f.c.ApplyImport(f.ctx, second, func(ImportState) (*ImportWrite, error) { return f.aDay(), nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM bookmarks WHERE import_id = 0`); n != 2 ||

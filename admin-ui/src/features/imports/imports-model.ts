@@ -215,6 +215,14 @@ export function replacedBy(imp: Import, list: Import[]): Import | undefined {
   );
 }
 
+/**
+ * Whether applying would only take back the person's applied import: this one adds no listening
+ * history (identifiers at most) and an apply undoes that one first, so the server refuses it (409).
+ */
+export function wouldOnlyUndo(imp: Import, list: Import[]): boolean {
+  return !!imp.summary && historyEmpty(imp.summary) && !!replacedBy(imp, list);
+}
+
 /** An address without its scheme, for a line of text ("books.example.com", "nas:13378/abs"). */
 export function sourceHost(url: string): string {
   const host = hostOf(url);

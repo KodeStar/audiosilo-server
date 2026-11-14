@@ -2606,6 +2606,7 @@
   "imports.summary.identifiersOnlyTitle": "No listening to import",
   "imports.summary.identifiersOnlyBody_one": "Applying brings over Audiobookshelf's ASIN or ISBN for {{formatted}} book as a match hint, so Match automatically can find it. No listening, progress or bookmarks are added.",
   "imports.summary.identifiersOnlyBody_other": "Applying brings over Audiobookshelf's ASIN or ISBN for {{formatted}} books as match hints, so Match automatically can find them. No listening, progress or bookmarks are added.",
+  "imports.summary.keepsApplied": "This import has no listening for {{user}}, so applying it would undo the import already applied for them. Undo that one first to replace it.",
   "imports.summary.emptyTitle": "Nothing to import",
   "imports.summary.emptyBody": "No book with history matched one here, or the books that did are already up to date here and the cutoff leaves out every session. Check the books that didn't match, or change the cutoff.",
   "imports.unmatched.title_one": "{{formatted}} book not matched",

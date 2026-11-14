@@ -49,6 +49,10 @@ var (
 	ErrImportNotApplied = errors.New("the import is not applied")
 	// ErrImportApplied: a delete of an applied import (undo it first).
 	ErrImportApplied = errors.New("the import is applied")
+	// ErrImportNoListening: an apply that writes no listening for the person
+	// (only identifiers, or nothing) while they have another applied import from
+	// the source, which the apply would take back and replace with nothing.
+	ErrImportNoListening = errors.New("the import has no listening to replace the applied one with")
 )
 
 // ImportMatched counts an import's matched items by how they matched.
@@ -579,6 +583,12 @@ type ImportWrite struct {
 	Zone         *time.Location
 }
 
+// hasListening reports whether w writes any listening for the person (its hints
+// aside).
+func (w *ImportWrite) hasListening() bool {
+	return len(w.Sessions) > 0 || len(w.Days) > 0 || len(w.Progress) > 0 || len(w.Bookmarks) > 0
+}
+
 // rollUp splits w's sessions for imp into the ones written as sessions and the
 // day totals of the ones already past the retention (RollUpBefore), summed as
 // PruneSessions sums them.
@@ -607,7 +617,10 @@ const ImportClientApp = "Audiobookshelf"
 // then one transaction takes back the person's previous applied import from the
 // same source (it becomes undone), reads the ImportState, asks build what to
 // write, writes it and marks the import applied. A failure puts it back in
-// review. ErrNotFound, or ErrImportNotReady unless it was in review.
+// review. ErrNotFound, or ErrImportNotReady unless it was in review;
+// ErrImportNoListening, with nothing written, when build writes no listening
+// (session, day, progress or bookmark) and there is a previous import to take
+// back: that would only lose the person's imported listening.
 //
 // The previous import's progress rows go back exactly as they were before it
 // (restoredProgress: their own updated_at), so the new import merges into the
@@ -648,6 +661,9 @@ func (c *Catalog) ApplyImport(ctx context.Context, id int64, build func(ImportSt
 		w, err := build(*st)
 		if err != nil {
 			return err
+		}
+		if prev != 0 && !w.hasListening() {
+			return ErrImportNoListening // the rollback puts the previous import back
 		}
 		if err := c.keepRewound(ctx, tx, imp.UserID, rewound, w); err != nil {
 			return err

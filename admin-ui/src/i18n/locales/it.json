@@ -2766,6 +2766,7 @@
   "imports.summary.identifiersOnlyBody_one": "Applicando si porta l'ASIN o l'ISBN di Audiobookshelf per {{formatted}} libro come indizio per l'abbinamento, così Associa automaticamente lo trova. Non si aggiungono ascolti, progressi né segnalibri.",
   "imports.summary.identifiersOnlyBody_many": "Applicando si portano l'ASIN o l'ISBN di Audiobookshelf per {{formatted}} libri come indizi per l'abbinamento, così Associa automaticamente li trova. Non si aggiungono ascolti, progressi né segnalibri.",
   "imports.summary.identifiersOnlyBody_other": "Applicando si portano l'ASIN o l'ISBN di Audiobookshelf per {{formatted}} libri come indizi per l'abbinamento, così Associa automaticamente li trova. Non si aggiungono ascolti, progressi né segnalibri.",
+  "imports.summary.keepsApplied": "Questa importazione non ha ascolti per {{user}}, quindi applicarla annullerebbe l'importazione già applicata. Annulla prima quella per sostituirla.",
   "imports.summary.emptyTitle": "Niente da importare",
   "imports.summary.emptyBody": "Nessun libro con cronologia corrisponde a uno di qui, oppure quelli che corrispondono sono già aggiornati qui e il limite esclude ogni sessione. Controlla i libri non abbinati o cambia il limite.",
   "imports.unmatched.title_one": "{{formatted}} libro non abbinato",
