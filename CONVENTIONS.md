@@ -1897,8 +1897,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
   it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
   off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
-  neither of its own: a hint the community knows whose length fits is an identifier hit (confident
-  while the book's title and series agree with it, above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
+  neither of its own, an Audiobookshelf import's hint first (`book_hints`, `0074`,
+  `Book.HintASIN`/`HintISBN`: ABS's identifiers carried by a listening import, see Listening imports;
+  joined into a run's subjects by `matchSubjectJoin` and read by `GetBook` for the dialog), else the
+  tag's (metaserve asks the ASIN first, so a tag's ISBN goes beside an import's ASIN, but a tag's ASIN
+  never beside an import's ISBN, which it would be asked ahead of): a hint the community knows whose
+  length fits is an identifier hit (confident while the book's title and series agree with it, above)
+  and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
   Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
   identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
   `benchharness`, never in CI; its scan hooks `metadata.ProbeTagsForBench` and
@@ -2348,7 +2353,29 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   import had moved it is then stamped now (`keepRewound`), as a standalone undo stamps it, so a
   device holding the old import's row adopts the rewind. `catalog.InterruptImports` (launcher, at start): fetching ->
   failed `interrupted`, applying -> review. `PruneSessions` rolls imported sessions up per import.
-  Audited `import.start|apply|undo`.
+  Audited `import.start|apply|undo`. **Identifiers as match hints** (server#366, `importer/identifiers.go`,
+  `catalog/hints.go`, `0074` `book_hints`): every import also carries ABS's ASIN/ISBN for the whole ABS
+  server, whoever's history it is: the payload's `identified` list (every ABS book with a valid ASIN or
+  ISBN, `itemIndex.identified`; absent from an older payload, which carries none; payload `v` stays 1) is
+  paired by `identifiersFor` with an all-access matcher, by path then title and author only (never the
+  identifier tier, which reads our own ids), skipping a book split into discs here, a
+  book two identified ABS books pair with (contested, judged among the identified ones only) and a book
+  already matched here (`Book.Matched`, `matchedExpr`: counted). The review (once per fetch,
+  for every user: the pairing reads nothing of a user's), a cutoff change and the apply (before its
+  transaction, like the history's matching) all pair them, so the summary's additive `identifiers {books, asin, isbn, by_title,
+  already_matched}` (absent from an import planned before it) matches what the apply writes:
+  `ImportWrite.Hints`, normalized and validated (`BookHint.Normalized`), one row per book and source,
+  owned by the import (`import_id`; the last import applied owns a row, so an earlier import's undo
+  leaves the hints a later one wrote, and the later one's undo takes them, even another person's). An
+  undo (and a re-import's taking back of the previous one) deletes the import's rows. A hint is never
+  the book's ASIN/ISBN and never on the wire: Match sends it (Admin catalog API, Tag identifiers are
+  hints). The console's review row: "ASIN or ISBN for matching"; an import with identifiers and no
+  listening history (`identifiersOnly`) still applies (the console's `importEmpty` now means no history
+  and no identifiers) and says it brings only match hints, unless the person has another applied import
+  from the source: an apply takes that one back first, so `ApplyImport` refuses a write with no listening
+  (no session, day or bookmark, and no progress row created or moved on: a start date moved earlier
+  is none, as the summary counts it) then (`ErrImportNoListening`, 409 `import_not_ready`, nothing
+  written) and the console turns Apply off with `wouldOnlyUndo` ("undo that one first").
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
   Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
@@ -3778,7 +3805,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners)
   and never another path's, by `adopted`: false (a vacant folder, so what is at the path is a
   deleted book's leftover) replaces the row and drops the path's ASIN/ISBN overrides (any source)
-  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match;
+  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match,
+  and its `book_hints` rows (the deleted book's Audiobookshelf hint, which the match dialog would send);
   true (an earlier fetch's book) inserts only when the path has no row, so an admin's rematch
   stays, and touches nothing else; absent replaces the row and touches nothing else (the L6
   rule). A job whose params name no recording writes nothing. `/meta` then answers the book from

@@ -867,6 +867,74 @@ func TestMatchHoldsAnIdentifierThatDisagrees(t *testing.T) {
 	}
 }
 
+// TestMatchSendsAnABSHint (server#366): a book an Audiobookshelf import gave an
+// ASIN (a hint, not its own: still unmatched) is looked up by it. A hit whose
+// title and series agree is confident and its apply records the match as any
+// confident item's; one that disagrees is held with identifier_disagrees.
+func TestMatchSendsAnABSHint(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Right", "Right Volume", "", nil)
+	e.book(t, "A/Wrong", "Wrong Volume", "", nil)
+	imps, err := e.cat.CreateImports(ctx, []catalog.Import{{UserID: e.admin, Source: catalog.ImportSourceABS, SourceURL: "http://abs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.FinishImportFetch(ctx, imps[0].ID, "abs", []byte("payload"), catalog.ImportPlan{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.ApplyImport(ctx, imps[0].ID, func(catalog.ImportState) (*catalog.ImportWrite, error) {
+		return &catalog.ImportWrite{Hints: []catalog.BookHint{
+			{Ref: catalog.Ref{LibraryID: e.lib, Path: "A/Right"}, ASIN: "B0RIGHT001"},
+			{Ref: catalog.Ref{LibraryID: e.lib, Path: "A/Wrong"}, ASIN: "B0WRONG001"}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unmatched, err := e.cat.UnmatchedBooks(ctx, e.lib); err != nil || len(unmatched) != 2 {
+		t.Fatalf("unmatched = %d %v, want both: a hint matches nothing", len(unmatched), err)
+	}
+	// metaserve answers only the hint's lookup.
+	e.matcher.answer = func(q meta.MatchQuery) []meta.MatchCandidate {
+		hit := func(title float64, series string) []meta.MatchCandidate {
+			c := cand("the-martian", 100, "")
+			c.Reasons = &meta.MatchReasons{Identifier: "asin", Title: &title, Series: series}
+			return []meta.MatchCandidate{c}
+		}
+		switch q.BookASIN {
+		case "B0RIGHT001":
+			return hit(1, "position")
+		case "B0WRONG001":
+			return hit(0.62, "conflict")
+		}
+		return nil
+	}
+
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 || run.Counts.Review != 1 {
+		t.Fatalf("run = %+v, want one confident, one held", run)
+	}
+	if review := e.items(t, run, catalog.OutcomeReview); len(review) != 1 || review[0].Path != "A/Wrong" ||
+		review[0].Detail != DetailIdentifierDisagrees {
+		t.Fatalf("review = %+v, want A/Wrong held with identifier_disagrees", review)
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeIDs, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	st, err := e.cat.BookMatchState(ctx, e.lib, "A/Right")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Anchor.WorkID != "the-martian" || st.Anchor.How != catalog.MatchHowAuto ||
+		st.Fields[catalog.FieldASIN].Value == "" || st.Fields[catalog.FieldASIN].Source != catalog.SourceCommunity {
+		t.Fatalf("A/Right after the apply = %+v %+v, want matched by the community, recorded auto", st.Anchor, st.Fields[catalog.FieldASIN])
+	}
+	if unmatched, _ := e.cat.UnmatchedBooks(ctx, e.lib); len(unmatched) != 1 || unmatched[0].RelPath != "A/Wrong" {
+		t.Fatalf("unmatched after the apply = %+v, want A/Wrong alone", unmatched)
+	}
+}
+
 // TestRefreshHoldsAnotherEdition: a book whose own ASIN names a recording of
 // another length (an unabridged book holding its dramatization's ASIN) is not
 // refreshed unasked: the record is offered for review, not applied.

@@ -580,7 +580,11 @@ export const api = {
   /** Changes the cutoff of an import in review; answers with it recounted (409 import_not_ready). */
   setImportCutoff: (id: number, cutoff: ImportCutoff) =>
     request<ImportDetail>('PATCH', `/admin/imports/${id}`, { cutoff }),
-  /** Writes the history (replacing the person's previous Audiobookshelf import). */
+  /**
+   * Writes the history (replacing the person's previous Audiobookshelf import). 409
+   * import_not_ready unless in review, or when it has no listening and would only undo
+   * the person's applied import (wouldOnlyUndo).
+   */
   applyImport: (id: number) => request<Import>('POST', `/admin/imports/${id}/apply`),
   /** Removes what an applied import added and puts progress back (409 import_not_applied). */
   undoImport: (id: number) => request<Import>('POST', `/admin/imports/${id}/undo`),

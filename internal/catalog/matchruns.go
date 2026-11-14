@@ -448,21 +448,29 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, scope stri
 }
 
 // matchSubjectCols are the facts a match reads of a book.
-// The book's recorded community match (book_matches) rides along by a LEFT
-// JOIN on its primary key, so every query naming these columns joins
-// matchSubjectJoin after `books b`.
+// The book's recorded community match (book_matches) and its Audiobookshelf
+// hint (book_hints) ride along by LEFT JOINs on their primary keys, so every
+// query naming these columns joins matchSubjectJoin after `books b`.
 const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series,
 	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn, b.language,
-	b.tag_asin, b.tag_isbn, b.tag_language, b.genres, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, '')`
+	b.tag_asin, b.tag_isbn, b.tag_language, b.genres, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''),
+	COALESCE(bh.asin, ''), COALESCE(bh.isbn, '')`
 
-// matchSubjectJoin is the join matchSubjectCols reads the match from.
-const matchSubjectJoin = ` LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path`
+// bookMatchJoin joins a book's recorded community match (bm) after `books b`,
+// for a query that reads the match alone.
+const bookMatchJoin = ` LEFT JOIN book_matches bm ON bm.library_id = b.library_id AND bm.path = b.rel_path`
+
+// matchSubjectJoin is the join matchSubjectCols reads the match and the hint
+// from (one row each at most: the hint's source is pinned).
+const matchSubjectJoin = bookMatchJoin + `
+	LEFT JOIN book_hints bh ON bh.library_id = b.library_id AND bh.path = b.rel_path AND bh.source = '` + HintSourceABS + `'`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
 	var genres string
 	if err := rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
 		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN, &b.Language,
-		&b.TagASIN, &b.TagISBN, &b.TagLanguage, &genres, &b.MatchWorkID, &b.MatchRecordingID); err != nil {
+		&b.TagASIN, &b.TagISBN, &b.TagLanguage, &genres, &b.MatchWorkID, &b.MatchRecordingID,
+		&b.HintASIN, &b.HintISBN); err != nil {
 		return err
 	}
 	b.Genres = ParseLabels(genres)
@@ -547,7 +555,7 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 		`SELECT b.id, b.title, b.author, b.duration, `+issuePredicates[IssueNoCover]+`,
 		        COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), COALESCE(bm.how, ''),
 		        COALESCE(bm.offered_asin, ''), COALESCE(bm.offered_isbn, '')
-		   FROM books b`+matchSubjectJoin+`
+		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, CleanRelPath(relPath)).
 		Scan(&id, &st.Title, &st.Author, &st.Duration, &st.CoverMissing,
 			&st.Anchor.WorkID, &st.Anchor.RecordingID, &st.Anchor.How,

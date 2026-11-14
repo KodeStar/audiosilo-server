@@ -2,6 +2,7 @@ import type {
   AbsUser,
   Import,
   ImportCutoff,
+  ImportIdentifiers,
   ImportMapping,
   ImportSummary,
   UnmatchedItem,
@@ -144,9 +145,29 @@ export function matchTiers(
     .filter((x) => x.count > 0);
 }
 
-/** Whether an import has nothing to add (no session, progress, finish or bookmark). */
-export function importEmpty(s: ImportSummary): boolean {
+/** The identifiers an import carries as match hints, when its summary says and there is any to tell. */
+export function importIdentifiers(s: ImportSummary): ImportIdentifiers | null {
+  const ids = s.identifiers;
+  return ids && (ids.books > 0 || ids.already_matched > 0) ? ids : null;
+}
+
+/** Whether an import adds no listening history (no session, progress, finish or bookmark). */
+function historyEmpty(s: ImportSummary): boolean {
   return !s.sessions && !s.progress && !s.finished && !s.bookmarks && !(s.estimated > 0);
+}
+
+/**
+ * How many books an import brings identifiers for when that is all it brings (no listening
+ * history, but Audiobookshelf's ASIN or ISBN for some books: it can still be applied), 0
+ * otherwise.
+ */
+export function identifierOnlyBooks(s: ImportSummary): number {
+  return historyEmpty(s) ? (s.identifiers?.books ?? 0) : 0;
+}
+
+/** Whether an import has nothing to add: no listening history and no identifiers either. */
+export function importEmpty(s: ImportSummary): boolean {
+  return historyEmpty(s) && identifierOnlyBooks(s) === 0;
 }
 
 /** The i18n key of why a book wasn't matched. */
@@ -192,6 +213,14 @@ export function replacedBy(imp: Import, list: Import[]): Import | undefined {
       o.source === imp.source &&
       o.status === 'applied',
   );
+}
+
+/**
+ * Whether applying would only take back the person's applied import: this one adds no listening
+ * history (identifiers at most) and an apply undoes that one first, so the server refuses it (409).
+ */
+export function wouldOnlyUndo(imp: Import, list: Import[]): boolean {
+  return !!imp.summary && historyEmpty(imp.summary) && !!replacedBy(imp, list);
 }
 
 /** An address without its scheme, for a line of text ("books.example.com", "nas:13378/abs"). */

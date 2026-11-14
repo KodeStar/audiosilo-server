@@ -18,9 +18,12 @@ import (
 //     Bridge's backfill or enrichment), except one a community match gave a
 //     book (a book_overrides row of source community): the community knows it;
 //   - else a book's tag ASIN (books.tag_asin), only when the book has no ASIN or
-//     ISBN of its own (matchrun.QueryFor's rule for sending the hint), no admin
+//     ISBN of its own (matchrun.QueryFor's rule for sending a hint), no admin
 //     edit of its ASIN (a cleared one too, as BackfillASIN's rule) and that tag
 //     is on exactly one book (a tag a batch of books share is a mis-tag).
+//
+// An Audiobookshelf import's hint (book_hints), which QueryFor sends ahead of
+// the tag's, is never one: of a book's hints the report sends its tag's only.
 func (c *Catalog) UnknownASINCandidates(ctx context.Context) ([]string, error) {
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT upper(trim(b.asin)) FROM books b WHERE `+inBookLibrary+` AND trim(b.asin) <> ''

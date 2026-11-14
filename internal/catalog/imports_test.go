@@ -65,6 +65,13 @@ func (f *importFixture) write(st ImportState) *ImportWrite {
 	return w
 }
 
+// aDay is a write with a minute's listening on the fixture's book and nothing
+// else (ApplyImport refuses a write with no listening that would replace an
+// applied import).
+func (f *importFixture) aDay() *ImportWrite {
+	return &ImportWrite{Days: []ImportDay{{Ref: f.book, Day: "2026-08-25", Listened: 60}}}
+}
+
 func (f *importFixture) apply(t *testing.T, id int64) *Import {
 	t.Helper()
 	imp, err := f.c.ApplyImport(f.ctx, id, func(st ImportState) (*ImportWrite, error) { return f.write(st), nil })
@@ -105,6 +112,18 @@ func starts(sessions []Session) []string {
 // the fixture's book at each start, and returns its id.
 func (f *importFixture) importSessions(t *testing.T, userID int64, at ...time.Time) int64 {
 	t.Helper()
+	w := &ImportWrite{}
+	for _, start := range at {
+		w.Sessions = append(w.Sessions, ImportSession{Ref: f.book, StartedAt: start,
+			LastAt: start.Add(time.Hour), Duration: 7200, Listened: 3600})
+	}
+	return f.applyWrite(t, userID, w)
+}
+
+// applyWrite applies a new import for userID (from the fixture's ABS) that
+// writes w, and returns its id.
+func (f *importFixture) applyWrite(t *testing.T, userID int64, w *ImportWrite) int64 {
+	t.Helper()
 	imps, err := f.c.CreateImports(f.ctx, []Import{{UserID: userID, Source: ImportSourceABS, SourceURL: "http://abs"}})
 	if err != nil {
 		t.Fatal(err)
@@ -113,14 +132,7 @@ func (f *importFixture) importSessions(t *testing.T, userID int64, at ...time.Ti
 	if err := f.c.FinishImportFetch(f.ctx, id, "abs", []byte("payload"), ImportPlan{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.c.ApplyImport(f.ctx, id, func(ImportState) (*ImportWrite, error) {
-		w := &ImportWrite{}
-		for _, start := range at {
-			w.Sessions = append(w.Sessions, ImportSession{Ref: f.book, StartedAt: start,
-				LastAt: start.Add(time.Hour), Duration: 7200, Listened: 3600})
-		}
-		return w, nil
-	}); err != nil {
+	if _, err := f.c.ApplyImport(f.ctx, id, func(ImportState) (*ImportWrite, error) { return w, nil }); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -392,7 +404,7 @@ func TestReimportRestoresProgressExactly(t *testing.T) {
 	// now so a device holding the imported row takes it.
 	third := f.newImport(t, time.Time{})
 	if _, err := f.c.ApplyImport(f.ctx, third, func(ImportState) (*ImportWrite, error) {
-		return &ImportWrite{}, nil
+		return f.aDay(), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +456,7 @@ func TestUndoKeepsEditedBookmarks(t *testing.T) {
 	if got := st.Bookmarks[f.book]; len(got) != 2 || got[0].Note != "Relabelled" || got[1].Note != note {
 		t.Errorf("review bookmarks = %+v", got)
 	}
-	if _, err := f.c.ApplyImport(f.ctx, second, func(ImportState) (*ImportWrite, error) { return &ImportWrite{}, nil }); err != nil {
+	if _, err := f.c.ApplyImport(f.ctx, second, func(ImportState) (*ImportWrite, error) { return f.aDay(), nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, `SELECT COUNT(*) FROM bookmarks WHERE import_id = 0`); n != 2 ||

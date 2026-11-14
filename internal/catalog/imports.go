@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -49,6 +50,10 @@ var (
 	ErrImportNotApplied = errors.New("the import is not applied")
 	// ErrImportApplied: a delete of an applied import (undo it first).
 	ErrImportApplied = errors.New("the import is applied")
+	// ErrImportNoListening: an apply that writes no listening for the person
+	// (only identifiers, or nothing) while they have another applied import from
+	// the source, which the apply would take back and replace with nothing.
+	ErrImportNoListening = errors.New("the import has no listening to replace the applied one with")
 )
 
 // ImportMatched counts an import's matched items by how they matched.
@@ -74,6 +79,23 @@ type ImportSummary struct {
 	Bookmarks          int           `json:"bookmarks"`
 	FirstListen        *string       `json:"first_listen"`
 	LastListen         *string       `json:"last_listen"`
+	// Identifiers is what the import carries as match hints (book_hints): nil in
+	// a summary planned before it (server#366), all zero once such an import is
+	// planned again (a cutoff change, the apply: its payload carries none).
+	Identifiers *ImportIdentifiers `json:"identifiers,omitempty"`
+}
+
+// ImportIdentifiers counts the books an import gives Audiobookshelf's ASIN or
+// ISBN as a match hint (ImportWrite.Hints): every ABS book it pairs with one here
+// (by path, or by title and author: ByTitle of them), whoever can access it, but
+// none already matched here (AlreadyMatched: left as they are). ASIN and ISBN
+// count the books given each.
+type ImportIdentifiers struct {
+	Books          int `json:"books"`
+	ASIN           int `json:"asin"`
+	ISBN           int `json:"isbn"`
+	ByTitle        int `json:"by_title"`
+	AlreadyMatched int `json:"already_matched"`
 }
 
 // UnmatchedItem is a source book an import skips, with the listening it had.
@@ -429,13 +451,14 @@ func (c *Catalog) ListeningStart(ctx context.Context, userID int64, loc *time.Lo
 	return out, nil
 }
 
-// ImportBooks returns every indexed book with what the importer matches on.
+// ImportBooks returns every indexed book with what the importer matches on, and
+// whether it is matched (Book.Matched: matchedExpr).
 func (c *Catalog) ImportBooks(ctx context.Context) ([]Book, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, b *Book) error {
 		return rows.Scan(&b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series, &b.SeriesIndex,
-			&b.ASIN, &b.ISBN, &b.Duration, &b.Codec, &b.SplitParent)
+			&b.ASIN, &b.ISBN, &b.Duration, &b.Codec, &b.SplitParent, &b.Matched)
 	}, `SELECT b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series, b.series_index, b.asin, b.isbn,
-	           b.duration, b.codec, b.split_parent
+	           b.duration, b.codec, b.split_parent, `+matchedExpr+`
 	      FROM books b JOIN libraries l ON l.id = b.library_id
 	     ORDER BY l.sort_order, l.id, b.rel_path`)
 }
@@ -548,7 +571,10 @@ type ImportWrite struct {
 	Days      []ImportDay
 	Bookmarks []Bookmark
 	Progress  []ImportProgress
-	Plan      ImportPlan
+	// Hints are the identifiers it gives books as match hints (book_hints, of
+	// the import's source, owned by the import: they replace any other import's).
+	Hints []BookHint
+	Plan  ImportPlan
 	// RollUpBefore is the session retention's cutoff, as PruneSessions is given
 	// it (zero: none). A session whose last save is before it is written as the
 	// listening_daily rows retention would sum it into (per day in Zone; nil is
@@ -556,6 +582,21 @@ type ImportWrite struct {
 	// listening_history span is written either way.
 	RollUpBefore time.Time
 	Zone         *time.Location
+}
+
+// hasListening reports whether w writes any listening for the person (its hints
+// aside): a session, a day, a bookmark, or a progress row it creates or moves on
+// (position, finish, finish date). A row whose only change is an earlier start
+// date is no listening, as the review's summary counts it (progress, finished)
+// and the console's historyEmpty reads it.
+func (w *ImportWrite) hasListening() bool {
+	if len(w.Sessions) > 0 || len(w.Days) > 0 || len(w.Bookmarks) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(w.Progress, func(p ImportProgress) bool {
+		return p.Prior == nil || p.Wrote.Position != p.Prior.Position ||
+			p.Wrote.Finished != p.Prior.Finished || p.Wrote.FinishedAt != p.Prior.FinishedAt
+	})
 }
 
 // rollUp splits w's sessions for imp into the ones written as sessions and the
@@ -586,7 +627,10 @@ const ImportClientApp = "Audiobookshelf"
 // then one transaction takes back the person's previous applied import from the
 // same source (it becomes undone), reads the ImportState, asks build what to
 // write, writes it and marks the import applied. A failure puts it back in
-// review. ErrNotFound, or ErrImportNotReady unless it was in review.
+// review. ErrNotFound, or ErrImportNotReady unless it was in review;
+// ErrImportNoListening, with nothing written, when build writes no listening
+// (hasListening) and there is a previous import to take back: that would only
+// lose the person's imported listening.
 //
 // The previous import's progress rows go back exactly as they were before it
 // (restoredProgress: their own updated_at), so the new import merges into the
@@ -627,6 +671,9 @@ func (c *Catalog) ApplyImport(ctx context.Context, id int64, build func(ImportSt
 		w, err := build(*st)
 		if err != nil {
 			return err
+		}
+		if prev != 0 && !w.hasListening() {
+			return ErrImportNoListening // the rollback puts the previous import back
 		}
 		if err := c.keepRewound(ctx, tx, imp.UserID, rewound, w); err != nil {
 			return err
@@ -708,6 +755,9 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 		return err
 	}
 	now := c.now()
+	if err := setHintsTx(ctx, tx, imp.Source, imp.ID, w.Hints, formatSessionTime(now)); err != nil {
+		return err
+	}
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
 		wrote := w.Progress[i].Wrote
 		return progressRowArgs(imp.UserID, wrote, finishChangeStamp(wrote.UpdatedAt, now)), nil
@@ -877,8 +927,8 @@ func unchangedPriors(ctx context.Context, q querier, importID int64) ([]progress
 	return out, nil
 }
 
-// UndoImport takes an applied import back out: its sessions, history spans and
-// days are deleted, so are its bookmarks unless the person has edited or
+// UndoImport takes an applied import back out: its sessions, history spans,
+// days and match hints are deleted, so are its bookmarks unless the person has edited or
 // labelled them since (bookmarkUntouched; those are kept as theirs), and every
 // progress row it changed that nobody has changed since is restored.
 // ErrNotFound, or ErrImportNotApplied unless it is applied.
@@ -917,6 +967,8 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 		// What is left of its bookmarks the person changed: theirs now.
 		`UPDATE bookmarks SET import_id = 0, import_note = '' WHERE import_id = ?`,
 		`DELETE FROM import_payloads WHERE import_id = ?`,
+		// Its match hints (those a later import has since taken over are that one's).
+		`DELETE FROM book_hints WHERE import_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
 			return nil, err

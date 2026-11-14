@@ -8,7 +8,9 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
+  identifierOnlyBooks,
   importEmpty,
+  importIdentifiers,
   initialMap,
   mappingBody,
   mappingProblem,
@@ -18,6 +20,7 @@ import {
   sourceHost,
   splitImports,
   unmatchedReasonKey,
+  wouldOnlyUndo,
 } from './imports-model';
 
 const absUser = (abs_id: string, suggested: number | null): AbsUser => ({
@@ -176,6 +179,30 @@ describe('summary', () => {
     expect(importEmpty(summary())).toBe(false);
   });
 
+  it('can be applied for identifiers alone, with no listening history', () => {
+    const none = summary({ sessions: 0, progress: 0, finished: 0, bookmarks: 0, estimated: 0 });
+    const ids = { books: 4, asin: 4, isbn: 0, by_title: 0, already_matched: 0 };
+    expect(identifierOnlyBooks({ ...none, identifiers: ids })).toBe(4);
+    expect(importEmpty({ ...none, identifiers: ids })).toBe(false);
+    // Only books already matched: nothing to bring over.
+    expect(importEmpty({ ...none, identifiers: { ...ids, books: 0, already_matched: 2 } })).toBe(
+      true,
+    );
+    expect(identifierOnlyBooks({ ...summary(), identifiers: ids })).toBe(0); // history too
+  });
+
+  it('tells the identifiers only when the summary has any to tell', () => {
+    const ids = { books: 0, asin: 0, isbn: 0, by_title: 0, already_matched: 0 };
+    expect(importIdentifiers(summary())).toBeNull(); // planned before identifiers
+    expect(importIdentifiers(summary({ identifiers: ids }))).toBeNull();
+    expect(importIdentifiers(summary({ identifiers: { ...ids, books: 3, asin: 3 } }))?.books).toBe(
+      3,
+    );
+    expect(
+      importIdentifiers(summary({ identifiers: { ...ids, already_matched: 2 } }))?.already_matched,
+    ).toBe(2);
+  });
+
   it('words reasons and failures, with a fallback for unknown codes', () => {
     expect(unmatchedReasonKey('contested')).toBe('imports.unmatched.reason.contested');
     expect(unmatchedReasonKey('no_access')).toBe('imports.unmatched.reason.no_access');
@@ -222,5 +249,17 @@ describe('import lists', () => {
     expect(replacedBy(next, [next, old])).toBe(old);
     expect(replacedBy(next, [next, { ...old, user_id: 9 }])).toBeUndefined();
     expect(replacedBy(next, [next, { ...old, status: 'undone' }])).toBeUndefined();
+  });
+
+  it('keeps an apply with no listening from undoing the applied import', () => {
+    const none = summary({ sessions: 0, progress: 0, finished: 0, bookmarks: 0, estimated: 0 });
+    const ids = { books: 4, asin: 4, isbn: 0, by_title: 0, already_matched: 0 };
+    const next = imp({ id: 5, summary: { ...none, identifiers: ids } });
+    const old = imp({ id: 2, status: 'applied', applied_at: '2026-01-01T00:00:00Z' });
+    expect(wouldOnlyUndo(next, [next, old])).toBe(true);
+    expect(wouldOnlyUndo(next, [next])).toBe(false); // nothing applied: it applies
+    expect(wouldOnlyUndo(next, [next, { ...old, status: 'undone' }])).toBe(false);
+    expect(wouldOnlyUndo({ ...next, summary: summary() }, [next, old])).toBe(false); // listening
+    expect(wouldOnlyUndo({ ...next, summary: null }, [next, old])).toBe(false);
   });
 });

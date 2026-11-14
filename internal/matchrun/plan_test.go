@@ -828,9 +828,11 @@ func TestLibraryLanguage(t *testing.T) {
 	}
 }
 
-// TestQueryForTagHints: a book with no ASIN or ISBN of its own sends its tags'
-// as the book's identifiers (a hint metaserve looks up); one with either of
-// its own sends only its own, never a tag's beside it.
+// TestQueryForTagHints: a book with no ASIN or ISBN of its own sends hints as
+// the book's identifiers (metaserve looks them up), an Audiobookshelf import's
+// ahead of its tags' (a tag's ASIN, which metaserve would ask first, never
+// beside an import's ISBN); one with either of its own sends only its own, never
+// a hint beside it.
 func TestQueryForTagHints(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -842,6 +844,17 @@ func TestQueryForTagHints(t *testing.T) {
 		{"its own ASIN", catalog.Book{ASIN: "B0OWN00001", TagASIN: "B0TAG00001", TagISBN: "9780000000005"}, "B0OWN00001", ""},
 		{"its own ISBN", catalog.Book{ISBN: "9780000000006", TagASIN: "B0TAG00001"}, "", "9780000000006"},
 		{"nothing", catalog.Book{}, "", ""},
+		// An Audiobookshelf hint comes before a tag's: the tag's ISBN is asked
+		// only after the import's ASIN, and its ASIN (asked first) never beside
+		// the import's ISBN.
+		{"an ABS hint over a tag's", catalog.Book{HintASIN: "B0ABS00001", TagASIN: "B0TAG00001", TagISBN: "9780000000005"},
+			"B0ABS00001", "9780000000005"},
+		{"an ABS ISBN, no tag ASIN beside it", catalog.Book{HintISBN: "9780000000007", TagASIN: "B0TAG00001", TagISBN: "9780000000005"},
+			"", "9780000000007"},
+		{"both ABS identifiers", catalog.Book{HintASIN: "B0ABS00001", HintISBN: "9780000000007", TagASIN: "B0TAG00001", TagISBN: "9780000000005"},
+			"B0ABS00001", "9780000000007"},
+		{"its own over an ABS hint", catalog.Book{ASIN: "B0OWN00001", HintASIN: "B0ABS00001", HintISBN: "9780000000007"},
+			"B0OWN00001", ""},
 	} {
 		q := QueryFor(&tc.book, "", "")
 		if q.BookASIN != tc.wantASIN || q.BookISBN != tc.wantISBN {

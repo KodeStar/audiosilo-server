@@ -151,7 +151,7 @@ func TestReimportUndoStampsTheFinishChangeNow(t *testing.T) {
 	}
 	// The re-import writes nothing on other: the undo's restored row stays.
 	if _, err := f.c.ApplyImport(f.ctx, f.newImport(t, day(10, 0)), func(ImportState) (*ImportWrite, error) {
-		return &ImportWrite{}, nil
+		return f.aDay(), nil
 	}); err != nil {
 		t.Fatal(err)
 	}

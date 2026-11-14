@@ -42,12 +42,13 @@ import (
 // closest recording of a work can still be another edition: the unabridged book
 // of a work that holds only its dramatization).
 // An identifier hit (the ASIN or ISBN the query sent named the work: in a run
-// always a tag hint, a book with its own being no run's subject) needs no lead:
+// always a hint, an Audiobookshelf import's or a tag's, a book with its own
+// being no run's subject) needs no lead:
 // it is the book. A runner-up that is one too would be two works holding one
 // identifier, the admin's choice; metaserve names one work per request today, so
 // that is a guard, not a case a run meets. An identifier hit is the book only while
 // the book's own title and series agree with it (identifierAgrees, server#306): a
-// tag ASIN can name another book, Chamber of Secrets carrying Philosopher's Stone's.
+// hint can name another book, Chamber of Secrets' tags carrying Philosopher's Stone's ASIN.
 //
 // A match with no ASIN or ISBN to attach (a store listing the community holds
 // without one: LibraForge E6) is applied unasked on firmer ground instead
@@ -126,9 +127,15 @@ func ScopesFor(mode string) []string {
 
 // QueryFor is the match query for book b on a server preferring region: its own
 // facts, as both the match dialog and a bulk run send them. A book with no ASIN
-// or ISBN of its own sends its tags' (Book.TagASIN, TagISBN) as hints: metaserve
-// looks them up like the book's own, and an identifier hit whose length fits is
-// confident (Classify), but the book is matched only by what an apply writes.
+// or ISBN of its own sends hints instead: an Audiobookshelf import's
+// (Book.HintASIN, HintISBN), else its tags' (TagASIN, TagISBN). metaserve asks
+// the ASIN first and the ISBN only when it doesn't know that one, so a tag's
+// ISBN goes beside an import's ASIN (asked second), but a tag's ASIN never
+// beside an import's ISBN: it would be asked first, the tag ahead of the
+// import. metaserve looks them up like the book's own, and an identifier hit
+// whose length fits is confident while the book's title and series agree with it
+// (Classify, identifierAgrees), but the book is matched only by what an apply
+// writes.
 // Its language is the book's, else its tags' (meta.NormalizeLanguage), else its
 // library's (libraryLanguage, LibraryLanguage's answer: "" for none): never the
 // region's, as a marketplace doesn't say what language a library is in.
@@ -136,7 +143,11 @@ func ScopesFor(mode string) []string {
 func QueryFor(b *catalog.Book, region, libraryLanguage string) meta.MatchQuery {
 	asin, isbn := b.ASIN, b.ISBN
 	if asin == "" && isbn == "" {
-		asin, isbn = b.TagASIN, b.TagISBN
+		if b.HintISBN != "" {
+			asin, isbn = b.HintASIN, b.HintISBN
+		} else {
+			asin, isbn = cmp.Or(b.HintASIN, b.TagASIN), b.TagISBN
+		}
 	}
 	return meta.MatchQuery{
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,

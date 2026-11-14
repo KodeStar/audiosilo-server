@@ -2360,6 +2360,22 @@ export interface ImportSummary {
   /** The earliest and latest imported session start. */
   first_listen: string | null;
   last_listen: string | null;
+  /** Audiobookshelf's ASIN and ISBN it carries as match hints; absent from an import planned before them. */
+  identifiers?: ImportIdentifiers;
+}
+
+/**
+ * The books an import gives Audiobookshelf's ASIN or ISBN as a match hint (never the book's own
+ * identifier: Match looks it up first). Every Audiobookshelf book it pairs with one here, whoever's
+ * history it is; `by_title` of them paired by title and author, `already_matched` books left as
+ * they are. `asin` and `isbn` count the books given each.
+ */
+export interface ImportIdentifiers {
+  books: number;
+  asin: number;
+  isbn: number;
+  by_title: number;
+  already_matched: number;
 }
 
 /** One import: one Audiobookshelf user's history into one AudioSilo user. */

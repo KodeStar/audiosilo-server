@@ -10,11 +10,15 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // Payload is one ABS user's history, normalized: what an import keeps (gzipped
 // JSON, catalog.ImportPayload) so a review's cutoff change and the apply never
-// fetch again. It names only the books the user has history for, and nothing
+// fetch again. Its history names only the books the user has history for;
+// Identified names every ABS book with an identifier, whoever's (the token's
+// view of ABS, read only by the admin's review and apply). Nothing in it is
 // secret. Times are epoch milliseconds, positions and listening seconds.
 type Payload struct {
 	V         int        `json:"v"`
@@ -22,6 +26,11 @@ type Payload struct {
 	Sessions  []Session  `json:"sessions"`
 	Progress  []Progress `json:"progress"`
 	Bookmarks []Bookmark `json:"bookmarks"`
+	// Identified is every book ABS has with a valid ASIN or ISBN, whoever's
+	// history it is in (itemIndex.identified): what the import carries as match hints
+	// (identifiersFor). Absent from a payload stored before it (server#366): that
+	// import carries none.
+	Identified []Item `json:"identified,omitempty"`
 }
 
 // payloadVersion is Payload.V: a stored payload of another version (a shape this
@@ -87,11 +96,15 @@ func isBook(mediaType string, episodeID *string) bool {
 	return (mediaType == "" || mediaType == "book") && (episodeID == nil || *episodeID == "")
 }
 
-// itemIndex is the server's items by id, with how many share each one's folder:
-// built once per fetch, for every user it reads.
+// itemIndex is the server's items by id, with how many share each one's folder
+// and those with an identifier: built once per fetch, for every user it reads.
 type itemIndex struct {
 	byID     map[string]*absItem
 	siblings map[folderKey]int
+	// identified is every item with a valid ASIN or ISBN
+	// (catalog.BookHint.Normalized), in ABS's order, nil for none:
+	// Payload.Identified, the same for every user.
+	identified []Item
 }
 
 type folderKey struct{ lib, folder, dir string }
@@ -107,17 +120,36 @@ func newItemIndex(items []absItem) *itemIndex {
 		x.byID[it.ID] = it
 		x.siblings[folderOf(it)]++
 	}
+	// Once every sibling is counted (item reads the count).
+	for i := range items {
+		it := &items[i]
+		if _, ok := (catalog.BookHint{ASIN: it.Media.Metadata.ASIN, ISBN: it.Media.Metadata.ISBN}).Normalized(); ok {
+			x.identified = append(x.identified, x.item(it))
+		}
+	}
 	return x
 }
 
+// item is it as a payload keeps it.
+func (x *itemIndex) item(it *absItem) Item {
+	title, author, series, seq := it.Media.Metadata.describe()
+	return Item{ID: it.ID, RelPath: it.RelPath, FullPath: it.Path, IsFile: it.IsFile,
+		Siblings: x.siblings[folderOf(it)],
+		Title:    title, Author: author, Series: series, Sequence: seq,
+		ASIN: strings.TrimSpace(it.Media.Metadata.ASIN), ISBN: strings.TrimSpace(it.Media.Metadata.ISBN),
+		Duration: it.Media.Duration}
+}
+
 // buildPayload normalizes what was fetched for one user: their book sessions,
-// progress and bookmarks, and the items those name (all of the server's items,
-// in items, are needed to count each one's siblings). A session on an item ABS
+// progress and bookmarks, the items those name (all of the server's items,
+// in items, are needed to count each one's siblings) and the server's books
+// with an identifier (the same for every user). A session on an item ABS
 // no longer has keeps it as a gone item, from the session's metadata; progress
 // or a bookmark on one (ABS deletes those with the item) is dropped.
 func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Payload {
 	p := &Payload{V: payloadVersion,
-		Items: []Item{}, Sessions: []Session{}, Progress: []Progress{}, Bookmarks: []Bookmark{}}
+		Items: []Item{}, Sessions: []Session{}, Progress: []Progress{}, Bookmarks: []Bookmark{},
+		Identified: items.identified}
 	// known: whether each id looked up is one of the server's items (added);
 	// gone: the ids added as gone items, which addItem keeps answering false for,
 	// so their progress and bookmarks stay dropped (matchAll relies on that).
@@ -128,12 +160,7 @@ func buildPayload(u *absUserDetail, sessions []absSession, items *itemIndex) *Pa
 		}
 		it, ok := items.byID[id]
 		if ok {
-			title, author, series, seq := it.Media.Metadata.describe()
-			p.Items = append(p.Items, Item{ID: id, RelPath: it.RelPath, FullPath: it.Path, IsFile: it.IsFile,
-				Siblings: items.siblings[folderOf(it)],
-				Title:    title, Author: author, Series: series, Sequence: seq,
-				ASIN: strings.TrimSpace(it.Media.Metadata.ASIN), ISBN: strings.TrimSpace(it.Media.Metadata.ISBN),
-				Duration: it.Media.Duration})
+			p.Items = append(p.Items, items.item(it))
 		}
 		known[id] = ok
 		return ok

@@ -121,7 +121,7 @@ func coverExpected(ctx context.Context, q querier, libraryID int64, path string,
 	)
 	err := q.QueryRowContext(ctx,
 		`SELECT `+hasCoverExpr+`, COALESCE(bm.work_id, ''), COALESCE(bm.recording_id, ''), b.asin, b.isbn
-		   FROM books b`+matchSubjectJoin+`
+		   FROM books b`+bookMatchJoin+`
 		  WHERE b.library_id = ? AND b.rel_path = ?`,
 		libraryID, path).Scan(&hasCover, &work, &recording, &asin, &isbn)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -70,9 +70,10 @@ const DetailLengthDiffers = "length_differs"
 const DetailDramatizationOnly = "dramatization_only"
 
 // DetailIdentifierDisagrees is a review item's detail when its best candidate was
-// found by the book's tag ASIN or ISBN but the book's own title or series position
-// doesn't agree with it (identifierAgrees): the tag most likely names another book,
-// so it is held for review however high it scored (server#306).
+// found by the book's hint ASIN or ISBN (an Audiobookshelf import's or its tags':
+// QueryFor) but the book's own title or series position doesn't agree with it
+// (identifierAgrees): the hint most likely names another book, so it is held for
+// review however high it scored (server#306).
 const DetailIdentifierDisagrees = "identifier_disagrees"
 
 // DetailWeakMatch is a match item's detail when its best candidate scored
@@ -403,7 +404,7 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 // its item (nil = nothing worth recording), and the community service's failure, if
 // that's what the item records. The recording proposed is DefaultRecording's, or the
 // one the length agrees with when that is another edition (meta.FitRecording: the
-// identifier a match sends is always a tag's hint).
+// identifier a match sends is always a hint, an Audiobookshelf import's or a tag's).
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book, language string) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
 	switch o.Mode {

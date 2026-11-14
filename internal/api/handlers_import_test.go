@@ -86,6 +86,8 @@ func newImportEnv(t *testing.T) *importEnv {
 		{LibraryID: books.ID, RelPath: "Mary Shelley/Frankenstein", Title: "Frankenstein", Author: "Mary Shelley", Duration: 4501},
 		{LibraryID: books.ID, RelPath: "Émile Zola/Germinal", Title: "Germinal", Author: "Émile Zola", Duration: 6000},
 		{LibraryID: kids.ID, RelPath: "Beatrix Potter/The Tale of Peter Rabbit", Title: "The Tale of Peter Rabbit", Author: "Beatrix Potter", Duration: 480},
+		// Not alex's to see, and no history of alex's: it still takes ABS's ASIN as a match hint.
+		{LibraryID: kids.ID, RelPath: "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone", Title: "Harry Potter and the Philosopher's Stone", Author: "J.K. Rowling", Duration: 4800},
 	} {
 		b.IsFolder, b.AddedAt = true, "2026-01-01T00:00:00Z"
 		if _, err := e.cat.UpsertBook(ctx, &b); err != nil {
@@ -167,6 +169,12 @@ func TestImportFromABS(t *testing.T) {
 		s.Sessions != 32 || s.Listened <= 0 {
 		t.Fatalf("summary = %+v", *s)
 	}
+	// Every ABS book with an ASIN that pairs with a book here, whoever's history and
+	// library it is in, carries it as a match hint: the four in Books, and the
+	// Harry Potter in Kids.
+	if s.Identifiers == nil || *s.Identifiers != (catalog.ImportIdentifiers{Books: 5, ASIN: 5}) {
+		t.Fatalf("identifiers = %+v", s.Identifiers)
+	}
 	reasons := map[string]int{}
 	for _, u := range d.UnmatchedItems {
 		reasons[u.Reason]++
@@ -179,6 +187,10 @@ func TestImportFromABS(t *testing.T) {
 	e.call(t, "PATCH", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, `{"cutoff":"2026-09-15"}`, 200, &d)
 	if d.Cutoff == nil || d.Summary.SkippedAfterCutoff == 0 || d.Summary.Sessions+d.Summary.SkippedAfterCutoff != 32 {
 		t.Fatalf("with a cutoff = %+v %+v", d.Cutoff, *d.Summary)
+	}
+	// A cutoff leaves history out, never the identifiers: the plan still counts them.
+	if d.Summary.Identifiers == nil || d.Summary.Identifiers.Books != 5 {
+		t.Fatalf("identifiers with a cutoff = %+v", d.Summary.Identifiers)
 	}
 	e.call(t, "PATCH", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, `{"cutoff":null}`, 200, &d)
 	if d.Cutoff != nil || d.Summary.Sessions != 32 {
@@ -194,6 +206,22 @@ func TestImportFromABS(t *testing.T) {
 	}
 	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", id), e.adminTok, "", 409, nil)
 	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 409, nil)
+	hp := e.hintOf(t, "Kids", "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone")
+	if hp.HintASIN != "B017V568SY" || hp.ASIN != "" {
+		t.Errorf("Harry Potter after the apply: hint %q, ASIN %q; want the hint alone", hp.HintASIN, hp.ASIN)
+	}
+	// The hint is the match's alone: neither the player's read of the book nor
+	// the console's list of it carries it.
+	for _, path := range []string{
+		fmt.Sprintf("/libraries/%d/item?path=%s", hp.LibraryID, url.QueryEscape(hp.RelPath)),
+		"/admin/books?q=" + url.QueryEscape("Philosopher's Stone"),
+	} {
+		var raw json.RawMessage
+		e.call(t, "GET", path, e.adminTok, "", 200, &raw)
+		if !strings.Contains(string(raw), "Philosopher") || strings.Contains(string(raw), "B017V568SY") {
+			t.Errorf("GET %s = %s; want the book without its hint", path, raw)
+		}
+	}
 
 	// Alex's own stats now show the listening and the three finished books.
 	var stats struct {
@@ -242,6 +270,9 @@ func TestImportFromABS(t *testing.T) {
 	if stats.Stats.Totals.Listened != 0 || stats.Stats.Totals.Finished != 0 {
 		t.Errorf("stats after undo = %+v", stats.Stats.Totals)
 	}
+	if hp := e.hintOf(t, "Kids", "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"); hp.HintASIN != "" {
+		t.Errorf("the undo left the hint %q", hp.HintASIN)
+	}
 	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", id), e.adminTok, "", 409, nil)
 	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 204, nil)
 	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 404, nil)
@@ -249,15 +280,148 @@ func TestImportFromABS(t *testing.T) {
 	e.checkNoToken(t, abstest.AdminToken)
 }
 
+// hintOf reads the book at path in the library named lib, with its match hint.
+func (e *importEnv) hintOf(t *testing.T, lib, path string) *catalog.Book {
+	t.Helper()
+	ctx := context.Background()
+	libs, err := e.cat.ListLibraries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range libs {
+		if l.Name == lib {
+			b, err := e.cat.GetBookByPath(ctx, l.ID, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+	}
+	t.Fatalf("no library %q", lib)
+	return nil
+}
+
+// TestImportIdentifiersOnly: jo's history is on two books this server doesn't
+// have, so their import brings no listening, only ABS's identifiers for the books
+// it pairs: it still applies (the hints written, nothing else) and undoes.
+func TestImportIdentifiersOnly(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	d := e.start(t, abstest.JoID)
+	id, s := d.ID, d.Summary
+	if s.Sessions != 0 || s.Progress != 0 || s.Finished != 0 ||
+		s.Bookmarks != 0 || s.Estimated != 0 || s.Identifiers == nil || s.Identifiers.Books != 5 {
+		t.Fatalf("review = %+v %+v", d.Import, s)
+	}
+
+	var imp catalog.Import
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", id), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportApplied || imp.Summary.Identifiers == nil || imp.Summary.Identifiers.Books != 5 {
+		t.Fatalf("applied = %+v", imp)
+	}
+	const hp = "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"
+	if b := e.hintOf(t, "Kids", hp); b.HintASIN != "B017V568SY" {
+		t.Fatalf("hint after the apply = %q", b.HintASIN)
+	}
+	first, err := e.cat.ListeningStart(context.Background(), e.alexID, time.Local)
+	if err != nil || !first.IsZero() {
+		t.Fatalf("listening after an identifier-only apply: %v %v", first, err)
+	}
+	var stats struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	if stats.Stats.Totals.Listened != 0 || stats.Stats.Totals.Finished != 0 {
+		t.Errorf("alex's stats = %+v, want nothing imported", stats.Stats.Totals)
+	}
+
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", id), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportUndone {
+		t.Fatalf("undone = %+v", imp)
+	}
+	if b := e.hintOf(t, "Kids", hp); b.HintASIN != "" {
+		t.Fatalf("hint after the undo = %q", b.HintASIN)
+	}
+	e.call(t, "DELETE", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 204, nil)
+}
+
+// TestImportIdentifiersOnlyKeepsAppliedImport: Alex already has alex's history
+// applied, so jo's import (identifiers only, no listening) must not replace it:
+// the apply is a 409 that writes nothing and leaves the applied import and its
+// listening as they were. Once that one is undone, jo's applies.
+func TestImportIdentifiersOnlyKeepsAppliedImport(t *testing.T) {
+	t.Parallel()
+	e := newImportEnv(t)
+	first := e.startAlex(t)
+	var imp catalog.Import
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", first.ID), e.adminTok, "", 200, &imp)
+
+	var stats struct {
+		Stats catalog.UserStats `json:"stats"`
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	before := stats.Stats.Totals
+	if before.Listened == 0 || before.Sessions == 0 {
+		t.Fatalf("alex's import wrote no listening: %+v", before)
+	}
+	const hp = "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone"
+	hint := e.hintOf(t, "Kids", hp).HintASIN
+
+	jo := e.start(t, abstest.JoID)
+	if s := jo.Summary; s.Sessions != 0 || s.Progress != 0 || s.Bookmarks != 0 || s.Estimated != 0 ||
+		s.Identifiers == nil || s.Identifiers.Books == 0 {
+		t.Fatalf("jo's review = %+v", s)
+	}
+	var refused struct{ Code string }
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", jo.ID), e.adminTok, "", 409, &refused)
+	if refused.Code != codeImportNotReady {
+		t.Errorf("code = %q, want %q", refused.Code, codeImportNotReady)
+	}
+
+	var d catalog.ImportDetail
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", jo.ID), e.adminTok, "", 200, &d)
+	if d.Status != catalog.ImportReview {
+		t.Errorf("jo's import after the refusal = %s, want review", d.Status)
+	}
+	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", first.ID), e.adminTok, "", 200, &d)
+	if d.Status != catalog.ImportApplied {
+		t.Errorf("alex's import after the refusal = %s, want applied", d.Status)
+	}
+	e.call(t, "GET", "/me/stats?range=2026", e.alexTok, "", 200, &stats)
+	if stats.Stats.Totals != before {
+		t.Errorf("stats after the refusal = %+v, want %+v", stats.Stats.Totals, before)
+	}
+	if got := e.hintOf(t, "Kids", hp).HintASIN; got != hint {
+		t.Errorf("hint after the refusal = %q, want %q", got, hint)
+	}
+
+	// Undo alex's first, as the console says: jo's then applies.
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/undo", first.ID), e.adminTok, "", 200, &imp)
+	e.call(t, "POST", fmt.Sprintf("/admin/imports/%d/apply", jo.ID), e.adminTok, "", 200, &imp)
+	if imp.Status != catalog.ImportApplied {
+		t.Fatalf("jo's import = %+v", imp)
+	}
+	if got := e.hintOf(t, "Kids", hp).HintASIN; got != "B017V568SY" {
+		t.Errorf("jo's hint = %q", got)
+	}
+}
+
 // startAlex starts an import of the recorded alex into Alex and waits for its
 // review.
 func (e *importEnv) startAlex(t *testing.T) catalog.ImportDetail {
+	t.Helper()
+	return e.start(t, abstest.AlexID)
+}
+
+// start starts an import of the recorded ABS user absUserID into Alex and waits
+// for its review.
+func (e *importEnv) start(t *testing.T, absUserID string) catalog.ImportDetail {
 	t.Helper()
 	var started struct {
 		Imports []catalog.Import `json:"imports"`
 	}
 	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":%q,"users":[{"abs_user_id":%q,"user_id":%d}]}`,
-		e.abs.URL, abstest.AdminToken, abstest.AlexID, e.alexID), 202, &started)
+		e.abs.URL, abstest.AdminToken, absUserID, e.alexID), 202, &started)
 	e.api.imports.Wait()
 	var d catalog.ImportDetail
 	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", started.Imports[0].ID), e.adminTok, "", 200, &d)

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   History,
   Import as ImportIcon,
+  Info,
   LoaderCircle,
   TriangleAlert,
 } from 'lucide-react';
@@ -46,7 +47,9 @@ import {
   cutoffValue,
   duplicateUsers,
   failureHintKey,
+  identifierOnlyBooks,
   importEmpty,
+  importIdentifiers,
   initialMap,
   mappingBody,
   mappingProblem,
@@ -56,6 +59,7 @@ import {
   sourceHost,
   splitImports,
   unmatchedReasonKey,
+  wouldOnlyUndo,
   type CutoffChoice,
   type UserMap,
 } from './imports-model';
@@ -518,6 +522,8 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
   const titleId = `import-${imp.id}-title`;
   const title = t('imports.row.title', { source: imp.source_user, user: imp.username });
   const replaced = replacedBy(imp, all);
+  const onlyIdentifiers = imp.summary ? identifierOnlyBooks(imp.summary) : 0;
+  const keepsApplied = wouldOnlyUndo(imp, all);
 
   return (
     <Card aria-labelledby={titleId}>
@@ -554,6 +560,7 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
         <SummaryView
           imp={imp}
           summary={imp.summary}
+          keepsApplied={keepsApplied}
           unmatched={detail.data?.unmatched_items}
           unmatchedLoading={detail.isLoading}
         />
@@ -570,7 +577,9 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           </Button>
           {imp.status !== 'failed' ? (
             <Button
-              disabled={imp.status !== 'review' || !imp.summary || importEmpty(imp.summary)}
+              disabled={
+                imp.status !== 'review' || !imp.summary || importEmpty(imp.summary) || keepsApplied
+              }
               onClick={() => setApplying(true)}
             >
               {imp.status === 'applying' ? (
@@ -590,12 +599,14 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
         onOpenChange={setApplying}
         title={t('imports.apply.title', { source: imp.source_user, user: imp.username })}
         description={
-          imp.summary
-            ? t('imports.apply.body', {
-                hours: formatHours(imp.summary.listened, lang),
-                ...counted(imp.summary.sessions, lang),
-              })
-            : undefined
+          !imp.summary
+            ? undefined
+            : onlyIdentifiers > 0
+              ? t('imports.apply.identifiersOnly', counted(onlyIdentifiers, lang))
+              : t('imports.apply.body', {
+                  hours: formatHours(imp.summary.listened, lang),
+                  ...counted(imp.summary.sessions, lang),
+                })
         }
         icon={ImportIcon}
         tone="brand"
@@ -610,7 +621,9 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
           }
           toast.add({
             title: t('imports.apply.done', { user: imp.username }),
-            description: t('imports.apply.doneBody'),
+            description: t(
+              onlyIdentifiers > 0 ? 'imports.apply.doneIdentifiers' : 'imports.apply.doneBody',
+            ),
             type: 'success',
           });
         }}
@@ -632,11 +645,14 @@ function ReviewCard({ imp, all }: { imp: Import; all: Import[] }) {
 function SummaryView({
   imp,
   summary: s,
+  keepsApplied,
   unmatched,
   unmatchedLoading,
 }: {
   imp: Import;
   summary: ImportSummary;
+  /** Applying would only undo the person's applied import (wouldOnlyUndo): Apply is off. */
+  keepsApplied: boolean;
   /** The unmatched books, once asked for. */
   unmatched: UnmatchedItem[] | undefined;
   unmatchedLoading: boolean;
@@ -645,6 +661,7 @@ function SummaryView({
   const lang = i18n.resolvedLanguage ?? 'en';
   const n = (v: number) => formatNumber(v, lang);
   const matched = matchedTotal(s);
+  const onlyIdentifiers = identifierOnlyBooks(s);
   const tiers = matchTiers(s)
     .map((x) => t(`imports.summary.tier.${x.tier}`, { n: n(x.count) }))
     .join(', ');
@@ -671,12 +688,38 @@ function SummaryView({
   if (s.estimated > 0) facts.push([t('imports.summary.estimated'), formatHours(s.estimated, lang)]);
   if (s.skipped_after_cutoff > 0)
     facts.push([t('imports.summary.skipped'), n(s.skipped_after_cutoff)]);
+  const ids = importIdentifiers(s);
+  if (ids) {
+    const notes = [
+      ids.by_title > 0 ? t('imports.summary.identifiersByTitle', { n: n(ids.by_title) }) : '',
+      ids.already_matched > 0
+        ? t('imports.summary.identifiersMatched', { n: n(ids.already_matched) })
+        : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    facts.push([
+      t('imports.summary.identifiers'),
+      t('imports.summary.identifiersValue', counted(ids.books, lang)) +
+        (notes ? ` (${notes})` : ''),
+    ]);
+  }
 
   return (
     <div className="flex flex-col gap-4 p-5">
       {importEmpty(s) ? (
         <Notice tone="warn" icon={TriangleAlert} title={t('imports.summary.emptyTitle')}>
           {t('imports.summary.emptyBody')}
+        </Notice>
+      ) : onlyIdentifiers > 0 ? (
+        <Notice
+          tone={keepsApplied ? 'warn' : 'info'}
+          icon={keepsApplied ? TriangleAlert : Info}
+          title={t('imports.summary.identifiersOnlyTitle')}
+        >
+          {keepsApplied
+            ? t('imports.summary.keepsApplied', { user: imp.username })
+            : t('imports.summary.identifiersOnlyBody', counted(onlyIdentifiers, lang))}
         </Notice>
       ) : (
         <p className="flex flex-wrap items-baseline gap-x-2">
