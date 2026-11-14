@@ -47,6 +47,7 @@ import {
   duplicateUsers,
   failureHintKey,
   importEmpty,
+  importIdentifiers,
   initialMap,
   mappingBody,
   mappingProblem,
@@ -671,6 +672,22 @@ function SummaryView({
   if (s.estimated > 0) facts.push([t('imports.summary.estimated'), formatHours(s.estimated, lang)]);
   if (s.skipped_after_cutoff > 0)
     facts.push([t('imports.summary.skipped'), n(s.skipped_after_cutoff)]);
+  const ids = importIdentifiers(s);
+  if (ids) {
+    const notes = [
+      ids.by_title > 0 ? t('imports.summary.identifiersByTitle', { n: n(ids.by_title) }) : '',
+      ids.already_matched > 0
+        ? t('imports.summary.identifiersMatched', { n: n(ids.already_matched) })
+        : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    facts.push([
+      t('imports.summary.identifiers'),
+      t('imports.summary.identifiersValue', counted(ids.books, lang)) +
+        (notes ? ` (${notes})` : ''),
+    ]);
+  }
 
   return (
     <div className="flex flex-col gap-4 p-5">

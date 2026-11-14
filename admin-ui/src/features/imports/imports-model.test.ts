@@ -9,6 +9,7 @@ import {
   duplicateUsers,
   failureHintKey,
   importEmpty,
+  importIdentifiers,
   initialMap,
   mappingBody,
   mappingProblem,
@@ -174,6 +175,18 @@ describe('summary', () => {
     expect(importEmpty({ ...none, bookmarks: 1 })).toBe(false);
     expect(importEmpty({ ...none, estimated: 600 })).toBe(false);
     expect(importEmpty(summary())).toBe(false);
+  });
+
+  it('tells the identifiers only when the summary has any to tell', () => {
+    const ids = { books: 0, asin: 0, isbn: 0, by_title: 0, already_matched: 0 };
+    expect(importIdentifiers(summary())).toBeNull(); // planned before identifiers
+    expect(importIdentifiers(summary({ identifiers: ids }))).toBeNull();
+    expect(importIdentifiers(summary({ identifiers: { ...ids, books: 3, asin: 3 } }))?.books).toBe(
+      3,
+    );
+    expect(
+      importIdentifiers(summary({ identifiers: { ...ids, already_matched: 2 } }))?.already_matched,
+    ).toBe(2);
   });
 
   it('words reasons and failures, with a fallback for unknown codes', () => {

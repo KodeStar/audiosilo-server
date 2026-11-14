@@ -2,6 +2,7 @@ import type {
   AbsUser,
   Import,
   ImportCutoff,
+  ImportIdentifiers,
   ImportMapping,
   ImportSummary,
   UnmatchedItem,
@@ -142,6 +143,12 @@ export function matchTiers(
   return (['path', 'asin', 'isbn', 'title'] as const)
     .map((tier) => ({ tier, count: s.matched[tier] }))
     .filter((x) => x.count > 0);
+}
+
+/** The identifiers an import carries as match hints, when its summary says and there is any to tell. */
+export function importIdentifiers(s: ImportSummary): ImportIdentifiers | null {
+  const ids = s.identifiers;
+  return ids && (ids.books > 0 || ids.already_matched > 0) ? ids : null;
 }
 
 /** Whether an import has nothing to add (no session, progress, finish or bookmark). */

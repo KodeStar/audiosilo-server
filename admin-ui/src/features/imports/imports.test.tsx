@@ -425,6 +425,35 @@ describe('import: review', () => {
     await waitFor(() => expect(patches()).toEqual([{ cutoff: '2026-05-01' }, { cutoff: 'auto' }]));
   });
 
+  it('shows the ASIN and ISBN it carries for matching, and none from an older import', async () => {
+    const identifiers = { books: 14, asin: 12, isbn: 3, by_title: 2, already_matched: 5 };
+    mockFetch(
+      routes({
+        'GET /admin/imports': {
+          body: {
+            imports: [
+              imp({ summary: summary({ identifiers }) }),
+              imp({ id: 8, username: 'jo', source_user: 'jo' }),
+            ],
+          },
+        },
+        'GET /admin/imports/7': { body: detail({ summary: summary({ identifiers }) }) },
+        'GET /admin/imports/8': { body: detail({ id: 8, username: 'jo', source_user: 'jo' }) },
+      }),
+    );
+    renderApp('/server?topic=import');
+    const card = await screen.findByRole('region', { name: 'samantha → sam' });
+    expect(await within(card).findByText('ASIN or ISBN for matching')).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        '14 books (2 paired by title and author, 5 already matched, left as they are)',
+      ),
+    ).toBeInTheDocument();
+    const older = await screen.findByRole('region', { name: 'jo → jo' });
+    expect(await within(older).findByText('Books matched')).toBeInTheDocument();
+    expect(within(older).queryByText('ASIN or ISBN for matching')).not.toBeInTheDocument();
+  });
+
   it('says what an apply replaces', async () => {
     mockFetch(
       routes({
