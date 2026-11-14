@@ -13,17 +13,20 @@ import { StepStop } from './step-actions';
 /**
  * The step's buttons: Back on the left, Skip and the step's own action on the
  * right. Each runs once at a time; a failure is toasted and the step stays.
+ * `skipLabel` says what Skip keeps, where "Skip" alone wouldn't.
  */
 export function StepFooter({
   back,
   onSkip,
   onContinue,
   last,
+  skipLabel,
 }: {
   back: (() => void) | null;
   onSkip: () => Promise<void>;
   onContinue: () => Promise<void>;
   last: boolean;
+  skipLabel?: string;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<'skip' | 'continue' | null>(null);
@@ -51,7 +54,7 @@ export function StepFooter({
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" disabled={busy !== null} onClick={() => void run('skip', onSkip)}>
           {busy === 'skip' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-          {t(last ? 'setup.skipFinish' : 'setup.skip')}
+          {skipLabel ?? t(last ? 'setup.skipFinish' : 'setup.skip')}
         </Button>
         <Button disabled={busy !== null} onClick={() => void run('continue', onContinue)}>
           {busy === 'continue' ? (

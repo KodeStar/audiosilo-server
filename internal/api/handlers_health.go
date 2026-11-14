@@ -32,7 +32,9 @@ type offlineLibrary struct {
 // handleIssues serves GET /admin/issues: each issue category's count, ignored
 // count and a few books to show, the offline libraries, and when a scan last
 // finished. "Not matched" is left out while community metadata is off (there is
-// nothing to match against).
+// nothing to match against), and "unknown ASIN" while the unknown-ASIN report
+// is off (only its lookups find such a book, so its count would read as all
+// clear when nothing was checked).
 //
 // Counting is a pass over the whole library (about 100 ms at 5,000 books), so
 // the answer is kept in the list cache (listcache.go) under the content
@@ -40,15 +42,18 @@ type offlineLibrary struct {
 // kinds and the offline libraries (a filesystem probe, cached for a few
 // seconds in library.RootsAvailable, so made before the lookup, listeners
 // included). It is exact: any content write (a fix, an ignore, a scan) moves
-// the generation, and the next request counts again (server#245). The one
-// user state it reads is how many people have progress on each duplicate copy
-// (its ranking), so a progress row added, removed or moved to another book is
-// a content write too; a save to an existing row is not (store's
-// userStateTables).
+// the generation, and the next request counts again (server#245). Two tables
+// written as user state are read: how many people have progress on each
+// duplicate copy (its ranking), so a progress row added, removed or moved to
+// another book is a content write too, a save to an existing row is not; and
+// which ASINs the unknown-ASIN report found unknown (unknown_asin), so a row
+// added or removed there, or its answer changed, is one as well, a lookup
+// that only renews its times is not (store's userStateTables).
 func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	gen, cacheable := a.cat.ContentGeneration() // before any read (listcache.go)
 	kinds := slices.DeleteFunc(slices.Clone(catalog.IssueKinds), func(k string) bool {
-		return k == catalog.IssueUnmatched && !a.metadataOn()
+		return (k == catalog.IssueUnmatched && !a.metadataOn()) ||
+			(k == catalog.IssueUnknownASIN && !a.reportUnknownOn())
 	})
 	offline, err := a.offlineLibraries(r)
 	if err != nil {

@@ -77,14 +77,10 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if req.Username == "" {
-		writeError(w, http.StatusBadRequest, "username is required")
-		return
-	}
-	// CreateUser enforces the password rules (required for admins, optional
-	// otherwise); writeUserError maps its typed errors to the right status and
-	// never echoes a raw DB error (a duplicate username must not leak the SQLite
-	// constraint string).
+	// CreateUser enforces the username rule (400 username_required) and the
+	// password rules (required for admins, optional otherwise); writeUserError
+	// maps its typed errors to the right status and never echoes a raw DB error
+	// (a duplicate username must not leak the SQLite constraint string).
 	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
 	if err != nil {
 		a.writeUserError(w, err, "could not create user")
@@ -197,6 +193,7 @@ func (a *API) memberCollectionsOf(ctx context.Context, u *auth.User) ([]catalog.
 // field ("leave it"), null ("Make independent") and an id ("Assign to someone")
 // differ.
 type userPatch struct {
+	Username      *string         `json:"username"`
 	Role          *string         `json:"role"`
 	Password      *string         `json:"password"`
 	Disabled      *bool           `json:"disabled"`
@@ -221,8 +218,10 @@ func (p userPatch) owner() (present bool, id int64, ok bool) {
 	return true, id, true
 }
 
-// handleUpdateUser patches an account in place: role, password, disabled state
-// and the household member fields (any subset). It replaces the old
+// handleUpdateUser patches an account in place: username, role, password,
+// disabled state and the household member fields (any subset). A username is
+// the rule a new account's is: not "" (400 username_required), not another
+// account's (409 username_taken). It replaces the old
 // delete-and-recreate dance and the separate disable endpoint. auth.UpdateUser
 // applies the whole body in one transaction, checking all of it first, so a
 // refused field changes nothing. The password counts before the role, so
@@ -255,10 +254,19 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			"managed_by needs member_kind and member_access, and they come only with it")
 		return
 	}
+	// The name before a rename, for the audit.
+	var was string
+	if req.Username != nil {
+		before := a.lookupUser(w, r, id)
+		if before == nil {
+			return
+		}
+		was = before.Username
+	}
 	// A reset of a password the person had ends their sessions, all but the
 	// admin's own when it is their own account (auth.UpdateUser).
 	change := auth.UserChanges{
-		Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
+		Username: req.Username, Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
 		KeepToken: credentialFrom(r.Context()).ID,
 	}
 	if assign {
@@ -276,8 +284,20 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
+	// An admin who set their own password here (People's password dialog on
+	// their own account) chose it, as POST /auth/password's caller does: the
+	// first-run admin's printed password is gone and the start's hint ends
+	// (auth/firstrun.go). One another admin set for them is not their choice.
+	if req.Password != nil && *req.Password != "" && u.ID == userFrom(r.Context()).ID && u.Role == auth.RoleAdmin {
+		if err := a.auth.NoteOwnPassword(r.Context(), u.ID); err != nil {
+			a.log.Warn("noting the admin's own password failed", "err", err)
+		}
+	}
 	// The password itself never: only that it changed (or was cleared).
 	details := map[string]any{}
+	if req.Username != nil && was != u.Username {
+		details["username_was"] = was
+	}
 	if req.Role != nil {
 		details["role"] = u.Role
 	}
@@ -372,6 +392,8 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeError(w, http.StatusNotFound, "user not found")
 	case errors.Is(err, auth.ErrUsernameTaken):
 		writeErrorCode(w, http.StatusConflict, codeUsernameTaken, "username already taken")
+	case errors.Is(err, auth.ErrUsernameRequired):
+		writeErrorCode(w, http.StatusBadRequest, codeUsernameRequired, err.Error())
 	case errors.Is(err, auth.ErrLastAdmin):
 		writeErrorCode(w, http.StatusConflict, codeLastAdmin, err.Error())
 	case errors.Is(err, auth.ErrAdminNeedsPassword):

@@ -1,6 +1,5 @@
-import { ApiError } from '@/api/client';
 import type { BridgeJob, BridgeStatus } from '@/api/types';
-import { JOBS_POLL_OPEN_MS, isOpen, text } from '@/features/bridge/bridge-model';
+import { failureCode, text } from '@/features/bridge/bridge-model';
 
 // Library > LibriVox (LibriVox L6): what the page decides, kept out of the
 // components so the rules are tested on their own.
@@ -57,17 +56,14 @@ export function fetchReason(
   job: Pick<BridgeJob, 'kind' | 'state' | 'progress' | 'result' | 'error'>,
 ): string | undefined {
   if (job.kind !== LIBRIVOX_KIND) return undefined;
-  const known = (code: string | undefined) =>
-    code && (FETCH_CODES as readonly string[]).includes(code) ? code : undefined;
   let code: string | undefined;
   if (job.state === 'needs_attention') {
     const park = job.progress?.park;
-    code = known(park && typeof park === 'object' ? text((park as { code?: unknown }).code) : '');
+    const parked =
+      park && typeof park === 'object' ? text((park as { code?: unknown }).code) : undefined;
+    code = FETCH_CODES.find((c) => c === parked);
   } else if (job.state === 'failed' || job.state === 'cancelled') {
-    const own = text(job.result?.code);
-    code = own
-      ? known(own)
-      : FETCH_CODES.find((c) => job.error === c || job.error.startsWith(`${c}:`));
+    code = failureCode(job, FETCH_CODES);
   }
   return code ? `librivox.code.${code}` : undefined;
 }
@@ -86,19 +82,6 @@ export function librivoxProject(job: Pick<BridgeJob, 'kind' | 'params'>): number
 export function librivoxTitle(job: Pick<BridgeJob, 'kind' | 'params'>): string | undefined {
   if (job.kind !== LIBRIVOX_KIND) return undefined;
   return text(job.params?.title);
-}
-
-/** How often a tracked job is asked again: every few seconds while it is open. */
-export function jobPollMs(job: Pick<BridgeJob, 'state'> | undefined): number | false {
-  return job && isOpen(job.state) ? JOBS_POLL_OPEN_MS : false;
-}
-
-/**
- * Whether a tracked job's read failed because the job is gone (deleted with
- * its library): it is followed no more, and never asked for again.
- */
-export function jobGone(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 404;
 }
 
 /**

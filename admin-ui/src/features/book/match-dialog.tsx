@@ -41,7 +41,9 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { addBookUrl } from '@/lib/meta-site';
 import { regionTag } from '@/lib/regions';
+import { NotInDatabase } from './add-to-community';
 import { shownValue } from './book-model';
 import {
   acceptRequest,
@@ -329,6 +331,13 @@ function MatchBody({
           candidates={candidates}
           picked={picked}
           bookSeconds={b.duration}
+          addUrl={addBookUrl({
+            asin: by.asin || b.asin,
+            query: by.q,
+            title: b.title,
+            author: b.author,
+          })}
+          bookTitle={b.title || b.path}
           recordingOf={recordingOf}
           onPick={(id) => {
             setPickId(id);
@@ -415,6 +424,8 @@ function Candidates({
   candidates,
   picked,
   bookSeconds,
+  addUrl,
+  bookTitle,
   recordingOf,
   onPick,
 }: {
@@ -422,6 +433,9 @@ function Candidates({
   candidates: MatchCandidate[];
   picked: MatchCandidate | undefined;
   bookSeconds: number;
+  /** Add it on the community site, for when nothing matches (server#370). */
+  addUrl: string;
+  bookTitle: string;
   recordingOf: (c: MatchCandidate) => MatchRecording | undefined;
   onPick: (workId: string) => void;
 }) {
@@ -461,9 +475,10 @@ function Candidates({
   }
   if (!candidates.length) {
     return (
-      <p className="rounded-[12px] border border-dashed px-4 py-6 text-center text-muted-foreground">
-        {t('book.match.none')}
-      </p>
+      <div className="flex flex-col gap-3 rounded-[12px] border border-dashed px-4 py-5">
+        <p className="text-center text-muted-foreground">{t('book.match.none')}</p>
+        <NotInDatabase href={addUrl} title={bookTitle} className="text-center" />
+      </div>
     );
   }
   return (

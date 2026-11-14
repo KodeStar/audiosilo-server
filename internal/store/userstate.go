@@ -84,9 +84,12 @@ var userStateTables = map[string]tableRule{
 	"upcoming_items":     {rows: true},
 	"upcoming_announced": {rows: true},
 	// The daily report of unknown Audible ASINs (internal/coverage, migration
-	// 0068): the job's own memory of what it looked up and sent, read by no
-	// content cache.
-	"unknown_asin_reports": {rows: true},
+	// 0068): the job's own memory of what it looked up and sent. The Health
+	// summary's unknown_asin kind (catalog.IssueUnknownASIN, in the list cache)
+	// reads which ASINs are unknown, so a row added or removed, or its answer
+	// (unknown) changed, moves the generation; a lookup that only renews when it
+	// was checked or sent does not (server#370).
+	"unknown_asin_reports": {free: []string{"checked_at", "sent_at"}},
 	// Audible (Bridge Phase 4a, migration 0063): a poll's titles
 	// (catalog.PutAudibleTitles) and an account's poll times, read only by the
 	// console's Audible routes and the scheduler, never by a content cache. An

@@ -20,7 +20,9 @@ import (
 const setupKey = "setup_state"
 
 // SetupSteps are the flow's step ids, in the order the console shows them.
-var SetupSteps = []string{"folder", "naming", "metadata", "reach", "abs", "backups", "phone", "bridge"}
+// The admin's own account comes first (server#369) and the phone last, once the
+// server has its books and its address.
+var SetupSteps = []string{"account", "folder", "naming", "metadata", "reach", "abs", "backups", "bridge", "phone"}
 
 // A step's recorded outcome. A step with neither hasn't been seen yet.
 const (
@@ -134,4 +136,24 @@ func ResolveScanned(b *Book, source string) ScannedNames {
 		Title: f[FieldTitle], Author: f[FieldAuthor], Narrator: f[FieldNarrator],
 		Series: f[FieldSeries], Position: f[FieldSeriesIndex],
 	}
+}
+
+// regionChosenKey is server_state's row saying an admin saved the preferred
+// Audible marketplace (metadata.region) from the console, "No preference"
+// included (server#192).
+const regionChosenKey = "metadata_region_chosen"
+
+// RegionChosen reports whether an admin ever saved metadata.region from the
+// console (NoteRegionChosen). With a value in config.yaml or the environment
+// it was chosen there too: the caller checks that.
+func (c *Catalog) RegionChosen(ctx context.Context) (bool, error) {
+	return getServerState[bool](ctx, c.db, regionChosenKey)
+}
+
+// NoteRegionChosen records that an admin saved metadata.region; once is enough.
+func (c *Catalog) NoteRegionChosen(ctx context.Context) error {
+	if done, err := c.RegionChosen(ctx); err != nil || done {
+		return err
+	}
+	return putServerState(ctx, c.db, regionChosenKey, true, c.stamp())
 }

@@ -28,7 +28,10 @@ function redeemFailure(resp, data) {
   return asI18n.t("connect.redeemError");
 }
 
-async function redeem(code) {
+// redeem asks the server for the code's pairing. fromLink: the code came in an
+// invite link's fragment, not typed into the form, which the page's "open this
+// invite link again" wording assumes.
+async function redeem(code, fromLink) {
   msg.classList.remove("show");
   if (!code) {
     showError(asI18n.t("connect.codeRequired"));
@@ -61,6 +64,12 @@ async function redeem(code) {
     if (data.web_url) setLink("link-web", data.web_url, asI18n.t("connect.openWeb"));
     // The console only for an admin's invite (a listener has no use for it).
     document.getElementById("link-admin").classList.toggle("hidden", data.admin !== true);
+    // Typed in: there is no link to open again, only this page to come back to.
+    if (!fromLink) {
+      retext("phone-heading", "connect.phoneHeadingTyped");
+      retext("phone-body", "connect.phoneBodyTyped");
+      retext("reopen-hint", "connect.reopenHintTyped");
+    }
     if (isPhone()) showPhone();
     form.classList.add("hidden");
     document.getElementById("intro").classList.add("hidden");
@@ -72,8 +81,16 @@ async function redeem(code) {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  redeem(codeInput.value.trim());
+  redeem(codeInput.value.trim(), false);
 });
+
+// retext swaps an element's text for another key's, kept on data-i18n so a
+// language change keeps it.
+function retext(id, key) {
+  const el = document.getElementById(id);
+  el.setAttribute("data-i18n", key);
+  el.textContent = asI18n.t(key);
+}
 
 // isPhone: a phone or tablet, the device the app would run on. A QR shown there
 // can't be scanned by the phone holding it, so the page leads with getting the
@@ -114,5 +131,5 @@ function setLink(id, href, label) {
   const code = decodeURIComponent(m[1]).trim();
   history.replaceState(null, "", location.pathname + location.search);
   codeInput.value = code;
-  redeem(code);
+  redeem(code, true);
 })();

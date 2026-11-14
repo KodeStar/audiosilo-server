@@ -101,6 +101,29 @@ describe('shareOrCopy', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it('ignores a press while the share sheet is still open (server#386)', async () => {
+    const exec = stubExecCommand(() => true);
+    let close = () => {};
+    const share = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          close = resolve;
+        }),
+    );
+    stubShare(share);
+    const first = shareOrCopy(data, 'Invite message');
+    await shareOrCopy(data, 'Invite message');
+    expect(share).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    close();
+    await first;
+    // Closed, the next press opens it again.
+    const again = shareOrCopy(data, 'Invite message');
+    expect(share).toHaveBeenCalledTimes(2);
+    close();
+    await again;
+  });
+
   it('copies the text and the link when there is no share sheet, or it refuses', async () => {
     let copied = '';
     stubExecCommand(() => {

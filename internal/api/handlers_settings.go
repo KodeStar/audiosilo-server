@@ -42,7 +42,8 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 //
 // Read-only facts ride along in their sections: metadata.available (the service
 // exists, so the switch can turn on), metadata.upcoming_status and
-// metadata.report_status (the two daily jobs' last runs, when the job exists), players.web_player (where /web is served
+// metadata.report_status (the two daily jobs' last runs, when the job exists),
+// metadata.region_chosen (regionChosen), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
 // is null), household.max_members_default/_min/_max (the cap's default and
 // range). The modules section is each managed module's toggle (modules.go; GET
@@ -51,6 +52,7 @@ func (a *API) settingsEnvelope() map[string]any {
 	saved := a.config().saved
 	sections := saved.Settings()
 	sections["metadata"]["available"] = a.meta != nil
+	sections["metadata"]["region_chosen"] = a.regionChosen(saved)
 	if st := a.upcomingStatus(context.Background()); st != nil {
 		sections["metadata"]["upcoming_status"] = st
 	}
@@ -140,8 +142,31 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		(!cur.Metadata.Enabled || !cur.Metadata.ReportUnknown) {
 		a.coverage.Wake()
 	}
+	// A marketplace saved, even the one it already was: never chosen no more.
+	if _, ok := patch["metadata"]["region"]; ok {
+		if err := a.cat.NoteRegionChosen(r.Context()); err != nil {
+			a.log.Warn("settings: noting the chosen marketplace failed", "err", err)
+		}
+	}
 	if changes := config.ChangedSettings(cur, next); len(changes) > 0 {
 		a.audit(r, "settings.update", "", map[string]any{"changes": changes})
 	}
 	writeJSON(w, http.StatusOK, a.settingsEnvelope())
+}
+
+// regionChosen is metadata.region_chosen: whether the preferred Audible
+// marketplace was ever chosen, so the console's setup flow and Settings may
+// offer the one nearest the admin only when it wasn't (server#192). Chosen: a
+// value in config.yaml or the environment, or one an admin saved here ("No
+// preference" too, catalog.NoteRegionChosen). A failed read counts as chosen:
+// nothing is offered over a choice.
+func (a *API) regionChosen(saved *config.Config) bool {
+	if saved.Metadata.PreferredRegion() != "" {
+		return true
+	}
+	if _, locked := saved.Locked()["metadata.region"]; locked {
+		return true
+	}
+	chosen, err := a.cat.RegionChosen(context.Background())
+	return err != nil || chosen
 }

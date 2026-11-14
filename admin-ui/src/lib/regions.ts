@@ -44,9 +44,14 @@ export function regionTag(region: string | undefined): string {
   return region ? region.toUpperCase() : '';
 }
 
-/** The marketplaces as select options: "United Kingdom (audible.co.uk)". */
+/** A marketplace with its store: "United Kingdom (audible.co.uk)". */
+export function regionLabel(region: string, lang: string): string {
+  return `${regionName(region, lang)} (${storeOf(region)})`;
+}
+
+/** The marketplaces as select options, each by its regionLabel. */
 export function regionOptions(lang: string): { value: string; label: string }[] {
-  return MATCH_REGIONS.map((r) => ({ value: r, label: `${regionName(r, lang)} (${STORES[r]})` }));
+  return MATCH_REGIONS.map((r) => ({ value: r, label: regionLabel(r, lang) }));
 }
 
 /** A marketplace's store ("audible.co.uk"), the code itself for one this console doesn't know. */

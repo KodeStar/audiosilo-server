@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   AudioLines,
+  CircleHelp,
   Combine,
   Copy,
   Disc3,
@@ -38,6 +39,7 @@ export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }
   duplicate: { icon: Copy, tile: 'bg-info-soft text-info' },
   no_cover: { icon: ImageOff, tile: 'bg-warning-soft text-warning' },
   unmatched: { icon: Globe, tile: 'bg-prov-community-soft text-prov-community' },
+  unknown_asin: { icon: CircleHelp, tile: 'bg-prov-community-soft text-prov-community' },
   series_spellings: { icon: SpellCheck, tile: 'bg-info-soft text-info' },
   no_chapters: { icon: List, tile: 'bg-muted text-muted-foreground' },
   detailed_chapters: { icon: ListTree, tile: 'bg-prov-community-soft text-prov-community' },
@@ -61,6 +63,8 @@ export const FIXES: Record<IssueKind, IssueFix> = {
   duplicate: null, // the compare view has its own actions
   no_cover: 'cover',
   unmatched: 'match',
+  // Matching it by hand finds it by its title (the row also offers Add it).
+  unknown_asin: 'match',
   series_spellings: null, // the spellings view has its own action
   no_chapters: 'detect',
   detailed_chapters: 'chapters',
@@ -167,6 +171,8 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
       return { key: 'health.reason.no_cover' };
     case 'unmatched':
       return { key: 'health.reason.unmatched' };
+    case 'unknown_asin':
+      return { key: 'health.reason.unknown_asin', values: { asin: b.asin } };
     case 'series_spellings':
       return { key: 'health.reason.series_spellings', values: { series: b.series } };
     case 'no_chapters':

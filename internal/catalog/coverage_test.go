@@ -114,3 +114,43 @@ func TestUnknownASINRows(t *testing.T) {
 		t.Fatalf("state = %+v, %v", st, err)
 	}
 }
+
+// TestASINChecksMoveTheContentGenerationOnAChangeOnly (server#370): Health's
+// unknown_asin kind is cached under the content generation, so the report's own
+// writers (an upsert, on a WITHOUT ROWID table) must move it when an ASIN is
+// first looked up, changes its answer or is forgotten, and leave it for a
+// lookup or a send that only renews the row's times.
+func TestASINChecksMoveTheContentGenerationOnAChangeOnly(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	step := func(name string, moves bool, write func() error) {
+		t.Helper()
+		before, ok := c.ContentGeneration()
+		if !ok {
+			t.Fatal("the test store counts no content generation")
+		}
+		if err := write(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if after, _ := c.ContentGeneration(); (after != before) != moves {
+			t.Errorf("%s: the content generation moved = %v, want %v", name, after != before, moves)
+		}
+	}
+	both := []ASINCheck{{ASIN: "B0UNKNOWN1", Unknown: true}, {ASIN: "B0KNOWN001"}}
+	step("first lookup", true, func() error { return c.SaveASINChecks(ctx, both, "2026-11-14T00:00:00.000Z") })
+	step("same answers", false, func() error { return c.SaveASINChecks(ctx, both, "2026-11-15T00:00:00.000Z") })
+	step("sent", false, func() error {
+		return c.MarkASINsSent(ctx, []string{"B0UNKNOWN1"}, "2026-11-15T00:00:01.000Z")
+	})
+	step("same answer once sent", false, func() error {
+		return c.SaveASINChecks(ctx, both[:1], "2026-11-16T00:00:00.000Z")
+	})
+	step("now known", true, func() error {
+		return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0UNKNOWN1"}}, "2026-11-17T00:00:00.000Z")
+	})
+	step("now unknown", true, func() error {
+		return c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0KNOWN001", Unknown: true}}, "2026-11-17T00:00:00.000Z")
+	})
+	step("forgotten", true, func() error { return c.DropUnknownASINs(ctx, []string{"B0KNOWN001"}) })
+	step("nothing to forget", false, func() error { return c.DropUnknownASINs(ctx, []string{"B0NOTHELD1"}) })
+}

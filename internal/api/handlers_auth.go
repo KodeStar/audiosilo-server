@@ -323,6 +323,13 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !knownBrowser {
 		a.reportSignIn(r, full, req.DeviceName, false)
 	}
+	// An admin's password sign-in ends the start's "not signed in yet" hint
+	// (auth/firstrun.go); a failure to note it only leaves the hint up.
+	if full.Role == auth.RoleAdmin {
+		if err := a.auth.NoteAdminSignIn(r.Context()); err != nil {
+			a.log.Warn("noting the admin's first sign-in failed", "err", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
 }
 
@@ -410,6 +417,8 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Changing an existing password ends the user's other sessions (their cast tokens
 // with them), keeping the caller's, and their open pairing codes and recovery
 // code; API keys, the calendar feed token and Bridge tokens stay (auth.endSessions).
+// A wrong current password is 401 current_password_incorrect. An admin's change
+// ends the start's first-run hint (auth.NoteOwnPassword).
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return
@@ -432,7 +441,9 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if full.HasPassword {
 		if err := a.auth.CheckPassword(r.Context(), full.ID, req.CurrentPassword); err != nil {
-			writeError(w, http.StatusUnauthorized, "current password is incorrect")
+			// The code tells a client this 401 apart from a session that ended
+			// (the console then keeps its session and asks again).
+			writeErrorCode(w, http.StatusUnauthorized, codeCurrentPasswordIncorrect, "current password is incorrect")
 			return
 		}
 	}
@@ -446,6 +457,13 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeUserError(w, err, "could not update password")
 		return
+	}
+	// An admin who set their own password holds it: the start's hint ends,
+	// and the first-run admin's printed password is gone (auth/firstrun.go).
+	if full.Role == auth.RoleAdmin {
+		if err := a.auth.NoteOwnPassword(r.Context(), full.ID); err != nil {
+			a.log.Warn("noting the admin's own password failed", "err", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

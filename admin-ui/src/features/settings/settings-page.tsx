@@ -41,6 +41,7 @@ import { activeMirror, mirrorLook } from '@/features/health/system-model';
 import { AudibleTopic } from '@/features/audible/audible-topic';
 import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
+import { RegionSuggestion } from '@/features/setup/region-suggestion';
 import { SettingsDrafts } from './settings-drafts';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
@@ -514,7 +515,9 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
             ],
           },
         ]}
-      />
+      >
+        <RegionSuggestion settings={settings} />
+      </SettingsForm>
       <SettingsForm
         settings={settings}
         section="metadata"

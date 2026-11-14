@@ -30,15 +30,13 @@ func (a *API) setupAvailable(r *http.Request) bool {
 	return !exists
 }
 
-// handleSetupPage serves the first-run wizard. When setup isn't available it
-// redirects an already-set-up server to /admin, and 404s when the wizard was
-// never enabled (so a normal deployment doesn't expose a /setup surface).
+// handleSetupPage serves the first-run wizard. When setup isn't available,
+// never enabled or closed by an admin, it redirects to /admin: the same answer
+// either way, so a normal deployment shows no /setup surface (nor whether it
+// was ever started with --setup), and the console's sign-in page can ask
+// whether the wizard is open (200) without a 404 in the browser's console.
 func (a *API) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 	if !a.setupAvailable(r) {
-		if a.setupToken == "" {
-			http.NotFound(w, r)
-			return
-		}
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
