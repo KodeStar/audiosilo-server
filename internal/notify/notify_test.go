@@ -700,6 +700,10 @@ func TestBridgeLibrivoxJobWording(t *testing.T) {
 		if m.Title != "Added from LibriVox: Johnny Crow's Garden" || m.Text != want[ev.Data["librivox_match"]] {
 			t.Errorf("%v: %+v", ev.Data["librivox_match"], m)
 		}
+		// Only the unmatched one is a warning (the bell's tone for it).
+		if warn := ev.Data["librivox_match"] == catalog.LibrivoxUnmatched; (m.Color == colorWarn) != warn || slices.Contains(m.Tags, "warning") != warn {
+			t.Errorf("%v: color %v tags %v, want a warning %v", ev.Data["librivox_match"], m.Color, m.Tags, warn)
+		}
 	}
 	failed, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
 	if len(failed) != 1 || failed[0].Data["librivox_match"] != nil {

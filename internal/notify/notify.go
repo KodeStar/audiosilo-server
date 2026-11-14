@@ -422,6 +422,10 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 			m.Text = "The community already had what this server generated for the book, so nothing was sent."
 		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
+		// A LibriVox book left unmatched is a warning, as the bell shows it.
+		if str("job_kind") == bridge.KindLibrivoxFetch && str("librivox_match") == catalog.LibrivoxUnmatched {
+			m.Tags, m.Color = []string{"warning"}, colorWarn
+		}
 	case KindBridgeJobFailed:
 		if str("state") == bridge.StateNeedsAttention {
 			m.Title = "A Bridge job needs attention: " + bridgeJobBook(ev)
