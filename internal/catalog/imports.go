@@ -75,7 +75,8 @@ type ImportSummary struct {
 	FirstListen        *string       `json:"first_listen"`
 	LastListen         *string       `json:"last_listen"`
 	// Identifiers is what the import carries as match hints (book_hints): nil in
-	// a summary planned before it (server#366).
+	// a summary planned before it (server#366), all zero once such an import is
+	// planned again (a cutoff change, the apply: its payload carries none).
 	Identifiers *ImportIdentifiers `json:"identifiers,omitempty"`
 }
 

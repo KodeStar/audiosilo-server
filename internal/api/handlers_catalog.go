@@ -478,7 +478,7 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 // works the book might be. ?q= adds that text to the book's own facts (its tags
 // and its library path) and ?asin= / ?isbn= look an identifier up; with none,
 // meta.Candidates matches the book's facts and looks its own identifiers, or its
-// tag hints, up.
+// hints (an Audiobookshelf import's, else its tags': matchrun.QueryFor), up.
 //
 // Responses: metadata off -> 404 (code metadata_off); no book -> 404; upstream
 // down -> 502; otherwise 200 {"candidates": [...]} (possibly empty).
