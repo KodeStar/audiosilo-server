@@ -107,6 +107,32 @@ type LibrivoxFetchResult struct {
 	Adopted    *bool  `json:"adopted,omitempty"`
 }
 
+// FetchFolder is how a done librivox.fetch got its book's folder, as its
+// result's Adopted says it (LibrivoxFetchResult.Folder).
+type FetchFolder int
+
+const (
+	// FolderUnsaid: a Bridge that doesn't say (Adopted absent, before
+	// server#379).
+	FolderUnsaid FetchFolder = iota
+	// FolderPlaced: a new folder, placed where there was none.
+	FolderPlaced
+	// FolderAdopted: a folder the Bridge placed before, an earlier fetch's book.
+	FolderAdopted
+)
+
+// Folder is how the fetch got its book's folder: Adopted read as one of the
+// three states, so no caller unpacks the pointer by hand.
+func (r LibrivoxFetchResult) Folder() FetchFolder {
+	switch {
+	case r.Adopted == nil:
+		return FolderUnsaid
+	case *r.Adopted:
+		return FolderAdopted
+	}
+	return FolderPlaced
+}
+
 // LibrivoxFetchOf reads a job's params and, when it is done, its result.
 func LibrivoxFetchOf(j Job) (p LibrivoxFetchParams, r LibrivoxFetchResult, err error) {
 	if err = json.Unmarshal(j.Params, &p); err != nil {

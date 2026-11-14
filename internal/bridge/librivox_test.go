@@ -123,3 +123,22 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 		t.Fatalf("LibrivoxFetch's params refused: %v", err)
 	}
 }
+
+// TestLibrivoxFetchFolder (server#386): a result's Adopted read as its three
+// states, from the JSON a Bridge sends.
+func TestLibrivoxFetchFolder(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]FetchFolder{
+		`{"path":"p"}`:                 FolderUnsaid,
+		`{"path":"p","adopted":false}`: FolderPlaced,
+		`{"path":"p","adopted":true}`:  FolderAdopted,
+	} {
+		var r LibrivoxFetchResult
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Folder(); got != want {
+			t.Errorf("%s: Folder = %d, want %d", raw, got, want)
+		}
+	}
+}
