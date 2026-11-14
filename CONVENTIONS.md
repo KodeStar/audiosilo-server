@@ -3833,14 +3833,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `first_admin` `{user_id, signed_in, chose_password}`; while `signed_in` is false every later start prints
   a framed reminder (`launcher.signInHint`: the console address, the username, and the `reset-admin`
   command, as `docker exec -u <uid>:<gid> <container> ...` inside a container, the server's own ids so the
-  command never makes a root-owned file in the data folder). Any admin's password sign-in
-  (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`) ends it; each writes once.
+  command never makes a root-owned file in the data folder; words quoted for the system's shell,
+  `quoteWord`: single quotes, double on Windows). The row is written after the banner and a failed write
+  only loses the reminder. Any admin's password sign-in
+  (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`: `POST /auth/password`, or
+  `PATCH /admin/users/{id}` on their own account, the console's People dialog; a password another admin
+  or `reset-admin` set is not their own) ends it; each writes once, in one transaction.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
-  reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one and
-  one with pending migrations), picks the only admin or the named one (exit 2 with the admins listed
+  reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one,
+  a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
+  migrations), picks the only admin or the named one (exit 2 with the admins listed
   otherwise; a disabled one is refused), sets a random password through `auth.SetPassword` (the console's
   rule: every session, pairing code and remembered browser ends) and prints it once. A running server
-  takes the new password at once; a session it holds cached may carry on until its next write.
+  takes the new password at once; a session it already checked is answered from its token cache (which
+  another process's write can't empty) until that server's next content write or the session's own
+  last-seen touch, a minute of use at most and the request that makes it
+  (`TestResetAdminEndsARunningServersSessions`). A reset also ends the sign-in hint (`NoteAdminSignIn`: the
+  hint names the first start's password), and the hint never names a first-run admin since disabled or
+  demoted.
   **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no
   region was ever set here, in config.yaml or by the environment (`server_state`
   `metadata_region_chosen`, written by any settings save carrying `metadata.region`, "No preference"

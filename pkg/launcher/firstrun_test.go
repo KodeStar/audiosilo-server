@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -137,7 +138,6 @@ func TestResetAdminCommand(t *testing.T) {
 	}
 }
 
-// passwordIn reads the password ResetAdmin printed.
 // On Windows a path's backslashes are plain and a word with a space takes
 // double quotes: cmd.exe reads a single quote as part of the word.
 func TestQuoteWord(t *testing.T) {
@@ -154,6 +154,7 @@ func TestQuoteWord(t *testing.T) {
 	}
 }
 
+// passwordIn reads the password ResetAdmin printed.
 var passwordLine = regexp.MustCompile(`(?m)^  (\S+)$`)
 
 func passwordIn(t *testing.T, out string) string {
@@ -232,6 +233,90 @@ func TestResetAdmin(t *testing.T) {
 	}
 }
 
+// A reset ends the start's hint: it names the first start's password, which
+// the reset replaced, and whoever ran the reset holds a working one.
+func TestResetAdminEndsTheSignInHint(t *testing.T) {
+	ctx := context.Background()
+	path := storetest.Path(t)
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	authSvc := auth.New(db, time.Now)
+	if _, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, io.Discard, discardLog()); err != nil {
+		t.Fatal(err)
+	}
+	if hintFor(t, authSvc) == "" {
+		t.Fatal("no hint before the reset")
+	}
+	if err := ResetAdmin(ctx, filepath.Dir(path), "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := hintFor(t, authSvc); got != "" {
+		t.Errorf("the hint after a reset still names the first start's password:\n%s", got)
+	}
+}
+
+// A session the running server already checked. reset-admin's write is another
+// process's, which the server's token cache can't see, so the session ends
+// when its row is next read: at the server's next content write, or once the
+// session's own last-seen touch (a minute after the last) drops it from the
+// cache, the request that makes the touch being the last one answered.
+func TestResetAdminEndsARunningServersSessions(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		// then is what the running server does after the reset.
+		then func(t *testing.T, running *auth.Service, secret string, clock *time.Time)
+	}{
+		{"its next write", func(t *testing.T, running *auth.Service, _ string, _ *time.Time) {
+			if _, err := running.CreateUser(ctx, "user-sam", "", auth.RoleUser); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the session's next touch", func(_ *testing.T, running *auth.Service, secret string, clock *time.Time) {
+			*clock = clock.Add(time.Minute)
+			_, _ = running.ResolveToken(ctx, secret, auth.KindSession)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := storetest.Path(t)
+			db, err := store.Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			clock := time.Now()
+			running := auth.New(db, func() time.Time { return clock })
+			if _, err := running.CreateUser(ctx, "admin", "old-password", auth.RoleAdmin); err != nil {
+				t.Fatal(err)
+			}
+			u, err := running.Authenticate(ctx, "admin", "old-password")
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret, _, err := running.IssueSession(ctx, u, "browser", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Twice: the first use touches the row, the second leaves it cached.
+			for range 2 {
+				if _, err := running.ResolveToken(ctx, secret, auth.KindSession); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ResetAdmin(ctx, filepath.Dir(path), "", io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			tc.then(t, running, secret, &clock)
+			if _, err := running.ResolveToken(ctx, secret, auth.KindSession); !errors.Is(err, auth.ErrInvalidToken) {
+				t.Errorf("the old session after %s: err = %v, want ErrInvalidToken", tc.name, err)
+			}
+		})
+	}
+}
+
 // The refusals: several admins and none named, a name that is no account or no
 // admin (each a UsageError listing the admins), no admin at all, no database,
 // and a disabled admin (errors).
@@ -277,6 +362,23 @@ func TestResetAdminRefusals(t *testing.T) {
 		// Nothing made in a folder that held no server.
 		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 			t.Errorf("reset-admin left files in an empty folder: %v", entries)
+		}
+	})
+
+	// A file that isn't an AudioSilo database is refused as it is, not
+	// migrated into one.
+	t.Run("an empty file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "audiosilo.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
+		if !errors.Is(err, store.ErrNotADatabase) {
+			t.Fatalf("err = %v, want ErrNotADatabase", err)
+		}
+		if fi, err := os.Stat(path); err != nil || fi.Size() != 0 {
+			t.Errorf("the file was written to: %v, %v", fi, err)
 		}
 	})
 
@@ -361,20 +463,3 @@ func TestResetAdminRefusesAnOlderDatabase(t *testing.T) {
 		t.Fatalf("err = %v, want the older-release refusal", err)
 	}
 }
-	// A file that isn't an AudioSilo database is refused as it is, not
-	// migrated into one.
-	t.Run("an empty file", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "audiosilo.db")
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		err := ResetAdmin(ctx, dir, "", &bytes.Buffer{})
-		if !errors.Is(err, store.ErrNotADatabase) {
-			t.Fatalf("err = %v, want ErrNotADatabase", err)
-		}
-		if fi, err := os.Stat(path); err != nil || fi.Size() != 0 {
-			t.Errorf("the file was written to: %v, %v", fi, err)
-		}
-	})
-

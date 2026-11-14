@@ -146,12 +146,17 @@ func (e *UsageError) Error() string { return e.msg }
 // username picks the admin; "" picks the only one (a UsageError, listing them,
 // when there are several). The password is set as the console sets one
 // (auth.SetPassword, nothing kept): the account's sessions, open pairing codes
-// and recovery code end and its browsers are forgotten. It runs beside a
-// running server (SQLite in WAL mode waits its turn): that server checks the
-// new password at once, since a sign-in reads the database. It touches
-// nothing else: no config.yaml written, no folder made, and a database an
-// older release left (migrations pending) is refused, for the server to
-// upgrade (and back up) at its next start.
+// and recovery code end and its browsers are forgotten, and the start's sign-in
+// hint ends with them. It runs beside a running server (SQLite in WAL mode
+// waits its turn): that server checks the new password at once, since a
+// sign-in reads the database, but its token cache can't see this process's
+// write, so a session it already checked is refused only once its row is read
+// again: at the server's next content write, or after the session's own
+// last-seen touch (within a minute of use, and the request that makes it). It touches
+// nothing else: no config.yaml written, no folder made, a file that isn't an
+// AudioSilo database (an empty one included) refused before it is opened for
+// writing, and a database an older release left (migrations pending) refused
+// too, for the server to upgrade (and back up) at its next start.
 func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) error {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -163,11 +168,6 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	} else if err != nil {
 		return err
 	}
-	pending, err := store.PendingMigrations(ctx, dbPath)
-	if err != nil {
-		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
-	}
-	if len(pending) > 0 {
 	// A file that isn't this server's database (an empty one a failed start
 	// left, another program's) is refused before anything opens it for writing:
 	// opening it would migrate it. One a newer release made is the server's to
@@ -175,6 +175,11 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if _, err := store.Inspect(ctx, dbPath, false); err != nil && !errors.Is(err, store.ErrNewerDatabase) {
 		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
 	}
+	pending, err := store.PendingMigrations(ctx, dbPath)
+	if err != nil {
+		return fmt.Errorf("reading the database at %s: %w", dbPath, err)
+	}
+	if len(pending) > 0 {
 		return fmt.Errorf("the database at %s is from an older release: start the server once (it upgrades the database), then run reset-admin again", dbPath)
 	}
 	db, err := store.Open(ctx, dbPath, store.WithLogger(slog.New(slog.DiscardHandler)))
@@ -192,11 +197,15 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	if err := authSvc.SetPassword(ctx, u.ID, password, 0); err != nil {
 		return err
 	}
+	// Whoever ran this holds a working admin password now, so later starts stop
+	// pointing at the first start's, which this may have replaced
+	// (auth.NoteAdminSignIn). A failed note only leaves the hint up.
+	_ = authSvc.NoteAdminSignIn(ctx)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("New password for the admin account %q:\n\n  %s\n\n", u.Username, password)
 	p("Sign in to the admin console with it. Every session that used the old password\n")
-	p("is signed out (a running server may let one it already checked carry on until its\n")
-	p("next change; restart the server to be sure).\n")
+	p("is signed out (a running server may answer one it already checked for a minute\n")
+	p("more; restart the server to end them at once).\n")
 	return nil
 }
 

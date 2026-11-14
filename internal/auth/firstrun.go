@@ -24,8 +24,8 @@ const firstAdminKey = "first_admin"
 type firstAdmin struct {
 	// UserID is the admin ensureAdmin made.
 	UserID int64 `json:"user_id"`
-	// SignedIn is set by the first password sign-in of any admin (or an
-	// admin's own password change): someone holds a working password.
+	// SignedIn is set by the first password sign-in of any admin, an admin's
+	// own password change or a reset-admin: someone holds a working password.
 	SignedIn bool `json:"signed_in"`
 	// ChosePassword is set once UserID changes their own password, so the
 	// printed one is gone (the console's Your account step words itself by it).
@@ -70,8 +70,10 @@ func (s *Service) FirstAdminWaiting(ctx context.Context) (*User, error) {
 }
 
 // NoteAdminSignIn records that an admin signed in with a password, ending the
-// start's hint. It writes only the first time (a write moves the content
-// generation), and nothing on a server without the row.
+// start's hint; reset-admin notes it too, for the password it just printed
+// (the hint would still point at the first start's, which it replaced). It
+// writes only the first time (a write moves the content generation), and
+// nothing on a server without the row.
 func (s *Service) NoteAdminSignIn(ctx context.Context) error {
 	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) { fa.SignedIn = true })
 }
