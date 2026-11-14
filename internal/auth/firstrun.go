@@ -32,8 +32,9 @@ type firstAdmin struct {
 	// SignedIn is set by the first password sign-in of any admin, an admin's
 	// own password change or a reset-admin: someone holds a working password.
 	SignedIn bool `json:"signed_in"`
-	// ChosePassword is set once UserID changes their own password, so the
-	// printed one is gone (the console's Your account step words itself by it).
+	// ChosePassword is set once UserID changes their own password or
+	// reset-admin gives them one, so the printed one is gone (the console's
+	// Your account step words itself by it).
 	ChosePassword bool `json:"chose_password"`
 }
 
@@ -75,17 +76,17 @@ func (s *Service) FirstAdminWaiting(ctx context.Context) (*User, error) {
 }
 
 // NoteAdminSignIn records that an admin signed in with a password, ending the
-// start's hint; reset-admin notes it too, for the password it just printed
-// (the hint would still point at the first start's, which it replaced). It
-// writes only the first time (a write moves the content generation), and
-// nothing on a server without the row.
+// start's hint. It writes only the first time (a write moves the content
+// generation), and nothing on a server without the row.
 func (s *Service) NoteAdminSignIn(ctx context.Context) error {
 	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) { fa.SignedIn = true })
 }
 
-// NoteOwnPassword records that admin id set their own password: signed in (as
-// NoteAdminSignIn), and, when id is the first-run admin, the printed password
-// replaced. Writes only what changes.
+// NoteOwnPassword records that admin id set their own password, or that
+// reset-admin printed them a new one: signed in (as NoteAdminSignIn: the hint
+// would point at the first start's password, which is replaced), and, when id
+// is the first-run admin, the printed password replaced (printed_password
+// false). Writes only what changes.
 func (s *Service) NoteOwnPassword(ctx context.Context, id int64) error {
 	return s.noteFirstAdmin(ctx, func(fa *firstAdmin) {
 		fa.SignedIn = true
@@ -93,16 +94,6 @@ func (s *Service) NoteOwnPassword(ctx context.Context, id int64) error {
 			fa.ChosePassword = true
 		}
 	})
-}
-
-// NoteResetPassword records that reset-admin gave admin id a new password,
-// printed to its terminal, not the log: as NoteOwnPassword, someone holds a
-// working password (the hint ends) and, for the first-run admin, the password
-// in the log is gone (printed_password false: the console's account step no
-// longer says it came from the log). reset-admin revokes the first-run auth
-// code beside it too.
-func (s *Service) NoteResetPassword(ctx context.Context, id int64) error {
-	return s.NoteOwnPassword(ctx, id)
 }
 
 // noteFirstAdmin applies note to the row, when there is one and note changes

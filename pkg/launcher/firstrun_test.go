@@ -425,21 +425,11 @@ func TestResetAdminEndsTheSignInHint(t *testing.T) {
 // the first-run admin's as it was.
 func TestResetAdminEndsThePrintedPassword(t *testing.T) {
 	ctx := context.Background()
-	path := storetest.Path(t)
-	db, err := store.Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	authSvc := auth.New(db, time.Now)
+	dir, authSvc := resetDir(t)
 	if _, err := ensureAdmin(ctx, config.Default(t.TempDir()), authSvc, io.Discard, discardLog()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := authSvc.CreateUser(ctx, "alex", "alex-password", auth.RoleAdmin); err != nil {
-		t.Fatal(err)
-	}
-	admin, err := authSvc.Authenticate(ctx, "alex", "alex-password")
-	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := authSvc.FirstAdminWaiting(ctx)
@@ -457,13 +447,13 @@ func TestResetAdminEndsThePrintedPassword(t *testing.T) {
 	if !printed() {
 		t.Fatal("no printed password before the reset")
 	}
-	if err := ResetAdmin(ctx, filepath.Dir(path), admin.Username, io.Discard); err != nil {
+	if err := ResetAdmin(ctx, dir, "alex", io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if !printed() {
 		t.Error("alex's reset ended the first-run admin's printed password")
 	}
-	if err := ResetAdmin(ctx, filepath.Dir(path), first.Username, io.Discard); err != nil {
+	if err := ResetAdmin(ctx, dir, first.Username, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if printed() {

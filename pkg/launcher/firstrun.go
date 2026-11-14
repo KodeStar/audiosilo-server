@@ -213,9 +213,9 @@ func ResetAdmin(ctx context.Context, dataDir, username string, w io.Writer) erro
 	// Whoever ran this holds a working admin password now, so later starts stop
 	// pointing at the first start's, and when this is the first-run admin the
 	// password in the log is gone, so the console's account step stops saying
-	// it came from there (auth.NoteResetPassword). A failed note only leaves
+	// it came from there (auth.NoteOwnPassword). A failed note only leaves
 	// the hint (and that notice) up.
-	_ = authSvc.NoteResetPassword(ctx, u.ID)
+	_ = authSvc.NoteOwnPassword(ctx, u.ID)
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("New password for the admin account %q:\n\n  %s\n\n", u.Username, password)
 	p("Sign in to the admin console with it. Every session that used the old password\n")
