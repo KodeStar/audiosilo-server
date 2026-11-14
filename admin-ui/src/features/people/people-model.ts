@@ -171,13 +171,18 @@ export function groupDevices(devices: readonly Device[] | undefined) {
  * What an invite link's address means for who can open it, so the invite card
  * can warn before it is sent: `loopback` (localhost: only this computer),
  * `home` (a home-network address: only on the same network), and
- * `certificate` (https at an IP address: the browser warns about the
- * self-signed certificate first). None for a public name, or a link that
- * isn't one.
+ * `certificate` (https while the server uses its self-signed certificate:
+ * the browser warns about it first, at an IP address or a name like
+ * nas.local alike). `selfSigned` is whether the server runs in self-signed
+ * TLS mode; unknown (settings not loaded yet, or a TLS mode change waiting
+ * for a restart), https at an IP address stands in for it, as such an address
+ * can't have a real certificate. A reverse proxy in front of a self-signed
+ * server (its own certificate on the public name) still reads as self-signed.
+ * None for a public name, or a link that isn't one.
  */
 export type InviteReach = { loopback: boolean; home: boolean; certificate: boolean };
 
-export function inviteReach(link: string): InviteReach {
+export function inviteReach(link: string, selfSigned?: boolean): InviteReach {
   let url: URL;
   try {
     url = new URL(link);
@@ -188,6 +193,6 @@ export function inviteReach(link: string): InviteReach {
   return {
     loopback,
     home: !loopback && isHomeHost(url.host),
-    certificate: !loopback && url.protocol === 'https:' && isIPHost(url.host),
+    certificate: !loopback && url.protocol === 'https:' && (selfSigned ?? isIPHost(url.host)),
   };
 }

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Clock, House, Share2, ShieldAlert, ShieldCheck, TriangleAlert, Users } from 'lucide-react';
-import { useServerInfo } from '@/api/hooks';
+import { useServerInfo, useSettings } from '@/api/hooks';
 import { CopyField } from '@/components/copy-field';
 import { LogoTile } from '@/components/logo';
 import { Notice } from '@/components/notice';
@@ -25,8 +25,15 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
   const server = useServerInfo();
   // The link's host is the server's public address, else the host it was asked on.
   const serverName = serverLabel(server.data?.name, hostOf(url));
-  // Who can open the link, said before it is sent (a home address, a self-signed one).
-  const reach = inviteReach(url);
+  // Who can open the link, said before it is sent (a home address, a self-signed
+  // certificate: the TLS mode the server runs, unknown while a change waits for a restart).
+  const settings = useSettings().data;
+  const reach = inviteReach(
+    url,
+    settings && !settings.restart_pending.includes('network.tls_mode')
+      ? settings.network.tls_mode === 'selfsigned'
+      : undefined,
+  );
   const share = () =>
     void shareOrCopy(
       {

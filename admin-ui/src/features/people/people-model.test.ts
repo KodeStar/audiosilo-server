@@ -229,6 +229,22 @@ describe('inviteReach', () => {
     // A name with a real certificate is fine, home or not.
     expect(inviteReach('https://nas.local/connect').certificate).toBe(false);
   });
+  it('warns about the certificate whenever the server is self-signed, a name too (server#386)', () => {
+    expect(inviteReach('https://nas.local:8443/connect', true)).toEqual({
+      ...none,
+      home: true,
+      certificate: true,
+    });
+    expect(inviteReach('https://books.example.com/connect', true)).toEqual({
+      ...none,
+      certificate: true,
+    });
+    // Plain http (home HTTP on the self-signed port) shows no certificate.
+    expect(inviteReach('http://nas.local:8443/connect', true).certificate).toBe(false);
+    // Another TLS mode (autocert, or off behind a proxy) has a real one, at an IP too.
+    expect(inviteReach('https://192.168.1.20:8443/connect', false).certificate).toBe(false);
+    expect(inviteReach('https://localhost:8443/connect', true).certificate).toBe(false);
+  });
   it('says localhost reaches only this computer, and nothing else', () => {
     expect(inviteReach('https://localhost:8443/connect')).toEqual({ ...none, loopback: true });
     expect(inviteReach('http://127.0.0.1:8080/connect')).toEqual({ ...none, loopback: true });
