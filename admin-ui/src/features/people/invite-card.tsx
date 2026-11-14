@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Clock, House, Share2, ShieldAlert, ShieldCheck, TriangleAlert, Users } from 'lucide-react';
-import { useServerInfo } from '@/api/hooks';
+import { useServerInfo, useSettings } from '@/api/hooks';
 import { CopyField } from '@/components/copy-field';
 import { LogoTile } from '@/components/logo';
 import { Notice } from '@/components/notice';
@@ -10,7 +10,7 @@ import { shareOrCopy } from '@/lib/clipboard';
 import { formatDateTime, hostOf } from '@/lib/format';
 import { serverLabel } from '@/lib/server-label';
 import type { ShownInvite } from './invite-dialog';
-import { inviteReach } from './people-model';
+import { inviteReach, runsSelfSigned } from './people-model';
 
 /**
  * A freshly minted (or rotated) invite: the ink card with the QR code, then the
@@ -25,8 +25,8 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
   const server = useServerInfo();
   // The link's host is the server's public address, else the host it was asked on.
   const serverName = serverLabel(server.data?.name, hostOf(url));
-  // Who can open the link, said before it is sent (a home address, a self-signed one).
-  const reach = inviteReach(url);
+  // Who can open the link, said before it is sent (a home address, a self-signed certificate).
+  const reach = inviteReach(url, runsSelfSigned(useSettings().data));
   const share = () =>
     void shareOrCopy(
       {
@@ -73,7 +73,11 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
       ) : null}
       {reach.certificate ? (
         <Notice tone="warn" icon={ShieldAlert} title={t('invite.reach.certificateTitle')}>
-          {t('invite.reach.certificate')}
+          {t(
+            reach.certificate === 'selfsigned'
+              ? 'invite.reach.certificateSelfSigned'
+              : 'invite.reach.certificateAddress',
+          )}
         </Notice>
       ) : null}
       <CopyField id="invite-link" label={t('invite.link')} value={url} />

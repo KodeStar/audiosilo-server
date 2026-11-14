@@ -13,6 +13,7 @@ import { toastError } from '@/lib/errors';
 import { counted, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
+import { UnmatchedPrompt } from '@/features/health/unmatched-prompt';
 import { AddToShareDialog } from '../add-to-share-dialog';
 import { LibraryFilter } from '../library-filter';
 import { useLibrarySearch, useUpdateSearch } from '../library-param';
@@ -130,6 +131,8 @@ export function BooksPage() {
         <EmptyLibrary hasLibraries={libs.length > 0} />
       ) : (
         <div className={cn(selection.selecting && 'selecting')}>
+          {/* Browsing, the books not matched and the way to match them all at once. */}
+          {browsing ? <UnmatchedPrompt className="mb-6" /> : null}
           <LibraryFilter counts={facets.data?.libraries} className="mb-6" />
           {browsing ? <Shelves selection={selection} metadataOn={metadataOn} now={now} /> : null}
           {/* Where the list starts: a change to it while scrolled past brings this back up. */}

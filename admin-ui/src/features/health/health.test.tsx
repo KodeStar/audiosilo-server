@@ -94,6 +94,35 @@ describe('library health', () => {
     expect(screen.getByRole('link', { name: 'Guards! Guards!' })).toBeInTheDocument();
   });
 
+  it('lists a book whose ASIN the community database lacks, to match by hand or add (server#370)', async () => {
+    const summary = issuesSummary();
+    summary.categories.push({ kind: 'unknown_asin', count: 1, ignored: 0, samples: [] });
+    const unknown = adminBook({
+      path: 'X/Rare',
+      title: 'Rare Book',
+      author: 'R. Author',
+      asin: 'B0RARE0001',
+    });
+    mockFetch(
+      routes({
+        'GET /admin/issues': { body: summary },
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('issue') === 'unknown_asin' ? [unknown] : [] },
+        }),
+      }),
+    );
+    renderApp('/health?issue=unknown_asin');
+    const card = await screen.findByRole('button', { name: /ASIN not in the community database/ });
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    const row = (
+      await screen.findByText("Its ASIN, B0RARE0001, isn't in the community database yet")
+    ).closest('li')!;
+    expect(
+      within(row).getByRole('link', { name: /^Add Rare Book to the community database/ }),
+    ).toHaveAttribute('href', 'https://meta.audiosilo.app/add?q=B0RARE0001');
+    expect(within(row).getByRole('button', { name: 'Review match' })).toBeInTheDocument();
+  });
+
   it('ignores a book with an undo, and lists the ignored ones on request', async () => {
     const calls = mockFetch(
       routes({

@@ -603,3 +603,72 @@ func TestDuplicateLengthsAndIgnoredView(t *testing.T) {
 		t.Fatalf("ignored groups = %+v", ign)
 	}
 }
+
+// TestIssueUnknownASIN (server#370): a book whose own ASIN the unknown-ASIN
+// report found unknown is listed (any case or padding of the ASIN), and leaves
+// once it is known, a match is recorded or a community ASIN replaces it. A book
+// with an ISBN too, or with an ASIN the report never looked up or found known,
+// is not.
+func TestIssueUnknownASIN(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	for _, b := range []*Book{
+		{RelPath: "unknown", Title: "Unknown", ASIN: " b0unknown1 "},
+		{RelPath: "isbn too", Title: "ISBN too", ASIN: "B0UNKNOWN2", ISBN: "9780000000001"},
+		{RelPath: "known", Title: "Known", ASIN: "B0KNOWN001"},
+		{RelPath: "unchecked", Title: "Unchecked", ASIN: "B0NEVER001"},
+		{RelPath: "no asin", Title: "No ASIN"},
+		{RelPath: "matched", Title: "Matched", ASIN: "B0UNKNOWN3"},
+		{RelPath: "community", Title: "Community", ASIN: "B0UNKNOWN4"},
+	} {
+		b.LibraryID = lib.ID
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.SaveASINChecks(ctx, []ASINCheck{
+		{ASIN: "B0UNKNOWN1", Unknown: true}, {ASIN: "B0UNKNOWN2", Unknown: true}, {ASIN: "B0KNOWN001"},
+		{ASIN: "B0UNKNOWN3", Unknown: true}, {ASIN: "B0UNKNOWN4", Unknown: true},
+	}, "2026-11-14T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	listed := func() []string {
+		t.Helper()
+		out := listAll(t, c, ctx, AdminListOptions{Filter: BookFilter{Issue: IssueUnknownASIN}})
+		slices.Sort(out)
+		return out
+	}
+	if got, want := listed(), []string{"community", "matched", "unknown"}; !slices.Equal(got, want) {
+		t.Fatalf("listed = %v, want %v", got, want)
+	}
+	counts, err := c.IssueCounts(ctx, []string{IssueUnknownASIN, IssueUnmatched})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[0].Count != 3 || counts[1].Count != 1 {
+		t.Fatalf("counts = %+v, want 3 unknown ASINs and 1 unmatched (still counted as matched)", counts)
+	}
+
+	// A hand match records the work; a community ASIN is one the community knows.
+	if err := c.EditBook(ctx, lib.ID, "matched", BookEdit{
+		Match: &MatchAnchor{WorkID: "the-work"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "community", BookEdit{
+		Set: map[string]string{FieldASIN: "B0UNKNOWN4"}, Source: SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := listed(), []string{"unknown"}; !slices.Equal(got, want) {
+		t.Fatalf("after the matches: listed = %v, want %v", got, want)
+	}
+	// A later lookup that finds it known settles it too.
+	if err := c.SaveASINChecks(ctx, []ASINCheck{{ASIN: "B0UNKNOWN1"}}, "2026-11-15T00:00:00.000Z"); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(); len(got) != 0 {
+		t.Fatalf("after the ASIN became known: listed = %v", got)
+	}
+}

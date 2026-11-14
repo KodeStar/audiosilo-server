@@ -1,4 +1,5 @@
 import type { ComponentProps } from 'react';
+import { ApiError } from '@/api/client';
 import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
@@ -168,6 +169,35 @@ export const text = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim() : undefined;
 
 /**
+ * A failed job's known failure code, one rule for every kind that names one
+ * (Audible's, LibriVox's): its result's `code`, else a code its error is or
+ * starts with ("exists: ..."). Undefined for a code not in `codes`, whose
+ * error the console shows as the Bridge wrote it.
+ */
+export function failureCode<C extends string>(
+  job: { result?: Record<string, unknown> | null; error?: string },
+  codes: readonly C[],
+): C | undefined {
+  const own = text(job.result?.code);
+  if (own) return codes.find((c) => c === own);
+  const err = job.error ?? '';
+  return codes.find((c) => err === c || err.startsWith(`${c}:`));
+}
+
+/** How often a tracked job (useTrackedJob) is asked again: every few seconds while it is open. */
+export function jobPollMs(job: Pick<BridgeJob, 'state'> | undefined): number | false {
+  return job && isOpen(job.state) ? JOBS_POLL_OPEN_MS : false;
+}
+
+/**
+ * Whether a tracked job's read failed because the job is gone (deleted with
+ * its library): it is followed no more, and never asked for again.
+ */
+export function jobGone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
+/**
  * What a job's progress says, leniently: its message (else its step) and a
  * done/total count when both are numbers. Any kind's progress reads this way.
  */
@@ -190,6 +220,21 @@ export function openProgress(
   job: Pick<BridgeJob, 'state' | 'progress'>,
 ): ReturnType<typeof progressOf> {
   return isOpen(job.state) ? progressOf(job.progress) : {};
+}
+
+/**
+ * A job's progress as the jobs list shows it (server#386): what an open job is
+ * doing, and the last step a failed or cancelled one reported (`last`: the
+ * clue to where it stopped, which the server keeps); nothing for a done job,
+ * whose last step is no longer what it is doing.
+ */
+export function listedProgress(
+  job: Pick<BridgeJob, 'state' | 'progress'>,
+): ReturnType<typeof progressOf> & { last?: true } {
+  if (isOpen(job.state)) return progressOf(job.progress);
+  if (job.state !== 'failed' && job.state !== 'cancelled') return {};
+  const p = progressOf(job.progress);
+  return p.text || p.total ? { ...p, last: true } : p;
 }
 
 /** A result's facts the page words (bridge.verify's), each only when present. */

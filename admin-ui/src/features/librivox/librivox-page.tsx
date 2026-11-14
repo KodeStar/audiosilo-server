@@ -24,12 +24,12 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { formatDuration, formatList, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { isOpen, openProgress } from '@/features/bridge/bridge-model';
+import { isOpen, jobGone, openProgress } from '@/features/bridge/bridge-model';
 import { BridgeSettingsLink, ExternalTextLink } from '@/features/bridge/generate-parts';
-import { useBridge } from '@/features/bridge/use-bridge';
+import { useBridge, useTrackedJob } from '@/features/bridge/use-bridge';
 import { CardEmpty } from '@/features/settings/card-empty';
-import { DONE_RECHECK_MS, bridgeNote, fetchReason, jobGone, type AddBlock } from './librivox-model';
-import { useAddLibrivox, useLibrivoxSearch, useLibrivoxWork, useTrackedJob } from './use-librivox';
+import { DONE_RECHECK_MS, bridgeNote, fetchReason, type AddBlock } from './librivox-model';
+import { useAddLibrivox, useLibrivoxSearch, useLibrivoxWork } from './use-librivox';
 
 /**
  * Library > LibriVox (LibriVox L6): find a free LibriVox recording in the

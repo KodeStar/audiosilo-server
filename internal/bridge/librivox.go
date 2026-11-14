@@ -3,8 +3,9 @@ package bridge
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"strconv"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
 )
 
 // LibriVox L6: adding a LibriVox recording to a books library. The admin picks
@@ -41,19 +42,15 @@ type LibrivoxFetchParams struct {
 	Title       string `json:"title,omitempty"`
 }
 
-// metaID is the shape of a community work or recording id, as the Bridge
-// checks librivox.fetch's (a slug): a refusal here is the server's at queue
-// time, not the Bridge's when it claims the job.
-var metaID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
-
 // maxLibrivoxTitle bounds a librivox.fetch's title in bytes (the work's, from
 // the metadata service; LibrivoxFetch shortens a longer one).
 const maxLibrivoxTitle = 300
 
 // librivoxFetchParams checks librivox.fetch's params strictly: a positive
-// project id, a work and a recording (ids of the community's shape, the
-// identity the fold records), a library and an optional title (bounded, no
-// control characters).
+// project id, a work and a recording (community ids, model.ValidSlug as
+// contribute and upcoming check them: the identity the fold records; checked
+// at queue time only, so a job queued before is never refused later), a
+// library and an optional title (bounded, no control characters).
 func librivoxFetchParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p LibrivoxFetchParams
 	if err := decodeStrict(raw, &p); err != nil {
@@ -62,9 +59,9 @@ func librivoxFetchParams(raw json.RawMessage) (json.RawMessage, error) {
 	switch {
 	case p.LibrivoxID <= 0:
 		return nil, invalid("librivox_id must be a LibriVox project id")
-	case !metaID.MatchString(p.WorkID):
+	case !model.ValidSlug(p.WorkID):
 		return nil, invalid("work_id must be a community work id")
-	case !metaID.MatchString(p.RecordingID):
+	case !model.ValidSlug(p.RecordingID):
 		return nil, invalid("recording_id must be a community recording id")
 	case p.LibraryID <= 0:
 		return nil, invalid("library_id is required")
@@ -108,6 +105,32 @@ type LibrivoxFetchResult struct {
 	Files      int    `json:"files"`
 	Bytes      int64  `json:"bytes"`
 	Adopted    *bool  `json:"adopted,omitempty"`
+}
+
+// FetchFolder is how a done librivox.fetch got its book's folder, as its
+// result's Adopted says it (LibrivoxFetchResult.Folder).
+type FetchFolder int
+
+const (
+	// FolderUnsaid: a Bridge that doesn't say (Adopted absent, before
+	// server#379).
+	FolderUnsaid FetchFolder = iota
+	// FolderPlaced: a new folder, placed where there was none.
+	FolderPlaced
+	// FolderAdopted: a folder the Bridge placed before, an earlier fetch's book.
+	FolderAdopted
+)
+
+// Folder is how the fetch got its book's folder: Adopted read as one of the
+// three states, so no caller unpacks the pointer by hand.
+func (r LibrivoxFetchResult) Folder() FetchFolder {
+	switch {
+	case r.Adopted == nil:
+		return FolderUnsaid
+	case *r.Adopted:
+		return FolderAdopted
+	}
+	return FolderPlaced
 }
 
 // LibrivoxFetchOf reads a job's params and, when it is done, its result.

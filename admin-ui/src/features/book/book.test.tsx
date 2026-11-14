@@ -12,7 +12,7 @@ import type {
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
-import { bookDetail } from '@/test/library-fixtures';
+import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -1190,6 +1190,51 @@ describe('match with community metadata', () => {
       expect(
         calls.some((c) => c.path.endsWith('/book/match') && c.query.get('asin') === 'B003P2WO5E'),
       ).toBe(true),
+    );
+  });
+
+  it('says a book nothing matches still plays, and links to add it by its ASIN (server#370)', async () => {
+    mockFetch(
+      matchRoutes(bookDetail(), {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [] } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByText(
+        'This book is not in the community database yet. It still plays as normal.',
+      ),
+    ).toBeInTheDocument();
+    const add = within(dialog).getByRole('link', {
+      name: /^Add The Way of Kings to the community/,
+    });
+    expect(add).toHaveAttribute('href', 'https://meta.audiosilo.app/add?q=B003P2WO5E');
+    expect(add).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(
+      within(dialog).getByRole('link', { name: 'Help complete the community database' }),
+    ).toHaveAttribute('href', '/admin/server?topic=metadata');
+  });
+
+  it('prefills Add it with the words searched for a book with no ASIN', async () => {
+    mockFetch(
+      matchRoutes(bookDetail({ book: adminBook({ path: BOOK_PATH, asin: '' }) }), {
+        'GET /admin/libraries/1/book/match': { body: { candidates: [] } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Match with community metadata' }));
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByRole('textbox', { name: 'Search the community database' });
+    await user.clear(box);
+    await user.type(box, 'a lost tale{Enter}');
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('link', { name: /to the community database/ }),
+      ).toHaveAttribute('href', 'https://meta.audiosilo.app/add?q=a%20lost%20tale'),
     );
   });
 

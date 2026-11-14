@@ -7,6 +7,7 @@ import {
   groupDevices,
   inviteReach,
   inviteStatus,
+  runsSelfSigned,
   parseAccessChoice,
   ruleLabel,
   shareLabel,
@@ -218,16 +219,57 @@ describe('inviteReach', () => {
     expect(inviteReach('https://192.168.1.20:8443/connect#code=X')).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'address',
     });
-    expect(inviteReach('https://203.0.113.7/connect')).toEqual({ ...none, certificate: true });
+    expect(inviteReach('https://203.0.113.7/connect')).toEqual({ ...none, certificate: 'address' });
     expect(inviteReach('https://[fd00::5]:8443/connect')).toEqual({
       ...none,
       home: true,
-      certificate: true,
+      certificate: 'address',
     });
     // A name with a real certificate is fine, home or not.
     expect(inviteReach('https://nas.local/connect').certificate).toBe(false);
+  });
+  it('warns about the certificate whenever the server is self-signed, a name too (server#386)', () => {
+    expect(inviteReach('https://nas.local:8443/connect', true)).toEqual({
+      ...none,
+      home: true,
+      certificate: 'selfsigned',
+    });
+    expect(inviteReach('https://books.example.com/connect', true)).toEqual({
+      ...none,
+      certificate: 'selfsigned',
+    });
+    // Plain http (home HTTP on the self-signed port) shows no certificate.
+    expect(inviteReach('http://nas.local:8443/connect', true).certificate).toBe(false);
+    expect(inviteReach('https://localhost:8443/connect', true).certificate).toBe(false);
+  });
+  it('warns about https at an IP address whatever the TLS mode, and not about a name without self-signed', () => {
+    // TLS off behind a proxy with its own certificate, or autocert reached by address.
+    expect(inviteReach('https://192.168.1.20/connect', false)).toEqual({
+      ...none,
+      home: true,
+      certificate: 'address',
+    });
+    expect(inviteReach('https://203.0.113.7:8443/connect', false).certificate).toBe('address');
+    expect(inviteReach('https://192.168.1.20:8443/connect', true).certificate).toBe('selfsigned');
+    // A name on a server that isn't self-signed has a real certificate.
+    expect(inviteReach('https://books.example.com/connect', false).certificate).toBe(false);
+    expect(inviteReach('https://nas.local/connect', false).certificate).toBe(false);
+    // Plain http at an IP shows no certificate, and localhost is this computer's own.
+    expect(inviteReach('http://192.168.1.20:8080/connect', false).certificate).toBe(false);
+    expect(inviteReach('https://127.0.0.1:8443/connect', false).certificate).toBe(false);
+  });
+  it('reads the running TLS mode from the settings, unknown while a change waits for a restart', () => {
+    const saved = (tls_mode: 'off' | 'selfsigned' | 'autocert', restart_pending: string[] = []) =>
+      ({ network: { tls_mode }, restart_pending }) as Parameters<typeof runsSelfSigned>[0];
+    expect(runsSelfSigned(undefined)).toBeUndefined();
+    expect(runsSelfSigned(saved('selfsigned'))).toBe(true);
+    expect(runsSelfSigned(saved('autocert'))).toBe(false);
+    expect(runsSelfSigned(saved('off', ['network.bind']))).toBe(false);
+    // Saved but not running yet: only the address is left to go by (inviteReach).
+    expect(runsSelfSigned(saved('off', ['network.tls_mode']))).toBeUndefined();
+    expect(runsSelfSigned(saved('selfsigned', ['network.tls_mode']))).toBeUndefined();
   });
   it('says localhost reaches only this computer, and nothing else', () => {
     expect(inviteReach('https://localhost:8443/connect')).toEqual({ ...none, loopback: true });

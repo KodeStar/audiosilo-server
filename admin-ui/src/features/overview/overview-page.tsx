@@ -36,6 +36,7 @@ import { FactList } from '@/components/fact-list';
 import { StatusText, type StatusTone } from '@/components/status-text';
 import { Monogram } from '@/components/monogram';
 import { CATEGORY_LOOK } from '@/features/health/issues-model';
+import { UnmatchedPrompt } from '@/features/health/unmatched-prompt';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
 import { RestartNotice } from '@/features/settings/restart-notice';
 import { Page } from '@/components/page';
@@ -59,7 +60,7 @@ import { SupportCard } from './support-card';
  * Home (the mark): a greeting, who is listening right now (the live sessions),
  * catalog totals, recent listening, books per library and a server card. Built on
  * GET /admin/stats, /admin/sessions/live, /admin/settings, /server,
- * /admin/issues (the "needs attention" card), /admin/support (the support
+ * /admin/issues (the "needs attention" card and the not-matched prompt), /admin/support (the support
  * card, shown only when the server says so) and /admin/setup (the "Finish
  * setting up" card, while a first-run step is still skipped).
  */
@@ -123,6 +124,7 @@ export function OverviewPage() {
 
       <OfflineLibraries />
       <PendingRestart />
+      <UnmatchedPrompt className="mb-8" />
 
       <section aria-labelledby="live-heading">
         <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-2">

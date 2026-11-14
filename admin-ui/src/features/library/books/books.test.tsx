@@ -4,7 +4,7 @@ import { deepEqual } from '@tanstack/react-router';
 import { setToken } from '@/api/token';
 import type { AdminBook } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
-import { fictionGrant, kidsShare, libraries, serverInfo } from '@/test/fixtures';
+import { fictionGrant, issuesSummary, kidsShare, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, facets } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes, withPodcastLibrary } from '@/test/routes';
@@ -42,6 +42,27 @@ const allBooks = () => screen.findByRole('list', { name: 'All books' });
 beforeEach(() => setToken('stored'));
 
 describe('books: browsing', () => {
+  it('offers Match automatically for the books not matched, only while browsing (server#370)', async () => {
+    const summary = issuesSummary();
+    summary.categories.push({ kind: 'unmatched', count: 12, ignored: 3, samples: [] });
+    mockFetch(bookRoutes(books, { 'GET /admin/issues': { body: summary } }));
+    const { router } = renderApp('/library');
+    expect(await screen.findByText('12 books not matched')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Match automatically' })).toHaveAttribute(
+      'href',
+      '/admin/health?issue=unmatched',
+    );
+    await act(() => router.navigate({ to: '/library', search: { q: 'mort' } } as never));
+    await waitFor(() => expect(screen.queryByText('12 books not matched')).toBeNull());
+  });
+
+  it('says nothing about matching with every book matched (or metadata off)', async () => {
+    mockFetch(bookRoutes());
+    renderApp('/library');
+    await allBooks();
+    expect(screen.queryByRole('link', { name: 'Match automatically' })).toBeNull();
+  });
+
   it('shows the shelves above the full list', async () => {
     mockFetch(bookRoutes());
     renderApp('/library');

@@ -10,7 +10,7 @@ import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
 import type { BridgeStatus } from '@/api/types';
 import { toastError } from '@/lib/errors';
-import { jobsPollMs, statusPollMs } from './bridge-model';
+import { jobGone, jobPollMs, jobsPollMs, statusPollMs } from './bridge-model';
 import type { ShownCode } from './pair-dialog';
 
 /**
@@ -88,4 +88,18 @@ export function useBridgeJobs(state: string) {
     fetchOlder: () => pages.fetchNextPage(),
     isFetchingOlder: pages.isFetchingNextPage,
   };
+}
+
+/**
+ * A job a page queued or saw, by id, asked again every few seconds while it is
+ * open, and no more once it is gone (a 404: the last answer would read as open
+ * for ever). Library > LibriVox follows each Add with it.
+ */
+export function useTrackedJob(id: number | undefined) {
+  return useQuery({
+    queryKey: keys.bridgeJob(id ?? 0),
+    queryFn: () => api.bridgeJob(id ?? 0),
+    enabled: id !== undefined,
+    refetchInterval: (q) => (jobGone(q.state.error) ? false : jobPollMs(q.state.data)),
+  });
 }

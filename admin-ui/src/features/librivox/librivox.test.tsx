@@ -1,6 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ApiError } from '@/api/client';
 import { setToken } from '@/api/token';
 import type {
   BridgeJob,
@@ -14,7 +13,6 @@ import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { JOBS_POLL_OPEN_MS } from '@/features/bridge/bridge-model';
 import {
   DONE_RECHECK_MS,
   FETCH_CODES,
@@ -22,8 +20,6 @@ import {
   bridgeNote,
   fetchParkKey,
   fetchReason,
-  jobGone,
-  jobPollMs,
   librivoxProject,
   librivoxTitle,
 } from './librivox-model';
@@ -157,7 +153,7 @@ describe('librivox model', () => {
     for (const code of FETCH_CODES) expect(strings[`librivox.code.${code}`]).toBeTruthy();
   });
 
-  it('reads the project from params and polls only an open job', () => {
+  it('reads the project from params', () => {
     expect(librivoxProject(job())).toBe(192);
     expect(librivoxTitle(job())).toBeUndefined();
     expect(librivoxTitle(job({ params: { librivox_id: 192, title: ' Garden ' } }))).toBe('Garden');
@@ -166,16 +162,9 @@ describe('librivox model', () => {
     expect(librivoxProject(job({ params: { librivox_id: '192' } }))).toBeUndefined();
     expect(librivoxProject(job({ params: { librivox_id: 0 } }))).toBeUndefined();
     expect(librivoxProject(job({ kind: 'audible.import' }))).toBeUndefined();
-    expect(jobPollMs(undefined)).toBe(false);
-    expect(jobPollMs(job({ state: 'running' }))).toBe(JOBS_POLL_OPEN_MS);
-    expect(jobPollMs(job({ state: 'done' }))).toBe(false);
   });
 
-  it('tells a job that is gone from one that could not be read, and words a park code', () => {
-    expect(jobGone(new ApiError(404, 'job not found'))).toBe(true);
-    expect(jobGone(new ApiError(502, 'bad gateway'))).toBe(false);
-    expect(jobGone(new Error('offline'))).toBe(false);
-    expect(jobGone(null)).toBe(false);
+  it('words a park code', () => {
     expect(fetchParkKey('librivox.fetch', 'not_writable')).toBe('librivox.code.not_writable');
     expect(fetchParkKey('librivox.fetch', 'odd')).toBeUndefined();
     expect(fetchParkKey('audible.import', 'not_writable')).toBeUndefined();

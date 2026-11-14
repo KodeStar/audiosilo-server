@@ -25,16 +25,16 @@ var ErrFetchNotIndexed = errors.New("the LibriVox fetch's book is not indexed")
 // recording: its community match (how accepted, set by the admin who asked),
 // with the work and recording the server resolved when it queued the job. What
 // it does at the book's path depends on how the Bridge got the folder
-// (LibrivoxFetchResult.Adopted):
-//   - placed (false): the folder was vacant, so every row already at that path
-//     is a deleted book's leftover: the match is replaced, and a leftover ASIN
-//     or ISBN (book_overrides, book_enrichment), which /meta would ask before
-//     the match, goes;
-//   - adopted (true): the folder is an earlier fetch's book, so a match already
-//     recorded there (an admin's rematch) stays and nothing else is touched; a
-//     book with none (a fold that was lost) is recorded;
-//   - not said (an older Bridge): the match is replaced and nothing else is
-//     touched.
+// (LibrivoxFetchResult.Folder):
+//   - placed (bridge.FolderPlaced): the folder was vacant, so every row already
+//     at that path is a deleted book's leftover: the match is replaced, and a
+//     leftover ASIN or ISBN (book_overrides, book_enrichment), which /meta
+//     would ask before the match, goes;
+//   - adopted (bridge.FolderAdopted): the folder is an earlier fetch's book, so
+//     a match already recorded there (an admin's rematch) stays and nothing
+//     else is touched; a book with none (a fold that was lost) is recorded;
+//   - not said (bridge.FolderUnsaid, an older Bridge): the match is replaced
+//     and nothing else is touched.
 //
 // No other path is touched. The result must name the job's own library and
 // project and a book indexed there (the Bridge rescans before it reports done),
@@ -60,7 +60,7 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 	if j.RequestedBy != nil {
 		editor = j.RequestedBy.ID
 	}
-	adopted, placed := r.Adopted != nil && *r.Adopted, r.Adopted != nil && !*r.Adopted
+	folder := r.Folder()
 	err = c.db.WithTx(ctx, "FoldLibrivoxFetch", func(tx *sql.Tx) error {
 		var id int64
 		err := tx.QueryRowContext(ctx, `SELECT b.id FROM books b JOIN libraries l ON l.id = b.library_id
@@ -72,13 +72,13 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 			return err
 		}
 		ref := Ref{LibraryID: r.LibraryID, Path: r.Path}
-		if placed {
+		if folder == bridge.FolderPlaced {
 			if err := dropLeftoverIdentity(ctx, tx, ref, id); err != nil {
 				return err
 			}
 		}
 		var was *MatchAnchor
-		if adopted {
+		if folder == bridge.FolderAdopted {
 			was = &MatchAnchor{} // insert only: a match recorded since stays
 		}
 		a := &MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID, How: MatchHowAccepted}
@@ -128,7 +128,7 @@ func (c *Catalog) LibrivoxFetchMatch(ctx context.Context, p bridge.LibrivoxFetch
 		return ""
 	case work.Valid && work.String == p.WorkID && recording.String == p.RecordingID:
 		return LibrivoxMatched
-	case work.Valid && r.Adopted != nil && *r.Adopted:
+	case work.Valid && r.Folder() == bridge.FolderAdopted:
 		return LibrivoxKept
 	}
 	return LibrivoxUnmatched

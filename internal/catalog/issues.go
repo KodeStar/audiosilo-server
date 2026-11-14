@@ -28,11 +28,15 @@ const (
 	// community's fit with more of them (a refine the admin hasn't decided on).
 	IssueDetailedChapters = "detailed_chapters"
 	IssueUnmatched        = "unmatched"
-	IssueTranscode        = "transcode"
-	IssueSuspect          = "suspect"
-	IssueSplitDiscs       = "split_discs"
-	IssueScanError        = "scan_error"
-	IssueDuplicate        = "duplicate"
+	// IssueUnknownASIN: the book's own ASIN is one the community database doesn't
+	// know (as the unknown-ASIN report last found it), so it counts as matched
+	// but gets no community details (server#370).
+	IssueUnknownASIN = "unknown_asin"
+	IssueTranscode   = "transcode"
+	IssueSuspect     = "suspect"
+	IssueSplitDiscs  = "split_discs"
+	IssueScanError   = "scan_error"
+	IssueDuplicate   = "duplicate"
 	// IssueSeriesSpellings: the book's series is spelled another way by other
 	// books of its library (seriesspellings.go).
 	IssueSeriesSpellings = "series_spellings"
@@ -40,7 +44,7 @@ const (
 
 // IssueKinds are the kinds an issue can be ignored for, in the Health page's order.
 var IssueKinds = []string{IssueScanError, IssueSuspect, IssueSplitDiscs, IssueDuplicate, IssueNoCover,
-	IssueUnmatched, IssueSeriesSpellings, IssueNoChapters, IssueDetailedChapters, IssueTranscode}
+	IssueUnmatched, IssueUnknownASIN, IssueSeriesSpellings, IssueNoChapters, IssueDetailedChapters, IssueTranscode}
 
 // ErrUnknownIssue marks an issue kind that isn't one of IssueKinds.
 var ErrUnknownIssue = errors.New("unknown issue kind")
@@ -60,8 +64,9 @@ var issuePredicates = map[string]string{
 		WHERE cc.library_id = b.library_id AND cc.path = b.rel_path AND cc.status = 'refine'
 		  AND cc.basis = ` + chapterBasisExpr + `)
 		AND NOT EXISTS(SELECT 1 FROM chapter_choices ch WHERE ch.library_id = b.library_id AND ch.path = b.rel_path))`,
-	IssueUnmatched: `(NOT ` + matchedExpr + `)`,
-	IssueTranscode: `(NOT ` + directPlayableExpr + `)`,
+	IssueUnmatched:   `(NOT ` + matchedExpr + `)`,
+	IssueUnknownASIN: unknownASINExpr,
+	IssueTranscode:   `(NOT ` + directPlayableExpr + `)`,
 	// A folder an admin set to "one book" (the category's own fix) is settled.
 	IssueSuspect: `(COALESCE(b.suspect_parts, 0) >= 2 AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
 		WHERE fo.library_id = b.library_id AND fo.path = b.rel_path AND fo.mode = '` + OverrideBook + `'))`,
@@ -72,6 +77,23 @@ var issuePredicates = map[string]string{
 		WHERE s.library_id = b.library_id AND s.split_parent <> '' AND s.split_parent = b.split_parent
 		  AND s.rel_path < b.rel_path))`,
 }
+
+// unknownASINExpr is "b has an ASIN of its own that the community database
+// doesn't know": the opt-in unknown-ASIN report (internal/coverage, 0068)
+// looked it up and the answer was a 404 (unknown_asin_reports.unknown, keyed by
+// the upper-cased ASIN, match.NormalizeASIN). Such a book counts as matched
+// (matchedExpr) and Match automatically skips it, yet /meta has nothing for it.
+// Only a book with nothing else to find it by: no ISBN (which the community may
+// know), no recorded community match (book_matches: /meta answers by that) and
+// an ASIN that isn't the community's own (a match gave it: book_overrides of
+// source community), so matching it by hand settles it. The table is filled
+// only while the report runs, so the Health summary lists the kind only then
+// (api.handleIssues).
+const unknownASINExpr = `(trim(b.asin) <> '' AND trim(b.isbn) = ''
+	AND EXISTS(SELECT 1 FROM unknown_asin_reports u WHERE u.asin = upper(trim(b.asin)) AND u.unknown = 1)
+	AND NOT EXISTS(SELECT 1 FROM book_matches m WHERE m.library_id = b.library_id AND m.path = b.rel_path)
+	AND NOT EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path
+		AND o.field = '` + FieldASIN + `' AND o.source = '` + SourceCommunity + `'))`
 
 // splitDiscExpr is "b is one disc of a book split across disc folders": a CD rip
 // ("Book/CD1", "Book/CD2", the tracks in each, none in "Book") reads as one book per

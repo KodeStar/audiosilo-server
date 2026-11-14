@@ -693,7 +693,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `sent_at` (even mid-stop, `WithoutCancel`); 404, 405, a 3xx or a 2xx without `accepted` is `not_offered` (one
   INFO line, no call for 7 days: `quiet_until`); 429, 5xx or anything else marks nothing (`failed`, next day). An
   `unknown` row a recheck finds known forgets its `sent_at`. **Storage**: `unknown_asin_reports(asin PK, checked_at,
-  unknown, sent_at)`, no path or book (disposable; user-state writes). **Wire**: GET /admin/settings
+  unknown, sent_at)`, no path or book (disposable; user-state writes, but a row added or removed or its `unknown`
+  changed moves the content generation: Health reads it). **Health** (server#370): `catalog.IssueUnknownASIN`
+  (`unknown_asin`) lists a book whose own ASIN a row marks unknown, with no ISBN, no `book_matches` row and no
+  community-given ASIN (a hand match settles it); `/admin/issues` lists the kind only while `reportUnknownOn()`
+  (off, the table is not kept current, and an empty card would read as all clear). **Wire**: GET /admin/settings
   `metadata.report_unknown` and read-only `metadata.report_status` = `{"state":"never|ok|not_offered|failed",
   "last_run_at"?, "last_sent"}` (absent without the job: no service, or a demo server). The mounted Metadata
   topic polls status every 30 s while metadata and reporting are on. Trigger by hand: switch it
@@ -824,8 +828,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   count: per table, a rule says whether new and removed rows are user state (`progress`'s are
   not: Health ranks duplicate copies by how many people have progress on them) and, for
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
-  `bridge_status` (`heartbeat_at`, `status`) and `bridge_jobs` (`lease_until`, `updated_at`,
-  `progress`), which columns an UPDATE may change by value (the hook reads a row only up to
+  `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
+  `progress`) and `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
+  the rest), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
   heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
   moves the generation; a table the list doesn't name is a misfiling (logged; a panic in a
@@ -857,8 +862,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
   library's authors/narrators/series: `books` and its side tables, `libraries`; scopes computed
   per request from shares, grants and members' `collection_shares`, into the key) and the
-  admin's `/admin/books` first page and facets read no user state; Health `/admin/issues` reads `progress` row counts (the duplicate ranking), hence
-  `progress`'s row rule, and its offline libraries' listener counts are computed per request
+  admin's `/admin/books` first page and facets read no user state but `unknown_asin_reports`
+  (`?issue=unknown_asin`); Health `/admin/issues` reads `progress` row counts (the duplicate
+  ranking), hence `progress`'s row rule, and which `unknown_asin_reports` rows are `unknown` (its
+  `unknown_asin` kind), hence that table's rule (rows and `unknown` watched, `checked_at` and
+  `sent_at` free), and its offline libraries' listener counts are computed per request
   into the key; `Catalog.libs` reads `libraries` only; the token cache (`auth/tokencache.go`)
   reads `tokens` and `users` (owner join), and the touch is the only user-state change to
   either, dropped from the cache by the touching request. A new cache whose answer reads a
@@ -2175,7 +2183,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h; the console's fix is the Bridge's Detect
   chapters, see The Bridge), `unmatched` (no ASIN, ISBN or recorded community match: `NOT matchedExpr`; left
-  out of the summary while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  out of the summary while metadata is off), `unknown_asin` (the book's own ASIN is one the unknown-ASIN report
+  found unknown: `unknownASINExpr`, see Unknown ASIN report; still matched by `matchedExpr`; left out of the
+  summary while the report is off), `transcode`, `suspect` (not a folder with a `book` override, the
   category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
   its library spells its main series another way, same `series_key`; listed per series by `GET
   /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
