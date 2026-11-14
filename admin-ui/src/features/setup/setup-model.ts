@@ -520,7 +520,8 @@ export interface AccountPlan {
 
 /**
  * The step's rules (server#369): a username (spaces at either end dropped, as
- * a sign-in drops them); a new password is optional unless the admin still has
+ * a sign-in drops them; an account whose name has them keeps it until the
+ * field is edited); a new password is optional unless the admin still has
  * the one the server printed (`printed`), and then at least MIN_PASSWORD
  * characters, typed twice, with the current one (the server asks for it).
  */
@@ -537,7 +538,9 @@ export function accountPlan(d: AccountDraft, username: string, printed: boolean)
     if (d.current === '') errors.current = 'setup.account.currentNeeded';
     password = { next: d.password, current: d.current };
   }
-  return { rename: name && name !== username ? name : null, password, errors };
+  // A name left as it was is kept as it is, spaces and all: only an edit renames.
+  const renamed = d.username !== username && name !== username;
+  return { rename: name && renamed ? name : null, password, errors };
 }
 
 // --- The marketplace nearest the admin -------------------------------------------

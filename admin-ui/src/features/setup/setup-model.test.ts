@@ -540,6 +540,9 @@ describe('accountPlan (server#369)', () => {
   it('renames with the spaces at either end dropped, and refuses an empty name', () => {
     expect(accountPlan(draft({ username: '  kode ' }), 'admin', false).rename).toBe('kode');
     expect(accountPlan(draft({ username: ' admin ' }), 'admin', false).rename).toBeNull();
+    // A name that has spaces already is renamed only by an edit, never by Continue alone.
+    expect(accountPlan(draft({ username: 'alex ' }), 'alex ', false).rename).toBeNull();
+    expect(accountPlan(draft({ username: 'alex' }), 'alex ', false).rename).toBe('alex');
     expect(accountPlan(draft({ username: '   ' }), 'admin', false).errors).toEqual({
       username: 'setup.account.usernameEmpty',
     });
