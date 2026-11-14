@@ -1,6 +1,7 @@
 import { sortLive } from '@/features/activity/live-model';
 import { isHomeHost, isIPHost, isLoopbackHost } from '@/features/setup/setup-model';
 import type {
+  AdminSettings,
   AuthCode,
   Device,
   Library,
@@ -181,6 +182,18 @@ export function groupDevices(devices: readonly Device[] | undefined) {
  * None for a public name, or a link that isn't one.
  */
 export type InviteReach = { loopback: boolean; home: boolean; certificate: boolean };
+
+/**
+ * Whether the running server uses its self-signed certificate, as the saved
+ * settings say it; undefined while they can't (not loaded yet, or a TLS mode
+ * change that waits for a restart: the saved mode isn't the running one).
+ */
+export function runsSelfSigned(
+  settings: Pick<AdminSettings, 'network' | 'restart_pending'> | undefined,
+): boolean | undefined {
+  if (!settings || settings.restart_pending.includes('network.tls_mode')) return undefined;
+  return settings.network.tls_mode === 'selfsigned';
+}
 
 export function inviteReach(link: string, selfSigned?: boolean): InviteReach {
   let url: URL;

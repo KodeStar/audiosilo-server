@@ -7,6 +7,7 @@ import {
   groupDevices,
   inviteReach,
   inviteStatus,
+  runsSelfSigned,
   parseAccessChoice,
   ruleLabel,
   shareLabel,
@@ -244,6 +245,17 @@ describe('inviteReach', () => {
     // Another TLS mode (autocert, or off behind a proxy) has a real one, at an IP too.
     expect(inviteReach('https://192.168.1.20:8443/connect', false).certificate).toBe(false);
     expect(inviteReach('https://localhost:8443/connect', true).certificate).toBe(false);
+  });
+  it('reads the running TLS mode from the settings, unknown while a change waits for a restart', () => {
+    const saved = (tls_mode: 'off' | 'selfsigned' | 'autocert', restart_pending: string[] = []) =>
+      ({ network: { tls_mode }, restart_pending }) as Parameters<typeof runsSelfSigned>[0];
+    expect(runsSelfSigned(undefined)).toBeUndefined();
+    expect(runsSelfSigned(saved('selfsigned'))).toBe(true);
+    expect(runsSelfSigned(saved('autocert'))).toBe(false);
+    expect(runsSelfSigned(saved('off', ['network.bind']))).toBe(false);
+    // Saved but not running yet: the address stands in (inviteReach).
+    expect(runsSelfSigned(saved('off', ['network.tls_mode']))).toBeUndefined();
+    expect(runsSelfSigned(saved('selfsigned', ['network.tls_mode']))).toBeUndefined();
   });
   it('says localhost reaches only this computer, and nothing else', () => {
     expect(inviteReach('https://localhost:8443/connect')).toEqual({ ...none, loopback: true });
