@@ -311,7 +311,7 @@ describe('bulk matching', () => {
     )!;
     expect(
       await within(card).findByText(
-        /any ASIN or ISBN in its tags, and up to three folder or file names go to the community/,
+        /any ASIN or ISBN in its tags or from an Audiobookshelf import, and up to three folder or file names go to the community/,
       ),
     ).toBeInTheDocument();
     expect(within(card).getByText(/audible\.co\.uk ASIN/)).toBeInTheDocument();
@@ -1164,7 +1164,7 @@ describe('bulk matching', () => {
     expect(box).not.toBeChecked();
     expect(
       within(box.closest('li')!).getByText(
-        "Held for review: the ASIN or ISBN in its tags may name another book, as its title or series position doesn't agree",
+        "Held for review: the ASIN or ISBN in its tags or from an Audiobookshelf import may name another book, as its title or series position doesn't agree",
       ),
     ).toBeInTheDocument();
   });
