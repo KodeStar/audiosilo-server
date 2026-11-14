@@ -3804,7 +3804,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   connection's Host and scheme (the server never trusts X-Forwarded-Host/Proto), `proxied` any forwarding
   header (`proxied`), `peer` (only when proxied) the connecting address for `trusted_proxies`;
   `config_libraries` the names the config declares (config.yaml); `printed_password` true while the caller
-  is the banner's admin and has not chosen their own password (`auth.PrintedPassword`); `mount_hints` (only while not finished or
+  is the banner's admin and has not chosen their own password nor had one from `reset-admin` (`auth.PrintedPassword`); `mount_hints` (only while not finished or
   while the folder step is skipped, else `[]`) `library.MountHints` (Linux
   `/proc/self/mountinfo`: folders, not system paths or pseudo filesystems, not the data folder, sorted,
   at most 20; `[]` elsewhere). `PUT /admin/setup` `{finished?, dismissed?, steps?}` merges (one writer
@@ -3841,7 +3841,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   write) writes it too, so the next start points at `reset-admin` for a password printed nowhere. Any admin's password sign-in
   (`NoteAdminSignIn`) or the admin's own password change (`NoteOwnPassword`: `POST /auth/password`, or
   `PATCH /admin/users/{id}` on their own account, the console's People dialog; a password another admin
-  or `reset-admin` set is not their own) ends it; each writes once, in one transaction.
+  set is not their own; `reset-admin` notes it too) ends it; each writes once, in one transaction.
   No row (an upgraded server, `--setup`) never prints it, so no backfill. **`audiosilo [--data dir]
   reset-admin [username]`** (`launcher.ResetAdmin`, offline): opens the database (refuses a missing one,
   a file that isn't an AudioSilo database (`store.Inspect`: never migrated here) and one with pending
@@ -3855,8 +3855,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   takes the new password at once; a session it already checked is answered from its token cache (which
   another process's write can't empty) until that server's next content write, or a minute after it last
   read the row (`auth.maxCachedTokenAge`, `TestResetAdminEndsARunningServersSessions`); a restart ends
-  them at once. A reset also ends the sign-in hint (`NoteAdminSignIn`: the
-  hint names the first start's password), and the hint never names a first-run admin since disabled or
+  them at once. A reset also ends the sign-in hint (`NoteOwnPassword`: the
+  hint names the first start's password) and, for the first-run admin, `printed_password` (the log's password is gone), and the hint never names a first-run admin since disabled or
   demoted.
   **Marketplace** (server#192): `GET /admin/settings` `metadata.region_chosen` is false only while no
   region was ever set here, in config.yaml or by the environment (`server_state`
