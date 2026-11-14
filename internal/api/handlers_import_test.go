@@ -210,6 +210,18 @@ func TestImportFromABS(t *testing.T) {
 	if hp.HintASIN != "B017V568SY" || hp.ASIN != "" {
 		t.Errorf("Harry Potter after the apply: hint %q, ASIN %q; want the hint alone", hp.HintASIN, hp.ASIN)
 	}
+	// The hint is the match's alone: neither the player's read of the book nor
+	// the console's list of it carries it.
+	for _, path := range []string{
+		fmt.Sprintf("/libraries/%d/item?path=%s", hp.LibraryID, url.QueryEscape(hp.RelPath)),
+		"/admin/books?q=" + url.QueryEscape("Philosopher's Stone"),
+	} {
+		var raw json.RawMessage
+		e.call(t, "GET", path, e.adminTok, "", 200, &raw)
+		if !strings.Contains(string(raw), "Philosopher") || strings.Contains(string(raw), "B017V568SY") {
+			t.Errorf("GET %s = %s; want the book without its hint", path, raw)
+		}
+	}
 
 	// Alex's own stats now show the listening and the three finished books.
 	var stats struct {
