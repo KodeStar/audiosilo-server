@@ -235,6 +235,9 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 			}
 			out[f] = v
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 	enriched := func() int {
