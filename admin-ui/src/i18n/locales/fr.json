@@ -362,6 +362,7 @@
   "invite.password": "Mot de passe (facultatif)",
   "invite.passwordHint_one": "Permet aussi de se connecter au lecteur web avec un mot de passe. Au moins {{count}} caractère ; laissez vide pour associer uniquement avec le lien.",
   "invite.passwordHint_other": "Permet aussi de se connecter au lecteur web avec un mot de passe. Au moins {{count}} caractères ; laissez vide pour associer uniquement avec le lien.",
+  "invite.passwordHint_many": "Permet aussi de se connecter au lecteur web avec un mot de passe. Au moins {{count}} caractères ; laissez vide pour associer uniquement avec le lien.",
   "invite.share.action": "Partager",
   "invite.share.title": "Invitation AudioSilo",
   "invite.share.text": "{{name}}, vous êtes invité à écouter sur {{server}}. Installez l'app AudioSilo, puis ouvrez ce lien :",

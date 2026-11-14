@@ -362,6 +362,7 @@
   "invite.password": "Password (facoltativa)",
   "invite.passwordHint_one": "Permette di accedere anche al lettore web con una password. Almeno {{count}} carattere; lascia vuoto per associare solo con il link.",
   "invite.passwordHint_other": "Permette di accedere anche al lettore web con una password. Almeno {{count}} caratteri; lascia vuoto per associare solo con il link.",
+  "invite.passwordHint_many": "Permette di accedere anche al lettore web con una password. Almeno {{count}} caratteri; lascia vuoto per associare solo con il link.",
   "invite.share.action": "Condividi",
   "invite.share.title": "Invito AudioSilo",
   "invite.share.text": "{{name}}, sei invitato ad ascoltare su {{server}}. Scarica l'app AudioSilo, poi apri questo link:",
