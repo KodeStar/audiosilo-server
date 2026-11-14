@@ -669,9 +669,9 @@ func mergeFurthest(a, b UserProgress) UserProgress {
 	return out
 }
 
-// moveBookState carries the book's own path-keyed state (enrichment, ignored
-// issues, an admin's metadata edits, a custom cover, its recorded community
-// match) from oldPath to newPath. Its Audible titles move with the per-user
+// moveBookState carries the book's own path-keyed state (enrichment, match
+// hints, ignored issues, an admin's metadata edits, a custom cover, its recorded
+// community match) from oldPath to newPath. Its Audible titles move with the per-user
 // state instead (moveAudibleTitles).
 func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	if err := movePodcastState(ctx, tx, libraryID, oldPath, newPath); err != nil {
@@ -681,6 +681,12 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	// attached ASIN/ISBN to the new path or the moved book silently loses it.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE OR REPLACE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
+		newPath, libraryID, oldPath); err != nil {
+		return err
+	}
+	// So do its match hints (an Audiobookshelf import's identifiers).
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE OR REPLACE book_hints SET path = ? WHERE library_id = ? AND path = ?`,
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}

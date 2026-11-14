@@ -974,14 +974,19 @@ func (c *Catalog) bookPathAt(ctx context.Context, libraryID int64, relPath strin
 	return book, err
 }
 
-// GetBook returns a book by ID including its files, chapters, description and tag
-// hints (which only this single-book read loads).
+// GetBook returns a book by ID including its files, chapters, description and
+// match hints, its tags' and its Audiobookshelf hint (which only this
+// single-book read loads).
 func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 	var b Book
 	dest, finish := bookDest(&b)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT `+bookCols+`, description, chapters_source, tag_asin, tag_isbn, tag_language FROM books WHERE id = ?`, id).
-		Scan(append(dest, &b.Description, &b.ChaptersSource, &b.TagASIN, &b.TagISBN, &b.TagLanguage)...)
+		`SELECT `+bookCols+`, description, chapters_source, tag_asin, tag_isbn, tag_language,
+		        COALESCE((SELECT h.asin FROM book_hints h `+bookHintWhere+`), ''),
+		        COALESCE((SELECT h.isbn FROM book_hints h `+bookHintWhere+`), '')
+		   FROM books WHERE id = ?1`, id, HintSourceABS).
+		Scan(append(dest, &b.Description, &b.ChaptersSource, &b.TagASIN, &b.TagISBN, &b.TagLanguage,
+			&b.HintASIN, &b.HintISBN)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

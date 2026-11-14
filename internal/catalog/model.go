@@ -118,13 +118,22 @@ type Book struct {
 	Genres    []string `json:"genres,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
 	// TagASIN, TagISBN and TagLanguage are what the file's tags say (books.tag_*,
-	// migration 0067): HINTS a community match sends (matchrun.QueryFor), never
-	// the book's identifiers, so a tagged book is not matched by them. Scanned,
-	// never edited, never on the wire; only GetBook and a match run's list of
-	// books read them.
+	// migration 0067): HINTS a community match sends (matchrun.QueryFor, after an
+	// Audiobookshelf hint), never the book's identifiers, so a tagged book is not
+	// matched by them. Scanned, never edited, never on the wire; only GetBook and
+	// a match run's list of books read them.
 	TagASIN     string `json:"-"`
 	TagISBN     string `json:"-"`
 	TagLanguage string `json:"-"`
+	// HintASIN and HintISBN are the identifiers an Audiobookshelf import gave
+	// the book (book_hints, migration 0074): HINTS a community match sends ahead
+	// of the tags' (matchrun.QueryFor), never the book's identifiers, never on
+	// the wire. Only GetBook and a match run's list of books read them.
+	HintASIN string `json:"-"`
+	HintISBN string `json:"-"`
+	// Matched is whether the book is matched (an ASIN, an ISBN or a recorded
+	// community match: matchedExpr). Only ImportBooks reads it.
+	Matched bool `json:"-"`
 	// MatchWorkID and MatchRecordingID are the book's recorded community match
 	// (book_matches, migration 0069), "" for none: only a match run's list of
 	// books reads them (a refresh looks an identifier-less book up by its work).

@@ -85,8 +85,8 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 //     joined book (or an earlier part's entry) keeps that one, in its place.
 //
 // The book's own config is COPIED, not moved, so the disc books keep theirs if the
-// override is removed: an admin's metadata edits, attached ASIN/ISBN, custom
-// cover and recorded community match field by field with the earliest part
+// override is removed: an admin's metadata edits, attached ASIN/ISBN, match
+// hints, custom cover and recorded community match field by field with the earliest part
 // winning, and only where the joined book has none of its own (so a first disc's
 // edits carry over); chapter renames all carry over (re-keyed to the file under
 // the joined folder, so they never collide). An Audible title's match to a part moves to the joined book (until
@@ -160,6 +160,11 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			                                     offered_asin, offered_isbn)
 			  SELECT library_id, ?1, work_id, recording_id, how, run_id, set_by, set_at, offered_asin, offered_isbn
 			    FROM book_matches WHERE library_id = ?2 AND path = ?3`,
+				[]any{into, libraryID, p.Path}},
+			// The match hints: the first part's from each source.
+			{`INSERT OR IGNORE INTO book_hints(library_id, path, source, asin, isbn, import_id, set_at)
+			  SELECT library_id, ?1, source, asin, isbn, import_id, set_at
+			    FROM book_hints WHERE library_id = ?2 AND path = ?3`,
 				[]any{into, libraryID, p.Path}},
 			{`INSERT OR IGNORE INTO book_covers(library_id, path, mime, updated_by, updated_at, data, source)
 			  SELECT library_id, ?1, mime, updated_by, updated_at, data, source

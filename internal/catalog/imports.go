@@ -74,6 +74,22 @@ type ImportSummary struct {
 	Bookmarks          int           `json:"bookmarks"`
 	FirstListen        *string       `json:"first_listen"`
 	LastListen         *string       `json:"last_listen"`
+	// Identifiers is what the import carries as match hints (book_hints): nil in
+	// a summary planned before it (server#366).
+	Identifiers *ImportIdentifiers `json:"identifiers,omitempty"`
+}
+
+// ImportIdentifiers counts the books an import gives Audiobookshelf's ASIN or
+// ISBN as a match hint (ImportWrite.Hints): every ABS book it pairs with one here
+// (by path, or by title and author: ByTitle of them), whoever can access it, but
+// none already matched here (AlreadyMatched: left as they are). ASIN and ISBN
+// count the books given each.
+type ImportIdentifiers struct {
+	Books          int `json:"books"`
+	ASIN           int `json:"asin"`
+	ISBN           int `json:"isbn"`
+	ByTitle        int `json:"by_title"`
+	AlreadyMatched int `json:"already_matched"`
 }
 
 // UnmatchedItem is a source book an import skips, with the listening it had.
@@ -429,13 +445,14 @@ func (c *Catalog) ListeningStart(ctx context.Context, userID int64, loc *time.Lo
 	return out, nil
 }
 
-// ImportBooks returns every indexed book with what the importer matches on.
+// ImportBooks returns every indexed book with what the importer matches on, and
+// whether it is matched (Book.Matched: matchedExpr).
 func (c *Catalog) ImportBooks(ctx context.Context) ([]Book, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, b *Book) error {
 		return rows.Scan(&b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series, &b.SeriesIndex,
-			&b.ASIN, &b.ISBN, &b.Duration, &b.Codec, &b.SplitParent)
+			&b.ASIN, &b.ISBN, &b.Duration, &b.Codec, &b.SplitParent, &b.Matched)
 	}, `SELECT b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series, b.series_index, b.asin, b.isbn,
-	           b.duration, b.codec, b.split_parent
+	           b.duration, b.codec, b.split_parent, `+matchedExpr+`
 	      FROM books b JOIN libraries l ON l.id = b.library_id
 	     ORDER BY l.sort_order, l.id, b.rel_path`)
 }
@@ -548,7 +565,10 @@ type ImportWrite struct {
 	Days      []ImportDay
 	Bookmarks []Bookmark
 	Progress  []ImportProgress
-	Plan      ImportPlan
+	// Hints are the identifiers it gives books as match hints (book_hints, of
+	// the import's source, owned by the import: they replace any other import's).
+	Hints []BookHint
+	Plan  ImportPlan
 	// RollUpBefore is the session retention's cutoff, as PruneSessions is given
 	// it (zero: none). A session whose last save is before it is written as the
 	// listening_daily rows retention would sum it into (per day in Zone; nil is
@@ -708,6 +728,9 @@ func (c *Catalog) writeImport(ctx context.Context, tx *sql.Tx, imp Import, w *Im
 		return err
 	}
 	now := c.now()
+	if err := setHintsTx(ctx, tx, imp.Source, imp.ID, w.Hints, formatSessionTime(now)); err != nil {
+		return err
+	}
 	if err := execEach(ctx, tx, progressUpsert, len(w.Progress), func(i int) ([]any, error) {
 		wrote := w.Progress[i].Wrote
 		return progressRowArgs(imp.UserID, wrote, finishChangeStamp(wrote.UpdatedAt, now)), nil
@@ -877,8 +900,8 @@ func unchangedPriors(ctx context.Context, q querier, importID int64) ([]progress
 	return out, nil
 }
 
-// UndoImport takes an applied import back out: its sessions, history spans and
-// days are deleted, so are its bookmarks unless the person has edited or
+// UndoImport takes an applied import back out: its sessions, history spans,
+// days and match hints are deleted, so are its bookmarks unless the person has edited or
 // labelled them since (bookmarkUntouched; those are kept as theirs), and every
 // progress row it changed that nobody has changed since is restored.
 // ErrNotFound, or ErrImportNotApplied unless it is applied.
@@ -917,6 +940,8 @@ func (c *Catalog) undoImport(ctx context.Context, tx *sql.Tx, id int64, replacin
 		// What is left of its bookmarks the person changed: theirs now.
 		`UPDATE bookmarks SET import_id = 0, import_note = '' WHERE import_id = ?`,
 		`DELETE FROM import_payloads WHERE import_id = ?`,
+		// Its match hints (those a later import has since taken over are that one's).
+		`DELETE FROM book_hints WHERE import_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
 			return nil, err
