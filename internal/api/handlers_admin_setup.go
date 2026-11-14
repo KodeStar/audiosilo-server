@@ -68,10 +68,11 @@ func (a *API) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 	if !st.Finished || st.Steps["folder"] == catalog.SetupStepSkipped {
 		hints = a.mountHints(cfg.DataDir)
 	}
+	// A failed read is no reason to refuse the whole flow: the account step
+	// then asks for nothing (a new password stays optional).
 	printed, err := a.auth.PrintedPassword(r.Context(), userFrom(r.Context()).ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not read the setup state")
-		return
+		a.log.Warn("setup: reading the first-run admin failed", "err", err)
 	}
 	writeJSON(w, http.StatusOK, setupEnvelope{
 		State: st, Request: req, ConfigLibraries: names, MountHints: hints, PrintedPassword: printed,
