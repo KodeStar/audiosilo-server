@@ -86,12 +86,18 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 		"no library":        `{"librivox_id":1,"work_id":"w","recording_id":"r"}`,
 		"control character": `{"librivox_id":1,"work_id":"w\n","recording_id":"r","library_id":1}`,
 		"long recording":    `{"librivox_id":1,"work_id":"w","recording_id":"` + strings.Repeat("r", maxWorkIDLen+1) + `","library_id":1}`,
-		// The Bridge's shape of an id (a slug): what it would refuse when it claims the job.
-		"recording no slug": `{"librivox_id":1,"work_id":"w","recording_id":"rec 1","library_id":1}`,
-		"work no slug":      `{"librivox_id":1,"work_id":"-w","recording_id":"r","library_id":1}`,
-		"recording slash":   `{"librivox_id":1,"work_id":"w","recording_id":"a/b","library_id":1}`,
-		"long title":        `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"` + strings.Repeat("t", maxLibrivoxTitle+1) + `"}`,
-		"title line break":  `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"a\nb"}`,
+		// A community id is a slug (model.ValidSlug, as contribute and upcoming
+		// check it, server#386): lower-case kebab, at most 100 bytes.
+		"recording no slug":   `{"librivox_id":1,"work_id":"w","recording_id":"rec 1","library_id":1}`,
+		"work no slug":        `{"librivox_id":1,"work_id":"-w","recording_id":"r","library_id":1}`,
+		"recording slash":     `{"librivox_id":1,"work_id":"w","recording_id":"a/b","library_id":1}`,
+		"recording upper":     `{"librivox_id":1,"work_id":"w","recording_id":"LV192","library_id":1}`,
+		"recording dot":       `{"librivox_id":1,"work_id":"w","recording_id":"lv.192","library_id":1}`,
+		"work underscore":     `{"librivox_id":1,"work_id":"the_martian","recording_id":"r","library_id":1}`,
+		"work trailing dash":  `{"librivox_id":1,"work_id":"w-","recording_id":"r","library_id":1}`,
+		"recording 101 bytes": `{"librivox_id":1,"work_id":"w","recording_id":"` + strings.Repeat("r", 101) + `","library_id":1}`,
+		"long title":          `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"` + strings.Repeat("t", maxLibrivoxTitle+1) + `"}`,
+		"title line break":    `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1,"title":"a\nb"}`,
 	} {
 		if _, err := librivoxFetchParams(json.RawMessage(raw)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
@@ -99,7 +105,8 @@ func TestLibrivoxFetchJobs(t *testing.T) {
 	}
 	for name, raw := range map[string]string{
 		"no title":   `{"librivox_id":1,"work_id":"w","recording_id":"r","library_id":1}`,
-		"with title": `{"librivox_id":1,"work_id":"the-martian","recording_id":"lv_47.2","library_id":1,"title":"The Martian"}`,
+		"with title": `{"librivox_id":1,"work_id":"the-martian","recording_id":"the-martian-lv-47","library_id":1,"title":"The Martian"}`,
+		"100 bytes":  `{"librivox_id":1,"work_id":"w","recording_id":"` + strings.Repeat("r", 100) + `","library_id":1}`,
 	} {
 		if _, err := librivoxFetchParams(json.RawMessage(raw)); err != nil {
 			t.Errorf("%s: %v, want accepted", name, err)
