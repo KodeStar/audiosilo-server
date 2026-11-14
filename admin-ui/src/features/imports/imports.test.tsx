@@ -30,6 +30,19 @@ function summary(over: Partial<ImportSummary> = {}): ImportSummary {
   };
 }
 
+/** A review that brings Audiobookshelf's identifiers for five books and no listening. */
+const onlyIds = summary({
+  sessions: 0,
+  skipped_after_cutoff: 0,
+  listened: 0,
+  progress: 0,
+  finished: 0,
+  bookmarks: 0,
+  first_listen: null,
+  last_listen: null,
+  identifiers: { books: 5, asin: 5, isbn: 0, by_title: 0, already_matched: 0 },
+});
+
 function imp(over: Partial<Import> = {}): Import {
   return {
     id: 7,
@@ -455,17 +468,6 @@ describe('import: review', () => {
   });
 
   it('applies an import with identifiers for matching and no listening', async () => {
-    const onlyIds = summary({
-      sessions: 0,
-      skipped_after_cutoff: 0,
-      listened: 0,
-      progress: 0,
-      finished: 0,
-      bookmarks: 0,
-      first_listen: null,
-      last_listen: null,
-      identifiers: { books: 5, asin: 5, isbn: 0, by_title: 0, already_matched: 0 },
-    });
     const calls = mockFetch(
       routes({
         'GET /admin/imports': { body: { imports: [imp({ summary: onlyIds })] } },
@@ -503,17 +505,6 @@ describe('import: review', () => {
   });
 
   it('keeps Apply off when identifiers alone would undo the applied import', async () => {
-    const onlyIds = summary({
-      sessions: 0,
-      skipped_after_cutoff: 0,
-      listened: 0,
-      progress: 0,
-      finished: 0,
-      bookmarks: 0,
-      first_listen: null,
-      last_listen: null,
-      identifiers: { books: 5, asin: 5, isbn: 0, by_title: 0, already_matched: 0 },
-    });
     mockFetch(
       routes({
         'GET /admin/imports': {
