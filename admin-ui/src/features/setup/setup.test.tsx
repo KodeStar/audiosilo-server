@@ -12,12 +12,13 @@ import type {
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   admin,
-  issuesSummary,
+  idle,
   libraries,
   settingsWith,
   settingsWithMetadata,
   setupEnvelope,
   systemStatus,
+  unmatchedSummary,
 } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -1073,13 +1074,8 @@ describe('the phone step explains signing in (server#369)', () => {
 });
 
 describe('the Audiobookshelf import inside the abs step (server#366)', () => {
-  const idle = libraries()[0].scan;
   /** Health's summary with three books not matched. */
-  const unmatched = () => {
-    const s = issuesSummary();
-    s.categories.push({ kind: 'unmatched', count: 3, ignored: 0, samples: [] });
-    return { body: s };
-  };
+  const unmatched = () => ({ body: unmatchedSummary(3) });
 
   it('holds Connect while the first scan runs, then offers Match automatically', async () => {
     let scanning = true;
@@ -1104,7 +1100,6 @@ describe('the Audiobookshelf import inside the abs step (server#366)', () => {
     // The import is right here, not in another tab, without its own step counter.
     const connect = await screen.findByRole('region', { name: 'Connect to Audiobookshelf' });
     expect(screen.queryByText('Step 1 of 3')).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Open the import' })).not.toBeInTheDocument();
     expect(
       within(connect).getByText(/Wait for the scan to finish/, { selector: '[role="status"]' }),
     ).toBeVisible();

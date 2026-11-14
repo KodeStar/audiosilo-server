@@ -545,6 +545,13 @@ export function issuesSummary(over: Partial<IssuesSummary> = {}): IssuesSummary 
   };
 }
 
+/** GET /admin/issues with `n` books not matched (what UnmatchedPrompt counts). */
+export function unmatchedSummary(n: number): IssuesSummary {
+  const s = issuesSummary();
+  s.categories.push({ kind: 'unmatched', count: n, ignored: 0, samples: [] });
+  return s;
+}
+
 /** GET /admin/jobs: nothing running, nothing queued, no schedules. */
 export function jobsState(over: Partial<JobsState> = {}): JobsState {
   return { running: null, queued: [], schedules: [], ...over };

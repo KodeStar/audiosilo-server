@@ -1,6 +1,12 @@
 import { ApiError } from '@/api/client';
 import type { PreviewSample, SetupMarks, SetupRequest, SetupState, SetupStepId } from '@/api/types';
-import { libraries, podcastLibrary, settingsWith, settingsWithMetadata } from '@/test/fixtures';
+import {
+  idle,
+  libraries,
+  podcastLibrary,
+  settingsWith,
+  settingsWithMetadata,
+} from '@/test/fixtures';
 import {
   accountPlan,
   addressMismatch,
@@ -454,25 +460,15 @@ describe('how people reach the server', () => {
 });
 
 describe('booksScanning', () => {
-  const scan = {
-    running: false,
-    total: 0,
-    done: 0,
-    indexed: 0,
-    added: 0,
-    updated: 0,
-    moved: 0,
-    removed: 0,
-  };
   it("holds the abs step's import while a books library scans or waits to", () => {
     expect(booksScanning([])).toBe(false);
     expect(booksScanning(libraries())).toBe(false);
-    expect(booksScanning(libraries([{ scan: { ...scan, running: true, total: 9 } }]))).toBe(true);
-    expect(booksScanning(libraries([{}, { scan: { ...scan, queued: true } }]))).toBe(true);
+    expect(booksScanning(libraries([{ scan: { ...idle, running: true, total: 9 } }]))).toBe(true);
+    expect(booksScanning(libraries([{}, { scan: { ...idle, queued: true } }]))).toBe(true);
   });
 
   it('ignores a podcast library scanning', () => {
-    expect(booksScanning([{ ...podcastLibrary, scan: { ...scan, running: true } }])).toBe(false);
+    expect(booksScanning([{ ...podcastLibrary, scan: { ...idle, running: true } }])).toBe(false);
   });
 });
 

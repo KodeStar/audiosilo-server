@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { Import, ImportDetail, ImportSummary } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { activity, issuesSummary, samDetail, users } from '@/test/fixtures';
+import { activity, samDetail, unmatchedSummary, users } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -574,11 +574,7 @@ describe('import: review', () => {
 
 describe('import: the match offer', () => {
   /** Health's summary with `n` books not matched. */
-  const unmatched = (n: number) => {
-    const s = issuesSummary();
-    s.categories.push({ kind: 'unmatched', count: n, ignored: 0, samples: [] });
-    return { body: s };
-  };
+  const unmatched = (n: number) => ({ body: unmatchedSummary(n) });
 
   it('offers Match automatically once an import is applied, and starts nothing', async () => {
     let applied = false;
