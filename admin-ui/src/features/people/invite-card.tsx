@@ -1,12 +1,16 @@
 import { useTranslation } from 'react-i18next';
-import { Clock, ShieldCheck, Users } from 'lucide-react';
+import { Clock, House, Share2, ShieldAlert, ShieldCheck, TriangleAlert, Users } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import { CopyField } from '@/components/copy-field';
 import { LogoTile } from '@/components/logo';
+import { Notice } from '@/components/notice';
 import { QrCode } from '@/components/qr-code';
+import { Button } from '@/components/ui/button';
+import { shareOrCopy } from '@/lib/clipboard';
 import { formatDateTime, hostOf } from '@/lib/format';
 import { serverLabel } from '@/lib/server-label';
 import type { ShownInvite } from './invite-dialog';
+import { inviteReach } from './people-model';
 
 /**
  * A freshly minted (or rotated) invite: the ink card with the QR code, then the
@@ -21,6 +25,17 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
   const server = useServerInfo();
   // The link's host is the server's public address, else the host it was asked on.
   const serverName = serverLabel(server.data?.name, hostOf(url));
+  // Who can open the link, said before it is sent (a home address, a self-signed one).
+  const reach = inviteReach(url);
+  const share = () =>
+    void shareOrCopy(
+      {
+        title: t('invite.share.title'),
+        text: t('invite.share.text', { name, server: serverName }),
+        url,
+      },
+      t('invite.share.what'),
+    );
   return (
     <div className="flex flex-col gap-4">
       <div className="invite-card relative overflow-hidden rounded-xl p-5 text-white md:p-6">
@@ -42,6 +57,25 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
         </div>
       </div>
 
+      <Button type="button" onClick={share} className="self-start">
+        <Share2 aria-hidden="true" />
+        {t('invite.share.action')}
+      </Button>
+      {reach.loopback ? (
+        <Notice tone="warn" icon={TriangleAlert} title={t('invite.reach.loopbackTitle')}>
+          {t('invite.reach.loopback')}
+        </Notice>
+      ) : null}
+      {reach.home ? (
+        <Notice tone="info" icon={House} title={t('invite.reach.homeTitle')}>
+          {t('invite.reach.home')}
+        </Notice>
+      ) : null}
+      {reach.certificate ? (
+        <Notice tone="warn" icon={ShieldAlert} title={t('invite.reach.certificateTitle')}>
+          {t('invite.reach.certificate')}
+        </Notice>
+      ) : null}
       <CopyField id="invite-link" label={t('invite.link')} value={url} />
       <CopyField id="invite-code" label={t('invite.code')} value={code}>
         <p className="text-[12.5px] text-muted-foreground">{t('invite.codeOnce')}</p>

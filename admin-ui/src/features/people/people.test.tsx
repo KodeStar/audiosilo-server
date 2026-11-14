@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
 import type { AdminUser } from '@/api/types';
+import { stubExecCommand, unstubExecCommand } from '@/test/clipboard';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
   activity,
@@ -73,7 +74,8 @@ describe('people', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
     await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
     await user.click(await within(dialog).findByRole('radio', { name: /All libraries/ }));
-    await user.selectOptions(within(dialog).getByLabelText('Expires after'), '7');
+    // A week unless changed.
+    expect(within(dialog).getByLabelText('Expires after')).toHaveValue('7');
     await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
 
     const ready = await screen.findByRole('dialog', { name: 'Invite ready for Uncle Ray' });
@@ -104,6 +106,90 @@ describe('people', () => {
     expect(
       calls.every((c) => !c.path.includes('ABCD') && !c.query.toString().includes('ABCD')),
     ).toBe(true);
+  });
+
+  it('sets an optional password with the account, checked for length first', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/users': {
+          status: 201,
+          body: { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined },
+        },
+        'POST /admin/users/9/authcode': { status: 201, body: created },
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
+    await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+    const password = within(dialog).getByLabelText('Password (optional)');
+    await user.type(password, 'short');
+    await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
+    expect(await within(dialog).findByText(/at least 8 characters/i)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/users')).toBe(false);
+
+    await user.clear(password);
+    await user.type(password, 'long enough');
+    await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
+    await screen.findByRole('dialog', { name: 'Invite ready for Uncle Ray' });
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/admin/users')?.body).toEqual({
+      username: 'Uncle Ray',
+      password: 'long enough',
+      role: 'user',
+    });
+  });
+
+  it('shares the invite, or copies the message where the browser has no share sheet', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/users': {
+          status: 201,
+          body: { ...sam, id: 9, username: 'Uncle Ray', last_seen_at: undefined },
+        },
+        'POST /admin/users/9/authcode': {
+          status: 201,
+          body: { ...created, invite_url: 'https://192.168.1.20:8443/connect#code=ABCD-1234' },
+        },
+      }),
+    );
+    const share = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    try {
+      renderApp('/people');
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: 'Invite someone' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Invite someone' });
+      await user.type(within(dialog).getByLabelText('Their name'), 'Uncle Ray');
+      await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
+      const ready = await screen.findByRole('dialog', { name: 'Invite ready for Uncle Ray' });
+      // A home address over https at an IP: both warnings, before it is sent.
+      expect(within(ready).getByText('Works on your home network only')).toBeInTheDocument();
+      expect(
+        within(ready).getByText('Their browser will warn about the certificate'),
+      ).toBeInTheDocument();
+      await user.click(within(ready).getByRole('button', { name: 'Share' }));
+      expect(share).toHaveBeenCalledWith({
+        title: 'AudioSilo invite',
+        text: expect.stringContaining('Uncle Ray'),
+        url: 'https://192.168.1.20:8443/connect#code=ABCD-1234',
+      });
+      // No share sheet: the message and the link are copied instead.
+      Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
+      let copied = '';
+      stubExecCommand(() => {
+        copied = (document.activeElement as HTMLTextAreaElement).value;
+        return true;
+      });
+      await user.click(within(ready).getByRole('button', { name: 'Share' }));
+      expect(await screen.findByText('Invite message copied')).toBeInTheDocument();
+      expect(copied).toMatch(
+        /Uncle Ray.*\nhttps:\/\/192\.168\.1\.20:8443\/connect#code=ABCD-1234$/s,
+      );
+    } finally {
+      Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
+      unstubExecCommand();
+    }
   });
 
   it('explains a name that is already taken', async () => {

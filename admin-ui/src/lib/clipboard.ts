@@ -56,3 +56,25 @@ export async function copyWithToast(text: string, what: string): Promise<void> {
   // No timeout: it stays until closed, so there is time to select the text.
   else toast.add({ title: t('common.copyFailed'), description: text, type: 'warning', timeout: 0 });
 }
+
+/**
+ * Hands a message to the device's share sheet (the Web Share API: a phone's
+ * Messages, Mail, WhatsApp), or copies it, text then link, where there is none
+ * (most desktop browsers, and any page on plain HTTP: it needs a secure
+ * context). Closing the share sheet is no failure; a share the browser refuses
+ * falls back to the copy.
+ */
+export async function shareOrCopy(
+  data: { title: string; text: string; url: string },
+  what: string,
+): Promise<void> {
+  if (typeof navigator.share === 'function' && (!navigator.canShare || navigator.canShare(data))) {
+    try {
+      await navigator.share(data);
+      return;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+    }
+  }
+  await copyWithToast(`${data.text}\n${data.url}`, what);
+}

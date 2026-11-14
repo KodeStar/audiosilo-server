@@ -5,6 +5,7 @@ import {
   datesEdit,
   datesProblem,
   groupDevices,
+  inviteReach,
   inviteStatus,
   parseAccessChoice,
   ruleLabel,
@@ -198,5 +199,38 @@ describe('groupDevices', () => {
     expect(by?.get(2)?.map((x) => x.id)).toEqual([1, 4]);
     expect(by?.get(3)).toHaveLength(1);
     expect(groupDevices(undefined)).toBeUndefined();
+  });
+});
+
+describe('inviteReach', () => {
+  const none = { loopback: false, home: false, certificate: false };
+  it('says nothing for a public name', () => {
+    expect(inviteReach('https://books.example.com/connect#code=X')).toEqual(none);
+    expect(inviteReach('http://books.example.com:8080/connect#code=X')).toEqual(none);
+    expect(inviteReach('not a link')).toEqual(none);
+  });
+  it('warns that a home address works on the home network only', () => {
+    expect(inviteReach('http://192.168.1.20:8080/connect#code=X')).toEqual({ ...none, home: true });
+    expect(inviteReach('http://nas.local:8080/connect')).toEqual({ ...none, home: true });
+    expect(inviteReach('http://nas:8080/connect')).toEqual({ ...none, home: true });
+  });
+  it('warns about the certificate of https at an IP address', () => {
+    expect(inviteReach('https://192.168.1.20:8443/connect#code=X')).toEqual({
+      ...none,
+      home: true,
+      certificate: true,
+    });
+    expect(inviteReach('https://203.0.113.7/connect')).toEqual({ ...none, certificate: true });
+    expect(inviteReach('https://[fd00::5]:8443/connect')).toEqual({
+      ...none,
+      home: true,
+      certificate: true,
+    });
+    // A name with a real certificate is fine, home or not.
+    expect(inviteReach('https://nas.local/connect').certificate).toBe(false);
+  });
+  it('says localhost reaches only this computer, and nothing else', () => {
+    expect(inviteReach('https://localhost:8443/connect')).toEqual({ ...none, loopback: true });
+    expect(inviteReach('http://127.0.0.1:8080/connect')).toEqual({ ...none, loopback: true });
   });
 });
