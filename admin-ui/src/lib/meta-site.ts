@@ -18,6 +18,16 @@ const ADD_PAGE = `${META_SITE}/add`;
 const AUDIBLE_ASIN = /^B0[A-Z0-9]{8}$/;
 
 /**
+ * Half a surrogate pair (a pasted search cut inside an emoji), on which
+ * encodeURIComponent throws: the link is built while the dialog renders, so
+ * such a half is dropped.
+ */
+const LONE_SURROGATE = /\p{Cs}/gu;
+
+/** A part of the link's words: trimmed, without a lone surrogate, '' for none. */
+const clean = (s: string | undefined) => (s ?? '').replace(LONE_SURROGATE, '').trim();
+
+/**
  * The "Add a book" link for a book the community database doesn't have,
  * prefilled with the best way to find it there: its ASIN (the caller's pick:
  * one the admin typed, else the book's own), else the words the admin searched
@@ -29,13 +39,9 @@ export function addBookUrl(book: {
   title?: string;
   author?: string;
 }): string {
-  const asin = (book.asin ?? '').trim().toUpperCase();
+  const asin = clean(book.asin).toUpperCase();
   const q = AUDIBLE_ASIN.test(asin)
     ? asin
-    : book.query?.trim() ||
-      [book.title, book.author]
-        .map((s) => s?.trim())
-        .filter(Boolean)
-        .join(' ');
+    : clean(book.query) || [book.title, book.author].map(clean).filter(Boolean).join(' ');
   return q ? `${ADD_PAGE}?q=${encodeURIComponent(q)}` : ADD_PAGE;
 }
