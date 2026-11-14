@@ -2341,12 +2341,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Audited `import.start|apply|undo`. **Identifiers as match hints** (server#366, `importer/identifiers.go`,
   `catalog/hints.go`, `0074` `book_hints`): every import also carries ABS's ASIN/ISBN for the whole ABS
   server, whoever's history it is: the payload's `identified` list (every ABS book with a valid ASIN or
-  ISBN, `identifiedItems`; absent from an older payload, which carries none; payload `v` stays 1) is
+  ISBN, `itemIndex.identified`; absent from an older payload, which carries none; payload `v` stays 1) is
   paired by `identifiersFor` with an all-access matcher, by path then title and author only (never the
-  identifier tier, which reads our own ids), skipping a gone item, a book split into discs here, a
+  identifier tier, which reads our own ids), skipping a book split into discs here, a
   book two identified ABS books pair with (contested, judged among the identified ones only) and a book
-  already matched here (`Book.Matched`, `matchedExpr`: counted). The review, a cutoff change and the
-  apply all plan them (`planAll`), so the summary's additive `identifiers {books, asin, isbn, by_title,
+  already matched here (`Book.Matched`, `matchedExpr`: counted). The review (once per fetch,
+  for every user: the pairing reads nothing of a user's), a cutoff change and the apply (before its
+  transaction, like the history's matching) all pair them, so the summary's additive `identifiers {books, asin, isbn, by_title,
   already_matched}` (absent from an import planned before it) matches what the apply writes:
   `ImportWrite.Hints`, normalized and validated (`BookHint.Normalized`), one row per book and source,
   owned by the import (`import_id`; the last import applied owns a row, so an earlier import's undo

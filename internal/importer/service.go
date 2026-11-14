@@ -271,18 +271,19 @@ func (s *Service) fetch(ctx context.Context, c *Client, imps []catalog.Import) {
 		return
 	}
 	byItem := newItemIndex(items)
-	identified := identifiedItems(items, byItem)
+	// The identifiers pair with the same books for every user: once.
+	_, ids := identifiersFor(byItem.identified, books)
 	for _, imp := range imps {
-		if err := s.fetchOne(ctx, c, imp, byItem, identified, books); err != nil {
+		if err := s.fetchOne(ctx, c, imp, byItem, books, ids); err != nil {
 			fail(imp, err)
 		}
 	}
 }
 
-// fetchOne fetches and plans one import. identified is the server's books with
-// an identifier (Payload.Identified).
-func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, items *itemIndex, identified []Item,
-	books *bookIndex) error {
+// fetchOne fetches and plans one import. ids is the count of the identifiers
+// it carries (identifiersFor over items.identified).
+func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, items *itemIndex, books *bookIndex,
+	ids *catalog.ImportIdentifiers) error {
 	u, own, err := c.userDetail(ctx, imp.SourceID)
 	if err != nil {
 		return err
@@ -292,12 +293,11 @@ func (s *Service) fetchOne(ctx context.Context, c *Client, imp catalog.Import, i
 		return err
 	}
 	p := buildPayload(u, sessions, items)
-	p.Identified = identified
 	st, err := s.cat.ImportStateFor(ctx, imp.ID)
 	if err != nil {
 		return err
 	}
-	pl, err := s.review(ctx, st, p, books)
+	pl, err := s.review(ctx, st, p, books, ids)
 	if err != nil {
 		return err
 	}
@@ -332,22 +332,18 @@ func (s *Service) matchesFor(ctx context.Context, userID int64, p *Payload, book
 	return m.matchAll(p.Items), nil
 }
 
-// review plans an import from p against st, as the review shows it.
-func (s *Service) review(ctx context.Context, st *catalog.ImportState, p *Payload, books *bookIndex) (catalog.ImportPlan, error) {
+// review plans an import from p against st, as the review shows it: its
+// history, and ids, the count of the identifiers it carries (identifiersFor,
+// which the caller runs: the same for every user of a fetch).
+func (s *Service) review(ctx context.Context, st *catalog.ImportState, p *Payload, books *bookIndex,
+	ids *catalog.ImportIdentifiers) (catalog.ImportPlan, error) {
 	matches, err := s.matchesFor(ctx, st.Import.UserID, p, books)
 	if err != nil {
 		return catalog.ImportPlan{}, err
 	}
-	return planAll(p, matches, books, *st, s.loc, s.now()).Plan, nil
-}
-
-// planAll is plan with the identifiers p carries (identifiersFor): everything a
-// review shows and an apply writes.
-func planAll(p *Payload, matches map[string]Match, books *bookIndex, st catalog.ImportState, loc *time.Location,
-	now time.Time) *catalog.ImportWrite {
-	w := plan(p, matches, st, loc, now)
-	w.Hints, w.Plan.Summary.Identifiers = identifiersFor(p, books)
-	return w
+	pl := plan(p, matches, *st, s.loc, s.now()).Plan
+	pl.Summary.Identifiers = ids
+	return pl, nil
 }
 
 // reviewing loads import id, which must be in review: its state (read once) and
@@ -385,7 +381,8 @@ func (s *Service) SetCutoff(ctx context.Context, id int64, c Cutoff) (*catalog.I
 	if err != nil {
 		return nil, err
 	}
-	pl, err := s.review(ctx, st, p, books)
+	_, ids := identifiersFor(p.Identified, books)
+	pl, err := s.review(ctx, st, p, books, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -412,13 +409,17 @@ func (s *Service) Apply(ctx context.Context, id int64) (*catalog.Import, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Paired here, like the history: never inside the apply's transaction, which
+	// holds the server's one writer while it plans.
+	hints, ids := identifiersFor(p.Identified, books)
 	now := s.now()
 	var rollUp time.Time
 	if s.retention != nil {
 		rollUp = now.Add(-s.retention())
 	}
 	return s.cat.ApplyImport(ctx, id, func(st catalog.ImportState) (*catalog.ImportWrite, error) {
-		w := planAll(p, matches, books, st, s.loc, now)
+		w := plan(p, matches, st, s.loc, now)
+		w.Hints, w.Plan.Summary.Identifiers = hints, ids
 		w.RollUpBefore, w.Zone = rollUp, s.loc
 		return w, nil
 	})

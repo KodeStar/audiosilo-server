@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/importer/abstest"
@@ -13,7 +12,7 @@ import (
 
 // TestIdentifiersFor: every ABS book with an identifier is paired with a book
 // here by path, then by title and author, whoever can access the book (library
-// 2 too); a contested book, a gone item, a book split into discs here, an item
+// 2 too); a contested book, a book split into discs here, an item
 // that pairs with nothing and an identifier that isn't one give no hint, and a
 // book already matched here is counted and left alone.
 func TestIdentifiersFor(t *testing.T) {
@@ -34,7 +33,6 @@ func TestIdentifiersFor(t *testing.T) {
 			ASIN: "B0PRIDE001"},
 		{ID: "pp2", RelPath: "Austen/P and P", FullPath: "/abs/Austen/P and P", Title: "Pride and Prejudice",
 			Author: "Jane Austen", ASIN: "B0PRIDE002"},
-		{ID: "gone", Gone: true, Title: "Frankenstein", Author: "Mary Shelley", ASIN: "B0GONE0001"},
 		{ID: "split", RelPath: "Hollis Varga/The Cartographer's Daughter",
 			FullPath: "/abs/Hollis Varga/The Cartographer's Daughter", Title: "CD1", Author: "Hollis Varga",
 			ASIN: "B0SPLIT001"}, // a title that would pair with one of the discs
@@ -42,7 +40,7 @@ func TestIdentifiersFor(t *testing.T) {
 			ASIN: "B0NONE0001"},
 		{ID: "invalid", RelPath: "Émile Zola/Germinal", FullPath: "/abs/Émile Zola/Germinal", ASIN: "nope"},
 	}}
-	hints, sum := identifiersFor(p, x)
+	hints, sum := identifiersFor(p.Identified, x)
 	ref := func(lib int64, path string) catalog.Ref { return catalog.Ref{LibraryID: lib, Path: path} }
 	want := []catalog.BookHint{
 		{Ref: ref(1, "Andy Weir/Project Hail Mary"), ASIN: "B08G9PRS1K"},
@@ -58,22 +56,8 @@ func TestIdentifiersFor(t *testing.T) {
 	}
 
 	// A payload stored before identifiers were kept carries none.
-	if hints, sum := identifiersFor(&Payload{}, x); hints != nil || *sum != (catalog.ImportIdentifiers{}) {
+	if hints, sum := identifiersFor(nil, x); hints != nil || *sum != (catalog.ImportIdentifiers{}) {
 		t.Errorf("no identified books: %+v %+v", hints, *sum)
-	}
-}
-
-// TestPlanAllCarriesIdentifiers: the review's plan and the apply's write carry
-// the identifiers, the history's own matching (a person's access) aside.
-func TestPlanAllCarriesIdentifiers(t *testing.T) {
-	x := newBookIndex(matchBooks())
-	p := &Payload{V: payloadVersion, Identified: []Item{{ID: "pooh", RelPath: "Kids/Winnie-the-Pooh",
-		FullPath: "/abs/Kids/Winnie-the-Pooh", ASIN: "B0POOH0001"}}}
-	matches := x.matcher(onlyLib1).matchAll(p.Items)
-	w := planAll(p, matches, x, planState(time.Time{}), time.UTC, time.Now())
-	if len(w.Hints) != 1 || w.Hints[0].Path != "Kids/Winnie-the-Pooh" || w.Plan.Summary.Identifiers == nil ||
-		w.Plan.Summary.Identifiers.Books != 1 {
-		t.Fatalf("hints %+v, identifiers %+v", w.Hints, w.Plan.Summary.Identifiers)
 	}
 }
 
@@ -87,7 +71,7 @@ func TestIdentifiedItemsFromRecordedABS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := identifiedItems(items, newItemIndex(items))
+	got := newItemIndex(items).identified
 	if len(got) != 13 {
 		t.Fatalf("%d identified items, want the 13 with an ASIN", len(got))
 	}

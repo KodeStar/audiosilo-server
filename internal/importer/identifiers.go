@@ -19,11 +19,13 @@ import (
 // allAccess is the matcher's access check for identifiers: every book.
 func allAccess(catalog.Ref) bool { return true }
 
-// identifiersFor pairs p's identified ABS books with books here: the hints an
-// apply writes, and the summary's count of them.
-func identifiersFor(p *Payload, books *bookIndex) ([]catalog.BookHint, *catalog.ImportIdentifiers) {
+// identifiersFor pairs the identified ABS books (Payload.Identified, none of
+// them a gone item: ABS has every one) with books here: the hints an apply
+// writes, and the summary's count of them. It reads nothing of a user's, so a
+// fetch runs it once for all of them.
+func identifiersFor(identified []Item, books *bookIndex) ([]catalog.BookHint, *catalog.ImportIdentifiers) {
 	sum := &catalog.ImportIdentifiers{}
-	if len(p.Identified) == 0 {
+	if len(identified) == 0 {
 		return nil, sum
 	}
 	m := books.matcher(allAccess)
@@ -34,9 +36,9 @@ func identifiersFor(p *Payload, books *bookIndex) ([]catalog.BookHint, *catalog.
 	}
 	var pairs []paired
 	per := map[int]int{} // ABS books paired with each book here
-	for _, it := range p.Identified {
+	for _, it := range identified {
 		h, ok := (catalog.BookHint{ASIN: it.ASIN, ISBN: it.ISBN}).Normalized()
-		if !ok || it.Gone {
+		if !ok {
 			continue
 		}
 		idx, _, split := m.matchPath(it)

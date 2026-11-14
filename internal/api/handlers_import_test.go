@@ -188,6 +188,10 @@ func TestImportFromABS(t *testing.T) {
 	if d.Cutoff == nil || d.Summary.SkippedAfterCutoff == 0 || d.Summary.Sessions+d.Summary.SkippedAfterCutoff != 32 {
 		t.Fatalf("with a cutoff = %+v %+v", d.Cutoff, *d.Summary)
 	}
+	// A cutoff leaves history out, never the identifiers: the plan still counts them.
+	if d.Summary.Identifiers == nil || d.Summary.Identifiers.Books != 5 {
+		t.Fatalf("identifiers with a cutoff = %+v", d.Summary.Identifiers)
+	}
 	e.call(t, "PATCH", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, `{"cutoff":null}`, 200, &d)
 	if d.Cutoff != nil || d.Summary.Sessions != 32 {
 		t.Fatalf("without = %+v %+v", d.Cutoff, *d.Summary)
@@ -291,17 +295,9 @@ func (e *importEnv) hintOf(t *testing.T, lib, path string) *catalog.Book {
 func TestImportIdentifiersOnly(t *testing.T) {
 	t.Parallel()
 	e := newImportEnv(t)
-	var started struct {
-		Imports []catalog.Import `json:"imports"`
-	}
-	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":%q,"users":[{"abs_user_id":%q,"user_id":%d}]}`,
-		e.abs.URL, abstest.AdminToken, abstest.JoID, e.alexID), 202, &started)
-	e.api.imports.Wait()
-	id := started.Imports[0].ID
-	var d catalog.ImportDetail
-	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", id), e.adminTok, "", 200, &d)
-	s := d.Summary
-	if d.Status != catalog.ImportReview || s == nil || s.Sessions != 0 || s.Progress != 0 || s.Finished != 0 ||
+	d := e.start(t, abstest.JoID)
+	id, s := d.ID, d.Summary
+	if s.Sessions != 0 || s.Progress != 0 || s.Finished != 0 ||
 		s.Bookmarks != 0 || s.Estimated != 0 || s.Identifiers == nil || s.Identifiers.Books != 5 {
 		t.Fatalf("review = %+v %+v", d.Import, s)
 	}
@@ -341,11 +337,18 @@ func TestImportIdentifiersOnly(t *testing.T) {
 // review.
 func (e *importEnv) startAlex(t *testing.T) catalog.ImportDetail {
 	t.Helper()
+	return e.start(t, abstest.AlexID)
+}
+
+// start starts an import of the recorded ABS user absUserID into Alex and waits
+// for its review.
+func (e *importEnv) start(t *testing.T, absUserID string) catalog.ImportDetail {
+	t.Helper()
 	var started struct {
 		Imports []catalog.Import `json:"imports"`
 	}
 	e.call(t, "POST", "/admin/imports/abs", e.adminTok, fmt.Sprintf(`{"url":%q,"token":%q,"users":[{"abs_user_id":%q,"user_id":%d}]}`,
-		e.abs.URL, abstest.AdminToken, abstest.AlexID, e.alexID), 202, &started)
+		e.abs.URL, abstest.AdminToken, absUserID, e.alexID), 202, &started)
 	e.api.imports.Wait()
 	var d catalog.ImportDetail
 	e.call(t, "GET", fmt.Sprintf("/admin/imports/%d", started.Imports[0].ID), e.adminTok, "", 200, &d)
