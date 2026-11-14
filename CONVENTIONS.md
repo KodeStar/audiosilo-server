@@ -3785,7 +3785,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   no run, no offered identifiers) through `writeAnchor` (and wakes the `OnBookChange` listeners)
   and never another path's, by `adopted`: false (a vacant folder, so what is at the path is a
   deleted book's leftover) replaces the row and drops the path's ASIN/ISBN overrides (any source)
-  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match;
+  and its `book_enrichment` row, rebuilding the book, since `/meta` asks those before the match,
+  and its `book_hints` rows (the deleted book's Audiobookshelf hint, which the match dialog would send);
   true (an earlier fetch's book) inserts only when the path has no row, so an admin's rematch
   stays, and touches nothing else; absent replaces the row and touches nothing else (the L6
   rule). A job whose params name no recording writes nothing. `/meta` then answers the book from

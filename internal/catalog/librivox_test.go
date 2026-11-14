@@ -182,7 +182,7 @@ func adoptedFetch(libID int64, path string, by int64, adopted string) bridge.Job
 // TestFoldLibrivoxFetchAdopted (server#379): how the fold treats what is
 // already at the book's path, by the result's adopted. A newly placed book
 // (false) drops a deleted book's leftover ASIN and ISBN (its overrides,
-// whoever set them, and its enrichment), so /meta no longer asks them before
+// whoever set them, its enrichment and its Audiobookshelf match hint), so /meta no longer asks them before
 // the match, and keeps every other edit; an adopted folder (true) keeps the
 // match recorded there (an admin's rematch) and its identifiers, and is
 // recorded when it has none (a fold that was lost); an older Bridge's result
@@ -197,11 +197,12 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// What a deleted book left at the path: an edited ASIN, a community ISBN,
-	// an enrichment row and an edited title.
+	// an enrichment row, an Audiobookshelf match hint and an edited title.
 	leftovers := func(t *testing.T) {
 		t.Helper()
 		for _, q := range []string{
-			`DELETE FROM book_overrides`, `DELETE FROM book_enrichment`, `DELETE FROM book_matches`,
+			`DELETE FROM book_overrides`, `DELETE FROM book_enrichment`, `DELETE FROM book_matches`, `DELETE FROM book_hints`,
+			`INSERT INTO book_hints(library_id, path, source, asin, import_id, set_at) VALUES(?1, ?2, 'abs', 'B0HINTED01', 1, 't')`,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'asin', 'B0LEFTOVER', 'edited', 't')`,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'isbn', '9780000000002', 'community', 't')`,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?1, ?2, 'title', 'Edited Title', 'edited', 't')`,
@@ -246,8 +247,10 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		if n := enriched(); n != 0 {
 			t.Fatalf("enrichment rows = %d, want none", n)
 		}
-		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "" || b.ISBN != "" || b.Title != "Edited Title" {
-			t.Fatalf("book = %q %q %q, want no identifiers and the title kept", b.ASIN, b.ISBN, b.Title)
+		if b := mustBook(t, c, ctx, lib.ID, path); b.ASIN != "" || b.ISBN != "" || b.Title != "Edited Title" ||
+			b.HintASIN != "" {
+			t.Fatalf("book = %q %q %q, hint %q; want no identifiers, no hint and the title kept",
+				b.ASIN, b.ISBN, b.Title, b.HintASIN)
 		}
 	})
 	t.Run("placed over a leftover enrichment alone", func(t *testing.T) {
@@ -277,7 +280,7 @@ func TestFoldLibrivoxFetchAdopted(t *testing.T) {
 		if w, r, _, _, _, _ := matchRow(t, c, lib.ID, path); w != "rematched-work" || r != "rematched-rec" {
 			t.Fatalf("match = %s %s, want the admin's rematch", w, r)
 		}
-		if o := overrides(); len(o) != 3 || enriched() != 1 {
+		if o := overrides(); len(o) != 3 || enriched() != 1 || mustBook(t, c, ctx, lib.ID, path).HintASIN != "B0HINTED01" {
 			t.Fatalf("overrides = %v, enrichment %d: an adopted folder's were touched", o, enriched())
 		}
 	})

@@ -141,11 +141,17 @@ func fetchResultFits(p bridge.LibrivoxFetchParams, r bridge.LibrivoxFetchResult)
 }
 
 // dropLeftoverIdentity removes the ASIN and ISBN a deleted book left at ref
-// (its book_overrides rows for them, whoever set them, and its
-// book_enrichment row) and rebuilds the effective metadata of book id, the new
-// book there, in tx: a newly placed LibriVox book is its recording, never the
-// book that was in its folder before.
+// (its book_overrides rows for them, whoever set them, its book_enrichment row
+// and its match hints, book_hints, which the match dialog would send for a
+// book with no identifier of its own) and rebuilds the effective metadata of
+// book id, the new book there, in tx: a newly placed LibriVox book is its
+// recording, never the book that was in its folder before.
 func dropLeftoverIdentity(ctx context.Context, tx *sql.Tx, ref Ref, id int64) error {
+	// A hint is never part of the effective metadata: no rebuild for it.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_hints WHERE library_id = ? AND path = ?`,
+		ref.LibraryID, ref.Path); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field IN (?, ?)`,
 		ref.LibraryID, ref.Path, FieldASIN, FieldISBN)
 	if err != nil {
