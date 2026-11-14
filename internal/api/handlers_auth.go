@@ -206,6 +206,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	payload.CodeExpiresAt = rc.ExpiresAt
 	payload.UsesRemaining = rc.UsesRemaining()
+	payload.Admin = rc.User.Role == auth.RoleAdmin
 	writeJSON(w, http.StatusOK, payload)
 }
 

@@ -13,11 +13,13 @@ import (
 
 // PairingPayload is returned by the redeem/pair endpoints so a client can render
 // a QR code (PNGDataURI) or deep-link directly. The QR encodes WebURL: an HTTPS
-// link that opens the native app when it claims the domain (iOS Universal / Android
-// App Link) and otherwise opens the embedded web player's connect route, which
-// exchanges the pairing token. URI is the custom-scheme equivalent for an explicit
-// "Open in app" action (custom schemes are not domain-bound, so they launch an
-// installed app on any self-hosted domain). The pairing token is as redeemable as
+// link to the embedded web player's connect route, which exchanges the pairing
+// token. A phone's camera opens it in the browser: the store apps claim no
+// domain (a self-hosted server's domain is its own), so only the app's own
+// scanner (Scan a QR code) pairs the app; a server whose app_links config names
+// a build that claims its domain is the exception. URI is the custom-scheme
+// equivalent for an explicit "Open in app" action (custom schemes are not
+// domain-bound, so they launch an installed app on any self-hosted domain). The pairing token is as redeemable as
 // its origin: redeemed from an invite it inherits the invite's uses and expiry (one
 // QR can pair several devices); from a recovery code it carries a short TTL of its
 // own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL
@@ -42,6 +44,10 @@ type PairingPayload struct {
 	// for recovery codes, /auth/pair and demo tokens (and nil = unlimited).
 	CodeExpiresAt string `json:"code_expires_at,omitempty"`
 	UsesRemaining *int   `json:"uses_remaining,omitempty"`
+	// Admin is set (and true) when an invite being redeemed pairs an admin's
+	// account, so the connect page offers the console only to an admin. Absent
+	// for a listener's invite and for every other pairing.
+	Admin bool `json:"admin,omitempty"`
 	// Addresses is the server's home and away addresses (the `addresses`
 	// capability), also carried by URI and WebURL as home=/away= params; nil when
 	// neither is known.
@@ -120,14 +126,26 @@ func sidQuery(id string) string {
 	return "&" + url.Values{"sid": {id}}.Encode()
 }
 
-// AppLinks points clients at the ways to connect. Mobile app stores are
-// placeholders until those apps ship.
+// AppLinks points clients at the ways to connect: this server's web player and
+// console, and where to get the app (the App Store, Google Play, and the APK
+// on the player's GitHub releases for an Android phone without Play; APK is
+// additive). The connect page (internal/web/assets/index.html) shows the same
+// store links before any redeem.
 type AppLinks struct {
 	Web     string `json:"web"`
 	Admin   string `json:"admin"`
 	IOS     string `json:"ios,omitempty"`
 	Android string `json:"android,omitempty"`
+	APK     string `json:"apk,omitempty"`
 }
+
+// Where to get the AudioSilo app. The APK link is the player's latest GitHub
+// release page, not a file, so it never names a stale version.
+const (
+	appStoreURL   = "https://apps.apple.com/us/app/audiosilo/id6783431375"
+	googlePlayURL = "https://play.google.com/store/apps/details?id=app.audiosilo"
+	apkReleaseURL = "https://github.com/KodeStar/audiosilo-frontend/releases/latest"
+)
 
 // inviteURL builds the shareable copy-invite link. The auth code rides in the URL
 // fragment so it never reaches the server (and so never lands in access logs): the
@@ -172,9 +190,10 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	cfg := a.config()
 	base := a.baseURL(r)
 	addrs := a.pairingAddresses(r)
-	// HTTPS handoff encoded in the QR: scanning it opens the native app when the
-	// app claims this domain (iOS Universal / Android App Link), otherwise it opens
-	// the embedded web player's connect route, which exchanges the pairing token.
+	// HTTPS handoff encoded in the QR: the app's own scanner reads the token from
+	// it; a phone's camera opens the embedded web player's connect route, which
+	// exchanges the pairing token (the native app only when a build claims this
+	// domain: app_links).
 	// The home/away params come after the existing ones, so a link without them
 	// reads exactly as before (older clients ignore params they don't know).
 	// sid= (the server's id) comes last, after them.
@@ -203,8 +222,11 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 		PNGDataURI:   "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
 		Addresses:    addrs,
 		Links: AppLinks{
-			Web:   base + "/web",
-			Admin: base + "/admin",
+			Web:     base + "/web",
+			Admin:   base + "/admin",
+			IOS:     appStoreURL,
+			Android: googlePlayURL,
+			APK:     apkReleaseURL,
 		},
 	}, nil
 }

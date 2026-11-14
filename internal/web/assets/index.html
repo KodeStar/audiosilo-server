@@ -30,16 +30,34 @@
         <div id="msg" class="msg" role="alert"></div>
 
         <div id="result" class="hidden">
-          <h2 data-i18n="connect.scanHeading">Scan to pair</h2>
-          <div class="qr"><img id="qr" alt="Pairing QR code" data-i18n-alt="connect.qrAlt"></div>
-          <p class="muted" data-i18n="connect.scanHint">Each device you're setting up can scan this code, or continue on this device.</p>
+          <!-- On a phone: get the app first; the QR would only point back at this phone. -->
+          <div id="phone-lead" class="hidden">
+            <h2 data-i18n="connect.phoneHeading">Get the app, then come back to this link</h2>
+            <p class="muted" data-i18n="connect.phoneBody">Install AudioSilo, then open this invite link again and tap Open in app. Or listen in your browser now with the web player.</p>
+          </div>
+          <div id="scan-block">
+            <h2 data-i18n="connect.scanHeading">Scan to pair</h2>
+            <div class="qr"><img id="qr" alt="Pairing QR code" data-i18n-alt="connect.qrAlt"></div>
+            <p class="muted" data-i18n="connect.scanHint">Open the AudioSilo app and tap Scan a QR code. The phone's camera opens the web player instead.</p>
+          </div>
           <p id="uses-note" class="muted hidden"></p>
-          <p class="muted" data-i18n="connect.reopenHint">Keep this page open while you set up your devices. To see this code again later, open your invite link again.</p>
+          <p id="reopen-hint" class="muted" data-i18n="connect.reopenHint">Keep this page open while you set up your devices. To see this code again later, open your invite link again.</p>
           <div class="links">
             <a id="link-app" class="button secondary block" href="#" aria-disabled="true" data-i18n="connect.openApp">Open in app</a>
             <a id="link-web" class="button block" href="#" aria-disabled="true" data-i18n="connect.openWeb">Open web player</a>
-            <a id="link-admin" class="button secondary block" href="/admin" data-i18n="connect.adminSection">Admin section</a>
+            <a id="link-admin" class="button secondary block hidden" href="/admin" data-i18n="connect.adminSection">Admin section</a>
           </div>
+        </div>
+
+        <!-- Where to get the app: shown before and after a redeem (connect.js moves it
+             under the phone lead). The same links as the pairing payload's links. -->
+        <div id="get-app" class="get-app">
+          <p class="get-app-title" data-i18n="connect.getApp">Get the AudioSilo app</p>
+          <div class="store-links">
+            <a class="button secondary" href="https://apps.apple.com/us/app/audiosilo/id6783431375" target="_blank" rel="noopener noreferrer" data-i18n="connect.appStore">App Store</a>
+            <a class="button secondary" href="https://play.google.com/store/apps/details?id=app.audiosilo" target="_blank" rel="noopener noreferrer" data-i18n="connect.googlePlay">Google Play</a>
+          </div>
+          <a class="get-app-apk" href="https://github.com/KodeStar/audiosilo-frontend/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="connect.apk">Android without Google Play? Download the APK</a>
         </div>
       </div>
 

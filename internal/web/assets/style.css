@@ -220,6 +220,13 @@ form .block { margin-top: 4px; }
 }
 .links { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
 
+/* ---- Get the app (connect) ---- */
+.get-app { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+#phone-lead + .get-app { margin-top: 16px; padding-top: 0; border-top: 0; }
+.get-app-title { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.store-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.get-app-apk { display: inline-block; margin-top: 10px; font-size: 13px; color: var(--muted-foreground); }
+
 /* ---- Footer row under the card (language picker) ---- */
 .lang-row {
   display: flex;

@@ -44,10 +44,19 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the admin's **Copy invite** button mints an auth code and shares
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
   reaches the server or its logs. The connect page auto-redeems a fragment code,
-  showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
+  showing a QR plus **Open in app** / **Open web player** buttons, and **Admin section**
+  only when the redeem says the invite is an admin's (the payload's additive `admin`,
+  set by `/auth/redeem` alone); on a phone or tablet (`connect.js` `isPhone`) it leads
+  with "Get the app, then come back to this link", the store links and the web player
+  instead of a QR the phone can't scan. The App Store / Google Play / APK links (the
+  APK is the player's GitHub `releases/latest` page, never a file) are static in
+  `index.html` (shown before any redeem) and in the payload's `links` (`ios`,
+  `android`, additive `apk`; `qr.go` `appStoreURL` etc.,
+  `TestConnectPageStoreLinks` keeps the two the same). `buildPairing`
   emits two carriers for the pairing token: `web_url`
-  (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
-  App Link when the domain is claimed, else the embedded web player) and `uri`
+  (`<base>/web/connect?token=` - encoded in the QR; the app's own scanner (Scan a QR
+  code) reads it, a phone's camera opens the embedded web player: the store apps claim
+  no domain, so a Universal/App Link only works for a build named in `app_links`) and `uri`
   (`audiosilo://connect?...` - custom scheme, launches an installed app on any
   domain). Both end with `sid=<server_id>` (after `home=`/`away=`; also the payload's
   `server_id`), so an app falling back to the link's http home checks `GET /server`'s
@@ -64,7 +73,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
   `web_url`, whose base may be another origin). Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
-  `handlers_admin.go`); explicit values override.
+  `handlers_admin.go`); explicit values override (the console's invite dialog asks
+  for 7 days unless changed).
 - **Home and away addresses (`addresses` capability)**: a server
   has an **away** address (`public_url`, works from anywhere) and may have a **home** one
   (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
