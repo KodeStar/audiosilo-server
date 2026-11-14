@@ -127,9 +127,12 @@ func ScopesFor(mode string) []string {
 
 // QueryFor is the match query for book b on a server preferring region: its own
 // facts, as both the match dialog and a bulk run send them. A book with no ASIN
-// or ISBN of its own sends hints instead, each field the best one it has: an
-// Audiobookshelf import's (Book.HintASIN, HintISBN), else its tags' (TagASIN,
-// TagISBN). metaserve looks them up like the book's own, and an identifier hit
+// or ISBN of its own sends hints instead: an Audiobookshelf import's
+// (Book.HintASIN, HintISBN), else its tags' (TagASIN, TagISBN). metaserve asks
+// the ASIN first and the ISBN only when it doesn't know that one, so a tag's
+// ISBN goes beside an import's ASIN (asked second), but a tag's ASIN never
+// beside an import's ISBN: it would be asked first, the tag ahead of the
+// import. metaserve looks them up like the book's own, and an identifier hit
 // whose length fits is confident while the book's title and series agree with it
 // (Classify, identifierAgrees), but the book is matched only by what an apply
 // writes.
@@ -140,7 +143,10 @@ func ScopesFor(mode string) []string {
 func QueryFor(b *catalog.Book, region, libraryLanguage string) meta.MatchQuery {
 	asin, isbn := b.ASIN, b.ISBN
 	if asin == "" && isbn == "" {
-		asin, isbn = cmp.Or(b.HintASIN, b.TagASIN), cmp.Or(b.HintISBN, b.TagISBN)
+		asin, isbn = b.HintASIN, cmp.Or(b.HintISBN, b.TagISBN)
+		if asin == "" && b.HintISBN == "" {
+			asin = b.TagASIN
+		}
 	}
 	return meta.MatchQuery{
 		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,

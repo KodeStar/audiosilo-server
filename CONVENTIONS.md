@@ -1886,10 +1886,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   edition, or wrong); a stored ASIN takes the book out of match runs, and a refresh never re-matches
   it by title, so a wrong tag would lock the book out of matching; and every community feature hangs
   off the ASIN. So `matchrun.QueryFor` sends the hint as `BookASIN`/`BookISBN` when the book has
-  neither of its own, each field an Audiobookshelf import's hint first (`book_hints`, `0074`,
+  neither of its own, an Audiobookshelf import's hint first (`book_hints`, `0074`,
   `Book.HintASIN`/`HintISBN`: ABS's identifiers carried by a listening import, see Listening imports;
   joined into a run's subjects by `matchSubjectJoin` and read by `GetBook` for the dialog), else the
-  tag's: a hint the community knows whose length fits is an identifier hit (confident
+  tag's (metaserve asks the ASIN first, so a tag's ISBN goes beside an import's ASIN, but a tag's ASIN
+  never beside an import's ISBN, which it would be asked ahead of): a hint the community knows whose length fits is an identifier hit (confident
   while the book's title and series agree with it, above) and becomes the book's ASIN only by an apply; one it doesn't know costs nothing. An
   Audiobookshelf `metadata.json`'s ASIN differs: ABS wrote it after a match, so it stays an
   identifier. The matcher's benchmark harness is `internal/matchrun/benchharness_test.go` (build tag
