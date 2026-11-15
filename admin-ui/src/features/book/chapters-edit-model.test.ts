@@ -298,6 +298,7 @@ describe('pasted timestamps', () => {
       'no time here',
       '2:00',
       'Epilogue 3:00',
+      'Too long 1234:56',
     ].join('\n');
     expect(parseTimestamps(text, 170)).toEqual({
       chapters: [
@@ -306,7 +307,7 @@ describe('pasted timestamps', () => {
         { line: 3, start: 70, title: 'Chapter 2' },
         { line: 4, start: 80, title: 'Chapter 3' },
       ],
-      unreadable: [7, 8],
+      unreadable: [7, 8, 10],
       outside: [5, 9],
     });
   });

@@ -328,10 +328,11 @@ export interface PastedList {
 
 // "0:00 Title", "[01:02:03.5] - Title", "1. 0:00 Title" are time first; "Title 1:02:03",
 // "Title (12:34)", "Title - 12:34" time last. Separators between are dropped: a
-// hyphen, an en or em dash, a colon, a pipe.
+// hyphen, an en or em dash, a colon, a pipe. A time last starts after no digit, so
+// "Title 1234:56" (too many minutes) is unreadable rather than "Title 1" at 234:56.
 const SEP = String.raw`[\s\-–—:|]*`;
 const TIME_FIRST = new RegExp(String.raw`^(?:\d+[.)]\s+)?[[(]?(${TIME})[\])]?${SEP}(.*)$`);
-const TIME_LAST = new RegExp(String.raw`^(.*?)${SEP}[[(]?(${TIME})[\])]?$`);
+const TIME_LAST = new RegExp(String.raw`^(.*?)${SEP}[[(]?(?<!\d)(${TIME})[\])]?$`);
 
 /** Reads a pasted chapter list (whole-book times), in time order. */
 export function parseTimestamps(text: string, end: number): PastedList {
