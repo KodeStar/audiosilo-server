@@ -130,6 +130,9 @@ export const keys = {
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   communityCover: (url: string, size: ThumbSize) => ['admin', 'communityCover', size, url] as const,
+  /** A book's media token for the chapter editor's player: outside `book`, so a page refresh never mints another. */
+  mediaToken: (libraryId: number, path: string) =>
+    ['admin', 'media-token', libraryId, path] as const,
   /** A book's /meta answers (a prefix: a finished Bridge job changes them). */
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
   /** A book's /meta answer, by identifiers: a new ASIN or ISBN (a new match) asks again. */
@@ -984,6 +987,22 @@ export function useAdminBook(libraryId: number, path: string) {
 
 /** How often a book page asks again while its community chapters are being checked. */
 const CHECK_POLL_MS = 3000;
+
+/**
+ * A token the chapter editor's <audio> streams the book's files with (minted while
+ * `enabled`). It works for a day and is kept while the editor is open (a new one
+ * would reload the audio mid-scrub), then dropped five minutes after; a failed mint
+ * isn't retried (the player says so).
+ */
+export function useBookMediaToken(libraryId: number, path: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.mediaToken(libraryId, path),
+    queryFn: () => api.bookMediaToken(libraryId, path).then((r) => r.token),
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
 
 /**
  * Community works a book might be. Searched only when asked (the match dialog is

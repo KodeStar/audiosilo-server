@@ -266,6 +266,7 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
     indexed_at: '2026-10-01T10:00:00Z',
     chapter_source: 'files',
     chapter_choice: '',
+    chapter_basis: { files: [{ path: '01.m4b', size: 48_000_000, duration_ms: 3_000_000 }] },
     community_chapters: null,
     community_checking: false,
     match_query: [book.title, book.author].filter(Boolean).join(' '),

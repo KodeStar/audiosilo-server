@@ -63,6 +63,15 @@ describe('audit model', () => {
     ]);
   });
 
+  it('labels an edited chapter list by its size, not as chapter titles', () => {
+    expect(detailLines(ev('book.chapters_edited', { chapters: 12 }), t, fmt)).toEqual([
+      { label: 'chapterCount', value: '12' },
+    ]);
+    expect(detailLines(ev('book.edit', { chapters: 2 }), t, fmt)).toEqual([
+      { label: 'chapters', value: '2' },
+    ]);
+  });
+
   it('words coded values, keeping an unknown code as is', () => {
     expect(detailLines(ev('user.update', { password: 'set', role: 'admin' }), t, fmt)).toEqual([
       { label: 'password', value: 'audit.enum.password.set' },
