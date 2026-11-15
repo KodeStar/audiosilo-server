@@ -63,13 +63,21 @@ export function namedApart(name: string, username: string): boolean {
 }
 
 /**
- * Who `subject` can be assigned to: anyone else who isn't a household member
- * or a demo account (the server's owner_is_member, owner_is_demo and
- * self_managed), apart from the owner they already have.
+ * An account of its own: not a household member or a demo account. Only such
+ * an account can own members or have a single sign-on linked to it.
+ */
+export function isIndependentAccount(u: Pick<AdminUser, 'managed_by' | 'is_demo'>): boolean {
+  return !u.managed_by && !u.is_demo;
+}
+
+/**
+ * Who `subject` can be assigned to: anyone else of their own account (the
+ * server's owner_is_member, owner_is_demo and self_managed), apart from the
+ * owner they already have.
  */
 export function assignTargets(users: readonly AdminUser[], subject: AdminUser): AdminUser[] {
   return users.filter(
-    (u) => u.id !== subject.id && !u.managed_by && !u.is_demo && u.id !== subject.managed_by?.id,
+    (u) => u.id !== subject.id && isIndependentAccount(u) && u.id !== subject.managed_by?.id,
   );
 }
 

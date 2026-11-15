@@ -174,9 +174,10 @@ export function describeEvent(ev: ServerEvent): EventText {
     // "someone". The waiting sign-ins are listed on People.
     case 'oidc_pending': {
       const provider = str(d.provider);
+      const person = str(d.person);
       return {
-        title: str(d.person)
-          ? { key: 'events.oidc_pending.title', values: { person: str(d.person), provider } }
+        title: person
+          ? { key: 'events.oidc_pending.title', values: { person, provider } }
           : { key: 'events.oidc_pending.titleSomeone', values: { provider } },
         body: { key: reasonKey(str(d.reason)) },
         tone: 'warn',

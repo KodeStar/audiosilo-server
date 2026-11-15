@@ -1,24 +1,21 @@
-import type { AdminUser, OIDCIdentity, OIDCPendingList, OIDCPendingSignIn } from '@/api/types';
+import {
+  OIDC_PENDING_REASONS,
+  type AdminUser,
+  type OIDCIdentity,
+  type OIDCPendingList,
+  type OIDCPendingSignIn,
+} from '@/api/types';
+import { hostOf } from '@/lib/format';
+import { isIndependentAccount } from './household-model';
 
 // People's waiting sign-ins (server#235): single sign-ons no account took,
 // which an admin links to an account, makes one for, or dismisses; and a
 // person's linked sign-ons on their page. Pure, so the rules are tested apart
 // from the screens.
 
-/** The reasons this console words (`people.pending.reason.<code>`). */
-const KNOWN_REASONS = new Set([
-  'unverified_email',
-  'no_match',
-  'several_matches',
-  'not_eligible',
-  'not_allowed',
-  'auto_create_off',
-  'admin_account',
-]);
-
 /** The i18n key for a waiting row's reason; a code from a newer server reads generically. */
 export function reasonKey(reason: string): string {
-  return KNOWN_REASONS.has(reason)
+  return (OIDC_PENDING_REASONS as readonly string[]).includes(reason)
     ? `people.pending.reason.${reason}`
     : 'people.pending.reason.unknown';
 }
@@ -29,7 +26,7 @@ export function pendingName(p: OIDCPendingSignIn): string {
 }
 
 /** How many of a row's groups are listed before "and N more". */
-export const GROUPS_SHOWN = 3;
+const GROUPS_SHOWN = 3;
 
 /** A row's groups as listed: the first few, and how many more there are. */
 export function groupsShown(p: OIDCPendingSignIn): { shown: string[]; more: number } {
@@ -50,7 +47,7 @@ export function linkCandidates(
   linked: OIDCPendingList['linked_user_ids'],
 ): AdminUser[] {
   const taken = new Set(linked?.[row.issuer] ?? []);
-  return users.filter((u) => !u.managed_by && !u.is_demo && !taken.has(u.id));
+  return users.filter((u) => isIndependentAccount(u) && !taken.has(u.id));
 }
 
 /**
@@ -79,9 +76,5 @@ export function identityProvider(
   if (configured && configured.issuer === identity.issuer && configured.name) {
     return configured.name;
   }
-  try {
-    return new URL(identity.issuer).host || identity.issuer;
-  } catch {
-    return identity.issuer;
-  }
+  return hostOf(identity.issuer) || identity.issuer;
 }

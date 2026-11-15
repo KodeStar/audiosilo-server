@@ -18,6 +18,7 @@ import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { toast } from '@/lib/toast';
+import { displayName, namedApart } from './household-model';
 import {
   groupsShown,
   linkCandidates,
@@ -192,15 +193,37 @@ function PendingRow({
 }
 
 /**
- * After a link or a create, done or refused: the list and People say what is
- * left (the row taken, someone new or newly linked, or a row gone meanwhile).
+ * A link or a create from a waiting row: the account it names toasted on
+ * success, the route's refusal in words otherwise. Done or refused, the list
+ * and People are read again for what is left (the row taken, someone new or
+ * newly linked, or a row gone meanwhile).
  */
-function useSettled() {
+function useRowSubmit(onDone: () => void) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
-  return () => {
-    void qc.invalidateQueries({ queryKey: keys.oidcPending });
-    invalidatePeople(qc);
-  };
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(run: () => Promise<AdminUser>, toastKey: string) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const settled = () => {
+      void qc.invalidateQueries({ queryKey: keys.oidcPending });
+      invalidatePeople(qc);
+    };
+    try {
+      const u = await run();
+      settled();
+      toast.add({ title: t(toastKey, { name: u.username }), type: 'success' });
+      onDone();
+    } catch (err) {
+      settled();
+      setError(errorMessage(err, t));
+      setBusy(false);
+    }
+  }
+  return { busy, error, submit };
 }
 
 /** Links a waiting sign-in to an account the admin chooses. */
@@ -240,56 +263,45 @@ function LinkForm({
 }) {
   const { t } = useTranslation();
   const users = useUsers();
-  const settled = useSettled();
-  const candidates: AdminUser[] = users.data ? linkCandidates(users.data, row, linked) : [];
+  const candidates = users.data ? linkCandidates(users.data, row, linked) : [];
+  const noCandidates = Boolean(users.data) && !candidates.length;
   const [choice, setChoice] = useState<number | undefined>(undefined);
   const chosen = choice ?? suggestedAccount(candidates, row)?.id;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, submit } = useRowSubmit(onDone);
   const id = useId();
 
-  async function onSubmit(e: React.FormEvent) {
+  function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (chosen === undefined || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const u = await api.linkPending(row.id, chosen);
-      settled();
-      toast.add({ title: t('people.pending.linked', { name: u.username }), type: 'success' });
-      onDone();
-    } catch (err) {
-      settled();
-      setError(errorMessage(err, t));
-      setBusy(false);
-    }
+    if (chosen === undefined) return;
+    void submit(() => api.linkPending(row.id, chosen), 'people.pending.linked');
   }
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
+    <form onSubmit={onSubmit} noValidate className="contents">
       <DialogBody className="flex flex-col gap-4">
         <Field
           htmlFor={id}
           label={t('people.pending.account')}
-          description={
-            users.data && !candidates.length ? t('people.pending.noCandidates') : undefined
-          }
+          description={noCandidates ? t('people.pending.noCandidates') : undefined}
         >
           <NativeSelect
             id={id}
             value={chosen ?? ''}
             disabled={!candidates.length}
-            aria-describedby={describedBy(id, false, Boolean(users.data && !candidates.length))}
+            aria-describedby={describedBy(id, false, noCandidates)}
             onChange={(e) => setChoice(e.target.value ? Number(e.target.value) : undefined)}
           >
             <option value="">{t('people.pending.choose')}</option>
-            {candidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.role === 'admin'
-                  ? t('people.pending.adminOption', { name: u.username })
-                  : u.username}
-              </option>
-            ))}
+            {candidates.map((u) => {
+              const name = namedApart(displayName(u), u.username)
+                ? `${displayName(u)} (${u.username})`
+                : u.username;
+              return (
+                <option key={u.id} value={u.id}>
+                  {u.role === 'admin' ? t('people.pending.adminOption', { name }) : name}
+                </option>
+              );
+            })}
           </NativeSelect>
         </Field>
         <FormError>{error}</FormError>
@@ -327,31 +339,17 @@ function CreateDialog({
 
 function CreateForm({ row, onDone }: { row: OIDCPendingSignIn; onDone: () => void }) {
   const { t } = useTranslation();
-  const settled = useSettled();
   const [username, setUsername] = useState(row.username);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, submit } = useRowSubmit(onDone);
   const id = useId();
 
-  async function onSubmit(e: React.FormEvent) {
+  function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const u = await api.createFromPending(row.id, username.trim());
-      settled();
-      toast.add({ title: t('people.pending.created', { name: u.username }), type: 'success' });
-      onDone();
-    } catch (err) {
-      settled();
-      setError(errorMessage(err, t));
-      setBusy(false);
-    }
+    void submit(() => api.createFromPending(row.id, username.trim()), 'people.pending.created');
   }
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
+    <form onSubmit={onSubmit} noValidate className="contents">
       <DialogBody className="flex flex-col gap-4">
         <Field
           htmlFor={id}

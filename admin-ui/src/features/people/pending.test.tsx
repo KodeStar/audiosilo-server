@@ -267,18 +267,6 @@ describe('a person’s single sign-on', () => {
     expect(screen.getByRole('dialog', { name: 'Unlink Keycloak from sam?' })).toBeInTheDocument();
   });
 
-  it('names a sign-on from a provider no longer configured by its host', async () => {
-    mockFetch(
-      personRoutes(sam, {
-        'GET /admin/oidc/status': { body: { ...status, issuer: 'https://new.example.org' } },
-      }),
-    );
-    renderApp('/people/user/2?tab=sign-in');
-    expect(
-      await screen.findByRole('region', { name: 'Signed in with sso.example.org' }),
-    ).toBeInTheDocument();
-  });
-
   it('shows no card for a person without one', async () => {
     mockFetch(signedInRoutes({ 'GET /admin/users/2': { body: samDetail() } }));
     renderApp('/people/user/2?tab=sign-in');

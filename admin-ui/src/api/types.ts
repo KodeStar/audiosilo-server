@@ -759,17 +759,19 @@ export interface OIDCIdentity {
 }
 
 /**
- * Why a single sign-on waits for an admin (oidc.Decide's Pending reasons,
+ * Why a single sign-on waits for an admin (oidc.PendingReasons,
  * internal/oidc/decide.go). A newer server may send another.
  */
-export type OIDCPendingReason =
-  | 'unverified_email'
-  | 'no_match'
-  | 'several_matches'
-  | 'not_eligible'
-  | 'not_allowed'
-  | 'auto_create_off'
-  | 'admin_account';
+export const OIDC_PENDING_REASONS = [
+  'unverified_email',
+  'no_match',
+  'several_matches',
+  'not_eligible',
+  'not_allowed',
+  'auto_create_off',
+  'admin_account',
+] as const;
+export type OIDCPendingReason = (typeof OIDC_PENDING_REASONS)[number];
 
 /** auth.PendingSignIn (internal/auth/identities.go): a sign-in no account took. */
 export interface OIDCPendingSignIn {

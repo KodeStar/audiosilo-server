@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useAdminBook, useLibraries, useOIDCPending, useUser } from '@/api/hooks';
 import { BooksLink } from '@/components/books-link';
+import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { segmentClass, segmentTrack } from '@/components/ui/segment-classes';
 import { cn } from '@/lib/utils';
@@ -57,12 +58,13 @@ export function SubBar() {
                 {t(`shell.section.${dest.key}.${s}`)}
                 {dest.key === 'people' && s === 'people' && waiting ? (
                   <>
-                    <span
-                      className="ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-soft px-1.5 text-[11px] font-semibold text-warning tabular-nums"
+                    <Badge
+                      variant="warning"
+                      className="ml-1.5 h-[18px] min-w-[18px] justify-center px-1.5 tabular-nums"
                       aria-hidden="true"
                     >
                       {waiting}
-                    </span>
+                    </Badge>
                     <span className="sr-only">
                       {', '}
                       {t('people.pending.count', { count: waiting })}
