@@ -3775,7 +3775,7 @@
   "librivox.code.metadata_off": "Community-Metadaten wurden ausgeschaltet.",
   "login.or": "oder",
   "login.oidc": "Mit {{name}} anmelden",
-  "auth.reason.oidcFailed": "Die Einmalanmeldung wurde nicht abgeschlossen: Ihr Link wurde schon benutzt oder ist abgelaufen. Versuche es noch einmal.",
+  "auth.reason.oidcFailed": "Die Einmalanmeldung wurde nicht abgeschlossen: Sie wurde schon benutzt oder ist abgelaufen. Versuche es noch einmal.",
   "settings.topic.signin": "Anmeldung",
   "settings.signin.card": "Einmalanmeldung",
   "settings.signin.cardBody": "Lass Personen sich über OpenID Connect mit deinem Identitätsanbieter anmelden (Authentik, Authelia, Keycloak, Pocket ID und ähnliche). Die Apps koppeln weiter per QR-Code.",

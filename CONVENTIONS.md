@@ -3508,10 +3508,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   progress/bookmarks/notes/history, share grants) - files on disk are untouched.
   Two safety guards live in `auth`: the **last enabled admin** can't be demoted,
   disabled, or deleted (`ErrLastAdmin`), and an admin must keep a way in: a password
-  or a linked single sign-on (`ErrAdminNeedsPassword`, `hasIdentity`; server#235's
+  or a linked single sign-on (`ErrAdminNeedsPassword`, `hasSignInIdentity`; server#235's
   decision 5, so a password-less account with an identity may be promoted and an
   admin with one may clear their password, while unlinking a password-less admin's
-  last identity is 409 `admin_needs_password`); the **delete handler additionally refuses self-delete**
+  identity is 409 `admin_needs_password`). Only an identity from the single sign-on
+  that can run now counts: its issuer the configured one, enabled and configured
+  (the API's `oidcIssuer`, handed to `auth.SetSSOIssuer`, read per check); one from a
+  provider no longer configured, or any while it is off, is no way in. The **delete handler additionally refuses self-delete**
   (an admin disables its own account instead, never deletes it). Disabling stays the
   reversible option; deletion is the irreversible one.
   **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
@@ -3545,7 +3548,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   HTTP handlers): `Provider` (go-oidc + x/oauth2; lazy discovery with a 1 to 15 minute backoff;
   asymmetric algorithms only, `SigningAlgs`; PKCE S256; nonce, `aud`, `azp` when several audiences,
   `iat` at most 5 minutes ahead; userinfo only when a claim is missing, its `sub` must equal the ID
-  token's; errors never carry a response body), the flow cookie (`Sealer`: AES-GCM under a key made at
+  token's; errors never carry a response body; every call one use makes (discovery when due, the token
+  request, the keys, userinfo) shares one deadline, `CallBudget` 20 s, under the API's 30 s
+  `requestTimeout`, so a slow provider ends on the result panel, not a bare 503), the flow cookie (`Sealer`: AES-GCM under a key made at
   start, so a restart ends flows in flight; `Flow{state, nonce, verifier, return, issued_at}`, ten
   minutes; `Replay` refuses a state used before, remembering only a flow whose exchange succeeded, so
   states sent back bare can't fill it), the claims (`Claims`: the email and its verified flag taken
@@ -3561,16 +3566,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   at most 500, dropped when a later sign-in links it or makes its account). `admin_group` (trimmed, like
   `allowed_group`, whatever set it), when set, syncs the role at every sign-in that signs in (in: admin,
   out: user), never demoting the last enabled admin (reported and audited `refused: last_admin`,
-  not an error). `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
+  not an error); a sign-in that carried **no groups claim at all** (neither the ID token nor
+  userinfo; an empty list is a claim and demotes) leaves the role alone (`Decision.NoGroups`, a
+  warning logged), so a provider that stops sending it demotes no one. `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
   charges nothing, since any page can make a visitor's browser send those): the cookie
   `audiosilo_oidc` (Path `/api/v1/auth/oidc/`, HttpOnly, SameSite=Lax, Secure when public_url is
   https) is deleted on every callback; a sign-in gets a **60 s single-use pairing token**
-  (`IssueToken(KindPairing)`) and a 303 to `/admin/#oidc_token=<t>` (the console trades it at
-  `POST /auth/exchange`, signs a non-admin straight back out, and takes it out of the address bar) or
-  `/web/connect?token=<t>`, so `/auth/exchange` stays the one way a session is made; anything else
+  (`IssueToken(KindPairing)`) that is **never in a URL** (a link carrying one would sign whoever
+  follows it in as its owner: a login CSRF), only in the cookie `audiosilo_oidc_done` (the same path,
+  HttpOnly, SameSite=Lax, Secure as above, Max-Age 60), and a 303 to `/admin/#oidc=done` or
+  `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
+  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name}`), which clears the
+  cookie whatever happens, consumes the token once (`ConsumePairing`) and answers exactly as
+  `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
+  the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown or its
+  account's disabled (charged to `redeemLimiter`, as an exchange is). The console finishes on
+  `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
+  keeps a stored session when the finish signs no admin in; anything else
   lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,
   rate_limited; `connect.js` words each in the six languages). An admin's sign-in calls
   `NoteAdminSignIn` like a password one. Audit: `user.oidc_link`, `user.oidc_create`,
@@ -3580,7 +3595,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `not_linkable` for a member or demo account, `user_has_identity`, `identity_linked`),
   `POST /admin/oidc/pending/{id}/create` `{username?}` (201), `DELETE /admin/oidc/pending/{id}` (204),
   `DELETE /admin/users/{id}/identities/{identity_id}` (409 `admin_needs_password` for a password-less
-  admin's last one); `GET /admin/users/{id}` carries `identities`. Logout stays local: disabling a
+  admin's identity from the running provider); `GET /admin/users/{id}` carries `identities`. Logout stays local: disabling a
   person at the provider ends no session here (an admin disables them here too). Tests: the fake IdP
   `internal/oidc/oidctest` (discovery, JWKS, authorize, token with PKCE and a single-use code,
   userinfo, knobs for each refusal), `api/oidc_test.go` (an allowed and a denied case for each

@@ -110,6 +110,14 @@ func (e *oidcEnv) start(t *testing.T, ret string) (*http.Cookie, string) {
 // callback sends the browser back: the redirect's Location.
 func (e *oidcEnv) callback(t *testing.T, path string, cookie *http.Cookie) string {
 	t.Helper()
+	loc, _ := e.callbackDone(t, path, cookie)
+	return loc
+}
+
+// callbackDone is callback with the finished sign-in's cookie it set (nil
+// when it set none).
+func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie) (string, *http.Cookie) {
+	t.Helper()
 	var cs []*http.Cookie
 	if cookie != nil {
 		cs = append(cs, cookie)
@@ -118,17 +126,32 @@ func (e *oidcEnv) callback(t *testing.T, path string, cookie *http.Cookie) strin
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("callback: %d", resp.StatusCode)
 	}
-	if c := resp.Cookies(); len(c) == 0 || c[0].Name != oidcCookie || c[0].MaxAge >= 0 {
+	c := resp.Cookies()
+	if len(c) == 0 || c[0].Name != oidcCookie || c[0].MaxAge >= 0 {
 		t.Fatalf("callback left the flow cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
-	return resp.Header.Get("Location")
+	var done *http.Cookie
+	for _, k := range c[1:] {
+		if k.Name == oidcDoneCookie {
+			done = k
+		}
+	}
+	return resp.Header.Get("Location"), done
 }
 
 // signIn runs a whole flow for ret: the callback's Location.
 func (e *oidcEnv) signIn(t *testing.T, ret string) string {
 	t.Helper()
+	loc, _ := e.signInDone(t, ret)
+	return loc
+}
+
+// signInDone runs a whole flow for ret: the callback's Location and the
+// finished sign-in's cookie (nil when none).
+func (e *oidcEnv) signInDone(t *testing.T, ret string) (string, *http.Cookie) {
+	t.Helper()
 	cookie, path := e.start(t, ret)
-	return e.callback(t, path, cookie)
+	return e.callbackDone(t, path, cookie)
 }
 
 func wantResult(t *testing.T, loc, reason string) {
@@ -138,18 +161,40 @@ func wantResult(t *testing.T, loc, reason string) {
 	}
 }
 
-// adminTokenFrom exchanges the console's #oidc_token: the session and the user.
-func (e *oidcEnv) exchangeFragment(t *testing.T, loc string) (int, map[string]any) {
+// finish is the landing page's POST /auth/oidc/finish with the browser's
+// cookie (none when nil): the response and its decoded body.
+func (e *testEnv) finish(t *testing.T, done *http.Cookie, device string) (*http.Response, map[string]any) {
 	t.Helper()
-	prefix := oidcPublic + "/admin/#oidc_token="
-	if !strings.HasPrefix(loc, prefix) {
-		t.Fatalf("landed on %q; want the console", loc)
+	headers := map[string]string{}
+	if done != nil {
+		headers["Cookie"] = done.Name + "=" + done.Value
 	}
-	tok, _ := url.QueryUnescape(strings.TrimPrefix(loc, prefix))
-	status, body := e.exchangeToken(t, tok, "admin-web")
+	body := ""
+	if device != "" {
+		body = `{"device_name":"` + device + `"}`
+	}
+	resp, b := e.doHeaders(t, "POST", oidcFinishPath, "", body, headers)
 	var out map[string]any
-	_ = json.Unmarshal([]byte(body), &out)
-	return status, out
+	_ = json.Unmarshal([]byte(b), &out)
+	return resp, out
+}
+
+// finishAdmin checks a sign-in landed on the console and finishes it there:
+// the status and body.
+func (e *oidcEnv) finishAdmin(t *testing.T, loc string, done *http.Cookie) (int, map[string]any) {
+	t.Helper()
+	if loc != oidcPublic+oidcDoneAdmin || done == nil {
+		t.Fatalf("landed on %q (cookie %v); want the console", loc, done)
+	}
+	resp, out := e.finish(t, done, "admin-web")
+	return resp.StatusCode, out
+}
+
+// signInAdmin runs a whole flow for the console and finishes it.
+func (e *oidcEnv) signInAdmin(t *testing.T) (int, map[string]any) {
+	t.Helper()
+	loc, done := e.signInDone(t, oidcReturnAdmin)
+	return e.finishAdmin(t, loc, done)
 }
 
 func (e *testEnv) session(t *testing.T, id int64) string {
@@ -238,7 +283,7 @@ func TestOIDCCookieSecureAnyCase(t *testing.T) {
 	for base, want := range map[string]bool{"HTTPS://audiosilo.test": true, "https://audiosilo.test": true, "http://audiosilo.test": false} {
 		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = base })
 		w := httptest.NewRecorder()
-		e.api.setOIDCCookie(w, "v", 600)
+		e.api.setOIDCCookie(w, oidcCookie, "v", 600)
 		if c := w.Result().Cookies(); len(c) != 1 || c[0].Secure != want {
 			t.Errorf("public_url %s: %+v, want Secure %v", base, c, want)
 		}
@@ -312,8 +357,8 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	// console's save trims it, and a claim's group is always trimmed.
 	e := newOIDCEnv(t, p, func(o *config.OIDCConfig) { o.AdminGroup = " audiosilo-admins " })
 	alice := e.mustUser(t, "alice", "Alice@Example.org")
-	loc := e.signIn(t, oidcReturnAdmin)
-	status, out := e.exchangeFragment(t, loc)
+	loc, done := e.signInDone(t, oidcReturnAdmin)
+	status, out := e.finishAdmin(t, loc, done)
 	if status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin || out["token"] == "" {
 		t.Fatalf("exchange: %d %v", status, out)
 	}
@@ -321,8 +366,8 @@ func TestOIDCAdminSignIn(t *testing.T) {
 		t.Fatal("the player's user carries the email")
 	}
 	// The token was single-use.
-	if status, _ := e.exchangeFragment(t, loc); status != http.StatusUnauthorized {
-		t.Fatalf("a second exchange: %d", status)
+	if status, out := e.finishAdmin(t, loc, done); status != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
+		t.Fatalf("a second finish: %d %v", status, out)
 	}
 	events, _, err := e.cat.ListAudit(context.Background(), catalog.AuditFilter{Limit: 10})
 	if err != nil {
@@ -338,11 +383,26 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	if strings.Join(actions, ",") != "user.role_sync,user.oidc_link" {
 		t.Fatalf("audit: %v", actions)
 	}
-	// She leaves the group: an ordinary user at the next sign-in.
+	// The provider stops sending the groups claim at all (neither the ID
+	// token nor userinfo): her role is left alone, and the log says why.
+	logs := &syncBuffer{}
+	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
 	p.Groups = nil
 	e.idp.SetPerson(p)
-	loc = e.signIn(t, oidcReturnAdmin)
-	if status, out := e.exchangeFragment(t, loc); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
+		t.Fatalf("no groups claim: %d %v", status, out)
+	}
+	if !strings.Contains(logs.String(), "sent no groups claim") {
+		t.Fatalf("no warning: %s", logs.String())
+	}
+	if n := e.idp.Calls("userinfo"); n == 0 {
+		t.Fatal("userinfo wasn't asked for the missing claim")
+	}
+	// She leaves the group (an empty list is a claim): an ordinary user at the
+	// next sign-in.
+	p.Groups = []string{}
+	e.idp.SetPerson(p)
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
 		t.Fatalf("after leaving the group: %d %v", status, out)
 	}
 	if u, _ := e.auth.GetUser(context.Background(), alice.ID); u.Role != auth.RoleUser {
@@ -350,19 +410,81 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	}
 }
 
-// TestOIDCWebSignIn: return=web lands on the web player's connect route.
+// TestOIDCWebSignIn: return=web lands on the web player's connect route,
+// which finishes the sign-in with the cookie; no token in the address.
 func TestOIDCWebSignIn(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
-	loc := e.signIn(t, oidcReturnWeb)
-	prefix := oidcPublic + "/web/connect?token="
-	if !strings.HasPrefix(loc, prefix) {
-		t.Fatalf("landed on %q", loc)
+	loc, done := e.signInDone(t, oidcReturnWeb)
+	if loc != oidcPublic+oidcDoneWeb || done == nil || strings.Contains(loc, done.Value) {
+		t.Fatalf("landed on %q (cookie %v)", loc, done)
 	}
-	tok, _ := url.QueryUnescape(strings.TrimPrefix(loc, prefix))
-	if status, _ := e.exchangeToken(t, tok, "web"); status != 200 {
-		t.Fatalf("exchange: %d", status)
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != 200 || out["token"] == "" {
+		t.Fatalf("finish: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCFinish: a sign-in's pairing token reaches the page only in its
+// cookie (HttpOnly, Lax, Secure on an https public_url, the flow's path, 60 s),
+// never in a URL; POST /auth/oidc/finish trades it once, clearing the cookie,
+// and answers as POST /auth/exchange does. A browser that never signed in
+// (someone else's link to /admin/#oidc=done) holds no cookie and gets no
+// session; a spent or expired token gets none either.
+func TestOIDCFinish(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	loc, done := e.signInDone(t, oidcReturnAdmin)
+	if done == nil || !done.HttpOnly || !done.Secure || done.SameSite != http.SameSiteLaxMode ||
+		done.Path != oidcCookiePath || done.MaxAge != 60 || done.Value == "" {
+		t.Fatalf("finish cookie: %+v", done)
+	}
+	if loc != oidcPublic+oidcDoneAdmin || strings.Contains(loc, done.Value) {
+		t.Fatalf("the landing page %q", loc)
+	}
+
+	// Denied: no cookie (the link followed in another browser).
+	resp, out := e.finish(t, nil, "admin-web")
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn || out["token"] != nil {
+		t.Fatalf("no cookie: %d %v", resp.StatusCode, out)
+	}
+	// Denied: a token that isn't a sign-in's.
+	resp, out = e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: "forged"}, "admin-web")
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
+		t.Fatalf("a forged cookie: %d %v", resp.StatusCode, out)
+	}
+	// Denied: an expired one (issued 61 s ago, with its 60 s life).
+	past := auth.New(e.db, func() time.Time { return time.Now().Add(-oidcPairingTTL - time.Second) })
+	stale, err := past.IssueToken(context.Background(), alice.ID, auth.KindPairing, "", oidcPairingTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, out = e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: stale}, "admin-web")
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
+		t.Fatalf("an expired token: %d %v", resp.StatusCode, out)
+	}
+
+	// Allowed: the cookie the sign-in set, once; the answer is exchange's.
+	resp, out = e.finish(t, done, "admin-web")
+	if _, ok := out["server_id"]; resp.StatusCode != 200 || out["token"] == "" || !ok ||
+		out["user"].(map[string]any)["username"] != "alice" || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("finish: %d %v", resp.StatusCode, out)
+	}
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].MaxAge >= 0 || c[0].Path != oidcCookiePath {
+		t.Fatalf("finish left the cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+	if r, _ := e.do(t, "GET", "/api/v1/me", out["token"].(string), ""); r.StatusCode != 200 {
+		t.Fatalf("the session: %d", r.StatusCode)
+	}
+	// Spent.
+	resp, out = e.finish(t, done, "admin-web")
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
+		t.Fatalf("a second finish: %d %v", resp.StatusCode, out)
+	}
+	// Only POST.
+	if r, _ := e.do(t, "GET", oidcFinishPath, "", ""); r.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET finish: %d", r.StatusCode)
 	}
 }
 
@@ -387,7 +509,7 @@ func TestOIDCLastAdminKept(t *testing.T) {
 		`{"user_id":`+itoa(e.adminID)+`}`); resp.StatusCode != 200 {
 		t.Fatalf("link: %d %s", resp.StatusCode, body)
 	}
-	status, out := e.exchangeFragment(t, e.signIn(t, oidcReturnAdmin))
+	status, out := e.signInAdmin(t)
 	if status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
 		t.Fatalf("the last admin: %d %v", status, out)
 	}
@@ -422,7 +544,7 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 
 	// Used once: a copy of the cookie with the same callback is refused.
 	cookie, path = e.start(t, oidcReturnAdmin)
-	if loc := e.callback(t, path, cookie); !strings.Contains(loc, "#oidc_token=") {
+	if loc := e.callback(t, path, cookie); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("the first use: %q", loc)
 	}
 	wantResult(t, e.callback(t, path, cookie), oidcFailed)
@@ -451,7 +573,7 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 	q.Set("error", "access_denied")
 	u.RawQuery = q.Encode()
 	wantResult(t, e.callback(t, u.RequestURI(), cookie), oidcFailed)
-	if loc := e.callback(t, path, cookie); !strings.Contains(loc, "#oidc_token=") {
+	if loc := e.callback(t, path, cookie); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("a flow sent back bare was remembered: %q", loc)
 	}
 }
@@ -468,7 +590,7 @@ func TestOIDCTokenRefused(t *testing.T) {
 		wantResult(t, e.signIn(t, oidcReturnAdmin), oidcFailed)
 	}
 	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
-	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, "#oidc_token=") {
+	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("a good token from userinfo: %q", loc)
 	}
 }
@@ -512,7 +634,7 @@ func TestOIDCPendingAndConsole(t *testing.T) {
 	if resp, _ := e.do(t, "POST", "/api/v1/admin/oidc/pending/"+id+"/create", tok, `{}`); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("create again: %d", resp.StatusCode)
 	}
-	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, "/web/connect?token=") {
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
 		t.Fatalf("carol after create: %q", loc)
 	}
 	// Dismiss and link, on another person.
@@ -531,7 +653,7 @@ func TestOIDCPendingAndConsole(t *testing.T) {
 	if resp, body := e.do(t, "POST", "/api/v1/admin/oidc/pending/"+itoa(rows[0].ID)+"/link", tok, `{"user_id":`+itoa(bob.ID)+`}`); resp.StatusCode != 200 {
 		t.Fatalf("link: %d %s", resp.StatusCode, body)
 	}
-	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, "/web/connect?token=") {
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
 		t.Fatalf("bob after link: %q", loc)
 	}
 	// The identities on bob's page; unlink.
@@ -575,7 +697,7 @@ func TestOIDCUnlinkAdminNeedsPassword(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcCarol, func(o *config.OIDCConfig) { o.AutoCreate = true })
 	ctx := context.Background()
-	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, "/web/connect?token=") {
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
 		t.Fatalf("auto-create: %q", loc)
 	}
 	users, _ := e.auth.ListUsers(ctx)
@@ -603,6 +725,30 @@ func TestOIDCUnlinkAdminNeedsPassword(t *testing.T) {
 	}
 }
 
+// TestOIDCIssuerWayIn: the issuer whose identities are an admin's way into the
+// console (auth.SetSSOIssuer) is the configured one only while single sign-on
+// can run: off, or on without a public_url, none is.
+func TestOIDCIssuerWayIn(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcCarol, nil)
+	if got := e.api.oidcIssuer(); got != e.idp.Issuer {
+		t.Fatalf("running: %q, want %q", got, e.idp.Issuer)
+	}
+	for name, configure := range map[string]func(*config.Config){
+		"off": func(c *config.Config) {
+			c.PublicURL = oidcPublic
+			c.Auth.OIDC = config.OIDCConfig{Issuer: e.idp.Issuer, ClientID: "audiosilo"}
+		},
+		"no public_url": func(c *config.Config) {
+			c.Auth.OIDC = config.OIDCConfig{Enabled: true, Issuer: e.idp.Issuer, ClientID: "audiosilo"}
+		},
+	} {
+		if got := newTestEnvWith(t, configure).api.oidcIssuer(); got != "" {
+			t.Fatalf("%s: %q", name, got)
+		}
+	}
+}
+
 // TestOIDCDisabledDenied: a disabled account is refused at the callback, and an
 // account disabled between the callback and the exchange gets no session.
 func TestOIDCDisabledDenied(t *testing.T) {
@@ -610,20 +756,20 @@ func TestOIDCDisabledDenied(t *testing.T) {
 	e := newOIDCEnv(t, oidcAlice, nil)
 	ctx := context.Background()
 	alice := e.mustUser(t, "alice", "alice@example.org")
-	loc := e.signIn(t, oidcReturnAdmin) // links her; the token not yet exchanged
+	loc, done := e.signInDone(t, oidcReturnAdmin) // links her; not yet finished
 	yes := true
 	if err := e.auth.UpdateUser(ctx, alice.ID, auth.UserChanges{Disabled: &yes}); err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := e.exchangeFragment(t, loc); status != http.StatusUnauthorized {
-		t.Fatalf("exchange for a disabled account: %d", status)
+	if status, _ := e.finishAdmin(t, loc, done); status != http.StatusUnauthorized {
+		t.Fatalf("finish for a disabled account: %d", status)
 	}
 	wantResult(t, e.signIn(t, oidcReturnAdmin), oidcDisabled)
 	no := false
 	if err := e.auth.UpdateUser(ctx, alice.ID, auth.UserChanges{Disabled: &no}); err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := e.exchangeFragment(t, e.signIn(t, oidcReturnAdmin)); status != 200 {
+	if status, _ := e.signInAdmin(t); status != 200 {
 		t.Fatalf("enabled again: %d", status)
 	}
 }
@@ -637,7 +783,7 @@ func TestOIDCAutoCreateAllowedGroup(t *testing.T) {
 	p := oidcCarol
 	p.Groups = []string{"family"}
 	e.idp.SetPerson(p)
-	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, "/web/connect?token=") {
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
 		t.Fatalf("in the group: %q", loc)
 	}
 	events, _, _ := e.cat.ListAudit(context.Background(), catalog.AuditFilter{Limit: 1})
@@ -661,7 +807,7 @@ func TestOIDCCallbackRateLimited(t *testing.T) {
 	for range 9 {
 		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", foreign), oidcFailed)
 	}
-	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, "#oidc_token=") {
+	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, oidcDoneAdmin) {
 		t.Fatalf("a good sign-in under the limit: %q", loc)
 	}
 	for range 10 {
@@ -708,8 +854,8 @@ func TestOIDCSecretsNeverShown(t *testing.T) {
 	u.RawQuery = q.Encode()
 	wantResult(t, e.callback(t, u.RequestURI(), cookie), oidcFailed)
 	e.mustUser(t, "alice", "alice@example.org")
-	loc := e.signIn(t, oidcReturnAdmin)
-	pairing, _ := url.QueryUnescape(strings.TrimPrefix(loc, oidcPublic+"/admin/#oidc_token="))
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	pairing := done.Value
 	out := logs.String()
 	if !strings.Contains(out, "oidc: sign-in refused") {
 		t.Fatalf("the refusal wasn't logged: %s", out)

@@ -3978,7 +3978,7 @@
   "librivox.code.metadata_off": "I metadati della community sono stati disattivati.",
   "login.or": "oppure",
   "login.oidc": "Accedi con {{name}}",
-  "auth.reason.oidcFailed": "L'accesso unico non è stato completato: il suo link è già stato usato o è scaduto. Riprova.",
+  "auth.reason.oidcFailed": "L'accesso unico non è stato completato: è già stato usato o è scaduto. Riprova.",
   "settings.topic.signin": "Accesso",
   "settings.signin.card": "Accesso unico",
   "settings.signin.cardBody": "Permetti di accedere con il tuo provider di identità (Authentik, Authelia, Keycloak, Pocket ID e simili) tramite OpenID Connect. Le app continuano ad abbinarsi con il codice QR.",

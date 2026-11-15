@@ -3978,7 +3978,7 @@
   "librivox.code.metadata_off": "Les métadonnées communautaires ont été désactivées.",
   "login.or": "ou",
   "login.oidc": "Se connecter avec {{name}}",
-  "auth.reason.oidcFailed": "L'authentification unique n'a pas abouti : son lien a déjà servi ou a expiré. Réessayez.",
+  "auth.reason.oidcFailed": "L'authentification unique n'a pas abouti : elle a déjà servi ou a expiré. Réessayez.",
   "settings.topic.signin": "Connexion",
   "settings.signin.card": "Authentification unique",
   "settings.signin.cardBody": "Permettez la connexion avec votre fournisseur d'identité (Authentik, Authelia, Keycloak, Pocket ID, etc.) via OpenID Connect. Les applications s'associent toujours par QR code.",

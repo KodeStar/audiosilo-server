@@ -1,41 +1,37 @@
-import { oidcTokenFrom, takeOIDCToken } from './oidc-return';
+import { isOIDCReturn, takeOIDCReturn } from './oidc-return';
 
-describe('oidcTokenFrom', () => {
-  it('reads the token a single sign-on lands on', () => {
-    expect(oidcTokenFrom('#oidc_token=abc_DEF-123')).toBe('abc_DEF-123');
+describe('isOIDCReturn', () => {
+  it("knows a single sign-on's return", () => {
+    expect(isOIDCReturn('#oidc=done')).toBe(true);
   });
 
-  it('ignores anything else', () => {
-    for (const hash of [
-      '',
-      '#',
-      '#oidc_token=',
-      '#other=abc',
-      '#oidc_token=a b',
-      '#oidc_token=a&x=1',
-    ]) {
-      expect(oidcTokenFrom(hash)).toBeNull();
+  it('ignores anything else, a token in the address included', () => {
+    for (const hash of ['', '#', '#oidc=', '#oidc=done&x=1', '#oidc_token=abc', '#other=done']) {
+      expect(isOIDCReturn(hash)).toBe(false);
     }
   });
 });
 
-describe('takeOIDCToken', () => {
-  it('returns the token and replaces the history entry without it', () => {
+describe('takeOIDCReturn', () => {
+  it('reports the return and replaces the history entry without it', () => {
     const replaceState = vi.fn();
     const state = { key: 'k' };
-    const token = takeOIDCToken(
-      { hash: '#oidc_token=tok', pathname: '/admin/', search: '?a=1' },
+    const done = takeOIDCReturn(
+      { hash: '#oidc=done', pathname: '/admin/', search: '?a=1' },
       { replaceState, state },
     );
-    expect(token).toBe('tok');
+    expect(done).toBe(true);
     expect(replaceState).toHaveBeenCalledWith(state, '', '/admin/?a=1');
   });
 
   it('leaves the address alone without one', () => {
     const replaceState = vi.fn();
     expect(
-      takeOIDCToken({ hash: '#x', pathname: '/admin/', search: '' }, { replaceState, state: null }),
-    ).toBeNull();
+      takeOIDCReturn(
+        { hash: '#x', pathname: '/admin/', search: '' },
+        { replaceState, state: null },
+      ),
+    ).toBe(false);
     expect(replaceState).not.toHaveBeenCalled();
   });
 });

@@ -8,25 +8,25 @@ import { SessionContext, type Session, type SessionState, type SignedOutReason }
 
 /**
  * The console's session: the stored token checked once on load, or, after a
- * single sign-on, `oidcToken` (the 60 s single-use token it landed on, which
- * main.tsx took out of the address bar) traded for a new session.
+ * single sign-on (`oidcDone`: main.tsx found /admin/#oidc=done), the sign-in the
+ * server holds in its cookie finished for a new session.
  */
 export function SessionProvider({
-  oidcToken,
+  oidcDone,
   children,
 }: {
-  oidcToken: string | null;
+  oidcDone: boolean;
   children: React.ReactNode;
 }) {
   const qc = useQueryClient();
   const [state, setState] = useState<SessionState>(() =>
-    oidcToken || getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
+    oidcDone || getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
   );
-  // The exchange runs once (the token is single use), whatever the effect's re-runs.
-  const exchange = useRef<Promise<LoginResponse | null> | null>(null);
-  // While a single sign-on's token is being traded, the stored token waits; one
-  // that signs no admin in hands back to it (below).
-  const [trading, setTrading] = useState(Boolean(oidcToken));
+  // The finish runs once (the sign-in is single use), whatever the effect's re-runs.
+  const finish = useRef<Promise<LoginResponse | null> | null>(null);
+  // While a single sign-on is being finished, the stored token waits; one that
+  // signs no admin in hands back to it (below).
+  const [trading, setTrading] = useState(oidcDone);
   const [attempt, setAttempt] = useState(0);
 
   const dropSession = useCallback(
@@ -68,24 +68,25 @@ export function SessionProvider({
     });
   }, [dropSession]);
 
-  // Trade a single sign-on's token for a session. An account that isn't an
-  // admin is signed straight out again (no session left behind), like the
-  // password form; the session this browser held before is ended once the new
-  // one is in. A token that signs no admin in (spent, forged in a link, a
-  // non-admin's) leaves a stored session alone: it is checked as on any load.
+  // Finish a single sign-on for a session. An account that isn't an admin is
+  // signed straight out again (no session left behind), like the password
+  // form; the session this browser held before is ended once the new one is
+  // in. A finish that signs no admin in (none in this browser, as when someone
+  // else's link to #oidc=done is followed; spent; a non-admin's) leaves a
+  // stored session alone: it is checked as on any load.
   useEffect(() => {
-    if (!oidcToken) return;
+    if (!oidcDone) return;
     let cancelled = false;
     const noAdmin = (reason: SignedOutReason) => {
       if (getToken()) setTrading(false);
       else dropSession(reason);
     };
-    exchange.current ??= api.exchange(oidcToken).then(async (res) => {
+    finish.current ??= api.oidcFinish().then(async (res) => {
       if (res.user.role === 'admin') return res;
       await api.logout(res.token).catch(() => {});
       return null;
     });
-    exchange.current
+    finish.current
       .then((res) => {
         if (cancelled) return;
         if (!res) {
@@ -103,10 +104,10 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [oidcToken, dropSession]);
+  }, [oidcDone, dropSession]);
 
   // Validate a stored token once on load (and on "Try again"); a single
-  // sign-on's token replaces it instead, unless that signs no admin in.
+  // sign-on's session replaces it instead, unless that signs no admin in.
   useEffect(() => {
     if (trading || !getToken()) return;
     let cancelled = false;

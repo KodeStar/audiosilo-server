@@ -3775,7 +3775,7 @@
   "librivox.code.metadata_off": "Community metadata was turned off.",
   "login.or": "or",
   "login.oidc": "Sign in with {{name}}",
-  "auth.reason.oidcFailed": "Single sign-on didn't finish: its link was used or has expired. Try again.",
+  "auth.reason.oidcFailed": "Single sign-on didn't finish: it was already used or has expired. Try again.",
   "settings.topic.signin": "Sign-in",
   "settings.signin.card": "Single sign-on",
   "settings.signin.cardBody": "Let people sign in with your identity provider (Authentik, Authelia, Keycloak, Pocket ID and the like) over OpenID Connect. The apps keep pairing by QR code.",

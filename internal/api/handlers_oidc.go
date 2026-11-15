@@ -23,9 +23,11 @@ import (
 // GET /api/v1/auth/oidc/start?return=web|admin sets the sealed flow cookie and
 // sends the browser to the provider; GET /api/v1/auth/oidc/callback checks it,
 // exchanges the code, applies the decision and sends the browser on: a sign-in
-// gets a 60 s single-use pairing token, which the console (/admin/#oidc_token=)
-// or the web player (/web/connect?token=) exchanges for a session at
-// POST /auth/exchange, the one way a session is made. Anything else lands on
+// gets a 60 s single-use pairing token in an HttpOnly cookie (never in a URL:
+// a link carrying one would sign whoever follows it in as its owner, a login
+// CSRF), and the console (/admin/#oidc=done) or the web player
+// (/web/connect?oidc=1) trades it for a session at POST /api/v1/auth/oidc/finish,
+// which answers as POST /auth/exchange does. Anything else lands on
 // /connect#oidc=<reason>. Every URL the provider or the browser is sent to is
 // built from public_url, never from the request's Host.
 
@@ -33,11 +35,22 @@ import (
 const (
 	oidcStartPath    = "/api/v1/auth/oidc/start"
 	oidcCallbackPath = "/api/v1/auth/oidc/callback"
+	oidcFinishPath   = "/api/v1/auth/oidc/finish"
 	oidcCookie       = "audiosilo_oidc"
-	oidcCookiePath   = "/api/v1/auth/oidc/"
+	// oidcDoneCookie holds a finished sign-in's pairing token until the page it
+	// lands on trades it at oidcFinishPath.
+	oidcDoneCookie = "audiosilo_oidc_done"
+	oidcCookiePath = "/api/v1/auth/oidc/"
 	// oidcPairingTTL is the life of the pairing token a sign-in hands the
-	// console or the web player: long enough for the page to load and exchange it.
+	// console or the web player (and of its cookie): long enough for the page
+	// to load and finish.
 	oidcPairingTTL = 60 * time.Second
+)
+
+// Where a finished sign-in lands: the page then calls oidcFinishPath.
+const (
+	oidcDoneAdmin = "/admin/#oidc=done"
+	oidcDoneWeb   = "/web/connect?oidc=1"
 )
 
 // Where a sign-in returns (?return=): an enum, never a URL.
@@ -128,6 +141,16 @@ func (a *API) oidcProblem() string {
 	return a.config().Auth.OIDC.Problem(a.config().PublicURL)
 }
 
+// oidcIssuer is the issuer of the single sign-on that can run now, "" while
+// it can't: the provider whose identities are an admin's way into the console
+// (auth.SetSSOIssuer).
+func (a *API) oidcIssuer() string {
+	if !a.oidcOn() {
+		return ""
+	}
+	return a.boot.Auth.OIDC.Issuer
+}
+
 // oidcOn is the `oidc` capability: configured and able to run (the provider
 // may still be unreachable: the button then lands on #oidc=unavailable).
 func (a *API) oidcOn() bool { return a.oidcProblem() == "" }
@@ -156,12 +179,13 @@ func sameHost(public *url.URL, host string) bool {
 	return strings.EqualFold(config.HostWithPort(host, port), config.HostWithPort(public.Host, port))
 }
 
-// setOIDCCookie sets the flow cookie (maxAge < 0 deletes it). Secure only on
-// an https public_url: a browser never sends a Secure cookie back over plain
-// http (a server on the home network without TLS).
-func (a *API) setOIDCCookie(w http.ResponseWriter, value string, maxAge int) {
+// setOIDCCookie sets one of the flow's cookies, name (maxAge < 0 deletes it),
+// on the flow's path only, HttpOnly and SameSite=Lax. Secure only on an https
+// public_url: a browser never sends a Secure cookie back over plain http (a
+// server on the home network without TLS).
+func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
-		Name: oidcCookie, Value: value, Path: oidcCookiePath, MaxAge: maxAge,
+		Name: name, Value: value, Path: oidcCookiePath, MaxAge: maxAge,
 		HttpOnly: true, Secure: strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:"), SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -223,7 +247,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not start the sign-in")
 		return
 	}
-	a.setOIDCCookie(w, sealed, int(oidc.FlowMaxAge/time.Second))
+	a.setOIDCCookie(w, oidcCookie, sealed, int(oidc.FlowMaxAge/time.Second))
 	noStore(w)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -238,10 +262,10 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // visitor's browser send ten (SameSite=Lax keeps the cookie off them), which
 // would lock that address out of signing in. The provider's ?error= (the
 // person cancelled) charges nothing either. Otherwise oidc.Decide's answer
-// (auth.OIDCSignIn) and its audits, then the pairing token for the flow's
-// return, or the result panel.
+// (auth.OIDCSignIn) and its audits, then the pairing token in its cookie and
+// the flow's return page, or the result panel.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	a.setOIDCCookie(w, "", -1)
+	a.setOIDCCookie(w, oidcCookie, "", -1)
 	ip := clientIP(r)
 	if !a.oidcLimiter.Allowed(ip) {
 		setRetryAfter(w, a.oidcLimiter.LockedFor(ip))
@@ -354,12 +378,62 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, oidcFailed)
 		return
 	}
+	a.setOIDCCookie(w, oidcDoneCookie, token, int(oidcPairingTTL/time.Second))
 	noStore(w)
+	done := oidcDoneWeb
 	if f.Return == oidcReturnAdmin {
-		http.Redirect(w, r, a.oidcBase()+"/admin/#oidc_token="+url.QueryEscape(token), http.StatusSeeOther)
+		done = oidcDoneAdmin
+	}
+	http.Redirect(w, r, a.oidcBase()+done, http.StatusSeeOther)
+}
+
+// handleOIDCFinish trades a finished sign-in for a session (public): the
+// pairing token the callback left in its cookie, read and cleared whatever
+// happens, consumed once, then the answer POST /auth/exchange gives (the
+// session envelope; the new device reported as there). Optional body
+// {"device_name"}. 401 code oidc_no_sign_in without the cookie (charging
+// nothing: no secret was tried), oidc_sign_in_expired for a token spent,
+// expired, unknown or its account's disabled (charged to the address's
+// redeemLimiter, as an exchange is). A page on another site can't make a
+// browser send the cookie here (SameSite=Lax, a POST), nor read the answer.
+func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
+	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
+	noStore(w)
+	ip := clientIP(r)
+	if !allowAttempt(w, a.redeemLimiter, ip) {
 		return
 	}
-	http.Redirect(w, r, a.oidcBase()+"/web/connect?token="+url.QueryEscape(token), http.StatusSeeOther)
+	var req struct {
+		DeviceName string `json:"device_name"`
+	}
+	if err := decodeJSONOptional(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	c, err := r.Cookie(oidcDoneCookie)
+	if err != nil || c.Value == "" {
+		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
+		return
+	}
+	u, _, err := a.auth.ConsumePairing(r.Context(), c.Value)
+	if err != nil {
+		a.redeemLimiter.Fail(ip)
+		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "the single sign-on has expired or was used: sign in again")
+		return
+	}
+	a.redeemLimiter.Reset(ip)
+	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not issue session")
+		return
+	}
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	a.reportSignIn(r, full, req.DeviceName, false)
+	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
 }
 
 // clip cuts s to n bytes for a log line.
@@ -373,10 +447,16 @@ func clip(s string, n int) string {
 // auditSignIn records what a sign-in changed, as the server's own act (no
 // admin made the request): a link by email, an account made, a role the
 // admin_group rule changed or would have (a refused demotion is logged too).
+// A sign-in with no groups claim while admin_group is set is logged: its role
+// was left alone.
 func (a *API) auditSignIn(r *http.Request, c oidc.Claims, res auth.OIDCResult) {
 	u := res.User
 	if u == nil {
 		return
+	}
+	if res.Decision.NoGroups {
+		a.log.Warn("oidc: admin_group is set but the provider sent no groups claim: the role is unchanged",
+			"user", u.Username, "groups_claim", a.boot.Auth.OIDC.EffectiveGroupsClaim())
 	}
 	switch res.Decision.Outcome {
 	case oidc.Link:

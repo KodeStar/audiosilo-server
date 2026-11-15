@@ -159,8 +159,8 @@ export function setForbiddenHandler(fn: () => void) {
 }
 
 const LOGIN_PATH = '/auth/login';
-/** A single sign-on's pairing token becomes a session here (handlers_auth.go handleExchange). */
-const EXCHANGE_PATH = '/auth/exchange';
+/** A single sign-on becomes a session here (handlers_oidc.go handleOIDCFinish). */
+const OIDC_FINISH_PATH = '/auth/oidc/finish';
 /** The 401 of the account's own password change that refuses the current password typed. */
 export const WRONG_CURRENT_PASSWORD = 'current_password_incorrect';
 
@@ -248,7 +248,7 @@ function checkSession(err: ApiError, path: string) {
   if (
     err.status === 401 &&
     path !== LOGIN_PATH &&
-    path !== EXCHANGE_PATH &&
+    path !== OIDC_FINISH_PATH &&
     err.code !== WRONG_CURRENT_PASSWORD
   ) {
     clearToken();
@@ -357,15 +357,12 @@ export const api = {
       device_id: browserId(),
     }),
   /**
-   * Trades the 60 s single-use token a single sign-on (OIDC) ended with for a
-   * session (/admin/#oidc_token=, handlers_oidc.go). A 401 here is a spent or
-   * stale token, never the stored session's end.
+   * Finishes a single sign-on (OIDC) for a session (/admin/#oidc=done,
+   * handlers_oidc.go): the server reads the sign-in from its HttpOnly cookie,
+   * once. A 401 here (code oidc_no_sign_in or oidc_sign_in_expired) is a
+   * sign-in this browser doesn't hold, never the stored session's end.
    */
-  exchange: (pairingToken: string) =>
-    request<LoginResponse>('POST', EXCHANGE_PATH, {
-      pairing_token: pairingToken,
-      device_name: 'admin-web',
-    }),
+  oidcFinish: () => request<LoginResponse>('POST', OIDC_FINISH_PATH, { device_name: 'admin-web' }),
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),

@@ -21,8 +21,8 @@ const OIDC_START = '/api/v1/auth/oidc/start?return=admin';
  * password in the server's log, reset-admin when it's lost; or, while the
  * server's /setup page is open (--setup, no admin yet), to open that link.
  * With single sign-on configured (capabilities.oidc, server#235), "Sign in with
- * <name>" leaves for the provider and comes back on /admin/#oidc_token=
- * (SessionProvider trades it for a session).
+ * <name>" leaves for the provider and comes back on /admin/#oidc=done
+ * (SessionProvider finishes it for a session).
  */
 export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const { t } = useTranslation();

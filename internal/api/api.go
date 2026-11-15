@@ -305,6 +305,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	a.discovery = a.newDiscovery()
 	a.playerSource = web.PlayerSource(cfg.WebDir)
 	a.oidc = newOIDCFlow(cfg.Auth.OIDC, log)
+	authSvc.SetSSOIssuer(a.oidcIssuer)
 	a.rt.StartedAt = time.Now()
 	return a
 }
@@ -415,6 +416,7 @@ func (a *API) Handler() http.Handler {
 	// Sign in with OpenID Connect: the browser's flow (handlers_oidc.go).
 	mux.HandleFunc("GET "+oidcStartPath, a.handleOIDCStart)
 	mux.HandleFunc("GET "+oidcCallbackPath, a.handleOIDCCallback)
+	mux.HandleFunc("POST "+oidcFinishPath, a.handleOIDCFinish)
 	mux.HandleFunc("POST /api/v1/demo/session", a.handleDemoSession)
 	// The Bridge trades a pairing code for its token (handlers_bridge.go).
 	mux.HandleFunc("POST /api/v1/bridge/pair", a.handleBridgeExchange)

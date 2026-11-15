@@ -3978,7 +3978,7 @@
   "librivox.code.metadata_off": "Se desactivaron los metadatos de la comunidad.",
   "login.or": "o",
   "login.oidc": "Iniciar sesión con {{name}}",
-  "auth.reason.oidcFailed": "El inicio de sesión único no terminó: su enlace ya se usó o caducó. Inténtalo de nuevo.",
+  "auth.reason.oidcFailed": "El inicio de sesión único no terminó: ya se usó o caducó. Inténtalo de nuevo.",
   "settings.topic.signin": "Inicio de sesión",
   "settings.signin.card": "Inicio de sesión único",
   "settings.signin.cardBody": "Permite iniciar sesión con tu proveedor de identidad (Authentik, Authelia, Keycloak, Pocket ID y similares) mediante OpenID Connect. Las apps siguen vinculándose con código QR.",
