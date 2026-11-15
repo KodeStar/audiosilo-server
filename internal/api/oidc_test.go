@@ -647,19 +647,25 @@ func TestOIDCAutoCreateAllowedGroup(t *testing.T) {
 }
 
 // TestOIDCCallbackRateLimited: ten failed callbacks from an address lock it out
-// for a while; a good one before that resets the count.
+// for a while; a good one before that resets the count. A callback with no
+// flow cookie (what another site's page can make a browser send) counts for
+// nothing.
 func TestOIDCCallbackRateLimited(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
-	for range 9 {
+	foreign := &http.Cookie{Name: oidcCookie, Value: "not-this-server's"}
+	for range 25 {
 		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", nil), oidcExpired)
+	}
+	for range 9 {
+		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", foreign), oidcFailed)
 	}
 	if loc := e.signIn(t, oidcReturnAdmin); !strings.Contains(loc, "#oidc_token=") {
 		t.Fatalf("a good sign-in under the limit: %q", loc)
 	}
 	for range 10 {
-		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", nil), oidcExpired)
+		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", foreign), oidcFailed)
 	}
 	resp := e.get(t, oidcCallbackPath+"?code=x&state=y", oidcHost)
 	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcRateLimited || resp.Header.Get("Retry-After") == "" {

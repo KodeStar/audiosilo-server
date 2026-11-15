@@ -230,11 +230,14 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 
 // handleOIDCCallback finishes a sign-in (public; the provider's redirect). The
 // flow cookie is deleted whatever happens. Refused, with a failure charged to
-// the address's oidcLimiter: a missing, foreign or expired cookie, a state that
-// isn't the cookie's (constant time), a failed exchange or a refused ID token,
-// a flow already used (a copied cookie; checked after the exchange, so only a
-// completed flow is remembered). The provider's ?error= (the person cancelled)
-// is a failure that charges nothing. Otherwise oidc.Decide's answer
+// the address's oidcLimiter: a foreign or expired cookie, a state that isn't
+// the cookie's (constant time), a failed exchange or a refused ID token, a
+// flow already used (a copied cookie; checked after the exchange, so only a
+// completed flow is remembered). A request with no cookie is refused and
+// charges nothing: it reaches nothing to guess at, and any page can make a
+// visitor's browser send ten (SameSite=Lax keeps the cookie off them), which
+// would lock that address out of signing in. The provider's ?error= (the
+// person cancelled) charges nothing either. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the pairing token for the flow's
 // return, or the result panel.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +268,8 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, err := r.Cookie(oidcCookie)
 	if err != nil {
-		fail(oidcExpired, "no flow cookie", nil)
+		a.log.Info("oidc: sign-in refused", "why", "no flow cookie")
+		a.oidcResult(w, r, oidcExpired)
 		return
 	}
 	f, err := a.oidc.sealer.Open(c.Value)
@@ -307,13 +311,13 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "flow used before", nil)
 		return
 	}
+	// The groups trimmed as the console saves them (config.yaml and the
+	// environment aren't): a claim's group is, so " admins" would match no one
+	// and every sign-in would lose its admin role.
 	pol := a.config().Auth.OIDC
 	res, err := a.auth.OIDCSignIn(r.Context(), claims, oidc.Policy{
 		AutoCreate: pol.AutoCreate, AllowedGroup: strings.TrimSpace(pol.AllowedGroup), AdminGroup: strings.TrimSpace(pol.AdminGroup),
 	})
-	// The groups trimmed as the console saves them (config.yaml and the
-	// environment aren't): a claim's group is, so " admins" would match no one
-	// and every sign-in would lose its admin role.
 	if err != nil {
 		a.log.Error("oidc: sign-in failed", "err", err)
 		a.oidcResult(w, r, oidcFailed)

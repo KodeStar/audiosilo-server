@@ -3563,7 +3563,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   not an error). `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
-  anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes): the cookie
+  anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
+  charges nothing, since any page can make a visitor's browser send those): the cookie
   `audiosilo_oidc` (Path `/api/v1/auth/oidc/`, HttpOnly, SameSite=Lax, Secure when public_url is
   https) is deleted on every callback; a sign-in gets a **60 s single-use pairing token**
   (`IssueToken(KindPairing)`) and a 303 to `/admin/#oidc_token=<t>` (the console trades it at
