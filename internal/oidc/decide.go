@@ -1,7 +1,5 @@
 package oidc
 
-import "strings"
-
 // Account is what Decide needs to know of an account.
 type Account struct {
 	ID       int64
@@ -78,28 +76,6 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 )
-
-// SameEmail is the email compare: both trimmed, ASCII case folded (SQLite's
-// NOCASE, the index MatchEmail reads), never empty.
-func SameEmail(a, b string) bool {
-	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
-	if a == "" || len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		if lowerASCII(a[i]) != lowerASCII(b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func lowerASCII(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + 'a' - 'A'
-	}
-	return c
-}
 
 // Decide says what a sign-in does (decisions 1-4):
 //   - linked: sign in, unless the account is disabled or now a member;

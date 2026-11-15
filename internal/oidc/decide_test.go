@@ -83,21 +83,3 @@ func TestDecideRoleSync(t *testing.T) {
 		t.Fatalf("refused: %+v", d)
 	}
 }
-
-func TestSameEmail(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		a, b string
-		want bool
-	}{
-		{"Alex@Example.org", "alex@example.org", true},
-		{" alex@example.org ", "alex@example.org", true},
-		{"alex@example.org", "alex@example.com", false},
-		{"", "", false},
-		{"ÄLEX@example.org", "älex@example.org", false}, // ASCII folding only, as SQLite's NOCASE
-	} {
-		if got := SameEmail(c.a, c.b); got != c.want {
-			t.Errorf("SameEmail(%q, %q) = %v", c.a, c.b, got)
-		}
-	}
-}

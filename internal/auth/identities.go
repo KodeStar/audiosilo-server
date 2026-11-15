@@ -47,8 +47,8 @@ const (
 	maxPendingGroups  = 50
 )
 
-// MaxEmail bounds an account's email, in bytes.
-const MaxEmail = 254
+// MaxEmail bounds an account's email, in bytes: a sign-in's bound.
+const MaxEmail = oidc.MaxEmail
 
 // NormalizeEmail is an email as stored: trimmed, "" for none, else something@
 // something with no space or control character, at most MaxEmail bytes
@@ -114,8 +114,6 @@ type OIDCResult struct {
 	User *User
 	// Role is set when the admin_group rule applied (Decision.Role).
 	Role *RoleSync
-	// Pending is the sign-in's waiting row (Pending).
-	Pending *PendingSignIn
 }
 
 // accountFacts reads an account's oidc.Account facts; ?1 is the issuer.
@@ -140,7 +138,6 @@ func scanAccount(row interface{ Scan(...any) error }) (oidc.Account, error) {
 // an error.
 func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) (OIDCResult, error) {
 	var res OIDCResult
-	email := strings.TrimSpace(c.Email)
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
 		in := oidc.Input{Claims: c, Policy: p}
@@ -152,8 +149,8 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 			in.Linked = &a
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
-		case email != "":
-			if in.Matches, err = matchEmail(ctx, tx, c.Issuer, email); err != nil {
+		case c.Email != "":
+			if in.Matches, err = matchEmail(ctx, tx, c.Issuer, c.Email); err != nil {
 				return err
 			}
 		}
@@ -164,27 +161,22 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 		switch d.Outcome {
 		case oidc.SignIn:
 			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?, email = ?, username = ?
-				WHERE issuer = ? AND subject = ?`, now, email, c.Username, c.Issuer, c.Subject); err != nil {
+				WHERE issuer = ? AND subject = ?`, now, c.Email, c.Username, c.Issuer, c.Subject); err != nil {
 				return err
 			}
 		case oidc.Link:
-			if err := insertIdentity(ctx, tx, id, c, LinkAutoEmail, nil, now, true); err != nil {
+			if err := insertIdentity(ctx, tx, id, c, LinkAutoEmail, nil, now); err != nil {
 				return err
 			}
 		case oidc.Create:
 			if id, err = createForIdentity(ctx, tx, c, "", now); err != nil {
 				return err
 			}
-			if err := insertIdentity(ctx, tx, id, c, LinkCreated, nil, now, true); err != nil {
+			if err := insertIdentity(ctx, tx, id, c, LinkCreated, nil, now); err != nil {
 				return err
 			}
 		case oidc.Pending:
-			pending, err := upsertPending(ctx, tx, c, d.Reason, now, s.now())
-			if err != nil {
-				return err
-			}
-			res.Pending = &pending
-			return nil
+			return upsertPending(ctx, tx, c, d.Reason, now, s.now())
 		default:
 			return nil
 		}
@@ -201,8 +193,8 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 	return res, err
 }
 
-// matchEmail reads every account whose email is email (trimmed; SQLite's NOCASE
-// is the ASCII case fold oidc.SameEmail states), as oidc.Account facts.
+// matchEmail reads every account whose email is email (both trimmed; SQLite's
+// NOCASE folds ASCII case only), as oidc.Account facts.
 func matchEmail(ctx context.Context, tx *sql.Tx, issuer, email string) ([]oidc.Account, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT `+accountFacts+` FROM users u
 		 WHERE u.email = ?2 COLLATE NOCASE AND u.email <> '' ORDER BY u.id`, issuer, email)
@@ -221,15 +213,15 @@ func matchEmail(ctx context.Context, tx *sql.Tx, issuer, email string) ([]oidc.A
 	return out, rows.Err()
 }
 
-// insertIdentity links (c.Issuer, c.Subject) to account id. signedIn stamps
-// the link as its first sign-in.
-func insertIdentity(ctx context.Context, tx *sql.Tx, id int64, c oidc.Claims, method string, by *int64, now string, signedIn bool) error {
+// insertIdentity links (c.Issuer, c.Subject) to account id, linked by admin by
+// (nil: by the sign-in itself, which then counts as the link's first sign-in).
+func insertIdentity(ctx context.Context, tx *sql.Tx, id int64, c oidc.Claims, method string, by *int64, now string) error {
 	var last any
-	if signedIn {
+	if by == nil {
 		last = now
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, email, username, link_method, linked_by, linked_at, last_sign_in_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, id, c.Issuer, c.Subject, strings.TrimSpace(c.Email), c.Username, method, by, now, last)
+		VALUES(?,?,?,?,?,?,?,?,?)`, id, c.Issuer, c.Subject, c.Email, c.Username, method, by, now, last)
 	if store.IsUniqueViolation(err) {
 		var n int
 		if qerr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_identities WHERE issuer = ? AND subject = ?`,
@@ -272,10 +264,7 @@ func createForIdentity(ctx context.Context, tx *sql.Tx, c oidc.Claims, username,
 func identityUsernameBase(c oidc.Claims) string {
 	local, _, _ := strings.Cut(c.Email, "@")
 	for _, s := range []string{c.Username, local, c.Name} {
-		if base := usernameSlug(s); base != "" {
-			if len(base) > maxUsernameBase {
-				base = strings.TrimRight(base[:maxUsernameBase], "-")
-			}
+		if base := clipBase(usernameSlug(s)); base != "" {
 			return base
 		}
 	}
@@ -308,7 +297,7 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 
 // upsertPending records or refreshes c's waiting row with reason, then drops
 // rows unseen for pendingDays and the oldest past maxPendingSignIns.
-func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (PendingSignIn, error) {
+func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) error {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
 		groups = groups[:maxPendingGroups]
@@ -318,7 +307,7 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 	}
 	g, err := json.Marshal(groups)
 	if err != nil {
-		return PendingSignIn{}, err
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO oidc_pending(issuer, subject, email, email_verified, username, name, groups,
 		    reason, first_seen_at, last_seen_at, attempts)
@@ -326,19 +315,13 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 		ON CONFLICT(issuer, subject) DO UPDATE SET email = excluded.email, email_verified = excluded.email_verified,
 		    username = excluded.username, name = excluded.name, groups = excluded.groups, reason = excluded.reason,
 		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1`,
-		c.Issuer, c.Subject, strings.TrimSpace(c.Email), c.EmailVerified, c.Username, c.Name, string(g), reason, now); err != nil {
-		return PendingSignIn{}, err
+		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now); err != nil {
+		return err
 	}
 	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
-	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ?`, cutoff); err != nil {
-		return PendingSignIn{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id NOT IN
-		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT ?)`, maxPendingSignIns); err != nil {
-		return PendingSignIn{}, err
-	}
-	return scanPending(tx.QueryRowContext(ctx, `SELECT `+pendingColumns+` FROM oidc_pending WHERE issuer = ? AND subject = ?`,
-		c.Issuer, c.Subject))
+	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ? OR id IN
+		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, cutoff, maxPendingSignIns)
+	return err
 }
 
 const pendingColumns = `id, issuer, subject, email, email_verified, username, name, groups, reason, first_seen_at, last_seen_at, attempts`
@@ -389,9 +372,10 @@ func (s *Service) ListPending(ctx context.Context) ([]PendingSignIn, error) {
 	return out, rows.Err()
 }
 
-// pendingIn reads waiting row id inside tx (ErrNotFound when gone).
-func pendingIn(ctx context.Context, tx *sql.Tx, id int64) (PendingSignIn, error) {
-	return scanPending(tx.QueryRowContext(ctx, `SELECT `+pendingColumns+` FROM oidc_pending WHERE id = ?`, id))
+// takePending removes waiting row id inside tx and returns it (ErrNotFound
+// when gone); a refusal later in tx rolls the removal back.
+func takePending(ctx context.Context, tx *sql.Tx, id int64) (PendingSignIn, error) {
+	return scanPending(tx.QueryRowContext(ctx, `DELETE FROM oidc_pending WHERE id = ? RETURNING `+pendingColumns, id))
 }
 
 // LinkPending is the console's Link: waiting row id's identity linked to
@@ -408,7 +392,7 @@ func (s *Service) LinkPending(ctx context.Context, id, userID, by int64) (Pendin
 	)
 	err := s.db.WithDurableTx(ctx, "LinkPending", func(tx *sql.Tx) error {
 		var err error
-		if p, err = pendingIn(ctx, tx, id); err != nil {
+		if p, err = takePending(ctx, tx, id); err != nil {
 			return err
 		}
 		if u, err = getUser(ctx, tx, userID); err != nil {
@@ -417,11 +401,7 @@ func (s *Service) LinkPending(ctx context.Context, id, userID, by int64) (Pendin
 		if u.IsMember() || u.IsDemo {
 			return ErrNotLinkable
 		}
-		if err := insertIdentity(ctx, tx, userID, p.claims(), LinkAdmin, &by, s.ts(), false); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id = ?`, id)
-		return err
+		return insertIdentity(ctx, tx, userID, p.claims(), LinkAdmin, &by, s.ts())
 	})
 	return p, u, err
 }
@@ -439,7 +419,7 @@ func (s *Service) CreateFromPending(ctx context.Context, id int64, username stri
 	username = strings.TrimSpace(username)
 	err := s.db.WithDurableTx(ctx, "CreateFromPending", func(tx *sql.Tx) error {
 		var err error
-		if p, err = pendingIn(ctx, tx, id); err != nil {
+		if p, err = takePending(ctx, tx, id); err != nil {
 			return err
 		}
 		now := s.ts()
@@ -447,10 +427,7 @@ func (s *Service) CreateFromPending(ctx context.Context, id int64, username stri
 		if err != nil {
 			return err
 		}
-		if err := insertIdentity(ctx, tx, uid, p.claims(), LinkCreated, &by, now, false); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id = ?`, id); err != nil {
+		if err := insertIdentity(ctx, tx, uid, p.claims(), LinkCreated, &by, now); err != nil {
 			return err
 		}
 		u, err = getUser(ctx, tx, uid)
@@ -465,10 +442,7 @@ func (s *Service) DismissPending(ctx context.Context, id int64) (PendingSignIn, 
 	var p PendingSignIn
 	err := s.db.WithTx(ctx, "DismissPending", func(tx *sql.Tx) error {
 		var err error
-		if p, err = pendingIn(ctx, tx, id); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id = ?`, id)
+		p, err = takePending(ctx, tx, id)
 		return err
 	})
 	return p, err

@@ -294,12 +294,17 @@ func usernameSlug(s string) string {
 
 // usernameBase is the name's slug cut to maxUsernameBase bytes, or "member".
 func usernameBase(name string) string {
-	base := usernameSlug(name)
+	if base := clipBase(usernameSlug(name)); base != "" {
+		return base
+	}
+	return "member"
+}
+
+// clipBase cuts a usernameSlug to maxUsernameBase bytes, leaving room for a
+// -2 or an owner's name.
+func clipBase(base string) string {
 	if len(base) > maxUsernameBase {
 		base = strings.TrimRight(base[:maxUsernameBase], "-")
-	}
-	if base == "" {
-		return "member"
 	}
 	return base
 }

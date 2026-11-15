@@ -28,10 +28,12 @@ type Claims struct {
 // Caps on what a sign-in carries into the database.
 const (
 	maxClaim      = 256
-	maxEmail      = 254
 	maxGroups     = 100
 	maxGroupClaim = 256
 )
+
+// MaxEmail bounds an email, in bytes (auth.MaxEmail, an account's).
+const MaxEmail = 254
 
 // claimSet is a decoded claims object (the ID token's or userinfo's).
 type claimSet map[string]json.RawMessage
@@ -132,7 +134,7 @@ func clean(s string, limit int) string {
 // flag), the username, the name and the groups.
 func (c *Claims) fill(set claimSet, usernameClaim, groupsClaim string) {
 	if c.Email == "" {
-		if e := clean(set.str("email"), maxEmail); e != "" {
+		if e := clean(set.str("email"), MaxEmail); e != "" {
 			c.Email, c.EmailVerified = e, set.verified()
 		}
 	}

@@ -28,6 +28,8 @@ CREATE TABLE user_identities (
     UNIQUE (issuer, subject),
     UNIQUE (user_id, issuer)
 );
+-- Serves ON DELETE SET NULL when the linking admin's account goes.
+CREATE INDEX idx_user_identities_linked_by ON user_identities(linked_by) WHERE linked_by IS NOT NULL;
 
 -- Sign-ins the server could not place on an account, for an admin to link,
 -- create or dismiss. One row per (issuer, subject), upserted on each attempt;

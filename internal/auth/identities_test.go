@@ -92,7 +92,7 @@ func TestOIDCTakeoverDenied(t *testing.T) {
 		{"demo@example.org", true, oidc.ReasonNotEligible},
 	} {
 		res := signIn(t, s, ctx, claimsFor("sub-"+c.email, c.email, c.verified), oidc.Policy{AutoCreate: true})
-		if res.Decision.Outcome != oidc.Pending || res.Decision.Reason != c.reason || res.User != nil || res.Pending == nil {
+		if res.Decision.Outcome != oidc.Pending || res.Decision.Reason != c.reason || res.User != nil || pendingID(t, s, ctx, "sub-"+c.email) == 0 {
 			t.Errorf("%s: %+v; want pending %s", c.email, res, c.reason)
 		}
 	}
@@ -237,10 +237,25 @@ func pendingFor(t *testing.T, s *Service, ctx context.Context, c oidc.Claims) in
 	t.Helper()
 	c.Email = "" // nothing to match on
 	res := signIn(t, s, ctx, c, oidc.Policy{})
-	if res.Pending == nil {
+	if res.Decision.Outcome != oidc.Pending {
 		t.Fatalf("not pending: %+v", res.Decision)
 	}
-	return res.Pending.ID
+	return pendingID(t, s, ctx, c.Subject)
+}
+
+// pendingID is the waiting row of subject's id, 0 for none.
+func pendingID(t *testing.T, s *Service, ctx context.Context, subject string) int64 {
+	t.Helper()
+	rows, err := s.ListPending(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range rows {
+		if p.Subject == subject {
+			return p.ID
+		}
+	}
+	return 0
 }
 
 // TestPendingLinkCreateDismiss: the console's three actions on a waiting
