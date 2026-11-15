@@ -768,7 +768,8 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 	}
 	data := map[string]any{
 		"library": n.Library, "library_id": n.LibraryID,
-		"show": plainLine(n.Show, 200), "show_path": n.ShowPath, "show_id": n.ShowID,
+		// A feed without a title is named by its folder.
+		"show": cmp.Or(plainLine(n.Show, 200), n.ShowPath), "show_path": n.ShowPath, "show_id": n.ShowID,
 	}
 	switch n.Kind {
 	case catalog.PodcastEpisodesNew:
@@ -787,13 +788,17 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 	}
 }
 
-// feedCode is a failed poll's code as a message may carry it: a short machine
-// code, else "failed" (the Bridge's code is its own; nothing else goes out).
+// feedCode is a failed poll's code as a message may carry it: one the messages
+// word (feedCodeText) or an HTTP status, else "failed". The code is the
+// Bridge's own, so only known values go out, never a token it may hold.
 func feedCode(code string) string {
-	if code == "" || len(code) > 32 || strings.Trim(code, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" {
-		return "failed"
+	if _, ok := feedCodeText[code]; ok {
+		return code
 	}
-	return code
+	if _, ok := bridge.HTTPStatus(code); ok {
+		return code
+	}
+	return "failed"
 }
 
 // SignedIn reports a new session: a password sign-in or a device set up by

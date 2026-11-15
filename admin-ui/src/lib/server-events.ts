@@ -290,7 +290,7 @@ const FEED_CODES = new Set([
 /** Why a podcast feed is failing: its code as a sentence, an HTTP status as such, else generically. */
 export function feedFailureBody(code: string): NonNullable<EventText['body']> {
   if (FEED_CODES.has(code)) return { key: `events.podcast_feed_failing.code.${code}` };
-  const http = /^http_(\d{3})$/.exec(code);
+  const http = /^http_([1-5]\d{2})$/.exec(code);
   if (http) return { key: 'events.podcast_feed_failing.http', values: { status: http[1] } };
   return { key: 'events.podcast_feed_failing.failed' };
 }

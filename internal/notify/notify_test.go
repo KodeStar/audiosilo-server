@@ -812,6 +812,9 @@ func TestPodcastNoticeWording(t *testing.T) {
 		{"feed_secret_missing", 0, "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it."},
 		{"http_5xx", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
 		{"Bad Code: https://x.example/", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
+		// A code it doesn't word goes out as "failed": a lowercase token could
+		// be anything the Bridge put there.
+		{"privatehost_token42", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
 	} {
 		failing := n
 		failing.Kind, failing.Code, failing.Failures = catalog.PodcastFeedFailing, c.code, c.failures
@@ -820,10 +823,19 @@ func TestPodcastNoticeWording(t *testing.T) {
 			t.Fatalf("failing %s = %+v", c.code, m)
 		}
 	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 1, KindPodcastFeedFailing)
+	if len(events) != 1 || events[0].Data["code"] != "failed" {
+		t.Fatalf("an unknown code is carried as %+v", events)
+	}
 	back := n
 	back.Kind = catalog.PodcastFeedRecovered
 	if m := emit(back); m.Title != "A podcast feed is back: Example Show" || m.Link != "https://books.example.com/admin/library/libraries" {
 		t.Fatalf("recovered = %+v", m)
+	}
+	// A feed without a title is named by its folder.
+	back.Show = ""
+	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
+		t.Fatalf("untitled = %+v", m)
 	}
 }
 

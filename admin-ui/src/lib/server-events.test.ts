@@ -289,6 +289,7 @@ describe('Bridge job events', () => {
     });
     expect(failing('failed').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
     expect(failing('http_5000').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
+    expect(failing('http_999').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
   });
 
   it('words a feed that is back', () => {
