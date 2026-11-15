@@ -54,7 +54,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version":      Version,
 		"api":          "v1",
 		"capabilities": caps,
-		"auth":         a.authMethods(),
+		"auth":         a.authMethods(caps["oidc"]),
 		// The rendition kinds GET /stream?rendition= serves (Track W2), [] while
 		// capabilities.renditions is false.
 		"renditions": a.renditionKinds(),
@@ -74,10 +74,11 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // authMethods is GET /server's auth block: the sign-in methods, "oidc" and the
-// provider's button name (auth.oidc.name) only while single sign-on can run.
-func (a *API) authMethods() map[string]any {
+// provider's button name (auth.oidc.name) only while single sign-on can run
+// (oidcOn, the capability's value).
+func (a *API) authMethods(oidcOn bool) map[string]any {
 	out := map[string]any{"methods": []string{"auth_code", "password"}}
-	if a.oidcOn() {
+	if oidcOn {
 		out["methods"] = []string{"auth_code", "password", "oidc"}
 		out["oidc"] = map[string]string{"name": a.oidc.name}
 	}

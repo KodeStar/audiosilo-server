@@ -147,11 +147,9 @@ func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	a.redeemLimiter.Reset(ip)
 	a.bridge.Forget()
-	// No admin made this request: the pairing is recorded as the server's own.
-	e := catalog.AuditEvent{Action: "bridge.paired", Via: catalog.ViaSystem} // the audit log keeps no addresses
-	if err := a.cat.RecordAudit(context.WithoutCancel(r.Context()), e); err != nil {
-		a.log.Warn("audit: record failed", "action", e.Action, "err", err)
-	}
+	// No admin made this request: the pairing is recorded as the server's own
+	// (the audit log keeps no addresses).
+	a.auditSystem(r, "bridge.paired", "", nil)
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"token": token, "server_id": a.config().ServerID, "server_name": a.config().DisplayName(),
 	})

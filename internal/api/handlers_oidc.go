@@ -1,10 +1,7 @@
 package api
 
 import (
-	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -15,7 +12,6 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
-	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/oidc"
 )
@@ -89,33 +85,35 @@ func newOIDCFlow(cfg config.OIDCConfig, log *slog.Logger) *oidcFlow {
 		return f
 	}
 	f.sealer = sealer
-	// public_url is live (checked per request): any placeholder passes here.
-	if f.problem = cfg.Problem("-"); f.problem != "" {
+	if f.provider, f.problem = buildOIDCProvider(cfg); f.problem != "" {
 		log.Warn("oidc: sign-in is off", "problem", f.problem)
-		return f
+	}
+	return f
+}
+
+// buildOIDCProvider makes cfg's provider, or says why it can't.
+func buildOIDCProvider(cfg config.OIDCConfig) (*oidc.Provider, string) {
+	// public_url is live (checked per request): any placeholder passes here.
+	if p := cfg.Problem("-"); p != "" {
+		return nil, p
 	}
 	secret, err := cfg.Secret()
 	if err != nil {
-		f.problem = err.Error()
-		log.Warn("oidc: sign-in is off", "problem", f.problem)
-		return f
+		return nil, err.Error()
 	}
 	client, err := oidc.HTTPClientFor(cfg.CAFile)
 	if err != nil {
-		f.problem = err.Error()
-		log.Warn("oidc: sign-in is off", "problem", f.problem)
-		return f
+		return nil, err.Error()
 	}
-	f.provider, err = oidc.New(oidc.Settings{
+	p, err := oidc.New(oidc.Settings{
 		Issuer: cfg.Issuer, ClientID: strings.TrimSpace(cfg.ClientID), ClientSecret: secret,
 		Scopes: cfg.EffectiveScopes(), UsernameClaim: cfg.EffectiveUsernameClaim(), GroupsClaim: cfg.EffectiveGroupsClaim(),
 		HTTPClient: client,
 	})
 	if err != nil {
-		f.problem = err.Error()
-		log.Warn("oidc: sign-in is off", "problem", f.problem)
+		return nil, err.Error()
 	}
-	return f
+	return p, ""
 }
 
 // oidcProblem says why the OIDC sign-in can't run now ("" when it can): off,
@@ -158,13 +156,14 @@ func sameHost(public *url.URL, host string) bool {
 	return strings.EqualFold(config.HostWithPort(host, port), config.HostWithPort(public.Host, port))
 }
 
-// randomToken is 32 random bytes, base64url.
-func randomToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+// setOIDCCookie sets the flow cookie (maxAge < 0 deletes it). Secure only on
+// an https public_url: a browser never sends a Secure cookie back over plain
+// http (a server on the home network without TLS).
+func (a *API) setOIDCCookie(w http.ResponseWriter, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
+		Name: oidcCookie, Value: value, Path: oidcCookiePath, MaxAge: maxAge,
+		HttpOnly: true, Secure: strings.HasPrefix(a.oidcBase(), "https:"), SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
@@ -190,7 +189,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, oidcOff)
 		return
 	}
-	if p := a.oidcProblem(); p != "" {
+	if a.oidcProblem() != "" {
 		a.oidcResult(w, r, oidcUnavailable)
 		return
 	}
@@ -204,15 +203,9 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?return="+ret+"&hop=1", http.StatusFound)
 		return
 	}
-	var f oidc.Flow
-	if f.State, err = randomToken(); err == nil {
-		f.Nonce, err = randomToken()
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not start the sign-in")
-		return
-	}
-	f.Verifier, f.Return = oauth2.GenerateVerifier(), ret
+	// 32 random bytes each, base64url.
+	f := oidc.Flow{State: oauth2.GenerateVerifier(), Nonce: oauth2.GenerateVerifier(),
+		Verifier: oauth2.GenerateVerifier(), Return: ret}
 	authURL, err := a.oidc.provider.AuthURL(r.Context(), a.oidcRedirectURI(), f)
 	if err != nil {
 		a.log.Warn("oidc: start failed", "err", err)
@@ -224,12 +217,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not start the sign-in")
 		return
 	}
-	// Secure only on an https public_url: a browser never sends a Secure cookie
-	// back over plain http (a server on the home network without TLS).
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
-		Name: oidcCookie, Value: sealed, Path: oidcCookiePath, MaxAge: int(oidc.FlowMaxAge / time.Second),
-		HttpOnly: true, Secure: public.Scheme == "https", SameSite: http.SameSiteLaxMode,
-	})
+	a.setOIDCCookie(w, sealed, int(oidc.FlowMaxAge/time.Second))
 	noStore(w)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -243,10 +231,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // (auth.OIDCSignIn) and its audits, then the pairing token for the flow's
 // return, or the result panel.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, as handleOIDCStart's
-		Name: oidcCookie, Value: "", Path: oidcCookiePath, MaxAge: -1,
-		HttpOnly: true, Secure: strings.HasPrefix(a.oidcBase(), "https:"), SameSite: http.SameSiteLaxMode,
-	})
+	a.setOIDCCookie(w, "", -1)
 	ip := clientIP(r)
 	if !a.oidcLimiter.Allowed(ip) {
 		setRetryAfter(w, a.oidcLimiter.LockedFor(ip))
@@ -393,14 +378,6 @@ func (a *API) auditSignIn(r *http.Request, c oidc.Claims, res auth.OIDCResult) {
 	}
 }
 
-// auditSystem records an audit event as the server's own act (no actor).
-func (a *API) auditSystem(r *http.Request, action, target string, details map[string]any) {
-	e := catalog.AuditEvent{Action: action, Target: target, Details: details, Via: catalog.ViaSystem}
-	if err := a.cat.RecordAudit(context.WithoutCancel(r.Context()), e); err != nil {
-		a.log.Warn("audit: record failed", "action", action, "err", err)
-	}
-}
-
 // oidcStatus is GET /admin/oidc/status.
 type oidcStatus struct {
 	// Enabled: auth.oidc.enabled was on at start. Configured: and it can run
@@ -479,12 +456,7 @@ func (a *API) handleOIDCPendingLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "user.oidc_link", u.Username, map[string]any{"method": auth.LinkAdmin, "issuer": p.Issuer})
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load user")
-		return
-	}
-	writeJSON(w, http.StatusOK, toAdminUser(full))
+	writeJSON(w, http.StatusOK, toAdminUser(u))
 }
 
 // handleOIDCPendingCreate makes an ordinary account for a waiting sign-in
