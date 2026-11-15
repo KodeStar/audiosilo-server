@@ -3507,18 +3507,78 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   of its durable state via the schema's `ON DELETE CASCADE` (sessions, auth codes,
   progress/bookmarks/notes/history, share grants) - files on disk are untouched.
   Two safety guards live in `auth`: the **last enabled admin** can't be demoted,
-  disabled, or deleted (`ErrLastAdmin`), and an admin must keep a password
-  (`ErrAdminNeedsPassword`); the **delete handler additionally refuses self-delete**
+  disabled, or deleted (`ErrLastAdmin`), and an admin must keep a way in: a password
+  or a linked single sign-on (`ErrAdminNeedsPassword`, `hasIdentity`; server#235's
+  decision 5, so a password-less account with an identity may be promoted and an
+  admin with one may clear their password, while unlinking a password-less admin's
+  last identity is 409 `admin_needs_password`); the **delete handler additionally refuses self-delete**
   (an admin disables its own account instead, never deletes it). Disabling stays the
   reversible option; deletion is the irreversible one.
   **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
   rejects empty-hash accounts) - player-only users onboard purely via auth-code
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
   shares + issued auth codes (metadata only; codes are unretrievable by design);
-  `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
+  `DELETE /admin/authcodes/{id}` revokes a code. **Email** (`users.email`, `0075`, server#235):
+  optional, `""` = none, set by `POST /admin/users` `email` and `PATCH` `email` (`""` clears;
+  `auth.NormalizeEmail`: trimmed, at most 254, one `@`, no spaces, else 400 `invalid_email`), on
+  `adminUser` only (never `/me`, never the audit: its details say `set`/`cleared`); not unique, so
+  the single sign-on counts the matches when it links (below); the console's field is People > a
+  person > Sign-in, not offered for a household member. A user's **last activity** is
   derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
   `ResolveRequest`, at most once a minute per token unless the request's address or
   app changed: `touchInterval`) - there is no `last_login` column; don't add one.
+- **Single sign-on, Sign in with OpenID Connect (server#235, capability `oidc`, `internal/oidc`,
+  `auth/identities.go`, `api/handlers_oidc.go`, `0075`)**: config `auth.oidc.*` (`config/oidc.go`,
+  settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims,
+  ca_file) are read only and restart-only in the console; `auto_create`, `allowed_group` and
+  `admin_group` are live and editable (env-set = locked). The **client secret** (`client_secret` |
+  `AUDIOSILO_OIDC_CLIENT_SECRET` | `client_secret_file`, none = a public client) is no setting: never
+  in `GET /admin/settings` (only `signin.client_secret_set`), never logged, never in an error, never
+  saved from the environment. OIDC needs `public_url`: the redirect URI is
+  `<public_url>/api/v1/auth/oidc/callback` and every URL the browser or the provider is sent to is
+  built from it, never from the Host (a `/start` on another host first hops to public_url's, once:
+  `hop=1`). A bad config never stops the server: logged, the flow keeps its `problem`, the console
+  shows it (`GET /admin/oidc/status`, which also tries discovery when due). `GET /server`:
+  `capabilities.oidc` (enabled and no problem; `false`, not absent, while off), `"oidc"` in
+  `auth.methods` and `auth.oidc {name}` (the button's name). **`internal/oidc` is pure** (no DB, no
+  HTTP handlers): `Provider` (go-oidc + x/oauth2; lazy discovery with a 1 to 15 minute backoff;
+  asymmetric algorithms only, `SigningAlgs`; PKCE S256; nonce, `aud`, `azp` when several audiences,
+  `iat` at most 5 minutes ahead; userinfo only when a claim is missing, its `sub` must equal the ID
+  token's; errors never carry a response body), the flow cookie (`Sealer`: AES-GCM under a key made at
+  start, so a restart ends flows in flight; `Flow{state, nonce, verifier, return, issued_at}`, ten
+  minutes; `Replay` refuses a state used before), the claims (`Claims`: the email and its verified
+  flag taken together, groups a list or a string, capped) and **`Decide`**, the one decision: a linked
+  identity signs in (refused when the account is disabled, or a household member or demo account
+  now); else an email matching accounts links on its own **only** when it is verified and matches
+  exactly one eligible account (decision 4: **never an admin's**, a member's or a demo account's;
+  any admin match waits, `admin_account`); else `auto_create` makes an ordinary account (for
+  `allowed_group`'s members when set; the email kept only when verified), and anything else is a **pending
+  sign-in** (`oidc_pending`, one row per issuer+subject, its attempts counted, pruned after 30 days,
+  at most 500). `admin_group`, when set, syncs the role at every sign-in that signs in (in: admin,
+  out: user), never demoting the last enabled admin (reported and audited `refused: last_admin`,
+  not an error). `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
+  (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
+  auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
+  anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes): the cookie
+  `audiosilo_oidc` (Path `/api/v1/auth/oidc/`, HttpOnly, SameSite=Lax, Secure when public_url is
+  https) is deleted on every callback; a sign-in gets a **60 s single-use pairing token**
+  (`IssueToken(KindPairing)`) and a 303 to `/admin/#oidc_token=<t>` (the console trades it at
+  `POST /auth/exchange`, signs a non-admin straight back out, and takes it out of the address bar) or
+  `/web/connect?token=<t>`, so `/auth/exchange` stays the one way a session is made; anything else
+  lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,
+  rate_limited; `connect.js` words each in the six languages). An admin's sign-in calls
+  `NoteAdminSignIn` like a password one. Audit: `user.oidc_link`, `user.oidc_create`,
+  `user.role_sync` (`via` system), `user.oidc_unlink`, `oidc.pending_dismiss`. Admin routes
+  (`requireAdmin`): `GET /admin/oidc/status`, `GET /admin/oidc/pending`,
+  `POST /admin/oidc/pending/{id}/link` `{user_id}` (an admin may link to an admin; 409
+  `not_linkable` for a member or demo account, `user_has_identity`, `identity_linked`),
+  `POST /admin/oidc/pending/{id}/create` `{username?}` (201), `DELETE /admin/oidc/pending/{id}` (204),
+  `DELETE /admin/users/{id}/identities/{identity_id}` (409 `admin_needs_password` for a password-less
+  admin's last one); `GET /admin/users/{id}` carries `identities`. Logout stays local: disabling a
+  person at the provider ends no session here (an admin disables them here too). Tests: the fake IdP
+  `internal/oidc/oidctest` (discovery, JWKS, authorize, token with PKCE and a single-use code,
+  userinfo, knobs for each refusal), `api/oidc_test.go` (an allowed and a denied case for each
+  check), `auth/identities_test.go`, `oidc/decide_test.go`.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`, each library with its `kind`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
