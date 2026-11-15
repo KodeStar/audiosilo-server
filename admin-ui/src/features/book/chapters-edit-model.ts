@@ -283,16 +283,17 @@ export function saveProblem(err: unknown): string | undefined {
 
 // ---- times as typed ----
 
-const TIME = String.raw`\d{1,3}(?::\d{1,2}){1,2}(?:[.,]\d{1,3})?`;
+const TIME = String.raw`\d{1,3}(?::\d{1,2}){1,2}(?:[.,]\d+)?`;
 
 /**
  * A time as typed: h:mm:ss, m:ss (minutes past 59 allowed), each with an optional
- * fraction (.5, ,250), or plain seconds. Undefined when it isn't one.
+ * fraction (.5, ,250; kept to the millisecond), or plain seconds. Undefined when it
+ * isn't one.
  */
 export function parseTime(raw: string): number | undefined {
   const v = raw.trim().replace(',', '.');
-  if (/^\d+(\.\d{1,3})?$/.test(v)) return roundMs(Number(v));
-  const m = /^(\d{1,3})(?::(\d{1,2}))?:(\d{1,2})(\.\d{1,3})?$/.exec(v);
+  if (/^\d+(\.\d+)?$/.test(v)) return roundMs(Number(v));
+  const m = /^(\d{1,3})(?::(\d{1,2}))?:(\d{1,2})(\.\d+)?$/.exec(v);
   if (!m) return undefined;
   const [, a, b, c, frac] = m;
   if (Number(c) > 59 || (b !== undefined && Number(b) > 59)) return undefined;
@@ -328,11 +329,13 @@ export interface PastedList {
 
 // "0:00 Title", "[01:02:03.5] - Title", "1. 0:00 Title" are time first; "Title 1:02:03",
 // "Title (12:34)", "Title - 12:34" time last. Separators between are dropped: a
-// hyphen, an en or em dash, a colon, a pipe. A time last starts after no digit, so
-// "Title 1234:56" (too many minutes) is unreadable rather than "Title 1" at 234:56.
+// hyphen, an en or em dash, a colon, a pipe. A time last starts after no digit (nor
+// one and a colon), so "Title 1234:56" (too many minutes) is unreadable rather than
+// "Title 1" at 234:56, and a time first ends before no digit (nor a colon and one),
+// so "1:02:03:04 Title" (frames) is unreadable rather than "04 Title" at 1:02:03.
 const SEP = String.raw`[\s\-–—:|]*`;
-const TIME_FIRST = new RegExp(String.raw`^(?:\d+[.)]\s+)?[[(]?(${TIME})[\])]?${SEP}(.*)$`);
-const TIME_LAST = new RegExp(String.raw`^(.*?)${SEP}[[(]?(?<!\d)(${TIME})[\])]?$`);
+const TIME_FIRST = new RegExp(String.raw`^(?:\d+[.)]\s+)?[[(]?(${TIME})(?!:?\d)[\])]?${SEP}(.*)$`);
+const TIME_LAST = new RegExp(String.raw`^(.*?)${SEP}[[(]?(?<!\d:?)(${TIME})[\])]?$`);
 
 /** Reads a pasted chapter list (whole-book times), in time order. */
 export function parseTimestamps(text: string, end: number): PastedList {

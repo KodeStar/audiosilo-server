@@ -272,6 +272,9 @@ describe('times', () => {
     expect(parseTime('75:00')).toBe(4500);
     expect(parseTime('12:34,250')).toBe(754.25);
     expect(parseTime(' 42.125 ')).toBe(42.125);
+    // A longer fraction is kept to the millisecond.
+    expect(parseTime('5:10.500000')).toBe(310.5);
+    expect(parseTime('42.1256')).toBe(42.126);
     expect(parseTime('1:60')).toBeUndefined();
     expect(parseTime('1:61:00')).toBeUndefined();
     expect(parseTime('abc')).toBeUndefined();
@@ -299,15 +302,22 @@ describe('pasted timestamps', () => {
       '2:00',
       'Epilogue 3:00',
       'Too long 1234:56',
+      '00:01:25.500000 Chapter 5',
+      '1:02:03:04 Frames',
+      '1:234 Not a time',
+      'Frames 1:02:03:04',
+      'Part 1: 1:15',
     ].join('\n');
     expect(parseTimestamps(text, 170)).toEqual({
       chapters: [
         { line: 1, start: 0, title: 'Opening credits' },
         { line: 2, start: 62.5, title: 'Chapter 1' },
         { line: 3, start: 70, title: 'Chapter 2' },
+        { line: 15, start: 75, title: 'Part 1' },
         { line: 4, start: 80, title: 'Chapter 3' },
+        { line: 11, start: 85.5, title: 'Chapter 5' },
       ],
-      unreadable: [7, 8, 10],
+      unreadable: [7, 8, 10, 12, 13, 14],
       outside: [5, 9],
     });
   });
