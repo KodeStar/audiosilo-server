@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -41,16 +40,6 @@ func (a *API) handleAdminEditChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := a.cat.SaveChapterEdit(r.Context(), lib.ID, p, *req.Basis, req.Chapters, userFrom(r.Context()).ID)
-	if ce, ok := errors.AsType[*catalog.ChapterEditError](err); ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": codeChaptersInvalid, "code": codeChaptersInvalid, "detail": ce.Detail,
-		})
-		return
-	}
-	if errors.Is(err, catalog.ErrChaptersBasis) {
-		writeErrorCode(w, http.StatusConflict, codeChaptersBasis, codeChaptersBasis)
-		return
-	}
 	if err != nil {
 		a.writeBookError(w, err, "edit chapters failed", "could not save the chapters", "library", lib.ID, "path", p)
 		return

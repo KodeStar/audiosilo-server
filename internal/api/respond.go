@@ -166,6 +166,7 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 // check catalog.ErrNotFound / library.ErrNotIndexable themselves first.
 func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	var oe *catalog.OverrideError
+	var ce *catalog.ChapterEditError
 	var se *config.SettingError
 	var te *notify.FieldError
 	switch {
@@ -193,6 +194,12 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": oe.Error(), "code": codeInvalidOverride, "field": oe.Field,
 		})
+	case errors.As(err, &ce):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": codeChaptersInvalid, "code": codeChaptersInvalid, "detail": ce.Detail,
+		})
+	case errors.Is(err, catalog.ErrChaptersBasis):
+		writeErrorCode(w, http.StatusConflict, codeChaptersBasis, codeChaptersBasis)
 	case errors.Is(err, catalog.ErrUnknownSort):
 		writeError(w, http.StatusBadRequest, "unknown sort")
 	case errors.Is(err, catalog.ErrUnsupportedImage):

@@ -41,7 +41,9 @@ const (
 	ChapterEditFileStart  = "file_start"   // a file's start begins no chapter
 )
 
-// minChapterGapMS is how close two edited chapters may start.
+// minChapterGapMS is how close two edited chapters may start. The console's
+// editor mirrors these rules and limits (admin-ui chapters-edit-model.ts
+// validateDraft): change both together.
 const minChapterGapMS = 1000
 
 // fileStartSnapMS is how far a chapter may start from a file's start and still
