@@ -422,18 +422,7 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not issue session")
-		return
-	}
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return
-	}
-	a.reportSignIn(r, full, req.DeviceName, false)
-	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
+	a.issuePairedSession(w, r, u.ID, req.DeviceName, false)
 }
 
 // clip cuts s to n bytes for a log line.

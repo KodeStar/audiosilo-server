@@ -255,17 +255,24 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
+	a.issuePairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite)
+}
+
+// issuePairedSession answers a consumed pairing token (exchange, single
+// sign-on's finish): a session for the device, the sign-in reported, the
+// session envelope.
+func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool) {
+	session, err := a.auth.IssueToken(r.Context(), userID, auth.KindSession, deviceName, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	full, err := a.auth.GetUser(r.Context(), u.ID)
+	full, err := a.auth.GetUser(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	a.reportSignIn(r, full, req.DeviceName, codeKind == auth.CodeInvite)
+	a.reportSignIn(r, full, deviceName, invite)
 	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
 }
 
