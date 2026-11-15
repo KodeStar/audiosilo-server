@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -196,10 +197,11 @@ func pollJob(lib int64, id int64, state, code string) bridge.Job {
 	return j
 }
 
-// A feed is announced failing at its third failure in a row, once; `gone`
-// and a lost secret at once; the Bridge's own failures neither count nor
-// reset; the next success says it is back, once; a refold tells nothing; a
-// job for a replaced show is ignored.
+// A feed is announced failing at its third failure in a row, once (its
+// sixth when every failure is network-class, a mix when the shares add up);
+// `gone` and a lost secret at once; the Bridge's own failures neither count
+// nor reset; the next success says it is back, once; a refold tells nothing;
+// a job for a replaced show is ignored.
 func TestPodcastFeedNotices(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	log := listenNotices(c)
@@ -239,16 +241,16 @@ func TestPodcastFeedNotices(t *testing.T) {
 		}
 	}
 
-	quiet(fold(bridge.StateFailed, "timeout"), "a first failure")
-	quiet(fold(bridge.StateFailed, "http_500"), "a second failure")
+	quiet(fold(bridge.StateFailed, "http_500"), "a first failure")
+	quiet(fold(bridge.StateFailed, "not_a_feed"), "a second failure")
 	// An offline Bridge, an unwritable library: not the feed's, so the run
 	// neither grows nor resets.
 	quiet(fold(bridge.StateFailed, "bridge_lost"), "a lost Bridge")
 	quiet(fold(bridge.StateFailed, "library_not_writable"), "an unwritable library")
 	quiet(fold(bridge.StateCancelled, ""), "a cancelled poll")
-	failing(fold(bridge.StateFailed, "dns"), "dns", 3)
+	failing(fold(bridge.StateFailed, "http_404"), "http_404", 3)
 	// Refolding the same job (the recovery sweep) is a no-op.
-	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, next, bridge.StateFailed, "dns")); err != nil {
+	if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, next, bridge.StateFailed, "http_404")); err != nil {
 		t.Fatal(err)
 	}
 	quiet(log.take(), "a refold")
@@ -261,12 +263,27 @@ func TestPodcastFeedNotices(t *testing.T) {
 	}
 	quiet(log.take(), "a refolded success")
 
+	// Network-class failures alone (a Bridge that lost its internet fails
+	// every show this way) take six in a row.
+	for i, code := range []string{"timeout", "dns", "network", "tls", "timeout"} {
+		quiet(fold(bridge.StateFailed, code), fmt.Sprintf("network failure %d", i+1))
+	}
+	failing(fold(bridge.StateFailed, "network"), "network", 6)
+	recovered(fold(bridge.StateDone, ""))
+	// A mix is announced once the shares add up: two of the feed's answers
+	// and two network failures.
+	quiet(fold(bridge.StateFailed, "http_500"), "one answer")
+	quiet(fold(bridge.StateFailed, "timeout"), "one answer, one timeout")
+	quiet(fold(bridge.StateFailed, "http_503"), "two answers, one timeout")
+	failing(fold(bridge.StateFailed, "dns"), "dns", 4)
+	recovered(fold(bridge.StateDone, ""))
+
 	// A success with nothing announced resets the run quietly.
-	quiet(fold(bridge.StateFailed, "timeout"), "one failure")
-	quiet(fold(bridge.StateFailed, "timeout"), "two failures")
+	quiet(fold(bridge.StateFailed, "http_500"), "one failure")
+	quiet(fold(bridge.StateFailed, "http_500"), "two failures")
 	quiet(fold(bridge.StateDone, ""), "a success before the threshold")
-	quiet(fold(bridge.StateFailed, "timeout"), "one failure of a new run")
-	quiet(fold(bridge.StateFailed, "timeout"), "two failures of a new run")
+	quiet(fold(bridge.StateFailed, "http_500"), "one failure of a new run")
+	quiet(fold(bridge.StateFailed, "http_500"), "two failures of a new run")
 
 	// gone: at once, whatever the run.
 	failing(fold(bridge.StateFailed, "gone"), "gone", 3)
@@ -285,28 +302,31 @@ func TestPodcastFeedNotices(t *testing.T) {
 
 	// A poll for the show this path held before (another show_id) changes
 	// nothing.
-	quiet(fold(bridge.StateFailed, "timeout"), "one failure")
+	quiet(fold(bridge.StateFailed, "http_500"), "one failure")
 	quiet(fold(bridge.StateFailed, "timeout"), "two failures")
-	stale := pollJob(lib.ID, 999, bridge.StateFailed, "timeout")
+	stale := pollJob(lib.ID, 999, bridge.StateFailed, "http_500")
 	stale.Params = json.RawMessage(`{"show_id":"0f0f0f0f0f0f0f0f"}`)
 	if err := c.FoldPodcastJob(ctx, stale); err != nil {
 		t.Fatal(err)
 	}
 	quiet(log.take(), "a replaced show's poll")
-	var feedFailures, announced int
-	if err := c.db.QueryRowContext(ctx, `SELECT feed_failures,failing_announced FROM podcast_feed_state WHERE library_id=?`, lib.ID).Scan(&feedFailures, &announced); err != nil || feedFailures != 2 || announced != 0 {
-		t.Fatalf("run = %d, %d, %v; want 2 failures, unannounced", feedFailures, announced, err)
+	var feedFailures, network, announced int
+	if err := c.db.QueryRowContext(ctx, `SELECT feed_failures,feed_network_failures,failing_announced FROM podcast_feed_state WHERE library_id=?`, lib.ID).Scan(&feedFailures, &network, &announced); err != nil || feedFailures != 2 || network != 1 || announced != 0 {
+		t.Fatalf("run = %d (%d network), %d, %v; want 2 failures, 1 network, unannounced", feedFailures, network, announced, err)
 	}
 
 	// A subscribe's failures (a follow by URL) aren't polls: they move no run.
-	sub := pollJob(lib.ID, 1000, bridge.StateFailed, "timeout")
+	sub := pollJob(lib.ID, 1000, bridge.StateFailed, "http_500")
 	sub.Kind, sub.Path = bridge.KindPodcastSubscribe, nil
 	sub.Params = json.RawMessage(`{"show_id":"a1b2c3d4e5f60718","show_path":"Example Show","feed_url_sha256":"","feed_host":"x","feed_url":""}`)
 	if err := c.FoldPodcastJob(ctx, sub); err != nil {
 		t.Fatal(err)
 	}
 	quiet(log.take(), "a failed subscribe")
-	failing(fold(bridge.StateFailed, "timeout"), "timeout", 3)
+	// The stored run goes on: two answers and one timeout are not yet due
+	// (were the timeout read back as an answer, they would be).
+	quiet(fold(bridge.StateFailed, "http_500"), "two answers, one timeout")
+	failing(fold(bridge.StateFailed, "timeout"), "timeout", 4)
 }
 
 // A show moved to another folder keeps its run of failures: a run under way

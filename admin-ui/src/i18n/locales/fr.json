@@ -2489,7 +2489,7 @@
   "notify.event.podcast_episodes_new": "Nouveaux épisodes de podcast",
   "notify.event.podcast_episodes_newBody": "Une fois par émission quand son flux apporte de nouveaux épisodes, avec quelques titres.",
   "notify.event.podcast_feed_failing": "Un flux de podcast échoue",
-  "notify.event.podcast_feed_failingBody": "Le flux d'une émission suivie a échoué trois vérifications d'affilée, a disparu ou a perdu son adresse privée. Une fois, jusqu'à son retour. Une Bridge hors ligne ne compte pas.",
+  "notify.event.podcast_feed_failingBody": "Le flux d'une émission suivie a échoué trois vérifications d'affilée (six s'il était injoignable), a disparu ou a perdu son adresse privée. Une fois, jusqu'à son retour. Une Bridge hors ligne ne compte pas.",
   "notify.event.podcast_feed_recovered": "Un flux de podcast est de retour",
   "notify.event.podcast_feed_recoveredBody": "Un flux signalé en échec répond de nouveau.",
   "notify.dialog.addTitle": "Ajouter une destination",

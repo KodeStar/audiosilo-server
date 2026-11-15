@@ -2489,7 +2489,7 @@
   "notify.event.podcast_episodes_new": "Episodios nuevos de pódcast",
   "notify.event.podcast_episodes_newBody": "Una vez por programa cuando su feed trae episodios nuevos, con algunos títulos.",
   "notify.event.podcast_feed_failing": "Un feed de pódcast falla",
-  "notify.event.podcast_feed_failingBody": "El feed de un programa seguido falló tres comprobaciones seguidas, ya no existe o perdió su dirección privada. Una vez, hasta que vuelva. Una Bridge sin conexión no cuenta.",
+  "notify.event.podcast_feed_failingBody": "El feed de un programa seguido falló tres comprobaciones seguidas (seis si no se pudo contactar en absoluto), ya no existe o perdió su dirección privada. Una vez, hasta que vuelva. Una Bridge sin conexión no cuenta.",
   "notify.event.podcast_feed_recovered": "Un feed de pódcast ha vuelto",
   "notify.event.podcast_feed_recoveredBody": "Un feed avisado como fallido vuelve a responder.",
   "notify.dialog.addTitle": "Añadir un destino",

@@ -3378,15 +3378,21 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
   episode ids, so the scheduled scan and the Bridge's rescan can't both announce them),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
-  idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures` and
-  `failing_announced`, while `failures` still drives the backoff: a failure whose code is the feed's
-  (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the third in a row
-  (`catalog.FeedFailingAfter`) or at once for `gone`; `feed_secret_missing` is announced at once without
-  counting; another failure (`bridge_lost`, an unwritable library) neither counts nor resets; a successful
-  poll resets the run and, after an announcement, raises recovered once; a job for a replaced show changes
-  nothing). Their data are the library and its id, `show` (the title, else its folder), `show_path`, `show_id`, `count` and
-  `titles`, or `code` (one the messages word or an `http_NNN` status, else `failed`) and `failures` (0 for a lost secret): never the error's text, the
-  feed URL or its host. The messages word each code and link Library > Libraries.
+  idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures`,
+  `feed_network_failures` and `failing_announced`, while `failures` still drives the backoff: a failure
+  whose code is the feed's (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the
+  third in a row (`catalog.FeedFailingAfter`) or at once for `gone`; network-class codes
+  (`bridge.NetworkFailure`: `dns`, `network`, `timeout`, `tls`, what every show fails with while the
+  Bridge's internet is down) need six (`catalog.NetworkFailingAfter`), and a mixed run is announced
+  once the two shares add up to one (`feedRun.due`: two answers and two timeouts, say);
+  `feed_secret_missing` is announced at once without counting; another failure (`bridge_lost`, an
+  unwritable library) neither counts nor resets; a successful poll resets the run and, after an
+  announcement, raises recovered once; a job for a replaced show changes nothing; a moved show keeps its
+  run (`movePodcastState` carries the three columns, the rest of its feed state starts afresh)). Their
+  data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
+  and `titles`, or `code` (one the messages word or an `http_NNN` status, else `failed`) and `failures`
+  (0 for a lost secret): never the error's text, the feed URL or its host. The messages word each code
+  and link Library > Libraries.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),

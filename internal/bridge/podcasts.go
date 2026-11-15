@@ -274,6 +274,20 @@ func FeedFailure(code string) bool {
 	return code != "" && !slices.Contains(notFeedFailures, code)
 }
 
+// networkFailures are the feed failure codes the Bridge raises when it could not
+// reach the feed at all (its netguard: the host unresolved, no connection, no
+// answer in time, a secure connection it could not verify), what every show
+// fails with at once while the Bridge's own internet is down.
+var networkFailures = []string{"dns", "network", "timeout", "tls"}
+
+// NetworkFailure reports whether a feed failure's code is network-class (one of
+// networkFailures), which the admin's failing-feed notification needs twice as
+// many of in a row (catalog.feedRun), so an outage at the Bridge doesn't
+// announce every followed show.
+func NetworkFailure(code string) bool {
+	return slices.Contains(networkFailures, code)
+}
+
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
 // it failed within the last `within` (the Service's clock), else nil: an OPML
 // import passes such a feed over instead of queueing it again. A failure that

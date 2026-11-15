@@ -913,10 +913,10 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	poll(1, bridge.StateFailed, "network")
-	poll(2, bridge.StateFailed, "network")
-	poll(3, bridge.StateFailed, "network")
-	poll(4, bridge.StateDone, "")
+	for id := range int64(catalog.NetworkFailingAfter) {
+		poll(id+1, bridge.StateFailed, "network")
+	}
+	poll(100, bridge.StateDone, "")
 	grown := *f
 	grown.Episodes = append([]feed.Episode{{ID: "1111111111111111", GUID: "x", Path: "Example Show/2026-10-26-1111111111.mp3",
 		Title: "Episode Four", Published: "2026-10-26T21:00:00Z", EpisodeType: "full",

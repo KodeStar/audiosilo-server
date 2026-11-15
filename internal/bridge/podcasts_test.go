@@ -432,3 +432,18 @@ func TestFeedFailure(t *testing.T) {
 		}
 	}
 }
+
+// NetworkFailure is the Bridge not reaching the feed at all, each one also a
+// feed failure; the feed's answer and its address are not network-class.
+func TestNetworkFailure(t *testing.T) {
+	for _, code := range []string{"dns", "network", "timeout", "tls"} {
+		if !NetworkFailure(code) || !FeedFailure(code) {
+			t.Errorf("%s is not a network-class feed failure", code)
+		}
+	}
+	for _, code := range []string{"", "http_500", "http_503", "gone", "not_a_feed", "blocked_address", "bridge_lost", "feed_secret_missing"} {
+		if NetworkFailure(code) {
+			t.Errorf("%q is counted as network-class", code)
+		}
+	}
+}

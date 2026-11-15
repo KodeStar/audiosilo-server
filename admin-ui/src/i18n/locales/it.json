@@ -2489,7 +2489,7 @@
   "notify.event.podcast_episodes_new": "Nuovi episodi dei podcast",
   "notify.event.podcast_episodes_newBody": "Una volta per programma quando il suo feed porta nuovi episodi, con alcuni titoli.",
   "notify.event.podcast_feed_failing": "Un feed podcast non funziona",
-  "notify.event.podcast_feed_failingBody": "Il feed di un programma seguito ha fallito tre controlli di fila, non esiste più o ha perso il suo indirizzo privato. Una volta, finché non torna. Una Bridge offline non conta.",
+  "notify.event.podcast_feed_failingBody": "Il feed di un programma seguito ha fallito tre controlli di fila (sei se non era raggiungibile), non esiste più o ha perso il suo indirizzo privato. Una volta, finché non torna. Una Bridge offline non conta.",
   "notify.event.podcast_feed_recovered": "Un feed podcast è tornato",
   "notify.event.podcast_feed_recoveredBody": "Un feed segnalato come non funzionante risponde di nuovo.",
   "notify.dialog.addTitle": "Aggiungi una destinazione",

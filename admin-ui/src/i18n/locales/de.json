@@ -2331,7 +2331,7 @@
   "notify.event.podcast_episodes_new": "Neue Podcast-Folgen",
   "notify.event.podcast_episodes_newBody": "Einmal pro Sendung, wenn ihr Feed neue Folgen bringt, mit ein paar Titeln.",
   "notify.event.podcast_feed_failing": "Ein Podcast-Feed schlägt fehl",
-  "notify.event.podcast_feed_failingBody": "Der Feed einer abonnierten Sendung ist dreimal hintereinander fehlgeschlagen, ist weg oder hat seine private Adresse verloren. Einmal, bis er wieder geht. Eine Bridge, die offline ist, zählt nicht.",
+  "notify.event.podcast_feed_failingBody": "Der Feed einer abonnierten Sendung ist dreimal hintereinander fehlgeschlagen (sechsmal, wenn er gar nicht erreichbar war), ist weg oder hat seine private Adresse verloren. Einmal, bis er wieder geht. Eine Bridge, die offline ist, zählt nicht.",
   "notify.event.podcast_feed_recovered": "Ein Podcast-Feed geht wieder",
   "notify.event.podcast_feed_recoveredBody": "Ein als fehlerhaft gemeldeter Feed antwortet wieder.",
   "notify.dialog.addTitle": "Ziel hinzufügen",

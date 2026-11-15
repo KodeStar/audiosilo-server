@@ -6,7 +6,7 @@ import (
 )
 
 // TestMigration0076PodcastFeedNotices (server#232): an existing feed state row
-// gains feed_failures and failing_announced at 0 (no backfill: a feed already
+// gains feed_failures, feed_network_failures and failing_announced at 0 (no backfill: a feed already
 // failing counts from its next failure), its backoff count kept as it was.
 func TestMigration0076PodcastFeedNotices(t *testing.T) {
 	t.Parallel()
@@ -24,12 +24,12 @@ func TestMigration0076PodcastFeedNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	var failures, feedFailures, announced int
-	if err := db.writer.QueryRow(`SELECT failures, feed_failures, failing_announced FROM podcast_feed_state`).
-		Scan(&failures, &feedFailures, &announced); err != nil {
+	var failures, feedFailures, network, announced int
+	if err := db.writer.QueryRow(`SELECT failures, feed_failures, feed_network_failures, failing_announced FROM podcast_feed_state`).
+		Scan(&failures, &feedFailures, &network, &announced); err != nil {
 		t.Fatal(err)
 	}
-	if failures != 4 || feedFailures != 0 || announced != 0 {
-		t.Fatalf("after 0076: failures %d, feed_failures %d, failing_announced %d; want 4, 0, 0", failures, feedFailures, announced)
+	if failures != 4 || feedFailures != 0 || network != 0 || announced != 0 {
+		t.Fatalf("after 0076: failures %d, feed_failures %d, feed_network_failures %d, failing_announced %d; want 4, 0, 0, 0", failures, feedFailures, network, announced)
 	}
 }

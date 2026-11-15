@@ -2331,7 +2331,7 @@
   "notify.event.podcast_episodes_new": "New podcast episodes",
   "notify.event.podcast_episodes_newBody": "Once per show when its feed brings new episodes, with a few titles.",
   "notify.event.podcast_feed_failing": "A podcast feed is failing",
-  "notify.event.podcast_feed_failingBody": "A followed show's feed failed three checks in a row, is gone, or lost its private address. Once, until it's back. An offline Bridge doesn't count.",
+  "notify.event.podcast_feed_failingBody": "A followed show's feed failed three checks in a row (six when it couldn't be reached at all), is gone, or lost its private address. Once, until it's back. An offline Bridge doesn't count.",
   "notify.event.podcast_feed_recovered": "A podcast feed is back",
   "notify.event.podcast_feed_recoveredBody": "A feed announced as failing answered again.",
   "notify.dialog.addTitle": "Add a destination",

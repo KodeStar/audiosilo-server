@@ -17,8 +17,13 @@ const (
 
 // FeedFailingAfter is how many polls in a row the feed itself fails before
 // it is announced as failing (`gone` and a lost private-feed secret are
-// announced at once).
-const FeedFailingAfter = 3
+// announced at once). NetworkFailingAfter is the same for network-class
+// failures (bridge.NetworkFailure), which every show raises at once while the
+// Bridge's own internet is down: a short outage there announces nothing.
+const (
+	FeedFailingAfter    = 3
+	NetworkFailingAfter = 6
+)
 
 // maxNoticeTitles bounds PodcastNotice.Titles.
 const maxNoticeTitles = 5
@@ -65,18 +70,32 @@ func newEpisodesNotice(lib int64, library, show string, f *feed.File, news []fee
 }
 
 // feedRun is a show's run of failed polls as the notifications count it
-// (podcast_feed_state.feed_failures and failing_announced).
+// (podcast_feed_state.feed_failures, feed_network_failures and
+// failing_announced).
 type feedRun struct {
-	failures  int
+	failures  int // the feed's own failures in a row
+	network   int // of which network-class (bridge.NetworkFailure)
 	announced bool
+}
+
+// due reports whether the run has failed long enough to announce. Each kind of
+// failure counts toward its own threshold and a mixed run is announced once
+// the shares add up to one whole: three of the feed's answers
+// (FeedFailingAfter), six network failures (NetworkFailingAfter), or, say, two
+// answers and two network failures. A real fault that a timeout interrupts is
+// still announced soon; only a run of network failures alone, what an outage
+// at the Bridge looks like, waits for six.
+func (r feedRun) due() bool {
+	other := r.failures - r.network
+	return other*NetworkFailingAfter+r.network*FeedFailingAfter >= FeedFailingAfter*NetworkFailingAfter
 }
 
 // next is the run after a podcast.poll that ended in state with code, and the
 // notice kind it raises ("" for none): a success after an announcement is
-// recovered; the feed's own failure counts, announced at the
-// FeedFailingAfter-th or, for `gone`, at once; a lost private-feed secret is
-// announced at once without counting; any other failure (the Bridge's, the
-// library's) leaves the run as it was.
+// recovered; the feed's own failure counts, announced once the run is due or,
+// for `gone`, at once; a lost private-feed secret is announced at once without
+// counting; any other failure (the Bridge's, the library's) leaves the run as
+// it was.
 func (r feedRun) next(state, code string) (feedRun, string) {
 	switch {
 	case state == bridge.StateDone:
@@ -94,7 +113,10 @@ func (r feedRun) next(state, code string) (feedRun, string) {
 		return r, PodcastFeedFailing
 	case bridge.FeedFailure(code):
 		r.failures++
-		if r.announced || r.failures < FeedFailingAfter && code != "gone" {
+		if bridge.NetworkFailure(code) {
+			r.network++
+		}
+		if r.announced || !r.due() && code != "gone" {
 			return r, ""
 		}
 		r.announced = true
