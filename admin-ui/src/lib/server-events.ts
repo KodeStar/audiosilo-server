@@ -148,13 +148,7 @@ export function describeEvent(ev: ServerEvent): EventText {
     // "a private podcast". Podcast libraries are listed in Library > Libraries.
     case 'podcast_episodes_new':
       return {
-        title:
-          d.private === true
-            ? { key: 'events.podcast_episodes_new.privateTitle', values: { count: num(d.count) } }
-            : {
-                key: 'events.podcast_episodes_new.title',
-                values: { count: num(d.count), show: str(d.show) },
-              },
+        title: podcastTitle(d, 'events.podcast_episodes_new', { count: num(d.count) }),
         body: titlesBody(d, 'events.podcast_episodes_new'),
         tone: 'info',
         link: { destination: 'library', section: 'libraries' },
@@ -276,13 +270,15 @@ function describeBridgeJob(
   };
 }
 
-/** A podcast feed event's title: the show by name, or a private show unnamed. */
+/** A podcast event's title: the show by name, or a private show unnamed. */
 function podcastTitle(
   d: ServerEvent['data'],
-  prefix: 'events.podcast_feed_failing' | 'events.podcast_feed_recovered',
+  prefix:
+    'events.podcast_episodes_new' | 'events.podcast_feed_failing' | 'events.podcast_feed_recovered',
+  values?: Record<string, number>,
 ): EventText['title'] {
-  if (d.private === true) return { key: `${prefix}.privateTitle` };
-  return { key: `${prefix}.title`, values: { show: str(d.show) } };
+  if (d.private === true) return { key: `${prefix}.privateTitle`, values };
+  return { key: `${prefix}.title`, values: { ...values, show: str(d.show) } };
 }
 
 /** The failed poll codes with a sentence of their own (notify's feedCodeText). */

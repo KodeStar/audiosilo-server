@@ -357,6 +357,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	num := func(k string) int { n, _ := ev.Data[k].(float64); return int(n) }
 	// A private podcast show's data carry no names (PodcastNotice).
 	privateShow := ev.Data["private"] == true
+	feedTitle := func(state string) string {
+		if privateShow {
+			return "A private podcast feed is " + state
+		}
+		return "A podcast feed is " + state + ": " + str("show")
+	}
 	link := func(path string) string {
 		if srv.PublicURL == "" {
 			return ""
@@ -447,26 +453,17 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindPodcastEpisodesNew:
 		n := num("count")
 		if privateShow {
-			m.Title = fmt.Sprintf("A private podcast has %d new episodes", n)
-			if n == 1 {
-				m.Title = "A private podcast has 1 new episode"
-			}
+			m.Title = plural(n, "A private podcast has 1 new episode", "A private podcast has %d new episodes")
 		} else {
 			m.Title = plural(n, "1 new episode of %s", "%d new episodes of %s", str("show"))
 		}
 		m.Text, m.Link, m.Tags = titleLines(ev, n), link("/library/libraries"), []string{"studio_microphone"}
 	case KindPodcastFeedFailing:
-		m.Title = "A podcast feed is failing: " + str("show")
-		if privateShow {
-			m.Title = "A private podcast feed is failing"
-		}
+		m.Title = feedTitle("failing")
 		m.Text = feedFailingText(str("code"), num("failures"))
 		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"warning"}, 4, colorWarn
 	case KindPodcastFeedRecovered:
-		m.Title = "A podcast feed is back: " + str("show")
-		if privateShow {
-			m.Title = "A private podcast feed is back"
-		}
+		m.Title = feedTitle("back")
 		m.Text = "The feed answered again, so new episodes arrive as before."
 		m.Link, m.Tags = link("/library/libraries"), []string{"white_check_mark"}
 	case kindTest:
@@ -619,11 +616,12 @@ func titleLines(ev catalog.ServerEvent, count int) string {
 	return strings.Join(lines, "\n")
 }
 
-func plural(n int, one, many, name string) string {
+// plural formats one (with args) when n is 1, else many (with n, then args).
+func plural(n int, one, many string, args ...any) string {
 	if n == 1 {
-		return fmt.Sprintf(one, name)
+		return fmt.Sprintf(one, args...)
 	}
-	return fmt.Sprintf(many, n, name)
+	return fmt.Sprintf(many, append([]any{n}, args...)...)
 }
 
 func nonEmpty(xs ...string) []string {
@@ -792,11 +790,12 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 	}
 	switch n.Kind {
 	case catalog.PodcastEpisodesNew:
+		if n.Private {
+			n.Titles = nil
+		}
 		titles := make([]string, 0, len(n.Titles))
-		if !n.Private {
-			for _, t := range n.Titles {
-				titles = append(titles, plainLine(t, 200))
-			}
+		for _, t := range n.Titles {
+			titles = append(titles, plainLine(t, 200))
 		}
 		data["count"], data["titles"] = len(n.EpisodeIDs), titles
 		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))
