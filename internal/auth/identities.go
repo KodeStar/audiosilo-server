@@ -207,8 +207,8 @@ func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Dur
 	return s.IssueToken(ctx, userID, KindOIDC, "", ttl)
 }
 
-// ConsumeOIDC trades a token IssueOIDCToken minted for its account, once: the
-// revoke-if-not-revoked write means two racing finishes cannot both win. Any
+// ConsumeOIDC trades a token IssueOIDCToken minted for its account, once
+// (spendOnce: two racing finishes cannot both win). Any
 // other token (a pairing token, a session) is ErrInvalidToken and left as it
 // was, as is a spent or expired one, or one whose account is disabled.
 func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
@@ -217,14 +217,8 @@ func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error)
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecDurable(ctx, "ConsumeOIDC",
-		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`,
-		s.ts(), hash, KindOIDC)
-	if err != nil {
+	if err := s.spendOnce(ctx, "ConsumeOIDC", hash, KindOIDC, s.ts()); err != nil {
 		return nil, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrInvalidToken
 	}
 	return u, nil
 }

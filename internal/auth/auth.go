@@ -45,13 +45,17 @@ const (
 	// GET /me/upcoming/releases.ics lists it, never touched (a calendar's polls
 	// are not the person's activity) and never a device.
 	KindFeed = "feed"
-	// KindOIDC is the 60 s single-use token a single sign-on's callback leaves
+	// KindOIDC is the short-lived single-use token a single sign-on's callback leaves
 	// in the browser's cookie (server#235): only POST /auth/oidc/finish takes
 	// it (ConsumeOIDC), so a pairing token planted in that cookie (an invite's
 	// QR, a person's own /auth/pair) is refused there, and this one is refused
 	// by POST /auth/exchange. Like a pairing token it is never a device.
 	KindOIDC = "oidc"
 )
+
+// singleUse reports whether a token of kind is spent by its one use (an
+// exchange's pairing token, a single sign-on's finish): never worth caching.
+func singleUse(kind string) bool { return kind == KindPairing || kind == KindOIDC }
 
 // neverTouched reports whether a token of kind is never touched by resolve: it
 // is no device of its owner's, and its calls are not the owner's activity, which
@@ -631,12 +635,12 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	// Only a cast token has a grant and a parent to read: every other token's
 	// lookup is this one two-table query, and a valid session, API key, bridge or feed
 	// token's is then answered from s.tokens until the next content write or touch.
-	switch row.kind {
-	case KindCast:
+	switch {
+	case row.kind == KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {
 			return nil, tokenRow{}, err
 		}
-	case KindPairing, KindOIDC: // used once, by an exchange or a finish: not worth holding
+	case singleUse(row.kind):
 	default:
 		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires, read: read})
 	}
@@ -1197,6 +1201,21 @@ func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
+// spendOnce revokes the unrevoked token hash of kind, at now: the one use of a
+// single-use token. The revoke-if-not-revoked write means two racing callers
+// cannot both win; the loser gets ErrInvalidToken.
+func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) error {
+	res, err := s.db.ExecDurable(ctx, op,
+		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`, now, hash, kind)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
 // ConsumePairing validates a pairing token and consumes it, returning the
 // bound user. An UNLINKED token (minted by /auth/pair, the demo flow, or
 // pre-migration) is atomically revoked - strictly single-use, and the
@@ -1217,13 +1236,8 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
-		res, err := s.db.ExecDurable(ctx, "ConsumePairing",
-			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
-		if err != nil {
+		if err := s.spendOnce(ctx, "ConsumePairing", hash, KindPairing, now); err != nil {
 			return nil, "", err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return nil, "", ErrInvalidToken
 		}
 		return u, "", nil
 	}
@@ -1795,8 +1809,8 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // ways back in that a session can make without the password and the person can
 // neither see nor revoke: their open pairing codes (unlinked pairing tokens,
 // POST /auth/pair: one use, but one that would make a session after the end, as
-// leaveOwners ends them, and a single sign-on not yet finished, KindOIDC) and their recovery code (its linked pairing tokens
-// cascade). Their household members go the same way where the person put them
+// leaveOwners ends them), a single sign-on not yet finished (KindOIDC) and their
+// recovery code (its linked pairing tokens cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
 // (created_on_token_id, the record the device revoke's alsoMembers reads; only
 // sessions here, a member's API keys stay as the person's do), and every

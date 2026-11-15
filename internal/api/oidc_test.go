@@ -81,15 +81,23 @@ const (
 	hostDoneCookie = hostCookiePrefix + oidcDoneCookie
 )
 
-func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
-	t.Helper()
+// respCookie is the cookie named name that resp sets (nil when none).
+func respCookie(resp *http.Response, name string) *http.Cookie {
 	for _, c := range resp.Cookies() {
-		if c.Name == hostFlowCookie {
+		if c.Name == name {
 			return c
 		}
 	}
-	t.Fatalf("no flow cookie: %v", resp.Header.Values("Set-Cookie"))
 	return nil
+}
+
+func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
+	t.Helper()
+	c := respCookie(resp, hostFlowCookie)
+	if c == nil {
+		t.Fatalf("no flow cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+	return c
 }
 
 // start runs /start for ret and the provider's authorize: the flow cookie and
@@ -136,13 +144,7 @@ func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie) (
 	if len(c) == 0 || c[0].Name != hostFlowCookie || c[0].MaxAge >= 0 {
 		t.Fatalf("callback left the flow cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
-	var done *http.Cookie
-	for _, k := range c[1:] {
-		if k.Name == hostDoneCookie {
-			done = k
-		}
-	}
-	return resp.Header.Get("Location"), done
+	return resp.Header.Get("Location"), respCookie(resp, hostDoneCookie)
 }
 
 // signIn runs a whole flow for ret: the callback's Location.
@@ -525,15 +527,10 @@ func TestOIDCFinishNotLockedByExchanges(t *testing.T) {
 	}
 }
 
-// clearsDone reports whether resp deleted the finished sign-in's cookie
-// named name.
-func clearsDone(resp *http.Response, name string) bool {
-	for _, c := range resp.Cookies() {
-		if c.Name == name && c.MaxAge < 0 {
-			return true
-		}
-	}
-	return false
+// clearsDone reports whether resp deleted the finished sign-in's cookie.
+func clearsDone(resp *http.Response) bool {
+	c := respCookie(resp, hostDoneCookie)
+	return c != nil && c.MaxAge < 0
 }
 
 // TestOIDCFinishOnlySignInTokens: finish takes only the token a sign-in's
@@ -556,7 +553,7 @@ func TestOIDCFinishOnlySignInTokens(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
 			t.Fatalf("%s finished a sign-in: %d %v", name, resp.StatusCode, out)
 		}
-		if !clearsDone(resp, hostDoneCookie) {
+		if !clearsDone(resp) {
 			t.Fatalf("%s: the cookie kept: %v", name, resp.Header.Values("Set-Cookie"))
 		}
 	}
@@ -623,19 +620,19 @@ func TestOIDCFinishKeepsCookieUntilTried(t *testing.T) {
 	cookie := map[string]string{"Cookie": done.Name + "=" + done.Value}
 
 	resp, _ := e.doHeaders(t, "POST", oidcFinishPath, "", `{"device_name":`, cookie)
-	if resp.StatusCode != http.StatusBadRequest || clearsDone(resp, hostDoneCookie) {
+	if resp.StatusCode != http.StatusBadRequest || clearsDone(resp) {
 		t.Fatalf("a bad body: %d %v", resp.StatusCode, resp.Header.Values("Set-Cookie"))
 	}
 	for range 10 {
 		e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, "admin-web")
 	}
 	resp, _ = e.finish(t, done, "admin-web")
-	if resp.StatusCode != http.StatusTooManyRequests || clearsDone(resp, hostDoneCookie) {
+	if resp.StatusCode != http.StatusTooManyRequests || clearsDone(resp) {
 		t.Fatalf("over the limit: %d %v", resp.StatusCode, resp.Header.Values("Set-Cookie"))
 	}
 	e.api.oidcLimiter.Reset("127.0.0.1")
 	resp, out := e.finish(t, done, "admin-web")
-	if resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsDone(resp, hostDoneCookie) {
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsDone(resp) {
 		t.Fatalf("finish once the limit lifts: %d %v", resp.StatusCode, out)
 	}
 }
