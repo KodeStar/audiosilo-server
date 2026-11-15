@@ -3573,7 +3573,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   userinfo; an empty list is a claim and demotes) leaves the role alone (`Decision.NoGroups`, a
   warning logged) **only while its identity has never carried one**, so a provider that never sends
   it demotes no one; once a sign-in has carried it (`user_identities.groups_seen`, set by the
-  sign-in, even for an empty list, never by the console's Link or Create from a waiting row), an
+  sign-in, even for an empty list; by the console's Link or Create from a waiting row only when the
+  row holds a group, as its stored list can't tell an absent claim from an empty one), an
   absent claim is no groups and demotes (Keycloak leaves the claim out for a person in no group).
   `allowed_group` counts an absent claim as no groups. `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`

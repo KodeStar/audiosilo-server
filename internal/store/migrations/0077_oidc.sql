@@ -14,7 +14,8 @@ CREATE INDEX idx_users_email ON users(email COLLATE NOCASE) WHERE email <> '';
 -- link_method says how it was linked: auto_email (a verified email matching one
 -- eligible account), admin (the console's Link) or created (a new account made
 -- for it). groups_seen: a sign-in through it has carried the groups claim
--- (even an empty list), so from then on a sign-in without one means no groups
+-- (even an empty list), or the console linked it from a waiting row holding a
+-- group, so from then on a sign-in without one means no groups
 -- (auth.OIDCSignIn, oidc.Decide). Goes with its account; the admin who linked
 -- it may go first.
 CREATE TABLE user_identities (

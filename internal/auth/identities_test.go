@@ -252,8 +252,9 @@ func TestOIDCRoleSync(t *testing.T) {
 
 // TestOIDCGroupsSeenByEmptyList: a sign-in's empty groups list marks the
 // identity as one the provider sends groups for, whatever admin_group says,
-// and the admin's link from a waiting row doesn't (its stored list can't tell
-// an absent claim from an empty one).
+// and the admin's link from a waiting row with an empty list doesn't (its
+// stored list can't tell an absent claim from an empty one), while one from a
+// row holding a group does.
 func TestOIDCGroupsSeenByEmptyList(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
@@ -286,6 +287,15 @@ func TestOIDCGroupsSeenByEmptyList(t *testing.T) {
 	}
 	if !groupsSeen(t, s, ctx, "sub-c") {
 		t.Fatal("a linking sign-in's empty list didn't mark the claim seen")
+	}
+	// A waiting row that holds a group carried the claim: the admin's Create
+	// (and Link) from it marks it seen.
+	dPend := pendingFor(t, s, ctx, claimsFor("sub-d", "d@example.org", true, "staff"))
+	if _, _, err := s.CreateFromPending(ctx, dPend, "", root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !groupsSeen(t, s, ctx, "sub-d") {
+		t.Fatal("a waiting row holding a group didn't mark the claim seen")
 	}
 }
 

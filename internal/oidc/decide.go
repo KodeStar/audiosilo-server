@@ -31,8 +31,9 @@ type Input struct {
 	Claims Claims
 	Linked *Account
 	// GroupsSeen: the linked identity has signed in with a groups claim
-	// before, even an empty list, so the provider sends one for this person
-	// and a sign-in without it means no groups. Always false with no Linked.
+	// before, even an empty list (or was linked from a waiting row holding a
+	// group), so the provider sends one for this person and a sign-in without
+	// it means no groups. Always false with no Linked.
 	GroupsSeen bool
 	Matches    []Account
 	Policy     Policy

@@ -256,13 +256,14 @@ func matchEmail(ctx context.Context, tx *sql.Tx, issuer, email string) ([]oidc.A
 // (nil: by the sign-in itself, which then counts as the link's first sign-in
 // and marks groups_seen when it carried the groups claim; a waiting row's
 // stored list can't tell an absent claim from an empty one, so an admin's
-// link leaves it for the identity's first sign-in).
+// link marks it only for a row that holds a group, and leaves an empty one
+// for the identity's first sign-in).
 func insertIdentity(ctx context.Context, tx *sql.Tx, id int64, c oidc.Claims, method string, by *int64, now string) error {
 	var last any
 	if by == nil {
 		last = now
 	}
-	seen := by == nil && c.Groups != nil
+	seen := c.Groups != nil && (by == nil || len(c.Groups) > 0)
 	_, err := tx.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, email, username, link_method, linked_by, linked_at,
 		    last_sign_in_at, groups_seen)
 		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, c.Issuer, c.Subject, c.Email, c.Username, method, by, now, last, seen)
