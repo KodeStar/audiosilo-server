@@ -93,9 +93,9 @@ type AdminBook struct {
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
 	// ChaptersSource is where the chapters come from (ChaptersFromFiles,
-	// ChaptersFromCommunity or ChaptersFromGenerated) and ChaptersCheck the
-	// status of the book's last community chapter check ("" = none), so a list
-	// can say why a book has no community chapters.
+	// ChaptersFromCommunity, ChaptersFromGenerated or ChaptersFromEdited) and
+	// ChaptersCheck the status of the book's last community chapter check ("" =
+	// none), so a list can say why a book has no community chapters.
 	ChaptersSource string `json:"chapters_source"`
 	ChaptersCheck  string `json:"chapters_check,omitempty"`
 	// ChapterChoice is the admin's choice of chapter source (files or
@@ -160,8 +160,10 @@ const (
 		WHERE m.library_id = b.library_id AND m.path = b.rel_path))`
 	// A chapter override counts only while the book has that chapter: one whose
 	// chapter a rescan dropped is dormant (it reapplies if the chapter comes back) and
-	// shows nowhere on the book page, so it can't mark the book edited.
+	// shows nowhere on the book page, so it can't mark the book edited. An edited
+	// chapter list counts while it applies, as a dormant one shows no chapter.
 	editedExpr = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
+		OR b.chapters_source = '` + ChaptersFromEdited + `'
 		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ON chapters.book_id = b.id AND ` + chapterOverrideMatch + `
 		           WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
 	// The overridden fields, in field order (fieldList splits them).

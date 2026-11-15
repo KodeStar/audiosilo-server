@@ -23,11 +23,17 @@ type AdminBookDetail struct {
 	Folder      BookFolder            `json:"folder"`
 	IndexedAt   string                `json:"indexed_at"`
 	// ChapterSource is where Chapters come from now (ChaptersFromFiles,
-	// ChaptersFromCommunity or ChaptersFromGenerated); ChapterChoice is the
-	// admin's choice of it (files or community, never generated), "" when it is
-	// left automatic.
+	// ChaptersFromCommunity, ChaptersFromGenerated or ChaptersFromEdited);
+	// ChapterChoice is the admin's choice of it (files or community, never
+	// generated or edited), "" when it is left automatic.
 	ChapterSource string `json:"chapter_source"`
 	ChapterChoice string `json:"chapter_choice"`
+	// ChapterEdit is the book's own chapter list made in the console
+	// (chapter_edits), applied or dormant, omitted when it has none.
+	// ChapterBasis is the files a chapter edit is made on, which a PUT of one
+	// sends back (catalog.SaveChapterEdit).
+	ChapterEdit  *ChapterEdit `json:"chapter_edit,omitempty"`
+	ChapterBasis ChapterBasis `json:"chapter_basis"`
 	// GeneratedChaptersFit: the book has a stored chapters.json (the chapters
 	// the Bridge found in the narration) that fits its files as they are now,
 	// so it stands in with no choice when the community's don't apply (true
@@ -147,19 +153,23 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 			return nil, err
 		}
 	}
+	if d.ChapterEdit, err = chapterEditOf(ctx, c.db, libraryID, relPath, d.ChapterSource == ChaptersFromEdited); err != nil {
+		return nil, err
+	}
 	if d.CommunityChapters, err = c.GetCommunityChapters(ctx, libraryID, relPath); err != nil {
 		return nil, err
 	}
 	if d.CommunityMatch, err = bookAnchor(ctx, c.db, libraryID, relPath); err != nil {
 		return nil, err
 	}
+	// A rename shows only where it applies: never over an edited list.
 	if d.Chapters, err = queryRows(ctx, c.db, func(rows *sql.Rows, ch *AdminChapter) error {
 		return rows.Scan(&ch.Index, &ch.Title, &ch.ScannedTitle, &ch.Edited, &ch.FilePath,
 			&ch.Start, &ch.End, &ch.BookOffset)
 	}, `SELECT chapters.idx, chapters.title, chapters.scanned_title,
-	           EXISTS(SELECT 1 FROM chapter_overrides co WHERE co.library_id = ? AND co.path = ? AND `+chapterOverrideMatch+`),
+	           ? <> '`+ChaptersFromEdited+`' AND EXISTS(SELECT 1 FROM chapter_overrides co WHERE co.library_id = ? AND co.path = ? AND `+chapterOverrideMatch+`),
 	           chapters.file_path, chapters.start, chapters."end", chapters.book_offset
-	      FROM chapters WHERE chapters.book_id = ? ORDER BY chapters.idx`, libraryID, relPath, bookID); err != nil {
+	      FROM chapters WHERE chapters.book_id = ? ORDER BY chapters.idx`, d.ChapterSource, libraryID, relPath, bookID); err != nil {
 		return nil, err
 	}
 	files := &Book{ID: bookID}
@@ -167,6 +177,12 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		return nil, err
 	}
 	d.Files = adminFiles(d.Book, files.Files)
+	playOrder, err := playFiles(ctx, c.db, &Book{ID: bookID, RelPath: relPath, IsFolder: d.Book.IsFolder,
+		Size: d.Book.Size, Duration: d.Book.Duration})
+	if err != nil {
+		return nil, err
+	}
+	d.ChapterBasis = basisOf(playOrder, relPath)
 	if d.Listeners, err = queryRows(ctx, c.db, func(rows *sql.Rows, l *Listener) error {
 		return rows.Scan(&l.UserID, &l.Username, &l.Position, &l.Duration, &l.Finished, &l.UpdatedAt,
 			&l.StartedAt, &l.FinishedAt)

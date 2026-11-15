@@ -290,14 +290,16 @@ type chapterRow struct {
 func (r *chapterRow) holds(source, key string) bool { return r.current == source && r.fit == key }
 
 // applyChapterSource puts the book's chapters from the source it should have
-// now: the community's when a check of the book as it is now fitted and either
-// the admin chose them (chapter_choices) or, with no choice, the book has no
-// chapters of its own (a fill); else, with no choice, the generated ones when
-// they fit the book (applyGenerated); else the scan's own
-// (books.scanned_chapters). A check of other audio or identifiers is stale and
-// never used: it may name files no longer there. Titles are the scanned ones;
-// refreshEffective applies the renames after. A fit already in the rows is not
-// written again, nor decoded.
+// now: an admin's own list (chapter_edits) while it applies to the book's
+// files (applyEdited; else it is dormant); else the community's when a check
+// of the book as it is now fitted and either the admin chose them
+// (chapter_choices) or, with no choice, the book has no chapters of its own (a
+// fill); else, with no choice, the generated ones when they fit the book
+// (applyGenerated); else the scan's own (books.scanned_chapters). A check of
+// other audio or identifiers is stale and never used: it may name files no
+// longer there. Titles are the scanned ones (an edit's own); refreshEffective
+// applies the renames after, except over an edit. A fit already in the rows is
+// not written again, nor decoded.
 func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, path string) error {
 	r := chapterRow{book: Book{ID: bookID, LibraryID: libID, RelPath: path}}
 	// Whether a chapters.json is stored, from the record header alone
@@ -312,16 +314,22 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 		Scan(&r.book.IsFolder, &r.book.Size, &r.book.Duration, &r.current, &r.fit, &r.snapshot, &r.generated); err != nil {
 		return err
 	}
-	var choice, status, fittedJSON string
+	var choice, status, fittedJSON, edit string
 	err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE((SELECT source FROM chapter_choices WHERE library_id = +?1 AND path = +?2), ''),
 		        COALESCE(cc.status, ''), COALESCE(cc.chapters, ''),
-		        COALESCE(cc.basis = `+chapterBasisExpr+`, 0)
+		        COALESCE(cc.basis = `+chapterBasisExpr+`, 0),
+		        COALESCE((SELECT list FROM chapter_edits WHERE library_id = +?1 AND path = +?2), '')
 		   FROM books b LEFT JOIN community_chapters cc ON cc.library_id = +?1 AND cc.path = +?2
 		  WHERE b.id = +?3`, libID, path, bookID).
-		Scan(&choice, &status, &fittedJSON, &r.checkCurrent)
+		Scan(&choice, &status, &fittedJSON, &r.checkCurrent, &edit)
 	if err != nil {
 		return err
+	}
+	if edit != "" {
+		if applied, err := applyEdited(ctx, tx, &r, edit); err != nil || applied {
+			return err
+		}
 	}
 	community := r.checkCurrent && fitted(status) &&
 		(choice == ChaptersFromCommunity || (choice == "" && status == string(chapteralign.Fill)))
@@ -345,7 +353,7 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 	if r.current == "" {
 		return nil
 	}
-	// Leaving a community or generated list: the scan's own come back.
+	// Leaving an edited, community or generated list: the scan's own come back.
 	own, err := scannedChapters(ctx, tx, bookID, r.snapshot)
 	if err != nil {
 		return err
