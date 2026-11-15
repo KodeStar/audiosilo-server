@@ -25,10 +25,12 @@ type Claims struct {
 	Groups        []string
 }
 
-// Caps on what a sign-in carries into the database.
+// Caps on what a sign-in carries. maxGroups only bounds the work: every group
+// under it is matched against admin_group and allowed_group, so it is far above
+// what a directory sends (a waiting row keeps fewer: auth's maxPendingGroups).
 const (
 	maxClaim      = 256
-	maxGroups     = 100
+	maxGroups     = 2000
 	maxGroupClaim = 256
 )
 
@@ -92,13 +94,16 @@ func (c claimSet) groups(name string) []string {
 	return cleanGroups(out)
 }
 
-// cleanGroups trims, drops empty and repeated names, caps each and the list.
+// cleanGroups trims, drops empty and repeated names and caps the list. A name
+// clean would change (over maxGroupClaim bytes, or holding a control
+// character) is dropped, never mended: the mended name is not the group's, and
+// could be another's (admin_group's).
 func cleanGroups(in []string) []string {
 	out := []string{}
 	seen := map[string]bool{}
 	for _, g := range in {
-		g = clean(g, maxGroupClaim)
-		if g == "" || seen[g] {
+		g = strings.TrimSpace(g)
+		if g == "" || clean(g, maxGroupClaim) != g || seen[g] {
 			continue
 		}
 		seen[g] = true

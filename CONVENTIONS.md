@@ -3550,7 +3550,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   minutes; `Replay` refuses a state used before, remembering only a flow whose exchange succeeded, so
   states sent back bare can't fill it), the claims (`Claims`: the email and its verified flag taken
   together, an email cleaning changed (cut, trimmed, a control character dropped) unverified; groups a
-  list or a string, capped) and **`Decide`**, the one decision: a linked
+  list or a string, up to 2000 so each is there for `admin_group` to match, a name over 256 bytes or
+  with a control character dropped, never mended into another's) and **`Decide`**, the one decision: a linked
   identity signs in (refused when the account is disabled, or a household member or demo account
   now); else an email matching accounts links on its own **only** when it is verified and matches
   exactly one eligible account (decision 4: **never an admin's**, a member's or a demo account's;

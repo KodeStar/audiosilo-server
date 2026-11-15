@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -111,6 +112,35 @@ func TestFillEmailAsSent(t *testing.T) {
 	}
 }
 
+// TestGroupsMatchedWhole: every group a large directory sends is there to
+// match (the admin's group may come after the hundredth), and a name that had
+// to be mended (cut, a control character dropped) is no group at all, so it
+// can't turn into admin_group.
+func TestGroupsMatchedWhole(t *testing.T) {
+	t.Parallel()
+	list := []string{" listeners ", "listeners", "", "audiosilo-\u0000admins", strings.Repeat("g", maxGroupClaim) + "-admins"}
+	for i := range 300 {
+		list = append(list, fmt.Sprintf("team-%d", i))
+	}
+	list = append(list, "audiosilo-admins")
+	raw, _ := json.Marshal(list)
+	var c Claims
+	c.fill(claimSet{"g": raw}, "u", "g")
+	if len(c.Groups) != 302 || c.Groups[0] != "listeners" || !c.InGroup("audiosilo-admins") {
+		t.Fatalf("%d groups, first %q, admin %v", len(c.Groups), c.Groups[0], c.InGroup("audiosilo-admins"))
+	}
+	if c.InGroup(strings.Repeat("g", maxGroupClaim)) {
+		t.Fatal("a cut name matched")
+	}
+	// The mended name alone: not in the group.
+	raw, _ = json.Marshal([]string{"audiosilo-\u0000admins"})
+	c = Claims{}
+	c.fill(claimSet{"g": raw}, "u", "g")
+	if c.Groups == nil || len(c.Groups) != 0 || c.InGroup("audiosilo-admins") {
+		t.Fatalf("a name with a control character matched: %q", c.Groups)
+	}
+}
+
 // TestWithoutBody: a failed request's error keeps its status, never the
 // provider's response body.
 func TestWithoutBody(t *testing.T) {
@@ -120,12 +150,12 @@ func TestWithoutBody(t *testing.T) {
 		"404 Not Found: <html>long page</html>":                               "404 Not Found",
 		`Get "https://idp.example/.well-known": dial tcp: refused`:            `Get "https://idp.example/.well-known": dial tcp: refused`,
 		"oidc: failed to decode provider discovery object: EOF":               "oidc: failed to decode provider discovery object: EOF",
+		// A signature that can't be checked: the keys endpoint's answer follows.
+		"failed to verify signature: fetching keys oidc: get keys failed: 502 Bad Gateway <html>long page</html>": "failed to verify signature: fetching keys oidc: get keys failed: 502",
+		"failed to verify signature: fetching keys oidc: failed to decode keys: EOF <html>long page</html>":       "failed to verify signature: fetching keys oidc: failed to decode keys",
 	} {
 		if got := withoutBody(in); got != want {
 			t.Errorf("withoutBody(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
-		// A signature that can't be checked: the keys endpoint's answer follows.
-		"failed to verify signature: fetching keys oidc: get keys failed: 502 Bad Gateway <html>long page</html>": "failed to verify signature: fetching keys oidc: get keys failed: 502",
-		"failed to verify signature: fetching keys oidc: failed to decode keys: EOF <html>long page</html>":       "failed to verify signature: fetching keys oidc: failed to decode keys",
