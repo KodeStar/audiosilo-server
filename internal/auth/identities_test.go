@@ -467,3 +467,24 @@ func TestOIDCSignInContextCancel(t *testing.T) {
 		t.Fatal("a cancelled sign-in succeeded")
 	}
 }
+
+// TestPendingClearedBySignIn: a sign-in that waited and is later placed by a
+// sign-in itself (the admin gave the account the email, or turned auto_create
+// on) leaves no waiting row behind for the console to offer.
+func TestPendingClearedBySignIn(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	alice := mustUser(t, s, ctx, "alice", "", RoleUser)
+	pendingFor(t, s, ctx, claimsFor("sub-a", "alice@example.org", true))
+	pendingFor(t, s, ctx, claimsFor("sub-b", "", false))
+	setEmail(t, s, ctx, alice.ID, "alice@example.org")
+	if res := signIn(t, s, ctx, claimsFor("sub-a", "alice@example.org", true), oidc.Policy{}); res.Decision.Outcome != oidc.Link {
+		t.Fatalf("link: %+v", res.Decision)
+	}
+	if res := signIn(t, s, ctx, claimsFor("sub-b", "", false), oidc.Policy{AutoCreate: true}); res.Decision.Outcome != oidc.Create {
+		t.Fatalf("create: %+v", res.Decision)
+	}
+	if rows, err := s.ListPending(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("waiting rows left behind: %+v %v", rows, err)
+	}
+}

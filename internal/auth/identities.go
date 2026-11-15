@@ -132,7 +132,8 @@ func scanAccount(row interface{ Scan(...any) error }) (oidc.Account, error) {
 // answer, then its write. SignIn stamps the identity's last sign-in and what it
 // says now; Link adds the identity (auto_email); Create makes an ordinary
 // account (its username from the claims, numbered on a clash; the email only
-// when verified) and its identity; Pending records or refreshes the waiting
+// when verified) and its identity, both dropping the row the sign-in waited
+// in; Pending records or refreshes the waiting
 // row (capped, pruned). An outcome that signs in applies the role rule: a
 // demotion that would leave no enabled admin is refused and reported, never
 // an error.
@@ -168,11 +169,17 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 			if err := insertIdentity(ctx, tx, id, c, LinkAutoEmail, nil, now); err != nil {
 				return err
 			}
+			if err := dropPending(ctx, tx, c); err != nil {
+				return err
+			}
 		case oidc.Create:
 			if id, err = createForIdentity(ctx, tx, c, "", now); err != nil {
 				return err
 			}
 			if err := insertIdentity(ctx, tx, id, c, LinkCreated, nil, now); err != nil {
+				return err
+			}
+			if err := dropPending(ctx, tx, c); err != nil {
 				return err
 			}
 		case oidc.Pending:
@@ -230,6 +237,14 @@ func insertIdentity(ctx context.Context, tx *sql.Tx, id int64, c oidc.Claims, me
 		}
 		return ErrUserHasIdentity
 	}
+	return err
+}
+
+// dropPending removes c's waiting row, if it has one: a sign-in that waited
+// (no account matched then) and is now linked or given an account by a sign-in
+// itself is no longer the console's to link, create or dismiss.
+func dropPending(ctx context.Context, tx *sql.Tx, c oidc.Claims) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE issuer = ? AND subject = ?`, c.Issuer, c.Subject)
 	return err
 }
 

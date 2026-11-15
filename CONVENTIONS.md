@@ -3556,7 +3556,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   any admin match waits, `admin_account`); else `auto_create` makes an ordinary account (for
   `allowed_group`'s members when set; the email kept only when verified), and anything else is a **pending
   sign-in** (`oidc_pending`, one row per issuer+subject, its attempts counted, pruned after 30 days,
-  at most 500). `admin_group`, when set, syncs the role at every sign-in that signs in (in: admin,
+  at most 500, dropped when a later sign-in links it or makes its account). `admin_group`, when set, syncs the role at every sign-in that signs in (in: admin,
   out: user), never demoting the last enabled admin (reported and audited `refused: last_admin`,
   not an error). `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
