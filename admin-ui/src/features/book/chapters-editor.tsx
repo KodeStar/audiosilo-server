@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -86,8 +86,8 @@ export function ChaptersEditor({
   const [shift, setShift] = useState('');
   const shiftId = useId();
 
-  const dirty = draftChanged(rows, opened.initial);
-  const check = validateDraft(rows, spans);
+  const dirty = useMemo(() => draftChanged(rows, opened.initial), [rows, opened.initial]);
+  const check = useMemo(() => validateDraft(rows, spans), [rows, spans]);
   const number = (key?: string) => rows.findIndex((r) => r.key === key) + 1;
   const newTitle = () => t('book.chapters.edit.newTitle');
 
@@ -440,7 +440,7 @@ function Scrubber({
   onAddHere: (at: number) => void;
 }) {
   const { t } = useTranslation();
-  const token = useBookMediaToken(libraryId, bookPath, true);
+  const token = useBookMediaToken(libraryId, bookPath);
   const audio = useRef<HTMLAudioElement>(null);
   const preview = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The seek waiting for a newly chosen file to load.
@@ -486,6 +486,8 @@ function Scrubber({
   };
   const here = () => (span ? toBookTime(span, audio.current?.currentTime ?? pos) : 0);
   const unavailable = failed || token.isError;
+  // The controls wait for a file to play and give up with it.
+  const off = !src || unavailable;
 
   return (
     <section
@@ -528,7 +530,7 @@ function Scrubber({
         max={length || 1}
         step={0.1}
         value={Math.min(pos, length)}
-        disabled={!src || unavailable}
+        disabled={off}
         aria-label={t('book.chapters.edit.position', { file: span?.name ?? '' })}
         aria-valuetext={span ? formatStamp(toBookTime(span, pos), withHours) : undefined}
         onChange={(e) => seek(Number(e.target.value))}
@@ -538,7 +540,7 @@ function Scrubber({
         <Button
           variant="outline"
           size="icon-sm"
-          disabled={!src || unavailable}
+          disabled={off}
           aria-label={playing ? t('book.chapters.edit.pause') : t('book.chapters.edit.play')}
           onClick={toggle}
         >
@@ -556,7 +558,7 @@ function Scrubber({
             key={key}
             variant="outline"
             size="sm"
-            disabled={!src || unavailable}
+            disabled={off}
             aria-label={t(`book.chapters.edit.${key}`)}
             onClick={() => nudge(d)}
             className="tabular-nums"
@@ -564,25 +566,20 @@ function Scrubber({
             {label}
           </Button>
         ))}
-        <Button variant="outline" size="sm" disabled={!src || unavailable} onClick={playFive}>
+        <Button variant="outline" size="sm" disabled={off} onClick={playFive}>
           {t('book.chapters.edit.playFive')}
         </Button>
         <span className="flex-1" />
         <Button
           variant="outline"
           size="sm"
-          disabled={!src || unavailable || !row || row.fixed}
+          disabled={off || !row || row.fixed}
           aria-label={t('book.chapters.edit.setHereLabel', { n })}
           onClick={() => onSetHere(here())}
         >
           {t('book.chapters.edit.setHere')}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!src || unavailable}
-          onClick={() => onAddHere(here())}
-        >
+        <Button variant="outline" size="sm" disabled={off} onClick={() => onAddHere(here())}>
           <Plus aria-hidden="true" />
           {t('book.chapters.edit.addHere')}
         </Button>

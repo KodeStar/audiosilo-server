@@ -6,6 +6,7 @@ import type {
   ChapterBasis,
   ChapterEditRequest,
 } from '@/api/types';
+import { formatClock } from '@/lib/format';
 import { CONTROL } from './field-rules';
 import { fileName, sortFiles } from './book-model';
 
@@ -61,14 +62,10 @@ export const roundMs = (s: number) => Math.round(s * 1000) / 1000;
  * book-relative path, else the file's own; a file's start is the sum of those
  * before it, so a file-start row sends exactly the time the server expects.
  */
-export function fileSpans(
-  files: AdminFile[],
-  bookPath: string,
-  basis: ChapterBasis | undefined,
-): FileSpan[] {
-  const ms = new Map((basis?.files ?? []).map((f) => [f.path, f.duration_ms]));
+export function fileSpans(files: AdminFile[], bookPath: string, basis: ChapterBasis): FileSpan[] {
+  const ms = new Map(basis.files.map((f) => [f.path, f.duration_ms]));
   const lengthMs = (f: AdminFile) =>
-    ms.get(fileName(f.path, bookPath)) ?? ms.get(f.path) ?? Math.round(f.duration * 1000);
+    ms.get(fileName(f.path, bookPath)) ?? Math.round(f.duration * 1000);
   let at = 0;
   return sortFiles(files).map((f) => {
     const start = at;
@@ -268,12 +265,8 @@ export function editRequest(rows: DraftRow[], basis: ChapterBasis): ChapterEditR
 /** What a refused save means, as an i18n key (undefined: not one of the editor's own answers). */
 export function saveProblem(err: unknown): string | undefined {
   if (!(err instanceof ApiError)) return undefined;
-  // The code rides in "code" (respond.go writeErrorCode); a bare {"error": code} reads the same.
-  const code = err.code ?? err.message;
-  if (err.status === 409 && (code === 'chapters_basis' || !err.code)) {
-    return 'book.chapters.edit.basis';
-  }
-  if (err.status === 400 && code === 'chapters_invalid') {
+  if (err.status === 409 && err.code === 'chapters_basis') return 'book.chapters.edit.basis';
+  if (err.status === 400 && err.code === 'chapters_invalid') {
     const d = INVALID_DETAILS.find((x) => x === err.detail);
     return d ? `book.chapters.edit.invalid.${d}` : 'book.chapters.edit.invalid.other';
   }
@@ -294,26 +287,17 @@ export function parseTime(raw: string): number | undefined {
   const m = /^(\d{1,3})(?::(\d{1,2}))?:(\d{1,2})(\.\d{1,3})?$/.exec(v);
   if (!m) return undefined;
   const [, a, b, c, frac] = m;
-  const sec = Number(c);
-  if (sec > 59) return undefined;
+  if (Number(c) > 59 || (b !== undefined && Number(b) > 59)) return undefined;
   const total =
-    b === undefined
-      ? Number(a) * 60 + sec
-      : Number(b) > 59
-        ? undefined
-        : Number(a) * 3600 + Number(b) * 60 + sec;
-  return total === undefined ? undefined : roundMs(total + (frac ? Number(frac) : 0));
+    b === undefined ? Number(a) * 60 + Number(c) : Number(a) * 3600 + Number(b) * 60 + Number(c);
+  return roundMs(total + (frac ? Number(frac) : 0));
 }
 
 /** A whole-book time as the editor shows it: "1:02:03", with ".450" when not on a second. */
 export function formatStamp(seconds: number, withHours = seconds >= 3600): string {
   const ms = Math.max(0, Math.round(seconds * 1000));
-  const whole = Math.floor(ms / 1000);
-  const h = Math.floor(whole / 3600);
-  const m = Math.floor((whole % 3600) / 60);
-  const s = String(whole % 60).padStart(2, '0');
   const frac = ms % 1000 ? `.${String(ms % 1000).padStart(3, '0')}` : '';
-  return withHours || h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}${frac}` : `${m}:${s}${frac}`;
+  return formatClock(Math.floor(ms / 1000), withHours) + frac;
 }
 
 // ---- pasted timestamps ----

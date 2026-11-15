@@ -101,7 +101,7 @@ export function rowFix(
   fix: IssueFix,
   b: Pick<AdminBook, 'chapter_choice' | 'chapters_source'>,
 ): IssueFix {
-  return fix === 'detect' && (b.chapter_choice || b.chapters_source === 'edited') ? null : fix;
+  return detectChosenNote(fix, b) ? null : fix;
 }
 
 /** Why a no_chapters row offers no Detect chapters (rowFix): the edit or the choice, and where to undo it. */

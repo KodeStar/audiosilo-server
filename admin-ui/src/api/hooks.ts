@@ -989,16 +989,14 @@ export function useAdminBook(libraryId: number, path: string) {
 const CHECK_POLL_MS = 3000;
 
 /**
- * A token the chapter editor's <audio> streams the book's files with (minted while
- * `enabled`). It works for a day and is kept while the editor is open (a new one
+ * A token the chapter editor's <audio> streams the book's files with. It works for a day and is kept while the editor is open (a new one
  * would reload the audio mid-scrub), then dropped five minutes after; a failed mint
  * isn't retried (the player says so).
  */
-export function useBookMediaToken(libraryId: number, path: string, enabled: boolean) {
+export function useBookMediaToken(libraryId: number, path: string) {
   return useQuery({
     queryKey: keys.mediaToken(libraryId, path),
     queryFn: () => api.bookMediaToken(libraryId, path).then((r) => r.token),
-    enabled,
     staleTime: Infinity,
     retry: false,
   });

@@ -72,7 +72,7 @@ describe('the whole-book timeline', () => {
   });
 
   it('falls back to the file’s own length without a basis entry', () => {
-    expect(fileSpans([file('01.mp3', 1, 12.3456)], BOOK, undefined)).toEqual([
+    expect(fileSpans([file('01.mp3', 1, 12.3456)], BOOK, { files: [] })).toEqual([
       { path: `${BOOK}/01.mp3`, name: '01.mp3', start: 0, end: 12.346 },
     ]);
   });
@@ -233,10 +233,6 @@ describe('saveProblem', () => {
     expect(saveProblem(invalid('order'))).toBe('book.chapters.edit.invalid.order');
     expect(saveProblem(invalid('file_start'))).toBe('book.chapters.edit.invalid.file_start');
     expect(saveProblem(invalid('something_new'))).toBe('book.chapters.edit.invalid.other');
-    // The code as the bare error string reads the same.
-    expect(
-      saveProblem(new ApiError(400, 'chapters_invalid', undefined, undefined, { detail: 'title' })),
-    ).toBe('book.chapters.edit.invalid.title');
   });
 
   it('says the files changed on a 409, and leaves other failures to the generic wording', () => {
