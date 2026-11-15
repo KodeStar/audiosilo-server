@@ -301,6 +301,8 @@ function LinkForm({
   const wanted = choice ?? suggestedAccount(candidates, row)?.id;
   const chosen = candidates.find((u) => u.id === wanted)?.id;
   const { busy, error, submit } = useRowSubmit(onDone);
+  // No accounts to choose from because they couldn't be read: say so.
+  const loadError = users.isError && !users.data ? errorMessage(users.error, t) : null;
   const id = useId();
 
   function onSubmit(e: React.FormEvent) {
@@ -337,7 +339,7 @@ function LinkForm({
             })}
           </NativeSelect>
         </Field>
-        <FormError>{error}</FormError>
+        <FormError>{error ?? loadError}</FormError>
       </DialogBody>
       <DialogFormFooter
         busy={busy}

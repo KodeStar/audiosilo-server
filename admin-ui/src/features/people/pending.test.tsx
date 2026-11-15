@@ -142,6 +142,16 @@ describe('waiting sign-ins', () => {
     );
   });
 
+  it('says so when the accounts to link to could not be read', async () => {
+    mockFetch(routes({ 'GET /admin/users': { status: 403, body: { error: 'admins only' } } }));
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Link' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('admins only');
+    expect(within(dialog).getByRole('button', { name: 'Link' })).toBeDisabled();
+  });
+
   it('keeps a refused dialog open when its row went meanwhile and the list empties', async () => {
     let rows = [bobRow];
     mockFetch(
