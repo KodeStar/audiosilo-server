@@ -10,10 +10,6 @@ type Account struct {
 	// Linked: the account already has an identity from this issuer (another
 	// subject), so a second can't be linked.
 	Linked bool
-	// GroupsSeen: the linked identity (Input.Linked only) has signed in with a
-	// groups claim before, even an empty list, so the provider sends one for
-	// this person and a sign-in without it means no groups (Decide).
-	GroupsSeen bool
 }
 
 // eligible reports whether a verified email may link a sign-in to a: not a demo,
@@ -32,10 +28,14 @@ type Policy struct {
 // (issuer, subject) is linked to (nil when none), and, when none, the accounts
 // whose email equals the sign-in's (MatchEmail), whatever their state.
 type Input struct {
-	Claims  Claims
-	Linked  *Account
-	Matches []Account
-	Policy  Policy
+	Claims Claims
+	Linked *Account
+	// GroupsSeen: the linked identity has signed in with a groups claim
+	// before, even an empty list, so the provider sends one for this person
+	// and a sign-in without it means no groups. Always false with no Linked.
+	GroupsSeen bool
+	Matches    []Account
+	Policy     Policy
 }
 
 // Outcome is what a sign-in does.
@@ -75,7 +75,7 @@ type Decision struct {
 	Role string
 	// NoGroups: admin_group is set but the sign-in carried no groups claim at
 	// all (neither the ID token nor userinfo; an empty list is a claim) and
-	// the identity has never carried one (Account.GroupsSeen), so the role is
+	// the identity has never carried one (Input.GroupsSeen), so the role is
 	// left as it is: a provider that never sends the claim (no scope or mapper
 	// for it) demotes no one. Once the identity has carried it, an absent
 	// claim is no groups (some providers, Keycloak among them, leave the claim
@@ -105,7 +105,7 @@ const (
 func Decide(in Input) Decision {
 	d := decide(in)
 	if (d.Outcome == SignIn || d.Outcome == Link || d.Outcome == Create) && in.Policy.AdminGroup != "" {
-		if in.Claims.Groups == nil && (in.Linked == nil || !in.Linked.GroupsSeen) {
+		if in.Claims.Groups == nil && !in.GroupsSeen {
 			d.NoGroups = true
 			return d
 		}

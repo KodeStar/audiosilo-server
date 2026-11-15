@@ -144,13 +144,11 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
 		in := oidc.Input{Claims: c, Policy: p}
-		var seen bool
 		a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountFacts+`, i.groups_seen
 			  FROM user_identities i JOIN users u ON u.id = i.user_id
-			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &seen)
+			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &in.GroupsSeen)
 		switch {
 		case err == nil:
-			a.GroupsSeen = seen
 			in.Linked = &a
 		case !errors.Is(err, sql.ErrNoRows):
 			return err

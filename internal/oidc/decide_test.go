@@ -113,7 +113,7 @@ func TestDecideNoGroupsClaim(t *testing.T) {
 // A sign-in in the group still promotes.
 func TestDecideGroupsSeen(t *testing.T) {
 	t.Parallel()
-	in := Input{Linked: &Account{ID: 3, Admin: true, GroupsSeen: true}, Policy: Policy{AdminGroup: "audiosilo-admins"}}
+	in := Input{Linked: &Account{ID: 3, Admin: true}, GroupsSeen: true, Policy: Policy{AdminGroup: "audiosilo-admins"}}
 	if d := Decide(in); d.Outcome != SignIn || d.Role != RoleUser || d.NoGroups {
 		t.Fatalf("absent after seen: %+v", d)
 	}
