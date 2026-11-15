@@ -107,9 +107,28 @@ const FILE_START_SLACK = 0.05;
 const byStart = (rows: DraftRow[]) => [...rows].sort((a, b) => a.start - b.start);
 
 /**
+ * Of `rows` (in time order), the one nearest t and under `slack` seconds from it,
+ * the later of two as near (the one at or after t), leaving out `taken`.
+ */
+function nearest<T extends { start: number }>(
+  rows: T[],
+  t: number,
+  slack: number,
+  taken?: Set<T>,
+): T | undefined {
+  let best: T | undefined;
+  for (const r of rows) {
+    const d = Math.abs(r.start - t);
+    if (d < slack && !taken?.has(r) && (!best || d <= Math.abs(best.start - t))) best = r;
+  }
+  return best;
+}
+
+/**
  * The editor's first rows: the book's chapters as they play now, each file's
- * start a fixed row (the chapter that starts it, snapped to the exact file start;
- * one titled after the chapter running into it, or the file, when none does). A
+ * start a fixed row (the chapter that starts it, the nearest one when two are
+ * that close, snapped to the exact file start; one titled after the chapter
+ * running into it, or the file, when none does). A
  * chapter's start is its file's start on this timeline plus its start in the
  * file (its book offset only when its file isn't one of them), so a book of many
  * files, whose book offsets add up the lengths unrounded, lines up the same.
@@ -130,7 +149,7 @@ export function draftFromChapters(chapters: AdminChapter[], spans: FileSpan[]): 
     .sort((a, b) => a.start - b.start);
   const own = [...rows];
   for (const span of spans) {
-    const at = own.find((r) => Math.abs(r.start - span.start) < FILE_START_SLACK);
+    const at = nearest(own, span.start, FILE_START_SLACK);
     if (at) {
       at.start = roundMs(span.start);
       at.fixed = true;
@@ -364,8 +383,8 @@ export function parseTimestamps(text: string, end: number): PastedList {
 
 /**
  * The rows a pasted list makes: its chapters, and each file's start fixed. A
- * pasted chapter within a second of a file's start names that file's row (the
- * file starts it); a file no chapter starts is titled after the pasted chapter
+ * pasted chapter within a second of a file's start (the nearest) names that file's
+ * row (the file starts it); a file no chapter starts is titled after the pasted chapter
  * running into it, else keeps its row's title from `current`.
  */
 export function rowsFromPaste(
@@ -375,7 +394,7 @@ export function rowsFromPaste(
 ): DraftRow[] {
   const used = new Set<PastedChapter>();
   const rows: DraftRow[] = spans.map((span) => {
-    const at = pasted.find((p) => !used.has(p) && Math.abs(p.start - span.start) < MIN_GAP);
+    const at = nearest(pasted, span.start, MIN_GAP, used);
     if (at) used.add(at);
     const before = pasted.filter((p) => p.start < span.start).at(-1);
     const own = current.find((r) => r.fixed && r.start === roundMs(span.start));

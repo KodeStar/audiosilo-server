@@ -124,6 +124,23 @@ describe('draftFromChapters', () => {
     ]);
   });
 
+  it('fixes the chapter nearest a file’s start when two are close to it', () => {
+    // A 30 ms tail ends 01.mp3: 02.mp3's own first chapter starts it, not the tail.
+    const draft = draftFromChapters(
+      [
+        chapter(0, '01.mp3', 0, 99.97, 0),
+        chapter(1, '01.mp3', 99.97, 100, 99.97),
+        chapter(2, '02.mp3', 0, 50, 100),
+      ],
+      SPANS,
+    );
+    expect(draft.map((r) => [r.start, r.title, r.fixed])).toEqual([
+      [0, 'Chapter 1', true],
+      [99.97, 'Chapter 2', false],
+      [100, 'Chapter 3', true],
+    ]);
+  });
+
   it('adds a fixed row for a file no chapter starts, named after the chapter running into it', () => {
     const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], SPANS);
     expect(draft.map((r) => [r.start, r.title, r.fixed])).toEqual([
@@ -337,5 +354,15 @@ describe('pasted timestamps', () => {
     // The fixed rows keep their keys.
     expect(out[0].key).toBe('k0');
     expect(out[3].key).toBe('k1');
+  });
+
+  it('names a file’s start after the nearest pasted chapter within a second of it', () => {
+    const pasted = parseTimestamps('0:00 Intro\n1:39.2 Tail\n1:40 Part two', 150);
+    const out = rowsFromPaste(pasted.chapters, SPANS, rows([0, 'Old one', true]));
+    expect(out.map((r) => [r.start, r.title, r.fixed])).toEqual([
+      [0, 'Intro', true],
+      [99.2, 'Tail', false],
+      [100, 'Part two', true],
+    ]);
   });
 });
