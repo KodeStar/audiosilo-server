@@ -96,7 +96,8 @@ type Status struct {
 	CheckedAt string `json:"checked_at,omitempty"`
 }
 
-// ErrUnavailable is any call while discovery hasn't succeeded.
+// ErrUnavailable is any call while discovery hasn't succeeded, and an
+// Exchange the provider didn't answer within the call budget.
 var ErrUnavailable = errors.New("oidc: the provider is unavailable")
 
 // Provider is one OpenID provider: discovered on first use (and retried with
@@ -165,6 +166,16 @@ func (p *Provider) Check(ctx context.Context) Status {
 // makes shares it.
 func (p *Provider) budget(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, p.s.Budget)
+}
+
+// outOfTime is err, or ErrUnavailable when the use's budget ran out (or its
+// caller left): a provider too slow to answer refused nothing, so the sign-in
+// ends as unavailable and charges the address no failure.
+func outOfTime(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w: no answer within the sign-in's time (%v)", ErrUnavailable, err)
+	}
+	return err
 }
 
 // ready discovers the provider once (one attempt at a time, none during a
@@ -309,7 +320,7 @@ func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flo
 	octx := context.WithValue(ctx, oauth2.HTTPClient, p.client)
 	tok, err := p.oauthConfig(prov, redirectURI).Exchange(octx, code, oauth2.VerifierOption(f.Verifier))
 	if err != nil {
-		return Claims{}, fmt.Errorf("%w: %s", ErrExchange, exchangeError(err))
+		return Claims{}, outOfTime(ctx, fmt.Errorf("%w: %s", ErrExchange, exchangeError(err)))
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	if raw == "" {
@@ -317,7 +328,7 @@ func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flo
 	}
 	idt, err := verifier.Verify(gooidc.ClientContext(ctx, p.client), raw)
 	if err != nil {
-		return Claims{}, fmt.Errorf("%w: %s", ErrIDToken, exchangeError(err))
+		return Claims{}, outOfTime(ctx, fmt.Errorf("%w: %s", ErrIDToken, exchangeError(err)))
 	}
 	if subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(f.Nonce)) != 1 {
 		return Claims{}, ErrNonce
@@ -341,7 +352,7 @@ func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flo
 	if !c.complete() && prov.UserInfoEndpoint() != "" {
 		ui, err := prov.UserInfo(gooidc.ClientContext(ctx, p.client), oauth2.StaticTokenSource(tok))
 		if err != nil {
-			return Claims{}, fmt.Errorf("%w: %s", ErrUserinfo, exchangeError(err))
+			return Claims{}, outOfTime(ctx, fmt.Errorf("%w: %s", ErrUserinfo, exchangeError(err)))
 		}
 		if ui.Subject != idt.Subject {
 			return Claims{}, ErrSubMismatch

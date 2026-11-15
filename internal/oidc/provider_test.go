@@ -299,7 +299,8 @@ func TestCallsShareOneBudget(t *testing.T) {
 		if tc.ok && err != nil {
 			t.Fatalf("budget %v: %v", tc.budget, err)
 		}
-		if !tc.ok && (err == nil || took > tc.budget+delay) {
+		// Out of time is the provider unavailable (nothing refused), not a failure.
+		if !tc.ok && (!errors.Is(err, oidc.ErrUnavailable) || took > tc.budget+delay) {
 			t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
 		}
 	}
