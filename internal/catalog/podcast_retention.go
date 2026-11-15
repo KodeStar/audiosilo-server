@@ -302,7 +302,7 @@ func movePodcastState(ctx context.Context, tx *sql.Tx, lib int64, oldPath, newPa
 	for _, q := range []string{
 		`DELETE FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND ?3 IS NOT NULL`,
 		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND show_path=?3`,
-		`UPDATE podcast_feed_state SET show_path=?3,etag='',last_modified='',last_checked_at=NULL,last_success_at=NULL,last_status=0,error_code='',error='',secret_missing=0,failures=0,next_poll_at=NULL WHERE library_id=?1 AND show_path=?2 AND (feed_failures>0 OR failing_announced<>0)`,
+		`INSERT INTO podcast_feed_state(library_id,show_path,show_id,feed_failures,feed_network_failures,failing_announced) SELECT library_id,?3,show_id,feed_failures,feed_network_failures,failing_announced FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2 AND (feed_failures>0 OR failing_announced<>0)`,
 		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2`,
 		`DELETE FROM podcast_fetch_state WHERE library_id=?1 AND (rel_path=?2 OR rel_path=?3 OR substr(rel_path,1,length(?2)+1)=?2||'/' OR substr(rel_path,1,length(?3)+1)=?3||'/')`,
 	} {
