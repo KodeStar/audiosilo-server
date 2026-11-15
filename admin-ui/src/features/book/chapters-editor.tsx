@@ -484,7 +484,14 @@ function Scrubber({
     void a.play().catch(() => {});
     preview.current = setTimeout(() => a.pause(), PREVIEW_MS);
   };
-  const here = () => (span ? toBookTime(span, audio.current?.currentTime ?? pos) : 0);
+  // The playhead: the seek a file still loading waits for, else where the audio is.
+  // Never past the file's end: audio that plays on a little longer than the length
+  // the book has for it is still this file, not the start of the next.
+  const here = () => {
+    if (!span) return 0;
+    const at = pending.current ?? audio.current?.currentTime ?? pos;
+    return toBookTime(span, Math.min(at, length));
+  };
   const unavailable = failed || token.isError;
   // The controls wait for a file to play and give up with it.
   const off = !src || unavailable;

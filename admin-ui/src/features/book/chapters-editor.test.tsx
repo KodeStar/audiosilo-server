@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, ChapterEditRequest } from '@/api/types';
@@ -176,6 +176,8 @@ describe('the chapter editor', () => {
     // The editor's kind of token: it never counts against the admin's casts.
     expect(mint?.body).toEqual({ library_id: 1, path: BOOK_PATH, editor: true });
 
+    // The file has loaded (the playhead is the row's start until it has), and plays on.
+    fireEvent.loadedMetadata(audio);
     Object.defineProperty(audio, 'currentTime', { value: 1500.25, writable: true });
     await user.click(screen.getByRole('button', { name: 'Start chapter 2 at the playhead' }));
     expect(screen.getByRole('textbox', { name: 'Start of chapter 2' })).toHaveValue('25:00.250');
