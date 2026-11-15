@@ -259,7 +259,7 @@ auth:
     # client_secret_file: ""
     # scopes: [openid, profile, email, groups]  # [AUDIOSILO_OIDC_SCOPES]
     # username_claim: preferred_username  # a new account's username [AUDIOSILO_OIDC_USERNAME_CLAIM]
-    # groups_claim: groups                # [AUDIOSILO_OIDC_GROUPS_CLAIM]
+    # groups_claim: groups                # or a namespaced one, https://example.org/groups [AUDIOSILO_OIDC_GROUPS_CLAIM]
     ca_file: ""                          # PEM certificates trusted for the provider [AUDIOSILO_OIDC_CA_FILE]
     # Who may sign in and as what (Settings > Sign-in, applies at once). A
     # sign-in links to an existing account only by a verified email that matches

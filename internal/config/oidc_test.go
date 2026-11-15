@@ -32,6 +32,12 @@ func TestOIDCProblem(t *testing.T) {
 	if p := (OIDCConfig{}).Problem(""); p != "" {
 		t.Fatalf("off: %q", p)
 	}
+	// A namespaced claim, as some providers require of a custom one.
+	namespaced := good
+	namespaced.GroupsClaim = "https://audiosilo.example/groups"
+	if p := namespaced.Problem("https://audiosilo.example"); p != "" {
+		t.Fatalf("a namespaced claim: %q", p)
+	}
 	for name, c := range map[string]struct {
 		o      OIDCConfig
 		public string

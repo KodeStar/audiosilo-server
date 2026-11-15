@@ -3529,8 +3529,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   app changed: `touchInterval`) - there is no `last_login` column; don't add one.
 - **Single sign-on, Sign in with OpenID Connect (server#235, capability `oidc`, `internal/oidc`,
   `auth/identities.go`, `api/handlers_oidc.go`, `0075`)**: config `auth.oidc.*` (`config/oidc.go`,
-  settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims,
-  ca_file) are read only and restart-only in the console; `auto_create`, `allowed_group` and
+  settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims
+  (a claim's name may be namespaced, `https://example.org/groups`), ca_file) are read only and restart-only in the console; `auto_create`, `allowed_group` and
   `admin_group` are live and editable (env-set = locked). The **client secret** (`client_secret` |
   `AUDIOSILO_OIDC_CLIENT_SECRET` | `client_secret_file`, none = a public client) is no setting: never
   in `GET /admin/settings` (only `signin.client_secret_set`), never logged, never in an error, never

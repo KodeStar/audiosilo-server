@@ -169,18 +169,20 @@ func (o OIDCConfig) Problem(publicURL string) string {
 	}
 	for _, c := range []string{o.EffectiveUsernameClaim(), o.EffectiveGroupsClaim()} {
 		if !claimName(c) {
-			return "a claim name holds only letters, digits, '.', '_', '-' or ':'"
+			return "a claim name holds only letters, digits, '.', '_', '-', ':' or '/'"
 		}
 	}
 	return ""
 }
 
+// claimName reports whether s can name a claim: a plain name, or a namespaced
+// one as some providers require of a custom claim (https://example.org/groups).
 func claimName(s string) bool {
 	if s == "" || len(s) > 128 {
 		return false
 	}
 	for _, r := range s {
-		if !(r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._-:", r))) {
+		if !(r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._-:/", r))) {
 			return false
 		}
 	}
