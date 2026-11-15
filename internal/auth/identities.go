@@ -13,7 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-// Sign in with OpenID Connect's storage (server#235, migration 0075): an
+// Sign in with OpenID Connect's storage (server#235, migration 0077): an
 // account's identities at the provider (user_identities), the sign-ins no
 // account took (oidc_pending) and the one write a sign-in makes (OIDCSignIn),
 // which reads the accounts, asks oidc.Decide and applies its answer in one

@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-// TestMigration0075OIDC (server#235): an existing account gains an empty email,
+// TestMigration0077OIDC (server#235): an existing account gains an empty email,
 // identities are one per (issuer, subject) and one per account and provider, go
 // with their account and outlive the admin who linked them, and pending sign-ins
 // are one row per (issuer, subject).
-func TestMigration0075OIDC(t *testing.T) {
+func TestMigration0077OIDC(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dsn, exec, closeRaw := openBefore(t, "0075")
+	dsn, exec, closeRaw := openBefore(t, "0077")
 	exec(`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(1, 'alex', '', 'user', 't', 't')`)
 	exec(`INSERT INTO users(id, username, password_hash, role, created_at, updated_at) VALUES(2, 'root', 'h', 'admin', 't', 't')`)
 	closeRaw()

@@ -332,7 +332,7 @@ mapping or complete poll last ended the sync's refusal; see Audible sync in CONV
 (server#366: identifiers another app gave a book, source `abs` from an applied listening import, as
 match hints only, never `books.asin` and never on the wire; durable, path-keyed, no FK to the index,
 moved and joined with the book, owned by the import that wrote it (`import_id`, deleted by its undo);
-see Listening imports in CONVENTIONS.md). `0075` (server#235) adds `users.email` (optional, not unique,
+see Listening imports in CONVENTIONS.md). `0077` (server#235) adds `users.email` (optional, not unique,
 a NOCASE index), `user_identities` (a single sign-on linked to an account: UNIQUE(issuer, subject) and
 UNIQUE(user_id, issuer), cascades with the user) and `oidc_pending` (sign-ins waiting for an admin, one per
 issuer+subject); see Single sign-on in CONVENTIONS.md.
@@ -365,7 +365,7 @@ keep this index in step (one line per topic).
   - Invite vs recovery (`auth_codes.kind`)
   - Password ends sessions (server#281: change, reset, Sign out everywhere; sessions, pairing codes, recovery code)
   - Personal API keys (`tokens.kind='api'`)
-  - Single sign-on, Sign in with OpenID Connect (server#235, `internal/oidc`, `auth/identities.go`, `0075`: config `auth.oidc` and settings `signin`, the secret, public_url, Decide, pending sign-ins, the flow and its cookies, finish, role sync, the admin routes)
+  - Single sign-on, Sign in with OpenID Connect (server#235, `internal/oidc`, `auth/identities.go`, `0077`: config `auth.oidc` and settings `signin`, the secret, public_url, Decide, pending sign-ins, the flow and its cookies, finish, role sync, the admin routes)
   - Web player at `/web`
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)

@@ -3523,7 +3523,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rejects empty-hash accounts) - player-only users onboard purely via auth-code
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
   shares + issued auth codes (metadata only; codes are unretrievable by design);
-  `DELETE /admin/authcodes/{id}` revokes a code. **Email** (`users.email`, `0075`, server#235):
+  `DELETE /admin/authcodes/{id}` revokes a code. **Email** (`users.email`, `0077`, server#235):
   optional, `""` = none, set by `POST /admin/users` `email` and `PATCH` `email` (`""` clears;
   `auth.NormalizeEmail`: trimmed, at most 254, an `@` with text either side, no spaces, else 400 `invalid_email`), on
   `adminUser` only (never `/me`, never the audit: its details say `set`/`cleared`); not unique, so
@@ -3533,7 +3533,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ResolveRequest`, at most once a minute per token unless the request's address or
   app changed: `touchInterval`) - there is no `last_login` column; don't add one.
 - **Single sign-on, Sign in with OpenID Connect (server#235, capability `oidc`, `internal/oidc`,
-  `auth/identities.go`, `api/handlers_oidc.go`, `0075`)**: config `auth.oidc.*` (`config/oidc.go`,
+  `auth/identities.go`, `api/handlers_oidc.go`, `0077`)**: config `auth.oidc.*` (`config/oidc.go`,
   settings section `signin`): the provider fields (enabled, name, issuer, client_id, scopes, claims
   (a claim's name may be namespaced, `https://example.org/groups`), ca_file) are read only and restart-only in the console; `auto_create`, `allowed_group` and
   `admin_group` are live and editable (env-set = locked). The **client secret** (`client_secret` |
