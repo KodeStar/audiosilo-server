@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -160,8 +159,9 @@ func (o OIDCConfig) Problem(publicURL string) string {
 	if o.Issuer == "" {
 		return "set auth.oidc.issuer"
 	}
-	u, err := url.Parse(o.Issuer)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+	// httpURL's rule, with no space around it: the issuer is used exactly as
+	// configured (a trailing slash counts).
+	if _, err := httpURL(o.Issuer); err != nil || strings.TrimSpace(o.Issuer) != o.Issuer {
 		return "auth.oidc.issuer must be an http(s) address with no ?, # or user name"
 	}
 	if strings.TrimSpace(o.ClientID) == "" {
@@ -190,18 +190,10 @@ func claimName(s string) bool {
 // MaxOIDCGroup bounds a group name setting, in characters.
 const MaxOIDCGroup = 256
 
-// fixOIDCGroup trims a group setting and refuses one too long or with control
-// characters.
-func fixOIDCGroup(p *string) error {
-	*p = strings.TrimSpace(*p)
-	if utf8.RuneCountInString(*p) > MaxOIDCGroup {
-		return fmt.Errorf("a group name can be at most %d characters", MaxOIDCGroup)
-	}
-	if strings.IndexFunc(*p, unicode.IsControl) >= 0 {
-		return errors.New("a group name can't contain line breaks or control characters")
-	}
-	return nil
+func fixOIDCAdminGroup(c *Config) error {
+	return fixText(&c.Auth.OIDC.AdminGroup, MaxOIDCGroup, "a group name")
 }
 
-func fixOIDCAdminGroup(c *Config) error   { return fixOIDCGroup(&c.Auth.OIDC.AdminGroup) }
-func fixOIDCAllowedGroup(c *Config) error { return fixOIDCGroup(&c.Auth.OIDC.AllowedGroup) }
+func fixOIDCAllowedGroup(c *Config) error {
+	return fixText(&c.Auth.OIDC.AllowedGroup, MaxOIDCGroup, "a group name")
+}

@@ -468,13 +468,17 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 // MaxServerName is the longest server name, in characters.
 const MaxServerName = 64
 
-func fixName(c *Config) error {
-	c.Name = strings.TrimSpace(c.Name)
-	if utf8.RuneCountInString(c.Name) > MaxServerName {
-		return fmt.Errorf("a name can be at most %d characters", MaxServerName)
+func fixName(c *Config) error { return fixText(&c.Name, MaxServerName, "a name") }
+
+// fixText trims a one-line text setting and refuses one over limit characters
+// or with control characters; what names it in the message ("a name").
+func fixText(p *string, limit int, what string) error {
+	*p = strings.TrimSpace(*p)
+	if utf8.RuneCountInString(*p) > limit {
+		return fmt.Errorf("%s can be at most %d characters", what, limit)
 	}
-	if strings.IndexFunc(c.Name, unicode.IsControl) >= 0 {
-		return errors.New("a name can't contain line breaks or control characters")
+	if strings.IndexFunc(*p, unicode.IsControl) >= 0 {
+		return errors.New(what + " can't contain line breaks or control characters")
 	}
 	return nil
 }
