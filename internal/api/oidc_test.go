@@ -573,6 +573,23 @@ func TestOIDCFinishOnlySignInTokens(t *testing.T) {
 	}
 }
 
+// Security-critical: a sign-in's token (auth.KindOIDC) authenticates no
+// request: it is a 401 on every authenticated route of the table, as the
+// header and as ?token=, and is left unspent there (finish still takes it).
+func TestOIDCTokenRefusedOnEveryRoute(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	// Two requests per route: more than one address's burst.
+	e.api.ipLimiter = newRateLimiter(100000, 100000)
+	e.api.mediaLimiter = newRateLimiter(100000, 100000)
+	_, done := e.signInDone(t, oidcReturnWeb)
+	refusedOnRoutes(t, e.testEnv, "single sign-on", done.Value, authedRoutes(t), "1", "path=x")
+	if resp, out := e.finish(t, done, "web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("finish after the refusals: %d %v", resp.StatusCode, out)
+	}
+}
+
 // TestOIDCFinishCookieName: on an https public_url finish reads only the
 // __Host- cookie, so one a sibling subdomain or a plain-http answer planted
 // under the bare name finishes nothing (and spends nothing); on plain http,
