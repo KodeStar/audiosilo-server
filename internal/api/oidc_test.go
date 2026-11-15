@@ -408,7 +408,9 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 	mu.Unlock()
 	wantResult(t, e.callback(t, path, cookie), oidcExpired)
 
-	// The provider ended it (the person cancelled).
+	// The provider ended it (the person cancelled). Only a completed flow is
+	// remembered, so states sent back bare can't fill the replay memory: the
+	// same flow still completes afterwards.
 	cookie, path = e.start(t, oidcReturnAdmin)
 	u, _ = url.Parse(path)
 	q = u.Query()
@@ -416,6 +418,9 @@ func TestOIDCFlowTamperingDenied(t *testing.T) {
 	q.Set("error", "access_denied")
 	u.RawQuery = q.Encode()
 	wantResult(t, e.callback(t, u.RequestURI(), cookie), oidcFailed)
+	if loc := e.callback(t, path, cookie); !strings.Contains(loc, "#oidc_token=") {
+		t.Fatalf("a flow sent back bare was remembered: %q", loc)
+	}
 }
 
 // TestOIDCTokenRefused: an ID token the checks refuse (a symmetric signature,

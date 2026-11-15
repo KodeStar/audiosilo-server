@@ -225,9 +225,10 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // handleOIDCCallback finishes a sign-in (public; the provider's redirect). The
 // flow cookie is deleted whatever happens. Refused, with a failure charged to
 // the address's oidcLimiter: a missing, foreign or expired cookie, a state that
-// isn't the cookie's (constant time), a flow already used (a copied cookie), a
-// failed exchange or a refused ID token. The provider's ?error= (the person
-// cancelled) is a failure that charges nothing. Otherwise oidc.Decide's answer
+// isn't the cookie's (constant time), a failed exchange or a refused ID token,
+// a flow already used (a copied cookie; checked after the exchange, so only a
+// completed flow is remembered). The provider's ?error= (the person cancelled)
+// is a failure that charges nothing. Otherwise oidc.Decide's answer
 // (auth.OIDCSignIn) and its audits, then the pairing token for the flow's
 // return, or the result panel.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
@@ -274,10 +275,6 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail(oidcFailed, "state mismatch", nil)
 		return
 	}
-	if !a.oidc.replay.Use(f.State) {
-		fail(oidcFailed, "flow used before", nil)
-		return
-	}
 	if e := q.Get("error"); e != "" {
 		a.log.Info("oidc: the provider ended the sign-in", "error", clip(e, 64))
 		a.oidcResult(w, r, oidcFailed)
@@ -295,6 +292,13 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		fail(oidcFailed, "exchange or token refused", err)
+		return
+	}
+	// Once per flow, and only a flow the provider completed takes a place in
+	// the memory: a flood of /start states sent back bare (or with ?error=)
+	// can't fill it and so refuse everyone's sign-in.
+	if !a.oidc.replay.Use(f.State) {
+		fail(oidcFailed, "flow used before", nil)
 		return
 	}
 	pol := a.config().Auth.OIDC
