@@ -856,7 +856,12 @@ func (s *Service) OIDCPending(ctx context.Context, pendingID int64, provider, na
 	}
 	data := map[string]any{"provider": plainLine(provider, 100)}
 	for _, who := range []string{name, username} {
-		if who = plainLine(who, 100); who != "" && !strings.Contains(who, "@") {
+		// Checked whole, before the cut: an "@" past it would leave its
+		// leading part (an address's local part) behind.
+		if strings.Contains(who, "@") {
+			continue
+		}
+		if who = plainLine(who, 100); who != "" {
 			data["person"] = who
 			break
 		}

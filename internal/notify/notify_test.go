@@ -988,8 +988,8 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 // again. Every destination and the bell get the same facts.
 func TestOIDCPending(t *testing.T) {
 	s, cat, ctx := newService(t)
-	if Kinds[len(Kinds)-1] != KindOIDCPending {
-		t.Fatal("oidc_pending must be the last kind a destination can subscribe to")
+	if !slices.Contains(Kinds, KindOIDCPending) {
+		t.Fatal("oidc_pending must be a kind a destination can subscribe to")
 	}
 	hook := newFakeDest(t)
 	addTarget(t, cat, TargetWebhook, hook.srv.URL, "", KindOIDCPending)
@@ -1038,5 +1038,12 @@ func TestOIDCPending(t *testing.T) {
 		if oidcPendingText[reason] == "" {
 			t.Fatalf("reason %s has no words", reason)
 		}
+	}
+	// An "@" past the 100 kept is seen all the same: the name is left out
+	// whole, not cut to the address's local part.
+	s.OIDCPending(ctx, 11, "Keycloak", strings.Repeat("x", 99)+"carolsmith@example.org", "", "no_match")
+	events, _, err = cat.ListServerEvents(ctx, 0, 1, KindOIDCPending)
+	if err != nil || len(events) != 1 || events[0].Data["person"] != nil {
+		t.Fatalf("a long name with an address: %+v, %v", events, err)
 	}
 }
