@@ -537,7 +537,7 @@ func bridgeParkReason(code string) string {
 
 // feedCodeText words a failed podcast poll's code (bridge.PodcastOutcome's,
 // the Bridge's own): what went wrong with the feed, never its address.
-var feedCodeText = map[string]string{
+var feedCodeText = map[string]string{ //nolint:gosec // G101: sentences keyed by failure codes, not credentials
 	"gone":                "The feed's address says it is gone, so the Bridge stopped checking it. Follow the show again by its new address.",
 	"feed_secret_missing": "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it.",
 	"dns":                 "The feed's host couldn't be found.",
