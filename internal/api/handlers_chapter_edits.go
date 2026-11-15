@@ -44,7 +44,7 @@ func (a *API) handleAdminEditChapters(w http.ResponseWriter, r *http.Request) {
 		a.writeBookError(w, err, "edit chapters failed", "could not save the chapters", "library", lib.ID, "path", p)
 		return
 	}
-	a.audit(r, "book.chapters_edited", lib.Name+": "+p, map[string]any{"chapters": len(req.Chapters)})
+	a.audit(r, "book.chapters_edited", lib.Name+": "+p, map[string]any{"chapter_count": len(req.Chapters)})
 	a.writeBookDetail(w, r, lib, p)
 }
 

@@ -2598,7 +2598,7 @@
   "audit.detail.source": "Von",
   "audit.detail.revert": "Zurückgesetzt",
   "audit.detail.chapters": "Kapiteltitel",
-  "audit.detail.chapterCount": "Kapitel",
+  "audit.detail.chapter_count": "Kapitel",
   "audit.detail.books": "Bücher",
   "audit.detail.bytes": "Größe",
   "audit.detail.paths": "Ordner und Bücher",

@@ -2762,7 +2762,7 @@
   "audit.detail.source": "Source",
   "audit.detail.revert": "Rétabli",
   "audit.detail.chapters": "Titres des chapitres",
-  "audit.detail.chapterCount": "Chapitres",
+  "audit.detail.chapter_count": "Chapitres",
   "audit.detail.books": "Livres",
   "audit.detail.bytes": "Taille",
   "audit.detail.paths": "Dossiers et livres",

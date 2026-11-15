@@ -2762,7 +2762,7 @@
   "audit.detail.source": "Origen",
   "audit.detail.revert": "Revertido",
   "audit.detail.chapters": "Títulos de capítulos",
-  "audit.detail.chapterCount": "Capítulos",
+  "audit.detail.chapter_count": "Capítulos",
   "audit.detail.books": "Libros",
   "audit.detail.bytes": "Tamaño",
   "audit.detail.paths": "Carpetas y libros",
