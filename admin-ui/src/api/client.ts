@@ -18,6 +18,7 @@ import type {
   BackupsEnvelope,
   BridgeEstimate,
   BridgeJob,
+  ChapterEditRequest,
   BridgeJobPage,
   BridgeJobRequest,
   BridgePairCode,
@@ -122,12 +123,14 @@ export class ApiError extends Error {
   /** Which rule a refused field broke (e.g. invalid_target's notify.Reason*), and a length's limit. */
   readonly reason?: string;
   readonly max?: number;
+  /** Which rule a refused chapter edit broke (code "chapters_invalid": empty, order, ...). */
+  readonly detail?: string;
   constructor(
     status: number,
     message: string,
     code?: string,
     field?: string,
-    detail: { reason?: string; max?: number } = {},
+    detail: { reason?: string; max?: number; detail?: string } = {},
   ) {
     super(message);
     this.name = 'ApiError';
@@ -136,6 +139,7 @@ export class ApiError extends Error {
     this.field = field;
     this.reason = detail.reason;
     this.max = detail.max;
+    this.detail = detail.detail;
   }
 }
 
@@ -222,6 +226,7 @@ async function apiError(res: Response): Promise<ApiError> {
     {
       reason: typeof env?.reason === 'string' ? env.reason : undefined,
       max: typeof env?.max === 'number' ? env.max : undefined,
+      detail: typeof env?.detail === 'string' ? env.detail : undefined,
     },
   );
 }
@@ -260,6 +265,13 @@ function checkSession(err: ApiError, path: string) {
 
 /** The path query every content endpoint takes (path is the identity, never an id). */
 const pathQuery = (path: string) => `?${new URLSearchParams({ path }).toString()}`;
+
+/**
+ * An audio file's stream URL for an <audio> element: `token` is a book media token
+ * (api.bookMediaToken), never the session's, which would leak into logs and history.
+ */
+export const streamUrl = (libraryId: number, path: string, token: string) =>
+  `${API}/libraries/${libraryId}/stream?${new URLSearchParams({ path, token }).toString()}`;
 
 /**
  * The filters GET /admin/books and /admin/books/facets share
@@ -741,6 +753,34 @@ export const api = {
   /** Sets or reverts overrides; answers with the updated book page. */
   editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
     request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),
+  /**
+   * Replaces the book's chapters with an edited list (whole-book starts) against the
+   * files it was made for (`basis`, from the page); answers with the page. 400
+   * chapters_invalid names the rule broken in `detail`; 409 chapters_basis: the files
+   * changed since.
+   */
+  saveChapters: (libraryId: number, path: string, edit: ChapterEditRequest) =>
+    request<AdminBookDetail>(
+      'PUT',
+      `/admin/libraries/${libraryId}/book/chapters${pathQuery(path)}`,
+      edit,
+    ),
+  /** Reverts an edited chapter list (applied or set aside); answers with the page. */
+  revertChapters: (libraryId: number, path: string) =>
+    request<AdminBookDetail>(
+      'DELETE',
+      `/admin/libraries/${libraryId}/book/chapters${pathQuery(path)}`,
+    ),
+  /**
+   * A token for one book's audio (POST /cast/token: book-scoped, short-lived, ended by
+   * signing out), so an <audio> element, which can't send the Authorization header,
+   * streams it without the session token in its URL.
+   */
+  bookMediaToken: (libraryId: number, path: string) =>
+    request<{ token: string; expires_at: string }>('POST', '/cast/token', {
+      library_id: libraryId,
+      path,
+    }),
   /** Checks the book against the community's chapter list, in the background; answers with the page. */
   checkCommunityChapters: (libraryId: number, path: string) =>
     request<AdminBookDetail>(

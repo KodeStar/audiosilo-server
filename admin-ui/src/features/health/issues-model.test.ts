@@ -3,12 +3,28 @@ import { issuesSummary } from '@/test/fixtures';
 import {
   attentionTotal,
   chaptersCheckNote,
+  detectChosenNote,
   fixFor,
   footKey,
   issueDetail,
   issueReason,
   pickCategory,
+  rowFix,
 } from './issues-model';
+
+it('offers Detect chapters only for a book with no chosen source and no edited chapters', () => {
+  expect(rowFix('detect', adminBook())).toBe('detect');
+  expect(detectChosenNote('detect', adminBook())).toBeUndefined();
+  const chosen = adminBook({ chapter_choice: 'files' });
+  expect(rowFix('detect', chosen)).toBeNull();
+  expect(detectChosenNote('detect', chosen)).toBe('health.detect.chosen.files');
+  // Edited chapters stand over found ones, choice or not.
+  const edited = adminBook({ chapters_source: 'edited' });
+  expect(rowFix('detect', edited)).toBeNull();
+  expect(detectChosenNote('detect', edited)).toBe('health.detect.edited');
+  // Another category's fix is untouched.
+  expect(rowFix('join', edited)).toBe('join');
+});
 
 it('says why a book is listed, per category', () => {
   const broken = adminBook({

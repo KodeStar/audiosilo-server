@@ -8,7 +8,7 @@ import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { canCheckChapters, communityState } from './book-model';
+import { canCheckChapters, chapterSourceAction, communityState } from './book-model';
 
 const BOOK_PATH = 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings';
 const URL = `/library/book?library=1&path=${encodeURIComponent(BOOK_PATH)}`;
@@ -353,6 +353,29 @@ describe('communityState', () => {
   it('says when the last check failed', () => {
     const d = bookDetail({ community_chapters: check({}), community_check_failed: true });
     expect(communityState(d, duration)?.notes[0]).toEqual({ key: 'book.community.lastFailed' });
+  });
+
+  it('offers nothing to switch to or take while edited chapters apply', () => {
+    for (const status of ['refine', 'titles'] as const) {
+      const d = bookDetail({
+        chapter_source: 'edited',
+        chapter_choice: 'files',
+        community_chapters: check({
+          status,
+          detail: {
+            ...check({}).detail!,
+            title_diffs: [
+              { index: 0, current: 'Prelude to the Stormlight Archive', community: 'Prelude' },
+            ],
+          },
+        }),
+      });
+      const state = communityState(d, duration);
+      expect(state?.action).toBeUndefined();
+      expect(state?.titles).toEqual([]);
+      expect(state?.notes.at(-1)).toEqual({ key: 'book.community.edited' });
+      expect(chapterSourceAction(d, state)).toBeUndefined();
+    }
   });
 
   it('offers a fill the admin turned off back as automatic', () => {

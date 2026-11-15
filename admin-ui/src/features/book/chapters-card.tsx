@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { AudioLines, Info, Undo2 } from 'lucide-react';
+import { AudioLines, Info, ListRestart, Lock, Pencil, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { InlineEdit } from '@/components/inline-edit';
+import { Notice } from '@/components/notice';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
 import { useBookGenerateJob } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
-import { formatClock, formatDuration } from '@/lib/format';
+import { formatClock, formatDateTime, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -22,6 +24,7 @@ import {
   fileStrip,
   ribbonSegments,
 } from './book-model';
+import { ChaptersEditor } from './chapters-editor';
 import { CommunityChapters } from './community-chapters';
 import { FIRST_ROWS, ShowAllToggle } from './show-all-toggle';
 
@@ -34,7 +37,11 @@ const CHAPTER_ORIGIN: Partial<Record<ChapterSource, string>> = {
 /**
  * The Chapters card (STYLEGUIDE.md "Chapter ribbon"): a proportional timeline
  * coloured per file, a file strip for multi-file books, and the list, where a
- * title is renamed in place and saved at once as an override.
+ * title is renamed in place and saved at once as an override. Edit chapters
+ * opens the editor (chapters-editor.tsx), whose saved list stands over every
+ * other source (chapter_source "edited", titles renamed only there) until it is
+ * reverted, and is set aside (dormant) while the files differ from the ones it
+ * was made for.
  */
 export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const { t, i18n } = useTranslation();
@@ -48,7 +55,11 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const files = detail.files ?? [];
   const [active, setActive] = useState<number | null>(null);
   const [all, setAll] = useState(false);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [renaming, setRenaming] = useState<number | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [reverting, setReverting] = useState(false);
+  const edited = detail.chapter_source === 'edited';
+  const chapterEdit = detail.chapter_edit;
   // The chapter a ribbon click asked for: its row scrolls into view.
   const [jump, setJump] = useState<number | null>(null);
   const problem = chapterProblem(chapters, b.duration);
@@ -90,7 +101,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   };
 
   const rename = (c: AdminChapter, raw: string) => {
-    setEditing(null);
+    setRenaming(null);
     const title = raw.trim();
     if (title === c.title) return;
     // An emptied title can't be saved: it means "back to the file's title".
@@ -120,18 +131,82 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
       }),
     );
 
+  const revertEdit = async () => {
+    settleBookEdit(qc, await api.revertChapters(b.library_id, b.path));
+    invalidateIssues(qc);
+    toast.add({ title: t('book.chapters.edit.reverted'), type: 'success' });
+  };
+
+  const header = (
+    <CardHeader
+      titleId="chapters-title"
+      title={t('book.chapters.title')}
+      description={t('book.chapters.summary', {
+        chapters: t('book.chapters.count', { count: chapters.length }),
+        files: t('book.chapters.files', { count: files.length }),
+        length: formatDuration(b.duration, lang),
+      })}
+      action={
+        !editing && files.length ? (
+          <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+            <Pencil aria-hidden="true" />
+            {t('book.chapters.edit.open')}
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+
+  if (editing) {
+    return (
+      <Card aria-labelledby="chapters-title">
+        {header}
+        <div className="p-5">
+          <ChaptersEditor detail={detail} onClose={() => setEditing(false)} />
+        </div>
+      </Card>
+    );
+  }
+
+  const editedBy = chapterEdit
+    ? t(chapterEdit.edited_by ? 'book.chapters.edit.editedBy' : 'book.chapters.edit.editedAt', {
+        user: chapterEdit.edited_by,
+        when: formatDateTime(chapterEdit.edited_at, lang, true),
+      })
+    : '';
+  const revertButton = (
+    <Button variant="outline" size="sm" onClick={() => setReverting(true)}>
+      <ListRestart aria-hidden="true" />
+      {t('book.chapters.edit.revert')}
+    </Button>
+  );
+
   return (
     <Card aria-labelledby="chapters-title">
-      <CardHeader
-        titleId="chapters-title"
-        title={t('book.chapters.title')}
-        description={t('book.chapters.summary', {
-          chapters: t('book.chapters.count', { count: chapters.length }),
-          files: t('book.chapters.files', { count: files.length }),
-          length: formatDuration(b.duration, lang),
-        })}
-      />
+      {header}
       <div className="flex flex-col gap-3.5 p-5">
+        {chapterEdit?.state === 'dormant' ? (
+          <Notice
+            tone="warn"
+            icon={Info}
+            title={t('book.chapters.edit.dormantTitle')}
+            actions={revertButton}
+          >
+            {t('book.chapters.edit.dormantBody')} {editedBy}
+          </Notice>
+        ) : null}
+        {edited ? (
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <p className="flex min-w-0 flex-1 basis-60 items-start gap-2 text-[13.5px] text-muted-foreground">
+              <Lock className="mt-0.5 size-4 shrink-0 text-prov-edit" aria-hidden="true" />
+              <span>
+                <b className="font-semibold text-foreground">{t('book.chapters.edit.source')}</b>{' '}
+                {editedBy}
+              </span>
+            </p>
+            {revertButton}
+          </div>
+        ) : null}
         <CommunityChapters detail={detail} />
         {detail.chapter_source === 'generated' || sourceAction ? (
           <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
@@ -235,10 +310,11 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
                 withHours={withHours}
                 active={active === c.index}
                 jump={jump === c.index}
-                editing={editing === c.index}
+                editing={renaming === c.index}
+                renamable={!edited}
                 onActive={() => setActive(c.index)}
-                onEdit={() => setEditing(c.index)}
-                onCancel={() => setEditing(null)}
+                onEdit={() => setRenaming(c.index)}
+                onCancel={() => setRenaming(null)}
                 onRename={(title) => rename(c, title)}
                 onRevert={() => revert(c)}
                 origin={origin}
@@ -253,6 +329,15 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
           onToggle={() => setAll(!all)}
         />
       </div>
+      <ConfirmDialog
+        open={reverting}
+        onOpenChange={setReverting}
+        icon={ListRestart}
+        title={t('book.chapters.edit.revertTitle')}
+        description={t('book.chapters.edit.revertBody')}
+        confirmLabel={t('book.chapters.edit.revertConfirm')}
+        onConfirm={revertEdit}
+      />
     </Card>
   );
 }
@@ -264,6 +349,7 @@ function ChapterRow({
   active,
   jump,
   editing,
+  renamable,
   onActive,
   onEdit,
   onCancel,
@@ -277,6 +363,8 @@ function ChapterRow({
   active: boolean;
   jump: boolean;
   editing: boolean;
+  /** False while an edited list applies: its titles change in the editor. */
+  renamable: boolean;
   onActive: () => void;
   onEdit: () => void;
   onCancel: () => void;
@@ -311,14 +399,18 @@ function ChapterRow({
         />
       ) : (
         <span className="flex min-w-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onEdit}
-            aria-label={t('book.chapters.rename', { title: c.title })}
-            className="-mx-1.5 -my-0.5 min-w-0 cursor-text truncate rounded-[6px] px-1.5 py-0.5 text-left font-medium hover:bg-card hover:shadow-[inset_0_0_0_1px_var(--border-strong)]"
-          >
-            {c.title}
-          </button>
+          {renamable ? (
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={t('book.chapters.rename', { title: c.title })}
+              className="-mx-1.5 -my-0.5 min-w-0 cursor-text truncate rounded-[6px] px-1.5 py-0.5 text-left font-medium hover:bg-card hover:shadow-[inset_0_0_0_1px_var(--border-strong)]"
+            >
+              {c.title}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate font-medium">{c.title}</span>
+          )}
           {c.edited ? (
             <>
               <ProvenanceMarker source="edited" short />

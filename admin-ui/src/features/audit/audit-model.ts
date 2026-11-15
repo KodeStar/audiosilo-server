@@ -153,7 +153,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     else if (DURATIONS.has(key) && typeof v === 'number')
       value = fmt.duration(v) || t('audit.value.none');
     else value = valueText(v, t, fmt);
-    out.push({ label: label(key), value });
+    // An edited chapter list's size, not the renamed titles a book edit's `chapters` holds.
+    const name = key === 'chapters' && e.action === 'book.chapters_edited' ? 'chapterCount' : key;
+    out.push({ label: label(name), value });
   }
   return out;
 }
