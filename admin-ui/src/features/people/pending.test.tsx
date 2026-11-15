@@ -341,9 +341,14 @@ describe('a person’s single sign-on', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Unlink Keycloak from sam?' });
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     expect(await screen.findByText('Keycloak unlinked')).toBeInTheDocument();
-    expect(
-      calls.some((c) => c.method === 'DELETE' && c.path === '/admin/users/2/identities/9'),
-    ).toBe(true);
+    const at = calls.findIndex(
+      (c) => c.method === 'DELETE' && c.path === '/admin/users/2/identities/9',
+    );
+    expect(at).toBeGreaterThanOrEqual(0);
+    // The waiting sign-ins are read again: their Link offers this account once more.
+    await waitFor(() =>
+      expect(calls.slice(at).some((c) => c.path === '/admin/oidc/pending')).toBe(true),
+    );
   });
 
   it('says a password-less admin needs a password first', async () => {

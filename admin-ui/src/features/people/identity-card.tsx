@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Unlink } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidatePeople, useOIDCStatus } from '@/api/hooks';
+import { invalidatePeople, keys, useOIDCStatus } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { FactList } from '@/components/fact-list';
@@ -90,6 +90,8 @@ function IdentityCard({
         onConfirm={async () => {
           await api.unlinkIdentity(u.id, i.id);
           invalidatePeople(qc);
+          // The waiting sign-ins' Link offers this account again.
+          void qc.invalidateQueries({ queryKey: keys.oidcPending });
           toast.add({ title: t('user.identity.unlinked', { provider }), type: 'success' });
         }}
       />
