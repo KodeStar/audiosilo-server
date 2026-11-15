@@ -218,6 +218,19 @@ describe('single sign-on', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent("Single sign-on didn't finish");
     expect(getToken()).toBeNull();
   });
+
+  it('keeps the session it had when the token signs no admin in (a link with a spent one)', async () => {
+    setToken('stored');
+    const calls = mockFetch({
+      ...signedInRoutes(),
+      'POST /auth/exchange': { status: 401, body: { error: 'invalid or expired pairing token' } },
+    });
+    renderApp('/', { oidcToken: 'tok_4' });
+    expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
+    expect(getToken()).toBe('stored');
+    expect(calls.find((c) => c.path === '/me')?.headers.Authorization).toBe('Bearer stored');
+    expect(calls.some((c) => c.path === '/auth/logout')).toBe(false);
+  });
 });
 
 describe('overview', () => {

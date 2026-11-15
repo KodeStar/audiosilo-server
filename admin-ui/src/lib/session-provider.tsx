@@ -24,6 +24,9 @@ export function SessionProvider({
   );
   // The exchange runs once (the token is single use), whatever the effect's re-runs.
   const exchange = useRef<Promise<LoginResponse | null> | null>(null);
+  // While a single sign-on's token is being traded, the stored token waits; one
+  // that signs no admin in hands back to it (below).
+  const [trading, setTrading] = useState(Boolean(oidcToken));
   const [attempt, setAttempt] = useState(0);
 
   const dropSession = useCallback(
@@ -68,10 +71,15 @@ export function SessionProvider({
   // Trade a single sign-on's token for a session. An account that isn't an
   // admin is signed straight out again (no session left behind), like the
   // password form; the session this browser held before is ended once the new
-  // one is in.
+  // one is in. A token that signs no admin in (spent, forged in a link, a
+  // non-admin's) leaves a stored session alone: it is checked as on any load.
   useEffect(() => {
     if (!oidcToken) return;
     let cancelled = false;
+    const noAdmin = (reason: SignedOutReason) => {
+      if (getToken()) setTrading(false);
+      else dropSession(reason);
+    };
     exchange.current ??= api.exchange(oidcToken).then(async (res) => {
       if (res.user.role === 'admin') return res;
       await api.logout(res.token).catch(() => {});
@@ -81,7 +89,7 @@ export function SessionProvider({
       .then((res) => {
         if (cancelled) return;
         if (!res) {
-          dropSession('notAdmin');
+          noAdmin('notAdmin');
           return;
         }
         const previous = getToken();
@@ -90,7 +98,7 @@ export function SessionProvider({
         setState({ status: 'signed-in', user: res.user });
       })
       .catch(() => {
-        if (!cancelled) dropSession('oidcFailed');
+        if (!cancelled) noAdmin('oidcFailed');
       });
     return () => {
       cancelled = true;
@@ -98,9 +106,9 @@ export function SessionProvider({
   }, [oidcToken, dropSession]);
 
   // Validate a stored token once on load (and on "Try again"); a single
-  // sign-on's token replaces it instead.
+  // sign-on's token replaces it instead, unless that signs no admin in.
   useEffect(() => {
-    if (oidcToken || !getToken()) return;
+    if (trading || !getToken()) return;
     let cancelled = false;
     api
       .me()
@@ -117,7 +125,7 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [attempt, oidcToken, dropSession]);
+  }, [attempt, trading, dropSession]);
 
   const value = useMemo<Session>(
     () => ({
