@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { BadgeCheck, CircleAlert, Link2, UserPlus, X } from 'lucide-react';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { invalidatePeople, keys, useOIDCPending, useUsers } from '@/api/hooks';
 import type { AdminUser, OIDCPendingList, OIDCPendingSignIn } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -18,7 +18,7 @@ import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { displayName, namedApart } from './household-model';
+import { accountLabel } from './household-model';
 import {
   groupsShown,
   linkCandidates,
@@ -41,50 +41,24 @@ export function PendingSignInsCard() {
   const [creating, setCreating] = useState<OIDCPendingSignIn | null>(null);
   const [dismissing, setDismissing] = useState<OIDCPendingSignIn | null>(null);
   const qc = useQueryClient();
-
-  if (pending.isError) {
-    return (
-      <div className="mb-6">
-        <QueryError
-          title={t('people.pending.error')}
-          error={pending.error}
-          onRetry={() => void pending.refetch()}
-        />
-      </div>
-    );
-  }
   const rows = pending.data?.pending ?? [];
-  if (!rows.length) return null;
 
-  return (
-    <Card className="mb-6" aria-labelledby={titleId}>
-      <CardHeader
-        titleId={titleId}
-        title={
-          <span className="inline-flex items-center gap-2">
-            {t('people.pending.title')}
-            <Badge variant="warning">{rows.length}</Badge>
-          </span>
-        }
-        description={t('people.pending.description')}
-      />
-      <ul className="divide-y">
-        {rows.map((p) => (
-          <PendingRow
-            key={p.id}
-            row={p}
-            onLink={() => setLinking(p)}
-            onCreate={() => setCreating(p)}
-            onDismiss={() => setDismissing(p)}
-          />
-        ))}
-      </ul>
+  // The dialogs stay mounted whatever the list shows: a refused action reads
+  // the list again, which may leave it empty (its row went meanwhile) or fail,
+  // and the dialog still says why until it is closed (which clears its row).
+  const dialogs = (
+    <>
       <LinkDialog
         row={linking}
         linked={pending.data?.linked_user_ids}
         onOpenChange={(o) => !o && setLinking(null)}
+        onDone={(id) => setLinking((cur) => (cur?.id === id ? null : cur))}
       />
-      <CreateDialog row={creating} onOpenChange={(o) => !o && setCreating(null)} />
+      <CreateDialog
+        row={creating}
+        onOpenChange={(o) => !o && setCreating(null)}
+        onDone={(id) => setCreating((cur) => (cur?.id === id ? null : cur))}
+      />
       <ConfirmDialog
         open={dismissing !== null}
         onOpenChange={(o) => !o && setDismissing(null)}
@@ -105,7 +79,53 @@ export function PendingSignInsCard() {
           toast.add({ title: t('people.pending.dismissed'), type: 'success' });
         }}
       />
-    </Card>
+    </>
+  );
+
+  // A poll that fails keeps the list it had; the error stands in for none.
+  if (pending.isError && !pending.data) {
+    return (
+      <>
+        <div className="mb-6">
+          <QueryError
+            title={t('people.pending.error')}
+            error={pending.error}
+            onRetry={() => void pending.refetch()}
+          />
+        </div>
+        {dialogs}
+      </>
+    );
+  }
+  if (!rows.length) return dialogs;
+
+  return (
+    <>
+      <Card className="mb-6" aria-labelledby={titleId}>
+        <CardHeader
+          titleId={titleId}
+          title={
+            <span className="inline-flex items-center gap-2">
+              {t('people.pending.title')}
+              <Badge variant="warning">{rows.length}</Badge>
+            </span>
+          }
+          description={t('people.pending.description')}
+        />
+        <ul className="divide-y">
+          {rows.map((p) => (
+            <PendingRow
+              key={p.id}
+              row={p}
+              onLink={() => setLinking(p)}
+              onCreate={() => setCreating(p)}
+              onDismiss={() => setDismissing(p)}
+            />
+          ))}
+        </ul>
+      </Card>
+      {dialogs}
+    </>
   );
 }
 
@@ -202,12 +222,13 @@ function useRowSubmit(onDone: () => void) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The refusal in words, and its code (which says where a form shows it).
+  const [failure, setFailure] = useState<{ message: string; code?: string } | null>(null);
 
   async function submit(run: () => Promise<AdminUser>, toastKey: string) {
     if (busy) return;
     setBusy(true);
-    setError(null);
+    setFailure(null);
     const settled = () => {
       void qc.invalidateQueries({ queryKey: keys.oidcPending });
       invalidatePeople(qc);
@@ -219,22 +240,31 @@ function useRowSubmit(onDone: () => void) {
       onDone();
     } catch (err) {
       settled();
-      setError(errorMessage(err, t));
+      setFailure({
+        message: errorMessage(err, t),
+        code: err instanceof ApiError ? err.code : undefined,
+      });
       setBusy(false);
     }
   }
-  return { busy, error, submit };
+  return { busy, error: failure?.message ?? null, code: failure?.code, submit };
 }
 
-/** Links a waiting sign-in to an account the admin chooses. */
+/**
+ * Links a waiting sign-in to an account the admin chooses. `onDone` gets the
+ * row a finished link was for, so it closes that dialog, never one opened
+ * since (Cancel works while a link is on its way).
+ */
 function LinkDialog({
   row,
   linked,
   onOpenChange,
+  onDone,
 }: {
   row: OIDCPendingSignIn | null;
   linked: OIDCPendingList['linked_user_ids'];
   onOpenChange: (open: boolean) => void;
+  onDone: (id: number) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -245,7 +275,7 @@ function LinkDialog({
         description={t('people.pending.linkBody')}
       >
         {row ? (
-          <LinkForm key={row.id} row={row} linked={linked} onDone={() => onOpenChange(false)} />
+          <LinkForm key={row.id} row={row} linked={linked} onDone={() => onDone(row.id)} />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -265,8 +295,11 @@ function LinkForm({
   const users = useUsers();
   const candidates = users.data ? linkCandidates(users.data, row, linked) : [];
   const noCandidates = Boolean(users.data) && !candidates.length;
-  const [choice, setChoice] = useState<number | undefined>(undefined);
-  const chosen = choice ?? suggestedAccount(candidates, row)?.id;
+  const [choice, setChoice] = useState<number>();
+  // The admin's pick, else the suggestion; one the list no longer offers
+  // (linked to this provider meanwhile, a refusal's re-read says) is none.
+  const wanted = choice ?? suggestedAccount(candidates, row)?.id;
+  const chosen = candidates.find((u) => u.id === wanted)?.id;
   const { busy, error, submit } = useRowSubmit(onDone);
   const id = useId();
 
@@ -289,13 +322,13 @@ function LinkForm({
             value={chosen ?? ''}
             disabled={!candidates.length}
             aria-describedby={describedBy(id, false, noCandidates)}
-            onChange={(e) => setChoice(e.target.value ? Number(e.target.value) : undefined)}
+            onChange={(e) => setChoice(Number(e.target.value))}
           >
-            <option value="">{t('people.pending.choose')}</option>
+            <option value="" disabled>
+              {t('people.pending.choose')}
+            </option>
             {candidates.map((u) => {
-              const name = namedApart(displayName(u), u.username)
-                ? `${displayName(u)} (${u.username})`
-                : u.username;
+              const name = accountLabel(u);
               return (
                 <option key={u.id} value={u.id}>
                   {u.role === 'admin' ? t('people.pending.adminOption', { name }) : name}
@@ -315,13 +348,18 @@ function LinkForm({
   );
 }
 
-/** Makes an ordinary account for a waiting sign-in, its username prefilled from the sign-in. */
+/**
+ * Makes an ordinary account for a waiting sign-in, its username prefilled from
+ * the sign-in. `onDone` as LinkDialog's.
+ */
 function CreateDialog({
   row,
   onOpenChange,
+  onDone,
 }: {
   row: OIDCPendingSignIn | null;
   onOpenChange: (open: boolean) => void;
+  onDone: (id: number) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -331,7 +369,7 @@ function CreateDialog({
         title={t('people.pending.createTitle', { name: row ? pendingName(row) : '' })}
         description={t('people.pending.createBody')}
       >
-        {row ? <CreateForm key={row.id} row={row} onDone={() => onOpenChange(false)} /> : null}
+        {row ? <CreateForm key={row.id} row={row} onDone={() => onDone(row.id)} /> : null}
       </DialogContent>
     </Dialog>
   );
@@ -340,8 +378,11 @@ function CreateDialog({
 function CreateForm({ row, onDone }: { row: OIDCPendingSignIn; onDone: () => void }) {
   const { t } = useTranslation();
   const [username, setUsername] = useState(row.username);
-  const { busy, error, submit } = useRowSubmit(onDone);
+  const { busy, error, code, submit } = useRowSubmit(onDone);
   const id = useId();
+  // A taken or missing username is the field's; any other refusal (the row
+  // gone, linked meanwhile) is the form's.
+  const fieldError = code === 'username_taken' || code === 'username_required' ? error : null;
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -355,7 +396,7 @@ function CreateForm({ row, onDone }: { row: OIDCPendingSignIn; onDone: () => voi
           htmlFor={id}
           label={t('people.pending.username')}
           description={t('people.pending.usernameHint')}
-          error={error ?? undefined}
+          error={fieldError ?? undefined}
         >
           <Input
             id={id}
@@ -363,10 +404,11 @@ function CreateForm({ row, onDone }: { row: OIDCPendingSignIn; onDone: () => voi
             spellCheck={false}
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={describedBy(id, Boolean(error), true)}
+            aria-invalid={fieldError ? true : undefined}
+            aria-describedby={describedBy(id, Boolean(fieldError), true)}
           />
         </Field>
+        {fieldError ? null : <FormError>{error}</FormError>}
       </DialogBody>
       <DialogFormFooter busy={busy} submitLabel={t('people.pending.createAction')} />
     </form>

@@ -116,6 +116,79 @@ describe('waiting sign-ins', () => {
     );
   });
 
+  it('keeps a refused dialog open when its row went meanwhile and the list empties', async () => {
+    let rows = [bobRow];
+    mockFetch(
+      routes({
+        'GET /admin/oidc/pending': () => ({ body: { pending: rows, linked_user_ids: {} } }),
+        'POST /admin/oidc/pending/4/link': () => {
+          rows = [];
+          return { status: 404, body: { error: 'the sign-in is gone', code: 'not_found' } };
+        },
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Link' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    await user.click(within(dialog).getByRole('button', { name: 'Link' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('the sign-in is gone');
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: /Waiting sign-ins/ })).toBeNull(),
+    );
+    expect(
+      screen.getByRole('dialog', { name: 'Link Bob Smith to an account' }),
+    ).toBeInTheDocument();
+  });
+
+  it('drops a picked account from the choice once a refusal says it is linked', async () => {
+    let linked: Record<string, number[]> = {};
+    mockFetch(
+      routes({
+        'GET /admin/oidc/pending': () => ({
+          body: { pending: [bobRow], linked_user_ids: linked },
+        }),
+        'POST /admin/oidc/pending/4/link': () => {
+          linked = { [ISSUER]: [2] };
+          return { status: 409, body: { error: 'has one', code: 'user_has_identity' } };
+        },
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Link' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Account' }), '2');
+    await user.click(within(dialog).getByRole('button', { name: 'Link' }));
+    await within(dialog).findByRole('alert');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('combobox', { name: 'Account' })).toHaveValue(''),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Link' })).toBeDisabled();
+  });
+
+  it('says a refusal that is not about the username apart from the field', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/oidc/pending/4/create': {
+          status: 409,
+          body: { error: 'linked meanwhile', code: 'identity_linked' },
+        },
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Create account' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Make an account for Bob Smith' });
+    await user.click(within(dialog).getByRole('button', { name: 'Create account' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'This sign-in was linked to an account meanwhile.',
+    );
+    expect(within(dialog).getByRole('textbox', { name: 'Username' })).not.toHaveAttribute(
+      'aria-invalid',
+    );
+  });
+
   it('creates an account with the username typed, prefilled from the sign-in', async () => {
     const calls = mockFetch(
       routes({

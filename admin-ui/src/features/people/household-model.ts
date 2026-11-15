@@ -62,6 +62,12 @@ export function namedApart(name: string, username: string): boolean {
   return name.trim().toLowerCase() !== username.toLowerCase();
 }
 
+/** An account as a list of choices names it: "Name (username)" when the name says more. */
+export function accountLabel(u: Pick<AdminUser, 'username' | 'display_name'>): string {
+  const name = displayName(u);
+  return namedApart(name, u.username) ? `${name} (${u.username})` : u.username;
+}
+
 /**
  * An account of its own: not a household member or a demo account. Only such
  * an account can own members or have a single sign-on linked to it.

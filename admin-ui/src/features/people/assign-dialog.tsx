@@ -14,11 +14,11 @@ import { RadioCards } from '@/components/ui/radio-cards';
 import { errorMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import {
+  accountLabel,
   assignPatch,
   assignTargets,
   defaultAccess,
   displayName,
-  namedApart,
 } from './household-model';
 
 /**
@@ -124,9 +124,7 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
                 </option>
                 {targets.map((u) => (
                   <option key={u.id} value={String(u.id)}>
-                    {namedApart(displayName(u), u.username)
-                      ? `${displayName(u)} (${u.username})`
-                      : u.username}
+                    {accountLabel(u)}
                   </option>
                 ))}
               </NativeSelect>
