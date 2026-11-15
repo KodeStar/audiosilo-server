@@ -353,10 +353,13 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 }
 
 // upsertPending records or refreshes c's waiting row with reason, returning its
-// id, then drops rows unseen for pendingDays and the oldest past
-// maxPendingSignIns, never the row just written (it is the newest, unless the
-// clock stepped back past rows stamped later: excluded by id all the same, so
-// the id returned always names a row).
+// id. Rows unseen for pendingDays go first, c's own among them: ListPending no
+// longer shows such a row, so the attempt records a new one (a new id, which
+// the callback tells the admins about) rather than bringing back one they were
+// told about long ago. Then the oldest past maxPendingSignIns go, never the
+// row just written (it is the newest, unless the clock stepped back past rows
+// stamped later: excluded by id all the same, so the id returned always names
+// a row).
 func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, error) {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
@@ -367,6 +370,10 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 	}
 	g, err := json.Marshal(groups)
 	if err != nil {
+		return 0, err
+	}
+	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ?`, cutoff); err != nil {
 		return 0, err
 	}
 	var id int64
@@ -380,9 +387,8 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now).Scan(&id); err != nil {
 		return 0, err
 	}
-	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
-	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND (last_seen_at < ? OR id IN
-		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?))`, id, cutoff, maxPendingSignIns)
+	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
+		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, id, maxPendingSignIns)
 	return id, err
 }
 

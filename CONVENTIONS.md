@@ -3399,7 +3399,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   And `oidc_pending` (server#235, `notify.OIDCPending` from the callback when `auth.OIDCSignIn` parks a
   sign-in, never for one refused outright: rate limited, disabled, a member): once per waiting row
   (`dedup_key` `pending:<id>`, the row's AUTOINCREMENT id from `OIDCResult.PendingID`, kept across the
-  person's attempts; a dismissed row recorded again is a new one), its data `provider` (the button's
+  person's attempts; a dismissed row recorded again is a new one, as is one unseen for 30 days, which
+  `upsertPending` drops before it records the attempt), its data `provider` (the button's
   name), `person` (the name, else the username, left out when it holds an "@": providers often make the
   email the username) and `reason` (a Pending reason the messages word, else none): never the email,
   subject, groups or a token. It links People, where the console lists the waiting sign-ins.
