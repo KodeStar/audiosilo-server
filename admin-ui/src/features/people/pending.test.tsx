@@ -163,9 +163,13 @@ describe('waiting sign-ins', () => {
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: /Waiting sign-ins/ })).toBeNull(),
     );
+    // The same dialog, still saying why: not one mounted again without it.
+    expect(dialog).toBeInTheDocument();
     expect(
-      screen.getByRole('dialog', { name: 'Link Bob Smith to an account' }),
-    ).toBeInTheDocument();
+      within(screen.getByRole('dialog', { name: 'Link Bob Smith to an account' })).getByRole(
+        'alert',
+      ),
+    ).toHaveTextContent('the sign-in is gone');
   });
 
   it('drops a picked account from the choice once a refusal says it is linked', async () => {

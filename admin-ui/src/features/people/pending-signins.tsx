@@ -43,11 +43,55 @@ export function PendingSignInsCard() {
   const qc = useQueryClient();
   const rows = pending.data?.pending ?? [];
 
-  // The dialogs stay mounted whatever the list shows: a refused action reads
-  // the list again, which may leave it empty (its row went meanwhile) or fail,
-  // and the dialog still says why until it is closed (which clears its row).
-  const dialogs = (
+  // A poll that fails keeps the list it had; the error stands in for none.
+  let list: React.ReactNode = null;
+  if (pending.isError && !pending.data) {
+    list = (
+      <div className="mb-6">
+        <QueryError
+          title={t('people.pending.error')}
+          error={pending.error}
+          onRetry={() => void pending.refetch()}
+        />
+      </div>
+    );
+  } else if (rows.length) {
+    list = (
+      <Card className="mb-6" aria-labelledby={titleId}>
+        <CardHeader
+          titleId={titleId}
+          title={
+            <span className="inline-flex items-center gap-2">
+              {t('people.pending.title')}
+              <Badge variant="warning">{rows.length}</Badge>
+            </span>
+          }
+          description={t('people.pending.description')}
+        />
+        <ul className="divide-y">
+          {rows.map((p) => (
+            <PendingRow
+              key={p.id}
+              row={p}
+              onLink={() => setLinking(p)}
+              onCreate={() => setCreating(p)}
+              onDismiss={() => setDismissing(p)}
+            />
+          ))}
+        </ul>
+      </Card>
+    );
+  }
+
+  // The dialogs keep one place in the tree whatever the list shows (the card,
+  // the error or nothing, always the first child): a refused action reads the
+  // list again, which may leave it empty (its row went meanwhile) or fail, and
+  // a dialog that moved would be mounted again without what it said. Each
+  // closes only for the row it was opened on, never one opened since (Cancel
+  // works while an action is on its way).
+  return (
     <>
+      {list}
       <LinkDialog
         row={linking}
         linked={pending.data?.linked_user_ids}
@@ -79,52 +123,6 @@ export function PendingSignInsCard() {
           toast.add({ title: t('people.pending.dismissed'), type: 'success' });
         }}
       />
-    </>
-  );
-
-  // A poll that fails keeps the list it had; the error stands in for none.
-  if (pending.isError && !pending.data) {
-    return (
-      <>
-        <div className="mb-6">
-          <QueryError
-            title={t('people.pending.error')}
-            error={pending.error}
-            onRetry={() => void pending.refetch()}
-          />
-        </div>
-        {dialogs}
-      </>
-    );
-  }
-  if (!rows.length) return dialogs;
-
-  return (
-    <>
-      <Card className="mb-6" aria-labelledby={titleId}>
-        <CardHeader
-          titleId={titleId}
-          title={
-            <span className="inline-flex items-center gap-2">
-              {t('people.pending.title')}
-              <Badge variant="warning">{rows.length}</Badge>
-            </span>
-          }
-          description={t('people.pending.description')}
-        />
-        <ul className="divide-y">
-          {rows.map((p) => (
-            <PendingRow
-              key={p.id}
-              row={p}
-              onLink={() => setLinking(p)}
-              onCreate={() => setCreating(p)}
-              onDismiss={() => setDismissing(p)}
-            />
-          ))}
-        </ul>
-      </Card>
-      {dialogs}
     </>
   );
 }
