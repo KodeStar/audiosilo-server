@@ -774,12 +774,15 @@ export const api = {
   /**
    * A token for one book's audio (POST /cast/token: book-scoped, short-lived, ended by
    * signing out), so an <audio> element, which can't send the Authorization header,
-   * streams it without the session token in its URL.
+   * streams it without the session token in its URL. `editor` asks for the chapter
+   * editor's kind, counted apart from the admin's cast tokens: minting one never
+   * ends a cast.
    */
   bookMediaToken: (libraryId: number, path: string) =>
     request<{ token: string; expires_at: string }>('POST', '/cast/token', {
       library_id: libraryId,
       path,
+      editor: true,
     }),
   /** Checks the book against the community's chapter list, in the background; answers with the page. */
   checkCommunityChapters: (libraryId: number, path: string) =>

@@ -988,16 +988,23 @@ export function useAdminBook(libraryId: number, path: string) {
 /** How often a book page asks again while its community chapters are being checked. */
 const CHECK_POLL_MS = 3000;
 
+/** How old the editor's media token may be before a newly opened editor asks for another (it works for four hours). */
+const MEDIA_TOKEN_FRESH_MS = 2 * 60 * 60 * 1000;
+
 /**
- * A token the chapter editor's <audio> streams the book's files with. It works for a day and is kept while the editor is open (a new one
- * would reload the audio mid-scrub), then dropped five minutes after; a failed mint
- * isn't retried (the player says so).
+ * A token the chapter editor's <audio> streams the book's files with. It works for
+ * four hours and is kept while the editor is open (a new one would reload the audio
+ * mid-scrub, so neither the window's focus nor a reconnect asks again), then
+ * dropped five minutes after; an editor opened on one two hours old asks for
+ * another. A failed mint isn't retried (the player says so).
  */
 export function useBookMediaToken(libraryId: number, path: string) {
   return useQuery({
     queryKey: keys.mediaToken(libraryId, path),
     queryFn: () => api.bookMediaToken(libraryId, path).then((r) => r.token),
-    staleTime: Infinity,
+    staleTime: MEDIA_TOKEN_FRESH_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   });
 }

@@ -17,3 +17,9 @@ CREATE TABLE chapter_edits (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (library_id, path)
 );
+
+-- The editor's player streams the book's files with a cast token (0043), which
+-- must not count against the person's cast tokens: a mint past that cap drops
+-- the oldest, perhaps one a receiver is playing with. editor = 1 marks a token
+-- minted for the editor (auth.IssueEditorToken), which has a cap of its own.
+ALTER TABLE cast_grants ADD COLUMN editor INTEGER NOT NULL DEFAULT 0;

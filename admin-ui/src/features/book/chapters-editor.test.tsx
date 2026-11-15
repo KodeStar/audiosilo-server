@@ -173,7 +173,8 @@ describe('the chapter editor', () => {
     // Never the session token in a URL.
     expect(src.searchParams.get('token')).toBe('media-tok');
     const mint = calls.find((c) => c.path === '/cast/token');
-    expect(mint?.body).toEqual({ library_id: 1, path: BOOK_PATH });
+    // The editor's kind of token: it never counts against the admin's casts.
+    expect(mint?.body).toEqual({ library_id: 1, path: BOOK_PATH, editor: true });
 
     Object.defineProperty(audio, 'currentTime', { value: 1500.25, writable: true });
     await user.click(screen.getByRole('button', { name: 'Start chapter 2 at the playhead' }));

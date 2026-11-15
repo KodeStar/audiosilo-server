@@ -2532,7 +2532,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
   own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
   grant, or its parent gone, signed out or expired) and keeps the person's newest
-  `maxCastTokens` (20); the daily retention (`pkg/launcher.retention`) runs the same prune
+  `maxCastTokens` (20). The console's chapter editor streams a book the same way and sends
+  `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
+  token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
+  (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
+  receiver is playing with; it allows no more than a cast token, so any caller may ask. The daily retention (`pkg/launcher.retention`) runs the same prune
   (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
   was cast) never outlive it by more than a day. **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
   disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
@@ -3843,7 +3847,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `DELETE` the same URL reverts it (200, the book page; nothing audited when there was none). Book page: `chapter_edit`
   (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
   [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
-  old app shows ordinary chapters).
+  old app shows ordinary chapters). The editor's player streams the chosen row's file with an editor token
+  (`POST /cast/token` with `"editor": true`, Cast tokens above), never the session token.
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`

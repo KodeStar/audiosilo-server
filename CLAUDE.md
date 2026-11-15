@@ -338,7 +338,8 @@ UNIQUE(user_id, issuer), cascades with the user) and `oidc_pending` (sign-ins wa
 issuer+subject); see Single sign-on in CONVENTIONS.md. `0078` (server#240) adds `chapter_edits` (an admin's own
 chapter list made in the console's chapter editor: a `metadata.ChapterList` with the files it was made on, the first
 chapter source while those are the book's files, dormant otherwise; durable, path-keyed, no FK to the index, moved
-with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md).
+with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md) and
+`cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

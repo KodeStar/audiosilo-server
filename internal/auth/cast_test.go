@@ -278,6 +278,76 @@ func TestCastTokenCap(t *testing.T) {
 	}
 }
 
+// The console's chapter editor mints editor tokens: the same one-book token, on
+// a shorter life and a cap of its own, so editing many books never drops a cast
+// token (a receiver mid-book), and a run of casts never drops the editor's.
+func TestEditorTokensCountApartFromCasts(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	sam, _, samSess := castSender(t, s, ctx, "sam")
+	cast, _, err := s.IssueCastToken(ctx, sam.ID, samSess, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var editors []string
+	for range maxEditorTokens + 2 {
+		sec, expires, err := s.IssueEditorToken(ctx, sam.ID, samSess, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := now.UTC().Add(editorTokenTTL).Truncate(time.Second).Format(millisUTC); expires != want {
+			t.Fatalf("editor token expires %q, want %q", expires, want)
+		}
+		editors = append(editors, sec)
+	}
+	// Allowed: the cast token outlives every editor mint past the editor's cap.
+	if _, _, err := resolveCast(s, ctx, cast, "Author/Book/01.mp3"); err != nil {
+		t.Fatalf("editor mints dropped a cast token: %v", err)
+	}
+	// Denied: the editor's own oldest, past its cap. An editor token reads what a
+	// cast token reads (its book) and nothing else.
+	for i, sec := range editors {
+		_, _, err := resolveCast(s, ctx, sec, "Author/Book/01.mp3")
+		if i < 2 && !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("oldest editor token %d still works: %v", i, err)
+		}
+		if i >= 2 && err != nil {
+			t.Fatalf("editor token %d = %v", i, err)
+		}
+	}
+	newest := editors[len(editors)-1]
+	if _, _, err := resolveCast(s, ctx, newest, "Author/Book 2/01.mp3"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("an editor token on another book = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, newest, Presence{}, KindSession, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("an editor token as a session = %v, want ErrInvalidToken", err)
+	}
+	// The other way: casts past their cap leave the editor's tokens alone.
+	for range maxCastTokens + 1 {
+		if _, _, err := s.IssueCastToken(ctx, sam.ID, samSess, 3, "Author/Book"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := resolveCast(s, ctx, newest, "Author/Book"); err != nil {
+		t.Fatalf("cast mints dropped an editor token: %v", err)
+	}
+	if _, _, err := resolveCast(s, ctx, cast, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("the oldest cast token outlived its own cap: %v", err)
+	}
+	// Denied: past its shorter life (a cast token minted with it still works).
+	late, _, err := s.IssueCastToken(ctx, sam.ID, samSess, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(editorTokenTTL + time.Second)
+	if _, _, err := resolveCast(s, ctx, newest, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("an editor token past its life = %v, want ErrInvalidToken", err)
+	}
+	if _, _, err := resolveCast(s, ctx, late, "Author/Book"); err != nil {
+		t.Fatalf("a cast token four hours old = %v", err)
+	}
+}
+
 // Security-critical: ResolveCastRequest cleans the path before the grant's prefix
 // rule judges it, so a traversal out of the book never passes, whoever calls.
 func TestCastTokenPathCleaned(t *testing.T) {

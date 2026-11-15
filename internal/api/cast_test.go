@@ -191,6 +191,60 @@ func TestCastTokenMint(t *testing.T) {
 
 // Security-critical: a cast token reaches its own book's cover and stream as
 // ?token=, and nothing else.
+// The console's chapter editor mints with "editor": true: a token that streams
+// the book like a cast token, on a shorter life and a cap of its own, so editing
+// many books never ends a cast (the receiver would get 401 mid-book).
+func TestEditorTokenMintLeavesCastsAlone(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	type minted struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	mint := func(editor bool) minted {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"library_id": c.lib, "path": cradleBook, "editor": editor})
+		resp, b := c.do(t, "POST", "/api/v1/cast/token", c.samTok, string(body))
+		var out minted
+		if resp.StatusCode != http.StatusCreated || json.Unmarshal([]byte(b), &out) != nil || out.Token == "" {
+			t.Fatalf("mint (editor %v) = %d %s", editor, resp.StatusCode, b)
+		}
+		return out
+	}
+	stream := func(token string) int {
+		t.Helper()
+		return c.media(t, c.lib, "stream", cradlePart, token, "").StatusCode
+	}
+	cast := mint(false)
+	// More editor tokens than a person keeps of either kind.
+	var editors []minted
+	for range 25 {
+		editors = append(editors, mint(true))
+	}
+	first, last := editors[0], editors[len(editors)-1]
+	if last.ExpiresAt >= cast.ExpiresAt {
+		t.Fatalf("an editor token expires %s, a cast token %s; want sooner", last.ExpiresAt, cast.ExpiresAt)
+	}
+	// Allowed: the cast token still streams, and so does the newest editor token.
+	if got := stream(cast.Token); got != http.StatusOK {
+		t.Fatalf("the cast token after 25 editor mints = %d, want 200", got)
+	}
+	if got := stream(last.Token); got != http.StatusOK {
+		t.Fatalf("the newest editor token = %d, want 200", got)
+	}
+	// Denied: the oldest editor token, past the editor's cap; and an editor token
+	// is still one book's media only.
+	if got := stream(first.Token); got != http.StatusUnauthorized {
+		t.Fatalf("the oldest editor token = %d, want 401", got)
+	}
+	if resp := c.media(t, c.lib, "stream", mistbornBook+"/01 - The Final Empire.m4b", last.Token, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an editor token on another book = %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := c.do(t, "GET", "/api/v1/me", last.Token, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an editor token as a session = %d, want 401", resp.StatusCode)
+	}
+}
+
 func TestCastTokenMediaAuth(t *testing.T) {
 	t.Parallel()
 	c := newCastEnv(t)

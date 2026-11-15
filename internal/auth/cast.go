@@ -24,6 +24,10 @@ import (
 //     for the ?token= of GET /libraries/{id}/cover and /stream with no
 //     Authorization header; ResolveRequest never does;
 //   - short-lived: castTokenTTL, and a person keeps at most maxCastTokens;
+//     the console's chapter editor, whose <audio> streams a book the same way,
+//     mints an editor token (IssueEditorToken, cast_grants.editor): the same
+//     token with a shorter life and a cap of its own, so editing many books
+//     never drops a token a receiver is playing with;
 //   - its sender's: it dies with the token that minted it (signed out, expired
 //     or deleted), and its user must exist and be enabled at every request; the
 //     media handlers check the person's CURRENT scope as for any request.
@@ -40,6 +44,26 @@ const (
 	// maxCastTokens is how many cast tokens a person keeps; a mint past it drops
 	// the oldest.
 	maxCastTokens = 20
+	// editorTokenTTL is how long an editor token works: a sitting at the
+	// console's chapter editor.
+	editorTokenTTL = 4 * time.Hour
+	// maxEditorTokens is how many editor tokens a person keeps, counted apart
+	// from their cast tokens: an editor open on each of a few books at once.
+	maxEditorTokens = 5
+)
+
+// castUse is what a cast token is minted for, which sets its life and the cap
+// it counts against: a receiver (castUse{}), or the console's chapter editor.
+type castUse struct {
+	// editor is cast_grants.editor: 1 for the chapter editor's token.
+	editor int
+	ttl    time.Duration
+	keep   int
+}
+
+var (
+	useCast   = castUse{editor: 0, ttl: castTokenTTL, keep: maxCastTokens}
+	useEditor = castUse{editor: 1, ttl: editorTokenTTL, keep: maxEditorTokens}
 )
 
 // millisUTC is the wire format of the times auth hands the player (a cast
@@ -124,8 +148,20 @@ func (s *Service) PruneCastTokens(ctx context.Context) error {
 // ends it), and returns the secret (shown once) and its expiry (fixed-width
 // millisecond UTC). The caller has checked the person may see the book. In the
 // same transaction it deletes every dead cast token (pruneCastTokensSQL) and
-// keeps only the person's newest maxCastTokens.
+// keeps only the person's newest maxCastTokens (editor tokens apart).
 func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, libraryID int64, bookPath string) (secret, expiresAt string, err error) {
+	return s.issueCastToken(ctx, useCast, userID, parentTokenID, libraryID, bookPath)
+}
+
+// IssueEditorToken is IssueCastToken for the console's chapter editor: the same
+// one-book, media-only token, valid for editorTokenTTL and counted against
+// maxEditorTokens instead, so it never takes the place of a cast token (a
+// receiver mid-book) and a cast never takes its.
+func (s *Service) IssueEditorToken(ctx context.Context, userID, parentTokenID, libraryID int64, bookPath string) (secret, expiresAt string, err error) {
+	return s.issueCastToken(ctx, useEditor, userID, parentTokenID, libraryID, bookPath)
+}
+
+func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, parentTokenID, libraryID int64, bookPath string) (secret, expiresAt string, err error) {
 	if userID <= 0 || parentTokenID <= 0 || libraryID <= 0 || bookPath == "" {
 		return "", "", errors.New("auth: a cast token needs a user, its token and a book")
 	}
@@ -135,7 +171,7 @@ func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, lib
 	}
 	// Whole seconds: tokens.expires_at is RFC3339, and the wire's milliseconds
 	// must name the same instant.
-	expires := s.now().UTC().Add(castTokenTTL).Truncate(time.Second)
+	expires := s.now().UTC().Add(use.ttl).Truncate(time.Second)
 	err = s.db.WithTx(ctx, "IssueCastToken", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, pruneCastTokensSQL, s.ts()); err != nil {
 			return err
@@ -149,14 +185,20 @@ func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, lib
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO cast_grants(token_id, library_id, rel_path, parent_token_id) VALUES(?, ?, ?, ?)`,
-			id, libraryID, bookPath, parentTokenID); err != nil {
+			`INSERT INTO cast_grants(token_id, library_id, rel_path, parent_token_id, editor) VALUES(?, ?, ?, ?, ?)`,
+			id, libraryID, bookPath, parentTokenID, use.editor); err != nil {
 			return err
 		}
+		// The cap, among the person's tokens of this use only (every cast token
+		// has a grant by now: the prune above deleted any without one).
 		_, err = tx.ExecContext(ctx,
-			`DELETE FROM tokens WHERE kind = '`+KindCast+`' AND user_id = ?1 AND id NOT IN
-			   (SELECT id FROM tokens WHERE kind = '`+KindCast+`' AND user_id = ?1 ORDER BY id DESC LIMIT ?2)`,
-			userID, maxCastTokens)
+			`DELETE FROM tokens WHERE kind = '`+KindCast+`' AND user_id = ?1
+			    AND EXISTS (SELECT 1 FROM cast_grants g WHERE g.token_id = tokens.id AND g.editor = ?2)
+			    AND id NOT IN
+			   (SELECT t.id FROM tokens t JOIN cast_grants g ON g.token_id = t.id
+			     WHERE t.kind = '`+KindCast+`' AND t.user_id = ?1 AND g.editor = ?2
+			     ORDER BY t.id DESC LIMIT ?3)`,
+			userID, use.editor, use.keep)
 		return err
 	})
 	if err != nil {
