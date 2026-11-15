@@ -386,6 +386,7 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	d := res.Decision
 	switch d.Outcome {
 	case oidc.Pending:
+		a.rt.Notify.OIDCPending(r.Context(), res.PendingID, a.oidc.name, claims.Name, claims.Username, d.Reason)
 		if d.Reason == oidc.ReasonNotAllowed {
 			a.oidcResult(w, r, oidcNotAllowed)
 			return
@@ -547,14 +548,21 @@ func (a *API) handleOIDCStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleOIDCPending lists the sign-ins waiting for an admin (admin only).
+// handleOIDCPending lists the sign-ins waiting for an admin (admin only), and
+// `linked_user_ids`: per issuer among them, the accounts already holding an
+// identity from it, which Link would refuse (409 user_has_identity).
 func (a *API) handleOIDCPending(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.auth.ListPending(r.Context())
 	if err != nil {
 		a.writeUserError(w, err, "could not list pending sign-ins")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"pending": rows})
+	linked, err := a.auth.LinkedAccounts(r.Context())
+	if err != nil {
+		a.writeUserError(w, err, "could not list pending sign-ins")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": rows, "linked_user_ids": linked})
 }
 
 // handleOIDCPendingLink links a waiting sign-in to an account (admin only):

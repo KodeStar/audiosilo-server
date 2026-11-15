@@ -979,3 +979,64 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 		}
 	}
 }
+
+// server#235: a single sign-on waiting for an admin is told once per waiting
+// row, named by the person's name or username and the reason's code, never
+// their email (a name or username holding an "@" is left out) or anything the
+// method isn't given; a dismissed row recorded again is a new row and told
+// again. Every destination and the bell get the same facts.
+func TestOIDCPending(t *testing.T) {
+	s, cat, ctx := newService(t)
+	if !slices.Contains(Kinds, KindOIDCPending) || Kinds[len(Kinds)-1] != KindOIDCPending {
+		t.Fatal("oidc_pending must be the last kind a destination can subscribe to")
+	}
+	hook := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, hook.srv.URL, "", KindOIDCPending)
+
+	s.OIDCPending(ctx, 7, "Keycloak", "Bob Smith", "bob", "unverified_email")
+	s.OIDCPending(ctx, 7, "Keycloak", "Bob Smith", "bob", "unverified_email") // the same row again: said once
+	s.OIDCPending(ctx, 9, "Keycloak", "", "carol@example.org", "made_up")     // an email as the username
+	s.OIDCPending(ctx, 0, "Keycloak", "Dan", "dan", "no_match")               // no row: nothing
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, KindOIDCPending)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events = %+v, %v; want one per row", events, err)
+	}
+	bob, carol := events[1], events[0]
+	if len(bob.Data) != 3 || bob.Data["provider"] != "Keycloak" || bob.Data["person"] != "Bob Smith" ||
+		bob.Data["reason"] != "unverified_email" {
+		t.Fatalf("bob's data = %v", bob.Data)
+	}
+	if len(carol.Data) != 1 || carol.Data["provider"] != "Keycloak" {
+		t.Fatalf("carol's data = %v; want the provider only (no email, no unknown code)", carol.Data)
+	}
+	m := compose(bob, s.server())
+	if m.Title != "Bob Smith is waiting to sign in with Keycloak" ||
+		m.Text != "Their email matches an account, but the provider hasn't verified it. Link it to an account, make one, or dismiss it in People." ||
+		m.Link != "https://books.example.com/admin/people" {
+		t.Fatalf("bob's message = %+v", m)
+	}
+	if m := compose(carol, s.server()); m.Title != "Someone is waiting to sign in with Keycloak" ||
+		!strings.HasPrefix(m.Text, "No account took the sign-in.") {
+		t.Fatalf("carol's message = %+v", m)
+	}
+	var bodies []string
+	for _, r := range hook.wait(t, 2) {
+		bodies = append(bodies, string(r.raw))
+	}
+	for _, ev := range events {
+		discord, _ := json.Marshal(discordBody(compose(ev, s.server()), s.server()))
+		bodies = append(bodies, string(discord))
+	}
+	for _, b := range bodies {
+		if strings.Contains(b, "@") || strings.Contains(b, "carol") {
+			t.Fatalf("a body names the email: %s", b)
+		}
+	}
+	// Every reason the console can be told is worded here too.
+	for _, reason := range []string{"unverified_email", "no_match", "several_matches", "not_eligible",
+		"not_allowed", "auto_create_off", "admin_account"} {
+		if oidcPendingText[reason] == "" {
+			t.Fatalf("reason %s has no words", reason)
+		}
+	}
+}
