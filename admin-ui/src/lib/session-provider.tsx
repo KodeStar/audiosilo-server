@@ -26,7 +26,7 @@ export function SessionProvider({
   const finish = useRef<Promise<LoginResponse | null> | null>(null);
   // While a single sign-on is being finished, the stored token waits; one that
   // signs no admin in hands back to it (below).
-  const [trading, setTrading] = useState(oidcDone);
+  const [finishing, setFinishing] = useState(oidcDone);
   const [attempt, setAttempt] = useState(0);
 
   const dropSession = useCallback(
@@ -78,7 +78,7 @@ export function SessionProvider({
     if (!oidcDone) return;
     let cancelled = false;
     const noAdmin = (reason: SignedOutReason) => {
-      if (getToken()) setTrading(false);
+      if (getToken()) setFinishing(false);
       else dropSession(reason);
     };
     finish.current ??= api.oidcFinish().then(async (res) => {
@@ -109,7 +109,7 @@ export function SessionProvider({
   // Validate a stored token once on load (and on "Try again"); a single
   // sign-on's session replaces it instead, unless that signs no admin in.
   useEffect(() => {
-    if (trading || !getToken()) return;
+    if (finishing || !getToken()) return;
     let cancelled = false;
     api
       .me()
@@ -126,7 +126,7 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [attempt, trading, dropSession]);
+  }, [attempt, finishing, dropSession]);
 
   const value = useMemo<Session>(
     () => ({

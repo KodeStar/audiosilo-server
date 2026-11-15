@@ -938,3 +938,13 @@ func TestOIDCReasonsWorded(t *testing.T) {
 		}
 	}
 }
+
+// TestOIDCBudgetFitsRequestTimeout: a sign-in's provider calls end inside the
+// request's own timeout, so a slow provider ends on the result panel, not on
+// the timeout's bare 503.
+func TestOIDCBudgetFitsRequestTimeout(t *testing.T) {
+	t.Parallel()
+	if oidc.CallBudget+5*time.Second > requestTimeout {
+		t.Fatalf("oidc.CallBudget %v leaves too little of requestTimeout %v", oidc.CallBudget, requestTimeout)
+	}
+}

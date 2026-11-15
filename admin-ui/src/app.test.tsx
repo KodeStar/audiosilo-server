@@ -214,24 +214,12 @@ describe('single sign-on', () => {
     expect(getToken()).toBeNull();
   });
 
-  it('says so when the sign-in is spent or stale', async () => {
-    mockFetch({
-      'POST /auth/oidc/finish': {
-        status: 401,
-        body: { error: 'expired', code: 'oidc_sign_in_expired' },
-      },
-    });
-    renderApp('/', { oidcDone: true });
-    expect(await screen.findByRole('alert')).toHaveTextContent("Single sign-on didn't finish");
-    expect(getToken()).toBeNull();
-  });
-
-  it('signs no one in from a link to the return in a browser that never signed in', async () => {
+  it.each([
+    ['spent or stale', 'oidc_sign_in_expired'],
+    ['never started in this browser (a link to the return)', 'oidc_no_sign_in'],
+  ])('signs no one in when the sign-in is %s', async (_, code) => {
     const calls = mockFetch({
-      'POST /auth/oidc/finish': {
-        status: 401,
-        body: { error: 'no single sign-on', code: 'oidc_no_sign_in' },
-      },
+      'POST /auth/oidc/finish': { status: 401, body: { error: 'no sign-in', code } },
     });
     renderApp('/', { oidcDone: true });
     expect(await screen.findByRole('alert')).toHaveTextContent("Single sign-on didn't finish");

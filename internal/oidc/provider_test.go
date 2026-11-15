@@ -278,8 +278,9 @@ func TestCallsShareOneBudget(t *testing.T) {
 		ok     bool
 	}{{400 * time.Millisecond, false}, {5 * time.Second, true}} {
 		idp := oidctest.New(t, "audiosilo", "s3cret", alice)
-		p, err := oidc.New(oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
-			Scopes: []string{"openid"}, UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget})
+		settings := oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
+			Scopes: []string{"openid"}, UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget}
+		p, err := oidc.New(settings)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -288,8 +289,7 @@ func TestCallsShareOneBudget(t *testing.T) {
 		code := signIn(t, p, f)
 		idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
 		// A fresh provider so the exchange discovers again: four slow calls.
-		p, err = oidc.New(oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
-			Scopes: []string{"openid"}, UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget})
+		p, err = oidc.New(settings)
 		if err != nil {
 			t.Fatal(err)
 		}
