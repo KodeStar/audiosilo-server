@@ -159,6 +159,13 @@ func TestGroupsMatchedWhole(t *testing.T) {
 	if c.Groups == nil || len(c.Groups) != 0 || c.InGroup("audiosilo-admins") {
 		t.Fatalf("a name with a control character matched: %q", c.Groups)
 	}
+	// A list with no string to read (a provider sending objects) is no claim,
+	// not an empty one: it leaves the role alone rather than demoting.
+	c = Claims{}
+	c.fill(claimSet{"g": json.RawMessage(`[{"name":"audiosilo-admins"},7]`)}, "u", "g")
+	if c.Groups != nil {
+		t.Fatalf("an unreadable list read as a claim: %q", c.Groups)
+	}
 }
 
 // TestWithoutBody: a failed request's error keeps its status, never the

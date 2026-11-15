@@ -70,7 +70,9 @@ func (c claimSet) verified() bool {
 }
 
 // groups reads a groups claim: a list of strings, or one string (some providers
-// send a single group bare). Other members of the list are skipped.
+// send a single group bare). Other members of the list are skipped; a list
+// with none to read (objects, numbers) is no claim (nil), like one of any
+// other shape, so it never reads as an empty list (Decide's NoGroups).
 func (c claimSet) groups(name string) []string {
 	raw, ok := c[name]
 	if !ok {
@@ -90,6 +92,9 @@ func (c claimSet) groups(name string) []string {
 		if json.Unmarshal(item, &s) == nil {
 			out = append(out, s)
 		}
+	}
+	if len(list) > 0 && len(out) == 0 {
+		return nil
 	}
 	return cleanGroups(out)
 }
