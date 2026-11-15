@@ -309,8 +309,11 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	pol := a.config().Auth.OIDC
 	res, err := a.auth.OIDCSignIn(r.Context(), claims, oidc.Policy{
-		AutoCreate: pol.AutoCreate, AllowedGroup: pol.AllowedGroup, AdminGroup: pol.AdminGroup,
+		AutoCreate: pol.AutoCreate, AllowedGroup: strings.TrimSpace(pol.AllowedGroup), AdminGroup: strings.TrimSpace(pol.AdminGroup),
 	})
+	// The groups trimmed as the console saves them (config.yaml and the
+	// environment aren't): a claim's group is, so " admins" would match no one
+	// and every sign-in would lose its admin role.
 	if err != nil {
 		a.log.Error("oidc: sign-in failed", "err", err)
 		a.oidcResult(w, r, oidcFailed)

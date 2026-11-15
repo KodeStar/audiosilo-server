@@ -308,7 +308,9 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	t.Parallel()
 	p := oidcAlice
 	p.Groups = []string{"audiosilo-admins"}
-	e := newOIDCEnv(t, p, func(o *config.OIDCConfig) { o.AdminGroup = "audiosilo-admins" })
+	// The group as config.yaml or the environment may hold it: only the
+	// console's save trims it, and a claim's group is always trimmed.
+	e := newOIDCEnv(t, p, func(o *config.OIDCConfig) { o.AdminGroup = " audiosilo-admins " })
 	alice := e.mustUser(t, "alice", "Alice@Example.org")
 	loc := e.signIn(t, oidcReturnAdmin)
 	status, out := e.exchangeFragment(t, loc)
