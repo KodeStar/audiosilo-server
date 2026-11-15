@@ -198,7 +198,12 @@ export function ChaptersEditor({
             onStart={(at) => apply(setStart(rows, spans, r.key, at))}
             onBadTime={() => setNotice(t('book.chapters.edit.refused.badTime'))}
             onAddAfter={() => apply(addAfter(rows, spans, r.key, newTitle()))}
-            onDelete={() => apply(removeRow(rows, r.key))}
+            onDelete={() => {
+              // The player stays on a chapter: the one before (a file's start, at least).
+              if (apply(removeRow(rows, r.key)) && r.key === selected) {
+                setSelected(rows[i - 1]?.key);
+              }
+            }}
           />
         ))}
       </ol>

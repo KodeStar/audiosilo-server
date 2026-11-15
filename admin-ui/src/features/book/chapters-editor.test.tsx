@@ -57,6 +57,11 @@ describe('the chapter editor', () => {
     expect(screen.getByRole('textbox', { name: 'Title of chapter 3' })).toHaveValue('New chapter');
     await user.click(screen.getByRole('button', { name: 'Add a chapter after chapter 3' }));
     await user.click(screen.getByRole('button', { name: 'Delete chapter 4' }));
+    // The player moves to the chapter before the deleted one.
+    expect(screen.getByRole('button', { name: 'Listen from chapter 3' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
 
     await user.click(save);
     await waitFor(() => expect(puts(calls)).toHaveLength(1));
