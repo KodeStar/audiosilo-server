@@ -111,7 +111,8 @@ func stringOrNil(s string) any {
 //
 // It tells the SetPodcastNotice listener, after the commit, about the episodes
 // new to a show indexed before under the same identity: an episode whose path
-// wasn't indexed and that was published after the show's latest episode then.
+// wasn't indexed and that was published after the show's latest episode then
+// (the latest not dated ahead of the clock, so one mistyped date hides nothing).
 // So a show's first index, a forced rescan of a feed already indexed, a rebuilt
 // index and a show whose missing episodes are indexed again announce nothing
 // (the Bridge's forced rescan after a poll that grew the feed does announce).
@@ -148,6 +149,19 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				indexed[b.RelPath] = true
 			}
 		}
+		// A latest episode dated ahead of the clock (a mistyped date in the
+		// feed) would hide every episode after it: the newest indexed episode
+		// not ahead of the clock stands in, when there is one.
+		newerThan := oldLatest.String
+		if now := c.now().UTC().Format(time.RFC3339); announce && newerThan > now {
+			var past sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT MAX(published) FROM podcast_episodes WHERE library_id=? AND show_path=? AND published<=?`, lib, show, now).Scan(&past); err != nil {
+				return err
+			}
+			if past.Valid {
+				newerThan = past.String
+			}
+		}
 		var news []feed.Episode
 		latest := ""
 		for _, e := range f.Episodes {
@@ -177,7 +191,7 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				continue
 			}
 			keep[e.Path] = true
-			if announce && !indexed[e.Path] && e.RemovedAt == "" && e.Published > oldLatest.String {
+			if announce && !indexed[e.Path] && e.RemovedAt == "" && e.Published > newerThan {
 				news = append(news, e)
 			}
 			info, exists := present[path.Base(e.Path)]

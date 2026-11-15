@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
@@ -50,6 +51,8 @@ func withEpisode(f *feed.File, id, file, title, published string) *feed.File {
 // missing rows and a replaced show at the path tell nothing.
 func TestPodcastNewEpisodesNotice(t *testing.T) {
 	c, ctx := newTestCatalog(t)
+	// Past every date below: an episode ahead of the clock is its own test.
+	c.now = func() time.Time { return time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }
 	log := listenNotices(c)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
 	if err != nil {
@@ -139,6 +142,46 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	index("s6", withEpisode(more, "bbbbbbbbbbbbbbbb", "2026-12-01-bbbbbbbbbb.mp3", "Late", "2026-12-01T00:00:00Z"), false)
 	if got := log.take(); len(got) != 0 {
 		t.Fatalf("a cleared listener was told %+v", got)
+	}
+}
+
+// One episode dated ahead of the clock (a mistyped date in the feed) is told
+// once and hides nothing after it: later episodes are measured against the
+// newest indexed episode that isn't ahead of the clock. With no such episode
+// the future date stands, so nothing is told by mistake.
+func TestPodcastNewEpisodesAfterFutureDate(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	now := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := func(sig string, f *feed.File) []PodcastNotice {
+		t.Helper()
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", sig, "", "", f, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		return log.take()
+	}
+	f := podcastFixture(t)
+	index("s1", f)
+	f = withEpisode(f, "1111111111111111", "2062-01-01-1111111111.mp3", "Mistyped", "2062-01-01T00:00:00Z")
+	if got := index("s2", f); len(got) != 1 || !slices.Equal(got[0].Titles, []string{"Mistyped"}) {
+		t.Fatalf("the future-dated episode: %+v", got)
+	}
+	// The next real episode is news; a back catalogue episode still isn't.
+	f = withEpisode(f, "2222222222222222", "2026-11-10-2222222222.mp3", "Episode Four", "2026-11-10T21:00:00Z")
+	f = withEpisode(f, "3333333333333333", "2026-01-01-3333333333.mp3", "Old Bonus", "2026-01-01T00:00:00Z")
+	if got := index("s3", f); len(got) != 1 || !slices.Equal(got[0].Titles, []string{"Episode Four"}) {
+		t.Fatalf("after a future-dated episode: %+v", got)
+	}
+	// A clock behind every indexed episode leaves the future date standing.
+	now = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	f = withEpisode(f, "4444444444444444", "2026-11-12-4444444444.mp3", "Episode Five", "2026-11-12T21:00:00Z")
+	if got := index("s4", f); len(got) != 0 {
+		t.Fatalf("a clock behind the whole show told %+v", got)
 	}
 }
 

@@ -3373,7 +3373,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (server#232, admin only, through `catalog.SetPodcastNotice` after the write commits, `notify.PodcastNotice`):
   `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
   before under the same `show_id`, a path not indexed and published after the show's previous
-  `latest_published`, so a first index, a forced rescan of a feed already indexed, a rebuilt index or missing rows indexed again
+  `latest_published` (or, when that is dated ahead of the clock, after its newest indexed episode that
+  isn't, so one mistyped date hides nothing), so a first index, a forced rescan of a feed already indexed, a rebuilt index or missing rows indexed again
   announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
   episode ids, so the scheduled scan and the Bridge's rescan can't both announce them),
   `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
