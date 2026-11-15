@@ -133,3 +133,30 @@ function setLink(id, href, label) {
   codeInput.value = code;
   redeem(code, true);
 })();
+
+// oidcMessage is the sentence for a single sign-on's result, "" for a reason
+// this page doesn't know.
+function oidcMessage(reason) {
+  switch (reason) {
+    case "off": return asI18n.t("connect.oidc.off");
+    case "unavailable": return asI18n.t("connect.oidc.unavailable");
+    case "pending": return asI18n.t("connect.oidc.pending");
+    case "disabled": return asI18n.t("connect.oidc.disabled");
+    case "not_allowed": return asI18n.t("connect.oidc.not_allowed");
+    case "failed": return asI18n.t("connect.oidc.failed");
+    case "expired": return asI18n.t("connect.oidc.expired");
+    case "rate_limited": return asI18n.t("connect.oidc.rate_limited");
+  }
+  return "";
+}
+
+// The result of a single sign-on (/api/v1/auth/oidc/callback sends the browser
+// here with #oidc=<reason> when it signed no one in): say why, then drop the
+// fragment so a reload doesn't say it again.
+(function () {
+  const m = /(?:^|[#&])oidc=([a-z_]+)/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const text = oidcMessage(m[1]);
+  if (text) showError(text);
+})();

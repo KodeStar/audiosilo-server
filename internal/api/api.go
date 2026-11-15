@@ -126,7 +126,12 @@ type API struct {
 	// bootstraps the admin via the printed first-run banner instead).
 	setupToken string
 
+	// oidc is Sign in with OpenID Connect (handlers_oidc.go), nil when
+	// auth.oidc.enabled was off at start.
+	oidc *oidcFlow
+
 	loginLimiter   *limiter     // per-IP lockout for password login
+	oidcLimiter    *limiter     // per-IP lockout for failed OIDC callbacks
 	redeemLimiter  *limiter     // per-IP lockout for auth-code redemption
 	demoLimiter    *limiter     // per-IP cap on demo account creation
 	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
@@ -230,6 +235,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		timeoutDur:     requestTimeout,
 		mountHints:     library.MountHints,
 		loginLimiter:   newLimiter(10, 15*time.Minute),
+		oidcLimiter:    newLimiter(10, 15*time.Minute),
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
@@ -298,6 +304,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	a.live.Store(newLiveConfig(cfg, cfg))
 	a.discovery = a.newDiscovery()
 	a.playerSource = web.PlayerSource(cfg.WebDir)
+	a.oidc = newOIDCFlow(cfg.Auth.OIDC, log)
 	a.rt.StartedAt = time.Now()
 	return a
 }
@@ -405,6 +412,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/redeem", a.handleRedeem)
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
+	// Sign in with OpenID Connect: the browser's flow (handlers_oidc.go).
+	mux.HandleFunc("GET "+oidcStartPath, a.handleOIDCStart)
+	mux.HandleFunc("GET "+oidcCallbackPath, a.handleOIDCCallback)
 	mux.HandleFunc("POST /api/v1/demo/session", a.handleDemoSession)
 	// The Bridge trades a pairing code for its token (handlers_bridge.go).
 	mux.HandleFunc("POST /api/v1/bridge/pair", a.handleBridgeExchange)
@@ -601,6 +611,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
 	mux.Handle("POST /api/v1/admin/users/{id}/sign-out", a.requireAdmin(http.HandlerFunc(a.handleSignOutEverywhere)))
+	mux.Handle("DELETE /api/v1/admin/users/{id}/identities/{identity_id}", a.requireAdmin(http.HandlerFunc(a.handleUnlinkIdentity)))
+	// Single sign-on: the provider's status and the sign-ins waiting for an admin.
+	mux.Handle("GET /api/v1/admin/oidc/status", a.requireAdmin(http.HandlerFunc(a.handleOIDCStatus)))
+	mux.Handle("GET /api/v1/admin/oidc/pending", a.requireAdmin(http.HandlerFunc(a.handleOIDCPending)))
+	mux.Handle("POST /api/v1/admin/oidc/pending/{id}/link", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingLink)))
+	mux.Handle("POST /api/v1/admin/oidc/pending/{id}/create", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingCreate)))
+	mux.Handle("DELETE /api/v1/admin/oidc/pending/{id}", a.requireAdmin(http.HandlerFunc(a.handleOIDCPendingDismiss)))
 	mux.Handle("GET /api/v1/admin/invites", a.requireAdmin(http.HandlerFunc(a.handleListInvites)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))

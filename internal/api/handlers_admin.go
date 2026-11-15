@@ -28,6 +28,7 @@ type adminUser struct {
 	CanAddMembers bool        `json:"can_add_members"`
 	MembersCount  int         `json:"members_count"`
 	DisplayName   string      `json:"display_name"`
+	Email         string      `json:"email"`
 }
 
 // adminOwner is a member's owner as the console names them (display_name, else
@@ -40,7 +41,7 @@ type adminOwner struct {
 
 func toAdminUser(u *auth.User) adminUser {
 	v := adminUser{User: u, MemberAccess: u.MemberAccess, CanAddMembers: u.CanAddMembers,
-		MembersCount: u.MembersCount, DisplayName: u.DisplayName}
+		MembersCount: u.MembersCount, DisplayName: u.DisplayName, Email: u.Email}
 	if o := u.ManagedBy; o != nil {
 		v.ManagedBy = &adminOwner{ID: o.ID, Username: o.Username, DisplayName: o.DisplayName}
 	}
@@ -72,6 +73,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"` // optional for non-admins (auth-code pairing only)
 		Role     string `json:"role"`
+		Email    string `json:"email"` // optional
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -81,12 +83,12 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// password rules (required for admins, optional otherwise); writeUserError
 	// maps its typed errors to the right status and never echoes a raw DB error
 	// (a duplicate username must not leak the SQLite constraint string).
-	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
+	u, err := a.auth.CreateUserWithEmail(r.Context(), req.Username, req.Password, req.Role, req.Email)
 	if err != nil {
 		a.writeUserError(w, err, "could not create user")
 		return
 	}
-	a.audit(r, "user.create", u.Username, map[string]any{"role": u.Role, "password": req.Password != ""})
+	a.audit(r, "user.create", u.Username, map[string]any{"role": u.Role, "password": req.Password != "", "email": u.Email != ""})
 	// Re-read, so the answer is the admin's user object like every other admin
 	// user answer (adminUser): the stored defaults (can_add_members) included.
 	full, err := a.auth.GetUser(r.Context(), u.ID)
@@ -141,6 +143,12 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	for i, m := range members {
 		own[i] = adminMember{Member: m, Disabled: m.Disabled}
 	}
+	identities, err := a.auth.ListIdentities(r.Context(), id)
+	if err != nil {
+		a.log.Warn("list identities failed", "user", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load single sign-on identities")
+		return
+	}
 	shared, err := a.memberCollectionsOf(r.Context(), u)
 	if err != nil {
 		a.log.Warn("member collections failed", "user", id, "err", err)
@@ -154,6 +162,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		"auth_codes":           codes,
 		"members":              own,
 		"member_collections":   shared,
+		"identities":           identities,
 	}
 	if u.IsMember() {
 		ownerLibs, ownerAdmin := []catalog.Library{}, false
@@ -196,6 +205,7 @@ type userPatch struct {
 	Username      *string         `json:"username"`
 	Role          *string         `json:"role"`
 	Password      *string         `json:"password"`
+	Email         *string         `json:"email"`
 	Disabled      *bool           `json:"disabled"`
 	CanAddMembers *bool           `json:"can_add_members"`
 	ManagedBy     json.RawMessage `json:"managed_by"`
@@ -266,8 +276,9 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	// A reset of a password the person had ends their sessions, all but the
 	// admin's own when it is their own account (auth.UpdateUser).
 	change := auth.UserChanges{
-		Username: req.Username, Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
-		KeepToken: credentialFrom(r.Context()).ID,
+		Username: req.Username, Password: req.Password, Email: req.Email, Role: req.Role, Disabled: req.Disabled,
+		CanAddMembers: req.CanAddMembers,
+		KeepToken:     credentialFrom(r.Context()).ID,
 	}
 	if assign {
 		change.Household = &auth.HouseholdChange{Owner: owner}
@@ -309,6 +320,9 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CanAddMembers != nil {
 		details["can_add_members"] = u.CanAddMembers
+	}
+	if req.Email != nil {
+		details["email"] = map[bool]string{true: "set", false: "cleared"}[u.Email != ""]
 	}
 	if assign {
 		details["managed_by"], details["member_kind"], details["member_access"] = nil, nil, nil
@@ -417,6 +431,14 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeErrorCode(w, http.StatusBadRequest, codeKidNoPassword, err.Error())
 	case errors.Is(err, auth.ErrInvalidKind), errors.Is(err, auth.ErrInvalidAccess):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, auth.ErrInvalidEmail):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidEmail, err.Error())
+	case errors.Is(err, auth.ErrIdentityLinked):
+		writeErrorCode(w, http.StatusConflict, codeIdentityLinked, err.Error())
+	case errors.Is(err, auth.ErrUserHasIdentity):
+		writeErrorCode(w, http.StatusConflict, codeUserHasIdentity, err.Error())
+	case errors.Is(err, auth.ErrNotLinkable):
+		writeErrorCode(w, http.StatusConflict, codeNotLinkable, err.Error())
 	case errors.Is(err, auth.ErrInvalidKeepMembers):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, err.Error())
 	default:

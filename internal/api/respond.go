@@ -139,6 +139,11 @@ const (
 	codeImportNotReady   = "import_not_ready"
 	codeImportNotApplied = "import_not_applied"
 	codeImportApplied    = "import_applied"
+	// Single sign-on (handlers_oidc.go) and an account's email.
+	codeInvalidEmail    = "invalid_email"
+	codeIdentityLinked  = "identity_linked"   // the sign-in is linked to an account meanwhile
+	codeUserHasIdentity = "user_has_identity" // the account has an identity from this provider
+	codeNotLinkable     = "not_linkable"      // a household member or demo account
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.

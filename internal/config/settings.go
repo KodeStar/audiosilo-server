@@ -141,6 +141,36 @@ var fields = []field{
 	{key: "scan.concurrency", env: "AUDIOSILO_SCAN_CONCURRENCY", restart: true,
 		ptr: func(c *Config) any { return &c.Scan.Concurrency }},
 
+	// Sign in with OpenID Connect (oidc.go). The provider is read once at start
+	// and shown read only; who may sign in and as what applies on the next
+	// sign-in. The client secret has no console setting: it is never shown.
+	{key: "auth.oidc.enabled", env: "AUDIOSILO_OIDC_ENABLED", setting: "signin.enabled", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.Enabled }},
+	{key: "auth.oidc.name", env: "AUDIOSILO_OIDC_NAME", setting: "signin.name", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.Name }},
+	{key: "auth.oidc.issuer", env: "AUDIOSILO_OIDC_ISSUER", setting: "signin.issuer", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.Issuer }},
+	{key: "auth.oidc.client_id", env: "AUDIOSILO_OIDC_CLIENT_ID", setting: "signin.client_id", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.ClientID }},
+	{key: "auth.oidc.client_secret", env: EnvOIDCClientSecret, restart: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.ClientSecret }},
+	{key: "auth.oidc.client_secret_file", env: "AUDIOSILO_OIDC_CLIENT_SECRET_FILE", restart: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.ClientSecretFile }},
+	{key: "auth.oidc.scopes", env: "AUDIOSILO_OIDC_SCOPES", setting: "signin.scopes", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.Scopes }},
+	{key: "auth.oidc.username_claim", env: "AUDIOSILO_OIDC_USERNAME_CLAIM", setting: "signin.username_claim", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.UsernameClaim }},
+	{key: "auth.oidc.groups_claim", env: "AUDIOSILO_OIDC_GROUPS_CLAIM", setting: "signin.groups_claim", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.GroupsClaim }},
+	{key: "auth.oidc.ca_file", env: "AUDIOSILO_OIDC_CA_FILE", setting: "signin.ca_file", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Auth.OIDC.CAFile }},
+	{key: "auth.oidc.auto_create", env: "AUDIOSILO_OIDC_AUTO_CREATE", setting: "signin.auto_create",
+		ptr: func(c *Config) any { return &c.Auth.OIDC.AutoCreate }},
+	{key: "auth.oidc.allowed_group", env: "AUDIOSILO_OIDC_ALLOWED_GROUP", setting: "signin.allowed_group",
+		ptr: func(c *Config) any { return &c.Auth.OIDC.AllowedGroup }, fix: fixOIDCAllowedGroup},
+	{key: "auth.oidc.admin_group", env: "AUDIOSILO_OIDC_ADMIN_GROUP", setting: "signin.admin_group",
+		ptr: func(c *Config) any { return &c.Auth.OIDC.AdminGroup }, fix: fixOIDCAdminGroup},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",
@@ -190,6 +220,7 @@ func (c *Config) Clone() *Config {
 	out.AppLinks.AppleAppIDs = slices.Clone(c.AppLinks.AppleAppIDs)
 	out.AppLinks.AndroidSHA256 = slices.Clone(c.AppLinks.AndroidSHA256)
 	out.Libraries = slices.Clone(c.Libraries)
+	out.Auth.OIDC.Scopes = slices.Clone(c.Auth.OIDC.Scopes)
 	if c.Demo.MaxUsers != nil {
 		n := *c.Demo.MaxUsers
 		out.Demo.MaxUsers = &n
@@ -269,7 +300,8 @@ type SettingChange struct {
 }
 
 // ChangedSettings lists the console settings whose value differs between cur and
-// next, in id order. No setting holds a secret, so the values can be recorded.
+// next, in id order. No setting holds a secret (the OIDC client secret has no
+// setting id), so the values can be recorded.
 func ChangedSettings(cur, next *Config) []SettingChange {
 	out := []SettingChange{}
 	for i := range fields {

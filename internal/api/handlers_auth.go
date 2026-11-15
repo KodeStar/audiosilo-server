@@ -54,9 +54,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version":      Version,
 		"api":          "v1",
 		"capabilities": caps,
-		"auth": map[string]any{
-			"methods": []string{"auth_code", "password"},
-		},
+		"auth":         a.authMethods(),
 		// The rendition kinds GET /stream?rendition= serves (Track W2), [] while
 		// capabilities.renditions is false.
 		"renditions": a.renditionKinds(),
@@ -73,6 +71,17 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		info["bridge"] = bridgeOn
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// authMethods is GET /server's auth block: the sign-in methods, "oidc" and the
+// provider's button name (auth.oidc.name) only while single sign-on can run.
+func (a *API) authMethods() map[string]any {
+	out := map[string]any{"methods": []string{"auth_code", "password"}}
+	if a.oidcOn() {
+		out["methods"] = []string{"auth_code", "password", "oidc"}
+		out["oidc"] = map[string]string{"name": a.oidc.name}
+	}
+	return out
 }
 
 // renditionKinds are the rendition kinds this server serves now: none while
@@ -141,6 +150,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
 		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
 		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
+		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
 	}
 }
 

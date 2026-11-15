@@ -64,6 +64,9 @@ func (a *API) settingsEnvelope() map[string]any {
 	sections["household"]["max_members_default"] = config.DefaultMaxMembers
 	sections["household"]["max_members_min"] = config.MinMaxMembers
 	sections["household"]["max_members_max"] = config.MaxMaxMembers
+	// Whether a client secret is set, never the secret (GET /admin/oidc/status
+	// says the rest of the provider).
+	sections["signin"]["client_secret_set"] = saved.Auth.OIDC.SecretSet()
 	out := map[string]any{
 		"locked":           saved.Locked(),
 		"restart_settings": config.RestartSettings(),
