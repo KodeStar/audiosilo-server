@@ -196,12 +196,28 @@ func discoveryError(err error) string {
 	return "discovery failed: " + msg
 }
 
+// keysErrors are how go-oidc starts a failed fetch of the provider's keys (a
+// signature that can't be checked): "<status> <response body>" or
+// "<error> <response body>" follows.
+var keysErrors = []string{"oidc: get keys failed: ", "oidc: failed to decode keys: "}
+
 // withoutBody cuts go-oidc's "<status>: <response body>" error (a failed
-// discovery or userinfo request) down to the status.
+// discovery or userinfo request) down to the status, and a failed keys fetch
+// down to its status code.
 func withoutBody(msg string) string {
 	status, _, found := strings.Cut(msg, ": ")
 	if found && len(status) >= 4 && status[3] == ' ' && strings.Trim(status[:3], "0123456789") == "" {
 		return status
+	}
+	for _, m := range keysErrors {
+		i := strings.Index(msg, m)
+		if i < 0 {
+			continue
+		}
+		if rest := msg[i+len(m):]; len(rest) >= 3 && strings.Trim(rest[:3], "0123456789") == "" {
+			return msg[:i+len(m)+3]
+		}
+		return msg[:i+len(m)-2]
 	}
 	return msg
 }
@@ -270,7 +286,7 @@ func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flo
 	}
 	idt, err := verifier.Verify(gooidc.ClientContext(ctx, p.client), raw)
 	if err != nil {
-		return Claims{}, fmt.Errorf("%w: %v", ErrIDToken, err)
+		return Claims{}, fmt.Errorf("%w: %s", ErrIDToken, exchangeError(err))
 	}
 	if subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(f.Nonce)) != 1 {
 		return Claims{}, ErrNonce
@@ -308,19 +324,20 @@ func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flo
 	return c, nil
 }
 
-// exchangeError words a failed token or userinfo request without its response
-// body (which some providers fill with the request's own parameters).
+// exchangeError words a failed token or userinfo request, or a refused ID
+// token, without a response body (which some providers fill with the request's
+// own parameters) and cut to 200 bytes (the provider's error code included).
 func exchangeError(err error) string {
+	msg := withoutBody(err.Error())
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {
-		if re.ErrorCode != "" {
-			return re.ErrorCode
-		}
-		if re.Response != nil {
-			return re.Response.Status
+		switch {
+		case re.ErrorCode != "":
+			msg = re.ErrorCode
+		case re.Response != nil:
+			msg = re.Response.Status
 		}
 	}
-	msg := withoutBody(err.Error())
 	if len(msg) > 200 {
 		msg = msg[:200] + "..."
 	}

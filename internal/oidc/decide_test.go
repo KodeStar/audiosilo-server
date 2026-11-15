@@ -126,3 +126,6 @@ func TestWithoutBody(t *testing.T) {
 		}
 	}
 }
+		// A signature that can't be checked: the keys endpoint's answer follows.
+		"failed to verify signature: fetching keys oidc: get keys failed: 502 Bad Gateway <html>long page</html>": "failed to verify signature: fetching keys oidc: get keys failed: 502",
+		"failed to verify signature: fetching keys oidc: failed to decode keys: EOF <html>long page</html>":       "failed to verify signature: fetching keys oidc: failed to decode keys",
