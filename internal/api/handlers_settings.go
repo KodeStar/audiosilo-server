@@ -46,7 +46,9 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 // metadata.region_chosen (regionChosen), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
 // is null), household.max_members_default/_min/_max (the cap's default and
-// range). The modules section is each managed module's toggle (modules.go; GET
+// range), signin.client_secret_set (never the secret) and
+// signin.scopes_default/username_claim_default/groups_claim_default (what an
+// empty provider field stands for). The modules section is each managed module's toggle (modules.go; GET
 // /admin/modules says more about each).
 func (a *API) settingsEnvelope() map[string]any {
 	saved := a.config().saved
@@ -64,6 +66,11 @@ func (a *API) settingsEnvelope() map[string]any {
 	sections["household"]["max_members_default"] = config.DefaultMaxMembers
 	sections["household"]["max_members_min"] = config.MinMaxMembers
 	sections["household"]["max_members_max"] = config.MaxMaxMembers
+	// Whether a client secret is set, never the secret.
+	sections["signin"]["client_secret_set"] = saved.Auth.OIDC.SecretSet()
+	sections["signin"]["scopes_default"] = config.DefaultOIDCScopes
+	sections["signin"]["username_claim_default"] = config.DefaultOIDCUsernameClaim
+	sections["signin"]["groups_claim_default"] = config.DefaultOIDCGroupsClaim
 	out := map[string]any{
 		"locked":           saved.Locked(),
 		"restart_settings": config.RestartSettings(),

@@ -38,6 +38,11 @@ export interface ServerInfo {
      * Book.readalong reported); absent before Bridge Phase 3c.
      */
     readalong?: boolean;
+    /**
+     * Sign in with OpenID Connect is configured (auth.oidc; `false` while off,
+     * absent before server#235): GET /auth/oidc/start runs a single sign-on.
+     */
+    oidc?: boolean;
   };
   /**
    * The online Bridge's version and features, only while capabilities.bridge
@@ -46,7 +51,11 @@ export interface ServerInfo {
    * contributions (bridge.Status.Features).
    */
   bridge?: { version: string; features: string[] };
-  auth: { methods: string[] };
+  /**
+   * How to sign in: "auth_code", "password", and "oidc" while single sign-on is
+   * configured, with the button's name in `oidc` (handlers_auth.go authMethods).
+   */
+  auth: { methods: string[]; oidc?: { name: string } };
   demo: { enabled: boolean };
 }
 
@@ -106,6 +115,11 @@ export interface AdminUser extends User {
   members_count: number;
   /** The name the household uses ("Evie"); "" = the username. */
   display_name: string;
+  /**
+   * The account's email ("" = none): a single sign-on with this verified email
+   * links to the account on its own when it matches no other (server#235).
+   */
+  email: string;
 }
 
 /**
@@ -609,6 +623,37 @@ export interface AdminSettings {
    * "modules.<id>"). GET /admin/modules says more about each.
    */
   modules: Record<string, boolean>;
+  /**
+   * Sign in with OpenID Connect (config auth.oidc, server#235). The provider
+   * fields are read only (config.yaml or AUDIOSILO_OIDC_*, applied at a
+   * restart); who may sign in and as what saves here and applies at once.
+   * Never the client secret: only whether one is set.
+   */
+  signin: {
+    enabled: boolean;
+    /** The button's name; "" = "single sign-on". */
+    name: string;
+    issuer: string;
+    client_id: string;
+    /** [] = scopes_default. */
+    scopes: string[] | null;
+    /** "" = username_claim_default. */
+    username_claim: string;
+    /** "" = groups_claim_default. */
+    groups_claim: string;
+    ca_file: string;
+    /** A sign-in no account takes makes an ordinary account (for allowed_group's members, when set). */
+    auto_create: boolean;
+    allowed_group: string;
+    /** In this group an admin, out of it an ordinary user, at each sign-in; "" = roles are the console's. */
+    admin_group: string;
+    /** A client secret is set (inline, AUDIOSILO_OIDC_CLIENT_SECRET or a file); read only. */
+    client_secret_set: boolean;
+    /** What an empty scopes, username_claim and groups_claim stand for. */
+    scopes_default: string[];
+    username_claim_default: string;
+    groups_claim_default: string;
+  };
   /** Setting id -> why the console can't change it: the AUDIOSILO_* variable that sets it. */
   locked: Record<string, string>;
   /** Setting ids read only at start. */
@@ -659,7 +704,59 @@ export interface MetaMirrorStatus {
 
 /** The sections of AdminSettings that hold settings. */
 export type SettingsSection =
-  'general' | 'network' | 'players' | 'metadata' | 'demo' | 'household' | 'backups' | 'modules';
+  | 'general'
+  | 'network'
+  | 'players'
+  | 'metadata'
+  | 'demo'
+  | 'household'
+  | 'backups'
+  | 'modules'
+  | 'signin';
+
+/** oidc.Status (internal/oidc/provider.go): the provider's discovery. */
+export interface OIDCDiscovery {
+  /** Not tried yet, found, or failing (tried again after a 1 to 15 minute wait). */
+  state: 'pending' | 'ok' | 'error';
+  error?: string;
+  checked_at?: string;
+}
+
+/** GET /admin/oidc/status (handlers_oidc.go oidcStatus). Never the client secret. */
+export interface OIDCStatus {
+  /** auth.oidc.enabled was on when the server started. */
+  enabled: boolean;
+  /** Enabled, and it can run (else `problem` says why). */
+  configured: boolean;
+  problem?: string;
+  name: string;
+  issuer: string;
+  client_id: string;
+  client_secret_set: boolean;
+  /** <public_url>/api/v1/auth/oidc/callback; "" while public_url is unset. */
+  redirect_uri: string;
+  /** The scopes asked for (openid first). */
+  scopes: string[];
+  username_claim: string;
+  groups_claim: string;
+  /** Only while configured. */
+  discovery?: OIDCDiscovery;
+}
+
+/** auth.Identity (internal/auth/identities.go): a single sign-on linked to an account. */
+export interface OIDCIdentity {
+  id: number;
+  issuer: string;
+  subject: string;
+  email: string;
+  username: string;
+  /** Linked on its own by a verified email, by an admin, or made with the account. */
+  link_method: 'auto_email' | 'admin' | 'created';
+  /** The admin who linked it (null otherwise, or since deleted). */
+  linked_by: UserRef | null;
+  linked_at: string;
+  last_sign_in_at: string | null;
+}
 
 /** A PATCH body: only the settings to change, by section. */
 export type SettingsPatch = {
@@ -1413,6 +1510,8 @@ export interface UserDetail {
   /** A household member only: the libraries their owner reaches, and whether the owner is an admin. */
   owner_libraries?: Library[];
   owner_is_admin?: boolean;
+  /** The person's linked single sign-ons (absent before server#235). */
+  identities?: OIDCIdentity[] | null;
 }
 
 /**
@@ -1427,6 +1526,8 @@ export type UserPatch = {
   password?: string;
   disabled?: boolean;
   can_add_members?: boolean;
+  /** "" clears it; not an address: 400 invalid_email. */
+  email?: string;
 } & (
   | { managed_by?: never; member_kind?: never; member_access?: never }
   | { managed_by: number; member_kind: MemberKind; member_access: MemberAccess }

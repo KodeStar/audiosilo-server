@@ -54,9 +54,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version":      Version,
 		"api":          "v1",
 		"capabilities": caps,
-		"auth": map[string]any{
-			"methods": []string{"auth_code", "password"},
-		},
+		"auth":         a.authMethods(caps["oidc"]),
 		// The rendition kinds GET /stream?rendition= serves (Track W2), [] while
 		// capabilities.renditions is false.
 		"renditions": a.renditionKinds(),
@@ -73,6 +71,18 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		info["bridge"] = bridgeOn
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// authMethods is GET /server's auth block: the sign-in methods, "oidc" and the
+// provider's button name (auth.oidc.name) only while single sign-on can run
+// (oidcOn, the capability's value).
+func (a *API) authMethods(oidcOn bool) map[string]any {
+	out := map[string]any{"methods": []string{"auth_code", "password"}}
+	if oidcOn {
+		out["methods"] = []string{"auth_code", "password", "oidc"}
+		out["oidc"] = map[string]string{"name": a.oidc.name}
+	}
+	return out
 }
 
 // renditionKinds are the rendition kinds this server serves now: none while
@@ -141,6 +151,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
 		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
 		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
+		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
 	}
 }
 
@@ -244,17 +255,24 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
+	a.issuePairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite)
+}
+
+// issuePairedSession answers a consumed pairing token (exchange) or single
+// sign-on token (finish): a session for the device, the sign-in reported, the
+// session envelope.
+func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool) {
+	session, err := a.auth.IssueToken(r.Context(), userID, auth.KindSession, deviceName, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	full, err := a.auth.GetUser(r.Context(), u.ID)
+	full, err := a.auth.GetUser(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	a.reportSignIn(r, full, req.DeviceName, codeKind == auth.CodeInvite)
+	a.reportSignIn(r, full, deviceName, invite)
 	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
 }
 

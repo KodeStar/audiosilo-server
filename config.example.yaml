@@ -234,3 +234,41 @@ upcoming:
   # How many days back a release still counts as new (1-365; applies after a
   # restart). [AUDIOSILO_UPCOMING_WINDOW_DAYS]
   window_days: 90
+
+# Sign in with OpenID Connect (single sign-on: Authentik, Authelia, Keycloak,
+# Pocket ID and the like). Off by default. The admin console and the web player
+# show a "Sign in with <name>" button; the apps keep pairing by QR code. Register
+# the server at your provider with the redirect URI
+#   <public_url>/api/v1/auth/oidc/callback
+# (public_url must be set). The provider settings apply after a restart and show
+# read only in Settings > Sign-in; a problem with them never stops the server
+# (single sign-on stays off and the console says why).
+auth:
+  oidc:
+    enabled: false                       # [AUDIOSILO_OIDC_ENABLED]
+    name: ""                             # the button's name (default "single sign-on") [AUDIOSILO_OIDC_NAME]
+    # Exactly as the provider's discovery document states it (a trailing slash
+    # counts): <issuer>/.well-known/openid-configuration. [AUDIOSILO_OIDC_ISSUER]
+    issuer: ""
+    client_id: ""                        # [AUDIOSILO_OIDC_CLIENT_ID]
+    # The client secret: here, in AUDIOSILO_OIDC_CLIENT_SECRET, or in the file
+    # client_secret_file names (one of them). None is a public client (PKCE
+    # alone). Never shown in the console or logged.
+    # [AUDIOSILO_OIDC_CLIENT_SECRET] [AUDIOSILO_OIDC_CLIENT_SECRET_FILE]
+    # client_secret: ""
+    # client_secret_file: ""
+    # scopes: [openid, profile, email, groups]  # [AUDIOSILO_OIDC_SCOPES]
+    # username_claim: preferred_username  # a new account's username [AUDIOSILO_OIDC_USERNAME_CLAIM]
+    # groups_claim: groups                # or a namespaced one, https://example.org/groups [AUDIOSILO_OIDC_GROUPS_CLAIM]
+    ca_file: ""                          # PEM certificates trusted for the provider [AUDIOSILO_OIDC_CA_FILE]
+    # Who may sign in and as what (Settings > Sign-in, applies at once). A
+    # sign-in links to an existing account only by a verified email that matches
+    # exactly one ordinary account (never an admin's, a household member's or a
+    # demo account's); any other sign-in waits for an admin to link it, make an
+    # account for it or dismiss it, unless auto_create makes an ordinary account
+    # (for members of allowed_group, when set).
+    auto_create: false                   # [AUDIOSILO_OIDC_AUTO_CREATE]
+    allowed_group: ""                    # [AUDIOSILO_OIDC_ALLOWED_GROUP]
+    # In this group: an admin; out of it: an ordinary user, at each single
+    # sign-on (never the last enabled admin). Empty: roles are the console's.
+    admin_group: ""                      # [AUDIOSILO_OIDC_ADMIN_GROUP]

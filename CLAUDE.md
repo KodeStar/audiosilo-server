@@ -141,6 +141,7 @@ internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last
 internal/podcast/     podcast feed.json v1 reader and URL helpers (pure format in feed/), poll/fetch/retention scheduler, bounded on-demand media waits and scoped one-ahead prefetch; catalog/podcasts.go and podcast_{fetch,retention}.go hold the generation index, identity-bound status, follows, durable policies and aggregate checks; library/podcast_media.go opens committed media
 internal/podcast/     (2c-3) follow.go: Follower, follow by URL for the single follow and OPML rows; opmlimport.go (rows, the five-new-per-upload wave); export.go (BuildExport); discovery/ (iTunes + Podcast Index search, the artwork proxy, caches/quotas/cooldown, the build-tagged test origin); opml/ (the bounded strict OPML parser and the export writer); quota/ (token buckets with a bounded key map, slots)
 internal/netguard/    the guarded dialer: PublicAddr, Control/Dialer check the address actually dialled (meta covers, podcast discovery)
+internal/oidc/        Sign in with OpenID Connect (server#235), pure (no DB, no handlers): Provider (go-oidc + x/oauth2: lazy discovery with backoff, asymmetric algs only, PKCE S256, nonce/aud/azp/iat checks, userinfo fallback, one 20 s CallBudget per use), the sealed flow cookie (Sealer, Replay), Claims and Decide (link, create, pending or refuse); oidctest/ is the fake IdP for tests. Storage: auth/identities.go (OIDCSignIn in one durable tx, pending sign-ins, identities); routes: api/handlers_oidc.go
 internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions: no routes of its own, its actions are Bridge jobs gated by `bridge.ModuleFor`; podcasts; audible)
 internal/audible/     the audible module's Start (Bridge Phase 4a): RunScheduler queues each due account's `audible.poll` while a Bridge offers it; see Audible accounts in CONVENTIONS.md; imports.go (Phase 4b): Queues, a title's Back up, Back up everything and AfterPoll's policy backups (`audible.import`); see Audible backups; Phase 4c: the scheduler queues each synced account's `audible.sync` every 15 min (`queueSyncs`); see Audible sync
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed`, the upcoming job's `book_released` and the podcast kinds `podcast_episodes_new` / `podcast_feed_failing` / `podcast_feed_recovered`)
@@ -174,7 +175,7 @@ is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
-`users`, `tokens` (sessions, API keys, pairing, cast, bridge and calendar feed tokens, hashed; pairing tokens minted from an
+`users`, `tokens` (sessions, API keys, pairing, single sign-on (`oidc`), cast, bridge and calendar feed tokens, hashed; pairing tokens minted from an
 auth code carry `auth_code_id` - `0014` migration - so they live and die with
 the code), `auth_codes`, `libraries` (no
 `layout` column - shape is auto-detected), `books` (+ `content_hash` fingerprint,
@@ -331,7 +332,10 @@ mapping or complete poll last ended the sync's refusal; see Audible sync in CONV
 (server#366: identifiers another app gave a book, source `abs` from an applied listening import, as
 match hints only, never `books.asin` and never on the wire; durable, path-keyed, no FK to the index,
 moved and joined with the book, owned by the import that wrote it (`import_id`, deleted by its undo);
-see Listening imports in CONVENTIONS.md).
+see Listening imports in CONVENTIONS.md). `0077` (server#235) adds `users.email` (optional, not unique,
+a NOCASE index), `user_identities` (a single sign-on linked to an account: UNIQUE(issuer, subject) and
+UNIQUE(user_id, issuer), cascades with the user) and `oidc_pending` (sign-ins waiting for an admin, one per
+issuer+subject); see Single sign-on in CONVENTIONS.md.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -361,6 +365,7 @@ keep this index in step (one line per topic).
   - Invite vs recovery (`auth_codes.kind`)
   - Password ends sessions (server#281: change, reset, Sign out everywhere; sessions, pairing codes, recovery code)
   - Personal API keys (`tokens.kind='api'`)
+  - Single sign-on, Sign in with OpenID Connect (server#235, `internal/oidc`, `auth/identities.go`, `0077`: config `auth.oidc` and settings `signin`, the secret, public_url, Decide, pending sign-ins, the flow and its cookies, finish, role sync, the admin routes)
   - Web player at `/web`
   - Admin console (`admin-ui/` + `internal/web/adminui`)
   - Community metadata lookup (Phase 1.5, `internal/meta`)
@@ -441,7 +446,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `renditions`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
@@ -466,12 +471,16 @@ AND the live `upcoming.enabled`; `upcoming_calendar` (the calendar feed) and `up
 (`GET /me/upcoming/cover`) are exactly `upcoming` (see Upcoming releases in CONVENTIONS.md).
 `renditions` is ffmpeg configured AND the rendition cache open (a data dir), with the kinds
 served in a top-level `"renditions": ["watch"]` beside `auth` (`[]` while off; see Watch
-renditions in CONVENTIONS.md).
+renditions in CONVENTIONS.md). `oidc` is single sign-on configured (`auth.oidc.enabled`, a
+public_url and a valid provider config at start; `false`, not absent, while off), with `"oidc"` in
+`auth.methods` and `auth.oidc: {name}` beside it (see Single sign-on in CONVENTIONS.md).
 
 ## API surface
 
 See `internal/api/api.go` for the full route table. Public: `/server`,
-`/auth/redeem`, `/auth/exchange`, `/auth/login`, the well-known association files,
+`/auth/redeem`, `/auth/exchange`, `/auth/login`, single sign-on's `GET /auth/oidc/start`,
+`GET /auth/oidc/callback` and `POST /auth/oidc/finish` (trades the sign-in its HttpOnly cookie holds,
+never a token in a URL, answering as `/auth/exchange`), the well-known association files,
 and the static UI (`/`, `/connect`, `/admin`, `/web/...`), and the Bridge's pairing exchange
 (`POST /bridge/pair`). Everything else needs a session bearer token (or an API key), except the
 Bridge's own routes (`/bridge/*`), which take only a bridge token, and the calendar feed

@@ -473,6 +473,7 @@ type Config struct {
 	Modules        ModulesConfig   `yaml:"modules"`   // managed modules (internal/modules), each off by default
 	Podcasts       PodcastsConfig  `yaml:"podcasts"`  // podcast discovery (boot only; the Podcast Index pair from the environment only)
 	Scan           ScanConfig      `yaml:"scan"`      // library scans (boot only)
+	Auth           AuthConfig      `yaml:"auth"`      // sign-in methods beyond codes and passwords (OpenID Connect)
 
 	// RateLimit is the API's request rate limits (boot only).
 	RateLimit RateLimitConfig `yaml:"rate_limit,omitempty"`

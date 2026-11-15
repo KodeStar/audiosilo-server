@@ -1,15 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
 import { clearThumbCache } from '@/api/thumb-cache';
 import { clearToken, getToken, setToken } from '@/api/token';
+import type { LoginResponse } from '@/api/types';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
-export function SessionProvider({ children }: { children: React.ReactNode }) {
+/**
+ * The console's session: the stored token checked once on load, or, after a
+ * single sign-on (`oidcDone`: main.tsx found /admin/#oidc=done), the sign-in the
+ * server holds in its cookie finished for a new session.
+ */
+export function SessionProvider({
+  oidcDone,
+  children,
+}: {
+  oidcDone: boolean;
+  children: React.ReactNode;
+}) {
   const qc = useQueryClient();
   const [state, setState] = useState<SessionState>(() =>
-    getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
+    oidcDone || getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
   );
+  // The finish runs once (the sign-in is single use), whatever the effect's re-runs.
+  const finish = useRef<Promise<LoginResponse | null> | null>(null);
+  // While a single sign-on is being finished, the stored token waits; one that
+  // signs no admin in hands back to it (below).
+  const [finishing, setFinishing] = useState(oidcDone);
   const [attempt, setAttempt] = useState(0);
 
   const dropSession = useCallback(
@@ -51,9 +68,48 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     });
   }, [dropSession]);
 
-  // Validate a stored token once on load (and on "Try again").
+  // Finish a single sign-on for a session. An account that isn't an admin is
+  // signed straight out again (no session left behind), like the password
+  // form; the session this browser held before is ended once the new one is
+  // in. A finish that signs no admin in (none in this browser, as when someone
+  // else's link to #oidc=done is followed; spent; a non-admin's) leaves a
+  // stored session alone: it is checked as on any load.
   useEffect(() => {
-    if (!getToken()) return;
+    if (!oidcDone) return;
+    let cancelled = false;
+    const noAdmin = (reason: SignedOutReason) => {
+      if (getToken()) setFinishing(false);
+      else dropSession(reason);
+    };
+    finish.current ??= api.oidcFinish().then(async (res) => {
+      if (res.user.role === 'admin') return res;
+      await api.logout(res.token).catch(() => {});
+      return null;
+    });
+    finish.current
+      .then((res) => {
+        if (cancelled) return;
+        if (!res) {
+          noAdmin('notAdmin');
+          return;
+        }
+        const previous = getToken();
+        if (previous && previous !== res.token) void api.logout(previous).catch(() => {});
+        setToken(res.token);
+        setState({ status: 'signed-in', user: res.user });
+      })
+      .catch(() => {
+        if (!cancelled) noAdmin('oidcFailed');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [oidcDone, dropSession]);
+
+  // Validate a stored token once on load (and on "Try again"); a single
+  // sign-on's session replaces it instead, unless that signs no admin in.
+  useEffect(() => {
+    if (finishing || !getToken()) return;
     let cancelled = false;
     api
       .me()
@@ -70,7 +126,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [attempt, dropSession]);
+  }, [attempt, finishing, dropSession]);
 
   const value = useMemo<Session>(
     () => ({

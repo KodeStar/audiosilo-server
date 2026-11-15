@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -44,7 +45,22 @@ const (
 	// GET /me/upcoming/releases.ics lists it, never touched (a calendar's polls
 	// are not the person's activity) and never a device.
 	KindFeed = "feed"
+	// KindOIDC is the short-lived single-use token a single sign-on's callback leaves
+	// in the browser's cookie (server#235): only POST /auth/oidc/finish takes
+	// it (ConsumeOIDC), so a pairing token planted in that cookie (an invite's
+	// QR, a person's own /auth/pair) is refused there, and this one is refused
+	// by POST /auth/exchange. Like a pairing token it is never a device.
+	KindOIDC = "oidc"
 )
+
+// singleUse reports whether a token of kind is spent by its one use (an
+// exchange's pairing token, a single sign-on's finish): never worth caching.
+func singleUse(kind string) bool { return kind == KindPairing || kind == KindOIDC }
+
+// singleUseKindsSQL is singleUse's kinds as a SQL list, for the writes that end
+// or prune the open ones (endSessions, leaveOwners, clearKidCredentials,
+// PrunePairingTokens).
+const singleUseKindsSQL = `('` + KindPairing + `', '` + KindOIDC + `')`
 
 // neverTouched reports whether a token of kind is never touched by resolve: it
 // is no device of its owner's, and its calls are not the owner's activity, which
@@ -84,7 +100,8 @@ var (
 	// ErrLastAdmin is returned when an operation would leave no enabled admin.
 	ErrLastAdmin = errors.New("cannot remove the last admin")
 	// ErrAdminNeedsPassword is returned when an account would become (or remain)
-	// an admin without a password to sign in to the console.
+	// an admin with no way to sign in to the console: no password and no linked
+	// single sign-on identity (identities.go, server#235 decision 5).
 	ErrAdminNeedsPassword = errors.New("admin accounts require a password")
 	// ErrPasswordTooShort is returned when a non-empty password is below the
 	// minimum length.
@@ -145,6 +162,7 @@ type User struct {
 	MemberAccess  *string `json:"-"` // MemberAll | MemberCollections, nil for a non-member
 	CanAddMembers bool    `json:"-"` // the admin's per-person switch
 	DisplayName   string  `json:"-"` // the name the owner typed for a member, '' otherwise
+	Email         string  `json:"-"` // the admin's (api.adminUser): an address typed in People, or a sign-in's verified one
 	MembersCount  int     `json:"-"` // how many members this person has (0 on a request's user)
 	// MemberRule is what a household member derives access from (catalog's
 	// member rule), read with the account so a request computes a member's scopes
@@ -188,6 +206,24 @@ type Service struct {
 	// tokens is lookupToken's cache of valid tokens, exact by the store's content
 	// generation and its own touches' deletes (tokencache.go).
 	tokens store.GenMap[string, cachedToken]
+	// ssoIssuer is the issuer of the single sign-on that can run now ("" while
+	// it is off or can't run; unset, none): only an identity from it is an
+	// admin's way into the console (decision 5). SetSSOIssuer.
+	ssoIssuer atomic.Pointer[func() string]
+}
+
+// SetSSOIssuer says which provider's identities count as an admin's way into
+// the console: issuer reports the issuer of the single sign-on that can run
+// now, "" while it is off or misconfigured (the API's, read per check, so a
+// public_url cleared since start counts). Until it is set no identity counts.
+func (s *Service) SetSSOIssuer(issuer func() string) { s.ssoIssuer.Store(&issuer) }
+
+// activeIssuer is SetSSOIssuer's answer now ("" for none).
+func (s *Service) activeIssuer() string {
+	if f := s.ssoIssuer.Load(); f != nil {
+		return (*f)()
+	}
+	return ""
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -206,17 +242,27 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 // can never password-login. An empty password is stored as an empty hash, never
 // a hash of "".
 func (s *Service) CreateUser(ctx context.Context, username, password, role string) (*User, error) {
-	return s.createUser(ctx, username, password, role, false)
+	return s.createUser(ctx, username, password, role, "", false)
+}
+
+// CreateUserWithEmail is CreateUser with the account's email (NormalizeEmail's
+// rule: ErrInvalidEmail).
+func (s *Service) CreateUserWithEmail(ctx context.Context, username, password, role, email string) (*User, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	return s.createUser(ctx, username, password, role, email, false)
 }
 
 // CreateDemoUser creates a password-less, non-admin throwaway account flagged
 // is_demo so the background reaper can sweep idle ones by flag (never by username
 // prefix, which would catch real accounts an admin named "demo_*").
 func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, error) {
-	return s.createUser(ctx, username, "", RoleUser, true)
+	return s.createUser(ctx, username, "", RoleUser, "", true)
 }
 
-func (s *Service) createUser(ctx context.Context, username, password, role string, isDemo bool) (*User, error) {
+func (s *Service) createUser(ctx context.Context, username, password, role, email string, isDemo bool) (*User, error) {
 	if username == "" {
 		return nil, ErrUsernameRequired
 	}
@@ -238,8 +284,8 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 	}
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users(username, password_hash, role, is_demo, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?)`, username, hash, role, isDemo, now, now)
+		`INSERT INTO users(username, password_hash, role, is_demo, email, created_at, updated_at)
+		 VALUES(?,?,?,?,?,?,?)`, username, hash, role, isDemo, email, now, now)
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrUsernameTaken
@@ -247,7 +293,7 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
-	return &User{ID: id, Username: username, Role: role, HasPassword: hash != "", IsDemo: isDemo}, nil
+	return &User{ID: id, Username: username, Role: role, HasPassword: hash != "", IsDemo: isDemo, Email: email}, nil
 }
 
 // AdminExists reports whether at least one admin account is present.
@@ -594,12 +640,12 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	// Only a cast token has a grant and a parent to read: every other token's
 	// lookup is this one two-table query, and a valid session, API key, bridge or feed
 	// token's is then answered from s.tokens until the next content write or touch.
-	switch row.kind {
-	case KindCast:
+	switch {
+	case row.kind == KindCast:
 		if err := s.castGrantOf(ctx, &row); err != nil {
 			return nil, tokenRow{}, err
 		}
-	case KindPairing: // used once, by an exchange: not worth holding
+	case singleUse(row.kind):
 	default:
 		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires, read: read})
 	}
@@ -1143,11 +1189,12 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // linked to a code that is expired or used up (a rotation that revives the code
 // revokes its tokens first, so none of them could pair again either). The rows
 // would otherwise pile up, one per QR shown; a code's own row, its uses and its
-// expiry are untouched. Run by the daily retention beside PruneCastTokens. It
+// expiry are untouched. A single sign-on's token (KindOIDC) goes the same way,
+// spent or expired. Run by the daily retention beside PruneCastTokens. It
 // reports how many it deleted.
 func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
-	  WHERE kind = '`+KindPairing+`'
+	  WHERE kind IN `+singleUseKindsSQL+`
 	    AND (revoked = 1 OR expires_at < ?1
 	         OR (auth_code_id IS NOT NULL AND NOT EXISTS (
 	               SELECT 1 FROM auth_codes c WHERE c.id = tokens.auth_code_id
@@ -1157,6 +1204,21 @@ func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// spendOnce revokes the unrevoked token hash of kind, at now: the one use of a
+// single-use token. The revoke-if-not-revoked write means two racing callers
+// cannot both win; the loser gets ErrInvalidToken.
+func (s *Service) spendOnce(ctx context.Context, op, hash, kind, now string) error {
+	res, err := s.db.ExecDurable(ctx, op,
+		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`, now, hash, kind)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInvalidToken
+	}
+	return nil
 }
 
 // ConsumePairing validates a pairing token and consumes it, returning the
@@ -1179,13 +1241,8 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
-		res, err := s.db.ExecDurable(ctx, "ConsumePairing",
-			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
-		if err != nil {
+		if err := s.spendOnce(ctx, "ConsumePairing", hash, KindPairing, now); err != nil {
 			return nil, "", err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return nil, "", ErrInvalidToken
 		}
 		return u, "", nil
 	}
@@ -1240,7 +1297,7 @@ const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
 	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `'),
 	` + memberColumns + `,
-	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id)`
+	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id), u.email`
 
 // userTables is the account u with its owner o (ownerJoin).
 const userTables = `users u` + ownerJoin
@@ -1292,7 +1349,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	)
 	dest := append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery},
 		member.dest()...)
-	if err := row.Scan(append(dest, &u.CanAddMembers, &u.DisplayName, &u.MembersCount)...); err != nil {
+	if err := row.Scan(append(dest, &u.CanAddMembers, &u.DisplayName, &u.MembersCount, &u.Email)...); err != nil {
 		return u, err
 	}
 	u.HasPassword = hash != ""
@@ -1478,6 +1535,9 @@ type UserChanges struct {
 	Username *string
 	// Password sets a password, or clears it with "".
 	Password *string
+	// Email sets the account's email, or clears it with "" (NormalizeEmail's
+	// rule: ErrInvalidEmail).
+	Email *string
 	// Role is RoleAdmin or anything else (RoleUser).
 	Role     *string
 	Disabled *bool
@@ -1516,13 +1576,15 @@ type HouseholdChange struct {
 // UpdateUser applies c to account id in one transaction, checking every change
 // against the account before any write, so a refused change changes nothing.
 // The changes apply in this order, each checked against the account as the ones
-// before it leave it: the password (an admin's can't be cleared:
-// ErrAdminNeedsPassword; a kid's, or one beside assigning the person as a kid,
-// is ErrKidNoPassword, since a kid holds none, while clearing one is fine), the
-// household (HouseholdChange's refusals), the role (not the last enabled admin's
-// demotion: ErrLastAdmin; to admin only with a password, ErrAdminNeedsPassword,
-// and never a member, ErrMemberNotAdmin), the disabled state (not the last
-// enabled admin: ErrLastAdmin) and the admin's can_add_members switch. An
+// before it leave it: the password (an admin's can't be cleared unless a single
+// sign-on identity is linked: ErrAdminNeedsPassword; a kid's, or one beside
+// assigning the person as a kid, is ErrKidNoPassword, since a kid holds none,
+// while clearing one is fine), the household (HouseholdChange's refusals), the
+// role (not the last enabled admin's demotion: ErrLastAdmin; to admin only with
+// a password or a linked identity, ErrAdminNeedsPassword, and never a member,
+// ErrMemberNotAdmin), the disabled state (not the last enabled admin:
+// ErrLastAdmin), the admin's can_add_members switch and the email
+// (ErrInvalidEmail). An
 // unknown account is ErrNotFound. A rename to "" is ErrUsernameRequired, to
 // another account's name ErrUsernameTaken. The write is one UPDATE; a new password, a
 // disabled account and a kid's assignment forget the person's browsers.
@@ -1534,6 +1596,14 @@ type HouseholdChange struct {
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	if c.Username != nil && *c.Username == "" {
 		return ErrUsernameRequired
+	}
+	var emailArg any
+	if c.Email != nil {
+		email, err := NormalizeEmail(*c.Email)
+		if err != nil {
+			return err
+		}
+		emailArg = email
 	}
 	hash := ""
 	if c.Password != nil {
@@ -1595,9 +1665,19 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		// Check every change against the account as the changes before it
 		// leave it, then write.
 		hasPassword, member, curRole := u.HasPassword, u.IsMember(), u.Role
+		// An admin needs a way into the console: a password, or a linked
+		// single sign-on identity (decision 5). Read only when it decides.
+		wayIn := func() error {
+			if ok, err := s.hasSignInIdentity(ctx, tx, id); err != nil || ok {
+				return err
+			}
+			return ErrAdminNeedsPassword
+		}
 		if c.Password != nil {
 			if hash == "" && curRole == RoleAdmin {
-				return ErrAdminNeedsPassword
+				if err := wayIn(); err != nil {
+					return err
+				}
 			}
 			hasPassword = hash != ""
 		}
@@ -1622,7 +1702,9 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 				return ErrMemberNotAdmin // decision 3: "Make independent" comes first
 			}
 			if role == RoleAdmin && !hasPassword {
-				return ErrAdminNeedsPassword
+				if err := wayIn(); err != nil {
+					return err
+				}
 			}
 			curRole = role
 		}
@@ -1642,7 +1724,8 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		} else if h != nil {
 			household = 2
 		}
-		other := c.Username != nil || c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil
+		other := c.Username != nil || c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil ||
+			c.Email != nil
 		if !other && household == 0 {
 			return nil
 		}
@@ -1663,10 +1746,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		        disabled        = COALESCE(?8, disabled),
 		        can_add_members = COALESCE(?9, can_add_members),
 		        username        = COALESCE(?13, username),
+		        email           = COALESCE(?14, email),
 		        updated_at      = CASE WHEN ?10 OR (?3 = 2 AND managed_by IS NOT NULL) THEN ?11 ELSE updated_at END
 		  WHERE id = ?12`,
 			c.Password != nil, hash, household, owner, kind, access, roleArg, c.Disabled, c.CanAddMembers,
-			other, s.ts(), id, c.Username); err != nil {
+			other, s.ts(), id, c.Username, emailArg); err != nil {
 			if c.Username != nil && store.IsUniqueViolation(err) {
 				return ErrUsernameTaken
 			}
@@ -1730,8 +1814,8 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // ways back in that a session can make without the password and the person can
 // neither see nor revoke: their open pairing codes (unlinked pairing tokens,
 // POST /auth/pair: one use, but one that would make a session after the end, as
-// leaveOwners ends them) and their recovery code (its linked pairing tokens
-// cascade). Their household members go the same way where the person put them
+// leaveOwners ends them), a single sign-on not yet finished (KindOIDC) and their
+// recovery code (its linked pairing tokens cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
 // (created_on_token_id, the record the device revoke's alsoMembers reads; only
 // sessions here, a member's API keys stay as the person's do), and every
@@ -1755,8 +1839,8 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND auth_code_id IS NULL AND revoked = 0`,
-		userID, KindPairing); err != nil {
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind IN `+singleUseKindsSQL+` AND auth_code_id IS NULL AND revoked = 0`,
+		userID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,

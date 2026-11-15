@@ -294,12 +294,17 @@ func usernameSlug(s string) string {
 
 // usernameBase is the name's slug cut to maxUsernameBase bytes, or "member".
 func usernameBase(name string) string {
-	base := usernameSlug(name)
+	if base := clipBase(usernameSlug(name)); base != "" {
+		return base
+	}
+	return "member"
+}
+
+// clipBase cuts a usernameSlug to maxUsernameBase bytes, leaving room for a
+// -2 or an owner's name.
+func clipBase(base string) string {
 	if len(base) > maxUsernameBase {
 		base = strings.TrimRight(base[:maxUsernameBase], "-")
-	}
-	if base == "" {
-		return "member"
 	}
 	return base
 }
@@ -310,7 +315,13 @@ func usernameBase(name string) string {
 // free one: a server whose people have names with no Latin letters shares the
 // base "member"). Runs inside the create's transaction.
 func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string) (string, error) {
-	base := usernameBase(name)
+	return freeUsername(ctx, tx, usernameBase(name), usernameSlug(ownerUsername))
+}
+
+// freeUsername is the first of base, base-alt (alt not "") and base-2, base-3,
+// ... that no account has in any case. base is a usernameSlug (so lower() on
+// the stored side is the whole case fold); one read of which are taken.
+func freeUsername(ctx context.Context, tx *sql.Tx, base, alt string) (string, error) {
 	// The base is lower case ASCII letters, digits and '-' (usernameSlug), so
 	// lower() on the stored side is the whole case fold, and the LIKE pattern
 	// holds no wildcard but its own '%'.
@@ -334,8 +345,8 @@ func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string)
 	if !taken[base] {
 		return base, nil
 	}
-	if owner := usernameSlug(ownerUsername); owner != "" && !taken[base+"-"+owner] {
-		return base + "-" + owner, nil
+	if alt != "" && !taken[base+"-"+alt] {
+		return base + "-" + alt, nil
 	}
 	for n := 2; ; n++ {
 		if c := fmt.Sprintf("%s-%d", base, n); !taken[c] {
@@ -714,7 +725,8 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 
 // clearKidCredentials takes from a member becoming a kid every way to sign in
 // that a kid can't have (plan decision 1): the password (and the browsers it
-// signed in from), API keys, open pairing tokens, the calendar feed token
+// signed in from), API keys, open pairing tokens and a single sign-on not yet
+// finished (KindOIDC), the calendar feed token
 // (feed.go: a kid has no Upcoming), the recovery code and any
 // still-redeemable invite (whose linked pairing tokens cascade), so no code can
 // pair a new device into the kid's account. Sessions stay: their devices stay
@@ -730,7 +742,7 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `') AND revoked = 0`,
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND (kind = '` + KindAPI + `' OR kind IN ` + singleUseKindsSQL + `) AND revoked = 0`,
 		deleteFeedTokensSQL,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,
@@ -753,7 +765,9 @@ func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) 
 // leaveOwners signs a person who leaves their owner's household (newOwner 0:
 // "Make independent", or kept when their owner is deleted) or joins newOwner's
 // out of what another owner set up for them: the open pairing codes minted for
-// their own device (unlinked pairing tokens) and, joining newOwner's household,
+// their own device (unlinked pairing tokens), a single sign-on not yet finished
+// (KindOIDC: the callback refuses a member, so its finish must too) and,
+// joining newOwner's household,
 // the sessions and API keys made on anyone else's devices (created_on_token_id),
 // which would otherwise carry newOwner's access to that person's phone, and the
 // calendar feed link made on one (IssueFeedToken records the device; deleted,
@@ -764,7 +778,7 @@ func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
 	const madeElsewhere = `(SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2`
 	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
 	  WHERE user_id = ?1 AND revoked = 0
-	    AND ((kind = '`+KindPairing+`' AND auth_code_id IS NULL)
+	    AND ((kind IN `+singleUseKindsSQL+` AND auth_code_id IS NULL)
 	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`') AND `+madeElsewhere+`))`, id, newOwner); err != nil {
 		return err
 	}

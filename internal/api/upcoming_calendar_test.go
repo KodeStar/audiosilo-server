@@ -293,7 +293,12 @@ func otherKindTokens(t *testing.T, u *upcomingEnv) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return map[string]string{"session": sess, "api key": key, "cast": cast, "bridge": bridgeTok, "pairing": pairing}
+	sso, err := u.auth.IssueOIDCToken(ctx, u.adminID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"session": sess, "api key": key, "cast": cast, "bridge": bridgeTok, "pairing": pairing,
+		"single sign-on": sso}
 }
 
 // Security-critical: the feed takes a feed token and nothing else, as

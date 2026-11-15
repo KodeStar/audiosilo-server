@@ -93,6 +93,7 @@ import type {
   Library,
   LoginResponse,
   MetaMirrorStatus,
+  OIDCStatus,
   PairToken,
   PathRule,
   ServerInfo,
@@ -158,6 +159,8 @@ export function setForbiddenHandler(fn: () => void) {
 }
 
 const LOGIN_PATH = '/auth/login';
+/** A single sign-on becomes a session here (handlers_oidc.go handleOIDCFinish). */
+const OIDC_FINISH_PATH = '/auth/oidc/finish';
 /** The 401 of the account's own password change that refuses the current password typed. */
 export const WRONG_CURRENT_PASSWORD = 'current_password_incorrect';
 
@@ -242,7 +245,12 @@ function checkSession(err: ApiError, path: string) {
   // Any 401 but a failed sign-in or a wrong current password (the session is
   // fine: the password typed wasn't) ends the session, including one sent with
   // no token at all: another tab signed out and cleared it.
-  if (err.status === 401 && path !== LOGIN_PATH && err.code !== WRONG_CURRENT_PASSWORD) {
+  if (
+    err.status === 401 &&
+    path !== LOGIN_PATH &&
+    path !== OIDC_FINISH_PATH &&
+    err.code !== WRONG_CURRENT_PASSWORD
+  ) {
     clearToken();
     onUnauthorized();
   }
@@ -348,6 +356,13 @@ export const api = {
       device_name: 'admin-web',
       device_id: browserId(),
     }),
+  /**
+   * Finishes a single sign-on (OIDC) for a session (/admin/#oidc=done,
+   * handlers_oidc.go): the server reads the sign-in from its HttpOnly cookie,
+   * once. A 401 here (code oidc_no_sign_in or oidc_sign_in_expired) is a
+   * sign-in this browser doesn't hold, never the stored session's end.
+   */
+  oidcFinish: () => request<LoginResponse>('POST', OIDC_FINISH_PATH, { device_name: 'admin-web' }),
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
@@ -631,7 +646,7 @@ export const api = {
 
   users: () => request<{ users: AdminUser[] }>('GET', '/admin/users'),
   user: (id: number) => request<UserDetail>('GET', `/admin/users/${id}`),
-  createUser: (u: { username: string; password: string; role: User['role'] }) =>
+  createUser: (u: { username: string; password: string; role: User['role']; email?: string }) =>
     request<AdminUser>('POST', '/admin/users', u),
   updateUser: (id: number, patch: UserPatch) =>
     request<AdminUser>('PATCH', `/admin/users/${id}`, patch),
@@ -651,6 +666,8 @@ export const api = {
    */
   signOutEverywhere: (id: number) =>
     request<{ signed_out: number }>('POST', `/admin/users/${id}/sign-out`),
+  /** Settings > Sign-in: the single sign-on as it runs, and its provider's discovery. */
+  oidcStatus: () => request<OIDCStatus>('GET', '/admin/oidc/status'),
   invites: () => request<{ invites: Invite[] }>('GET', '/admin/invites'),
   /** Mints an invite; `max_uses` 0 = unlimited, `ttl_days` 0 = never expires. */
   createInvite: (userId: number, opts: { max_uses: number; ttl_days: number }) =>

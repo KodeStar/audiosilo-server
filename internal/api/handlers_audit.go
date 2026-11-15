@@ -25,8 +25,18 @@ func (a *API) audit(r *http.Request, action, target string, details map[string]a
 		id := u.ID
 		e.ActorID, e.ActorName = &id, u.Username
 	}
+	a.recordAudit(r, e)
+}
+
+// auditSystem records an event as the server's own act (no admin made the
+// request, no actor).
+func (a *API) auditSystem(r *http.Request, action, target string, details map[string]any) {
+	a.recordAudit(r, catalog.AuditEvent{Action: action, Target: target, Details: details, Via: catalog.ViaSystem})
+}
+
+func (a *API) recordAudit(r *http.Request, e catalog.AuditEvent) {
 	if err := a.cat.RecordAudit(context.WithoutCancel(r.Context()), e); err != nil {
-		a.log.Warn("audit: record failed", "action", action, "err", err)
+		a.log.Warn("audit: record failed", "action", e.Action, "err", err)
 	}
 }
 

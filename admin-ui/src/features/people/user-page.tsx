@@ -39,6 +39,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { NotFound } from '@/features/not-found';
 import { DeviceList } from './devices-page';
+import { EmailCard } from './email-card';
 import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
@@ -452,8 +453,12 @@ function InvitesTab({
   return <InviteTable invites={invites} now={now} showFor={false} canRotate={Boolean(onInvite)} />;
 }
 
-/** How a person signs in. A kid holds no password (the server refuses one), so their card says how they do sign in instead. */
-function SignInTab({ user: u, owner }: { user: User; owner: string }) {
+/**
+ * How a person signs in. A kid holds no password (the server refuses one), so
+ * their card says how they do sign in instead. A household member has no email
+ * card: members never sign in with single sign-on.
+ */
+function SignInTab({ user: u, owner }: { user: AdminUser; owner: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [password, setPassword] = useState(false);
@@ -497,6 +502,7 @@ function SignInTab({ user: u, owner }: { user: User; owner: string }) {
           </div>
         </Card>
       ) : null}
+      {u.managed_by ? null : <EmailCard key={u.email} user={u} />}
       {kid ? null : <PasswordDialog open={password} onOpenChange={setPassword} user={u} />}
       <ConfirmDialog
         open={clearing}

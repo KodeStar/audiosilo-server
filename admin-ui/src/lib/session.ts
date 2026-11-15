@@ -5,7 +5,7 @@ import type { User } from '@/api/types';
  * Why the sign-in screen is showing, when it isn't simply a fresh visit. Keys
  * into the i18n `auth.*` messages.
  */
-export type SignedOutReason = 'expired' | 'notAdmin' | null;
+export type SignedOutReason = 'expired' | 'notAdmin' | 'oidcFailed' | null;
 
 export type SessionState =
   | { status: 'checking' }

@@ -9,12 +9,15 @@ toolchain go1.26.10
 ignore ./admin-ui/node_modules
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/kodestar/audiosilo-meta v0.25.5
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.48.0
+	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.44.0
 	gopkg.in/yaml.v3 v3.0.1

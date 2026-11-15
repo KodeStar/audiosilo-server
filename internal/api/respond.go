@@ -90,6 +90,8 @@ const (
 	codeConfigLibrary            = "config_library" // a library the config declares: renamed, moved or deleted here
 	codeLastAdmin                = "last_admin"
 	codeAdminNeedsPassword       = "admin_needs_password"
+	codeOIDCNoSignIn             = "oidc_no_sign_in"      // POST /auth/oidc/finish without a finished sign-in's cookie
+	codeOIDCSignInExpired        = "oidc_sign_in_expired" // POST /auth/oidc/finish: the sign-in's token spent or expired
 	codePasswordTooShort         = "password_too_short"
 	codeCannotDeleteSelf         = "cannot_delete_self"
 	codeFolderUnreadable         = "folder_unreadable"
@@ -139,6 +141,11 @@ const (
 	codeImportNotReady   = "import_not_ready"
 	codeImportNotApplied = "import_not_applied"
 	codeImportApplied    = "import_applied"
+	// Single sign-on (handlers_oidc.go) and an account's email.
+	codeInvalidEmail    = "invalid_email"
+	codeIdentityLinked  = "identity_linked"   // the sign-in is linked to an account meanwhile
+	codeUserHasIdentity = "user_has_identity" // the account has an identity from this provider
+	codeNotLinkable     = "not_linkable"      // a household member or demo account
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
