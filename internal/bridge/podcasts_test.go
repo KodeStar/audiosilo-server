@@ -417,3 +417,33 @@ func TestPruneSecretsAfterLibraryDelete(t *testing.T) {
 		t.Fatalf("an open request's URL: %q %v", q.privateURLs[open.ID], err)
 	}
 }
+
+// FeedFailure counts the feed's own failures only: an offline Bridge, a library
+// it can't write or a lost private URL say nothing about the feed.
+func TestFeedFailure(t *testing.T) {
+	for _, code := range []string{"timeout", "dns", "http_500", "gone", "not_a_feed", "tls"} {
+		if !FeedFailure(code) {
+			t.Errorf("%s is not counted as the feed's failure", code)
+		}
+	}
+	for _, code := range []string{"", "bridge_lost", "request_expired", "library_not_writable", "write_failed", "feed_secret_missing", "identity_changed", "not_podcast_library"} {
+		if FeedFailure(code) {
+			t.Errorf("%q is counted as the feed's failure", code)
+		}
+	}
+}
+
+// NetworkFailure is the Bridge not reaching the feed at all, each one also a
+// feed failure; the feed's answer and its address are not network-class.
+func TestNetworkFailure(t *testing.T) {
+	for _, code := range []string{"dns", "network", "timeout", "tls"} {
+		if !NetworkFailure(code) || !FeedFailure(code) {
+			t.Errorf("%s is not a network-class feed failure", code)
+		}
+	}
+	for _, code := range []string{"", "http_500", "http_503", "gone", "not_a_feed", "blocked_address", "bridge_lost", "feed_secret_missing"} {
+		if NetworkFailure(code) {
+			t.Errorf("%q is counted as network-class", code)
+		}
+	}
+}

@@ -50,13 +50,19 @@ const (
 	KindBridgeJobFinished  = "bridge_job_finished"
 	KindBridgeJobFailed    = "bridge_job_failed"
 	KindBookReleased       = "book_released"
+	// A podcast show's news (catalog.PodcastNotice, PodcastNotice).
+	KindPodcastEpisodesNew   = "podcast_episodes_new"
+	KindPodcastFeedFailing   = "podcast_feed_failing"
+	KindPodcastFeedRecovered = "podcast_feed_recovered"
 )
 
-// Kinds lists the event kinds, in the order the console shows them.
+// Kinds lists the event kinds, in the order the console shows them. A kind
+// added later starts unticked on every existing destination.
 var Kinds = []string{
 	KindBookAdded, KindScanFailed, KindLibraryUnavailable, KindNewDevice,
 	KindInviteRedeemed, KindUpdateAvailable, KindBackupFailed,
 	KindBridgeJobFinished, KindBridgeJobFailed, KindBookReleased,
+	KindPodcastEpisodesNew, KindPodcastFeedFailing, KindPodcastFeedRecovered,
 }
 
 // kindTest is the "Send test" message's kind (sent, never recorded).
@@ -349,6 +355,14 @@ const (
 func compose(ev catalog.ServerEvent, srv Server) message {
 	str := func(k string) string { s, _ := ev.Data[k].(string); return s }
 	num := func(k string) int { n, _ := ev.Data[k].(float64); return int(n) }
+	// A private podcast show's data carry no names (PodcastNotice).
+	privateShow := ev.Data["private"] == true
+	feedTitle := func(state string) string {
+		if privateShow {
+			return "A private podcast feed is " + state
+		}
+		return "A podcast feed is " + state + ": " + str("show")
+	}
 	link := func(path string) string {
 		if srv.PublicURL == "" {
 			return ""
@@ -436,6 +450,22 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		}
 		m.Text = bridgeParkReason(str("code"))
 		m.Link, m.Tags, m.Priority = link("/server?topic=bridge"), []string{"warning"}, 4
+	case KindPodcastEpisodesNew:
+		n := num("count")
+		if privateShow {
+			m.Title = plural(n, "A private podcast has 1 new episode", "A private podcast has %d new episodes")
+		} else {
+			m.Title = plural(n, "1 new episode of %s", "%d new episodes of %s", str("show"))
+		}
+		m.Text, m.Link, m.Tags = titleLines(ev, n), link("/library/libraries"), []string{"studio_microphone"}
+	case KindPodcastFeedFailing:
+		m.Title = feedTitle("failing")
+		m.Text = feedFailingText(str("code"), num("failures"))
+		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"warning"}, 4, colorWarn
+	case KindPodcastFeedRecovered:
+		m.Title = feedTitle("back")
+		m.Text = "The feed answered again, so new episodes arrive as before."
+		m.Link, m.Tags = link("/library/libraries"), []string{"white_check_mark"}
 	case kindTest:
 		m.Title = "Test from " + srv.Name
 		m.Text = "Notifications from this AudioSilo server will arrive here."
@@ -517,6 +547,38 @@ func bridgeParkReason(code string) string {
 	return "See the job in Settings > Bridge."
 }
 
+// feedCodeText words a failed podcast poll's code (bridge.PodcastOutcome's,
+// the Bridge's own): what went wrong with the feed, never its address.
+var feedCodeText = map[string]string{ //nolint:gosec // G101: sentences keyed by failure codes, not credentials
+	"gone":                "The feed's address says it is gone, so the Bridge stopped checking it. Follow the show again by its new address.",
+	"feed_secret_missing": "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it.",
+	"dns":                 "The feed's host couldn't be found.",
+	"network":             "The feed couldn't be reached.",
+	"timeout":             "The feed didn't answer in time.",
+	"tls":                 "The feed's secure connection couldn't be verified.",
+	"not_a_feed":          "The feed's address no longer serves a podcast feed.",
+	"not_a_podcast":       "The feed has no podcast episodes the Bridge can use.",
+	"too_large":           "The feed is larger than the Bridge accepts.",
+	"blocked_address":     "The feed's address is one the Bridge won't contact.",
+	"invalid_feed_url":    "The feed's address isn't valid.",
+}
+
+// feedFailingText is a failing feed's message: its code worded (an HTTP status
+// as such) and, for the feed's own failures, how many checks in a row failed.
+func feedFailingText(code string, failures int) string {
+	text, ok := feedCodeText[code]
+	if !ok {
+		text = "The Bridge couldn't check the feed."
+		if status, ok := bridge.HTTPStatus(code); ok {
+			text = fmt.Sprintf("The feed answered HTTP %d.", status)
+		}
+	}
+	if failures > 1 {
+		text += fmt.Sprintf(" %d checks in a row failed.", failures)
+	}
+	return text
+}
+
 // backupReason is a failed backup's message: detail (the folder, the server's
 // user, its owner and the fix) when the folder refused the server.
 func backupReason(code, detail string) string {
@@ -554,11 +616,12 @@ func titleLines(ev catalog.ServerEvent, count int) string {
 	return strings.Join(lines, "\n")
 }
 
-func plural(n int, one, many, name string) string {
+// plural formats one (with args) when n is 1, else many (with n, then args).
+func plural(n int, one, many string, args ...any) string {
 	if n == 1 {
-		return fmt.Sprintf(one, name)
+		return fmt.Sprintf(one, args...)
 	}
-	return fmt.Sprintf(many, n, name)
+	return fmt.Sprintf(many, append([]any{n}, args...)...)
 }
 
 func nonEmpty(xs ...string) []string {
@@ -661,7 +724,8 @@ func (s *Service) ScanFinished(ctx context.Context, r library.RunReport) {
 	lib := r.Library.Name
 	switch r.Status {
 	case catalog.RunOK, catalog.RunPartial:
-		if r.Counts.Added > 0 {
+		// A podcast library's new episodes are told per show (PodcastNotice).
+		if r.Counts.Added > 0 && r.Library.Kind != catalog.KindPodcasts {
 			titles := r.AddedTitles
 			if titles == nil {
 				titles = []string{}
@@ -697,6 +761,64 @@ func (s *Service) BooksReleased(ctx context.Context, count int, titles []string,
 		titles = []string{}
 	}
 	s.Emit(ctx, Event{Kind: KindBookReleased, Data: map[string]any{"count": count, "titles": titles}, Dedup: dedup})
+}
+
+// SetDigest is a dedup key's digest of a set of ids, the same whatever their
+// order (book_released's work ids, podcast_episodes_new's episode ids).
+func SetDigest(ids []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(slices.Sorted(slices.Values(ids)), "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// PodcastNotice reports a podcast show's news (catalog.SetPodcastNotice): new
+// episodes (once per set of episodes: dedup is the show and their ids, so the
+// scheduled scan and the Bridge's rescan can't both announce them), a feed
+// failing or back. The data name the library and the show, with counts and
+// the failed poll's code: never the feed's address, host or the error's text.
+// A private show is hidden from admins who don't follow it, so its notice
+// says `private` instead of its title, folder and episode titles.
+func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
+	if s == nil {
+		return
+	}
+	data := map[string]any{"library": n.Library, "library_id": n.LibraryID, "show_id": n.ShowID}
+	if n.Private {
+		data["private"] = true
+	} else {
+		// A feed without a title is named by its folder.
+		data["show"], data["show_path"] = cmp.Or(plainLine(n.Show, 200), plainLine(n.ShowPath, 200)), n.ShowPath
+	}
+	switch n.Kind {
+	case catalog.PodcastEpisodesNew:
+		if n.Private {
+			n.Titles = nil
+		}
+		titles := make([]string, 0, len(n.Titles))
+		for _, t := range n.Titles {
+			titles = append(titles, plainLine(t, 200))
+		}
+		data["count"], data["titles"] = len(n.EpisodeIDs), titles
+		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))
+		s.Emit(ctx, Event{Kind: KindPodcastEpisodesNew, Data: data, Dedup: dedup})
+	case catalog.PodcastFeedFailing:
+		data["code"], data["failures"] = feedCode(n.Code), n.Failures
+		s.Emit(ctx, Event{Kind: KindPodcastFeedFailing, Data: data})
+	case catalog.PodcastFeedRecovered:
+		s.Emit(ctx, Event{Kind: KindPodcastFeedRecovered, Data: data})
+	}
+}
+
+// feedCode is a failed poll's code as a message may carry it: one the messages
+// word (feedCodeText) or an HTTP status, else "failed". The code is the
+// Bridge's own, so only known values go out, never a token it may hold.
+func feedCode(code string) string {
+	if _, ok := feedCodeText[code]; ok {
+		return code
+	}
+	if _, ok := bridge.HTTPStatus(code); ok {
+		return code
+	}
+	return "failed"
 }
 
 // SignedIn reports a new session: a password sign-in or a device set up by

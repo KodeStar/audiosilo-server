@@ -259,11 +259,34 @@ func (s *Service) dropIfEnded(ctx context.Context, id int64) {
 	}
 }
 
-// notFeedFailures are the subscribe failure codes that say nothing about the
-// feed: the Bridge or the library failed (bridge_lost: the lease ran out on
-// every attempt) or a private request lost its URL. Every other code (the
+// notFeedFailures are the podcast job failure codes (a subscribe's or a
+// poll's) that say nothing about the feed: the Bridge or the library failed
+// (bridge_lost: the lease ran out on every attempt) or a private request lost
+// its URL. Every other code (the
 // feed's answer, its address, the network) is the feed's failure.
 var notFeedFailures = []string{"request_expired", "bridge_lost", "library_not_writable", "not_podcast_library", "write_failed", "feed_secret_missing", "identity_changed"}
+
+// FeedFailure reports whether a failed podcast job's code is the feed's own
+// failure (its answer, its address, the network), not one of notFeedFailures
+// (the Bridge, the library or a lost private URL): the admin's failing-feed
+// notification counts only these (catalog.FoldPodcastJob).
+func FeedFailure(code string) bool {
+	return code != "" && !slices.Contains(notFeedFailures, code)
+}
+
+// networkFailures are the feed failure codes the Bridge raises when it could not
+// reach the feed at all (its netguard: the host unresolved, no connection, no
+// answer in time, a secure connection it could not verify), what every show
+// fails with at once while the Bridge's own internet is down.
+var networkFailures = []string{"dns", "network", "timeout", "tls"}
+
+// NetworkFailure reports whether a feed failure's code is network-class (one of
+// networkFailures), which the admin's failing-feed notification needs twice as
+// many of in a row (catalog.feedRun), so an outage at the Bridge doesn't
+// announce every followed show.
+func NetworkFailure(code string) bool {
+	return slices.Contains(networkFailures, code)
+}
 
 // RecentSubscribeFailure is user's last podcast.subscribe for norm in lib when
 // it failed within the last `within` (the Service's clock), else nil: an OPML
@@ -286,7 +309,7 @@ func (s *Service) RecentSubscribeFailure(ctx context.Context, lib, user int64, n
 	if j.State != StateFailed {
 		return nil, nil
 	}
-	if o, _ := PodcastOutcomeOf(*j); slices.Contains(notFeedFailures, o.Code) {
+	if o, _ := PodcastOutcomeOf(*j); !FeedFailure(o.Code) {
 		return nil, nil
 	}
 	// ...counts only while it is still the last request for it.

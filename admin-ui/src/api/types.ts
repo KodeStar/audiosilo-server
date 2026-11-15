@@ -854,7 +854,10 @@ export type ServerEventKind =
   | 'backup_failed'
   | 'bridge_job_finished'
   | 'bridge_job_failed'
-  | 'book_released';
+  | 'book_released'
+  | 'podcast_episodes_new'
+  | 'podcast_feed_failing'
+  | 'podcast_feed_recovered';
 
 export type NotifyTargetKind = 'webhook' | 'ntfy' | 'discord';
 

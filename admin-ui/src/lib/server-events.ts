@@ -27,6 +27,9 @@ export const EVENT_KINDS: readonly ServerEventKind[] = [
   'bridge_job_finished',
   'bridge_job_failed',
   'book_released',
+  'podcast_episodes_new',
+  'podcast_feed_failing',
+  'podcast_feed_recovered',
 ];
 
 export type EventTone = 'info' | 'warn' | 'bad';
@@ -56,7 +59,7 @@ const TITLES_SHOWN = 3;
 /** A book list event's body: the first titles, then "and N more" when `count` is more. */
 function titlesBody(
   d: ServerEvent['data'],
-  prefix: 'events.book_added' | 'events.book_released',
+  prefix: 'events.book_added' | 'events.book_released' | 'events.podcast_episodes_new',
 ): EventText['body'] {
   const count = num(d.count);
   const titles = (Array.isArray(d.titles) ? d.titles : []).map(str).filter(Boolean);
@@ -140,6 +143,30 @@ export function describeEvent(ev: ServerEvent): EventText {
     case 'bridge_job_finished':
     case 'bridge_job_failed':
       return describeBridgeJob(ev.kind, d);
+    // notify.PodcastNotice: a show's news, named by its title (never its feed
+    // address); a private show's (`private`) carries no names at all, so it is
+    // "a private podcast". Podcast libraries are listed in Library > Libraries.
+    case 'podcast_episodes_new':
+      return {
+        title: podcastTitle(d, 'events.podcast_episodes_new', { count: num(d.count) }),
+        body: titlesBody(d, 'events.podcast_episodes_new'),
+        tone: 'info',
+        link: { destination: 'library', section: 'libraries' },
+      };
+    case 'podcast_feed_failing':
+      return {
+        title: podcastTitle(d, 'events.podcast_feed_failing'),
+        body: feedFailureBody(str(d.code)),
+        tone: 'warn',
+        link: { destination: 'library', section: 'libraries' },
+      };
+    case 'podcast_feed_recovered':
+      return {
+        title: podcastTitle(d, 'events.podcast_feed_recovered'),
+        body: { key: 'events.podcast_feed_recovered.body' },
+        tone: 'info',
+        link: { destination: 'library', section: 'libraries' },
+      };
   }
   // A kind from a newer server: say what it is called.
   return {
@@ -241,6 +268,40 @@ function describeBridgeJob(
     tone: 'bad',
     link,
   };
+}
+
+/** A podcast event's title: the show by name, or a private show unnamed. */
+function podcastTitle(
+  d: ServerEvent['data'],
+  prefix:
+    'events.podcast_episodes_new' | 'events.podcast_feed_failing' | 'events.podcast_feed_recovered',
+  values?: Record<string, number>,
+): EventText['title'] {
+  if (d.private === true) return { key: `${prefix}.privateTitle`, values };
+  return { key: `${prefix}.title`, values: { ...values, show: str(d.show) } };
+}
+
+/** The failed poll codes with a sentence of their own (notify's feedCodeText). */
+const FEED_CODES = new Set([
+  'gone',
+  'feed_secret_missing',
+  'dns',
+  'network',
+  'timeout',
+  'tls',
+  'not_a_feed',
+  'not_a_podcast',
+  'too_large',
+  'blocked_address',
+  'invalid_feed_url',
+]);
+
+/** Why a podcast feed is failing: its code as a sentence, an HTTP status as such, else generically. */
+export function feedFailureBody(code: string): NonNullable<EventText['body']> {
+  if (FEED_CODES.has(code)) return { key: `events.podcast_feed_failing.code.${code}` };
+  const http = /^http_([1-5]\d{2})$/.exec(code);
+  if (http) return { key: 'events.podcast_feed_failing.http', values: { status: http[1] } };
+  return { key: 'events.podcast_feed_failing.failed' };
 }
 
 /** The i18n key of why a backup failed (backup.Result's error; unknown ones generically). */

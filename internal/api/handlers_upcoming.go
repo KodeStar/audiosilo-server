@@ -2,15 +2,12 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"net/http"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/upcoming"
 )
 
@@ -107,9 +104,7 @@ func (a *API) announceReleases(ctx context.Context, releases []upcoming.Release)
 			titles = append(titles, rel.Label())
 		}
 	}
-	slices.Sort(ids)
-	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
-	a.rt.Notify.BooksReleased(ctx, len(releases), titles, "released:"+hex.EncodeToString(sum[:]))
+	a.rt.Notify.BooksReleased(ctx, len(releases), titles, "released:"+notify.SetDigest(ids))
 }
 
 // maxReleaseTitles is how many releases a book_released event names (the rest

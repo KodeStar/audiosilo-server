@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -771,5 +772,210 @@ func TestBackupFailedNamesTheOwnerProblem(t *testing.T) {
 	old := catalog.ServerEvent{Kind: KindBackupFailed, Data: map[string]any{"error": "permission_denied"}}
 	if m := compose(old, s.server()); !strings.Contains(m.Text, "Server > Logs names the folder") {
 		t.Fatalf("text without a detail = %q", m.Text)
+	}
+}
+
+// Each podcast kind is worded with the show's name and, for a failing feed,
+// its code as a sentence (an HTTP status as such, an unknown code generically).
+func TestPodcastNoticeWording(t *testing.T) {
+	s, cat, ctx := newService(t)
+	srv := s.server()
+	n := catalog.PodcastNotice{Library: "Pods", LibraryID: 4, ShowPath: "Example Show", ShowID: "a1b2c3d4e5f60718", Show: "Example\nShow"}
+	emit := func(n catalog.PodcastNotice) message {
+		t.Helper()
+		s.PodcastNotice(ctx, n)
+		events, _, err := cat.ListServerEvents(ctx, 0, 1, "")
+		if err != nil || len(events) == 0 {
+			t.Fatalf("no event: %v", err)
+		}
+		return compose(events[0], srv)
+	}
+	news := n
+	news.Kind, news.Titles, news.EpisodeIDs = catalog.PodcastEpisodesNew, []string{"Five", "Four"}, []string{"g", "f", "e", "d", "c", "b", "a"}
+	m := emit(news)
+	if m.Title != "7 new episodes of Example Show" || m.Text != "Five\nFour\nand 5 more" ||
+		m.Link != "https://books.example.com/admin/library/libraries" || m.Color != colorInfo {
+		t.Fatalf("episodes = %+v", m)
+	}
+	news.Titles, news.EpisodeIDs = []string{"Six"}, []string{"h"}
+	if m := emit(news); m.Title != "1 new episode of Example Show" || m.Text != "Six" {
+		t.Fatalf("one episode = %+v", m)
+	}
+	for _, c := range []struct {
+		code     string
+		failures int
+		text     string
+	}{
+		{"timeout", 3, "The feed didn't answer in time. 3 checks in a row failed."},
+		{"http_503", 4, "The feed answered HTTP 503. 4 checks in a row failed."},
+		{"gone", 1, "The feed's address says it is gone, so the Bridge stopped checking it. Follow the show again by its new address."},
+		{"feed_secret_missing", 0, "The Bridge no longer has this private feed's address. Follow the show again by its address to restore it."},
+		{"http_5xx", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
+		{"Bad Code: https://x.example/", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
+		// A code it doesn't word goes out as "failed": a lowercase token could
+		// be anything the Bridge put there.
+		{"privatehost_token42", 3, "The Bridge couldn't check the feed. 3 checks in a row failed."},
+	} {
+		failing := n
+		failing.Kind, failing.Code, failing.Failures = catalog.PodcastFeedFailing, c.code, c.failures
+		m := emit(failing)
+		if m.Title != "A podcast feed is failing: Example Show" || m.Text != c.text || m.Priority != 4 || m.Color != colorWarn {
+			t.Fatalf("failing %s = %+v", c.code, m)
+		}
+	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 1, KindPodcastFeedFailing)
+	if len(events) != 1 || events[0].Data["code"] != "failed" {
+		t.Fatalf("an unknown code is carried as %+v", events)
+	}
+	back := n
+	back.Kind = catalog.PodcastFeedRecovered
+	if m := emit(back); m.Title != "A podcast feed is back: Example Show" || m.Link != "https://books.example.com/admin/library/libraries" {
+		t.Fatalf("recovered = %+v", m)
+	}
+	// A private show goes unnamed, its episodes untitled.
+	private := news
+	private.Private, private.Titles, private.EpisodeIDs = true, []string{"Secret Episode"}, []string{"p", "q"}
+	if m := emit(private); m.Title != "A private podcast has 2 new episodes" || m.Text != "" {
+		t.Fatalf("private episodes = %+v", m)
+	}
+	private.EpisodeIDs = []string{"r"}
+	if m := emit(private); m.Title != "A private podcast has 1 new episode" || m.Text != "" {
+		t.Fatalf("private episode = %+v", m)
+	}
+	private.Kind, private.Code, private.Failures = catalog.PodcastFeedFailing, "http_500", 3
+	if m := emit(private); m.Title != "A private podcast feed is failing" || m.Text != "The feed answered HTTP 500. 3 checks in a row failed." {
+		t.Fatalf("private failing = %+v", m)
+	}
+	private.Kind = catalog.PodcastFeedRecovered
+	if m := emit(private); m.Title != "A private podcast feed is back" {
+		t.Fatalf("private recovered = %+v", m)
+	}
+	// A feed without a title is named by its folder, as one plain line too.
+	back.Show = ""
+	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
+		t.Fatalf("untitled = %+v", m)
+	}
+	back.ShowPath = "Example\tShow"
+	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
+		t.Fatalf("untitled, a folder with a control character = %+v", m)
+	}
+}
+
+// The same new episodes are announced once (the scheduled scan and the
+// Bridge's rescan), other new episodes of the show again.
+func TestPodcastEpisodesDedup(t *testing.T) {
+	s, cat, ctx := newService(t)
+	n := catalog.PodcastNotice{Kind: catalog.PodcastEpisodesNew, LibraryID: 1, ShowID: "a1b2c3d4e5f60718", Show: "S", Titles: []string{"B", "A"}, EpisodeIDs: []string{"b", "a"}}
+	s.PodcastNotice(ctx, n)
+	n.EpisodeIDs = []string{"a", "b"}
+	s.PodcastNotice(ctx, n)
+	n.EpisodeIDs = []string{"c"}
+	s.PodcastNotice(ctx, n)
+	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindPodcastEpisodesNew); len(events) != 2 {
+		t.Fatalf("episode events = %d, want 2", len(events))
+	}
+}
+
+// A podcast library's scan adds episodes, which are told per show: it raises
+// no book_added.
+func TestPodcastScanRaisesNoBookAdded(t *testing.T) {
+	s, cat, ctx := newService(t)
+	for _, kind := range []string{catalog.KindPodcasts, catalog.KindBooks} {
+		s.ScanFinished(ctx, library.RunReport{
+			Library: catalog.Library{ID: 1, Name: kind, Kind: kind}, Status: catalog.RunOK,
+			Counts: catalog.ScanCounts{Added: 3}, AddedTitles: []string{"Ep"},
+		})
+	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBookAdded)
+	if len(events) != 1 || events[0].Data["library"] != catalog.KindBooks {
+		t.Fatalf("book_added = %+v, want the books library's only", events)
+	}
+}
+
+// LEAK: a private show's feed address is in the database and inside the
+// Bridge's error text, and neither its address, host nor any part of the
+// error reaches a webhook, ntfy or Discord body, or the bell's data; nor do
+// its title, its folder or its episodes' titles (a private show is hidden from
+// admins who don't follow it).
+func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
+	s, cat, ctx := newService(t)
+	cat.SetPodcastNotice(s.PodcastNotice)
+	hook, push := newFakeDest(t), newFakeDest(t)
+	kinds := []string{KindPodcastEpisodesNew, KindPodcastFeedFailing, KindPodcastFeedRecovered}
+	addTarget(t, cat, TargetWebhook, hook.srv.URL, "sig", kinds...)
+	addTarget(t, cat, TargetNtfy, push.srv.URL+"/pods", "", kinds...)
+
+	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "Pods", Root: t.TempDir(), Kind: catalog.KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secretURL = "https://member:hunter2@private.feeds.example.net/rss/sekrit-token-42.xml?auth=TOKEN42"
+	secrets := []string{"hunter2", "private.feeds.example.net", "sekrit-token-42", "TOKEN42", "member:", "rss/",
+		"Example Show", "Example%20Show", "Episode Four", "show_path"}
+	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Private, f.FeedURL, f.FeedHost = true, secretURL, "private.feeds.example.net"
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	show := "Example Show"
+	poll := func(id int64, state, code string) {
+		t.Helper()
+		j := bridge.Job{ID: id, Kind: bridge.KindPodcastPoll, LibraryID: &lib.ID, Path: &show, State: state,
+			Params: json.RawMessage(`{"show_id":"a1b2c3d4e5f60718"}`), Result: json.RawMessage(`{"status":200,"next_poll_seconds":900}`),
+			Error: "GET " + secretURL + " failed"}
+		if state == bridge.StateFailed {
+			raw, _ := json.Marshal(map[string]string{"code": code, "message": "fetching " + secretURL + ": connection refused"})
+			j.Result = raw
+		}
+		if err := cat.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id := range int64(catalog.NetworkFailingAfter) {
+		poll(id+1, bridge.StateFailed, "network")
+	}
+	poll(100, bridge.StateDone, "")
+	grown := *f
+	grown.Episodes = append([]feed.Episode{{ID: "1111111111111111", GUID: "x", Path: "Example Show/2026-10-26-1111111111.mp3",
+		Title: "Episode Four", Published: "2026-10-26T21:00:00Z", EpisodeType: "full",
+		Enclosure: feed.Enclosure{URL: secretURL + "&ep=4"}}}, f.Episodes...)
+	if _, err := cat.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", &grown, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events = %+v, %v; want failing, recovered, new episodes", events, err)
+	}
+	var bodies []string
+	for _, r := range append(hook.wait(t, 3), push.wait(t, 3)...) {
+		bodies = append(bodies, string(r.raw))
+	}
+	for _, ev := range events {
+		data, _ := json.Marshal(ev.Data)
+		discord, _ := json.Marshal(discordBody(compose(ev, s.server()), s.server()))
+		bodies = append(bodies, string(data), string(discord))
+	}
+	for _, b := range bodies {
+		for _, secret := range secrets {
+			if strings.Contains(b, secret) {
+				t.Fatalf("%q leaked into %s", secret, b)
+			}
+		}
+	}
+	// What is sent says a private podcast and the code.
+	for _, want := range [][]string{
+		{`"code":"network"`, `"private":true`, "A private podcast feed is failing"},
+		{`"private":true`, "A private podcast feed is back"},
+		{`"private":true`, `"count":1`, "A private podcast has 1 new episode"},
+	} {
+		if !slices.ContainsFunc(bodies, func(b string) bool {
+			return !slices.ContainsFunc(want, func(w string) bool { return !strings.Contains(b, w) })
+		}) {
+			t.Fatalf("no webhook body says %q: %v", want, bodies)
+		}
 	}
 }
