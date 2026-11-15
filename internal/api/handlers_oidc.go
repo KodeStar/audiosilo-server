@@ -509,9 +509,10 @@ func (a *API) handleOIDCPendingDismiss(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not dismiss the sign-in")
 		return
 	}
+	// Never the email: the audit keeps none (CONVENTIONS.md, Email).
 	target := p.Username
 	if target == "" {
-		target = p.Email
+		target = p.Subject
 	}
 	a.audit(r, "oidc.pending_dismiss", target, map[string]any{"issuer": p.Issuer})
 	w.WriteHeader(http.StatusNoContent)

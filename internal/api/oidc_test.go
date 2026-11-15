@@ -541,6 +541,10 @@ func TestOIDCPendingAndConsole(t *testing.T) {
 	events, _, _ := e.cat.ListAudit(ctx, catalog.AuditFilter{Limit: 10})
 	for _, ev := range events {
 		actions = append(actions, ev.Action)
+		// The audit keeps no email (bob's dismissed sign-in has no username).
+		if strings.Contains(ev.Target, "@") {
+			t.Fatalf("%s names an email: %q", ev.Action, ev.Target)
+		}
 	}
 	if got := strings.Join(actions, ","); got != "user.oidc_unlink,user.oidc_link,oidc.pending_dismiss,user.oidc_create" {
 		t.Fatalf("audit: %s", got)
