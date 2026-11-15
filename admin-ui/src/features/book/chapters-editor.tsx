@@ -316,9 +316,7 @@ function EditRow({
           <span className="sr-only">{t('book.chapters.edit.fixed', { file })}</span>
         </span>
       ) : (
-        // Keyed by the start, so a moved row shows its new time.
         <TimeInput
-          key={row.start}
           value={row.start}
           withHours={withHours}
           label={t('book.chapters.edit.time', { n })}
@@ -382,6 +380,13 @@ function TimeInput({
   const shown = formatStamp(value, withHours);
   const [text, setText] = useState(shown);
   const [bad, setBad] = useState(false);
+  // A moved row shows its new time, in the same field (it keeps the focus).
+  const [last, setLast] = useState(shown);
+  if (last !== shown) {
+    setLast(shown);
+    setText(shown);
+    setBad(false);
+  }
   const commit = () => {
     if (text.trim() === shown) return;
     const at = parseTime(text);

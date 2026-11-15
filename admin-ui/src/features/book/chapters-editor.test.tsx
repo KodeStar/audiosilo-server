@@ -52,6 +52,9 @@ describe('the chapter editor', () => {
     const start = screen.getByRole('textbox', { name: 'Start of chapter 2' });
     await user.clear(start);
     await user.type(start, '20:00.5{Enter}');
+    // The moved row shows its time in the same field, which keeps the focus.
+    expect(start).toHaveValue('20:00.500');
+    expect(start).toHaveFocus();
     // Halfway between chapter 2 (20:00.5) and the end (50:00).
     await user.click(screen.getByRole('button', { name: 'Add a chapter after chapter 2' }));
     expect(screen.getByRole('textbox', { name: 'Title of chapter 3' })).toHaveValue('New chapter');
