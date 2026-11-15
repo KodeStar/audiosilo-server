@@ -30,7 +30,7 @@ import (
 
 // applyGenerated puts the book's generated chapters, fitted onto its files
 // (library relative, titles as found), in its rows (useChapters, the fit named
-// by generatedKey: what it was fitted from) and reports whether they apply (see
+// by listFitKey: what it was fitted from) and reports whether they apply (see
 // above), false leaving the rows to the caller. When the rows already hold the
 // fit of that key, the list is neither decoded nor fitted again.
 func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error) {
@@ -42,7 +42,7 @@ func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error
 	if err != nil {
 		return false, err
 	}
-	key := generatedKey(raw, r.snapshot, files, r.book.RelPath)
+	key := listFitKey(raw, r.snapshot, files, r.book.RelPath)
 	if r.holds(ChaptersFromGenerated, key) {
 		return true, nil
 	}
@@ -107,11 +107,12 @@ func generatedFits(ctx context.Context, q querier, bookID int64) (bool, error) {
 	return chs != nil, err
 }
 
-// generatedKey names a generated fit (books.chapters_fit) by what it is
-// fitted from: the stored chapters.json (raw), the scan's own chapters
-// (snapshot) and the book's files in play order (each one's path relative to
-// the book, size and length). JSON holds no NUL, nor does a path.
-func generatedKey(raw, snapshot string, files []BookFile, bookPath string) string {
+// listFitKey names a fit of a stored chapter list (books.chapters_fit) by what
+// it is fitted from: the list (raw: a chapters.json, or an admin's edit), the
+// scan's own chapters (snapshot; "" for an edit, which never reads them) and
+// the book's files in play order (each one's path relative to the book, size
+// and length). JSON holds no NUL, nor does a path.
+func listFitKey(raw, snapshot string, files []BookFile, bookPath string) string {
 	var b strings.Builder
 	b.WriteString(raw + "\x00" + snapshot)
 	for _, f := range files {

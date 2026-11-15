@@ -47,10 +47,10 @@ const (
 	// ChapterListVersion is the one format version the server reads.
 	ChapterListVersion = 1
 	// A list has at least two chapters (one chapter is no chapters: the Bridge
-	// writes no file) and at most maxChapterListEntries; at most
-	// maxChapterListFiles files.
+	// writes no file) and at most MaxChapterListEntries (an admin's edit in the
+	// console too); at most maxChapterListFiles files.
 	minChapterListEntries = 2
-	maxChapterListEntries = 2000
+	MaxChapterListEntries = 2000
 	maxChapterListFiles   = 2000
 	// maxChapterTitle is the longest title in bytes, maxChapterFilePath the
 	// longest file path.
@@ -77,7 +77,7 @@ func ParseChapterList(data []byte) (*ChapterList, error) {
 	if l.Version != ChapterListVersion {
 		return nil, invalidAttachment("chapters version %d", l.Version)
 	}
-	if n := len(l.Chapters); n < minChapterListEntries || n > maxChapterListEntries {
+	if n := len(l.Chapters); n < minChapterListEntries || n > MaxChapterListEntries {
 		return nil, invalidAttachment("%d chapters", n)
 	}
 	if n := len(l.Files); n == 0 || n > maxChapterListFiles {
@@ -85,9 +85,8 @@ func ParseChapterList(data []byte) (*ChapterList, error) {
 	}
 	for i := range l.Chapters {
 		ch := &l.Chapters[i]
-		ch.Title = strings.TrimSpace(ch.Title)
-		if ch.Title == "" || len(ch.Title) > maxChapterTitle || !utf8.ValidString(ch.Title) ||
-			strings.ContainsFunc(ch.Title, unicode.IsControl) {
+		var ok bool
+		if ch.Title, ok = ListChapterTitle(ch.Title); !ok {
 			return nil, invalidAttachment("chapter %d's title", i)
 		}
 		if ch.StartMS < 0 || ch.LengthMS <= 0 {
@@ -115,6 +114,15 @@ func ParseChapterList(data []byte) (*ChapterList, error) {
 	l.Generator, l.From = cleanProvenance(l.Generator), cleanProvenance(l.From)
 	l.GeneratedAt = cleanTime(l.GeneratedAt)
 	return &l, nil
+}
+
+// ListChapterTitle is title trimmed, and whether it is one a chapter list may
+// hold: 1 to 200 bytes once trimmed, valid text, no control character. The
+// Bridge's chapters.json and an admin's edit in the console share the rule.
+func ListChapterTitle(title string) (string, bool) {
+	title = strings.TrimSpace(title)
+	return title, title != "" && len(title) <= maxChapterTitle && utf8.ValidString(title) &&
+		!strings.ContainsFunc(title, unicode.IsControl)
 }
 
 // relativeFilePath reports whether p is a file path relative to a book's
