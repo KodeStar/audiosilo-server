@@ -258,8 +258,8 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	a.issuePairedSession(w, r, u.ID, req.DeviceName, codeKind == auth.CodeInvite)
 }
 
-// issuePairedSession answers a consumed pairing token (exchange, single
-// sign-on's finish): a session for the device, the sign-in reported, the
+// issuePairedSession answers a consumed pairing token (exchange) or single
+// sign-on token (finish): a session for the device, the sign-in reported, the
 // session envelope.
 func (a *API) issuePairedSession(w http.ResponseWriter, r *http.Request, userID int64, deviceName string, invite bool) {
 	session, err := a.auth.IssueToken(r.Context(), userID, auth.KindSession, deviceName, 0)

@@ -539,3 +539,66 @@ func TestPendingClearedBySignIn(t *testing.T) {
 		t.Fatalf("waiting rows left behind: %+v %v", rows, err)
 	}
 }
+
+// TestConsumeOIDC: only a token a sign-in minted (KindOIDC) finishes one, once;
+// a pairing token or a session presented there is refused and left unspent,
+// and a sign-in's token is no pairing token for an exchange. A sign-out
+// everywhere ends one not yet finished, and the daily prune drops the spent.
+func TestConsumeOIDC(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	alice := mustUser(t, s, ctx, "alice", "", RoleUser)
+	sso, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := s.IssueOwnPairingToken(ctx, alice.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.IssueToken(ctx, alice.ID, KindSession, "phone", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Denied: another kind's token, which stays as it was.
+	for name, tok := range map[string]string{"pairing": pair, "session": sess, "unknown": "guess"} {
+		if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("%s token finished a sign-in: %v", name, err)
+		}
+	}
+	if u, _, err := s.ConsumePairing(ctx, pair); err != nil || u.ID != alice.ID {
+		t.Fatalf("the refused pairing token was spent: %v", err)
+	}
+	if _, err := s.ResolveToken(ctx, sess, KindSession); err != nil {
+		t.Fatalf("the refused session was ended: %v", err)
+	}
+	// Denied: the sign-in's token at an exchange; it stays unspent too.
+	if _, _, err := s.ConsumePairing(ctx, sso); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("an exchange took a sign-in's token: %v", err)
+	}
+	// Allowed: once.
+	if u, err := s.ConsumeOIDC(ctx, sso); err != nil || u.ID != alice.ID {
+		t.Fatalf("finish: %v %v", u, err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, sso); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a second finish: %v", err)
+	}
+	// A sign-out everywhere ends one in flight.
+	open, err := s.IssueOIDCToken(ctx, alice.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SignOutEverywhere(ctx, alice.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, open); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a sign-in survived a sign-out everywhere: %v", err)
+	}
+	if _, err := s.PrunePairingTokens(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE kind = ?`, KindOIDC).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("spent sign-in tokens kept: %d %v", left, err)
+	}
+}

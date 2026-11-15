@@ -75,10 +75,16 @@ func (e *testEnv) get(t *testing.T, path, host string, cookies ...*http.Cookie) 
 	return resp
 }
 
+// The flow's cookies as a browser holds them for oidcPublic (https).
+const (
+	hostFlowCookie = hostCookiePrefix + oidcCookie
+	hostDoneCookie = hostCookiePrefix + oidcDoneCookie
+)
+
 func flowCookie(t *testing.T, resp *http.Response) *http.Cookie {
 	t.Helper()
 	for _, c := range resp.Cookies() {
-		if c.Name == oidcCookie {
+		if c.Name == hostFlowCookie {
 			return c
 		}
 	}
@@ -127,12 +133,12 @@ func (e *oidcEnv) callbackDone(t *testing.T, path string, cookie *http.Cookie) (
 		t.Fatalf("callback: %d", resp.StatusCode)
 	}
 	c := resp.Cookies()
-	if len(c) == 0 || c[0].Name != oidcCookie || c[0].MaxAge >= 0 {
+	if len(c) == 0 || c[0].Name != hostFlowCookie || c[0].MaxAge >= 0 {
 		t.Fatalf("callback left the flow cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
 	var done *http.Cookie
 	for _, k := range c[1:] {
-		if k.Name == oidcDoneCookie {
+		if k.Name == hostDoneCookie {
 			done = k
 		}
 	}
@@ -276,22 +282,34 @@ func TestOIDCServerInfo(t *testing.T) {
 	}
 }
 
-// TestOIDCCookieSecureAnyCase: the flow cookie is Secure on an https public_url
-// in any case (public_url keeps the case it was typed in), and not on http.
+// TestOIDCCookieSecureAnyCase: on an https public_url (in any case: public_url
+// keeps the case it was typed in) the flow's cookies are Secure and __Host-
+// on Path=/ with no Domain, so nothing but this origin over TLS can plant
+// one; on http, where no prefix can be had, they keep their plain names on
+// the flow's path.
 func TestOIDCCookieSecureAnyCase(t *testing.T) {
 	t.Parallel()
-	for base, want := range map[string]bool{"HTTPS://audiosilo.test": true, "https://audiosilo.test": true, "http://audiosilo.test": false} {
+	type want struct {
+		secure     bool
+		name, path string
+	}
+	for base, w := range map[string]want{
+		"HTTPS://audiosilo.test": {true, hostFlowCookie, "/"},
+		"https://audiosilo.test": {true, hostFlowCookie, "/"},
+		"http://audiosilo.test":  {false, oidcCookie, oidcCookiePath},
+	} {
 		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = base })
-		w := httptest.NewRecorder()
-		e.api.setOIDCCookie(w, oidcCookie, "v", 600)
-		if c := w.Result().Cookies(); len(c) != 1 || c[0].Secure != want {
-			t.Errorf("public_url %s: %+v, want Secure %v", base, c, want)
+		rec := httptest.NewRecorder()
+		e.api.setOIDCCookie(rec, oidcCookie, "v", 600)
+		if c := rec.Result().Cookies(); len(c) != 1 || c[0].Secure != w.secure || c[0].Name != w.name ||
+			c[0].Path != w.path || c[0].Domain != "" {
+			t.Errorf("public_url %s: %+v, want %+v", base, c, w)
 		}
 	}
 }
 
 // TestOIDCStart: return is an enum, every redirect is built from public_url,
-// and the flow cookie is HttpOnly, Lax, Secure, ten minutes, on its path.
+// and the flow cookie is HttpOnly, Lax, Secure, ten minutes, __Host- on Path=/.
 func TestOIDCStart(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
@@ -335,7 +353,7 @@ func TestOIDCStart(t *testing.T) {
 		t.Fatalf("authorize URL: %v", q)
 	}
 	c := flowCookie(t, resp)
-	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.Path != oidcCookiePath || c.MaxAge != 600 {
+	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" || c.MaxAge != 600 {
 		t.Fatalf("cookie: %+v", c)
 	}
 	if strings.Contains(c.Value, q.Get("state")) {
@@ -425,8 +443,8 @@ func TestOIDCWebSignIn(t *testing.T) {
 	}
 }
 
-// TestOIDCFinish: a sign-in's pairing token reaches the page only in its
-// cookie (HttpOnly, Lax, Secure on an https public_url, the flow's path, 60 s),
+// TestOIDCFinish: a sign-in's token reaches the page only in its cookie
+// (HttpOnly, Lax, Secure and __Host- on Path=/ for an https public_url, 60 s),
 // never in a URL; POST /auth/oidc/finish trades it once, clearing the cookie,
 // and answers as POST /auth/exchange does. A browser that never signed in
 // (someone else's link to /admin/#oidc=done) holds no cookie and gets no
@@ -437,7 +455,7 @@ func TestOIDCFinish(t *testing.T) {
 	alice := e.mustUser(t, "alice", "alice@example.org")
 	loc, done := e.signInDone(t, oidcReturnAdmin)
 	if done == nil || !done.HttpOnly || !done.Secure || done.SameSite != http.SameSiteLaxMode ||
-		done.Path != oidcCookiePath || done.MaxAge != 60 || done.Value == "" {
+		done.Path != "/" || done.Domain != "" || done.MaxAge != 60 || done.Value == "" {
 		t.Fatalf("finish cookie: %+v", done)
 	}
 	if loc != oidcPublic+oidcDoneAdmin || strings.Contains(loc, done.Value) {
@@ -450,17 +468,17 @@ func TestOIDCFinish(t *testing.T) {
 		t.Fatalf("no cookie: %d %v", resp.StatusCode, out)
 	}
 	// Denied: a token that isn't a sign-in's.
-	resp, out = e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: "forged"}, "admin-web")
+	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: "forged"}, "admin-web")
 	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
 		t.Fatalf("a forged cookie: %d %v", resp.StatusCode, out)
 	}
 	// Denied: an expired one (issued 61 s ago, with its 60 s life).
-	past := auth.New(e.db, func() time.Time { return time.Now().Add(-oidcPairingTTL - time.Second) })
-	stale, err := past.IssueToken(context.Background(), alice.ID, auth.KindPairing, "", oidcPairingTTL)
+	past := auth.New(e.db, func() time.Time { return time.Now().Add(-oidcDoneTTL - time.Second) })
+	stale, err := past.IssueOIDCToken(context.Background(), alice.ID, oidcDoneTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, out = e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: stale}, "admin-web")
+	resp, out = e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: stale}, "admin-web")
 	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired {
 		t.Fatalf("an expired token: %d %v", resp.StatusCode, out)
 	}
@@ -471,7 +489,7 @@ func TestOIDCFinish(t *testing.T) {
 		out["user"].(map[string]any)["username"] != "alice" || resp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("finish: %d %v", resp.StatusCode, out)
 	}
-	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].MaxAge >= 0 || c[0].Path != oidcCookiePath {
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != hostDoneCookie || c[0].MaxAge >= 0 || c[0].Path != "/" {
 		t.Fatalf("finish left the cookie: %v", resp.Header.Values("Set-Cookie"))
 	}
 	if r, _ := e.do(t, "GET", "/api/v1/me", out["token"].(string), ""); r.StatusCode != 200 {
@@ -504,6 +522,121 @@ func TestOIDCFinishNotLockedByExchanges(t *testing.T) {
 	_, done := e.signInDone(t, oidcReturnAdmin)
 	if resp, out := e.finish(t, done, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
 		t.Fatalf("finish after failed exchanges: %d %v", resp.StatusCode, out)
+	}
+}
+
+// clearsDone reports whether resp deleted the finished sign-in's cookie
+// named name.
+func clearsDone(resp *http.Response, name string) bool {
+	for _, c := range resp.Cookies() {
+		if c.Name == name && c.MaxAge < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOIDCFinishOnlySignInTokens: finish takes only the token a sign-in's
+// callback minted. A pairing token planted in the cookie (an invite's QR, a
+// person's own /auth/pair) or a session is refused (a login CSRF otherwise:
+// the browser signed in as the token's owner) and left unspent; the
+// sign-in's token in turn is no pairing token for an exchange.
+func TestOIDCFinishOnlySignInTokens(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	_, qr, _ := e.redeemCode(t, e.authCode)
+	own, err := e.auth.IssueOwnPairingToken(context.Background(), alice.ID, time.Minute)
+	if err != nil || qr == "" {
+		t.Fatalf("tokens: %q %v", qr, err)
+	}
+	// Denied: another kind's token; the cookie is cleared all the same.
+	for name, tok := range map[string]string{"an invite's QR": qr, "an own pairing": own, "a session": e.session(t, alice.ID)} {
+		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "admin-web")
+		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
+			t.Fatalf("%s finished a sign-in: %d %v", name, resp.StatusCode, out)
+		}
+		if !clearsDone(resp, hostDoneCookie) {
+			t.Fatalf("%s: the cookie kept: %v", name, resp.Header.Values("Set-Cookie"))
+		}
+	}
+	// None of them was spent.
+	for name, tok := range map[string]string{"the QR": qr, "the own pairing": own} {
+		if status, body := e.exchangeToken(t, tok, "phone"); status != http.StatusOK {
+			t.Fatalf("%s was spent by the refused finish: %d %s", name, status, body)
+		}
+	}
+	// Allowed: the sign-in's own token, which an exchange refuses.
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	if status, _ := e.exchangeToken(t, done.Value, "phone"); status == http.StatusOK {
+		t.Fatal("an exchange took a sign-in's token")
+	}
+	if resp, out := e.finish(t, done, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("finish: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestOIDCFinishCookieName: on an https public_url finish reads only the
+// __Host- cookie, so one a sibling subdomain or a plain-http answer planted
+// under the bare name finishes nothing (and spends nothing); on plain http,
+// where no prefix can be had, it reads the bare name on the flow's path.
+func TestOIDCFinishCookieName(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	resp, out := e.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: done.Value}, "admin-web")
+	if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("https, a bare-named cookie: %d %v", resp.StatusCode, out)
+	}
+	if resp, out := e.finish(t, done, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("https, the __Host- cookie: %d %v", resp.StatusCode, out)
+	}
+
+	plain := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "http://audiosilo.test" })
+	bob := plain.mustUser(t, "bob", "")
+	tok, err := plain.auth.IssueOIDCToken(context.Background(), bob.ID, oidcDoneTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := plain.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "web"); resp.StatusCode != http.StatusUnauthorized ||
+		out["code"] != codeOIDCNoSignIn {
+		t.Fatalf("http, a __Host- cookie: %d %v", resp.StatusCode, out)
+	}
+	resp, out = plain.finish(t, &http.Cookie{Name: oidcDoneCookie, Value: tok}, "web")
+	if resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("http, the bare cookie: %d %v", resp.StatusCode, out)
+	}
+	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath || c[0].Secure {
+		t.Fatalf("http, the clearing cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+}
+
+// TestOIDCFinishKeepsCookieUntilTried: a finish refused before it tries the
+// token (429, its address over oidcLimiter; 400, a body it can't read) leaves
+// the cookie, so the completed sign-in can still be finished in its minute.
+func TestOIDCFinishKeepsCookieUntilTried(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	cookie := map[string]string{"Cookie": done.Name + "=" + done.Value}
+
+	resp, _ := e.doHeaders(t, "POST", oidcFinishPath, "", `{"device_name":`, cookie)
+	if resp.StatusCode != http.StatusBadRequest || clearsDone(resp, hostDoneCookie) {
+		t.Fatalf("a bad body: %d %v", resp.StatusCode, resp.Header.Values("Set-Cookie"))
+	}
+	for range 10 {
+		e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: "guess"}, "admin-web")
+	}
+	resp, _ = e.finish(t, done, "admin-web")
+	if resp.StatusCode != http.StatusTooManyRequests || clearsDone(resp, hostDoneCookie) {
+		t.Fatalf("over the limit: %d %v", resp.StatusCode, resp.Header.Values("Set-Cookie"))
+	}
+	e.api.oidcLimiter.Reset("127.0.0.1")
+	resp, out := e.finish(t, done, "admin-web")
+	if resp.StatusCode != http.StatusOK || out["token"] == "" || !clearsDone(resp, hostDoneCookie) {
+		t.Fatalf("finish once the limit lifts: %d %v", resp.StatusCode, out)
 	}
 }
 
@@ -819,7 +952,7 @@ func TestOIDCCallbackRateLimited(t *testing.T) {
 	t.Parallel()
 	e := newOIDCEnv(t, oidcAlice, nil)
 	e.mustUser(t, "alice", "alice@example.org")
-	foreign := &http.Cookie{Name: oidcCookie, Value: "not-this-server's"}
+	foreign := &http.Cookie{Name: hostFlowCookie, Value: "not-this-server's"}
 	for range 25 {
 		wantResult(t, e.callback(t, oidcCallbackPath+"?code=x&state=y", nil), oidcExpired)
 	}

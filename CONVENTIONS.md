@@ -3572,17 +3572,25 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
-  charges nothing, since any page can make a visitor's browser send those): the cookie
-  `audiosilo_oidc` (Path `/api/v1/auth/oidc/`, HttpOnly, SameSite=Lax, Secure when public_url is
-  https) is deleted on every callback; a sign-in gets a **60 s single-use pairing token**
-  (`IssueToken(KindPairing)`) that is **never in a URL** (a link carrying one would sign whoever
-  follows it in as its owner: a login CSRF), only in the cookie `audiosilo_oidc_done` (the same path,
-  HttpOnly, SameSite=Lax, Secure as above, Max-Age 60), and a 303 to `/admin/#oidc=done` or
+  charges nothing, since any page can make a visitor's browser send those): the flow cookie
+  (HttpOnly, SameSite=Lax; on an https public_url `__Host-audiosilo_oidc`, Path `/`, Secure, no
+  Domain, so neither a sibling subdomain nor a plain-http answer can plant one; on plain http
+  `audiosilo_oidc` on Path `/api/v1/auth/oidc/`, where a network attacker can plant one: no prefix
+  without Secure; `oidcCookieName`) is deleted on every callback; a sign-in gets a **60 s
+  single-use token of its own kind** (`auth.KindOIDC`, `IssueOIDCToken`) that is **never in a URL**
+  (a link carrying one would sign whoever follows it in as its owner: a login CSRF), only in the
+  done cookie (`__Host-audiosilo_oidc_done` or `audiosilo_oidc_done`, named and placed as the flow
+  cookie, Max-Age 60), and a 303 to `/admin/#oidc=done` or
   `/web/connect?oidc=1` (the player's button is 235c; `/web/connect?token=` stays QR pairing's).
-  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name}`), which clears the
-  cookie whatever happens, consumes the token once (`ConsumePairing`) and answers exactly as
+  That page calls **`POST /auth/oidc/finish`** (public, optional `{device_name}`, per-IP
+  `oidcLimiter`), which leaves the cookie on a 429 or a 400 (the sign-in stays finishable for its
+  minute) and clears it on every other answer, consumes the token once (`ConsumeOIDC`: only
+  `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
+  refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out
+  everywhere ends one not yet finished, the daily `PrunePairingTokens` drops it) and answers exactly as
   `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
-  the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown or its
+  the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown, of
+  another kind or its
   account's disabled (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
   `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
   keeps a stored session when the finish signs no admin in; anything else

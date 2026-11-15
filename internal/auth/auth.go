@@ -45,6 +45,12 @@ const (
 	// GET /me/upcoming/releases.ics lists it, never touched (a calendar's polls
 	// are not the person's activity) and never a device.
 	KindFeed = "feed"
+	// KindOIDC is the 60 s single-use token a single sign-on's callback leaves
+	// in the browser's cookie (server#235): only POST /auth/oidc/finish takes
+	// it (ConsumeOIDC), so a pairing token planted in that cookie (an invite's
+	// QR, a person's own /auth/pair) is refused there, and this one is refused
+	// by POST /auth/exchange. Like a pairing token it is never a device.
+	KindOIDC = "oidc"
 )
 
 // neverTouched reports whether a token of kind is never touched by resolve: it
@@ -630,7 +636,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		if err := s.castGrantOf(ctx, &row); err != nil {
 			return nil, tokenRow{}, err
 		}
-	case KindPairing: // used once, by an exchange: not worth holding
+	case KindPairing, KindOIDC: // used once, by an exchange or a finish: not worth holding
 	default:
 		s.tokens.PutMarked(gen, mark, hash, cachedToken{user: cloneUser(u), row: row, expires: expires, read: read})
 	}
@@ -1174,11 +1180,12 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // linked to a code that is expired or used up (a rotation that revives the code
 // revokes its tokens first, so none of them could pair again either). The rows
 // would otherwise pile up, one per QR shown; a code's own row, its uses and its
-// expiry are untouched. Run by the daily retention beside PruneCastTokens. It
+// expiry are untouched. A single sign-on's token (KindOIDC) goes the same way,
+// spent or expired. Run by the daily retention beside PruneCastTokens. It
 // reports how many it deleted.
 func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
-	  WHERE kind = '`+KindPairing+`'
+	  WHERE kind IN ('`+KindPairing+`', '`+KindOIDC+`')
 	    AND (revoked = 1 OR expires_at < ?1
 	         OR (auth_code_id IS NOT NULL AND NOT EXISTS (
 	               SELECT 1 FROM auth_codes c WHERE c.id = tokens.auth_code_id
@@ -1788,7 +1795,7 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // ways back in that a session can make without the password and the person can
 // neither see nor revoke: their open pairing codes (unlinked pairing tokens,
 // POST /auth/pair: one use, but one that would make a session after the end, as
-// leaveOwners ends them) and their recovery code (its linked pairing tokens
+// leaveOwners ends them, and a single sign-on not yet finished, KindOIDC) and their recovery code (its linked pairing tokens
 // cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
 // (created_on_token_id, the record the device revoke's alsoMembers reads; only
@@ -1813,8 +1820,8 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind = ? AND auth_code_id IS NULL AND revoked = 0`,
-		userID, KindPairing); err != nil {
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind IN (?, ?) AND auth_code_id IS NULL AND revoked = 0`,
+		userID, KindPairing, KindOIDC); err != nil {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,

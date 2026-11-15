@@ -23,7 +23,7 @@ import (
 // GET /api/v1/auth/oidc/start?return=web|admin sets the sealed flow cookie and
 // sends the browser to the provider; GET /api/v1/auth/oidc/callback checks it,
 // exchanges the code, applies the decision and sends the browser on: a sign-in
-// gets a 60 s single-use pairing token in an HttpOnly cookie (never in a URL:
+// gets a 60 s single-use token (auth.KindOIDC) in an HttpOnly cookie (never in a URL:
 // a link carrying one would sign whoever follows it in as its owner, a login
 // CSRF), and the console (/admin/#oidc=done) or the web player
 // (/web/connect?oidc=1) trades it for a session at POST /api/v1/auth/oidc/finish,
@@ -36,15 +36,22 @@ const (
 	oidcStartPath    = "/api/v1/auth/oidc/start"
 	oidcCallbackPath = "/api/v1/auth/oidc/callback"
 	oidcFinishPath   = "/api/v1/auth/oidc/finish"
-	oidcCookie       = "audiosilo_oidc"
-	// oidcDoneCookie holds a finished sign-in's pairing token until the page it
-	// lands on trades it at oidcFinishPath.
+	// oidcCookie holds the sealed flow from /start to the callback. Its name
+	// and path as set depend on public_url's scheme: oidcCookieName.
+	oidcCookie = "audiosilo_oidc"
+	// oidcDoneCookie holds a finished sign-in's token (auth.KindOIDC) until
+	// the page it lands on trades it at oidcFinishPath.
 	oidcDoneCookie = "audiosilo_oidc_done"
+	// oidcCookiePath is both cookies' path on a plain-http public_url.
 	oidcCookiePath = "/api/v1/auth/oidc/"
-	// oidcPairingTTL is the life of the pairing token a sign-in hands the
-	// console or the web player (and of its cookie): long enough for the page
-	// to load and finish.
-	oidcPairingTTL = 60 * time.Second
+	// hostCookiePrefix makes a browser take the cookie only when it is Secure,
+	// set by this origin itself (no Domain) for Path=/: a sibling subdomain
+	// or a plain-http answer can't plant one by that name.
+	hostCookiePrefix = "__Host-"
+	// oidcDoneTTL is the life of the token a sign-in hands the console or
+	// the web player (and of its cookie): long enough for the page to load and
+	// finish.
+	oidcDoneTTL = 60 * time.Second
 )
 
 // Where a finished sign-in lands: the page then calls oidcFinishPath.
@@ -179,15 +186,45 @@ func sameHost(public *url.URL, host string) bool {
 	return strings.EqualFold(config.HostWithPort(host, port), config.HostWithPort(public.Host, port))
 }
 
+// oidcHTTPS reports whether public_url is https (in any case: it keeps the
+// case it was typed in).
+func (a *API) oidcHTTPS() bool { return strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:") }
+
+// oidcCookieName is the name one of the flow's cookies (oidcCookie,
+// oidcDoneCookie) is set and read by, and its path. On an https public_url
+// it is __Host-<name> on Path=/ (the prefix demands that path, Secure and no
+// Domain), so neither a sibling subdomain nor a network attacker answering
+// plain http can plant one: a planted flow or done cookie would sign the
+// browser in as the attacker (a login CSRF). On plain http no prefix can be
+// had (it needs Secure), so a network attacker can plant one there; the
+// cookies keep the flow's path, oidcCookiePath, then.
+func (a *API) oidcCookieName(name string) (string, string) {
+	if a.oidcHTTPS() {
+		return hostCookiePrefix + name, "/"
+	}
+	return name, oidcCookiePath
+}
+
 // setOIDCCookie sets one of the flow's cookies, name (maxAge < 0 deletes it),
-// on the flow's path only, HttpOnly and SameSite=Lax. Secure only on an https
-// public_url: a browser never sends a Secure cookie back over plain http (a
-// server on the home network without TLS).
+// as oidcCookieName names and places it, HttpOnly and SameSite=Lax. Secure
+// only on an https public_url: a browser never sends a Secure cookie back over
+// plain http (a server on the home network without TLS).
 func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge int) {
+	name, path := a.oidcCookieName(name)
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
-		Name: name, Value: value, Path: oidcCookiePath, MaxAge: maxAge,
-		HttpOnly: true, Secure: strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:"), SameSite: http.SameSiteLaxMode,
+		Name: name, Value: value, Path: path, MaxAge: maxAge,
+		HttpOnly: true, Secure: a.oidcHTTPS(), SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// oidcCookieValue is one of the flow's cookies the request carries, by the
+// name oidcCookieName gives it ("" when absent).
+func (a *API) oidcCookieValue(r *http.Request, name string) string {
+	name, _ = a.oidcCookieName(name)
+	if c, err := r.Cookie(name); err == nil {
+		return c.Value
+	}
+	return ""
 }
 
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
@@ -195,9 +232,9 @@ func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge in
 // another host than public_url's, or over plain HTTP for an https public_url,
 // it first sends the browser to this route on public_url (once: ?hop=1), so
 // the flow cookie is set where the provider returns. Then the cookie (sealed
-// state, nonce, PKCE verifier, return; ten minutes, this path only, HttpOnly,
-// SameSite=Lax, Secure on an https public_url) and a 302 to the provider's
-// authorization URL.
+// state, nonce, PKCE verifier, return; ten minutes, HttpOnly, SameSite=Lax;
+// named and placed by oidcCookieName, Secure on an https public_url) and a
+// 302 to the provider's authorization URL.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// Never the request's own value from here on: the enum's constant.
 	var ret string
@@ -262,7 +299,7 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // visitor's browser send ten (SameSite=Lax keeps the cookie off them), which
 // would lock that address out of signing in. The provider's ?error= (the
 // person cancelled) charges nothing either. Otherwise oidc.Decide's answer
-// (auth.OIDCSignIn) and its audits, then the pairing token in its cookie and
+// (auth.OIDCSignIn) and its audits, then the sign-in's token in its cookie and
 // the flow's return page, or the result panel.
 func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	a.setOIDCCookie(w, oidcCookie, "", -1)
@@ -290,13 +327,13 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, reason)
 	}
 	q := r.URL.Query()
-	c, err := r.Cookie(oidcCookie)
-	if err != nil {
+	sealed := a.oidcCookieValue(r, oidcCookie)
+	if sealed == "" {
 		a.log.Info("oidc: sign-in refused", "why", "no flow cookie")
 		a.oidcResult(w, r, oidcExpired)
 		return
 	}
-	f, err := a.oidc.sealer.Open(c.Value)
+	f, err := a.oidc.sealer.Open(sealed)
 	switch {
 	case errors.Is(err, oidc.ErrFlowExpired):
 		fail(oidcExpired, "flow expired", nil)
@@ -372,13 +409,13 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			a.log.Warn("noting the admin's first sign-in failed", "err", err)
 		}
 	}
-	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", oidcPairingTTL)
+	token, err := a.auth.IssueOIDCToken(r.Context(), u.ID, oidcDoneTTL)
 	if err != nil {
-		a.log.Error("oidc: could not issue the pairing token", "err", err)
+		a.log.Error("oidc: could not issue the sign-in's token", "err", err)
 		a.oidcResult(w, r, oidcFailed)
 		return
 	}
-	a.setOIDCCookie(w, oidcDoneCookie, token, int(oidcPairingTTL/time.Second))
+	a.setOIDCCookie(w, oidcDoneCookie, token, int(oidcDoneTTL/time.Second))
 	noStore(w)
 	done := oidcDoneWeb
 	if f.Return == oidcReturnAdmin {
@@ -388,19 +425,22 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOIDCFinish trades a finished sign-in for a session (public): the
-// pairing token the callback left in its cookie, read and cleared whatever
-// happens, consumed once, then the answer POST /auth/exchange gives (the
-// session envelope; the new device reported as there). Optional body
-// {"device_name"}. 401 code oidc_no_sign_in without the cookie (charging
+// token the callback left in its cookie (auth.KindOIDC, never a pairing
+// token: one planted in that cookie, an invite's QR or a person's own
+// /auth/pair, would sign the browser in as someone else, and is refused and
+// left unspent), consumed once, then the answer POST /auth/exchange gives
+// (the session envelope; the new device reported as there). Optional body
+// {"device_name"}. A 429 (oidcLimiter) or a 400 (the body) leaves the cookie,
+// so the sign-in can still be finished for the rest of its minute; every other
+// answer clears it. 401 code oidc_no_sign_in without the cookie (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
-// expired, unknown or its account's disabled (charged to the address's
-// oidcLimiter, the callback's). Not redeemLimiter: any page can make a
-// visitor's browser fail ten exchanges or redeems (a simple POST), which
+// expired, unknown, of another kind or its account's disabled (charged to the
+// address's oidcLimiter, the callback's). Not redeemLimiter: any page can make
+// a visitor's browser fail ten exchanges or redeems (a simple POST), which
 // would lock that address out of finishing a sign-in the provider completed.
 // A page on another site can't make a browser send the cookie here
 // (SameSite=Lax, a POST), nor read the answer.
 func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
-	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
 	noStore(w)
 	ip := clientIP(r)
 	if !allowAttempt(w, a.oidcLimiter, ip) {
@@ -413,12 +453,13 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	c, err := r.Cookie(oidcDoneCookie)
-	if err != nil || c.Value == "" {
+	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
+	token := a.oidcCookieValue(r, oidcDoneCookie)
+	if token == "" {
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCNoSignIn, "no single sign-on to finish in this browser")
 		return
 	}
-	u, _, err := a.auth.ConsumePairing(r.Context(), c.Value)
+	u, err := a.auth.ConsumeOIDC(r.Context(), token)
 	if err != nil {
 		a.oidcLimiter.Fail(ip)
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "the single sign-on has expired or was used: sign in again")

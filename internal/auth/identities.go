@@ -200,6 +200,35 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 	return res, err
 }
 
+// IssueOIDCToken mints the single-use token a sign-in that signed in leaves
+// in the browser's cookie (KindOIDC, ttl long), the only token ConsumeOIDC
+// takes.
+func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
+	return s.IssueToken(ctx, userID, KindOIDC, "", ttl)
+}
+
+// ConsumeOIDC trades a token IssueOIDCToken minted for its account, once: the
+// revoke-if-not-revoked write means two racing finishes cannot both win. Any
+// other token (a pairing token, a session) is ErrInvalidToken and left as it
+// was, as is a spent or expired one, or one whose account is disabled.
+func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
+	hash := hashSecret(secret)
+	u, _, err := s.lookupToken(ctx, hash, KindOIDC)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.ExecDurable(ctx, "ConsumeOIDC",
+		`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND kind = ? AND revoked = 0`,
+		s.ts(), hash, KindOIDC)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrInvalidToken
+	}
+	return u, nil
+}
+
 // matchEmail reads every account whose email is email (both trimmed; SQLite's
 // NOCASE folds ASCII case only), as oidc.Account facts.
 func matchEmail(ctx context.Context, tx *sql.Tx, issuer, email string) ([]oidc.Account, error) {
