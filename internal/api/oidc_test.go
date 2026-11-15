@@ -403,23 +403,29 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	if strings.Join(actions, ",") != "user.role_sync,user.oidc_link" {
 		t.Fatalf("audit: %v", actions)
 	}
-	// The provider stops sending the groups claim at all (neither the ID
-	// token nor userinfo): her role is left alone, and the log says why.
+	// Keycloak leaves the groups claim out for a person in no group: once her
+	// identity has carried the claim, an absent one (neither the ID token nor
+	// userinfo) is no groups, and she is an ordinary user at the next sign-in,
+	// with nothing logged as missing.
 	logs := &syncBuffer{}
 	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
 	p.Groups = nil
 	e.idp.SetPerson(p)
-	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
-		t.Fatalf("no groups claim: %d %v", status, out)
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
+		t.Fatalf("no groups claim after one: %d %v", status, out)
 	}
-	if !strings.Contains(logs.String(), "sent no groups claim") {
-		t.Fatalf("no warning: %s", logs.String())
+	if strings.Contains(logs.String(), "sent no groups claim") {
+		t.Fatalf("a warning for a provider that sends groups: %s", logs.String())
 	}
 	if n := e.idp.Calls("userinfo"); n == 0 {
 		t.Fatal("userinfo wasn't asked for the missing claim")
 	}
-	// She leaves the group (an empty list is a claim): an ordinary user at the
-	// next sign-in.
+	// Back in the group, then out of it again as an empty list: the same.
+	p.Groups = []string{"audiosilo-admins"}
+	e.idp.SetPerson(p)
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
+		t.Fatalf("back in the group: %d %v", status, out)
+	}
 	p.Groups = []string{}
 	e.idp.SetPerson(p)
 	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
@@ -427,6 +433,34 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	}
 	if u, _ := e.auth.GetUser(context.Background(), alice.ID); u.Role != auth.RoleUser {
 		t.Fatalf("role %q", u.Role)
+	}
+}
+
+// TestOIDCNoGroupsClaimNeverSent: with admin_group set, a provider that has
+// never sent the groups claim for a person (no scope or mapper for it) demotes
+// no one: her role is left alone at each sign-in, and the log says why.
+func TestOIDCNoGroupsClaimNeverSent(t *testing.T) {
+	t.Parallel()
+	p := oidcAlice
+	p.Groups = nil
+	e := newOIDCEnv(t, p, func(o *config.OIDCConfig) { o.AdminGroup = "audiosilo-admins" })
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	logs := &syncBuffer{}
+	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
+		t.Fatalf("first sign-in: %d %v", status, out)
+	}
+	if !strings.Contains(logs.String(), "sent no groups claim") {
+		t.Fatalf("no warning: %s", logs.String())
+	}
+	// Made an admin in the console: the next sign-in, still without the
+	// claim, leaves her one.
+	role, password := auth.RoleAdmin, "alice-password"
+	if err := e.auth.UpdateUser(context.Background(), alice.ID, auth.UserChanges{Role: &role, Password: &password}); err != nil {
+		t.Fatal(err)
+	}
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
+		t.Fatalf("never sent: %d %v", status, out)
 	}
 }
 

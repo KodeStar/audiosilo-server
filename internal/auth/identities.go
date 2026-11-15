@@ -120,9 +120,10 @@ type OIDCResult struct {
 const accountFacts = `u.id, u.role = '` + RoleAdmin + `', u.disabled, u.is_demo, u.managed_by IS NOT NULL,
 	EXISTS(SELECT 1 FROM user_identities li WHERE li.user_id = u.id AND li.issuer = ?1)`
 
-func scanAccount(row interface{ Scan(...any) error }) (oidc.Account, error) {
+// scanAccount scans accountFacts, then extra (columns the query adds after).
+func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Account, error) {
 	var a oidc.Account
-	err := row.Scan(&a.ID, &a.Admin, &a.Disabled, &a.Demo, &a.Member, &a.Linked)
+	err := row.Scan(append([]any{&a.ID, &a.Admin, &a.Disabled, &a.Demo, &a.Member, &a.Linked}, extra...)...)
 	return a, err
 }
 
@@ -130,11 +131,12 @@ func scanAccount(row interface{ Scan(...any) error }) (oidc.Account, error) {
 // transaction: the account linked to (issuer, subject), else the accounts with
 // its email (any state: oidc.Decide sets the ineligible aside), oidc.Decide's
 // answer, then its write. SignIn stamps the identity's last sign-in and what it
-// says now; Link adds the identity (auto_email); Create makes an ordinary
-// account (its username from the claims, numbered on a clash; the email only
-// when verified) and its identity, both dropping the row the sign-in waited
-// in; Pending records or refreshes the waiting
-// row (capped, pruned). An outcome that signs in applies the role rule: a
+// says now, and marks it groups_seen when the sign-in carried the groups claim
+// (even an empty list: from then on an absent claim is no groups); Link adds
+// the identity (auto_email); Create makes an ordinary account (its username
+// from the claims, numbered on a clash; the email only when verified) and its
+// identity, both dropping the row the sign-in waited in; Pending records or
+// refreshes the waiting row (capped, pruned). An outcome that signs in applies the role rule: a
 // demotion that would leave no enabled admin is refused and reported, never
 // an error.
 func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) (OIDCResult, error) {
@@ -142,11 +144,13 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
 		in := oidc.Input{Claims: c, Policy: p}
-		a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountFacts+`
+		var seen bool
+		a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountFacts+`, i.groups_seen
 			  FROM user_identities i JOIN users u ON u.id = i.user_id
-			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject))
+			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &seen)
 		switch {
 		case err == nil:
+			a.GroupsSeen = seen
 			in.Linked = &a
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
@@ -161,8 +165,9 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 		id := d.Account
 		switch d.Outcome {
 		case oidc.SignIn:
-			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?, email = ?, username = ?
-				WHERE issuer = ? AND subject = ?`, now, c.Email, c.Username, c.Issuer, c.Subject); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?, email = ?, username = ?,
+				groups_seen = groups_seen OR ? WHERE issuer = ? AND subject = ?`,
+				now, c.Email, c.Username, c.Groups != nil, c.Issuer, c.Subject); err != nil {
 				return err
 			}
 		case oidc.Link:
@@ -250,14 +255,19 @@ func matchEmail(ctx context.Context, tx *sql.Tx, issuer, email string) ([]oidc.A
 }
 
 // insertIdentity links (c.Issuer, c.Subject) to account id, linked by admin by
-// (nil: by the sign-in itself, which then counts as the link's first sign-in).
+// (nil: by the sign-in itself, which then counts as the link's first sign-in
+// and marks groups_seen when it carried the groups claim; a waiting row's
+// stored list can't tell an absent claim from an empty one, so an admin's
+// link leaves it for the identity's first sign-in).
 func insertIdentity(ctx context.Context, tx *sql.Tx, id int64, c oidc.Claims, method string, by *int64, now string) error {
 	var last any
 	if by == nil {
 		last = now
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, email, username, link_method, linked_by, linked_at, last_sign_in_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, id, c.Issuer, c.Subject, c.Email, c.Username, method, by, now, last)
+	seen := by == nil && c.Groups != nil
+	_, err := tx.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, email, username, link_method, linked_by, linked_at,
+		    last_sign_in_at, groups_seen)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, c.Issuer, c.Subject, c.Email, c.Username, method, by, now, last, seen)
 	if store.IsUniqueViolation(err) {
 		var n int
 		if qerr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_identities WHERE issuer = ? AND subject = ?`,

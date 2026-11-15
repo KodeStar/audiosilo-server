@@ -195,22 +195,37 @@ func TestIdentityUsernameBase(t *testing.T) {
 }
 
 // TestOIDCRoleSync: admin_group promotes and demotes at each sign-in, never the
-// last enabled admin.
+// last enabled admin. An identity that has never carried a groups claim keeps
+// its role when the claim is absent; once it has (Keycloak's sequence: in the
+// group, then the claim left out for a person in no group), absent demotes.
 func TestOIDCRoleSync(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
-	a := mustUser(t, s, ctx, "a", "", RoleUser)
+	a := mustUser(t, s, ctx, "a", "a-password", RoleAdmin)
 	setEmail(t, s, ctx, a.ID, "a@example.org")
-	p := oidc.Policy{AdminGroup: "admins"}
-	res := signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), p)
-	if res.User.Role != RoleAdmin || res.Role == nil || !res.Role.Changed() {
-		t.Fatalf("promotion: %+v %+v", res.User, res.Role)
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-1", "a@example.org", true)), a.ID, root.ID); err != nil {
+		t.Fatal(err)
 	}
-	// No groups claim at all: the role is left as it is (no demotion).
+	p := oidc.Policy{AdminGroup: "admins"}
+	// Never seen, absent: the role is left as it is (a provider that never
+	// sends the claim demotes no one).
+	res := signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
+	if res.User.Role != RoleAdmin || res.Role != nil || !res.Decision.NoGroups || groupsSeen(t, s, ctx, "sub-1") {
+		t.Fatalf("never-seen, no groups claim: %+v %+v", res.User, res.Role)
+	}
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), p)
+	if res.User.Role != RoleAdmin || res.Decision.NoGroups || !groupsSeen(t, s, ctx, "sub-1") {
+		t.Fatalf("in the group: %+v %+v", res.User, res.Role)
+	}
+	// Seen, now absent: out of every group.
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
-	if res.User.Role != RoleAdmin || res.Role != nil || !res.Decision.NoGroups {
-		t.Fatalf("no groups claim: %+v %+v", res.User, res.Role)
+	if res.User.Role != RoleUser || res.Role == nil || !res.Role.Changed() || res.Decision.NoGroups {
+		t.Fatalf("absent after seen: %+v %+v", res.User, res.Role)
+	}
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), p)
+	if res.User.Role != RoleAdmin || !res.Role.Changed() {
+		t.Fatalf("promotion: %+v %+v", res.User, res.Role)
 	}
 	// An empty list is a claim: out of the group.
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, []string{}...), p)
@@ -233,6 +248,64 @@ func TestOIDCRoleSync(t *testing.T) {
 	if res.Role != nil || res.User.Role != RoleUser {
 		t.Fatalf("no admin_group: %+v %+v", res.User, res.Role)
 	}
+}
+
+// TestOIDCGroupsSeenByEmptyList: a sign-in's empty groups list marks the
+// identity as one the provider sends groups for, whatever admin_group says,
+// and the admin's link from a waiting row doesn't (its stored list can't tell
+// an absent claim from an empty one).
+func TestOIDCGroupsSeenByEmptyList(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	b := mustUser(t, s, ctx, "b", "b-password", RoleUser)
+	setEmail(t, s, ctx, b.ID, "b@example.org")
+	// Linked from a waiting row that held an empty list: not seen yet.
+	pend := claimsFor("sub-b", "b@example.org", true, []string{}...)
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, pend), b.ID, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if groupsSeen(t, s, ctx, "sub-b") {
+		t.Fatal("an admin's link marked the groups claim seen")
+	}
+	// Its first sign-in carries an empty list, with no admin_group set.
+	signIn(t, s, ctx, claimsFor("sub-b", "b@example.org", true, []string{}...), oidc.Policy{})
+	if !groupsSeen(t, s, ctx, "sub-b") {
+		t.Fatal("an empty groups list didn't mark the claim seen")
+	}
+	// An absent claim later never clears it.
+	signIn(t, s, ctx, claimsFor("sub-b", "b@example.org", true), oidc.Policy{})
+	if !groupsSeen(t, s, ctx, "sub-b") {
+		t.Fatal("an absent claim cleared groups_seen")
+	}
+	// Made an admin in the console, then a sign-in without the claim: demoted.
+	if err := s.UpdateUser(ctx, b.ID, UserChanges{Role: ptr(RoleAdmin)}); err != nil {
+		t.Fatal(err)
+	}
+	res := signIn(t, s, ctx, claimsFor("sub-b", "b@example.org", true), oidc.Policy{AdminGroup: "admins"})
+	if res.User.Role != RoleUser || res.Decision.NoGroups {
+		t.Fatalf("absent after an empty list: %+v %+v", res.User, res.Decision)
+	}
+	// A sign-in that links by email with the claim marks it at once.
+	c := mustUser(t, s, ctx, "c", "", RoleUser)
+	setEmail(t, s, ctx, c.ID, "c@example.org")
+	if res := signIn(t, s, ctx, claimsFor("sub-c", "c@example.org", true, []string{}...), oidc.Policy{}); res.Decision.Outcome != oidc.Link {
+		t.Fatalf("link: %+v", res.Decision)
+	}
+	if !groupsSeen(t, s, ctx, "sub-c") {
+		t.Fatal("a linking sign-in's empty list didn't mark the claim seen")
+	}
+}
+
+// groupsSeen reads the test issuer's identity subject's groups_seen.
+func groupsSeen(t *testing.T, s *Service, ctx context.Context, subject string) bool {
+	t.Helper()
+	var seen bool
+	if err := s.db.QueryRowContext(ctx, `SELECT groups_seen FROM user_identities WHERE issuer = ? AND subject = ?`,
+		testIssuer, subject).Scan(&seen); err != nil {
+		t.Fatal(err)
+	}
+	return seen
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -324,6 +397,14 @@ func TestPendingLinkCreateDismiss(t *testing.T) {
 	if _, err := s.DismissPending(ctx, id3); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("dismiss again: %v", err)
 	}
+	// The next waiting sign-in never takes the dismissed (newest) row's id, so
+	// a console list read before the dismissal can't link someone else.
+	if id4 := pendingFor(t, s, ctx, claimsFor("sub-frank", "", false)); id4 == id3 {
+		t.Fatalf("the dismissed row's id %d was reused", id3)
+	}
+	if _, _, err := s.LinkPending(ctx, id3, owner.ID, admin.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("link by the dismissed id: %v", err)
+	}
 }
 
 // TestPendingIdentityLinkedMeanwhile: a row whose identity signed in (or was
@@ -333,7 +414,7 @@ func TestPendingIdentityLinkedMeanwhile(t *testing.T) {
 	s, ctx := newTestService(t)
 	admin := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
 	a := mustUser(t, s, ctx, "a", "", RoleUser)
-	b := mustUser(t, s, ctx, "b", "", RoleUser)
+	b := mustUser(t, s, ctx, "b", "b-password", RoleUser)
 	id := pendingFor(t, s, ctx, claimsFor("sub-x", "", false))
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, link_method, linked_at)
 		VALUES(?, ?, 'sub-x', 'admin', 't')`, a.ID, testIssuer); err != nil {

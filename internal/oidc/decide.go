@@ -10,6 +10,10 @@ type Account struct {
 	// Linked: the account already has an identity from this issuer (another
 	// subject), so a second can't be linked.
 	Linked bool
+	// GroupsSeen: the linked identity (Input.Linked only) has signed in with a
+	// groups claim before, even an empty list, so the provider sends one for
+	// this person and a sign-in without it means no groups (Decide).
+	GroupsSeen bool
 }
 
 // eligible reports whether a verified email may link a sign-in to a: not a demo,
@@ -70,9 +74,12 @@ type Decision struct {
 	// admin_group rule), "" for no change of role by the sign-in.
 	Role string
 	// NoGroups: admin_group is set but the sign-in carried no groups claim at
-	// all (neither the ID token nor userinfo; an empty list is a claim), so the
-	// role is left as it is: a provider that stopped sending the claim (a
-	// scope or mapper removed) demotes no one.
+	// all (neither the ID token nor userinfo; an empty list is a claim) and
+	// the identity has never carried one (Account.GroupsSeen), so the role is
+	// left as it is: a provider that never sends the claim (no scope or mapper
+	// for it) demotes no one. Once the identity has carried it, an absent
+	// claim is no groups (some providers, Keycloak among them, leave the claim
+	// out for a person in no group).
 	NoGroups bool
 }
 
@@ -92,11 +99,13 @@ const (
 //     set) lists the person, else pending not_allowed; with it off: pending.
 //
 // Never on a username. Role is set for every outcome that signs in while
-// admin_group is set, unless the sign-in carried no groups claim (NoGroups).
+// admin_group is set, unless the sign-in carried no groups claim and its
+// identity never has (NoGroups); allowed_group, read only for a sign-in with
+// no identity yet, counts an absent claim as no groups.
 func Decide(in Input) Decision {
 	d := decide(in)
 	if (d.Outcome == SignIn || d.Outcome == Link || d.Outcome == Create) && in.Policy.AdminGroup != "" {
-		if in.Claims.Groups == nil {
+		if in.Claims.Groups == nil && (in.Linked == nil || !in.Linked.GroupsSeen) {
 			d.NoGroups = true
 			return d
 		}

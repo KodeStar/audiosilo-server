@@ -88,8 +88,8 @@ func TestDecideRoleSync(t *testing.T) {
 }
 
 // TestDecideNoGroupsClaim: with admin_group set, a sign-in that carried no
-// groups claim at all leaves the role alone (NoGroups), while an empty list is
-// a claim and demotes.
+// groups claim at all leaves the role alone (NoGroups) while its identity has
+// never carried one, while an empty list is a claim and demotes.
 func TestDecideNoGroupsClaim(t *testing.T) {
 	t.Parallel()
 	in := Input{Claims: Claims{}, Linked: &Account{ID: 3, Admin: true}, Policy: Policy{AdminGroup: "audiosilo-admins"}}
@@ -104,6 +104,29 @@ func TestDecideNoGroupsClaim(t *testing.T) {
 	in.Claims.Groups, in.Policy.AdminGroup = nil, ""
 	if d := Decide(in); d.Role != "" || d.NoGroups {
 		t.Fatalf("no admin_group: %+v", d)
+	}
+}
+
+// TestDecideGroupsSeen: once a linked identity has carried a groups claim, a
+// sign-in without one is out of every group (Keycloak leaves the claim out for
+// a person in no group): an admin is demoted, nothing is logged as missing.
+// A sign-in in the group still promotes.
+func TestDecideGroupsSeen(t *testing.T) {
+	t.Parallel()
+	in := Input{Linked: &Account{ID: 3, Admin: true, GroupsSeen: true}, Policy: Policy{AdminGroup: "audiosilo-admins"}}
+	if d := Decide(in); d.Outcome != SignIn || d.Role != RoleUser || d.NoGroups {
+		t.Fatalf("absent after seen: %+v", d)
+	}
+	in.Claims.Groups = []string{"audiosilo-admins"}
+	if d := Decide(in); d.Role != RoleAdmin || d.NoGroups {
+		t.Fatalf("in the group: %+v", d)
+	}
+	// The flag is the linked identity's: a first sign-in (no identity yet)
+	// without the claim leaves the role alone.
+	in = Input{Claims: Claims{Email: "a@example.org", EmailVerified: true}, Matches: []Account{{ID: 4}},
+		Policy: Policy{AdminGroup: "audiosilo-admins"}}
+	if d := Decide(in); d.Outcome != Link || d.Role != "" || !d.NoGroups {
+		t.Fatalf("a first sign-in: %+v", d)
 	}
 }
 

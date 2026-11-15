@@ -477,15 +477,15 @@ func clip(s string, n int) string {
 // auditSignIn records what a sign-in changed, as the server's own act (no
 // admin made the request): a link by email, an account made, a role the
 // admin_group rule changed or would have (a refused demotion is logged too).
-// A sign-in with no groups claim while admin_group is set is logged: its role
-// was left alone.
+// A sign-in with no groups claim while admin_group is set, through an
+// identity that has never carried one, is logged: its role was left alone.
 func (a *API) auditSignIn(r *http.Request, c oidc.Claims, res auth.OIDCResult) {
 	u := res.User
 	if u == nil {
 		return
 	}
 	if res.Decision.NoGroups {
-		a.log.Warn("oidc: admin_group is set but the provider sent no groups claim: the role is unchanged",
+		a.log.Warn("oidc: admin_group is set but the provider sent no groups claim (never for this person): the role is unchanged",
 			"user", u.Username, "groups_claim", a.boot.Auth.OIDC.EffectiveGroupsClaim())
 	}
 	switch res.Decision.Outcome {

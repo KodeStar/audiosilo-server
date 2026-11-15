@@ -3565,12 +3565,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   any admin match waits, `admin_account`); else `auto_create` makes an ordinary account (for
   `allowed_group`'s members when set; the email kept only when verified), and anything else is a **pending
   sign-in** (`oidc_pending`, one row per issuer+subject, its attempts counted, pruned after 30 days,
-  at most 500, dropped when a later sign-in links it or makes its account). `admin_group` (trimmed, like
+  at most 500, dropped when a later sign-in links it or makes its account; ids AUTOINCREMENT, so a
+  dismissed row's id never names another person to a console list read before). `admin_group` (trimmed, like
   `allowed_group`, whatever set it), when set, syncs the role at every sign-in that signs in (in: admin,
   out: user), never demoting the last enabled admin (reported and audited `refused: last_admin`,
   not an error); a sign-in that carried **no groups claim at all** (neither the ID token nor
   userinfo; an empty list is a claim and demotes) leaves the role alone (`Decision.NoGroups`, a
-  warning logged), so a provider that stops sending it demotes no one. `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
+  warning logged) **only while its identity has never carried one**, so a provider that never sends
+  it demotes no one; once a sign-in has carried it (`user_identities.groups_seen`, set by the
+  sign-in, even for an empty list, never by the console's Link or Create from a waiting row), an
+  absent claim is no groups and demotes (Keycloak leaves the claim out for a person in no group).
+  `allowed_group` counts an absent claim as no groups. `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
