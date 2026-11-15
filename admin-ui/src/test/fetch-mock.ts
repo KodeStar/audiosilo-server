@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { serverInfo } from './fixtures';
 
 export interface MockRequest {
   method: string;
@@ -32,10 +33,15 @@ export function mockFetch(routes: Record<string, MockRoute>) {
     };
     calls.push(req);
     // The sign-in page asks whether /setup is open: closed (the server's redirect
-    // to /admin) unless a test says so.
+    // to /admin) unless a test says so; and how to sign in (GET /server): the
+    // fixture's methods, with no single sign-on, unless a test says so.
     const route =
       routes[`${req.method} ${req.path}`] ??
-      (req.method === 'HEAD' && req.path === '/setup' ? { status: 303 } : undefined);
+      (req.method === 'HEAD' && req.path === '/setup'
+        ? { status: 303 }
+        : req.method === 'GET' && req.path === '/server'
+          ? { body: serverInfo }
+          : undefined);
     if (!route) {
       console.error(`unmocked fetch: ${req.method} ${req.path}`);
       return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 });

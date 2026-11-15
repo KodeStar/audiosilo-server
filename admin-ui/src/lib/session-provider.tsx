@@ -1,15 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
 import { clearThumbCache } from '@/api/thumb-cache';
 import { clearToken, getToken, setToken } from '@/api/token';
+import type { LoginResponse } from '@/api/types';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
-export function SessionProvider({ children }: { children: React.ReactNode }) {
+/**
+ * The console's session: the stored token checked once on load, or, after a
+ * single sign-on, `oidcToken` (the 60 s single-use token it landed on, which
+ * main.tsx took out of the address bar) traded for a new session.
+ */
+export function SessionProvider({
+  oidcToken,
+  children,
+}: {
+  oidcToken: string | null;
+  children: React.ReactNode;
+}) {
   const qc = useQueryClient();
   const [state, setState] = useState<SessionState>(() =>
-    getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
+    oidcToken || getToken() ? { status: 'checking' } : { status: 'signed-out', reason: null },
   );
+  // The exchange runs once (the token is single use), whatever the effect's re-runs.
+  const exchange = useRef<Promise<LoginResponse | null> | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   const dropSession = useCallback(
@@ -51,9 +65,42 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     });
   }, [dropSession]);
 
-  // Validate a stored token once on load (and on "Try again").
+  // Trade a single sign-on's token for a session. An account that isn't an
+  // admin is signed straight out again (no session left behind), like the
+  // password form; the session this browser held before is ended once the new
+  // one is in.
   useEffect(() => {
-    if (!getToken()) return;
+    if (!oidcToken) return;
+    let cancelled = false;
+    exchange.current ??= api.exchange(oidcToken).then(async (res) => {
+      if (res.user.role === 'admin') return res;
+      await api.logout(res.token).catch(() => {});
+      return null;
+    });
+    exchange.current
+      .then((res) => {
+        if (cancelled) return;
+        if (!res) {
+          dropSession('notAdmin');
+          return;
+        }
+        const previous = getToken();
+        if (previous && previous !== res.token) void api.logout(previous).catch(() => {});
+        setToken(res.token);
+        setState({ status: 'signed-in', user: res.user });
+      })
+      .catch(() => {
+        if (!cancelled) dropSession('oidcFailed');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [oidcToken, dropSession]);
+
+  // Validate a stored token once on load (and on "Try again"); a single
+  // sign-on's token replaces it instead.
+  useEffect(() => {
+    if (oidcToken || !getToken()) return;
     let cancelled = false;
     api
       .me()
@@ -70,7 +117,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [attempt, dropSession]);
+  }, [attempt, oidcToken, dropSession]);
 
   const value = useMemo<Session>(
     () => ({

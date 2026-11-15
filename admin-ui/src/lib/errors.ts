@@ -16,6 +16,8 @@ const BY_CODE: Record<string, string> = {
   name_taken: 'errors.nameTaken',
   last_admin: 'errors.lastAdmin',
   admin_needs_password: 'errors.adminNeedsPassword',
+  // A person's email that isn't an address (People > a person > Sign-in).
+  invalid_email: 'errors.invalidEmail',
   password_too_short: 'errors.passwordTooShort',
   cannot_delete_self: 'errors.deleteSelf',
   folder_unreadable: 'errors.folderUnreadable',

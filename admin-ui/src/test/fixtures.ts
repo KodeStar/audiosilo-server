@@ -55,6 +55,7 @@ export const admin: AdminUser = {
   can_add_members: true,
   members_count: 0,
   display_name: '',
+  email: '',
 };
 
 export const member: AdminUser = { ...admin, id: 2, username: 'sam', role: 'user' };
@@ -271,6 +272,20 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       max_members_max: 50,
     },
     backups: { schedule: 'daily:03:00', keep: 7, dir: '' },
+    signin: {
+      enabled: false,
+      name: '',
+      issuer: '',
+      client_id: '',
+      scopes: [],
+      username_claim: '',
+      groups_claim: '',
+      ca_file: '',
+      auto_create: false,
+      allowed_group: '',
+      admin_group: '',
+      client_secret_set: false,
+    },
     modules: { contributions: false },
     locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
     restart_settings: [
@@ -284,6 +299,14 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       'demo.enabled',
       'demo.idle_ttl',
       'backups.dir',
+      'signin.enabled',
+      'signin.name',
+      'signin.issuer',
+      'signin.client_id',
+      'signin.scopes',
+      'signin.username_claim',
+      'signin.groups_claim',
+      'signin.ca_file',
     ],
     restart_pending: [],
     ...over,

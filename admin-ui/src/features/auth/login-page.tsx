@@ -1,14 +1,18 @@
 import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, LoaderCircle } from 'lucide-react';
+import { ArrowLeft, LoaderCircle, LogIn } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
+import { useServerInfo } from '@/api/hooks';
 import { LogoTile } from '@/components/logo';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LanguageSelect } from '@/components/language-select';
 import { useSession, type SignedOutReason } from '@/lib/session';
 import { setupPageOpen } from './setup-probe';
+
+/** Where a single sign-on for the console starts (handlers_oidc.go handleOIDCStart). */
+const OIDC_START = '/api/v1/auth/oidc/start?return=admin';
 
 /**
  * Admin sign-in. Shown in place of the console whenever there is no valid
@@ -16,6 +20,9 @@ import { setupPageOpen } from './setup-probe';
  * Its hint is the first-run default (server#369): the username admin, the
  * password in the server's log, reset-admin when it's lost; or, while the
  * server's /setup page is open (--setup, no admin yet), to open that link.
+ * With single sign-on configured (capabilities.oidc, server#235), "Sign in with
+ * <name>" leaves for the provider and comes back on /admin/#oidc_token=
+ * (SessionProvider trades it for a session).
  */
 export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const { t } = useTranslation();
@@ -26,6 +33,8 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
   const [error, setError] = useState<string | null>(reason ? t(`auth.reason.${reason}`) : null);
   const errorId = useId();
   const [setupOpen, setSetupOpen] = useState(false);
+  const server = useServerInfo().data;
+  const sso = server?.capabilities.oidc ? server.auth.oidc?.name : undefined;
   useEffect(() => {
     let live = true;
     void setupPageOpen().then((open) => live && setSetupOpen(open));
@@ -108,6 +117,22 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
               {t('login.submit')}
             </Button>
           </form>
+          {sso ? (
+            <>
+              <div className="my-5 flex items-center gap-3 text-[12.5px] text-muted-foreground">
+                <span className="h-px flex-1 bg-border" aria-hidden="true" />
+                {t('login.or')}
+                <span className="h-px flex-1 bg-border" aria-hidden="true" />
+              </div>
+              <a
+                href={OIDC_START}
+                className={buttonVariants({ variant: 'outline', size: 'lg', className: 'w-full' })}
+              >
+                <LogIn aria-hidden="true" />
+                {t('login.oidc', { name: sso })}
+              </a>
+            </>
+          ) : null}
         </div>
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-[13px]">
           <a

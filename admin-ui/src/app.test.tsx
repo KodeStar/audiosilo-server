@@ -5,7 +5,15 @@ import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
 import { mockFetch } from '@/test/fetch-mock';
-import { admin, liveSession, member, settingsWith, stats, systemStatus } from '@/test/fixtures';
+import {
+  admin,
+  liveSession,
+  member,
+  serverInfo,
+  settingsWith,
+  stats,
+  systemStatus,
+} from '@/test/fixtures';
 import { signedInRoutes } from '@/test/routes';
 import { renderApp } from '@/test/render-app';
 
@@ -135,6 +143,80 @@ describe('sign-in gate', () => {
     expect(calls.some((c) => c.path === '/auth/logout')).toBe(true);
     expect(getToken()).toBeNull();
     await waitFor(async () => expect(await thumbCache().get(kept)).toBeUndefined());
+  });
+});
+
+// Sign in with OpenID Connect (server#235): the button, and the console's side
+// of the return (/admin/#oidc_token=<t>, which main.tsx takes from the address:
+// lib/oidc-return.test.ts; traded at POST /auth/exchange).
+describe('single sign-on', () => {
+  const ssoServer = {
+    ...serverInfo,
+    capabilities: { ...serverInfo.capabilities, oidc: true },
+    auth: { methods: ['auth_code', 'password', 'oidc'], oidc: { name: 'Authentik' } },
+  };
+
+  it('offers "Sign in with <name>" while the server has it', async () => {
+    mockFetch({ 'GET /server': { body: ssoServer } });
+    renderApp();
+    const link = await screen.findByRole('link', { name: 'Sign in with Authentik' });
+    expect(link).toHaveAttribute('href', '/api/v1/auth/oidc/start?return=admin');
+  });
+
+  it('offers no button while it is off', async () => {
+    const calls = mockFetch({
+      'GET /server': {
+        body: { ...serverInfo, capabilities: { ...serverInfo.capabilities, oidc: false } },
+      },
+    });
+    renderApp();
+    await screen.findByLabelText('Username');
+    await waitFor(() => expect(calls.some((c) => c.path === '/server')).toBe(true));
+    expect(screen.queryByRole('link', { name: /Sign in with/ })).toBeNull();
+  });
+
+  it('trades the token it lands on for a session and ends the old session', async () => {
+    setToken('old');
+    const calls = mockFetch({
+      ...signedInRoutes(),
+      'POST /auth/exchange': { body: { token: 'sso-session', user: admin, server_id: 'srv-1' } },
+      'POST /auth/logout': { status: 204 },
+    });
+    renderApp('/', { oidcToken: 'tok_1' });
+    expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
+    expect(getToken()).toBe('sso-session');
+    const exchanges = calls.filter((c) => c.path === '/auth/exchange');
+    expect(exchanges).toHaveLength(1);
+    expect(exchanges[0].body).toEqual({ pairing_token: 'tok_1', device_name: 'admin-web' });
+    // The stored session was never checked: the new one replaced it, and it ended.
+    expect(calls.some((c) => c.path === '/me')).toBe(false);
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/auth/logout')?.headers.Authorization).toBe(
+        'Bearer old',
+      ),
+    );
+  });
+
+  it('signs a non-admin straight back out, leaving no session', async () => {
+    const calls = mockFetch({
+      'POST /auth/exchange': { body: { token: 'member-token', user: member, server_id: 'srv-1' } },
+      'POST /auth/logout': { status: 204 },
+    });
+    renderApp('/', { oidcToken: 'tok_2' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('not an administrator');
+    expect(calls.find((c) => c.path === '/auth/logout')?.headers.Authorization).toBe(
+      'Bearer member-token',
+    );
+    expect(getToken()).toBeNull();
+  });
+
+  it('says so when the token is spent or stale', async () => {
+    mockFetch({
+      'POST /auth/exchange': { status: 401, body: { error: 'invalid or expired pairing token' } },
+    });
+    renderApp('/', { oidcToken: 'tok_3' });
+    expect(await screen.findByRole('alert')).toHaveTextContent("Single sign-on didn't finish");
+    expect(getToken()).toBeNull();
   });
 });
 

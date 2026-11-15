@@ -11,6 +11,7 @@ import {
   House,
   Import,
   Info,
+  LogIn,
   MonitorSmartphone,
   Puzzle,
   Repeat2,
@@ -47,6 +48,7 @@ import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
 import { ModulesTopic } from './modules-topic';
 import { RestartNotice } from './restart-notice';
+import { SigninTopic } from './signin-topic';
 import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
@@ -63,6 +65,7 @@ import {
 const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   general: Settings2,
   network: ShieldCheck,
+  signin: LogIn,
   players: MonitorSmartphone,
   metadata: Globe,
   transcoding: Repeat2,
@@ -178,6 +181,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
   switch (topic) {
     case 'network':
       return <NetworkTopic settings={settings} />;
+    case 'signin':
+      return <SigninTopic settings={settings} />;
     case 'players':
       return <PlayersTopic settings={settings} />;
     case 'metadata':

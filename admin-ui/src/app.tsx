@@ -13,9 +13,12 @@ import type { createAppRouter } from '@/router';
 export function App({
   router,
   queryClient,
+  oidcToken = null,
 }: {
   router: ReturnType<typeof createAppRouter>;
   queryClient: QueryClient;
+  /** The token a single sign-on landed on (main.tsx takes it from the address). */
+  oidcToken?: string | null;
 }) {
   // The console runs under `style-src 'self'` with no nonce, so Base UI must not
   // render its inline <style> tags; the one rule it needs lives in globals.css.
@@ -24,7 +27,7 @@ export function App({
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <Toaster>
-            <SessionProvider>
+            <SessionProvider oidcToken={oidcToken}>
               <RouterProvider router={router} />
             </SessionProvider>
           </Toaster>

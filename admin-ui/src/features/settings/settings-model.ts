@@ -2,10 +2,12 @@ import type { TFunction } from 'i18next';
 import type {
   AdminSettings,
   MetadataMode,
+  OIDCStatus,
   SettingsPatch,
   SettingsSection,
   SystemStatus,
 } from '@/api/types';
+import type { StatusTone } from '@/components/status-text';
 import { formatList } from '@/lib/format';
 
 // Server > Settings: which sections exist, what each setting id is called, and
@@ -15,6 +17,7 @@ import { formatList } from '@/lib/format';
 export const SETTINGS_PAGES = [
   'general',
   'network',
+  'signin',
   'players',
   'metadata',
   'transcoding',
@@ -67,7 +70,8 @@ type ReadOnlyFact =
   | 'max_members_min'
   | 'max_members_max'
   | 'upcoming_status'
-  | 'report_status';
+  | 'report_status'
+  | 'client_secret_set';
 
 /** Why the console can't change a setting, if it can't: the AUDIOSILO_* variable that sets it. */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
@@ -182,4 +186,18 @@ export function restartList(t: TFunction, settings: AdminSettings, lang: string)
     settings.restart_pending.map((id) => t(`settings.${id}`)),
     lang,
   );
+}
+
+/** What the single sign-on's status row says: its i18n key and tone. */
+export function signinLook(s: OIDCStatus): { key: string; tone: StatusTone } {
+  if (!s.enabled) return { key: 'settings.signin.state.off', tone: 'off' };
+  if (!s.configured) return { key: 'settings.signin.state.problem', tone: 'bad' };
+  switch (s.discovery?.state) {
+    case 'ok':
+      return { key: 'settings.signin.state.ok', tone: 'ok' };
+    case 'error':
+      return { key: 'settings.signin.state.error', tone: 'bad' };
+    default:
+      return { key: 'settings.signin.state.pending', tone: 'warn' };
+  }
 }
