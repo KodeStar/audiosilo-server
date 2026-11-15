@@ -301,6 +301,21 @@ describe('Bridge job events', () => {
     expect(d.body).toEqual({ key: 'events.podcast_feed_recovered.body' });
     expect(d.tone).toBe('info');
   });
+
+  it('never names a private show', () => {
+    const news = describeEvent(ev('podcast_episodes_new', { private: true, count: 2, titles: [] }));
+    expect(news.title).toEqual({
+      key: 'events.podcast_episodes_new.privateTitle',
+      values: { count: 2 },
+    });
+    expect(news.body).toBeUndefined();
+    expect(
+      describeEvent(ev('podcast_feed_failing', { private: true, code: 'gone', failures: 1 })).title,
+    ).toEqual({ key: 'events.podcast_feed_failing.privateTitle' });
+    expect(describeEvent(ev('podcast_feed_recovered', { private: true })).title).toEqual({
+      key: 'events.podcast_feed_recovered.privateTitle',
+    });
+  });
 });
 
 describe('seen cursor', () => {

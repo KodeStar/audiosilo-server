@@ -3391,8 +3391,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   run (`movePodcastState` carries the three columns, the rest of its feed state starts afresh)). Their
   data are the library and its id, `show_id`, `show` (the title, else its folder), `show_path`, `count`
   and `titles`, or `code` (one the messages word or an `http_NNN` status, else `failed`) and `failures`
-  (0 for a lost secret): never the error's text, the feed URL or its host. The messages word each code
-  and link Library > Libraries.
+  (0 for a lost secret): never the error's text, the feed URL or its host. A private show is hidden from
+  admins who don't follow it, so its notices carry `private: true` instead of `show`, `show_path` and
+  the episode titles (`PodcastNotice.Private`): "A private podcast has 2 new episodes", "A private
+  podcast feed is failing" / "is back". The messages word each code and link Library > Libraries.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),

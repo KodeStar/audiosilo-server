@@ -832,6 +832,24 @@ func TestPodcastNoticeWording(t *testing.T) {
 	if m := emit(back); m.Title != "A podcast feed is back: Example Show" || m.Link != "https://books.example.com/admin/library/libraries" {
 		t.Fatalf("recovered = %+v", m)
 	}
+	// A private show goes unnamed, its episodes untitled.
+	private := news
+	private.Private, private.Titles, private.EpisodeIDs = true, []string{"Secret Episode"}, []string{"p", "q"}
+	if m := emit(private); m.Title != "A private podcast has 2 new episodes" || m.Text != "" {
+		t.Fatalf("private episodes = %+v", m)
+	}
+	private.EpisodeIDs = []string{"r"}
+	if m := emit(private); m.Title != "A private podcast has 1 new episode" || m.Text != "" {
+		t.Fatalf("private episode = %+v", m)
+	}
+	private.Kind, private.Code, private.Failures = catalog.PodcastFeedFailing, "http_500", 3
+	if m := emit(private); m.Title != "A private podcast feed is failing" || m.Text != "The feed answered HTTP 500. 3 checks in a row failed." {
+		t.Fatalf("private failing = %+v", m)
+	}
+	private.Kind = catalog.PodcastFeedRecovered
+	if m := emit(private); m.Title != "A private podcast feed is back" {
+		t.Fatalf("private recovered = %+v", m)
+	}
 	// A feed without a title is named by its folder, as one plain line too.
 	back.Show = ""
 	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
@@ -876,7 +894,9 @@ func TestPodcastScanRaisesNoBookAdded(t *testing.T) {
 
 // LEAK: a private show's feed address is in the database and inside the
 // Bridge's error text, and neither its address, host nor any part of the
-// error reaches a webhook, ntfy or Discord body, or the bell's data.
+// error reaches a webhook, ntfy or Discord body, or the bell's data; nor do
+// its title, its folder or its episodes' titles (a private show is hidden from
+// admins who don't follow it).
 func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 	s, cat, ctx := newService(t)
 	cat.SetPodcastNotice(s.PodcastNotice)
@@ -890,7 +910,8 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	const secretURL = "https://member:hunter2@private.feeds.example.net/rss/sekrit-token-42.xml?auth=TOKEN42"
-	secrets := []string{"hunter2", "private.feeds.example.net", "sekrit-token-42", "TOKEN42", "member:", "rss/"}
+	secrets := []string{"hunter2", "private.feeds.example.net", "sekrit-token-42", "TOKEN42", "member:", "rss/",
+		"Example Show", "Example%20Show", "Episode Four", "show_path"}
 	f, err := feed.ReadFile("../podcast/testdata/feed-v1.json", "Example Show", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -945,10 +966,16 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 			}
 		}
 	}
-	// What is sent says the show and the code.
-	if !slices.ContainsFunc(bodies, func(b string) bool {
-		return strings.Contains(b, `"code":"network"`) && strings.Contains(b, "A podcast feed is failing: Example Show")
-	}) {
-		t.Fatalf("no failing webhook body names the show and code: %v", bodies)
+	// What is sent says a private podcast and the code.
+	for _, want := range [][]string{
+		{`"code":"network"`, `"private":true`, "A private podcast feed is failing"},
+		{`"private":true`, "A private podcast feed is back"},
+		{`"private":true`, `"count":1`, "A private podcast has 1 new episode"},
+	} {
+		if !slices.ContainsFunc(bodies, func(b string) bool {
+			return !slices.ContainsFunc(want, func(w string) bool { return !strings.Contains(b, w) })
+		}) {
+			t.Fatalf("no webhook body says %q: %v", want, bodies)
+		}
 	}
 }

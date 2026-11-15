@@ -31,7 +31,8 @@ const maxNoticeTitles = 5
 // PodcastNotice is a podcast show's news for the admin's notifications
 // (SetPodcastNotice). It names the show and carries codes and counts only:
 // never a feed address, its host or an error's text, which can hold a private
-// feed's credentials.
+// feed's credentials. A private show's notice is sent without its names
+// (notify.PodcastNotice): admins who don't follow it never see it.
 type PodcastNotice struct {
 	Kind      string // PodcastEpisodesNew, PodcastFeedFailing or PodcastFeedRecovered
 	Library   string
@@ -39,6 +40,7 @@ type PodcastNotice struct {
 	ShowPath  string
 	ShowID    string
 	Show      string // the show's title
+	Private   bool   // podcast_shows.private
 	// New episodes: the first few titles (newest first) and every new
 	// episode's feed id (how many, and what a repeat announcement is known by).
 	Titles     []string
@@ -59,7 +61,7 @@ func newEpisodesNotice(lib int64, library, show string, f *feed.File, news []fee
 		return cmp.Or(cmp.Compare(b.Published, a.Published), cmp.Compare(a.Path, b.Path))
 	})
 	n := &PodcastNotice{Kind: PodcastEpisodesNew, Library: library, LibraryID: lib, ShowPath: show, ShowID: f.ShowID,
-		Show: f.Show.Title}
+		Show: f.Show.Title, Private: f.Private}
 	for _, e := range news {
 		if len(n.Titles) < maxNoticeTitles {
 			n.Titles = append(n.Titles, e.Title)

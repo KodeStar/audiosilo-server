@@ -355,6 +355,8 @@ const (
 func compose(ev catalog.ServerEvent, srv Server) message {
 	str := func(k string) string { s, _ := ev.Data[k].(string); return s }
 	num := func(k string) int { n, _ := ev.Data[k].(float64); return int(n) }
+	// A private podcast show's data carry no names (PodcastNotice).
+	privateShow := ev.Data["private"] == true
 	link := func(path string) string {
 		if srv.PublicURL == "" {
 			return ""
@@ -444,14 +446,27 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Link, m.Tags, m.Priority = link("/server?topic=bridge"), []string{"warning"}, 4
 	case KindPodcastEpisodesNew:
 		n := num("count")
-		m.Title = plural(n, "1 new episode of %s", "%d new episodes of %s", str("show"))
+		if privateShow {
+			m.Title = fmt.Sprintf("A private podcast has %d new episodes", n)
+			if n == 1 {
+				m.Title = "A private podcast has 1 new episode"
+			}
+		} else {
+			m.Title = plural(n, "1 new episode of %s", "%d new episodes of %s", str("show"))
+		}
 		m.Text, m.Link, m.Tags = titleLines(ev, n), link("/library/libraries"), []string{"studio_microphone"}
 	case KindPodcastFeedFailing:
 		m.Title = "A podcast feed is failing: " + str("show")
+		if privateShow {
+			m.Title = "A private podcast feed is failing"
+		}
 		m.Text = feedFailingText(str("code"), num("failures"))
 		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"warning"}, 4, colorWarn
 	case KindPodcastFeedRecovered:
 		m.Title = "A podcast feed is back: " + str("show")
+		if privateShow {
+			m.Title = "A private podcast feed is back"
+		}
 		m.Text = "The feed answered again, so new episodes arrive as before."
 		m.Link, m.Tags = link("/library/libraries"), []string{"white_check_mark"}
 	case kindTest:
@@ -762,20 +777,26 @@ func SetDigest(ids []string) string {
 // scheduled scan and the Bridge's rescan can't both announce them), a feed
 // failing or back. The data name the library and the show, with counts and
 // the failed poll's code: never the feed's address, host or the error's text.
+// A private show is hidden from admins who don't follow it, so its notice
+// says `private` instead of its title, folder and episode titles.
 func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 	if s == nil {
 		return
 	}
-	data := map[string]any{
-		"library": n.Library, "library_id": n.LibraryID,
+	data := map[string]any{"library": n.Library, "library_id": n.LibraryID, "show_id": n.ShowID}
+	if n.Private {
+		data["private"] = true
+	} else {
 		// A feed without a title is named by its folder.
-		"show": cmp.Or(plainLine(n.Show, 200), plainLine(n.ShowPath, 200)), "show_path": n.ShowPath, "show_id": n.ShowID,
+		data["show"], data["show_path"] = cmp.Or(plainLine(n.Show, 200), plainLine(n.ShowPath, 200)), n.ShowPath
 	}
 	switch n.Kind {
 	case catalog.PodcastEpisodesNew:
 		titles := make([]string, 0, len(n.Titles))
-		for _, t := range n.Titles {
-			titles = append(titles, plainLine(t, 200))
+		if !n.Private {
+			for _, t := range n.Titles {
+				titles = append(titles, plainLine(t, 200))
+			}
 		}
 		data["count"], data["titles"] = len(n.EpisodeIDs), titles
 		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))

@@ -810,7 +810,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			return nil
 		}
 		var current, title, library string
-		err = tx.QueryRowContext(ctx, `SELECT s.show_id,s.title,l.name FROM podcast_shows s JOIN libraries l ON l.id=s.library_id WHERE s.library_id=? AND s.show_path=?`, *j.LibraryID, show).Scan(&current, &title, &library)
+		var private bool
+		err = tx.QueryRowContext(ctx, `SELECT s.show_id,s.title,s.private,l.name FROM podcast_shows s JOIN libraries l ON l.id=s.library_id WHERE s.library_id=? AND s.show_path=?`, *j.LibraryID, show).Scan(&current, &title, &private, &library)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -837,7 +838,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if j.Kind == bridge.KindPodcastPoll {
 			var news string
 			if run, news = run.next(j.State, result.Code); news != "" {
-				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title}
+				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title, Private: private}
 				if news == PodcastFeedFailing {
 					notice.Code = result.Code
 					// A lost secret isn't the feed's failure: no run to count.

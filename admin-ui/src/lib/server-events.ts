@@ -144,27 +144,31 @@ export function describeEvent(ev: ServerEvent): EventText {
     case 'bridge_job_failed':
       return describeBridgeJob(ev.kind, d);
     // notify.PodcastNotice: a show's news, named by its title (never its feed
-    // address). Podcast libraries are listed in Library > Libraries.
+    // address); a private show's (`private`) carries no names at all, so it is
+    // "a private podcast". Podcast libraries are listed in Library > Libraries.
     case 'podcast_episodes_new':
       return {
-        title: {
-          key: 'events.podcast_episodes_new.title',
-          values: { count: num(d.count), show: str(d.show) },
-        },
+        title:
+          d.private === true
+            ? { key: 'events.podcast_episodes_new.privateTitle', values: { count: num(d.count) } }
+            : {
+                key: 'events.podcast_episodes_new.title',
+                values: { count: num(d.count), show: str(d.show) },
+              },
         body: titlesBody(d, 'events.podcast_episodes_new'),
         tone: 'info',
         link: { destination: 'library', section: 'libraries' },
       };
     case 'podcast_feed_failing':
       return {
-        title: { key: 'events.podcast_feed_failing.title', values: { show: str(d.show) } },
+        title: podcastTitle(d, 'events.podcast_feed_failing'),
         body: feedFailureBody(str(d.code)),
         tone: 'warn',
         link: { destination: 'library', section: 'libraries' },
       };
     case 'podcast_feed_recovered':
       return {
-        title: { key: 'events.podcast_feed_recovered.title', values: { show: str(d.show) } },
+        title: podcastTitle(d, 'events.podcast_feed_recovered'),
         body: { key: 'events.podcast_feed_recovered.body' },
         tone: 'info',
         link: { destination: 'library', section: 'libraries' },
@@ -270,6 +274,15 @@ function describeBridgeJob(
     tone: 'bad',
     link,
   };
+}
+
+/** A podcast feed event's title: the show by name, or a private show unnamed. */
+function podcastTitle(
+  d: ServerEvent['data'],
+  prefix: 'events.podcast_feed_failing' | 'events.podcast_feed_recovered',
+): EventText['title'] {
+  if (d.private === true) return { key: `${prefix}.privateTitle` };
+  return { key: `${prefix}.title`, values: { show: str(d.show) } };
 }
 
 /** The failed poll codes with a sentence of their own (notify's feedCodeText). */

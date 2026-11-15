@@ -224,7 +224,7 @@ func TestPodcastFeedNotices(t *testing.T) {
 	failing := func(got []PodcastNotice, code string, failures int) {
 		t.Helper()
 		if len(got) != 1 || got[0].Kind != PodcastFeedFailing || got[0].Code != code || got[0].Failures != failures ||
-			got[0].Show != "Example Show" || got[0].Library != "Pods" || got[0].ShowID != "a1b2c3d4e5f60718" {
+			got[0].Show != "Example Show" || got[0].Library != "Pods" || got[0].ShowID != "a1b2c3d4e5f60718" || got[0].Private {
 			t.Fatalf("want failing %s after %d, told %+v", code, failures, got)
 		}
 	}
@@ -327,6 +327,39 @@ func TestPodcastFeedNotices(t *testing.T) {
 	// (were the timeout read back as an answer, they would be).
 	quiet(fold(bridge.StateFailed, "http_500"), "two answers, one timeout")
 	failing(fold(bridge.StateFailed, "timeout"), "timeout", 4)
+}
+
+// A private show's notices say so (notify words them without its names).
+func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	c.now = func() time.Time { return time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := podcastFixture(t)
+	f.Private = true
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s1", "", "", f, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s2", "", "", withEpisode(f, "1111111111111111", "new.mp3", "New", "2026-12-01T00:00:00Z"), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	for i, state := range []string{bridge.StateFailed, bridge.StateDone} {
+		if err := c.FoldPodcastJob(ctx, pollJob(lib.ID, int64(i+1), state, "gone")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := log.take()
+	if len(got) != 3 || got[0].Kind != PodcastEpisodesNew || got[1].Kind != PodcastFeedFailing || got[2].Kind != PodcastFeedRecovered {
+		t.Fatalf("told %+v", got)
+	}
+	for _, n := range got {
+		if !n.Private {
+			t.Fatalf("a private show's %s notice is not marked private", n.Kind)
+		}
+	}
 }
 
 // A show moved to another folder keeps its run of failures: a run under way
