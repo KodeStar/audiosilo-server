@@ -394,13 +394,16 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // {"device_name"}. 401 code oidc_no_sign_in without the cookie (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
 // expired, unknown or its account's disabled (charged to the address's
-// redeemLimiter, as an exchange is). A page on another site can't make a
-// browser send the cookie here (SameSite=Lax, a POST), nor read the answer.
+// oidcLimiter, the callback's). Not redeemLimiter: any page can make a
+// visitor's browser fail ten exchanges or redeems (a simple POST), which
+// would lock that address out of finishing a sign-in the provider completed.
+// A page on another site can't make a browser send the cookie here
+// (SameSite=Lax, a POST), nor read the answer.
 func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	a.setOIDCCookie(w, oidcDoneCookie, "", -1)
 	noStore(w)
 	ip := clientIP(r)
-	if !allowAttempt(w, a.redeemLimiter, ip) {
+	if !allowAttempt(w, a.oidcLimiter, ip) {
 		return
 	}
 	var req struct {
@@ -417,11 +420,11 @@ func (a *API) handleOIDCFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	u, _, err := a.auth.ConsumePairing(r.Context(), c.Value)
 	if err != nil {
-		a.redeemLimiter.Fail(ip)
+		a.oidcLimiter.Fail(ip)
 		writeErrorCode(w, http.StatusUnauthorized, codeOIDCSignInExpired, "the single sign-on has expired or was used: sign in again")
 		return
 	}
-	a.redeemLimiter.Reset(ip)
+	a.oidcLimiter.Reset(ip)
 	a.issuePairedSession(w, r, u.ID, req.DeviceName, false)
 }
 

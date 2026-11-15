@@ -488,6 +488,25 @@ func TestOIDCFinish(t *testing.T) {
 	}
 }
 
+// TestOIDCFinishNotLockedByExchanges: an address any page made fail ten
+// pairing exchanges (a simple cross-site POST, no cookie needed) can still
+// finish a sign-in the provider completed: finish has its own limiter.
+func TestOIDCFinishNotLockedByExchanges(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	e.mustUser(t, "alice", "alice@example.org")
+	for range 11 {
+		e.do(t, "POST", "/api/v1/auth/exchange", "", `{"pairing_token":"guess"}`)
+	}
+	if r, _ := e.do(t, "POST", "/api/v1/auth/exchange", "", `{"pairing_token":"guess"}`); r.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("exchange not locked: %d", r.StatusCode)
+	}
+	_, done := e.signInDone(t, oidcReturnAdmin)
+	if resp, out := e.finish(t, done, "admin-web"); resp.StatusCode != http.StatusOK || out["token"] == "" {
+		t.Fatalf("finish after failed exchanges: %d %v", resp.StatusCode, out)
+	}
+}
+
 // TestOIDCLastAdminKept: the only enabled admin, signing in out of the admin
 // group, stays an admin (refused demotion audited), and still signs in.
 func TestOIDCLastAdminKept(t *testing.T) {

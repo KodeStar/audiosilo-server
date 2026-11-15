@@ -3583,7 +3583,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   cookie whatever happens, consumes the token once (`ConsumePairing`) and answers exactly as
   `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
   the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown or its
-  account's disabled (charged to `redeemLimiter`, as an exchange is). The console finishes on
+  account's disabled (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
   `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
   keeps a stored session when the finish signs no admin in; anything else
   lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,
