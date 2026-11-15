@@ -52,13 +52,16 @@ export function linkCandidates(
 
 /**
  * The account Link suggests: the one candidate whose email is the row's
- * (letter case aside), else none. A suggestion only: the admin still chooses.
+ * (letter case aside), else none. Only for an email the provider verified: an
+ * address anyone could have typed in there never picks an account, so linking
+ * on it takes the admin choosing that account themselves. A suggestion only:
+ * the admin still chooses.
  */
 export function suggestedAccount(
   candidates: readonly AdminUser[],
   row: OIDCPendingSignIn,
 ): AdminUser | undefined {
-  const email = row.email.trim().toLowerCase();
+  const email = row.email_verified ? row.email.trim().toLowerCase() : '';
   if (!email) return undefined;
   const same = candidates.filter((u) => u.email.trim().toLowerCase() === email);
   return same.length === 1 ? same[0] : undefined;

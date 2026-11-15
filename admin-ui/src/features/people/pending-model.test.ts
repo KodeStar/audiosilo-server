@@ -71,10 +71,15 @@ describe('waiting sign-ins', () => {
     expect(linkCandidates(all, row(), undefined).map((u) => u.id)).toEqual([1, 2, 5]);
   });
 
-  it('suggests the one account with the row’s email', () => {
-    expect(suggestedAccount([admin, sam, bob], row())?.id).toBe(5);
-    expect(suggestedAccount([admin, bob, { ...bob, id: 6 }], row())).toBeUndefined();
-    expect(suggestedAccount([bob], row({ email: '' }))).toBeUndefined();
+  it('suggests the one account with the row’s verified email', () => {
+    const verified = row({ email_verified: true });
+    expect(suggestedAccount([admin, sam, bob], verified)?.id).toBe(5);
+    expect(suggestedAccount([admin, bob, { ...bob, id: 6 }], verified)).toBeUndefined();
+    expect(suggestedAccount([bob], row({ email: '', email_verified: true }))).toBeUndefined();
+  });
+
+  it('suggests no account on an email the provider has not verified', () => {
+    expect(suggestedAccount([admin, sam, bob], row())).toBeUndefined();
   });
 
   it('names an identity by the configured provider, else its issuer’s host', () => {

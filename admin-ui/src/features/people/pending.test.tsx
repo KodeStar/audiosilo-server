@@ -78,23 +78,48 @@ describe('waiting sign-ins', () => {
     expect(screen.queryByRole('link', { name: /waiting sign-in/ })).toBeNull();
   });
 
-  it('links to an account: suggested by email, no member or already linked one offered', async () => {
+  it('links to an account the admin picks: no member or already linked one offered', async () => {
     const calls = mockFetch(routes({ 'POST /admin/oidc/pending/4/link': { body: bob } }));
     renderApp('/people');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Link' }));
     const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
     const select = within(dialog).getByRole('combobox', { name: 'Account' });
-    expect(select).toHaveValue('5');
     const options = within(select)
       .getAllByRole('option')
       .map((o) => o.textContent);
     expect(options).toEqual(['Choose an account', 'chris (admin)', 'bob']);
+    // Bob's email is not verified: the account with that address is not picked for the admin.
+    expect(select).toHaveValue('');
+    expect(within(dialog).getByRole('button', { name: 'Link' })).toBeDisabled();
+    await user.selectOptions(select, '5');
     await user.click(within(dialog).getByRole('button', { name: 'Link' }));
     expect(await screen.findByText('Linked to bob')).toBeInTheDocument();
     expect(calls.find((c) => c.path === '/admin/oidc/pending/4/link')?.body).toEqual({
       user_id: 5,
     });
+  });
+
+  it('suggests the account with the sign-in’s email once the provider verified it', async () => {
+    // What waits with a verified email that one account has: an admin's, never linked on its own.
+    mockFetch(
+      routes({
+        'GET /admin/users': { body: { users: [admin, sam, { ...bob, role: 'admin' }, kid] } },
+        'GET /admin/oidc/pending': {
+          body: {
+            pending: [{ ...bobRow, email_verified: true, reason: 'admin_account' }],
+            linked_user_ids: {},
+          },
+        },
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Link' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('combobox', { name: 'Account' })).toHaveValue('5'),
+    );
   });
 
   it('says why a link was refused', async () => {
@@ -110,6 +135,7 @@ describe('waiting sign-ins', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Link' }));
     const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Account' }), '5');
     await user.click(within(dialog).getByRole('button', { name: 'Link' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'That account already has a single sign-on from this provider.',
@@ -131,6 +157,7 @@ describe('waiting sign-ins', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Link' }));
     const dialog = await screen.findByRole('dialog', { name: 'Link Bob Smith to an account' });
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Account' }), '5');
     await user.click(within(dialog).getByRole('button', { name: 'Link' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('the sign-in is gone');
     await waitFor(() =>
