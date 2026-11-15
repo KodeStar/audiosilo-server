@@ -98,6 +98,8 @@ const (
 	codePathNotAbsolute          = "path_not_absolute"
 	codeInvalidOverride          = "invalid_override" // + "field": the field it names
 	codeBookNotFound             = "book_not_found"
+	codeChaptersInvalid          = "chapters_invalid" // + "detail": catalog.ChapterEdit* (PUT .../book/chapters)
+	codeChaptersBasis            = "chapters_basis"   // PUT .../book/chapters made on other files than the book's now
 	codeMetadataOff              = "metadata_off"
 	codeUpcomingOff              = "upcoming_off" // an upcoming route (upcomingOff) while upcoming.enabled is off (metadata on)
 	codeNotFound                 = "not_found"    // no such resource (the router's fallback, a library's delete, GET /me/upcoming/cover)

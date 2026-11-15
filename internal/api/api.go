@@ -670,6 +670,8 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(http.HandlerFunc(a.handleAdminSeries)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminBook)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminEditBook)))
+	mux.Handle("PUT /api/v1/admin/libraries/{id}/book/chapters", a.requireAdmin(http.HandlerFunc(a.handleAdminEditChapters)))
+	mux.Handle("DELETE /api/v1/admin/libraries/{id}/book/chapters", a.requireAdmin(http.HandlerFunc(a.handleAdminRevertChapters)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(http.HandlerFunc(a.handleAdminMatch)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/book/community-chapters", a.requireAdmin(http.HandlerFunc(a.handleCheckCommunityChapters)))
 	// Bulk community matching: a background run over the unmatched books, reviewed
