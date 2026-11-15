@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strconv"
@@ -224,6 +225,20 @@ func TestOIDCServerInfo(t *testing.T) {
 	resp, body := bad.do(t, "GET", "/api/v1/admin/oidc/status", bad.session(t, bad.adminID), "")
 	if resp.StatusCode != 200 || !strings.Contains(body, `"configured":false`) || !strings.Contains(body, "issuer") {
 		t.Fatalf("status of a bad config: %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestOIDCCookieSecureAnyCase: the flow cookie is Secure on an https public_url
+// in any case (public_url keeps the case it was typed in), and not on http.
+func TestOIDCCookieSecureAnyCase(t *testing.T) {
+	t.Parallel()
+	for base, want := range map[string]bool{"HTTPS://audiosilo.test": true, "https://audiosilo.test": true, "http://audiosilo.test": false} {
+		e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = base })
+		w := httptest.NewRecorder()
+		e.api.setOIDCCookie(w, "v", 600)
+		if c := w.Result().Cookies(); len(c) != 1 || c[0].Secure != want {
+			t.Errorf("public_url %s: %+v, want Secure %v", base, c, want)
+		}
 	}
 }
 

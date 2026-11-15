@@ -162,7 +162,7 @@ func sameHost(public *url.URL, host string) bool {
 func (a *API) setOIDCCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
 		Name: oidcCookie, Value: value, Path: oidcCookiePath, MaxAge: maxAge,
-		HttpOnly: true, Secure: strings.HasPrefix(a.oidcBase(), "https:"), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:"), SameSite: http.SameSiteLaxMode,
 	})
 }
 
