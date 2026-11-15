@@ -140,9 +140,12 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 		if err != nil {
 			return err
 		}
-		indexed := make(map[string]bool, len(oldBooks))
-		for _, b := range oldBooks {
-			indexed[b.RelPath] = true
+		var indexed map[string]bool
+		if announce {
+			indexed = make(map[string]bool, len(oldBooks))
+			for _, b := range oldBooks {
+				indexed[b.RelPath] = true
+			}
 		}
 		var news []feed.Episode
 		latest := ""

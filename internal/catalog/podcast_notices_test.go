@@ -83,7 +83,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 		t.Fatalf("told %d notices, want one for the show: %+v", len(got), got)
 	}
 	n := got[0]
-	if n.Kind != PodcastEpisodesNew || n.Count != 2 || !slices.Equal(n.Titles, []string{"Episode Five", "Episode Four"}) ||
+	if n.Kind != PodcastEpisodesNew || len(n.EpisodeIDs) != 2 || !slices.Equal(n.Titles, []string{"Episode Five", "Episode Four"}) ||
 		n.Show != "Example Show" || n.ShowPath != show || n.ShowID != f.ShowID || n.Library != "Pods" || n.LibraryID != lib.ID ||
 		!slices.Equal(n.EpisodeIDs, []string{"2222222222222222", "1111111111111111"}) {
 		t.Fatalf("notice = %+v", n)
@@ -130,7 +130,7 @@ func TestPodcastNewEpisodesNotice(t *testing.T) {
 	}
 	index("s5", more, false)
 	got = log.take()
-	if len(got) != 1 || got[0].Count != 7 || len(got[0].Titles) != 5 || got[0].Titles[0] != "Ep 7" || len(got[0].EpisodeIDs) != 7 {
+	if len(got) != 1 || len(got[0].EpisodeIDs) != 7 || len(got[0].Titles) != 5 || got[0].Titles[0] != "Ep 7" {
 		t.Fatalf("seven new: %+v", got)
 	}
 

@@ -34,9 +34,8 @@ type PodcastNotice struct {
 	ShowPath  string
 	ShowID    string
 	Show      string // the show's title
-	// New episodes: how many, the first few titles (newest first) and every
-	// new episode's feed id (what a repeat announcement is known by).
-	Count      int
+	// New episodes: the first few titles (newest first) and every new
+	// episode's feed id (how many, and what a repeat announcement is known by).
 	Titles     []string
 	EpisodeIDs []string
 	// A failing feed: the failed poll's code and the feed's failures in a row
@@ -55,7 +54,7 @@ func newEpisodesNotice(lib int64, library, show string, f *feed.File, news []fee
 		return cmp.Or(cmp.Compare(b.Published, a.Published), cmp.Compare(a.Path, b.Path))
 	})
 	n := &PodcastNotice{Kind: PodcastEpisodesNew, Library: library, LibraryID: lib, ShowPath: show, ShowID: f.ShowID,
-		Show: f.Show.Title, Count: len(news), Titles: []string{}}
+		Show: f.Show.Title}
 	for _, e := range news {
 		if len(n.Titles) < maxNoticeTitles {
 			n.Titles = append(n.Titles, e.Title)
