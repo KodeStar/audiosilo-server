@@ -28,7 +28,8 @@ type Values = z.infer<typeof schema>;
 
 /**
  * Sets or changes a person's password. With `promote`, it also makes them an
- * admin in the same request (an admin must have a password). A change signs the
+ * admin in the same request (an admin needs a password, or a single sign-on
+ * from the provider the server runs, which they lack here). A change signs the
  * person out of their devices (the server keeps the console's own session when
  * it is the admin's account); a first password signs nobody out.
  */

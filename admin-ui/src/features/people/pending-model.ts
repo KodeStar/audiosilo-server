@@ -4,6 +4,7 @@ import {
   type OIDCIdentity,
   type OIDCPendingList,
   type OIDCPendingSignIn,
+  type OIDCStatus,
 } from '@/api/types';
 import { hostOf } from '@/lib/format';
 import { isIndependentAccount } from './household-model';
@@ -80,4 +81,20 @@ export function identityProvider(
     return configured.name;
   }
   return hostOf(identity.issuer) || identity.issuer;
+}
+
+/**
+ * The provider a person signs in with now, by name: one of their identities is
+ * from the single sign-on the server runs (enabled and configured, the same
+ * issuer), which is also what counts as an admin's way into the console in
+ * place of a password (the server's rule, auth.SetSSOIssuer). Undefined while
+ * none is, or the status is not known yet.
+ */
+export function signInProvider(
+  identities: readonly Pick<OIDCIdentity, 'issuer'>[],
+  status: Pick<OIDCStatus, 'configured' | 'issuer' | 'name'> | undefined,
+): string | undefined {
+  if (!status?.configured || !status.issuer) return undefined;
+  const counts = identities.find((i) => i.issuer === status.issuer);
+  return counts ? identityProvider(counts, status) : undefined;
 }

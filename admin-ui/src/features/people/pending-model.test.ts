@@ -6,6 +6,7 @@ import {
   linkCandidates,
   pendingName,
   reasonKey,
+  signInProvider,
   suggestedAccount,
 } from './pending-model';
 
@@ -89,5 +90,17 @@ describe('waiting sign-ins', () => {
       'old.example.net',
     );
     expect(identityProvider({ issuer: 'not a url' }, undefined)).toBe('not a url');
+  });
+
+  it('names the provider a person signs in with only while it is the one the server runs', () => {
+    const on = { configured: true, issuer: ISSUER, name: 'Keycloak' };
+    const mine = [{ issuer: 'https://old.example.net/x' }, { issuer: ISSUER }];
+    expect(signInProvider(mine, on)).toBe('Keycloak');
+    // Not enabled or not able to run: no identity counts, as on the server.
+    expect(signInProvider(mine, { ...on, configured: false })).toBeUndefined();
+    // Only another provider's identity, none at all, or the status not read yet.
+    expect(signInProvider([{ issuer: 'https://old.example.net/x' }], on)).toBeUndefined();
+    expect(signInProvider([], on)).toBeUndefined();
+    expect(signInProvider(mine, undefined)).toBeUndefined();
   });
 });

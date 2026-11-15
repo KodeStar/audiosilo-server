@@ -19,8 +19,10 @@ import { ApiError, api } from '@/api/client';
 import {
   invalidateDevices,
   invalidatePeople,
+  keys,
   useDevices,
   useLibraries,
+  useOIDCStatus,
   useUser,
 } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity, User, UserDetail } from '@/api/types';
@@ -53,6 +55,7 @@ import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
 import { MemberChips } from './member-chips';
+import { signInProvider } from './pending-model';
 import { ListeningTab } from './user-listening';
 import {
   ruleLabel,
@@ -112,12 +115,22 @@ function UserView({ detail }: { detail: UserDetail }) {
   // A kid holds no invite: only their owner sets up their devices, from the
   // player (the server answers 409 kid_account), so the page offers no pairing.
   const kid = u.member_kind === 'kid';
+  const identities = detail.identities ?? [];
+  // The provider they sign in with, when one of their single sign-ons is the
+  // one the server runs: said in place of "player only", and, like a password,
+  // an admin's way into the console. Read only for someone who has one.
+  const status = useOIDCStatus(identities.length > 0);
+  const sso = signInProvider(identities, status.data);
 
   const facts = [
     u.last_seen_at
       ? t('user.lastActive', { time: formatRelative(u.last_seen_at, lang) })
       : t('user.neverSignedIn'),
-    u.has_password ? t('user.hasPassword') : t('user.noPassword'),
+    u.has_password
+      ? t('user.hasPassword')
+      : sso
+        ? t('user.noPasswordSSO', { provider: sso })
+        : t('user.noPassword'),
   ];
 
   return (
@@ -172,6 +185,7 @@ function UserView({ detail }: { detail: UserDetail }) {
           <DevicesTab
             user={u}
             devices={devices}
+            sso={sso}
             onPair={kid ? undefined : () => setInviting(true)}
           />
         </TabsPanel>
@@ -183,10 +197,10 @@ function UserView({ detail }: { detail: UserDetail }) {
           />
         </TabsPanel>
         <TabsPanel value="sign-in">
-          <SignInTab user={u} owner={ownerName(u) ?? ''} identities={detail.identities ?? []} />
+          <SignInTab user={u} owner={ownerName(u) ?? ''} identities={identities} sso={sso} />
         </TabsPanel>
         <TabsPanel value="account">
-          <AccountTab detail={detail} />
+          <AccountTab detail={detail} sso={sso} />
         </TabsPanel>
       </Tabs>
       {kid ? null : (
@@ -200,10 +214,10 @@ function UserView({ detail }: { detail: UserDetail }) {
  * Signs a person out of every device (server#281): their sessions end, and with
  * them anything they are casting, their open pairing codes and their recovery
  * code; API keys and calendar links stay. Offered while they have a session the
- * console isn't using. The words say how they get back in: a password, a new
- * invite, or a kid's owner.
+ * console isn't using. The words say how they get back in: a password, their
+ * single sign-on (sso, its provider's name) or a new invite, or a kid's owner.
  */
-function SignOutEverywhere({ user }: { user: AdminUser }) {
+function SignOutEverywhere({ user, sso }: { user: AdminUser; sso?: string }) {
   const { t } = useTranslation();
   const self = useCurrentUser().id === user.id;
   const qc = useQueryClient();
@@ -214,7 +228,9 @@ function SignOutEverywhere({ user }: { user: AdminUser }) {
       ? t('user.devices.signOutAllKidBody', { name: user.username, owner: ownerName(user) ?? '' })
       : user.has_password
         ? t('user.devices.signOutAllBody', { name: user.username })
-        : t('user.devices.signOutAllPairedBody', { name: user.username });
+        : sso
+          ? t('user.devices.signOutAllSSOBody', { name: user.username, provider: sso })
+          : t('user.devices.signOutAllPairedBody', { name: user.username });
   return (
     <>
       <Button
@@ -247,14 +263,19 @@ function SignOutEverywhere({ user }: { user: AdminUser }) {
   );
 }
 
-/** A person's devices; onPair is undefined for a kid, whose owner pairs them from the player. */
+/**
+ * A person's devices; onPair is undefined for a kid, whose owner pairs them from
+ * the player. sso names the single sign-on they sign in with, if any.
+ */
 function DevicesTab({
   user,
   devices,
+  sso,
   onPair,
 }: {
   user: AdminUser;
   devices: ReturnType<typeof useDevices>;
+  sso?: string;
   onPair?: () => void;
 }) {
   const { t } = useTranslation();
@@ -277,7 +298,7 @@ function DevicesTab({
       {sessions.length ? (
         <div className="flex flex-col gap-3">
           <DeviceList devices={sessions} showPerson={false} />
-          {sessions.some((d) => !d.current) ? <SignOutEverywhere user={user} /> : null}
+          {sessions.some((d) => !d.current) ? <SignOutEverywhere user={user} sso={sso} /> : null}
         </div>
       ) : (
         <EmptyState
@@ -456,18 +477,21 @@ function InvitesTab({
 
 /**
  * How a person signs in. A kid holds no password (the server refuses one), so
- * their card says how they do sign in instead. A household member has no email
- * card: members never sign in with single sign-on. Each linked single sign-on
- * has a card of its own, with Unlink.
+ * their card says how they do sign in instead, as it does for someone without
+ * one who signs in with single sign-on (sso, its provider's name). A household
+ * member has no email card: members never sign in with single sign-on. Each
+ * linked single sign-on has a card of its own, with Unlink.
  */
 function SignInTab({
   user: u,
   owner,
   identities,
+  sso,
 }: {
   user: AdminUser;
   owner: string;
   identities: OIDCIdentity[];
+  sso?: string;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -485,7 +509,9 @@ function SignInTab({
             ? t('user.signIn.passwordKid', { owner })
             : u.has_password
               ? t('user.signIn.passwordSet')
-              : t('user.signIn.passwordNone')}
+              : sso
+                ? t('user.signIn.passwordNoneSSO', { provider: sso })
+                : t('user.signIn.passwordNone')}
         </p>
         {kid ? null : (
           <div>
@@ -532,7 +558,8 @@ function SignInTab({
   );
 }
 
-function AccountTab({ detail }: { detail: UserDetail }) {
+/** The account: role, household and the danger zone. sso: see SignInTab. */
+function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
   const { t } = useTranslation();
   const u = detail.user;
   const members = detail.members ?? [];
@@ -554,13 +581,21 @@ function AccountTab({ detail }: { detail: UserDetail }) {
       toast.add({ title: done, type: 'success' });
     } catch (err) {
       toastError(t('user.account.failed'), err);
+      // Made an admin on their single sign-on, which the server no longer
+      // counts (turned off since the page read it): ask for a password.
+      if (err instanceof ApiError && err.code === 'admin_needs_password') {
+        void qc.invalidateQueries({ queryKey: keys.oidcStatus });
+        setPromoting(true);
+      }
     }
   };
 
   const setRole = (role: User['role']) => {
     if (role === u.role) return;
-    // An admin must have a password; ask for one in the same step.
-    if (role === 'admin' && !u.has_password) {
+    // An admin needs a way into the console (owner decision 5): a password, or
+    // a single sign-on from the provider the server runs. With neither, ask for
+    // a password in the same step; the server's answer stays the authority.
+    if (role === 'admin' && !u.has_password && !sso) {
       setPromoting(true);
       return;
     }

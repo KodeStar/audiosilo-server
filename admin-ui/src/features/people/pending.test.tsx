@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminUser, OIDCIdentity, OIDCPendingSignIn, OIDCStatus } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { admin, sam, samDetail } from '@/test/fixtures';
+import { admin, device, sam, samDetail } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -413,6 +413,82 @@ describe('a person’s single sign-on', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Set a password first.');
     expect(screen.getByRole('dialog', { name: 'Unlink Keycloak from sam?' })).toBeInTheDocument();
+  });
+
+  it('says a password-less person signs in with the provider, wherever it says how they sign in', async () => {
+    mockFetch(
+      personRoutes(sam, {
+        'GET /admin/devices': { body: { devices: [device()] } },
+      }),
+    );
+    renderApp('/people/user/2?tab=sign-in');
+    expect(await screen.findByText(/No password \(signs in with Keycloak\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText('No password. Signs in with Keycloak, or by pairing a device.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/player only/)).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: /^Devices/ }));
+    await user.click(await screen.findByRole('button', { name: 'Sign out everywhere' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign sam out everywhere?' });
+    expect(
+      within(dialog).getByText(/sign in again with Keycloak or by pairing with a new invite/),
+    ).toBeInTheDocument();
+  });
+
+  it('says player only when their sign-on is not the one the server runs', async () => {
+    mockFetch(
+      personRoutes(sam, { 'GET /admin/oidc/status': { body: { ...status, configured: false } } }),
+    );
+    renderApp('/people/user/2?tab=sign-in');
+    // The identity card is there, but single sign-on can't run: not a way in.
+    await screen.findByRole('region', { name: /Signed in with/ });
+    expect(await screen.findByText(/No password \(player only\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Signs in only by pairing a device/)).toBeInTheDocument();
+  });
+
+  it('makes a person admin on their single sign-on alone, without asking for a password', async () => {
+    const calls = mockFetch(
+      personRoutes(sam, { 'PATCH /admin/users/2': { body: { ...sam, role: 'admin' } } }),
+    );
+    renderApp('/people/user/2?tab=account');
+    await screen.findByText(/signs in with Keycloak/);
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    expect(await screen.findByText('sam is now an admin')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Make sam an admin' })).toBeNull();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role: 'admin' });
+  });
+
+  it('asks for a password to make them admin when their sign-on does not count', async () => {
+    const calls = mockFetch(
+      personRoutes(sam, {
+        'GET /admin/oidc/status': { body: { ...status, issuer: 'https://other.example.net' } },
+      }),
+    );
+    renderApp('/people/user/2?tab=account');
+    await screen.findByText(/player only/);
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('asks for a password when the server no longer counts the sign-on', async () => {
+    mockFetch(
+      personRoutes(sam, {
+        'PATCH /admin/users/2': {
+          status: 400,
+          body: { error: 'admin accounts require a password', code: 'admin_needs_password' },
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=account');
+    await screen.findByText(/signs in with Keycloak/);
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    expect(await screen.findByText(/Set a password first\./)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
   });
 
   it('shows no card for a person without one', async () => {
