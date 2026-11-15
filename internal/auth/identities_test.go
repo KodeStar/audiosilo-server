@@ -602,3 +602,37 @@ func TestConsumeOIDC(t *testing.T) {
 		t.Fatalf("spent sign-in tokens kept: %d %v", left, err)
 	}
 }
+
+// TestOIDCTokenEndsWhenJoiningAHousehold: a sign-in's token not yet finished
+// is ended when its account becomes a member (the callback refuses members),
+// a grown-up or a kid, as an open pairing token is. Allowed: an account left
+// independent still finishes.
+func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	for _, kind := range []string{MemberGrownup, MemberKid} {
+		u := mustUser(t, s, ctx, "joins-"+kind, "", RoleUser)
+		tok, err := s.IssueOIDCToken(ctx, u.ID, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.UpdateUser(ctx, u.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: kind, Access: MemberAll}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("a %s member finished a sign-in started before joining: %v", kind, err)
+		}
+	}
+	stays := mustUser(t, s, ctx, "stays", "", RoleUser)
+	tok, err := s.IssueOIDCToken(ctx, stays.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateUser(ctx, stays.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.ConsumeOIDC(ctx, tok); err != nil || u.ID != stays.ID {
+		t.Fatalf("an independent account's sign-in was ended: %v", err)
+	}
+}

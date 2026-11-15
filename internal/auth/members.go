@@ -725,7 +725,8 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 
 // clearKidCredentials takes from a member becoming a kid every way to sign in
 // that a kid can't have (plan decision 1): the password (and the browsers it
-// signed in from), API keys, open pairing tokens, the calendar feed token
+// signed in from), API keys, open pairing tokens and a single sign-on not yet
+// finished (KindOIDC), the calendar feed token
 // (feed.go: a kid has no Upcoming), the recovery code and any
 // still-redeemable invite (whose linked pairing tokens cascade), so no code can
 // pair a new device into the kid's account. Sessions stay: their devices stay
@@ -741,7 +742,7 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `') AND revoked = 0`,
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `', '` + KindOIDC + `') AND revoked = 0`,
 		deleteFeedTokensSQL,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,
@@ -764,7 +765,9 @@ func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) 
 // leaveOwners signs a person who leaves their owner's household (newOwner 0:
 // "Make independent", or kept when their owner is deleted) or joins newOwner's
 // out of what another owner set up for them: the open pairing codes minted for
-// their own device (unlinked pairing tokens) and, joining newOwner's household,
+// their own device (unlinked pairing tokens), a single sign-on not yet finished
+// (KindOIDC: the callback refuses a member, so its finish must too) and,
+// joining newOwner's household,
 // the sessions and API keys made on anyone else's devices (created_on_token_id),
 // which would otherwise carry newOwner's access to that person's phone, and the
 // calendar feed link made on one (IssueFeedToken records the device; deleted,
@@ -775,7 +778,7 @@ func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
 	const madeElsewhere = `(SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2`
 	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
 	  WHERE user_id = ?1 AND revoked = 0
-	    AND ((kind = '`+KindPairing+`' AND auth_code_id IS NULL)
+	    AND ((kind IN ('`+KindPairing+`', '`+KindOIDC+`') AND auth_code_id IS NULL)
 	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`') AND `+madeElsewhere+`))`, id, newOwner); err != nil {
 		return err
 	}
