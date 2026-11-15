@@ -294,6 +294,9 @@ type Catalog struct {
 	// (SetPodcastChanged): atomic, as the startup scan indexes before the
 	// Bridge is wired.
 	podcastChanged atomic.Pointer[func(int64, string)]
+	// podcastNotice hears a podcast show's news for the admin's notifications
+	// (SetPodcastNotice): atomic for the same reason.
+	podcastNotice atomic.Pointer[func(context.Context, PodcastNotice)]
 	// onChange hears that a book's index row was written (OnBookChange): the
 	// listeners, replaced whole (copy-on-write) by each registration.
 	onChange          atomic.Pointer[[]func()]
@@ -336,6 +339,26 @@ func (c *Catalog) SetPodcastChanged(f func(lib int64, path string)) {
 		return
 	}
 	c.podcastChanged.Store(&f)
+}
+
+// SetPodcastNotice sets the one listener told a podcast show's news after the
+// write that found it commits (notify.Service.PodcastNotice): new episodes
+// (IndexPodcastShow) and a feed failing or back (FoldPodcastJob). f runs on
+// the writer's goroutine once its transaction has committed; nil clears it.
+// Safe while the catalog is in use.
+func (c *Catalog) SetPodcastNotice(f func(context.Context, PodcastNotice)) {
+	if f == nil {
+		c.podcastNotice.Store(nil)
+		return
+	}
+	c.podcastNotice.Store(&f)
+}
+
+// tellPodcastNotice hands n to the SetPodcastNotice listener, if any.
+func (c *Catalog) tellPodcastNotice(ctx context.Context, n *PodcastNotice) {
+	if f := c.podcastNotice.Load(); n != nil && f != nil {
+		(*f)(ctx, *n)
+	}
 }
 
 // changed tells the OnBookChange listeners.

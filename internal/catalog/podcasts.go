@@ -108,24 +108,43 @@ func stringOrNil(s string) any {
 
 // IndexPodcastShow commits a show's entire derived index together. It never
 // deduplicates GUIDs or touches durable follows and listening state.
+//
+// It tells the SetPodcastNotice listener, after the commit, about the episodes
+// new to a show indexed before under the same identity: an episode whose path
+// wasn't indexed and that was published after the show's latest episode then.
+// So a show's first index, a forced rescan, a rebuilt index and a show whose
+// missing episodes are indexed again announce nothing.
 func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
 	changed := false
+	var notice *PodcastNotice
 	err := c.db.WithTx(ctx, "IndexPodcastShow", func(tx *sql.Tx) error {
-		var kind string
-		if err := tx.QueryRowContext(ctx, `SELECT kind FROM libraries WHERE id=?`, lib).Scan(&kind); err != nil {
+		var kind, library string
+		if err := tx.QueryRowContext(ctx, `SELECT kind,name FROM libraries WHERE id=?`, lib).Scan(&kind, &library); err != nil {
 			return err
 		}
 		if kind != KindPodcasts {
 			return ErrInvalidKind
 		}
-		var old string
-		err := tx.QueryRowContext(ctx, `SELECT feed_sig FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&old)
+		var old, oldShowID string
+		var oldLatest sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT feed_sig,show_id,latest_published FROM podcast_shows WHERE library_id=? AND show_path=?`, lib, show).Scan(&old, &oldShowID, &oldLatest)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if err == nil && old == sig && !force {
 			return nil
 		}
+		// News is told only of a show indexed before as this same show.
+		announce := err == nil && oldShowID == f.ShowID
+		oldBooks, err := queryRows(ctx, tx, func(r *sql.Rows, b *Book) error { return r.Scan(&b.ID, &b.RelPath) }, `SELECT b.id,b.rel_path FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE e.library_id=? AND e.show_path=?`, lib, show)
+		if err != nil {
+			return err
+		}
+		indexed := make(map[string]bool, len(oldBooks))
+		for _, b := range oldBooks {
+			indexed[b.RelPath] = true
+		}
+		var news []feed.Episode
 		latest := ""
 		for _, e := range f.Episodes {
 			if e.Published > latest {
@@ -154,6 +173,9 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				continue
 			}
 			keep[e.Path] = true
+			if announce && !indexed[e.Path] && e.RemovedAt == "" && e.Published > oldLatest.String {
+				news = append(news, e)
+			}
 			info, exists := present[path.Base(e.Path)]
 			exists = exists && feed.ValidFetch(e.Fetch) && e.Fetch.DeletedAt == "" && info.Size == e.Fetch.Bytes
 			if !exists {
@@ -217,10 +239,8 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 				return err
 			}
 		}
-		oldBooks, err := queryRows(ctx, tx, func(r *sql.Rows, b *Book) error { return r.Scan(&b.ID, &b.RelPath) }, `SELECT b.id,b.rel_path FROM books b JOIN podcast_episodes e ON e.book_id=b.id WHERE e.library_id=? AND e.show_path=?`, lib, show)
-		if err != nil {
-			return err
-		}
+		// The episodes indexed before (their ids stay as the upserts above
+		// keep them) that the feed no longer lists.
 		for _, b := range oldBooks {
 			if !keep[b.RelPath] {
 				if err := deleteBook(ctx, tx, b.ID); err != nil {
@@ -229,12 +249,16 @@ func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, co
 			}
 		}
 		changed = true
+		notice = newEpisodesNotice(lib, library, show, f, news)
 		return nil
 	})
 	if notify := c.podcastChanged.Load(); err == nil && changed && notify != nil {
 		for _, ep := range f.Episodes {
 			(*notify)(lib, ep.Path)
 		}
+	}
+	if err == nil {
+		c.tellPodcastNotice(ctx, notice)
 	}
 	return changed, err
 }
@@ -708,11 +732,16 @@ func (c *Catalog) PodcastNotWritable(ctx context.Context, ref Ref) error {
 
 // FoldPodcastJob is idempotent even if an unfollow happens before the recovery
 // sweep. Durable follow and status writes share the folded marker's transaction.
+// A podcast.poll's fold also keeps the feed's run of failures for the admin's
+// notifications (feedRun.next) and tells the SetPodcastNotice listener, after
+// the commit, that the feed is failing or back; a job folded before tells
+// nothing again.
 func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 	if !bridge.IsPodcast(j.Kind) || j.LibraryID == nil || !slices.Contains([]string{bridge.StateDone, bridge.StateFailed, bridge.StateCancelled}, j.State) {
 		return nil
 	}
-	return c.db.WithTx(ctx, "FoldPodcastJob", func(tx *sql.Tx) error {
+	var notice *PodcastNotice
+	err := c.db.WithTx(ctx, "FoldPodcastJob", func(tx *sql.Tx) error {
 		now := c.now().UTC()
 		stamp := now.Format(time.RFC3339)
 		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO podcast_folded(job_id,at) VALUES(?,?)`, j.ID, stamp)
@@ -762,8 +791,8 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		if !feed.ValidHex(expected, 16) {
 			return nil
 		}
-		var current string
-		err = tx.QueryRowContext(ctx, `SELECT show_id FROM podcast_shows WHERE library_id=? AND show_path=?`, *j.LibraryID, show).Scan(&current)
+		var current, title, library string
+		err = tx.QueryRowContext(ctx, `SELECT s.show_id,s.title,l.name FROM podcast_shows s JOIN libraries l ON l.id=s.library_id WHERE s.library_id=? AND s.show_path=?`, *j.LibraryID, show).Scan(&current, &title, &library)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -780,9 +809,21 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			}
 		}
 		var failures int
-		err = tx.QueryRowContext(ctx, `SELECT failures FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures)
+		var run feedRun
+		err = tx.QueryRowContext(ctx, `SELECT failures,feed_failures,failing_announced FROM podcast_feed_state WHERE library_id=? AND show_path=? AND show_id=?`, *j.LibraryID, show, expected).Scan(&failures, &run.failures, &run.announced)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		// Only a poll's outcome moves the run: a subscribe tells nothing of a
+		// feed already followed.
+		if j.Kind == bridge.KindPodcastPoll {
+			var news string
+			if run, news = run.next(j.State, result.Code); news != "" {
+				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title}
+				if news == PodcastFeedFailing {
+					notice.Code, notice.Failures = result.Code, run.failures
+				}
+			}
 		}
 		if j.State == bridge.StateDone {
 			// The validators go back out as a poll's params, which refuse one over
@@ -793,7 +834,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 					*v = ""
 				}
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?,'','',0,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, expected, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339))
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,etag,last_modified,last_checked_at,last_success_at,last_status,error_code,error,failures,next_poll_at,feed_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,'','',0,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET etag=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.etag ELSE excluded.etag END,last_modified=CASE WHEN excluded.last_status=304 THEN podcast_feed_state.last_modified ELSE excluded.last_modified END,last_checked_at=excluded.last_checked_at,last_success_at=excluded.last_success_at,last_status=excluded.last_status,error_code='',error='',secret_missing=0,failures=0,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, result.ETag, result.LastModified, stamp, stamp, result.Status, now.Add(time.Duration(min(max(result.NextPollSeconds, 900), 86400))*time.Second).Format(time.RFC3339), run.failures, run.announced)
 		} else {
 			seconds := 1800 << min(failures, 6)
 			if result.RetryAfterSeconds != nil {
@@ -804,7 +845,7 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			if result.Code == "gone" {
 				next = nil
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", failures+1, next)
+			_, err = tx.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,show_id,last_checked_at,last_status,error_code,error,secret_missing,failures,next_poll_at,feed_failures,failing_announced) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_status=excluded.last_status,error_code=excluded.error_code,error=excluded.error,secret_missing=MAX(podcast_feed_state.secret_missing,excluded.secret_missing),failures=excluded.failures,next_poll_at=excluded.next_poll_at,feed_failures=excluded.feed_failures,failing_announced=excluded.failing_announced`, *j.LibraryID, show, expected, stamp, result.Status, result.Code, result.Message, result.Code == "feed_secret_missing", failures+1, next, run.failures, run.announced)
 		}
 		if err != nil {
 			return err
@@ -812,6 +853,10 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 		_, err = tx.ExecContext(ctx, `DELETE FROM podcast_folded WHERE at<? AND NOT EXISTS(SELECT 1 FROM bridge_jobs j WHERE j.id=podcast_folded.job_id)`, now.Add(-7*24*time.Hour).Format(time.RFC3339))
 		return err
 	})
+	if err == nil {
+		c.tellPodcastNotice(ctx, notice)
+	}
+	return err
 }
 
 func durationFromFeed(p *int) float64 {
