@@ -9,6 +9,8 @@ import {
   MailCheck,
   MonitorSmartphone,
   Package,
+  Podcast,
+  Rss,
   TriangleAlert,
   Unplug,
   Waypoints,
@@ -34,6 +36,9 @@ const ICONS: Record<ServerEventKind, LucideIcon> = {
   bridge_job_finished: Waypoints,
   bridge_job_failed: CircleAlert,
   book_released: CalendarCheck,
+  podcast_episodes_new: Podcast,
+  podcast_feed_failing: Rss,
+  podcast_feed_recovered: Rss,
 };
 
 const TONE: Record<EventTone, string> = {

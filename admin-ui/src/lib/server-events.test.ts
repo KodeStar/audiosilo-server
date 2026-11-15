@@ -234,11 +234,71 @@ describe('Bridge job events', () => {
       values: { titles: 'Next (Mars #3)' },
     });
     expect(describeEvent(ev('book_released', { count: 2 })).body).toBeUndefined();
-    expect(EVENT_KINDS.at(-1)).toBe('book_released');
   });
 
-  it('lists both kinds, in the server order', () => {
-    expect(EVENT_KINDS.slice(-3, -1)).toEqual(['bridge_job_finished', 'bridge_job_failed']);
+  it('lists the kinds in the server order', () => {
+    expect(EVENT_KINDS.slice(-6)).toEqual([
+      'bridge_job_finished',
+      'bridge_job_failed',
+      'book_released',
+      'podcast_episodes_new',
+      'podcast_feed_failing',
+      'podcast_feed_recovered',
+    ]);
+  });
+
+  it("words a show's new episodes by its name", () => {
+    const d = describeEvent(
+      ev('podcast_episodes_new', {
+        library: 'Pods',
+        show: 'Example Show',
+        count: 5,
+        titles: ['Five', 'Four', 'Three', 'Two', 'One'],
+      }),
+    );
+    expect(d.title).toEqual({
+      key: 'events.podcast_episodes_new.title',
+      values: { count: 5, show: 'Example Show' },
+    });
+    expect(d.body).toEqual({
+      key: 'events.podcast_episodes_new.bodyMore',
+      values: { titles: 'Five, Four, Three', count: 2 },
+    });
+    expect(d.tone).toBe('info');
+    expect(d.link).toEqual({ destination: 'library', section: 'libraries' });
+  });
+
+  it("words a failing feed's code, never more", () => {
+    const failing = (code: string) =>
+      describeEvent(ev('podcast_feed_failing', { show: 'Example Show', code, failures: 3 }));
+    const d = failing('timeout');
+    expect(d.title).toEqual({
+      key: 'events.podcast_feed_failing.title',
+      values: { show: 'Example Show' },
+    });
+    expect(d.body).toEqual({ key: 'events.podcast_feed_failing.code.timeout' });
+    expect(d.tone).toBe('warn');
+    expect(d.link).toEqual({ destination: 'library', section: 'libraries' });
+    expect(failing('gone').body).toEqual({ key: 'events.podcast_feed_failing.code.gone' });
+    expect(failing('feed_secret_missing').body).toEqual({
+      key: 'events.podcast_feed_failing.code.feed_secret_missing',
+    });
+    expect(failing('http_503').body).toEqual({
+      key: 'events.podcast_feed_failing.http',
+      values: { status: '503' },
+    });
+    expect(failing('failed').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
+    expect(failing('http_5000').body).toEqual({ key: 'events.podcast_feed_failing.failed' });
+  });
+
+  it('words a feed that is back', () => {
+    const d = describeEvent(ev('podcast_feed_recovered', { show: 'Example Show' }));
+    expect(d.title).toEqual({
+      key: 'events.podcast_feed_recovered.title',
+      values: { show: 'Example Show' },
+    });
+    expect(d.body).toEqual({ key: 'events.podcast_feed_recovered.body' });
+    expect(d.tone).toBe('info');
   });
 });
 
