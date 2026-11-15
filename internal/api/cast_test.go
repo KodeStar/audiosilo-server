@@ -189,8 +189,6 @@ func TestCastTokenMint(t *testing.T) {
 	}
 }
 
-// Security-critical: a cast token reaches its own book's cover and stream as
-// ?token=, and nothing else.
 // The console's chapter editor mints with "editor": true: a token that streams
 // the book like a cast token, on a shorter life and a cap of its own, so editing
 // many books never ends a cast (the receiver would get 401 mid-book).
@@ -245,6 +243,8 @@ func TestEditorTokenMintLeavesCastsAlone(t *testing.T) {
 	}
 }
 
+// Security-critical: a cast token reaches its own book's cover and stream as
+// ?token=, and nothing else.
 func TestCastTokenMediaAuth(t *testing.T) {
 	t.Parallel()
 	c := newCastEnv(t)

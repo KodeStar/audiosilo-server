@@ -53,7 +53,8 @@ const (
 )
 
 // castUse is what a cast token is minted for, which sets its life and the cap
-// it counts against: a receiver (castUse{}), or the console's chapter editor.
+// it counts against: a receiver (useCast), or the console's chapter editor
+// (useEditor).
 type castUse struct {
 	// editor is cast_grants.editor: 1 for the chapter editor's token.
 	editor int
@@ -190,14 +191,13 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 			return err
 		}
 		// The cap, among the person's tokens of this use only (every cast token
-		// has a grant by now: the prune above deleted any without one).
+		// has a grant by now: the prune above deleted any without one): all but
+		// the newest use.keep go.
 		_, err = tx.ExecContext(ctx,
-			`DELETE FROM tokens WHERE kind = '`+KindCast+`' AND user_id = ?1
-			    AND EXISTS (SELECT 1 FROM cast_grants g WHERE g.token_id = tokens.id AND g.editor = ?2)
-			    AND id NOT IN
+			`DELETE FROM tokens WHERE id IN
 			   (SELECT t.id FROM tokens t JOIN cast_grants g ON g.token_id = t.id
 			     WHERE t.kind = '`+KindCast+`' AND t.user_id = ?1 AND g.editor = ?2
-			     ORDER BY t.id DESC LIMIT ?3)`,
+			     ORDER BY t.id DESC LIMIT -1 OFFSET ?3)`,
 			userID, use.editor, use.keep)
 		return err
 	})
