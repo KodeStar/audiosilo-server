@@ -607,3 +607,30 @@ func TestNoOpSettingsSaveIsNotAudited(t *testing.T) {
 		t.Fatalf("audited %+v", events)
 	}
 }
+
+// server#232: a destination subscribes to the podcast kinds, which the
+// envelope lists after the earlier ones, and the feed filters by them; a
+// non-admin is refused.
+func TestNotificationTargetsTakePodcastKinds(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, userTok := opsTokens(t, e)
+	const create = `{"kind":"ntfy","name":"Pods","url":"https://ntfy.sh/pods","events":["podcast_episodes_new","podcast_feed_failing","podcast_feed_recovered"]}`
+	if resp, _ := e.do(t, "POST", "/api/v1/admin/notifications", userTok, create); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a listener's create = %d, want 403", resp.StatusCode)
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/notifications", adminTok, create)
+	if resp.StatusCode != http.StatusCreated ||
+		!strings.Contains(body, `"events":["podcast_episodes_new","podcast_feed_failing","podcast_feed_recovered"]`) {
+		t.Fatalf("create = %d %s", resp.StatusCode, body)
+	}
+	_, body = e.do(t, "GET", "/api/v1/admin/notifications", adminTok, "")
+	if !strings.Contains(body, `"book_released","podcast_episodes_new","podcast_feed_failing","podcast_feed_recovered"]`) {
+		t.Fatalf("envelope = %s", body)
+	}
+	for _, kind := range []string{"podcast_episodes_new", "podcast_feed_failing", "podcast_feed_recovered"} {
+		if resp, body := e.do(t, "GET", "/api/v1/admin/events?kind="+kind, adminTok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("events?kind=%s = %d %s", kind, resp.StatusCode, body)
+		}
+	}
+}

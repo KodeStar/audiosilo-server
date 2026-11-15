@@ -2938,7 +2938,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   display labels are redacted, a restart expires unclaimed requests (so does deleting the
   requester's account, `requested_by` NULL: `lostPrivateRequests`, server#179), and deleting a library keeps only
   the URLs of open subscribes (`bridge.PruneSecrets`, under Subscribe's lock, run to the end). Podcast
-  errors, progress and results are redacted before storage and never notify. The module scheduler
+  errors, progress and results are redacted before storage; their notifications carry codes and show names
+  only (see Backups, audit log, notifications: `podcast_feed_failing`). The module scheduler
   folds ended outcomes idempotently, wakes on job endings and sweeps every minute, then queues
   up to ten due followed shows; a job or show that fails is logged and passed over, and a stored
   validator over a poll's 512-byte cap is dropped. Successful cadence clamps to 15 minutes..24 hours; failures back
@@ -3359,7 +3360,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
   HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
   optional); Discord is one embed with `allowed_mentions` empty. Triggers: `Scanner.OnRunFinished`
-  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed` (its `detail` is shown in the
+  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, never for a podcast library, `scan_failed` (its `detail` is shown in the
   bell but never sent out: `internalData`), `library_unavailable`
   only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
   via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
@@ -3368,7 +3369,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited` and
   `agent_unavailable` whatever their `retry_at`, and counts a park whose code changes in place as news;
   a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
-  the Bridge's own text that can name its folders, is the bell's `detail`, never sent out).
+  the Bridge's own text that can name its folders, is the bell's `detail`, never sent out), and podcasts
+  (server#232, admin only, through `catalog.SetPodcastNotice` after the write commits, `notify.PodcastNotice`):
+  `podcast_episodes_new`, one per show per index (`catalog.IndexPodcastShow`: episodes new to a show indexed
+  before under the same `show_id`, a path not indexed and published after the show's previous
+  `latest_published`, so a first index, a forced rescan, a rebuilt index or missing rows indexed again
+  announce nothing; up to 5 titles, newest first; `dedup_key` the library, show id and a hash of the new
+  episode ids, so the scheduled scan and the Bridge's rescan can't both announce them),
+  `podcast_feed_failing` and `podcast_feed_recovered` (`catalog.FoldPodcastJob`, `podcast.poll` only,
+  idempotent through `podcast_folded`; `0076` adds `podcast_feed_state.feed_failures` and
+  `failing_announced`, while `failures` still drives the backoff: a failure whose code is the feed's
+  (`bridge.FeedFailure`, not `notFeedFailures`) counts, announced once at the third in a row
+  (`catalog.FeedFailingAfter`) or at once for `gone`; `feed_secret_missing` is announced at once without
+  counting; another failure (`bridge_lost`, an unwritable library) neither counts nor resets; a successful
+  poll resets the run and, after an announcement, raises recovered once; a job for a replaced show changes
+  nothing). Their data are the library and its id, `show` (the title), `show_path`, `show_id`, `count` and
+  `titles`, or `code` (a short machine code, else `failed`) and `failures`: never the error's text, the
+  feed URL or its host. The messages word each code and link Library > Libraries.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
