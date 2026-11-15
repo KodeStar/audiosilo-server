@@ -290,6 +290,35 @@ describe('waiting sign-ins', () => {
     );
   });
 
+  it('leaves a dismiss dialog opened since alone when an earlier dismiss ends', async () => {
+    const carolRow: OIDCPendingSignIn = { ...bobRow, id: 5, subject: 'sub-carol', name: 'Carol' };
+    let finish: (reply: { status: number }) => void = () => {};
+    mockFetch(
+      routes({
+        'GET /admin/oidc/pending': {
+          body: { pending: [bobRow, carolRow], linked_user_ids: {} },
+        },
+        'DELETE /admin/oidc/pending/4': () =>
+          new Promise<{ status: number }>((resolve) => {
+            finish = resolve;
+          }),
+      }),
+    );
+    renderApp('/people');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: "Dismiss Bob Smith's sign-in" }));
+    const first = await screen.findByRole('dialog', { name: "Dismiss Bob Smith's sign-in?" });
+    await user.click(within(first).getByRole('button', { name: 'Dismiss' }));
+    // Cancelled while it is on its way, and another row's dialog opened.
+    await user.click(within(first).getByRole('button', { name: 'Cancel' }));
+    await user.click(await screen.findByRole('button', { name: "Dismiss Carol's sign-in" }));
+    const second = await screen.findByRole('dialog', { name: "Dismiss Carol's sign-in?" });
+    finish({ status: 204 });
+    expect(await screen.findByText('Sign-in dismissed')).toBeInTheDocument();
+    expect(second).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: "Dismiss Carol's sign-in?" })).toBeInTheDocument();
+  });
+
   it('shows a list that failed to load', async () => {
     mockFetch(routes({ 'GET /admin/oidc/pending': { status: 500, body: { error: 'boom' } } }));
     renderApp('/people');

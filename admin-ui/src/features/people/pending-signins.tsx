@@ -105,7 +105,9 @@ export function PendingSignInsCard() {
       />
       <ConfirmDialog
         open={dismissing !== null}
-        onOpenChange={(o) => !o && setDismissing(null)}
+        onOpenChange={(o) =>
+          !o && setDismissing((cur) => (cur?.id === dismissing?.id ? null : cur))
+        }
         icon={X}
         title={t('people.pending.dismissTitle', {
           name: dismissing ? pendingName(dismissing) : '',
