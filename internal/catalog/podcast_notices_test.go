@@ -308,3 +308,67 @@ func TestPodcastFeedNotices(t *testing.T) {
 	quiet(log.take(), "a failed subscribe")
 	failing(fold(bridge.StateFailed, "timeout"), "timeout", 3)
 }
+
+// A show moved to another folder keeps its run of failures: a run under way
+// keeps counting and a feed announced failing is told back from the new path.
+func TestPodcastFeedRunMovesWithTheShow(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	log := listenNotices(c)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Pods", Root: t.TempDir(), Kind: KindPodcasts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", podcastFixture(t), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	next := int64(0)
+	path := "Example Show"
+	fold := func(state, code string) []PodcastNotice {
+		t.Helper()
+		next++
+		j := pollJob(lib.ID, next, state, code)
+		j.Path = &path
+		if err := c.FoldPodcastJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		return log.take()
+	}
+	move := func(to string) {
+		t.Helper()
+		if err := c.MoveFolderFavourites(ctx, lib.ID, path, to); err != nil {
+			t.Fatal(err)
+		}
+		moved, err := feed.ReadFile("../podcast/testdata/feed-v1.json", to, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.IndexPodcastShow(ctx, lib.ID, to, "s-"+to, "", "", moved, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		path = to
+	}
+	if got := fold(bridge.StateFailed, "http_500"); len(got) != 0 {
+		t.Fatalf("one failure told %+v", got)
+	}
+	if got := fold(bridge.StateFailed, "http_500"); len(got) != 0 {
+		t.Fatalf("two failures told %+v", got)
+	}
+	move("Moved Show")
+	// The backoff and the last error start afresh at the new path.
+	var failures int
+	var lastError string
+	if err := c.db.QueryRowContext(ctx, `SELECT failures,error_code FROM podcast_feed_state WHERE library_id=? AND show_path='Moved Show'`, lib.ID).Scan(&failures, &lastError); err != nil || failures != 0 || lastError != "" {
+		t.Fatalf("moved feed state: %d %q %v", failures, lastError, err)
+	}
+	if got := fold(bridge.StateFailed, "http_500"); len(got) != 1 || got[0].Kind != PodcastFeedFailing || got[0].Failures != 3 || got[0].ShowPath != "Moved Show" {
+		t.Fatalf("the third failure, after a move, told %+v", got)
+	}
+	move("Moved Again")
+	if got := fold(bridge.StateDone, ""); len(got) != 1 || got[0].Kind != PodcastFeedRecovered || got[0].ShowPath != "Moved Again" {
+		t.Fatalf("a success after a move told %+v", got)
+	}
+	var rows int
+	if err := c.db.QueryRowContext(ctx, `SELECT count(*) FROM podcast_feed_state WHERE library_id=? AND show_path<>'Moved Again'`, lib.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("feed state left at old paths: %d %v", rows, err)
+	}
+}

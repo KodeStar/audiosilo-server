@@ -291,13 +291,19 @@ func (c *Catalog) followerScope(ctx context.Context, user int64, admin bool, lib
 	return c.CallerScope(ctx, who, lib)
 }
 
+// movePodcastState carries a moved show's retention policy to newPath and lets
+// go of its feed and fetch state (the next poll starts afresh), all but the
+// run of failures the admin's notifications count (feedRun): a feed announced
+// failing is still told back after a move, and a run under way keeps counting.
 func movePodcastState(ctx context.Context, tx *sql.Tx, lib int64, oldPath, newPath string) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO podcast_policies(library_id,show_path,show_id,mode,keep,days,updated_at) SELECT library_id,?,show_id,mode,keep,days,updated_at FROM podcast_policies WHERE library_id=? AND show_path=? ON CONFLICT(library_id,show_path,show_id) DO UPDATE SET mode=excluded.mode,keep=excluded.keep,days=excluded.days,updated_at=excluded.updated_at WHERE excluded.updated_at>podcast_policies.updated_at`, newPath, lib, oldPath); err != nil {
 		return err
 	}
 	for _, q := range []string{
 		`DELETE FROM podcast_policies WHERE library_id=?1 AND show_path=?2 AND ?3 IS NOT NULL`,
-		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND (show_path=?2 OR show_path=?3)`,
+		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND show_path=?3`,
+		`UPDATE podcast_feed_state SET show_path=?3,etag='',last_modified='',last_checked_at=NULL,last_success_at=NULL,last_status=0,error_code='',error='',secret_missing=0,failures=0,next_poll_at=NULL WHERE library_id=?1 AND show_path=?2 AND (feed_failures>0 OR failing_announced<>0)`,
+		`DELETE FROM podcast_feed_state WHERE library_id=?1 AND show_path=?2`,
 		`DELETE FROM podcast_fetch_state WHERE library_id=?1 AND (rel_path=?2 OR rel_path=?3 OR substr(rel_path,1,length(?2)+1)=?2||'/' OR substr(rel_path,1,length(?3)+1)=?3||'/')`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, lib, oldPath, newPath); err != nil {
