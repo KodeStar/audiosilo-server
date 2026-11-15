@@ -557,8 +557,8 @@ func feedFailingText(code string, failures int) string {
 	text, ok := feedCodeText[code]
 	if !ok {
 		text = "The Bridge couldn't check the feed."
-		if status, found := strings.CutPrefix(code, "http_"); found && len(status) == 3 && strings.Trim(status, "0123456789") == "" {
-			text = "The feed answered HTTP " + status + "."
+		if status, ok := bridge.HTTPStatus(code); ok {
+			text = fmt.Sprintf("The feed answered HTTP %d.", status)
 		}
 	}
 	if failures > 1 {
@@ -750,6 +750,13 @@ func (s *Service) BooksReleased(ctx context.Context, count int, titles []string,
 	s.Emit(ctx, Event{Kind: KindBookReleased, Data: map[string]any{"count": count, "titles": titles}, Dedup: dedup})
 }
 
+// SetDigest is a dedup key's digest of a set of ids, the same whatever their
+// order (book_released's work ids, podcast_episodes_new's episode ids).
+func SetDigest(ids []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(slices.Sorted(slices.Values(ids)), "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
 // PodcastNotice reports a podcast show's news (catalog.SetPodcastNotice): new
 // episodes (once per set of episodes: dedup is the show and their ids, so the
 // scheduled scan and the Bridge's rescan can't both announce them), a feed
@@ -769,10 +776,8 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 		for _, t := range n.Titles {
 			titles = append(titles, plainLine(t, 200))
 		}
-		data["count"], data["titles"] = n.Count, titles
-		ids := slices.Sorted(slices.Values(n.EpisodeIDs))
-		sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
-		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, hex.EncodeToString(sum[:]))
+		data["count"], data["titles"] = len(n.EpisodeIDs), titles
+		dedup := fmt.Sprintf("%d:%s:%s", n.LibraryID, n.ShowID, SetDigest(n.EpisodeIDs))
 		s.Emit(ctx, Event{Kind: KindPodcastEpisodesNew, Data: data, Dedup: dedup})
 	case catalog.PodcastFeedFailing:
 		data["code"], data["failures"] = feedCode(n.Code), n.Failures

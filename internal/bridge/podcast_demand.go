@@ -157,14 +157,22 @@ var fetchMessages = map[string]string{
 	"bridge_lost":          "The Bridge stopped reporting.",
 }
 
+// HTTPStatus is the status of a podcast job's `http_NNN` failure code (1xx to
+// 5xx), and whether code is one.
+func HTTPStatus(code string) (int, bool) {
+	if len(code) != 8 || code[:5] != "http_" || code[5] < '1' || code[5] > '5' {
+		return 0, false
+	}
+	status, err := strconv.Atoi(code[5:])
+	return status, err == nil
+}
+
 // FetchErrorFor accepts only known safe codes and supplies our own copy.
 func FetchErrorFor(code string) *FetchError {
 	message, ok := fetchMessages[code]
-	if !ok && len(code) == 8 && code[:5] == "http_" {
-		if status, err := strconv.Atoi(code[5:]); err == nil && code[5] >= '1' && code[5] <= '5' {
-			message = "The episode returned HTTP " + strconv.Itoa(status) + "."
-			ok = true
-		}
+	if status, isHTTP := HTTPStatus(code); !ok && isHTTP {
+		message = "The episode returned HTTP " + strconv.Itoa(status) + "."
+		ok = true
 	}
 	if !ok {
 		code = "fetch_failed"

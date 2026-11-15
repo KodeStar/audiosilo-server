@@ -791,13 +791,13 @@ func TestPodcastNoticeWording(t *testing.T) {
 		return compose(events[0], srv)
 	}
 	news := n
-	news.Kind, news.Count, news.Titles, news.EpisodeIDs = catalog.PodcastEpisodesNew, 7, []string{"Five", "Four"}, []string{"b", "a"}
+	news.Kind, news.Titles, news.EpisodeIDs = catalog.PodcastEpisodesNew, []string{"Five", "Four"}, []string{"g", "f", "e", "d", "c", "b", "a"}
 	m := emit(news)
 	if m.Title != "7 new episodes of Example Show" || m.Text != "Five\nFour\nand 5 more" ||
 		m.Link != "https://books.example.com/admin/library/libraries" || m.Color != colorInfo {
 		t.Fatalf("episodes = %+v", m)
 	}
-	news.Count, news.Titles, news.EpisodeIDs = 1, []string{"Six"}, []string{"c"}
+	news.Titles, news.EpisodeIDs = []string{"Six"}, []string{"h"}
 	if m := emit(news); m.Title != "1 new episode of Example Show" || m.Text != "Six" {
 		t.Fatalf("one episode = %+v", m)
 	}
@@ -831,11 +831,11 @@ func TestPodcastNoticeWording(t *testing.T) {
 // Bridge's rescan), other new episodes of the show again.
 func TestPodcastEpisodesDedup(t *testing.T) {
 	s, cat, ctx := newService(t)
-	n := catalog.PodcastNotice{Kind: catalog.PodcastEpisodesNew, LibraryID: 1, ShowID: "a1b2c3d4e5f60718", Show: "S", Count: 2, Titles: []string{"B", "A"}, EpisodeIDs: []string{"b", "a"}}
+	n := catalog.PodcastNotice{Kind: catalog.PodcastEpisodesNew, LibraryID: 1, ShowID: "a1b2c3d4e5f60718", Show: "S", Titles: []string{"B", "A"}, EpisodeIDs: []string{"b", "a"}}
 	s.PodcastNotice(ctx, n)
 	n.EpisodeIDs = []string{"a", "b"}
 	s.PodcastNotice(ctx, n)
-	n.Count, n.EpisodeIDs = 1, []string{"c"}
+	n.EpisodeIDs = []string{"c"}
 	s.PodcastNotice(ctx, n)
 	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindPodcastEpisodesNew); len(events) != 2 {
 		t.Fatalf("episode events = %d, want 2", len(events))
