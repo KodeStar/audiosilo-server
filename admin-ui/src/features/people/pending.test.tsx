@@ -510,7 +510,7 @@ describe('a person’s single sign-on', () => {
   });
 
   it('asks for a password when the server no longer counts the sign-on', async () => {
-    mockFetch(
+    const calls = mockFetch(
       personRoutes(sam, {
         'PATCH /admin/users/2': {
           status: 400,
@@ -524,6 +524,13 @@ describe('a person’s single sign-on', () => {
     await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
     expect(await screen.findByText(/Set a password first\./)).toBeInTheDocument();
     expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
+    // Either half of the rule may be what changed: both are read again.
+    const reads = (path: string) => calls.filter((c) => c.method === 'GET' && c.path === path);
+    const patchAt = calls.findIndex((c) => c.method === 'PATCH');
+    await waitFor(() => {
+      expect(reads('/admin/oidc/status').some((c) => calls.indexOf(c) > patchAt)).toBe(true);
+      expect(reads('/admin/users/2').some((c) => calls.indexOf(c) > patchAt)).toBe(true);
+    });
   });
 
   it('shows no card for a person without one', async () => {

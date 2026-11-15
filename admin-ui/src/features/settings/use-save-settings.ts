@@ -5,8 +5,9 @@ import type { AdminSettings, SettingsPatch } from '@/api/types';
 
 /**
  * Saves a settings change: PATCH, then the new envelope into the cache and a
- * refetch of what reads settings (capabilities, system status, modules). Throws the
- * ApiError on a refusal so a form can show it on its field.
+ * refetch of what reads settings (capabilities, system status, modules, the
+ * single sign-on's status). Throws the ApiError on a refusal so a form can show
+ * it on its field.
  */
 export function useSaveSettings() {
   const qc = useQueryClient();
@@ -16,7 +17,8 @@ export function useSaveSettings() {
     // Discard that reply before publishing the PATCH's authoritative envelope.
     await qc.cancelQueries({ queryKey: keys.settings });
     qc.setQueryData(keys.settings, saved);
-    for (const key of [keys.server, keys.system, keys.update, keys.modules]) {
+    // keys.oidcStatus: public_url decides whether single sign-on can run.
+    for (const key of [keys.server, keys.system, keys.update, keys.modules, keys.oidcStatus]) {
       void qc.invalidateQueries({ queryKey: key });
     }
     return saved;

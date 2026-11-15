@@ -588,7 +588,9 @@ function AccountTab({ detail, sso }: { detail: UserDetail; sso?: string }) {
       // Made an admin on their single sign-on, which the server no longer
       // counts (turned off since the page read it): ask for a password.
       if (err instanceof ApiError && err.code === 'admin_needs_password') {
+        // Both halves of the rule may be stale: the status and their identities.
         void qc.invalidateQueries({ queryKey: keys.oidcStatus });
+        invalidatePeople(qc);
         setPromoting(true);
       }
     }

@@ -107,6 +107,11 @@ describe('Settings > Sign-in', () => {
         signin: { auto_create: true, allowed_group: 'family', admin_group: 'admins' },
       }),
     );
+    // A save can change whether single sign-on runs (public_url): read it again.
+    const patchAt = calls.findIndex((c) => c.method === 'PATCH');
+    await waitFor(() =>
+      expect(calls.slice(patchAt).some((c) => c.path === '/admin/oidc/status')).toBe(true),
+    );
   });
 
   it('locks a group the environment sets', async () => {
