@@ -3772,8 +3772,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   scan kicks once per book), so a burst is one pass. The book page's
   `community_check_failed` says the last check failed (the service, or the 4-minute
   pause budget of a 5-minute check: past it, the rest are left unsnapped).
-  `refreshEffective` -> `applyChapterSource` puts the community chapters in the
-  `chapters` rows when a current check fitted and either the admin chose them
+  `refreshEffective` -> `applyChapterSource` (after an admin's edited list, Edited chapters below) puts the
+  community chapters in the `chapters` rows when a current check fitted and either the admin chose them
   (`chapter_choices`: `files`|`community`, durable, path-keyed, moved with the book's
   edits by `MoveDurableState`, never copied onto a joined book) or, with no choice,
   the status is `fill` (no chapters of its own: none, or one per file); else the
@@ -3796,13 +3796,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   listed lengths, `movedChapters`, each running to the next start in the new order) and `chapteralign.Align` with no Prober
   answers `fill` (the book has no chapters of its own: no file holding two); then the rows are the fit,
   `chapters_source = "generated"` (`ChaptersFromGenerated`, never a choice an admin makes: `PATCH
-  {chapter_source}` still takes files|community|auto) and `chapters_fit` a hash of what it was fitted from (`generatedKey`: the
+  {chapter_source}` still takes files|community|auto) and `chapters_fit` a hash of what it was fitted from (`listFitKey`: the
   stored list, the scan's own chapters and the files' book-relative paths, sizes and lengths), so a refresh of an
   unchanged book neither decodes nor fits the list again. Leaving it (the file gone,
   other files, a community fill, a files choice) restores the scan's own (`useChapters` is the one write of
   a stand-in list: on a row from before the snapshot it records the rows as the snapshot and, when the book's
   community check was made of the book as it is now, re-stamps that check's basis, for either source, so the
-  check stays current; a stale one stays stale). Wire (additive): `chapters_source: "community"` or `"generated"`
+  check stays current; a stale one stays stale). Wire (additive): `chapters_source: "community"`, `"generated"` or `"edited"` (below)
   on `/chapters` and the book JSON (an old app shows ordinary chapters with no label); admin book page `chapter_source`, `chapter_choice`,
   `community_chapters` (status, detail, `stale`; not the fitted list),
   `community_checking` (`chapter_source` may be `generated`, which the book page names "Found in the
@@ -3815,6 +3815,31 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
   sets no ASIN from tags (they are only hints; an Audiobookshelf metadata.json does set one): a book is checked once matched.
+  **Edited chapters** (server#240, `0078`, `catalog/chapteredits.go`): an admin's own chapter list made in the
+  console's chapter editor, stored in `chapter_edits` as a `metadata.ChapterList` (generator `console`) with the files
+  it was made on (book-relative path, size, `duration_ms`). It is the FIRST source: `applyChapterSource` reads it
+  before the choice (edited > choice/community > generated > files) and uses it (`applyEdited`) while its files are
+  the book's (`chaptersOnFiles`, as a chapters.json: in another play order its chapters move with their files), placed
+  by the pure `placeOnFiles` (each chapter in the file its start falls in, to the next start or the file's end; a
+  start within 50 ms of a file's start is that file's first chapter); on other files it is dormant (the next source's
+  chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
+  (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
+  every file starts a chapter (its start fixed, its title editable). While an edit applies the renames
+  (`chapter_overrides`) are dormant (`refreshEffective` skips them, the book page marks no chapter `edited`, a PATCH
+  `chapters` rename is 400 `invalid_override` field `chapters`) and come back on Revert; a choice made meanwhile is
+  kept and used after it. `MoveDurableState` carries the row with the book's other edits; a join never copies it
+  (other audio). Health `detailed_chapters` is settled while an edit exists (applied or dormant); an applied edit marks
+  the admin row `edited`. Routes (admin only, audited `book.chapters_edited` / `book.chapters_reverted`): `PUT
+  /admin/libraries/{id}/book/chapters?path=` `{"basis": <the page's chapter_basis>, "chapters": [{"start": <whole-book
+  s, kept to the ms>, "title"}]}` -> the book page; 400 `{"error":"chapters_invalid","code":"chapters_invalid",
+  "detail": empty|too_many (> 2000)|order (< 1 s apart or out of order)|out_of_range (< 0 or at or past the end)|title
+  (1-200 bytes trimmed, no control character: `metadata.ListChapterTitle`, the chapters.json rule)|file_start}`; 409
+  `chapters_basis` when the basis is not the book's files now (path, size, `duration_ms`, in play order); 409
+  `not_book_library` in a podcast library; 404 no book; a body without `basis` or with an unknown field is 400.
+  `DELETE` the same URL reverts it (200, the book page; nothing audited when there was none). Book page: `chapter_edit`
+  (`{state: applied|dormant, edited_by: username|null, edited_at}`, omitted with none) and `chapter_basis` (`{files:
+  [{path, size, duration_ms}]}`, always); `chapter_source` and the player's `chapters_source` may be `"edited"` (an
+  old app shows ordinary chapters).
 - ffprobe is optional; code paths must degrade gracefully when it is absent (with it, most files
   are read in-process: see In-process probe)
   (path-derived metadata still works; codec is left unknown → `direct_playable`

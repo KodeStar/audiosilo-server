@@ -335,7 +335,10 @@ moved and joined with the book, owned by the import that wrote it (`import_id`, 
 see Listening imports in CONVENTIONS.md). `0077` (server#235) adds `users.email` (optional, not unique,
 a NOCASE index), `user_identities` (a single sign-on linked to an account: UNIQUE(issuer, subject) and
 UNIQUE(user_id, issuer), cascades with the user) and `oidc_pending` (sign-ins waiting for an admin, one per
-issuer+subject); see Single sign-on in CONVENTIONS.md.
+issuer+subject); see Single sign-on in CONVENTIONS.md. `0078` (server#240) adds `chapter_edits` (an admin's own
+chapter list made in the console's chapter editor: a `metadata.ChapterList` with the files it was made on, the first
+chapter source while those are the book's files, dormant otherwise; durable, path-keyed, no FK to the index, moved
+with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -402,7 +405,7 @@ keep this index in step (one line per topic).
   - Progress reconciliation
   - Listening sync (Sync v2, Track W1, `catalog/listening_sync.go`: events, the backstop, other_place, file remap, `put` events)
   - Chapters are normalized
-  - Community chapters (incl. Generated chapters, Bridge Phase 1d)
+  - Community chapters (incl. Generated chapters, Bridge Phase 1d, and Edited chapters, server#240)
   - Podcasts (Bridge Phases 2c-1, 2c-2a, 2c-2b and 2c-3: discovery, OPML import/export)
   - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
   - Audible accounts (Bridge Phase 4a, module `audible`: `0063`, the Bridge's routes, `audible.poll` and its scheduler, the console's card and titles page, its Remove, `DELETE /admin/audible/accounts/{account}` outside the toggle)
