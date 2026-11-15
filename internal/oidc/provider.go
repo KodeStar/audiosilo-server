@@ -38,15 +38,24 @@ type Settings struct {
 	// HTTPClient makes every call to the provider (discovery, keys, token,
 	// userinfo); nil is HTTPClientFor("").
 	HTTPClient *http.Client
+	// Budget bounds one use's calls to the provider together (0 = CallBudget;
+	// tests shorten it).
+	Budget time.Duration
 	// Now is the clock (tests); nil is time.Now.
 	Now func() time.Time
 }
 
-// httpTimeout bounds one call to the provider.
-const httpTimeout = 15 * time.Second
+// CallBudget bounds a sign-in's calls to the provider together: AuthURL's
+// discovery when it is due, or Exchange's discovery, token request, keys fetch
+// and userinfo share one deadline. It fits under the API's 30 s request timeout
+// (api's requestTimeout), so a slow provider ends the sign-in on its result
+// panel, not on the timeout's bare 503.
+const CallBudget = 20 * time.Second
 
-// HTTPClientFor is the client a Provider uses: a 15 s timeout and, with caFile
-// set, that PEM file's certificates trusted beside the system's.
+// HTTPClientFor is the client a Provider uses: CallBudget as its timeout (what
+// bounds the key set's own fetch, which runs on the provider's context, not a
+// request's) and, with caFile set, that PEM file's certificates trusted beside
+// the system's.
 func HTTPClientFor(caFile string) (*http.Client, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if caFile != "" {
@@ -63,7 +72,7 @@ func HTTPClientFor(caFile string) (*http.Client, error) {
 		}
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Timeout: httpTimeout, Transport: tr}, nil
+	return &http.Client{Timeout: CallBudget, Transport: tr}, nil
 }
 
 // Discovery backoff: a failed discovery is tried again no sooner than
@@ -111,6 +120,9 @@ func New(s Settings) (*Provider, error) {
 	if s.Now == nil {
 		s.Now = time.Now
 	}
+	if s.Budget <= 0 {
+		s.Budget = CallBudget
+	}
 	client := s.HTTPClient
 	if client == nil {
 		var err error
@@ -143,12 +155,21 @@ func (p *Provider) Status() Status {
 // Check tries discovery when it is due (not during a backoff) and reports the
 // state: what the console's status asks.
 func (p *Provider) Check(ctx context.Context) Status {
+	ctx, cancel := p.budget(ctx)
+	defer cancel()
 	_, _, _ = p.ready(ctx)
 	return p.Status()
 }
 
+// budget is ctx bounded by the provider's call budget: every call one use
+// makes shares it.
+func (p *Provider) budget(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, p.s.Budget)
+}
+
 // ready discovers the provider once (one attempt at a time, none during a
-// backoff): ErrUnavailable wraps why it isn't.
+// backoff): ErrUnavailable wraps why it isn't. Discovery keeps ctx's deadline
+// (the use's budget) but not its cancellation.
 func (p *Provider) ready(ctx context.Context) (*gooidc.Provider, *gooidc.IDTokenVerifier, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -161,7 +182,12 @@ func (p *Provider) ready(ctx context.Context) (*gooidc.Provider, *gooidc.IDToken
 	}
 	// Not the caller's cancellation: a browser that leaves mid-discovery would
 	// otherwise count as the provider failing and start a backoff for everyone.
-	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	// Its deadline still holds: the budget the rest of the use shares.
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(p.s.Budget)
+	}
+	dctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer cancel()
 	prov, err := gooidc.NewProvider(gooidc.ClientContext(dctx, p.client), p.s.Issuer)
 	p.checkedAt = now
@@ -240,6 +266,8 @@ func (p *Provider) oauthConfig(prov *gooidc.Provider, redirectURI string) *oauth
 // AuthURL is the provider's authorization URL for a flow: state, nonce and the
 // PKCE S256 challenge of verifier.
 func (p *Provider) AuthURL(ctx context.Context, redirectURI string, f Flow) (string, error) {
+	ctx, cancel := p.budget(ctx)
+	defer cancel()
 	prov, _, err := p.ready(ctx)
 	if err != nil {
 		return "", err
@@ -269,8 +297,11 @@ const issuedAtLeeway = 5 * time.Minute
 // allowed algorithm from the provider's keys, iss, aud holding the client id,
 // azp when present or when there are several audiences, exp, iat no more than
 // five minutes ahead, the flow's nonce), then userinfo for what the ID token
-// lacks (its sub must be the ID token's).
+// lacks (its sub must be the ID token's). Every call shares one deadline, the
+// call budget.
 func (p *Provider) Exchange(ctx context.Context, redirectURI, code string, f Flow) (Claims, error) {
+	ctx, cancel := p.budget(ctx)
+	defer cancel()
 	prov, verifier, err := p.ready(ctx)
 	if err != nil {
 		return Claims{}, err

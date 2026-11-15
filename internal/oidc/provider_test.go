@@ -266,6 +266,45 @@ func TestDiscoveryIssuerMismatch(t *testing.T) {
 	}
 }
 
+// TestCallsShareOneBudget: a sign-in's calls to the provider (discovery, token,
+// keys, userinfo) share one deadline. Each slow answer alone is well inside the
+// budget, so only a shared deadline ends the use that needs four; the same
+// provider within a larger budget signs in.
+func TestCallsShareOneBudget(t *testing.T) {
+	t.Parallel()
+	const delay = 150 * time.Millisecond
+	for _, tc := range []struct {
+		budget time.Duration
+		ok     bool
+	}{{400 * time.Millisecond, false}, {5 * time.Second, true}} {
+		idp := oidctest.New(t, "audiosilo", "s3cret", alice)
+		p, err := oidc.New(oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
+			Scopes: []string{"openid"}, UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The authorize step on its own (its discovery is the use's only call).
+		f := flow()
+		code := signIn(t, p, f)
+		idp.SetKnobs(oidctest.Knobs{Delay: delay, UserinfoOnly: true})
+		// A fresh provider so the exchange discovers again: four slow calls.
+		p, err = oidc.New(oidc.Settings{Issuer: idp.Issuer, ClientID: idp.ClientID, ClientSecret: "s3cret",
+			Scopes: []string{"openid"}, UsernameClaim: "preferred_username", GroupsClaim: "groups", Budget: tc.budget})
+		if err != nil {
+			t.Fatal(err)
+		}
+		began := time.Now()
+		_, err = p.Exchange(context.Background(), redirectURI, code, f)
+		took := time.Since(began)
+		if tc.ok && err != nil {
+			t.Fatalf("budget %v: %v", tc.budget, err)
+		}
+		if !tc.ok && (err == nil || took > tc.budget+delay) {
+			t.Fatalf("budget %v: err %v after %v", tc.budget, err, took)
+		}
+	}
+}
+
 func TestHTTPClientFor(t *testing.T) {
 	t.Parallel()
 	if _, err := oidc.HTTPClientFor(t.TempDir() + "/missing.pem"); err == nil {

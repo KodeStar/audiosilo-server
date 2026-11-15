@@ -60,6 +60,9 @@ type Knobs struct {
 	DiscoveryIssuer string
 	// FailDiscovery answers discovery 500.
 	FailDiscovery bool
+	// Delay holds each answer of discovery, the keys, token and userinfo this
+	// long (or until the caller leaves): a slow provider.
+	Delay time.Duration
 }
 
 // Provider is a running fake provider.
@@ -140,8 +143,25 @@ func (f *Provider) count(endpoint string) {
 	f.mu.Unlock()
 }
 
-func (f *Provider) discovery(w http.ResponseWriter, _ *http.Request) {
+// slow holds an answer for the Delay knob, or until the caller leaves.
+func (f *Provider) slow(r *http.Request) {
+	f.mu.Lock()
+	d := f.knobs.Delay
+	f.mu.Unlock()
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-r.Context().Done():
+	}
+}
+
+func (f *Provider) discovery(w http.ResponseWriter, r *http.Request) {
 	f.count("discovery")
+	f.slow(r)
 	f.mu.Lock()
 	k := f.knobs
 	f.mu.Unlock()
@@ -164,7 +184,8 @@ func (f *Provider) discovery(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (f *Provider) jwks(w http.ResponseWriter, _ *http.Request) {
+func (f *Provider) jwks(w http.ResponseWriter, r *http.Request) {
+	f.slow(r)
 	writeJSON(w, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &f.key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}})
 }
 
@@ -195,6 +216,7 @@ func (f *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 
 func (f *Provider) token(w http.ResponseWriter, r *http.Request) {
 	f.count("token")
+	f.slow(r)
 	if err := r.ParseForm(); err != nil {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -315,6 +337,7 @@ func addPerson(claims map[string]any, p Person) {
 
 func (f *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 	f.count("userinfo")
+	f.slow(r)
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	f.mu.Lock()
 	p, ok := f.access[tok]
