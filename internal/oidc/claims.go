@@ -131,11 +131,14 @@ func clean(s string, limit int) string {
 
 // fill sets what c lacks from set: the email with its verified flag (taken
 // together, so one source's address is never vouched for by the other's
-// flag), the username, the name and the groups.
+// flag), the username, the name and the groups. An email clean changed (cut
+// to MaxEmail, trimmed, a control character dropped) is not the address the
+// provider verified, so it counts as unverified: it never links by itself.
 func (c *Claims) fill(set claimSet, usernameClaim, groupsClaim string) {
 	if c.Email == "" {
-		if e := clean(set.str("email"), MaxEmail); e != "" {
-			c.Email, c.EmailVerified = e, set.verified()
+		raw := set.str("email")
+		if e := clean(raw, MaxEmail); e != "" {
+			c.Email, c.EmailVerified = e, e == raw && set.verified()
 		}
 	}
 	if c.Username == "" {

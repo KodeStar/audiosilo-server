@@ -3546,8 +3546,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `iat` at most 5 minutes ahead; userinfo only when a claim is missing, its `sub` must equal the ID
   token's; errors never carry a response body), the flow cookie (`Sealer`: AES-GCM under a key made at
   start, so a restart ends flows in flight; `Flow{state, nonce, verifier, return, issued_at}`, ten
-  minutes; `Replay` refuses a state used before), the claims (`Claims`: the email and its verified
-  flag taken together, groups a list or a string, capped) and **`Decide`**, the one decision: a linked
+  minutes; `Replay` refuses a state used before, remembering only a flow whose exchange succeeded, so
+  states sent back bare can't fill it), the claims (`Claims`: the email and its verified flag taken
+  together, an email cleaning changed (cut, trimmed, a control character dropped) unverified; groups a
+  list or a string, capped) and **`Decide`**, the one decision: a linked
   identity signs in (refused when the account is disabled, or a household member or demo account
   now); else an email matching accounts links on its own **only** when it is verified and matches
   exactly one eligible account (decision 4: **never an admin's**, a member's or a demo account's;

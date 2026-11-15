@@ -1,6 +1,8 @@
 package oidc
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +83,46 @@ func TestDecideRoleSync(t *testing.T) {
 	in.Linked = &Account{ID: 3, Disabled: true}
 	if d := Decide(in); d.Outcome != Refuse || d.Role != "" {
 		t.Fatalf("refused: %+v", d)
+	}
+}
+
+// TestFillEmailAsSent: an email is vouched for only as the provider sent it;
+// one clean had to change (cut, trimmed, a control character dropped) is kept
+// for the console but counts as unverified, so it never links by itself.
+func TestFillEmailAsSent(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", MaxEmail) + "@example.org"
+	for _, tc := range []struct {
+		raw      string
+		verified bool
+	}{
+		{"alice@example.org", true},
+		{" alice@example.org", false},
+		{"alice@example.org\n", false},
+		{"ali\u0000ce@example.org", false},
+		{long, false},
+	} {
+		raw, _ := json.Marshal(tc.raw)
+		var c Claims
+		c.fill(claimSet{"email": raw, "email_verified": json.RawMessage("true")}, "u", "g")
+		if c.Email == "" || c.EmailVerified != tc.verified {
+			t.Errorf("%q: email %q verified %v, want verified %v", tc.raw, c.Email, c.EmailVerified, tc.verified)
+		}
+	}
+}
+
+// TestWithoutBody: a failed request's error keeps its status, never the
+// provider's response body.
+func TestWithoutBody(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"401 Unauthorized: {\"error\":\"invalid_token\",\"echo\":\"secret\"}": "401 Unauthorized",
+		"404 Not Found: <html>long page</html>":                               "404 Not Found",
+		`Get "https://idp.example/.well-known": dial tcp: refused`:            `Get "https://idp.example/.well-known": dial tcp: refused`,
+		"oidc: failed to decode provider discovery object: EOF":               "oidc: failed to decode provider discovery object: EOF",
+	} {
+		if got := withoutBody(in); got != want {
+			t.Errorf("withoutBody(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
