@@ -635,4 +635,17 @@ func TestOIDCTokenEndsWhenJoiningAHousehold(t *testing.T) {
 	if u, err := s.ConsumeOIDC(ctx, tok); err != nil || u.ID != stays.ID {
 		t.Fatalf("an independent account's sign-in was ended: %v", err)
 	}
+	// Denied: a token minted after the account joined (the callback decided
+	// before the join committed), which leaveOwners never saw.
+	late := mustUser(t, s, ctx, "late", "", RoleUser)
+	if err := s.UpdateUser(ctx, late.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberGrownup, Access: MemberAll}}); err != nil {
+		t.Fatal(err)
+	}
+	tok, err = s.IssueOIDCToken(ctx, late.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumeOIDC(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("a member finished a sign-in minted after joining: %v", err)
+	}
 }

@@ -175,7 +175,7 @@ is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
-`users`, `tokens` (sessions, API keys, pairing, cast, bridge and calendar feed tokens, hashed; pairing tokens minted from an
+`users`, `tokens` (sessions, API keys, pairing, single sign-on (`oidc`), cast, bridge and calendar feed tokens, hashed; pairing tokens minted from an
 auth code carry `auth_code_id` - `0014` migration - so they live and die with
 the code), `auth_codes`, `libraries` (no
 `layout` column - shape is auto-detected), `books` (+ `content_hash` fingerprint,

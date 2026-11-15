@@ -208,14 +208,20 @@ func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Dur
 }
 
 // ConsumeOIDC trades a token IssueOIDCToken minted for its account, once
-// (spendOnce: two racing finishes cannot both win). Any
-// other token (a pairing token, a session) is ErrInvalidToken and left as it
-// was, as is a spent or expired one, or one whose account is disabled.
+// (spendOnce: two racing finishes cannot both win). Any other token (a
+// pairing token, a session) is ErrInvalidToken and left as it was, as is a
+// spent or expired one, or one whose account is disabled or is now a
+// household member or a demo account (which single sign-on never signs in:
+// the callback's decision and its token are two writes, so an account can
+// join a household between them, after leaveOwners had no token to end).
 func (s *Service) ConsumeOIDC(ctx context.Context, secret string) (*User, error) {
 	hash := hashSecret(secret)
 	u, _, err := s.lookupToken(ctx, hash, KindOIDC)
 	if err != nil {
 		return nil, err
+	}
+	if u.IsMember() || u.IsDemo {
+		return nil, ErrInvalidToken
 	}
 	if err := s.spendOnce(ctx, "ConsumeOIDC", hash, KindOIDC, s.ts()); err != nil {
 		return nil, err

@@ -152,7 +152,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   answers `{"signed_out": n}`, audit `user.sign_out_everywhere`) does the same without a password
   change, and forgets the person's browsers. With the sessions go the ways back in a session can make
   without the password, which the person can neither see nor revoke: their open pairing codes
-  (unlinked `pairing` tokens, `POST /auth/pair`) and their recovery code (its linked pairing tokens
+  (unlinked `pairing` tokens, `POST /auth/pair`), a single sign-on not yet finished (`oidc` tokens)
+  and their recovery code (its linked pairing tokens
   cascade). Their household members go the same way where the person put them (server#285): a member's
   session made on any of the person's devices but the kept one (`created_on_token_id`, the device
   revoke's `also_members` rule, a device signed out earlier included) and every member's open pairing
@@ -2264,7 +2265,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
   expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that) and
   the pairing tokens that can never pair again (`auth.PrunePairingTokens`: revoked, expired, or linked to
-  a used-up or expired code). Migration 0021 backfilled listening from before sessions were
+  a used-up or expired code; single sign-on's `oidc` tokens too, spent or expired). Migration 0021 backfilled listening from before sessions were
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
@@ -2486,7 +2487,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /admin/authcodes/{id}/rotate` answer 409 `kid_account`: `auth.refuseKid` in `CreateInvite` and
   `RotateAuthCode`, the latter so a used-up invite kept as history can't be revived into a kid's account),
   since only the owner sets up a kid's devices; switching a grown-up to a kid (or the admin assigning a kid) clears the password,
-  API keys, pairing tokens, the calendar feed token,
+  API keys, pairing tokens, a single sign-on not yet finished (`oidc` token), the calendar feed token,
   recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between
   the kid and anyone but their owner (both ways, so no sharer is left with a kid in a list the server
   refuses back) and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
@@ -2513,8 +2514,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
   on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
   access to the old owner's phone, the calendar feed link made on one (deleted; `IssueFeedToken`
-  records the device of the session that made it), and open unlinked pairing tokens); leaving one ("Make
-  independent", or kept by `keep_members`) takes the open pairing tokens only; their own devices stay
+  records the device of the session that made it), and open unlinked pairing tokens and an unfinished
+  single sign-on's `oidc` token); leaving one ("Make independent", or kept by `keep_members`) takes the
+  open pairing and `oidc` tokens only; their own devices stay
   signed in. Audit `member.create|update|delete|session|pair|device_revoke`
   (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).
 - **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
@@ -3591,7 +3593,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
   the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown, of
   another kind or its
-  account's disabled (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
+  account's disabled, or now a household member or demo account (one that joined between the
+  callback's decision and its token) (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on
   `#oidc=done` (`main.tsx` strips it before the router), signs a non-admin straight back out, and
   keeps a stored session when the finish signs no admin in; anything else
   lands on `/connect#oidc=<reason>` (off, unavailable, pending, disabled, not_allowed, failed, expired,
