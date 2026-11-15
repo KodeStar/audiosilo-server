@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -190,6 +191,24 @@ type Service struct {
 	// tokens is lookupToken's cache of valid tokens, exact by the store's content
 	// generation and its own touches' deletes (tokencache.go).
 	tokens store.GenMap[string, cachedToken]
+	// ssoIssuer is the issuer of the single sign-on that can run now ("" while
+	// it is off or can't run; unset, none): only an identity from it is an
+	// admin's way into the console (decision 5). SetSSOIssuer.
+	ssoIssuer atomic.Pointer[func() string]
+}
+
+// SetSSOIssuer says which provider's identities count as an admin's way into
+// the console: issuer reports the issuer of the single sign-on that can run
+// now, "" while it is off or misconfigured (the API's, read per check, so a
+// public_url cleared since start counts). Until it is set no identity counts.
+func (s *Service) SetSSOIssuer(issuer func() string) { s.ssoIssuer.Store(&issuer) }
+
+// activeIssuer is SetSSOIssuer's answer now ("" for none).
+func (s *Service) activeIssuer() string {
+	if f := s.ssoIssuer.Load(); f != nil {
+		return (*f)()
+	}
+	return ""
 }
 
 // New returns a Service. now may be nil to use time.Now.
@@ -1623,7 +1642,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		// An admin needs a way into the console: a password, or a linked
 		// single sign-on identity (decision 5). Read only when it decides.
 		wayIn := func() error {
-			if ok, err := hasIdentity(ctx, tx, id); err != nil || ok {
+			if ok, err := s.hasSignInIdentity(ctx, tx, id); err != nil || ok {
 				return err
 			}
 			return ErrAdminNeedsPassword

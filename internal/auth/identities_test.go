@@ -207,7 +207,13 @@ func TestOIDCRoleSync(t *testing.T) {
 	if res.User.Role != RoleAdmin || res.Role == nil || !res.Role.Changed() {
 		t.Fatalf("promotion: %+v %+v", res.User, res.Role)
 	}
+	// No groups claim at all: the role is left as it is (no demotion).
 	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
+	if res.User.Role != RoleAdmin || res.Role != nil || !res.Decision.NoGroups {
+		t.Fatalf("no groups claim: %+v %+v", res.User, res.Role)
+	}
+	// An empty list is a claim: out of the group.
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, []string{}...), p)
 	if res.User.Role != RoleUser || !res.Role.Changed() {
 		t.Fatalf("demotion: %+v %+v", res.User, res.Role)
 	}
@@ -218,7 +224,7 @@ func TestOIDCRoleSync(t *testing.T) {
 	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-root", "root@example.org", true)), root.ID, root.ID); err != nil {
 		t.Fatal(err)
 	}
-	res = signIn(t, s, ctx, claimsFor("sub-root", "root@example.org", true), p)
+	res = signIn(t, s, ctx, claimsFor("sub-root", "root@example.org", true, []string{}...), p)
 	if res.Decision.Outcome != oidc.SignIn || res.User.Role != RoleAdmin || !res.Role.Refused || res.Role.Changed() {
 		t.Fatalf("last admin: %+v %+v", res.User, res.Role)
 	}
@@ -382,6 +388,7 @@ func TestPendingGroupsCapped(t *testing.T) {
 func TestUnlinkIdentity(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
+	s.SetSSOIssuer(func() string { return testIssuer })
 	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
 	sso := mustUser(t, s, ctx, "sso", "", RoleUser)
 	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-sso", "", false)), sso.ID, root.ID); err != nil {
@@ -411,6 +418,7 @@ func TestUnlinkIdentity(t *testing.T) {
 func TestAdminPasswordRule(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
+	s.SetSSOIssuer(func() string { return testIssuer })
 	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
 	other := mustUser(t, s, ctx, "other", "admin-password", RoleAdmin)
 	plain := mustUser(t, s, ctx, "plain", "", RoleUser)
@@ -429,6 +437,49 @@ func TestAdminPasswordRule(t *testing.T) {
 	u, _ := s.GetUser(ctx, other.ID)
 	if u.HasPassword || u.Role != RoleAdmin {
 		t.Fatalf("after clearing: %+v", u)
+	}
+}
+
+// TestIdentityWayInOnlyForTheRunningSSO: an identity is an admin's way into
+// the console only while it is from the single sign-on that can run now: with
+// it off (or never set), or configured for another provider, a password-less
+// admin's identity neither replaces a password nor blocks its own unlinking.
+func TestIdentityWayInOnlyForTheRunningSSO(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	other := mustUser(t, s, ctx, "other", "admin-password", RoleAdmin)
+	plain := mustUser(t, s, ctx, "plain", "", RoleUser)
+	for _, u := range []*User{other, plain} {
+		if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-"+u.Username, "", false)), u.ID, root.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var active string
+	s.SetSSOIssuer(func() string { return active })
+	for _, iss := range []string{"", "https://another-idp.example"} {
+		active = iss
+		if err := s.UpdateUser(ctx, other.ID, UserChanges{Password: ptr("")}); !errors.Is(err, ErrAdminNeedsPassword) {
+			t.Fatalf("issuer %q: clear a linked admin's password: %v", iss, err)
+		}
+		if err := s.UpdateUser(ctx, plain.ID, UserChanges{Role: ptr(RoleAdmin)}); !errors.Is(err, ErrAdminNeedsPassword) {
+			t.Fatalf("issuer %q: promote a linked, password-less account: %v", iss, err)
+		}
+	}
+	// The running sign-in's: a way in.
+	active = testIssuer
+	if err := s.UpdateUser(ctx, plain.ID, UserChanges{Role: ptr(RoleAdmin)}); err != nil {
+		t.Fatalf("promote with the running sign-in's identity: %v", err)
+	}
+	ids, _ := s.ListIdentities(ctx, plain.ID)
+	if _, err := s.UnlinkIdentity(ctx, plain.ID, ids[0].ID); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("unlink the running sign-in's last way in: %v", err)
+	}
+	// Single sign-on turned off: the identity is no way in, so unlinking it
+	// strands no one it hadn't.
+	active = ""
+	if _, err := s.UnlinkIdentity(ctx, plain.ID, ids[0].ID); err != nil {
+		t.Fatalf("unlink while single sign-on is off: %v", err)
 	}
 }
 

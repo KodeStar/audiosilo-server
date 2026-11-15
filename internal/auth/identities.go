@@ -508,7 +508,9 @@ func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]Identity,
 
 // UnlinkIdentity removes identity identityID from account userID, returning
 // it: ErrNotFound when the account has no such identity, ErrAdminNeedsPassword
-// when it is a password-less admin's last way in (decision 5).
+// when it is a password-less admin's way in (decision 5): an identity from the
+// single sign-on that can run now (activeIssuer; an account has at most one
+// per issuer). One from another provider, or while it is off, is no way in.
 func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) (Identity, error) {
 	var out Identity
 	err := s.db.WithDurableTx(ctx, "UnlinkIdentity", func(tx *sql.Tx) error {
@@ -522,14 +524,15 @@ func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) 
 		if err != nil {
 			return err
 		}
-		var stranded bool
-		if err := tx.QueryRowContext(ctx, `SELECT u.role = ? AND u.password_hash = ''
-			   AND NOT EXISTS(SELECT 1 FROM user_identities o WHERE o.user_id = u.id AND o.id <> ?)
-			  FROM users u WHERE u.id = ?`, RoleAdmin, identityID, userID).Scan(&stranded); err != nil {
-			return err
-		}
-		if stranded {
-			return ErrAdminNeedsPassword
+		if iss := s.activeIssuer(); iss != "" && out.Issuer == iss {
+			var stranded bool
+			if err := tx.QueryRowContext(ctx, `SELECT role = ? AND password_hash = '' FROM users WHERE id = ?`,
+				RoleAdmin, userID).Scan(&stranded); err != nil {
+				return err
+			}
+			if stranded {
+				return ErrAdminNeedsPassword
+			}
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, identityID)
 		return err
@@ -537,10 +540,16 @@ func (s *Service) UnlinkIdentity(ctx context.Context, userID, identityID int64) 
 	return out, err
 }
 
-// hasIdentity reports whether account id has an identity at any provider: a
-// way into the console besides a password (decision 5).
-func hasIdentity(ctx context.Context, q rowQuerier, id int64) (bool, error) {
+// hasSignInIdentity reports whether account id has an identity from the
+// single sign-on that can run now (activeIssuer): a way into the console
+// besides a password (decision 5). None counts while it is off or
+// misconfigured, nor one from a provider no longer configured.
+func (s *Service) hasSignInIdentity(ctx context.Context, q rowQuerier, id int64) (bool, error) {
+	iss := s.activeIssuer()
+	if iss == "" {
+		return false, nil
+	}
 	var ok bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = ?)`, id).Scan(&ok)
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = ? AND issuer = ?)`, id, iss).Scan(&ok)
 	return ok, err
 }
