@@ -57,6 +57,11 @@ const (
 // exchange's pairing token, a single sign-on's finish): never worth caching.
 func singleUse(kind string) bool { return kind == KindPairing || kind == KindOIDC }
 
+// singleUseKindsSQL is singleUse's kinds as a SQL list, for the writes that end
+// or prune the open ones (endSessions, leaveOwners, clearKidCredentials,
+// PrunePairingTokens).
+const singleUseKindsSQL = `('` + KindPairing + `', '` + KindOIDC + `')`
+
 // neverTouched reports whether a token of kind is never touched by resolve: it
 // is no device of its owner's, and its calls are not the owner's activity, which
 // is the newest last_seen of their tokens (userColumns, the inactive accounts).
@@ -1189,7 +1194,7 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // reports how many it deleted.
 func (s *Service) PrunePairingTokens(ctx context.Context) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens
-	  WHERE kind IN ('`+KindPairing+`', '`+KindOIDC+`')
+	  WHERE kind IN `+singleUseKindsSQL+`
 	    AND (revoked = 1 OR expires_at < ?1
 	         OR (auth_code_id IS NOT NULL AND NOT EXISTS (
 	               SELECT 1 FROM auth_codes c WHERE c.id = tokens.auth_code_id
@@ -1834,8 +1839,8 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind IN (?, ?) AND auth_code_id IS NULL AND revoked = 0`,
-		userID, KindPairing, KindOIDC); err != nil {
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ? AND kind IN `+singleUseKindsSQL+` AND auth_code_id IS NULL AND revoked = 0`,
+		userID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,

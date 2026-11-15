@@ -742,7 +742,7 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
-		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `', '` + KindOIDC + `') AND revoked = 0`,
+		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND (kind = '` + KindAPI + `' OR kind IN ` + singleUseKindsSQL + `) AND revoked = 0`,
 		deleteFeedTokensSQL,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,
@@ -778,7 +778,7 @@ func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
 	const madeElsewhere = `(SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2`
 	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
 	  WHERE user_id = ?1 AND revoked = 0
-	    AND ((kind IN ('`+KindPairing+`', '`+KindOIDC+`') AND auth_code_id IS NULL)
+	    AND ((kind IN `+singleUseKindsSQL+` AND auth_code_id IS NULL)
 	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`') AND `+madeElsewhere+`))`, id, newOwner); err != nil {
 		return err
 	}

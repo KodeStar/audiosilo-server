@@ -186,23 +186,20 @@ func sameHost(public *url.URL, host string) bool {
 	return strings.EqualFold(config.HostWithPort(host, port), config.HostWithPort(public.Host, port))
 }
 
-// oidcHTTPS reports whether public_url is https (in any case: it keeps the
-// case it was typed in).
-func (a *API) oidcHTTPS() bool { return strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:") }
-
 // oidcCookieName is the name one of the flow's cookies (oidcCookie,
-// oidcDoneCookie) is set and read by, and its path. On an https public_url
-// it is __Host-<name> on Path=/ (the prefix demands that path, Secure and no
+// oidcDoneCookie) is set and read by, its path and whether it is Secure: an
+// https public_url (in any case: it keeps the case it was typed in). There it
+// is __Host-<name> on Path=/ (the prefix demands that path, Secure and no
 // Domain), so neither a sibling subdomain nor a network attacker answering
 // plain http can plant one: a planted flow or done cookie would sign the
 // browser in as the attacker (a login CSRF). On plain http no prefix can be
 // had (it needs Secure), so a network attacker can plant one there; the
 // cookies keep the flow's path, oidcCookiePath, then.
-func (a *API) oidcCookieName(name string) (string, string) {
-	if a.oidcHTTPS() {
-		return hostCookiePrefix + name, "/"
+func (a *API) oidcCookieName(name string) (cookie, path string, secure bool) {
+	if strings.HasPrefix(strings.ToLower(a.oidcBase()), "https:") {
+		return hostCookiePrefix + name, "/", true
 	}
-	return name, oidcCookiePath
+	return name, oidcCookiePath, false
 }
 
 // setOIDCCookie sets one of the flow's cookies, name (maxAge < 0 deletes it),
@@ -210,17 +207,17 @@ func (a *API) oidcCookieName(name string) (string, string) {
 // only on an https public_url: a browser never sends a Secure cookie back over
 // plain http (a server on the home network without TLS).
 func (a *API) setOIDCCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	name, path := a.oidcCookieName(name)
+	name, path, secure := a.oidcCookieName(name)
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure follows public_url's scheme, see above
 		Name: name, Value: value, Path: path, MaxAge: maxAge,
-		HttpOnly: true, Secure: a.oidcHTTPS(), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
 	})
 }
 
 // oidcCookieValue is one of the flow's cookies the request carries, by the
 // name oidcCookieName gives it ("" when absent).
 func (a *API) oidcCookieValue(r *http.Request, name string) string {
-	name, _ = a.oidcCookieName(name)
+	name, _, _ = a.oidcCookieName(name)
 	if c, err := r.Cookie(name); err == nil {
 		return c.Value
 	}
@@ -434,8 +431,8 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 // so the sign-in can still be finished for the rest of its minute; every other
 // answer clears it. 401 code oidc_no_sign_in without the cookie (charging
 // nothing: no secret was tried), oidc_sign_in_expired for a token spent,
-// expired, unknown, of another kind or its account's disabled (charged to the
-// address's oidcLimiter, the callback's). Not redeemLimiter: any page can make
+// expired, unknown, of another kind, or its account's disabled or now a
+// member (charged to the address's oidcLimiter, the callback's). Not redeemLimiter: any page can make
 // a visitor's browser fail ten exchanges or redeems (a simple POST), which
 // would lock that address out of finishing a sign-in the provider completed.
 // A page on another site can't make a browser send the cookie here
