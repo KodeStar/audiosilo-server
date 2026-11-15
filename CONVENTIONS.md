@@ -2778,7 +2778,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   toast by `skipNotes`) one refused `generate_open`, `describe_open` or `chapters_chosen` and one whose
   answer is its own PARKED detect job (`queueInOrder` never counts a returned `needs_attention` job as
   queued: reason `parked`, "waiting for attention on the Bridge"); a row whose `chapter_choice` is set
-  (admin rows carry it, additive) offers no Detect, says why (`rowFix`, `detectChosenNote`) and is left out
+  (admin rows carry it, additive), or whose `chapters_source` is `edited`, offers no Detect, says why (`rowFix`, `detectChosenNote`) and is left out
   of the bar's selection; it stays open while it queues (a close is ignored then), so a run's outcome lands
   in the dialog that started it. The Community card's `GenerateSection` shows a queued or working detect
   job's status (`generateBlocker`: the job list, else the estimate's `open_job`) in place of Generate, and
