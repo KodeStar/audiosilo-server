@@ -832,10 +832,14 @@ func TestPodcastNoticeWording(t *testing.T) {
 	if m := emit(back); m.Title != "A podcast feed is back: Example Show" || m.Link != "https://books.example.com/admin/library/libraries" {
 		t.Fatalf("recovered = %+v", m)
 	}
-	// A feed without a title is named by its folder.
+	// A feed without a title is named by its folder, as one plain line too.
 	back.Show = ""
 	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
 		t.Fatalf("untitled = %+v", m)
+	}
+	back.ShowPath = "Example\tShow"
+	if m := emit(back); m.Title != "A podcast feed is back: Example Show" {
+		t.Fatalf("untitled, a folder with a control character = %+v", m)
 	}
 }
 

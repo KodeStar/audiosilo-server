@@ -769,7 +769,7 @@ func (s *Service) PodcastNotice(ctx context.Context, n catalog.PodcastNotice) {
 	data := map[string]any{
 		"library": n.Library, "library_id": n.LibraryID,
 		// A feed without a title is named by its folder.
-		"show": cmp.Or(plainLine(n.Show, 200), n.ShowPath), "show_path": n.ShowPath, "show_id": n.ShowID,
+		"show": cmp.Or(plainLine(n.Show, 200), plainLine(n.ShowPath, 200)), "show_path": n.ShowPath, "show_id": n.ShowID,
 	}
 	switch n.Kind {
 	case catalog.PodcastEpisodesNew:
