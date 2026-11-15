@@ -109,17 +109,25 @@ const byStart = (rows: DraftRow[]) => [...rows].sort((a, b) => a.start - b.start
 /**
  * The editor's first rows: the book's chapters as they play now, each file's
  * start a fixed row (the chapter that starts it, snapped to the exact file start;
- * one titled after the chapter running into it, or the file, when none does).
+ * one titled after the chapter running into it, or the file, when none does). A
+ * chapter's start is its file's start on this timeline plus its start in the
+ * file (its book offset only when its file isn't one of them), so a book of many
+ * files, whose book offsets add up the lengths unrounded, lines up the same.
  */
 export function draftFromChapters(chapters: AdminChapter[], spans: FileSpan[]): DraftRow[] {
-  const rows: DraftRow[] = [...chapters]
-    .sort((a, b) => a.book_offset - b.book_offset)
+  const spanOf = new Map(spans.map((s) => [s.path, s]));
+  const startOf = (c: AdminChapter) => {
+    const span = spanOf.get(c.file_path);
+    return roundMs(span ? span.start + c.start : c.book_offset);
+  };
+  const rows: DraftRow[] = chapters
     .map((c) => ({
       key: `c${c.index}`,
-      start: roundMs(c.book_offset),
+      start: startOf(c),
       title: c.title,
       fixed: false,
-    }));
+    }))
+    .sort((a, b) => a.start - b.start);
   const own = [...rows];
   for (const span of spans) {
     const at = own.find((r) => Math.abs(r.start - span.start) < FILE_START_SLACK);

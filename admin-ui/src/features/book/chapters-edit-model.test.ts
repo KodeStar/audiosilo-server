@@ -106,6 +106,24 @@ describe('draftFromChapters', () => {
     ]);
   });
 
+  it('places a chapter by its file and its start in it, not a book offset that drifted', () => {
+    // A book of many files: the book offsets add up the files' lengths unrounded,
+    // 80 ms past where the basis' whole milliseconds put 02.mp3.
+    const draft = draftFromChapters(
+      [
+        chapter(0, '01.mp3', 0, 100, 0),
+        chapter(1, '02.mp3', 0, 20, 100.08),
+        chapter(2, '02.mp3', 20, 50, 120.08),
+      ],
+      SPANS,
+    );
+    expect(draft.map((r) => [r.start, r.title, r.fixed])).toEqual([
+      [0, 'Chapter 1', true],
+      [100, 'Chapter 2', true],
+      [120, 'Chapter 3', false],
+    ]);
+  });
+
   it('adds a fixed row for a file no chapter starts, named after the chapter running into it', () => {
     const draft = draftFromChapters([chapter(0, '01.mp3', 0, 100, 0)], SPANS);
     expect(draft.map((r) => [r.start, r.title, r.fixed])).toEqual([
