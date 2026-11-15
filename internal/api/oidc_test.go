@@ -891,6 +891,75 @@ func TestOIDCPendingAndConsole(t *testing.T) {
 	}
 }
 
+// TestOIDCPendingNotifies (server#235): a sign-in parked for an admin raises
+// oidc_pending once per waiting row (a repeat attempt adds none, a dismissed
+// row recorded again is told again), naming the provider, the person and the
+// reason's code, never the email, subject or groups; a refused sign-in that
+// records nothing (a disabled account) raises none. The pending list carries
+// the accounts already linked to each issuer, which Link would refuse.
+func TestOIDCPendingNotifies(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	ctx := context.Background()
+	tok := e.session(t, e.adminID)
+	pending := func() []catalog.ServerEvent {
+		t.Helper()
+		events, _, err := e.cat.ListServerEvents(ctx, 0, 20, "oidc_pending")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+	// Alice links on her own (a verified email, one account); Carol waits.
+	alice := e.mustUser(t, "alice", "alice@example.org")
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("alice: %q", loc)
+	}
+	e.idp.SetPerson(oidcCarol)
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcPending)
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcPending)
+	events := pending()
+	if len(events) != 1 {
+		t.Fatalf("events after two attempts = %+v; want one", events)
+	}
+	if d := events[0].Data; d["provider"] != "Keycloak" || d["person"] != "carol" || d["reason"] != oidc.ReasonAutoCreateOff {
+		t.Fatalf("data = %v", d)
+	}
+	raw, _ := json.Marshal(events[0].Data)
+	for _, secret := range []string{"@", "sub-carol", "guests", e.idp.Issuer} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("data %s carries %q", raw, secret)
+		}
+	}
+	resp, body := e.do(t, "GET", "/api/v1/admin/oidc/pending", tok, "")
+	var list struct {
+		Pending []auth.PendingSignIn `json:"pending"`
+		Linked  map[string][]int64   `json:"linked_user_ids"`
+	}
+	_ = json.Unmarshal([]byte(body), &list)
+	if resp.StatusCode != 200 || len(list.Pending) != 1 || len(list.Linked[e.idp.Issuer]) != 1 ||
+		list.Linked[e.idp.Issuer][0] != alice.ID {
+		t.Fatalf("pending: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := e.do(t, "DELETE", "/api/v1/admin/oidc/pending/"+itoa(list.Pending[0].ID), tok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("dismiss: %d", resp.StatusCode)
+	}
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcPending)
+	if events := pending(); len(events) != 2 {
+		t.Fatalf("events after a dismissed row came back = %d; want 2", len(events))
+	}
+	// A disabled account's sign-in is refused, not parked: nothing raised.
+	yes := true
+	if err := e.auth.UpdateUser(ctx, alice.ID, auth.UserChanges{Disabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	e.idp.SetPerson(oidcAlice)
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcDisabled)
+	if events := pending(); len(events) != 2 {
+		t.Fatalf("a refused sign-in raised oidc_pending: %d events", len(events))
+	}
+}
+
 // TestOIDCUnlinkAdminNeedsPassword: a password-less admin's last identity
 // can't be unlinked (409); with a password it can.
 func TestOIDCUnlinkAdminNeedsPassword(t *testing.T) {

@@ -758,6 +758,50 @@ export interface OIDCIdentity {
   last_sign_in_at: string | null;
 }
 
+/**
+ * Why a single sign-on waits for an admin (oidc.PendingReasons,
+ * internal/oidc/decide.go). A newer server may send another.
+ */
+export const OIDC_PENDING_REASONS = [
+  'unverified_email',
+  'no_match',
+  'several_matches',
+  'not_eligible',
+  'not_allowed',
+  'auto_create_off',
+  'admin_account',
+] as const;
+export type OIDCPendingReason = (typeof OIDC_PENDING_REASONS)[number];
+
+/** auth.PendingSignIn (internal/auth/identities.go): a sign-in no account took. */
+export interface OIDCPendingSignIn {
+  id: number;
+  issuer: string;
+  subject: string;
+  /** "" when the provider sent none. */
+  email: string;
+  email_verified: boolean;
+  username: string;
+  name: string;
+  /** At most 50 kept. */
+  groups: string[] | null;
+  reason: OIDCPendingReason | (string & {});
+  first_seen_at: string;
+  last_seen_at: string;
+  attempts: number;
+}
+
+/** GET /admin/oidc/pending (handlers_oidc.go handleOIDCPending). */
+export interface OIDCPendingList {
+  /** The newest first. */
+  pending: OIDCPendingSignIn[];
+  /**
+   * Per issuer among them, the accounts already holding an identity from it
+   * (Link refuses those, 409 user_has_identity). Absent before server#235b.
+   */
+  linked_user_ids?: Record<string, number[]>;
+}
+
 /** A PATCH body: only the settings to change, by section. */
 export type SettingsPatch = {
   [S in SettingsSection]?: Partial<AdminSettings[S]>;
@@ -954,7 +998,8 @@ export type ServerEventKind =
   | 'book_released'
   | 'podcast_episodes_new'
   | 'podcast_feed_failing'
-  | 'podcast_feed_recovered';
+  | 'podcast_feed_recovered'
+  | 'oidc_pending';
 
 export type NotifyTargetKind = 'webhook' | 'ntfy' | 'discord';
 

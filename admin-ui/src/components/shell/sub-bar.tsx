@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Link, useMatch, useParams, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
-import { useAdminBook, useLibraries, useUser } from '@/api/hooks';
+import { useAdminBook, useLibraries, useOIDCPending, useUser } from '@/api/hooks';
 import { BooksLink } from '@/components/books-link';
+import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { segmentClass, segmentTrack } from '@/components/ui/segment-classes';
 import { cn } from '@/lib/utils';
@@ -22,6 +23,8 @@ export function SubBar() {
   const book = useMatch({ from: '/library/book', shouldThrow: false });
   const activeRef = useRef<HTMLAnchorElement>(null);
   const dest = destinationFor(pathname);
+  // People's section counts the single sign-ons waiting for an admin.
+  const waiting = useOIDCPending(dest?.key === 'people').data?.pending.length ?? 0;
   // On a phone the sections scroll sideways; keep the current one on screen.
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -53,6 +56,21 @@ export function SubBar() {
                 className={segmentClass(current)}
               >
                 {t(`shell.section.${dest.key}.${s}`)}
+                {dest.key === 'people' && s === 'people' && waiting ? (
+                  <>
+                    <Badge
+                      variant="warning"
+                      className="ml-1.5 h-[18px] min-w-[18px] justify-center px-1.5 tabular-nums"
+                      aria-hidden="true"
+                    >
+                      {waiting}
+                    </Badge>
+                    <span className="sr-only">
+                      {', '}
+                      {t('people.pending.count', { count: waiting })}
+                    </span>
+                  </>
+                ) : null}
               </Link>
             );
           })}

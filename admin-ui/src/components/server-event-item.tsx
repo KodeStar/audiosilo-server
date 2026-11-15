@@ -6,6 +6,7 @@ import {
   BookPlus,
   CalendarCheck,
   CircleAlert,
+  LogIn,
   MailCheck,
   MonitorSmartphone,
   Package,
@@ -39,6 +40,7 @@ const ICONS: Record<ServerEventKind, LucideIcon> = {
   podcast_episodes_new: Podcast,
   podcast_feed_failing: Rss,
   podcast_feed_recovered: Rss,
+  oidc_pending: LogIn,
 };
 
 const TONE: Record<EventTone, string> = {

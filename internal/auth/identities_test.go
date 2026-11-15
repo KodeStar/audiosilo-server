@@ -437,14 +437,30 @@ func TestPendingCapAndPrune(t *testing.T) {
 	if len(rows) != maxPendingSignIns || rows[len(rows)-1].Subject != "sub-3" {
 		t.Fatalf("cap: %d rows, oldest %q", len(rows), rows[len(rows)-1].Subject)
 	}
-	*now = now.AddDate(0, 0, pendingDays+1)
+	// A clock stepped back past every row: the row just written is the
+	// oldest, yet the prune keeps it, so the id returned names a row.
+	back := *now
+	*now = now.Add(-time.Hour)
+	res := signIn(t, s, ctx, claimsFor("sub-back", "", false), oidc.Policy{})
+	if res.PendingID == 0 || pendingID(t, s, ctx, "sub-back") != res.PendingID {
+		t.Fatalf("the row just written was pruned: %+v", res)
+	}
+	*now = back.AddDate(0, 0, pendingDays+1)
 	if rows, _ := s.ListPending(ctx); len(rows) != 0 {
 		t.Fatalf("listed after 30 days: %d", len(rows))
 	}
-	pendingFor(t, s, ctx, claimsFor("sub-new", "", false))
+	first := pendingFor(t, s, ctx, claimsFor("sub-new", "", false))
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM oidc_pending`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("kept after the prune: %d %v", n, err)
+	}
+	// The same person back once their row is no longer listed: a new row (a
+	// new id, so the admins are told again), not the old one brought back.
+	*now = now.AddDate(0, 0, pendingDays+1)
+	res = signIn(t, s, ctx, claimsFor("sub-new", "", false), oidc.Policy{})
+	rows, _ = s.ListPending(ctx)
+	if res.PendingID == 0 || res.PendingID == first || len(rows) != 1 || rows[0].ID != res.PendingID || rows[0].Attempts != 1 {
+		t.Fatalf("a row unseen for %d days came back: first id %d, now %+v, listed %+v", pendingDays, first, res, rows)
 	}
 }
 

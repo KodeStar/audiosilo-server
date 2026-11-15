@@ -63,6 +63,8 @@ export const keys = {
   bridge: ['admin', 'bridge', 'status'] as const,
   /** Settings > Sign-in's single sign-on status (GET /admin/oidc/status). */
   oidcStatus: ['admin', 'oidc', 'status'] as const,
+  /** People's waiting sign-ins (GET /admin/oidc/pending). */
+  oidcPending: ['admin', 'oidc', 'pending'] as const,
   /** The first-run flow's state (GET /admin/setup). */
   setup: ['admin', 'setup'] as const,
   /** A folder's setup preview (POST /admin/setup/preview), by root. */
@@ -194,8 +196,26 @@ export function useServerInfo() {
  * The single sign-on as the server runs it, and its provider's discovery (tried
  * when due by the request itself, so a minute's staleness is enough).
  */
-export function useOIDCStatus() {
-  return useQuery({ queryKey: keys.oidcStatus, queryFn: api.oidcStatus, staleTime: 60_000 });
+export function useOIDCStatus(enabled = true) {
+  return useQuery({
+    queryKey: keys.oidcStatus,
+    queryFn: api.oidcStatus,
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * The single sign-ons waiting for an admin: People's card and its section's
+ * count. Polled gently, as a sign-in can park at any time.
+ */
+export function useOIDCPending(enabled = true) {
+  return useQuery({
+    queryKey: keys.oidcPending,
+    queryFn: api.oidcPending,
+    enabled,
+    refetchInterval: 60_000,
+  });
 }
 
 /** Catalog totals + who's listening. Polled so "listening now" stays live. */

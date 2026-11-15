@@ -43,6 +43,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/series': { body: { series: [] } },
     'GET /admin/users': { body: { users: [] } },
     'GET /admin/shares': { body: { shares: [] } },
+    // People's waiting single sign-ons (and its section's count): none, by default.
+    'GET /admin/oidc/pending': { body: { pending: [], linked_user_ids: {} } },
     // A person's imported listening (their Listening tab): none, by default.
     'GET /admin/imports': { body: { imports: [] } },
     // The book page's Characters and recaps card: no community match, nothing generated.

@@ -114,6 +114,9 @@ type OIDCResult struct {
 	User *User
 	// Role is set when the admin_group rule applied (Decision.Role).
 	Role *RoleSync
+	// PendingID is the waiting row a Pending outcome recorded or refreshed
+	// (its id stays the same across the person's attempts), else 0.
+	PendingID int64
 }
 
 // accountFacts reads an account's oidc.Account facts; ?1 is the issuer.
@@ -186,7 +189,8 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 				return err
 			}
 		case oidc.Pending:
-			return upsertPending(ctx, tx, c, d.Reason, now, s.now())
+			res.PendingID, err = upsertPending(ctx, tx, c, d.Reason, now, s.now())
+			return err
 		default:
 			return nil
 		}
@@ -348,9 +352,15 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 	return rs, err
 }
 
-// upsertPending records or refreshes c's waiting row with reason, then drops
-// rows unseen for pendingDays and the oldest past maxPendingSignIns.
-func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) error {
+// upsertPending records or refreshes c's waiting row with reason, returning its
+// id. Rows unseen for pendingDays go first, c's own among them: ListPending no
+// longer shows such a row, so the attempt records a new one (a new id, which
+// the callback tells the admins about) rather than bringing back one they were
+// told about long ago. Then the oldest past maxPendingSignIns go, never the
+// row just written (it is the newest, unless the clock stepped back past rows
+// stamped later: excluded by id all the same, so the id returned always names
+// a row).
+func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, error) {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
 		groups = groups[:maxPendingGroups]
@@ -360,21 +370,26 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 	}
 	g, err := json.Marshal(groups)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO oidc_pending(issuer, subject, email, email_verified, username, name, groups,
+	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ?`, cutoff); err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO oidc_pending(issuer, subject, email, email_verified, username, name, groups,
 		    reason, first_seen_at, last_seen_at, attempts)
 		VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1)
 		ON CONFLICT(issuer, subject) DO UPDATE SET email = excluded.email, email_verified = excluded.email_verified,
 		    username = excluded.username, name = excluded.name, groups = excluded.groups, reason = excluded.reason,
-		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1`,
-		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now); err != nil {
-		return err
+		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1
+		RETURNING id`,
+		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now).Scan(&id); err != nil {
+		return 0, err
 	}
-	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
-	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ? OR id IN
-		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, cutoff, maxPendingSignIns)
-	return err
+	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
+		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, id, maxPendingSignIns)
+	return id, err
 }
 
 const pendingColumns = `id, issuer, subject, email, email_verified, username, name, groups, reason, first_seen_at, last_seen_at, attempts`
@@ -421,6 +436,30 @@ func (s *Service) ListPending(ctx context.Context) ([]PendingSignIn, error) {
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// LinkedAccounts maps each issuer a waiting sign-in came from to the accounts
+// that already have an identity from it (an account holds at most one per
+// issuer, so the console's Link leaves them out of its choices).
+func (s *Service) LinkedAccounts(ctx context.Context) (map[string][]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT issuer, user_id FROM user_identities
+		 WHERE issuer IN (SELECT issuer FROM oidc_pending) ORDER BY issuer, user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]int64{}
+	for rows.Next() {
+		var (
+			iss string
+			id  int64
+		)
+		if err := rows.Scan(&iss, &id); err != nil {
+			return nil, err
+		}
+		out[iss] = append(out[iss], id)
 	}
 	return out, rows.Err()
 }

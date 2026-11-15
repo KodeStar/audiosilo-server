@@ -62,14 +62,28 @@ export function namedApart(name: string, username: string): boolean {
   return name.trim().toLowerCase() !== username.toLowerCase();
 }
 
+/** An account as a list of choices names it: "Name (username)" when the name says more. */
+export function accountLabel(u: Pick<AdminUser, 'username' | 'display_name'>): string {
+  const name = displayName(u);
+  return namedApart(name, u.username) ? `${name} (${u.username})` : u.username;
+}
+
 /**
- * Who `subject` can be assigned to: anyone else who isn't a household member
- * or a demo account (the server's owner_is_member, owner_is_demo and
- * self_managed), apart from the owner they already have.
+ * An account of its own: not a household member or a demo account. Only such
+ * an account can own members or have a single sign-on linked to it.
+ */
+export function isIndependentAccount(u: Pick<AdminUser, 'managed_by' | 'is_demo'>): boolean {
+  return !u.managed_by && !u.is_demo;
+}
+
+/**
+ * Who `subject` can be assigned to: anyone else of their own account (the
+ * server's owner_is_member, owner_is_demo and self_managed), apart from the
+ * owner they already have.
  */
 export function assignTargets(users: readonly AdminUser[], subject: AdminUser): AdminUser[] {
   return users.filter(
-    (u) => u.id !== subject.id && !u.managed_by && !u.is_demo && u.id !== subject.managed_by?.id,
+    (u) => u.id !== subject.id && isIndependentAccount(u) && u.id !== subject.managed_by?.id,
   );
 }
 

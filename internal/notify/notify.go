@@ -36,6 +36,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/oidc"
 )
 
 // Event kinds an admin can subscribe a destination to.
@@ -54,6 +55,8 @@ const (
 	KindPodcastEpisodesNew   = "podcast_episodes_new"
 	KindPodcastFeedFailing   = "podcast_feed_failing"
 	KindPodcastFeedRecovered = "podcast_feed_recovered"
+	// A single sign-on no account took, waiting for an admin (OIDCPending).
+	KindOIDCPending = "oidc_pending"
 )
 
 // Kinds lists the event kinds, in the order the console shows them. A kind
@@ -63,6 +66,7 @@ var Kinds = []string{
 	KindInviteRedeemed, KindUpdateAvailable, KindBackupFailed,
 	KindBridgeJobFinished, KindBridgeJobFailed, KindBookReleased,
 	KindPodcastEpisodesNew, KindPodcastFeedFailing, KindPodcastFeedRecovered,
+	KindOIDCPending,
 }
 
 // kindTest is the "Send test" message's kind (sent, never recorded).
@@ -466,6 +470,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Title = feedTitle("back")
 		m.Text = "The feed answered again, so new episodes arrive as before."
 		m.Link, m.Tags = link("/library/libraries"), []string{"white_check_mark"}
+	case KindOIDCPending:
+		who := cmp.Or(str("person"), "Someone")
+		m.Title = who + " is waiting to sign in with " + cmp.Or(str("provider"), "single sign-on")
+		m.Text = cmp.Or(oidcPendingText[str("reason")], "No account took the sign-in.") +
+			" Link it to an account, make one, or dismiss it in People."
+		m.Link, m.Tags = link("/people"), []string{"hourglass"}
 	case kindTest:
 		m.Title = "Test from " + srv.Name
 		m.Text = "Notifications from this AudioSilo server will arrive here."
@@ -819,6 +829,47 @@ func feedCode(code string) string {
 		return code
 	}
 	return "failed"
+}
+
+// oidcPendingText words why a single sign-on waits (oidc.PendingReasons); the
+// console words the same codes.
+var oidcPendingText = map[string]string{
+	oidc.ReasonUnverifiedEmail: "Their email matches an account, but the provider hasn't verified it.",
+	oidc.ReasonNoMatch:         "The provider sent no verified email to match an account on.",
+	oidc.ReasonSeveralMatches:  "Their email matches more than one account.",
+	oidc.ReasonNotEligible:     "Their email matches only accounts that can't be linked to a single sign-on.",
+	oidc.ReasonNotAllowed:      "They aren't in the group allowed to get an account.",
+	oidc.ReasonAutoCreateOff:   "No account has their email, and accounts aren't made on their own.",
+	oidc.ReasonAdminAccount:    "Their email matches an admin's account, which is never linked on its own.",
+}
+
+// OIDCPending reports a single sign-on no account took (auth.OIDCSignIn's
+// Pending), once per waiting row (pendingID: the row keeps its id across the
+// person's attempts, and a row dismissed and recorded again is a new one).
+// Its data are the provider's name, the person's name or username and the
+// reason's code: never their email, subject, groups or any token. A name or
+// username that holds an "@" may be their email (providers often make the
+// email the username), so it is left out.
+func (s *Service) OIDCPending(ctx context.Context, pendingID int64, provider, name, username, reason string) {
+	if s == nil || pendingID <= 0 {
+		return
+	}
+	data := map[string]any{"provider": plainLine(provider, 100)}
+	for _, who := range []string{name, username} {
+		// Checked whole, before the cut: an "@" past it would leave its
+		// leading part (an address's local part) behind.
+		if strings.Contains(who, "@") {
+			continue
+		}
+		if who = plainLine(who, 100); who != "" {
+			data["person"] = who
+			break
+		}
+	}
+	if _, ok := oidcPendingText[reason]; ok {
+		data["reason"] = reason
+	}
+	s.Emit(ctx, Event{Kind: KindOIDCPending, Data: data, Dedup: "pending:" + strconv.FormatInt(pendingID, 10)})
 }
 
 // SignedIn reports a new session: a password sign-in or a device set up by

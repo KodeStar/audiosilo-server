@@ -18,6 +18,10 @@ const BY_CODE: Record<string, string> = {
   admin_needs_password: 'errors.adminNeedsPassword',
   // A person's email that isn't an address (People > a person > Sign-in).
   invalid_email: 'errors.invalidEmail',
+  // People > Waiting sign-ins: Link and Create.
+  not_linkable: 'errors.notLinkable',
+  user_has_identity: 'errors.userHasIdentity',
+  identity_linked: 'errors.identityLinked',
   password_too_short: 'errors.passwordTooShort',
   cannot_delete_self: 'errors.deleteSelf',
   folder_unreadable: 'errors.folderUnreadable',
