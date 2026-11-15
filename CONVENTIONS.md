@@ -3520,7 +3520,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   shares + issued auth codes (metadata only; codes are unretrievable by design);
   `DELETE /admin/authcodes/{id}` revokes a code. **Email** (`users.email`, `0075`, server#235):
   optional, `""` = none, set by `POST /admin/users` `email` and `PATCH` `email` (`""` clears;
-  `auth.NormalizeEmail`: trimmed, at most 254, one `@`, no spaces, else 400 `invalid_email`), on
+  `auth.NormalizeEmail`: trimmed, at most 254, an `@` with text either side, no spaces, else 400 `invalid_email`), on
   `adminUser` only (never `/me`, never the audit: its details say `set`/`cleared`); not unique, so
   the single sign-on counts the matches when it links (below); the console's field is People > a
   person > Sign-in, not offered for a household member. A user's **last activity** is
