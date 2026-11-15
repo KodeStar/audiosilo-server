@@ -105,9 +105,9 @@ function ProviderCard({ settings }: { settings: AdminSettings }) {
             {s.client_secret_set ? t('settings.signin.secretSet') : t('settings.signin.secretNone')}
           </span>
         </SettingRow>
-        {fact('signin.scopes', (s.scopes ?? []).join(' '), 'openid profile email groups')}
-        {fact('signin.username_claim', s.username_claim, 'preferred_username')}
-        {fact('signin.groups_claim', s.groups_claim, 'groups')}
+        {fact('signin.scopes', (s.scopes ?? []).join(' '), s.scopes_default.join(' '))}
+        {fact('signin.username_claim', s.username_claim, s.username_claim_default)}
+        {fact('signin.groups_claim', s.groups_claim, s.groups_claim_default)}
         {fact('signin.ca_file', s.ca_file, t('settings.signin.systemCAs'))}
       </div>
       <Notice tone="info" icon={Info} className="mx-5 mb-5">

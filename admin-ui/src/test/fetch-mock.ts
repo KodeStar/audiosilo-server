@@ -16,6 +16,16 @@ export type MockReply =
 export type MockRoute = MockReply | ((req: MockRequest) => MockReply | Promise<MockReply>);
 
 /**
+ * Routes every test gets unless it mocks them: the sign-in page asks whether
+ * /setup is open (closed: the server's redirect to /admin) and how to sign in
+ * (GET /server: the fixture's methods, with no single sign-on).
+ */
+const DEFAULT_ROUTES: Record<string, MockRoute> = {
+  'HEAD /setup': { status: 303 },
+  'GET /server': { body: serverInfo },
+};
+
+/**
  * Stubs global fetch with a route table keyed "METHOD /path". Unmatched calls
  * fail the test loudly (404 + a console error) so a missing mock is obvious.
  * Returns the recorded requests.
@@ -32,16 +42,8 @@ export function mockFetch(routes: Record<string, MockRoute>) {
       body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
     };
     calls.push(req);
-    // The sign-in page asks whether /setup is open: closed (the server's redirect
-    // to /admin) unless a test says so; and how to sign in (GET /server): the
-    // fixture's methods, with no single sign-on, unless a test says so.
-    const route =
-      routes[`${req.method} ${req.path}`] ??
-      (req.method === 'HEAD' && req.path === '/setup'
-        ? { status: 303 }
-        : req.method === 'GET' && req.path === '/server'
-          ? { body: serverInfo }
-          : undefined);
+    const key = `${req.method} ${req.path}`;
+    const route = routes[key] ?? DEFAULT_ROUTES[key];
     if (!route) {
       console.error(`unmocked fetch: ${req.method} ${req.path}`);
       return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 });

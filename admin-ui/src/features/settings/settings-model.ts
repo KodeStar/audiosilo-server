@@ -71,7 +71,10 @@ type ReadOnlyFact =
   | 'max_members_max'
   | 'upcoming_status'
   | 'report_status'
-  | 'client_secret_set';
+  | 'client_secret_set'
+  | 'scopes_default'
+  | 'username_claim_default'
+  | 'groups_claim_default';
 
 /** Why the console can't change a setting, if it can't: the AUDIOSILO_* variable that sets it. */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {

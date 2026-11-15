@@ -645,6 +645,9 @@ func TestOIDCSecretsNeverShown(t *testing.T) {
 			t.Fatalf("%s doesn't say a secret is set: %s", name, body)
 		}
 	}
+	if !strings.Contains(settings, `"username_claim_default":"preferred_username"`) {
+		t.Fatalf("settings don't say the defaults: %s", settings)
+	}
 	if !strings.Contains(status, `"redirect_uri":"`+oidcPublic+oidcCallbackPath+`"`) || !strings.Contains(status, `"state":"ok"`) {
 		t.Fatalf("status: %s", status)
 	}

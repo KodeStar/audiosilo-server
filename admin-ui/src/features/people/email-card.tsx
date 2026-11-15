@@ -14,7 +14,8 @@ import { toast } from '@/lib/toast';
 /**
  * A person's email (server#235): a single sign-on whose verified email matches
  * this account, and no other, links to it on its own (never an admin's). Not
- * for household members: they never sign in with single sign-on.
+ * for household members: they never sign in with single sign-on. Keyed by the
+ * saved email, so a new one (saved here or by another admin) starts it afresh.
  */
 export function EmailCard({ user: u }: { user: AdminUser }) {
   const { t } = useTranslation();
@@ -24,12 +25,6 @@ export function EmailCard({ user: u }: { user: AdminUser }) {
   const [error, setError] = useState<string | null>(null);
   const id = useId();
   const errorId = `${id}-error`;
-  // The saved value moved on (saved here, or by another admin): start from it.
-  const [saved, setSaved] = useState(u.email);
-  if (saved !== u.email) {
-    setSaved(u.email);
-    setEmail(u.email);
-  }
   const changed = email.trim() !== u.email;
 
   async function onSubmit(e: React.FormEvent) {

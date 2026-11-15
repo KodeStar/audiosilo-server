@@ -635,11 +635,11 @@ export interface AdminSettings {
     name: string;
     issuer: string;
     client_id: string;
-    /** [] = openid, profile, email, groups. */
+    /** [] = scopes_default. */
     scopes: string[] | null;
-    /** "" = preferred_username. */
+    /** "" = username_claim_default. */
     username_claim: string;
-    /** "" = groups. */
+    /** "" = groups_claim_default. */
     groups_claim: string;
     ca_file: string;
     /** A sign-in no account takes makes an ordinary account (for allowed_group's members, when set). */
@@ -649,6 +649,10 @@ export interface AdminSettings {
     admin_group: string;
     /** A client secret is set (inline, AUDIOSILO_OIDC_CLIENT_SECRET or a file); read only. */
     client_secret_set: boolean;
+    /** What an empty scopes, username_claim and groups_claim stand for. */
+    scopes_default: string[];
+    username_claim_default: string;
+    groups_claim_default: string;
   };
   /** Setting id -> why the console can't change it: the AUDIOSILO_* variable that sets it. */
   locked: Record<string, string>;

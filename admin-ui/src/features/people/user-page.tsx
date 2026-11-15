@@ -502,7 +502,7 @@ function SignInTab({ user: u, owner }: { user: AdminUser; owner: string }) {
           </div>
         </Card>
       ) : null}
-      {u.managed_by ? null : <EmailCard user={u} />}
+      {u.managed_by ? null : <EmailCard key={u.email} user={u} />}
       {kid ? null : <PasswordDialog open={password} onOpenChange={setPassword} user={u} />}
       <ConfirmDialog
         open={clearing}
