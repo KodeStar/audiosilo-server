@@ -235,6 +235,24 @@ func TestDiscoveryBackoff(t *testing.T) {
 	}
 }
 
+// TestDiscoveryOutlivesTheCaller: a caller that leaves mid-discovery (its
+// context cancelled) is not the provider failing: discovery still runs, and
+// no backoff starts for everyone else.
+func TestDiscoveryOutlivesTheCaller(t *testing.T) {
+	t.Parallel()
+	idp := oidctest.New(t, "audiosilo", "s3cret", alice)
+	p := newProvider(t, idp, "s3cret")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = p.AuthURL(ctx, redirectURI, flow())
+	if st := p.Status(); st.State != oidc.StateOK {
+		t.Fatalf("a cancelled caller counted against the provider: %+v", st)
+	}
+	if _, err := p.AuthURL(context.Background(), redirectURI, flow()); err != nil {
+		t.Fatalf("the next caller: %v", err)
+	}
+}
+
 func TestDiscoveryIssuerMismatch(t *testing.T) {
 	t.Parallel()
 	idp := oidctest.New(t, "audiosilo", "s3cret", alice)

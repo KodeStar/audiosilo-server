@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,7 +159,9 @@ func (p *Provider) ready(ctx context.Context) (*gooidc.Provider, *gooidc.IDToken
 	if now.Before(p.nextTry) {
 		return nil, nil, fmt.Errorf("%w: %s", ErrUnavailable, p.lastErr)
 	}
-	dctx, cancel := context.WithTimeout(ctx, httpTimeout)
+	// Not the caller's cancellation: a browser that leaves mid-discovery would
+	// otherwise count as the provider failing and start a backoff for everyone.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
 	defer cancel()
 	prov, err := gooidc.NewProvider(gooidc.ClientContext(dctx, p.client), p.s.Issuer)
 	p.checkedAt = now
@@ -186,11 +189,21 @@ func discoveryError(err error) string {
 	if errors.As(err, &mismatch) {
 		return fmt.Sprintf("the provider calls itself %q, not %q: set issuer to exactly that", mismatch.Discovered, mismatch.Provided)
 	}
-	msg := err.Error()
+	msg := withoutBody(err.Error())
 	if len(msg) > 300 {
 		msg = msg[:300] + "..."
 	}
 	return "discovery failed: " + msg
+}
+
+// withoutBody cuts go-oidc's "<status>: <response body>" error (a failed
+// discovery or userinfo request) down to the status.
+func withoutBody(msg string) string {
+	status, _, found := strings.Cut(msg, ": ")
+	if found && len(status) >= 4 && status[3] == ' ' && strings.Trim(status[:3], "0123456789") == "" {
+		return status
+	}
+	return msg
 }
 
 // oauthConfig is the client's config for redirectURI.
@@ -307,7 +320,7 @@ func exchangeError(err error) string {
 			return re.Response.Status
 		}
 	}
-	msg := err.Error()
+	msg := withoutBody(err.Error())
 	if len(msg) > 200 {
 		msg = msg[:200] + "..."
 	}
