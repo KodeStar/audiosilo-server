@@ -177,12 +177,8 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		return nil, err
 	}
 	d.Files = adminFiles(d.Book, files.Files)
-	playOrder, err := playFiles(ctx, c.db, &Book{ID: bookID, RelPath: relPath, IsFolder: d.Book.IsFolder,
-		Size: d.Book.Size, Duration: d.Book.Duration})
-	if err != nil {
-		return nil, err
-	}
-	d.ChapterBasis = basisOf(playOrder, relPath)
+	d.ChapterBasis = basisOf(orOwnFile(files.Files, &Book{RelPath: relPath, IsFolder: d.Book.IsFolder,
+		Size: d.Book.Size, Duration: d.Book.Duration}), relPath)
 	if d.Listeners, err = queryRows(ctx, c.db, func(rows *sql.Rows, l *Listener) error {
 		return rows.Scan(&l.UserID, &l.Username, &l.Position, &l.Duration, &l.Finished, &l.UpdatedAt,
 			&l.StartedAt, &l.FinishedAt)

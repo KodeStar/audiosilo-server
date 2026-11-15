@@ -174,10 +174,16 @@ func playFiles(ctx context.Context, q rowQuerier, b *Book) ([]BookFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return orOwnFile(files, b), nil
+}
+
+// orOwnFile is a book's book_files rows (in seq order), or for a single-file
+// book with none its own file: its files in play order (playFiles).
+func orOwnFile(files []BookFile, b *Book) []BookFile {
 	if len(files) == 0 && !b.IsFolder {
-		files = []BookFile{{RelPath: b.RelPath, Size: b.Size, Duration: b.Duration}}
+		return []BookFile{{RelPath: b.RelPath, Size: b.Size, Duration: b.Duration}}
 	}
-	return files, nil
+	return files
 }
 
 // AlignFiles is a book's files as chapteralign fits chapters onto them.
