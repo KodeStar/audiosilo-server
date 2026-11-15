@@ -35,6 +35,7 @@ import {
   formatStamp,
   parseTime,
   removeRow,
+  roundMs,
   saveProblem,
   setStart,
   setTitle,
@@ -88,6 +89,9 @@ export function ChaptersEditor({
 
   const dirty = useMemo(() => draftChanged(rows, opened.initial), [rows, opened.initial]);
   const check = useMemo(() => validateDraft(rows, spans), [rows, spans]);
+  // The file each fixed row starts, by its start (of files that start together,
+  // the last: the one with audio).
+  const fileAt = useMemo(() => new Map(spans.map((s) => [roundMs(s.start), s.name])), [spans]);
   const number = (key?: string) => rows.findIndex((r) => r.key === key) + 1;
   const newTitle = () => t('book.chapters.edit.newTitle');
 
@@ -189,7 +193,7 @@ export function ChaptersEditor({
             key={r.key}
             row={r}
             n={i + 1}
-            file={r.fixed ? toFileTime(spans, r.start)?.span.name : undefined}
+            file={r.fixed ? fileAt.get(r.start) : undefined}
             withHours={withHours}
             selected={r.key === selected}
             problem={check.rows.get(r.key)}
