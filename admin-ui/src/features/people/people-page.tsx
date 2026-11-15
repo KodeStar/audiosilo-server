@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
+import { PendingSignInsCard } from './pending-signins';
 import { displayName, peopleGroups } from './household-model';
 import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
@@ -57,6 +58,7 @@ export function PeoplePage() {
         }
         action={inviteButton}
       />
+      <PendingSignInsCard />
       {users.isError ? (
         <QueryError
           title={t('people.error')}

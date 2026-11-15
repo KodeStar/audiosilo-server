@@ -93,6 +93,7 @@ import type {
   Library,
   LoginResponse,
   MetaMirrorStatus,
+  OIDCPendingList,
   OIDCStatus,
   PairToken,
   PathRule,
@@ -668,6 +669,18 @@ export const api = {
     request<{ signed_out: number }>('POST', `/admin/users/${id}/sign-out`),
   /** Settings > Sign-in: the single sign-on as it runs, and its provider's discovery. */
   oidcStatus: () => request<OIDCStatus>('GET', '/admin/oidc/status'),
+  /** People > Waiting sign-ins: the single sign-ons no account took. */
+  oidcPending: () => request<OIDCPendingList>('GET', '/admin/oidc/pending'),
+  /** Links a waiting sign-in to an existing account (409 not_linkable, user_has_identity, identity_linked). */
+  linkPending: (id: number, userId: number) =>
+    request<AdminUser>('POST', `/admin/oidc/pending/${id}/link`, { user_id: userId }),
+  /** Makes an ordinary account for a waiting sign-in ("" = the server picks the username). */
+  createFromPending: (id: number, username: string) =>
+    request<AdminUser>('POST', `/admin/oidc/pending/${id}/create`, username ? { username } : {}),
+  dismissPending: (id: number) => request<void>('DELETE', `/admin/oidc/pending/${id}`),
+  /** Unlinks a person's single sign-on (409 admin_needs_password: a password-less admin's way in). */
+  unlinkIdentity: (userId: number, identityId: number) =>
+    request<void>('DELETE', `/admin/users/${userId}/identities/${identityId}`),
   invites: () => request<{ invites: Invite[] }>('GET', '/admin/invites'),
   /** Mints an invite; `max_uses` 0 = unlimited, `ttl_days` 0 = never expires. */
   createInvite: (userId: number, opts: { max_uses: number; ttl_days: number }) =>

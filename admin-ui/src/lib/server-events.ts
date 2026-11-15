@@ -8,6 +8,7 @@ import {
   parkKey,
 } from '@/features/bridge/generate-model';
 import { LIBRIVOX_KIND, fetchParkKey } from '@/features/librivox/librivox-model';
+import { reasonKey } from '@/features/people/pending-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -30,6 +31,7 @@ export const EVENT_KINDS: readonly ServerEventKind[] = [
   'podcast_episodes_new',
   'podcast_feed_failing',
   'podcast_feed_recovered',
+  'oidc_pending',
 ];
 
 export type EventTone = 'info' | 'warn' | 'bad';
@@ -167,6 +169,20 @@ export function describeEvent(ev: ServerEvent): EventText {
         tone: 'info',
         link: { destination: 'library', section: 'libraries' },
       };
+    // notify.OIDCPending: a single sign-on no account took, once per waiting
+    // row; named by the person's name or username (never their email), or
+    // "someone". The waiting sign-ins are listed on People.
+    case 'oidc_pending': {
+      const provider = str(d.provider);
+      return {
+        title: str(d.person)
+          ? { key: 'events.oidc_pending.title', values: { person: str(d.person), provider } }
+          : { key: 'events.oidc_pending.titleSomeone', values: { provider } },
+        body: { key: reasonKey(str(d.reason)) },
+        tone: 'warn',
+        link: { destination: 'people' },
+      };
+    }
   }
   // A kind from a newer server: say what it is called.
   return {

@@ -3396,6 +3396,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   admins who don't follow it, so its notices carry `private: true` instead of `show`, `show_path` and
   the episode titles (`PodcastNotice.Private`): "A private podcast has 2 new episodes", "A private
   podcast feed is failing" / "is back". The messages word each code and link Library > Libraries.
+  And `oidc_pending` (server#235, `notify.OIDCPending` from the callback when `auth.OIDCSignIn` parks a
+  sign-in, never for one refused outright: rate limited, disabled, a member): once per waiting row
+  (`dedup_key` `pending:<id>`, the row's AUTOINCREMENT id from `OIDCResult.PendingID`, kept across the
+  person's attempts; a dismissed row recorded again is a new one), its data `provider` (the button's
+  name), `person` (the name, else the username, left out when it holds an "@": providers often make the
+  email the username) and `reason` (a Pending reason the messages word, else none): never the email,
+  subject, groups or a token. It links People, where the console lists the waiting sign-ins.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
@@ -3607,12 +3614,17 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rate_limited; `connect.js` words each in the six languages). An admin's sign-in calls
   `NoteAdminSignIn` like a password one. Audit: `user.oidc_link`, `user.oidc_create`,
   `user.role_sync` (`via` system), `user.oidc_unlink`, `oidc.pending_dismiss`. Admin routes
-  (`requireAdmin`): `GET /admin/oidc/status`, `GET /admin/oidc/pending`,
+  (`requireAdmin`): `GET /admin/oidc/status`,
+  `GET /admin/oidc/pending` (`{pending, linked_user_ids}`: per issuer among the rows, the accounts
+  already holding an identity from it, which the console's Link leaves out),
   `POST /admin/oidc/pending/{id}/link` `{user_id}` (an admin may link to an admin; 409
   `not_linkable` for a member or demo account, `user_has_identity`, `identity_linked`),
   `POST /admin/oidc/pending/{id}/create` `{username?}` (201), `DELETE /admin/oidc/pending/{id}` (204),
   `DELETE /admin/users/{id}/identities/{identity_id}` (409 `admin_needs_password` for a password-less
-  admin's identity from the running provider); `GET /admin/users/{id}` carries `identities`. Logout stays local: disabling a
+  admin's identity from the running provider); `GET /admin/users/{id}` carries `identities`. Console
+  (235b): People's Waiting sign-ins card (`features/people/pending-signins.tsx`, its count on the
+  People section) and a person's Sign-in tab's "Signed in with <name>" cards with Unlink
+  (`identity-card.tsx`); a sign-in that waits raises `oidc_pending` (Notifications above). Logout stays local: disabling a
   person at the provider ends no session here (an admin disables them here too). Tests: the fake IdP
   `internal/oidc/oidctest` (discovery, JWKS, authorize, token with PKCE and a single-use code,
   userinfo, knobs for each refusal), `api/oidc_test.go` (an allowed and a denied case for each

@@ -33,7 +33,9 @@ describe('describeEvent', () => {
 
   it('words every kind, with a tone and a place to go', () => {
     for (const kind of EVENT_KINDS) {
-      const d = describeEvent(ev(kind, { library: 'Fiction', user: 'sam', version: 'v2.0.0' }));
+      const d = describeEvent(
+        ev(kind, { library: 'Fiction', user: 'sam', version: 'v2.0.0', person: 'Bob' }),
+      );
       expect(d.title.key).toBe(`events.${kind}.title`);
       expect(d.link.destination).toBeTruthy();
     }
@@ -237,14 +239,34 @@ describe('Bridge job events', () => {
   });
 
   it('lists the kinds in the server order', () => {
-    expect(EVENT_KINDS.slice(-6)).toEqual([
+    expect(EVENT_KINDS.slice(-7)).toEqual([
       'bridge_job_finished',
       'bridge_job_failed',
       'book_released',
       'podcast_episodes_new',
       'podcast_feed_failing',
       'podcast_feed_recovered',
+      'oidc_pending',
     ]);
+  });
+
+  it('words a waiting single sign-on by the person, or someone, and its reason', () => {
+    const d = describeEvent(
+      ev('oidc_pending', { provider: 'Keycloak', person: 'Bob', reason: 'admin_account' }),
+    );
+    expect(d.title).toEqual({
+      key: 'events.oidc_pending.title',
+      values: { person: 'Bob', provider: 'Keycloak' },
+    });
+    expect(d.body).toEqual({ key: 'people.pending.reason.admin_account' });
+    expect(d.tone).toBe('warn');
+    expect(d.link).toEqual({ destination: 'people' });
+    const someone = describeEvent(ev('oidc_pending', { provider: 'Keycloak' }));
+    expect(someone.title).toEqual({
+      key: 'events.oidc_pending.titleSomeone',
+      values: { provider: 'Keycloak' },
+    });
+    expect(someone.body).toEqual({ key: 'people.pending.reason.unknown' });
   });
 
   it("words a show's new episodes by its name", () => {

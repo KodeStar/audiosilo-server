@@ -370,4 +370,26 @@ describe('notifications', () => {
       }),
     );
   });
+  it('offers waiting single sign-ons as an event, with its label', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/notifications': { body: targetsEnv([target()]) },
+        'PATCH /admin/notifications/1': {
+          body: target({ events: ['scan_failed', 'oidc_pending'] }),
+        },
+      }),
+    );
+    renderApp('/server?topic=notifications');
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole('checkbox', {
+        name: 'Send "Someone is waiting to sign in" to My phone',
+      }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        events: expect.arrayContaining(['oidc_pending']),
+      }),
+    );
+  });
 });

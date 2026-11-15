@@ -23,7 +23,7 @@ import {
   useLibraries,
   useUser,
 } from '@/api/hooks';
-import type { AdminUser, User, UserDetail } from '@/api/types';
+import type { AdminUser, OIDCIdentity, User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
 import { EmptyState } from '@/components/empty-state';
@@ -40,6 +40,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { NotFound } from '@/features/not-found';
 import { DeviceList } from './devices-page';
 import { EmailCard } from './email-card';
+import { IdentityCards } from './identity-card';
 import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
@@ -182,7 +183,7 @@ function UserView({ detail }: { detail: UserDetail }) {
           />
         </TabsPanel>
         <TabsPanel value="sign-in">
-          <SignInTab user={u} owner={ownerName(u) ?? ''} />
+          <SignInTab user={u} owner={ownerName(u) ?? ''} identities={detail.identities ?? []} />
         </TabsPanel>
         <TabsPanel value="account">
           <AccountTab detail={detail} />
@@ -456,9 +457,18 @@ function InvitesTab({
 /**
  * How a person signs in. A kid holds no password (the server refuses one), so
  * their card says how they do sign in instead. A household member has no email
- * card: members never sign in with single sign-on.
+ * card: members never sign in with single sign-on. Each linked single sign-on
+ * has a card of its own, with Unlink.
  */
-function SignInTab({ user: u, owner }: { user: AdminUser; owner: string }) {
+function SignInTab({
+  user: u,
+  owner,
+  identities,
+}: {
+  user: AdminUser;
+  owner: string;
+  identities: OIDCIdentity[];
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [password, setPassword] = useState(false);
@@ -502,6 +512,7 @@ function SignInTab({ user: u, owner }: { user: AdminUser; owner: string }) {
           </div>
         </Card>
       ) : null}
+      {identities.length ? <IdentityCards user={u} identities={identities} /> : null}
       {u.managed_by ? null : <EmailCard key={u.email} user={u} />}
       {kid ? null : <PasswordDialog open={password} onOpenChange={setPassword} user={u} />}
       <ConfirmDialog
