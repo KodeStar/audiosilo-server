@@ -1,6 +1,7 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
+import { keys } from '@/api/hooks';
 import type { AdminUser, OIDCIdentity, OIDCPendingSignIn, OIDCStatus } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { admin, device, sam, samDetail } from '@/test/fixtures';
@@ -458,6 +459,40 @@ describe('a person’s single sign-on', () => {
     expect(await screen.findByText('sam is now an admin')).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Make sam an admin' })).toBeNull();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role: 'admin' });
+  });
+
+  it('says player only for a household member, whom single sign-on never signs in', async () => {
+    const member: AdminUser = {
+      ...sam,
+      managed_by: { id: 1, username: 'chris', display_name: '' },
+      member_kind: 'grownup',
+      member_access: 'all',
+    };
+    mockFetch(personRoutes(member));
+    renderApp('/people/user/2?tab=sign-in');
+    // The status is read (the card names the provider), yet it is no way in.
+    await screen.findByRole('region', { name: 'Signed in with Keycloak' });
+    expect(screen.getByText(/No password \(player only\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/signs in with Keycloak/i)).toBeNull();
+  });
+
+  it('asks for a password once a re-read of the status fails, despite the older answer', async () => {
+    let fail = false;
+    const calls = mockFetch(
+      personRoutes(sam, {
+        'GET /admin/oidc/status': () =>
+          fail ? { status: 500, body: { error: 'could not read' } } : { body: status },
+      }),
+    );
+    const { queryClient } = renderApp('/people/user/2?tab=account');
+    await screen.findByText(/signs in with Keycloak/);
+    fail = true;
+    await act(() => queryClient.refetchQueries({ queryKey: keys.oidcStatus }));
+    expect(await screen.findByText(/player only/)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText('Role'), 'admin');
+    expect(await screen.findByRole('dialog', { name: 'Make sam an admin' })).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
 
   it('asks for a password to make them admin when their sign-on does not count', async () => {
