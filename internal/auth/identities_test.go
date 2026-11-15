@@ -1,0 +1,454 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/oidc"
+)
+
+const testIssuer = "https://idp.example"
+
+func claimsFor(sub, email string, verified bool, groups ...string) oidc.Claims {
+	return oidc.Claims{Issuer: testIssuer, Subject: sub, Email: email, EmailVerified: verified,
+		Username: "Alice.Smith", Name: "Alice Smith", Groups: groups}
+}
+
+func setEmail(t *testing.T, s *Service, ctx context.Context, id int64, email string) {
+	t.Helper()
+	if err := s.UpdateUser(ctx, id, UserChanges{Email: &email}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func signIn(t *testing.T, s *Service, ctx context.Context, c oidc.Claims, p oidc.Policy) OIDCResult {
+	t.Helper()
+	res, err := s.OIDCSignIn(ctx, c, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// TestOIDCAutoLink: a verified email matching one ordinary account links it and
+// signs in; the next sign-in finds it by (issuer, subject) alone.
+func TestOIDCAutoLink(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	alice := mustUser(t, s, ctx, "alice", "", RoleUser)
+	setEmail(t, s, ctx, alice.ID, " Alice@Example.org ")
+	res := signIn(t, s, ctx, claimsFor("sub-a", "alice@example.org", true), oidc.Policy{})
+	if res.Decision.Outcome != oidc.Link || res.User == nil || res.User.ID != alice.ID {
+		t.Fatalf("auto-link: %+v", res)
+	}
+	ids, err := s.ListIdentities(ctx, alice.ID)
+	if err != nil || len(ids) != 1 || ids[0].LinkMethod != LinkAutoEmail || ids[0].LinkedBy != nil || ids[0].LastSignInAt == nil {
+		t.Fatalf("identities: %+v %v", ids, err)
+	}
+	// The email changes at the provider: the link holds.
+	res = signIn(t, s, ctx, claimsFor("sub-a", "new@example.org", false), oidc.Policy{})
+	if res.Decision.Outcome != oidc.SignIn || res.User.ID != alice.ID {
+		t.Fatalf("linked sign-in: %+v", res)
+	}
+	if ids, _ := s.ListIdentities(ctx, alice.ID); ids[0].Email != "new@example.org" {
+		t.Fatalf("the identity's email is not refreshed: %+v", ids[0])
+	}
+}
+
+// TestOIDCTakeoverDenied: an unverified email, a shared email, an admin's email,
+// a member's or a demo account's never link; nothing is linked, a pending row is
+// written.
+func TestOIDCTakeoverDenied(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	setEmail(t, s, ctx, admin.ID, "root@example.org")
+	u1 := mustUser(t, s, ctx, "u1", "", RoleUser)
+	u2 := mustUser(t, s, ctx, "u2", "", RoleUser)
+	setEmail(t, s, ctx, u1.ID, "shared@example.org")
+	setEmail(t, s, ctx, u2.ID, "shared@example.org")
+	solo := mustUser(t, s, ctx, "solo", "", RoleUser)
+	setEmail(t, s, ctx, solo.ID, "solo@example.org")
+	m := mustMember(t, s, ctx, solo.ID, NewMember{Name: "Kiddo", Kind: MemberKid, Access: MemberAll})
+	setEmail(t, s, ctx, m.ID, "kid@example.org")
+	demo, err := s.CreateDemoUser(ctx, "demo_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setEmail(t, s, ctx, demo.ID, "demo@example.org")
+
+	for _, c := range []struct {
+		email    string
+		verified bool
+		reason   string
+	}{
+		{"solo@example.org", false, oidc.ReasonUnverifiedEmail},
+		{"shared@example.org", true, oidc.ReasonSeveralMatches},
+		{"root@example.org", true, oidc.ReasonAdminAccount},
+		{"kid@example.org", true, oidc.ReasonNotEligible},
+		{"demo@example.org", true, oidc.ReasonNotEligible},
+	} {
+		res := signIn(t, s, ctx, claimsFor("sub-"+c.email, c.email, c.verified), oidc.Policy{AutoCreate: true})
+		if res.Decision.Outcome != oidc.Pending || res.Decision.Reason != c.reason || res.User != nil || res.Pending == nil {
+			t.Errorf("%s: %+v; want pending %s", c.email, res, c.reason)
+		}
+	}
+	for _, id := range []int64{admin.ID, u1.ID, u2.ID, solo.ID, m.ID, demo.ID} {
+		if ids, _ := s.ListIdentities(ctx, id); len(ids) != 0 {
+			t.Errorf("account %d was linked: %+v", id, ids)
+		}
+	}
+	pending, err := s.ListPending(ctx)
+	if err != nil || len(pending) != 5 {
+		t.Fatalf("pending: %d %v", len(pending), err)
+	}
+}
+
+// TestOIDCAlreadyLinkedNotEligible: an account linked to another subject at the
+// same issuer is not linked again by email.
+func TestOIDCAlreadyLinkedNotEligible(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	a := mustUser(t, s, ctx, "a", "", RoleUser)
+	setEmail(t, s, ctx, a.ID, "a@example.org")
+	signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), oidc.Policy{})
+	res := signIn(t, s, ctx, claimsFor("sub-2", "a@example.org", true), oidc.Policy{})
+	if res.Decision.Reason != oidc.ReasonNotEligible {
+		t.Fatalf("a second subject: %+v", res.Decision)
+	}
+	// Another issuer may link the same account.
+	other := claimsFor("sub-2", "a@example.org", true)
+	other.Issuer = "https://other.example"
+	if res := signIn(t, s, ctx, other, oidc.Policy{}); res.Decision.Outcome != oidc.Link {
+		t.Fatalf("another issuer: %+v", res.Decision)
+	}
+}
+
+// TestOIDCDisabledRefused: a disabled linked account is refused at the sign-in.
+func TestOIDCDisabledRefused(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	a := mustUser(t, s, ctx, "a", "", RoleUser)
+	setEmail(t, s, ctx, a.ID, "a@example.org")
+	signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), oidc.Policy{})
+	yes := true
+	if err := s.UpdateUser(ctx, a.ID, UserChanges{Disabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if res := signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), oidc.Policy{}); res.Decision.Outcome != oidc.Refuse ||
+		res.Decision.Reason != oidc.ReasonDisabled || res.User != nil {
+		t.Fatalf("disabled: %+v", res)
+	}
+}
+
+// TestOIDCCreate: auto_create makes an ordinary account named from the claims
+// (numbered on a clash, never demo_), with the verified email only.
+func TestOIDCCreate(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	mustUser(t, s, ctx, "alice-smith", "", RoleUser)
+	res := signIn(t, s, ctx, claimsFor("sub-1", "new@example.org", true), oidc.Policy{AutoCreate: true})
+	if res.Decision.Outcome != oidc.Create || res.User == nil || res.User.Username != "alice-smith-2" ||
+		res.User.Role != RoleUser || res.User.Email != "new@example.org" || res.User.HasPassword {
+		t.Fatalf("create: %+v %+v", res.Decision, res.User)
+	}
+	ids, _ := s.ListIdentities(ctx, res.User.ID)
+	if len(ids) != 1 || ids[0].LinkMethod != LinkCreated {
+		t.Fatalf("identities: %+v", ids)
+	}
+	c := claimsFor("sub-2", "other@example.org", false)
+	c.Username = "demo_mallory"
+	res = signIn(t, s, ctx, c, oidc.Policy{AutoCreate: true})
+	if res.User == nil || res.User.Username != "demo-mallory" || res.User.Email != "" || res.User.IsDemo {
+		t.Fatalf("demo_ name or unverified email: %+v", res.User)
+	}
+	// allowed_group refuses the others, recording them.
+	res = signIn(t, s, ctx, claimsFor("sub-3", "", false, "guests"), oidc.Policy{AutoCreate: true, AllowedGroup: "family"})
+	if res.Decision.Outcome != oidc.Pending || res.Decision.Reason != oidc.ReasonNotAllowed {
+		t.Fatalf("not allowed: %+v", res.Decision)
+	}
+	res = signIn(t, s, ctx, claimsFor("sub-4", "", false, "family"), oidc.Policy{AutoCreate: true, AllowedGroup: "family"})
+	if res.Decision.Outcome != oidc.Create {
+		t.Fatalf("allowed: %+v", res.Decision)
+	}
+}
+
+func TestIdentityUsernameBase(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		claims oidc.Claims
+		want   string
+	}{
+		{oidc.Claims{Username: "Bob"}, "bob"},
+		{oidc.Claims{Email: "carol.d@example.org"}, "carol-d"},
+		{oidc.Claims{Name: "Dée Dee"}, "dee-dee"},
+		{oidc.Claims{Username: "日本"}, "user"},
+		{oidc.Claims{}, "user"},
+	} {
+		if got := identityUsernameBase(c.claims); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.claims, got, c.want)
+		}
+	}
+}
+
+// TestOIDCRoleSync: admin_group promotes and demotes at each sign-in, never the
+// last enabled admin.
+func TestOIDCRoleSync(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	a := mustUser(t, s, ctx, "a", "", RoleUser)
+	setEmail(t, s, ctx, a.ID, "a@example.org")
+	p := oidc.Policy{AdminGroup: "admins"}
+	res := signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), p)
+	if res.User.Role != RoleAdmin || res.Role == nil || !res.Role.Changed() {
+		t.Fatalf("promotion: %+v %+v", res.User, res.Role)
+	}
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true), p)
+	if res.User.Role != RoleUser || !res.Role.Changed() {
+		t.Fatalf("demotion: %+v %+v", res.User, res.Role)
+	}
+	// The last enabled admin, signing in out of the group, stays an admin.
+	if err := s.UpdateUser(ctx, root.ID, UserChanges{Email: ptr("root@example.org")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-root", "root@example.org", true)), root.ID, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	res = signIn(t, s, ctx, claimsFor("sub-root", "root@example.org", true), p)
+	if res.Decision.Outcome != oidc.SignIn || res.User.Role != RoleAdmin || !res.Role.Refused || res.Role.Changed() {
+		t.Fatalf("last admin: %+v %+v", res.User, res.Role)
+	}
+	// No admin_group: no role change at all.
+	res = signIn(t, s, ctx, claimsFor("sub-1", "a@example.org", true, "admins"), oidc.Policy{})
+	if res.Role != nil || res.User.Role != RoleUser {
+		t.Fatalf("no admin_group: %+v %+v", res.User, res.Role)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// pendingFor records c as pending (auto_create off, no matching account) and
+// returns its row's id.
+func pendingFor(t *testing.T, s *Service, ctx context.Context, c oidc.Claims) int64 {
+	t.Helper()
+	c.Email = "" // nothing to match on
+	res := signIn(t, s, ctx, c, oidc.Policy{})
+	if res.Pending == nil {
+		t.Fatalf("not pending: %+v", res.Decision)
+	}
+	return res.Pending.ID
+}
+
+// TestPendingLinkCreateDismiss: the console's three actions on a waiting
+// sign-in, and their refusals.
+func TestPendingLinkCreateDismiss(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	bob := mustUser(t, s, ctx, "bob", "", RoleUser)
+	owner := mustUser(t, s, ctx, "owner", "", RoleUser)
+	kid := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Kid", Kind: MemberKid, Access: MemberAll})
+
+	id := pendingFor(t, s, ctx, claimsFor("sub-bob", "", false))
+	// A second attempt refreshes the row.
+	if again := pendingFor(t, s, ctx, claimsFor("sub-bob", "", false)); again != id {
+		t.Fatalf("a second attempt made row %d, not %d", again, id)
+	}
+	rows, _ := s.ListPending(ctx)
+	if len(rows) != 1 || rows[0].Attempts != 2 {
+		t.Fatalf("pending rows: %+v", rows)
+	}
+	if _, _, err := s.LinkPending(ctx, id, kid.ID, admin.ID); !errors.Is(err, ErrNotLinkable) {
+		t.Fatalf("link to a member: %v", err)
+	}
+	if _, _, err := s.LinkPending(ctx, id, 9999, admin.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("link to no account: %v", err)
+	}
+	if _, u, err := s.LinkPending(ctx, id, bob.ID, admin.ID); err != nil || u.ID != bob.ID {
+		t.Fatalf("link: %v", err)
+	}
+	ids, _ := s.ListIdentities(ctx, bob.ID)
+	if len(ids) != 1 || ids[0].LinkMethod != LinkAdmin || ids[0].LinkedBy == nil || ids[0].LinkedBy.ID != admin.ID {
+		t.Fatalf("bob's identity: %+v", ids)
+	}
+	if _, _, err := s.LinkPending(ctx, id, bob.ID, admin.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the row is gone: %v", err)
+	}
+	// Bob's next sign-in is his.
+	if res := signIn(t, s, ctx, claimsFor("sub-bob", "", false), oidc.Policy{}); res.Decision.Outcome != oidc.SignIn || res.User.ID != bob.ID {
+		t.Fatalf("bob signs in: %+v", res.Decision)
+	}
+	// Bob has an identity from this issuer: another can't join it.
+	id2 := pendingFor(t, s, ctx, claimsFor("sub-other", "", false))
+	if _, _, err := s.LinkPending(ctx, id2, bob.ID, admin.ID); !errors.Is(err, ErrUserHasIdentity) {
+		t.Fatalf("a second identity: %v", err)
+	}
+	// Create: the given username, or a taken one refused.
+	if _, _, err := s.CreateFromPending(ctx, id2, "bob", admin.ID); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("create with a taken name: %v", err)
+	}
+	_, u, err := s.CreateFromPending(ctx, id2, "carol", admin.ID)
+	if err != nil || u.Username != "carol" || u.Role != RoleUser {
+		t.Fatalf("create: %+v %v", u, err)
+	}
+	// Dismiss.
+	id3 := pendingFor(t, s, ctx, claimsFor("sub-eve", "", false))
+	if p, err := s.DismissPending(ctx, id3); err != nil || p.Subject != "sub-eve" {
+		t.Fatalf("dismiss: %+v %v", p, err)
+	}
+	if _, err := s.DismissPending(ctx, id3); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("dismiss again: %v", err)
+	}
+}
+
+// TestPendingIdentityLinkedMeanwhile: a row whose identity signed in (or was
+// linked) since is refused, not linked twice.
+func TestPendingIdentityLinkedMeanwhile(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	a := mustUser(t, s, ctx, "a", "", RoleUser)
+	b := mustUser(t, s, ctx, "b", "", RoleUser)
+	id := pendingFor(t, s, ctx, claimsFor("sub-x", "", false))
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO user_identities(user_id, issuer, subject, link_method, linked_at)
+		VALUES(?, ?, 'sub-x', 'admin', 't')`, a.ID, testIssuer); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.LinkPending(ctx, id, b.ID, admin.ID); !errors.Is(err, ErrIdentityLinked) {
+		t.Fatalf("linked meanwhile: %v", err)
+	}
+}
+
+// TestPendingCapAndPrune: the oldest rows past the cap go, and rows unseen for
+// 30 days are neither listed nor kept.
+func TestPendingCapAndPrune(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	for i := range maxPendingSignIns + 3 {
+		*now = now.Add(time.Second)
+		pendingFor(t, s, ctx, claimsFor(fmt.Sprintf("sub-%d", i), "", false))
+	}
+	rows, _ := s.ListPending(ctx)
+	if len(rows) != maxPendingSignIns || rows[len(rows)-1].Subject != "sub-3" {
+		t.Fatalf("cap: %d rows, oldest %q", len(rows), rows[len(rows)-1].Subject)
+	}
+	*now = now.AddDate(0, 0, pendingDays+1)
+	if rows, _ := s.ListPending(ctx); len(rows) != 0 {
+		t.Fatalf("listed after 30 days: %d", len(rows))
+	}
+	pendingFor(t, s, ctx, claimsFor("sub-new", "", false))
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM oidc_pending`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("kept after the prune: %d %v", n, err)
+	}
+}
+
+// TestPendingGroupsCapped: the groups list kept is bounded.
+func TestPendingGroupsCapped(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	groups := make([]string, maxPendingGroups+10)
+	for i := range groups {
+		groups[i] = fmt.Sprintf("g%d", i)
+	}
+	pendingFor(t, s, ctx, claimsFor("sub-1", "", false, groups...))
+	rows, _ := s.ListPending(ctx)
+	if len(rows[0].Groups) != maxPendingGroups {
+		t.Fatalf("groups kept: %d", len(rows[0].Groups))
+	}
+}
+
+// TestUnlinkIdentity: unlinking works, except a password-less admin's last way
+// in (decision 5).
+func TestUnlinkIdentity(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	sso := mustUser(t, s, ctx, "sso", "", RoleUser)
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-sso", "", false)), sso.ID, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Linked: a password-less account may become an admin now.
+	if err := s.UpdateUser(ctx, sso.ID, UserChanges{Role: ptr(RoleAdmin)}); err != nil {
+		t.Fatalf("promote a password-less account with an identity: %v", err)
+	}
+	ids, _ := s.ListIdentities(ctx, sso.ID)
+	if _, err := s.UnlinkIdentity(ctx, sso.ID, ids[0].ID); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("unlink a password-less admin's last identity: %v", err)
+	}
+	if _, err := s.UnlinkIdentity(ctx, root.ID, ids[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unlink another account's identity: %v", err)
+	}
+	if err := s.UpdateUser(ctx, sso.ID, UserChanges{Password: ptr("a-new-password")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.UnlinkIdentity(ctx, sso.ID, ids[0].ID); err != nil || got.Subject != "sub-sso" {
+		t.Fatalf("unlink with a password: %+v %v", got, err)
+	}
+}
+
+// TestAdminPasswordRule: an admin's password can be cleared only while an
+// identity is linked; a password-less account becomes an admin only with one.
+func TestAdminPasswordRule(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "admin-password", RoleAdmin)
+	other := mustUser(t, s, ctx, "other", "admin-password", RoleAdmin)
+	plain := mustUser(t, s, ctx, "plain", "", RoleUser)
+	if err := s.UpdateUser(ctx, other.ID, UserChanges{Password: ptr("")}); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("clear an admin's password without an identity: %v", err)
+	}
+	if err := s.UpdateUser(ctx, plain.ID, UserChanges{Role: ptr(RoleAdmin)}); !errors.Is(err, ErrAdminNeedsPassword) {
+		t.Fatalf("promote a password-less account without an identity: %v", err)
+	}
+	if _, _, err := s.LinkPending(ctx, pendingFor(t, s, ctx, claimsFor("sub-o", "", false)), other.ID, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateUser(ctx, other.ID, UserChanges{Password: ptr("")}); err != nil {
+		t.Fatalf("clear a linked admin's password: %v", err)
+	}
+	u, _ := s.GetUser(ctx, other.ID)
+	if u.HasPassword || u.Role != RoleAdmin {
+		t.Fatalf("after clearing: %+v", u)
+	}
+}
+
+func TestNormalizeEmail(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{" a@b.org ": "a@b.org", "": "", "A.B@Example.ORG": "A.B@Example.ORG"} {
+		if got, err := NormalizeEmail(in); err != nil || got != want {
+			t.Errorf("%q: %q %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"no-at", "@b.org", "a@", "a b@c.org", "a@b\n.org"} {
+		if _, err := NormalizeEmail(bad); !errors.Is(err, ErrInvalidEmail) {
+			t.Errorf("%q accepted: %v", bad, err)
+		}
+	}
+	s, ctx := newTestService(t)
+	u := mustUser(t, s, ctx, "u", "", RoleUser)
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Email: ptr("nope")}); !errors.Is(err, ErrInvalidEmail) {
+		t.Fatalf("invalid email saved: %v", err)
+	}
+	if _, err := s.CreateUserWithEmail(ctx, "v", "", RoleUser, "v@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUser(ctx, u.ID+1); got.Email != "v@example.org" {
+		t.Fatalf("created email: %q", got.Email)
+	}
+}
+
+// TestOIDCSignInContextCancel: a failed transaction changes nothing.
+func TestOIDCSignInContextCancel(t *testing.T) {
+	t.Parallel()
+	s, _ := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.OIDCSignIn(ctx, claimsFor("sub", "", false), oidc.Policy{}); err == nil {
+		t.Fatal("a cancelled sign-in succeeded")
+	}
+}

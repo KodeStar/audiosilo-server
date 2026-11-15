@@ -84,7 +84,8 @@ var (
 	// ErrLastAdmin is returned when an operation would leave no enabled admin.
 	ErrLastAdmin = errors.New("cannot remove the last admin")
 	// ErrAdminNeedsPassword is returned when an account would become (or remain)
-	// an admin without a password to sign in to the console.
+	// an admin with no way to sign in to the console: no password and no linked
+	// single sign-on identity (identities.go, server#235 decision 5).
 	ErrAdminNeedsPassword = errors.New("admin accounts require a password")
 	// ErrPasswordTooShort is returned when a non-empty password is below the
 	// minimum length.
@@ -145,6 +146,7 @@ type User struct {
 	MemberAccess  *string `json:"-"` // MemberAll | MemberCollections, nil for a non-member
 	CanAddMembers bool    `json:"-"` // the admin's per-person switch
 	DisplayName   string  `json:"-"` // the name the owner typed for a member, '' otherwise
+	Email         string  `json:"-"` // the admin's (api.adminUser): an address typed in People, or a sign-in's verified one
 	MembersCount  int     `json:"-"` // how many members this person has (0 on a request's user)
 	// MemberRule is what a household member derives access from (catalog's
 	// member rule), read with the account so a request computes a member's scopes
@@ -206,17 +208,27 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 // can never password-login. An empty password is stored as an empty hash, never
 // a hash of "".
 func (s *Service) CreateUser(ctx context.Context, username, password, role string) (*User, error) {
-	return s.createUser(ctx, username, password, role, false)
+	return s.createUser(ctx, username, password, role, "", false)
+}
+
+// CreateUserWithEmail is CreateUser with the account's email (NormalizeEmail's
+// rule: ErrInvalidEmail).
+func (s *Service) CreateUserWithEmail(ctx context.Context, username, password, role, email string) (*User, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	return s.createUser(ctx, username, password, role, email, false)
 }
 
 // CreateDemoUser creates a password-less, non-admin throwaway account flagged
 // is_demo so the background reaper can sweep idle ones by flag (never by username
 // prefix, which would catch real accounts an admin named "demo_*").
 func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, error) {
-	return s.createUser(ctx, username, "", RoleUser, true)
+	return s.createUser(ctx, username, "", RoleUser, "", true)
 }
 
-func (s *Service) createUser(ctx context.Context, username, password, role string, isDemo bool) (*User, error) {
+func (s *Service) createUser(ctx context.Context, username, password, role, email string, isDemo bool) (*User, error) {
 	if username == "" {
 		return nil, ErrUsernameRequired
 	}
@@ -238,8 +250,8 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 	}
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users(username, password_hash, role, is_demo, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?)`, username, hash, role, isDemo, now, now)
+		`INSERT INTO users(username, password_hash, role, is_demo, email, created_at, updated_at)
+		 VALUES(?,?,?,?,?,?,?)`, username, hash, role, isDemo, email, now, now)
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrUsernameTaken
@@ -247,7 +259,7 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
-	return &User{ID: id, Username: username, Role: role, HasPassword: hash != "", IsDemo: isDemo}, nil
+	return &User{ID: id, Username: username, Role: role, HasPassword: hash != "", IsDemo: isDemo, Email: email}, nil
 }
 
 // AdminExists reports whether at least one admin account is present.
@@ -1240,7 +1252,7 @@ const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
 	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `'),
 	` + memberColumns + `,
-	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id)`
+	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id), u.email`
 
 // userTables is the account u with its owner o (ownerJoin).
 const userTables = `users u` + ownerJoin
@@ -1292,7 +1304,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	)
 	dest := append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery},
 		member.dest()...)
-	if err := row.Scan(append(dest, &u.CanAddMembers, &u.DisplayName, &u.MembersCount)...); err != nil {
+	if err := row.Scan(append(dest, &u.CanAddMembers, &u.DisplayName, &u.MembersCount, &u.Email)...); err != nil {
 		return u, err
 	}
 	u.HasPassword = hash != ""
@@ -1478,6 +1490,9 @@ type UserChanges struct {
 	Username *string
 	// Password sets a password, or clears it with "".
 	Password *string
+	// Email sets the account's email, or clears it with "" (NormalizeEmail's
+	// rule: ErrInvalidEmail).
+	Email *string
 	// Role is RoleAdmin or anything else (RoleUser).
 	Role     *string
 	Disabled *bool
@@ -1516,13 +1531,15 @@ type HouseholdChange struct {
 // UpdateUser applies c to account id in one transaction, checking every change
 // against the account before any write, so a refused change changes nothing.
 // The changes apply in this order, each checked against the account as the ones
-// before it leave it: the password (an admin's can't be cleared:
-// ErrAdminNeedsPassword; a kid's, or one beside assigning the person as a kid,
-// is ErrKidNoPassword, since a kid holds none, while clearing one is fine), the
-// household (HouseholdChange's refusals), the role (not the last enabled admin's
-// demotion: ErrLastAdmin; to admin only with a password, ErrAdminNeedsPassword,
-// and never a member, ErrMemberNotAdmin), the disabled state (not the last
-// enabled admin: ErrLastAdmin) and the admin's can_add_members switch. An
+// before it leave it: the password (an admin's can't be cleared unless a single
+// sign-on identity is linked: ErrAdminNeedsPassword; a kid's, or one beside
+// assigning the person as a kid, is ErrKidNoPassword, since a kid holds none,
+// while clearing one is fine), the household (HouseholdChange's refusals), the
+// role (not the last enabled admin's demotion: ErrLastAdmin; to admin only with
+// a password or a linked identity, ErrAdminNeedsPassword, and never a member,
+// ErrMemberNotAdmin), the disabled state (not the last enabled admin:
+// ErrLastAdmin), the admin's can_add_members switch and the email
+// (ErrInvalidEmail). An
 // unknown account is ErrNotFound. A rename to "" is ErrUsernameRequired, to
 // another account's name ErrUsernameTaken. The write is one UPDATE; a new password, a
 // disabled account and a kid's assignment forget the person's browsers.
@@ -1534,6 +1551,14 @@ type HouseholdChange struct {
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	if c.Username != nil && *c.Username == "" {
 		return ErrUsernameRequired
+	}
+	var emailArg any
+	if c.Email != nil {
+		email, err := NormalizeEmail(*c.Email)
+		if err != nil {
+			return err
+		}
+		emailArg = email
 	}
 	hash := ""
 	if c.Password != nil {
@@ -1595,9 +1620,19 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		// Check every change against the account as the changes before it
 		// leave it, then write.
 		hasPassword, member, curRole := u.HasPassword, u.IsMember(), u.Role
+		// An admin needs a way into the console: a password, or a linked
+		// single sign-on identity (decision 5). Read only when it decides.
+		wayIn := func() error {
+			if ok, err := hasIdentity(ctx, tx, id); err != nil || ok {
+				return err
+			}
+			return ErrAdminNeedsPassword
+		}
 		if c.Password != nil {
 			if hash == "" && curRole == RoleAdmin {
-				return ErrAdminNeedsPassword
+				if err := wayIn(); err != nil {
+					return err
+				}
 			}
 			hasPassword = hash != ""
 		}
@@ -1622,7 +1657,9 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 				return ErrMemberNotAdmin // decision 3: "Make independent" comes first
 			}
 			if role == RoleAdmin && !hasPassword {
-				return ErrAdminNeedsPassword
+				if err := wayIn(); err != nil {
+					return err
+				}
 			}
 			curRole = role
 		}
@@ -1642,7 +1679,8 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		} else if h != nil {
 			household = 2
 		}
-		other := c.Username != nil || c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil
+		other := c.Username != nil || c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil ||
+			c.Email != nil
 		if !other && household == 0 {
 			return nil
 		}
@@ -1663,10 +1701,11 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		        disabled        = COALESCE(?8, disabled),
 		        can_add_members = COALESCE(?9, can_add_members),
 		        username        = COALESCE(?13, username),
+		        email           = COALESCE(?14, email),
 		        updated_at      = CASE WHEN ?10 OR (?3 = 2 AND managed_by IS NOT NULL) THEN ?11 ELSE updated_at END
 		  WHERE id = ?12`,
 			c.Password != nil, hash, household, owner, kind, access, roleArg, c.Disabled, c.CanAddMembers,
-			other, s.ts(), id, c.Username); err != nil {
+			other, s.ts(), id, c.Username, emailArg); err != nil {
 			if c.Username != nil && store.IsUniqueViolation(err) {
 				return ErrUsernameTaken
 			}

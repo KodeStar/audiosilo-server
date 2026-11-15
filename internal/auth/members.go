@@ -310,7 +310,13 @@ func usernameBase(name string) string {
 // free one: a server whose people have names with no Latin letters shares the
 // base "member"). Runs inside the create's transaction.
 func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string) (string, error) {
-	base := usernameBase(name)
+	return freeUsername(ctx, tx, usernameBase(name), usernameSlug(ownerUsername))
+}
+
+// freeUsername is the first of base, base-alt (alt not "") and base-2, base-3,
+// ... that no account has in any case. base is a usernameSlug (so lower() on
+// the stored side is the whole case fold); one read of which are taken.
+func freeUsername(ctx context.Context, tx *sql.Tx, base, alt string) (string, error) {
 	// The base is lower case ASCII letters, digits and '-' (usernameSlug), so
 	// lower() on the stored side is the whole case fold, and the LIKE pattern
 	// holds no wildcard but its own '%'.
@@ -334,8 +340,8 @@ func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string)
 	if !taken[base] {
 		return base, nil
 	}
-	if owner := usernameSlug(ownerUsername); owner != "" && !taken[base+"-"+owner] {
-		return base + "-" + owner, nil
+	if alt != "" && !taken[base+"-"+alt] {
+		return base + "-" + alt, nil
 	}
 	for n := 2; ; n++ {
 		if c := fmt.Sprintf("%s-%d", base, n); !taken[c] {
