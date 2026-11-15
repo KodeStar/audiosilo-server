@@ -49,6 +49,7 @@ func TestDecide(t *testing.T) {
 		{"allowed group is exact", Input{Claims: verified, Policy: Policy{AutoCreate: true, AllowedGroup: "Listeners"}},
 			Pending, ReasonNotAllowed, 0},
 	}
+	pending := map[string]bool{}
 	for _, c := range cases {
 		d := Decide(c.in)
 		if d.Outcome != c.want || d.Reason != c.reason || d.Account != c.acct {
@@ -56,6 +57,18 @@ func TestDecide(t *testing.T) {
 		}
 		if d.Role != "" {
 			t.Errorf("%s: role %q without admin_group", c.name, d.Role)
+		}
+		if d.Outcome == Pending {
+			pending[d.Reason] = true
+		}
+	}
+	// PendingReasons lists exactly the reasons a Pending outcome gives.
+	if len(pending) != len(PendingReasons) {
+		t.Errorf("pending reasons given %v; PendingReasons %v", pending, PendingReasons)
+	}
+	for _, r := range PendingReasons {
+		if !pending[r] {
+			t.Errorf("PendingReasons has %q, which no case gives", r)
 		}
 	}
 }

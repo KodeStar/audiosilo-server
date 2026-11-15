@@ -64,6 +64,13 @@ const (
 	ReasonMember          = "member"           // Refuse: the linked account has become a household member
 )
 
+// PendingReasons are the reasons Decide gives a Pending outcome: what a waiting
+// sign-in's reason can be, which notify and the console word.
+var PendingReasons = []string{
+	ReasonUnverifiedEmail, ReasonNoMatch, ReasonSeveralMatches, ReasonNotEligible,
+	ReasonNotAllowed, ReasonAutoCreateOff, ReasonAdminAccount,
+}
+
 // Decision is Decide's answer.
 type Decision struct {
 	Outcome Outcome

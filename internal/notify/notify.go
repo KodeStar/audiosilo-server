@@ -831,8 +831,8 @@ func feedCode(code string) string {
 	return "failed"
 }
 
-// oidcPendingText words why a single sign-on waits (oidc.Decide's Pending
-// reasons); the console words the same codes.
+// oidcPendingText words why a single sign-on waits (oidc.PendingReasons); the
+// console words the same codes.
 var oidcPendingText = map[string]string{
 	oidc.ReasonUnverifiedEmail: "Their email matches an account, but the provider hasn't verified it.",
 	oidc.ReasonNoMatch:         "The provider sent no verified email to match an account on.",

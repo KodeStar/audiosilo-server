@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/oidc"
 	"github.com/kodestar/audiosilo-server/internal/podcast/feed"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -987,7 +988,7 @@ func TestPodcastNoticesNeverLeakTheFeed(t *testing.T) {
 // again. Every destination and the bell get the same facts.
 func TestOIDCPending(t *testing.T) {
 	s, cat, ctx := newService(t)
-	if !slices.Contains(Kinds, KindOIDCPending) || Kinds[len(Kinds)-1] != KindOIDCPending {
+	if Kinds[len(Kinds)-1] != KindOIDCPending {
 		t.Fatal("oidc_pending must be the last kind a destination can subscribe to")
 	}
 	hook := newFakeDest(t)
@@ -1032,9 +1033,8 @@ func TestOIDCPending(t *testing.T) {
 			t.Fatalf("a body names the email: %s", b)
 		}
 	}
-	// Every reason the console can be told is worded here too.
-	for _, reason := range []string{"unverified_email", "no_match", "several_matches", "not_eligible",
-		"not_allowed", "auto_create_off", "admin_account"} {
+	// Every reason a sign-in can wait for is worded here too.
+	for _, reason := range oidc.PendingReasons {
 		if oidcPendingText[reason] == "" {
 			t.Fatalf("reason %s has no words", reason)
 		}
