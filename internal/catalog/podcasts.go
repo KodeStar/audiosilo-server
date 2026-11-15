@@ -112,8 +112,9 @@ func stringOrNil(s string) any {
 // It tells the SetPodcastNotice listener, after the commit, about the episodes
 // new to a show indexed before under the same identity: an episode whose path
 // wasn't indexed and that was published after the show's latest episode then.
-// So a show's first index, a forced rescan, a rebuilt index and a show whose
-// missing episodes are indexed again announce nothing.
+// So a show's first index, a forced rescan of a feed already indexed, a rebuilt
+// index and a show whose missing episodes are indexed again announce nothing
+// (the Bridge's forced rescan after a poll that grew the feed does announce).
 func (c *Catalog) IndexPodcastShow(ctx context.Context, lib int64, show, sig, cover, coverVersion string, f *feed.File, present map[string]PodcastFile, force bool) (bool, error) {
 	changed := false
 	var notice *PodcastNotice
@@ -824,7 +825,11 @@ func (c *Catalog) FoldPodcastJob(ctx context.Context, j bridge.Job) error {
 			if run, news = run.next(j.State, result.Code); news != "" {
 				notice = &PodcastNotice{Kind: news, Library: library, LibraryID: *j.LibraryID, ShowPath: show, ShowID: expected, Show: title}
 				if news == PodcastFeedFailing {
-					notice.Code, notice.Failures = result.Code, run.failures
+					notice.Code = result.Code
+					// A lost secret isn't the feed's failure: no run to count.
+					if bridge.FeedFailure(result.Code) {
+						notice.Failures = run.failures
+					}
 				}
 			}
 		}

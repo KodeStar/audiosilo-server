@@ -235,6 +235,10 @@ func TestPodcastFeedNotices(t *testing.T) {
 	failing(fold(bridge.StateFailed, "feed_secret_missing"), "feed_secret_missing", 0)
 	quiet(fold(bridge.StateFailed, "feed_secret_missing"), "the secret still missing")
 	recovered(fold(bridge.StateDone, ""))
+	// ...and says no run of the feed's failures, even after some.
+	quiet(fold(bridge.StateFailed, "timeout"), "a failure before the lost secret")
+	failing(fold(bridge.StateFailed, "feed_secret_missing"), "feed_secret_missing", 0)
+	recovered(fold(bridge.StateDone, ""))
 
 	// A poll for the show this path held before (another show_id) changes
 	// nothing.
