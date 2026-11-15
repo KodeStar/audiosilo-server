@@ -3819,9 +3819,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   console's chapter editor, stored in `chapter_edits` as a `metadata.ChapterList` (generator `console`) with the files
   it was made on (book-relative path, size, `duration_ms`). It is the FIRST source: `applyChapterSource` reads it
   before the choice (edited > choice/community > generated > files) and uses it (`applyEdited`) while its files are
-  the book's (`chaptersOnFiles`, as a chapters.json: in another play order its chapters move with their files), placed
-  by the pure `placeOnFiles` (each chapter in the file its start falls in, to the next start or the file's end; a
-  start within 50 ms of a file's start is that file's first chapter); on other files it is dormant (the next source's
+  the book's (`listedOrder`, as a chapters.json: path and size; in another play order its chapters move with their
+  files, `chaptersInOrder`; a single-file book's one file by size alone, so a renamed file keeps its edit), placed
+  by the pure `placeOnFiles` (each chapter in the file its start falls in, at the same place in it by the lengths the
+  list was made on, to the next start or the file's end, its book offset on the files' lengths now; so another probe
+  reading a file a little longer or shorter moves no chapter in its audio, and one at or past its file's end now
+  leaves the edit dormant; a start within 50 ms of a file's start is that file's first chapter; file starts are the
+  sums of the files' lengths in whole milliseconds, `fileStartsMS`, as the console sums the basis); on other files it is dormant (the next source's
   chapters, never applied to other audio) and applies again when the files come back. `chapters_source = "edited"`
   (`ChaptersFromEdited`, never a choice), `chapters_fit` = `listFitKey(list, "", files)`. No chapter crosses a file:
   every file starts a chapter (its start fixed, its title editable). While an edit applies the renames

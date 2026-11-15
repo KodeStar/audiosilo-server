@@ -19,6 +19,16 @@ func twoFiles(libID int64, p string) *Book {
 			{Index: 1, Title: "02", FileIndex: 1, FilePath: p + "/02.mp3", End: 1800, BookOffset: 1800}}}
 }
 
+// lengthsOf is files' lengths in whole milliseconds, as a list made on them
+// gives them (placeOnFiles).
+func lengthsOf(files []BookFile) []int64 {
+	out := make([]int64, len(files))
+	for i, f := range files {
+		out[i] = msOf(f.Duration)
+	}
+	return out
+}
+
 // basisNow is the book page's basis for the book at p.
 func basisNow(t *testing.T, c *Catalog, libID int64, p string) ChapterBasis {
 	t.Helper()
@@ -39,7 +49,7 @@ var fourChapters = []EditedChapter{{0, "Prologue"}, {900.25, "One"}, {1800, "Two
 func TestPlaceOnFiles(t *testing.T) {
 	t.Parallel()
 	one := []BookFile{{RelPath: "A/B.m4b", Duration: 3600}}
-	got := placeOnFiles([]metadata.ChapterListEntry{{Title: "A"}, {Title: "B", StartMS: 1000500}}, one)
+	got := placeOnFiles([]metadata.ChapterListEntry{{Title: "A"}, {Title: "B", StartMS: 1000500}}, one, lengthsOf(one))
 	want := []metadata.Chapter{
 		{Index: 0, Title: "A", FilePath: "A/B.m4b", End: 1000.5},
 		{Index: 1, Title: "B", FilePath: "A/B.m4b", Start: 1000.5, End: 3600, BookOffset: 1000.5},
@@ -48,8 +58,9 @@ func TestPlaceOnFiles(t *testing.T) {
 		t.Fatalf("one file = %+v\nwant %+v", got, want)
 	}
 	files := []BookFile{{RelPath: "A/1.mp3", Duration: 1000.0004}, {RelPath: "A/2.mp3", Duration: 500}, {RelPath: "A/3.mp3", Duration: 700}}
-	got = placeOnFiles([]metadata.ChapterListEntry{{Title: "A"}, {Title: "B", StartMS: 400000},
-		{Title: "C", StartMS: 1000030}, {Title: "D", StartMS: 1500000}, {Title: "E", StartMS: 1900000}}, files)
+	five := []metadata.ChapterListEntry{{Title: "A"}, {Title: "B", StartMS: 400000},
+		{Title: "C", StartMS: 1000030}, {Title: "D", StartMS: 1500000}, {Title: "E", StartMS: 1900000}}
+	got = placeOnFiles(five, files, lengthsOf(files))
 	want = []metadata.Chapter{
 		{Index: 0, Title: "A", FilePath: "A/1.mp3", End: 400},
 		{Index: 1, Title: "B", FilePath: "A/1.mp3", Start: 400, End: 1000.0004, BookOffset: 400},
@@ -61,6 +72,27 @@ func TestPlaceOnFiles(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("three files = %+v\nwant %+v", got, want)
 	}
+	// The files read longer now than the list's lengths (another probe of the
+	// same files): each chapter stays at its place in its file, its book offset
+	// on the files as they are now.
+	longer := []BookFile{{RelPath: "A/1.mp3", Duration: 1001.5}, {RelPath: "A/2.mp3", Duration: 500.25}, {RelPath: "A/3.mp3", Duration: 700}}
+	got = placeOnFiles(five, longer, lengthsOf(files))
+	want = []metadata.Chapter{
+		{Index: 0, Title: "A", FilePath: "A/1.mp3", End: 400},
+		{Index: 1, Title: "B", FilePath: "A/1.mp3", Start: 400, End: 1001.5, BookOffset: 400},
+		{Index: 2, Title: "C", FileIndex: 1, FilePath: "A/2.mp3", End: 500.25, BookOffset: 1001.5},
+		{Index: 3, Title: "D", FileIndex: 2, FilePath: "A/3.mp3", End: 400, BookOffset: 1501.75},
+		{Index: 4, Title: "E", FileIndex: 2, FilePath: "A/3.mp3", Start: 400, End: 700, BookOffset: 1901.75},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("longer files = %+v\nwant %+v", got, want)
+	}
+	// A file shorter now than where a chapter starts in it: they no longer fit.
+	shorter := slices.Clone(files)
+	shorter[2].Duration = 350
+	if got := placeOnFiles(five, shorter, lengthsOf(files)); got != nil {
+		t.Errorf("a chapter past its file's end now: %+v, want nil", got)
+	}
 	for name, entries := range map[string][]metadata.ChapterListEntry{
 		"no chapters":          nil,
 		"a file with no start": {{Title: "A"}, {Title: "D", StartMS: 1500000}},
@@ -68,7 +100,7 @@ func TestPlaceOnFiles(t *testing.T) {
 		"out of order":         {{Title: "A"}, {Title: "C", StartMS: 1000000}, {Title: "B", StartMS: 400000}, {Title: "D", StartMS: 1500000}},
 		"past the end":         {{Title: "A"}, {Title: "C", StartMS: 1000000}, {Title: "D", StartMS: 1500000}, {Title: "Z", StartMS: 2200000}},
 	} {
-		if got := placeOnFiles(entries, files); got != nil {
+		if got := placeOnFiles(entries, files, lengthsOf(files)); got != nil {
 			t.Errorf("%s: %+v, want nil", name, got)
 		}
 	}
@@ -245,6 +277,50 @@ func TestChapterEditDormant(t *testing.T) {
 	upsert(t, c, twoFiles(pods.ID, p))
 	if err := c.SaveChapterEdit(ctx, pods.ID, p, basis, fourChapters, 0); !errors.Is(err, ErrNotBookLibrary) {
 		t.Fatalf("a podcast library = %v, want ErrNotBookLibrary", err)
+	}
+}
+
+// The same files read again keep the edit: lengths a probe reads a little
+// otherwise (each chapter at its place in its file, book offsets on the files
+// now), and a single-file book's file renamed (its edit moved with it).
+func TestChapterEditSameFilesReadAgain(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	upsert(t, c, twoFiles(lib.ID, p))
+	if err := c.SaveChapterEdit(ctx, lib.ID, p, basisNow(t, c, lib.ID, p), fourChapters, 0); err != nil {
+		t.Fatal(err)
+	}
+	reread := twoFiles(lib.ID, p)
+	reread.Files[0].Duration, reread.Duration = 1801.5, 3601.5
+	upsert(t, c, reread)
+	b := mustBook(t, c, ctx, lib.ID, p)
+	if b.ChaptersSource != ChaptersFromEdited || len(b.Chapters) != 4 {
+		t.Fatalf("read again: %q from %q", titlesOf(b), b.ChaptersSource)
+	}
+	if ch := b.Chapters[1]; ch.Start != 900.25 || ch.End != 1801.5 {
+		t.Fatalf("chapter 1 = %+v", ch)
+	}
+	if ch := b.Chapters[3]; ch.FileIndex != 1 || ch.Start != 900.5 || ch.BookOffset != 2702 {
+		t.Fatalf("chapter 3 = %+v", ch)
+	}
+
+	const one = "A/Old title.m4b"
+	upsert(t, c, &Book{LibraryID: lib.ID, RelPath: one, Title: "Single", Duration: 3600, Size: 99, AddedAt: "2020-01-01T00:00:00Z",
+		Chapters: []metadata.Chapter{{Index: 0, Title: "Whole", FilePath: one, End: 3600}}})
+	if err := c.SaveChapterEdit(ctx, lib.ID, one, basisNow(t, c, lib.ID, one), []EditedChapter{{0, "A"}, {1800, "B"}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	const renamed = "A/New title.m4b"
+	if err := c.MoveDurableState(ctx, lib.ID, one, renamed); err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, c, &Book{LibraryID: lib.ID, RelPath: renamed, Title: "Single", Duration: 3600, Size: 99, AddedAt: "2020-01-01T00:00:00Z",
+		Chapters: []metadata.Chapter{{Index: 0, Title: "Whole", FilePath: renamed, End: 3600}}})
+	if b := mustBook(t, c, ctx, lib.ID, renamed); b.ChaptersSource != ChaptersFromEdited ||
+		!slices.Equal(titlesOf(b), []string{"A", "B"}) || b.Chapters[1].FilePath != renamed {
+		t.Fatalf("renamed: %q from %q", titlesOf(b), b.ChaptersSource)
 	}
 }
 

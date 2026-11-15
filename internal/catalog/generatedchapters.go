@@ -133,6 +133,13 @@ func chaptersOnFiles(list *metadata.ChapterList, files []BookFile, bookPath stri
 	if order == nil {
 		return nil
 	}
+	return chaptersInOrder(list, order)
+}
+
+// chaptersInOrder is a chapter list's chapters for its files played in order
+// (as listedOrder has it): as listed in the same order, else moved with their
+// files (movedChapters, nil when they can't be).
+func chaptersInOrder(list *metadata.ChapterList, order []int) []metadata.ChapterListEntry {
 	if slices.IsSorted(order) {
 		return list.Chapters
 	}
