@@ -6,8 +6,9 @@ import (
 )
 
 // TestMigration0076PodcastFeedNotices (server#232): an existing feed state row
-// gains feed_failures, feed_network_failures and failing_announced at 0 (no backfill: a feed already
-// failing counts from its next failure), its backoff count kept as it was.
+// gains feed_failures, feed_network_failures and failing_announced at 0 (no
+// backfill: a feed already failing counts from its next failure), its backoff
+// count kept as it was.
 func TestMigration0076PodcastFeedNotices(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

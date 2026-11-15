@@ -329,6 +329,25 @@ func TestPodcastFeedNotices(t *testing.T) {
 	failing(fold(bridge.StateFailed, "timeout"), "timeout", 4)
 }
 
+// A run is due once its shares add up to one whole: a third of the way per
+// feed answer, a sixth per network failure.
+func TestFeedRunDue(t *testing.T) {
+	for _, c := range []struct {
+		answers, network int
+		due              bool
+	}{
+		{2, 0, false}, {3, 0, true},
+		{0, 5, false}, {0, 6, true},
+		{1, 3, false}, {1, 4, true},
+		{2, 1, false}, {2, 2, true},
+	} {
+		r := feedRun{failures: c.answers + c.network, network: c.network}
+		if r.due() != c.due {
+			t.Errorf("%d answers, %d network: due = %v, want %v", c.answers, c.network, r.due(), c.due)
+		}
+	}
+}
+
 // A private show's notices say so (notify words them without its names).
 func TestPodcastNoticesMarkPrivateShows(t *testing.T) {
 	c, ctx := newTestCatalog(t)
