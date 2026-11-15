@@ -437,7 +437,15 @@ func TestPendingCapAndPrune(t *testing.T) {
 	if len(rows) != maxPendingSignIns || rows[len(rows)-1].Subject != "sub-3" {
 		t.Fatalf("cap: %d rows, oldest %q", len(rows), rows[len(rows)-1].Subject)
 	}
-	*now = now.AddDate(0, 0, pendingDays+1)
+	// A clock stepped back past every row: the row just written is the
+	// oldest, yet the prune keeps it, so the id returned names a row.
+	back := *now
+	*now = now.Add(-time.Hour)
+	res := signIn(t, s, ctx, claimsFor("sub-back", "", false), oidc.Policy{})
+	if res.PendingID == 0 || pendingID(t, s, ctx, "sub-back") != res.PendingID {
+		t.Fatalf("the row just written was pruned: %+v", res)
+	}
+	*now = back.AddDate(0, 0, pendingDays+1)
 	if rows, _ := s.ListPending(ctx); len(rows) != 0 {
 		t.Fatalf("listed after 30 days: %d", len(rows))
 	}
