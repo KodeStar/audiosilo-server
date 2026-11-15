@@ -168,11 +168,12 @@ func (a *API) setOIDCCookie(w http.ResponseWriter, value string, maxAge int) {
 
 // handleOIDCStart begins a sign-in (public): ?return=web|admin (400 for
 // anything else). Off or misconfigured: /connect#oidc=off|unavailable. On
-// another host than public_url's, it first sends the browser to this route on
-// public_url (once: ?hop=1), so the flow cookie is set where the provider
-// returns. Then the cookie (sealed state, nonce, PKCE verifier, return; ten
-// minutes, this path only, HttpOnly, SameSite=Lax, Secure on an https
-// public_url) and a 302 to the provider's authorization URL.
+// another host than public_url's, or over plain HTTP for an https public_url,
+// it first sends the browser to this route on public_url (once: ?hop=1), so
+// the flow cookie is set where the provider returns. Then the cookie (sealed
+// state, nonce, PKCE verifier, return; ten minutes, this path only, HttpOnly,
+// SameSite=Lax, Secure on an https public_url) and a 302 to the provider's
+// authorization URL.
 func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	// Never the request's own value from here on: the enum's constant.
 	var ret string
@@ -198,7 +199,12 @@ func (a *API) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, oidcUnavailable)
 		return
 	}
-	if !sameHost(public, r.Host) && r.URL.Query().Get("hop") == "" {
+	// A plain HTTP request that came straight from the browser (home HTTP on a
+	// self-signed server, the same host and port as an https public_url) hops
+	// too: a browser drops a Secure cookie set over plain HTTP, and the flow
+	// would end on "expired". Behind a proxy the scheme isn't ours to know.
+	plain := public.Scheme == "https" && r.TLS == nil && !proxied(r)
+	if (plain || !sameHost(public, r.Host)) && r.URL.Query().Get("hop") == "" {
 		noStore(w)
 		http.Redirect(w, r, a.oidcBase()+oidcStartPath+"?return="+ret+"&hop=1", http.StatusFound)
 		return

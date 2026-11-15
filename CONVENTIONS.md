@@ -3536,9 +3536,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   in `GET /admin/settings` (only `signin.client_secret_set`), never logged, never in an error, never
   saved from the environment. OIDC needs `public_url`: the redirect URI is
   `<public_url>/api/v1/auth/oidc/callback` and every URL the browser or the provider is sent to is
-  built from it, never from the Host (a `/start` on another host first hops to public_url's, once:
-  `hop=1`). A bad config never stops the server: logged, the flow keeps its `problem`, the console
-  shows it (`GET /admin/oidc/status`, which also tries discovery when due). `GET /server`:
+  built from it, never from the Host (a `/start` on another host, or over plain HTTP straight from
+  the browser for an https public_url (home HTTP: a Secure cookie set there is dropped), first hops to
+  public_url's, once: `hop=1`). A bad config never stops the server: logged, the flow keeps its
+  `problem`, the console shows it (`GET /admin/oidc/status`, which also tries discovery when due). `GET /server`:
   `capabilities.oidc` (enabled and no problem; `false`, not absent, while off), `"oidc"` in
   `auth.methods` and `auth.oidc {name}` (the button's name). **`internal/oidc` is pure** (no DB, no
   HTTP handlers): `Provider` (go-oidc + x/oauth2; lazy discovery with a 1 to 15 minute backoff;

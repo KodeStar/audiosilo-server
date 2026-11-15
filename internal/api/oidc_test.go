@@ -61,6 +61,9 @@ func (e *testEnv) get(t *testing.T, path, host string, cookies ...*http.Cookie) 
 	t.Helper()
 	req, _ := http.NewRequest("GET", e.srv.URL+path, nil)
 	req.Host = host
+	// The test server is plain HTTP behind an https public_url, as behind a
+	// proxy that ends TLS.
+	req.Header.Set("X-Forwarded-Proto", "https")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -259,6 +262,19 @@ func TestOIDCStart(t *testing.T) {
 	}
 	if len(resp.Cookies()) != 0 {
 		t.Fatal("a cookie set on the wrong host")
+	}
+	// Plain HTTP straight from the browser (home HTTP on public_url's own host
+	// and port): the hop too, since a Secure cookie set there is dropped.
+	plain, _ := http.NewRequest("GET", e.srv.URL+oidcStartPath+"?return=admin", nil)
+	plain.Host = oidcHost
+	resp, err := noFollow.Do(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != oidcPublic+oidcStartPath+"?return=admin&hop=1" ||
+		len(resp.Cookies()) != 0 {
+		t.Fatalf("plain HTTP on the public host: %d %q %v", resp.StatusCode, resp.Header.Get("Location"), resp.Cookies())
 	}
 	// After the hop the flow goes on, whatever Host a proxy passes.
 	if resp := e.get(t, oidcStartPath+"?return=admin&hop=1", "backend:8080"); resp.StatusCode != http.StatusFound ||
