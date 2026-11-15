@@ -69,6 +69,11 @@ type Decision struct {
 	// Role is the role the account should have after this sign-in (the
 	// admin_group rule), "" for no change of role by the sign-in.
 	Role string
+	// NoGroups: admin_group is set but the sign-in carried no groups claim at
+	// all (neither the ID token nor userinfo; an empty list is a claim), so the
+	// role is left as it is: a provider that stopped sending the claim (a
+	// scope or mapper removed) demotes no one.
+	NoGroups bool
 }
 
 // Roles Decide speaks of (auth's).
@@ -87,10 +92,14 @@ const (
 //     set) lists the person, else pending not_allowed; with it off: pending.
 //
 // Never on a username. Role is set for every outcome that signs in while
-// admin_group is set.
+// admin_group is set, unless the sign-in carried no groups claim (NoGroups).
 func Decide(in Input) Decision {
 	d := decide(in)
 	if (d.Outcome == SignIn || d.Outcome == Link || d.Outcome == Create) && in.Policy.AdminGroup != "" {
+		if in.Claims.Groups == nil {
+			d.NoGroups = true
+			return d
+		}
 		d.Role = RoleUser
 		if in.Claims.InGroup(in.Policy.AdminGroup) {
 			d.Role = RoleAdmin

@@ -87,6 +87,26 @@ func TestDecideRoleSync(t *testing.T) {
 	}
 }
 
+// TestDecideNoGroupsClaim: with admin_group set, a sign-in that carried no
+// groups claim at all leaves the role alone (NoGroups), while an empty list is
+// a claim and demotes.
+func TestDecideNoGroupsClaim(t *testing.T) {
+	t.Parallel()
+	in := Input{Claims: Claims{}, Linked: &Account{ID: 3, Admin: true}, Policy: Policy{AdminGroup: "audiosilo-admins"}}
+	if d := Decide(in); d.Outcome != SignIn || d.Role != "" || !d.NoGroups {
+		t.Fatalf("no groups claim: %+v", d)
+	}
+	in.Claims.Groups = []string{}
+	if d := Decide(in); d.Role != RoleUser || d.NoGroups {
+		t.Fatalf("an empty groups claim: %+v", d)
+	}
+	// Without admin_group nothing is said of groups.
+	in.Claims.Groups, in.Policy.AdminGroup = nil, ""
+	if d := Decide(in); d.Role != "" || d.NoGroups {
+		t.Fatalf("no admin_group: %+v", d)
+	}
+}
+
 // TestFillEmailAsSent: an email is vouched for only as the provider sent it;
 // one clean had to change (cut, trimmed, a control character dropped) is kept
 // for the console but counts as unverified, so it never links by itself.
