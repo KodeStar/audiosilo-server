@@ -453,6 +453,41 @@ describe('book page', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /community/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Compare fields' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unlink' })).not.toBeInTheDocument();
+  });
+
+  it('still offers Unlink for a recorded match when community metadata is off (server#350)', async () => {
+    const detail = bookDetail();
+    detail.community_match = {
+      work_id: 'a-guild-book',
+      recording_id: 'r1',
+      how: 'auto',
+      matched_at: new Date(Date.now() - 86400_000).toISOString(),
+    };
+    const unlinked = structuredClone(detail);
+    delete unlinked.community_match;
+    const calls = mockFetch(
+      routes(detail, {
+        'GET /server': {
+          body: { ...serverInfo, capabilities: { ...serverInfo.capabilities, metadata: false } },
+        },
+        'PATCH /admin/libraries/1/book': { body: unlinked },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText('Community metadata is off on this server.'),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink from the community work?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ match: { work_id: '' } });
+    expect(await screen.findByText('Unlinked from the community work')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Unlink' })).not.toBeInTheDocument(),
+    );
   });
 
   it("says plainly when the book isn't in the library", async () => {
