@@ -290,9 +290,10 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]p
 }
 
 // otherRecordings is books as LocalOthers, one per recording: a book sharing
-// an ASIN or ISBN with pick, or with a book before it (match.Recordings,
-// compared normalized, a tag's case, spaces and hyphens aside), is the same
-// recording again and left out, as catalog.OtherRecordings leaves it out, so of
+// an ASIN with pick, or with a book before it, or an ISBN when either has no
+// ASIN (match.Recordings, compared normalized, a tag's case, spaces and hyphens
+// aside; books with different ASINs never are), is the same recording again
+// and left out, as catalog.OtherRecordings leaves it out, so of
 // a recording's copies the first in books' order is the one listed; nil when
 // none is left.
 func otherRecordings(books []LocalBook, pick LocalBook) []MetaLocal {

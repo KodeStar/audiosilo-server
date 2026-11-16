@@ -275,7 +275,7 @@ func TestOtherRecordings(t *testing.T) {
 }
 
 // TestOtherRecordingsOneEach (server#241): each other recording is listed
-// once. Of copies of one (a shared ASIN or ISBN, normalized) the first in order
+// once. Of copies of one (a shared ASIN, else ISBN, normalized) the first in order
 // is kept, the book's own library first, and copies never crowd a recording out
 // of the limit. The pair: a caller who can open only a copy in another library
 // gets that copy, and one who can open only the original never gets the copy.
@@ -323,12 +323,49 @@ func TestOtherRecordingsOneEach(t *testing.T) {
 		t.Fatalf("copy only = %+v", got)
 	}
 	// Denied: a copy outside the grant never stands in for the one inside it.
-	member = []Scope{{LibraryID: f.main.ID, Paths: []string{"Bray", "Kemper"}}}
-	if got, err = f.c.OtherRecordings(f.ctx, member, me); err != nil {
+	// Asked from the second library, its own copy comes first in order, so
+	// dropping copies before the scope filter would leave this member nothing.
+	member = []Scope{{LibraryID: f.main.ID, Paths: []string{"Kemper"}}, {LibraryID: f.other.ID, Paths: []string{"Abridged"}}}
+	if got, err = f.c.OtherRecordings(f.ctx, member, f.book(t, f.other.ID, "Abridged/One")); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].LibraryID != f.main.ID || got[0].RelPath != "Kemper/One" {
 		t.Fatalf("original only = %+v", got)
+	}
+}
+
+// TestOtherRecordingsSharedISBN (server#241): two recordings with their own
+// ASINs are both listed though they share an ISBN (the print edition's, as a
+// match often fills it in), and a book with only that ISBN is a copy.
+func TestOtherRecordingsSharedISBN(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	const isbn = "9780000000002"
+	for path, spelled := range map[string]string{"Kemper/One": isbn, "Private/One": "978-0-00-000000-2"} {
+		b := f.book(t, f.main.ID, path)
+		b.ISBN = spelled
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	printed := Book{LibraryID: f.other.ID, RelPath: "Print/One", Title: "One", Narrator: "Kemper", ISBN: isbn,
+		AddedAt: "2024-01-01T00:00:00Z"}
+	if _, err := f.c.UpsertBook(f.ctx, &printed); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.SaveUpcomingOwned(f.ctx, []UpcomingOwned{{Ref: Ref{LibraryID: f.other.ID, Path: "Print/One"},
+		IDKey: meta.IDKey("", isbn), WorkID: "w-one", CheckedAt: "now"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.book(t, f.other.ID, "Print/One").WorkID; got != "w-one" {
+		t.Fatalf("Print/One work = %q, want w-one", got)
+	}
+	got, err := f.c.OtherRecordings(f.ctx, f.all(), f.book(t, f.main.ID, "Bray/One"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Kemper/One", "Private/One", "Abridged/One"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("other recordings = %q, want %q", relPaths(got), want)
 	}
 }
 

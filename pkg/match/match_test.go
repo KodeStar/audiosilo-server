@@ -501,25 +501,50 @@ func TestNormalizeIdentifiers(t *testing.T) {
 	}
 }
 
-// TestRecordings: a book sharing a normalized ASIN or ISBN with one seen before
-// is a copy, its other identifier then marking copies too; a book with
-// neither, or with only other identifiers, never is.
+// TestRecordings: a book sharing a normalized ASIN with one seen before is a
+// copy, and so is one sharing an ISBN when either has no ASIN, its other
+// identifier then marking copies too; books with different ASINs never are,
+// whatever their ISBNs, and a book with neither, or with only other
+// identifiers, never is.
 func TestRecordings(t *testing.T) {
-	var r Recordings
-	for _, tc := range []struct {
+	type book struct {
 		asin, isbn string
 		copy       bool
-	}{
-		{"B0GRETA0001", "", false},
-		{" b0greta0001 ", "978-0-00-000000-1", true}, // the same ASIN, respelled
-		{"", "9780000000001", true},                  // the copy's ISBN
-		{"B0DAVINA001", "", false},                   // another narrator
-		{"", "", false},
-		{"", "", false}, // no identifiers: never merged
-		{"B0OTHER0001", "0306406152", false},
+	}
+	for name, books := range map[string][]book{
+		"respelled": {
+			{"B0GRETA0001", "", false},
+			{" b0greta0001 ", "978-0-00-000000-1", true}, // the same ASIN, respelled
+			{"", "9780000000001", true},                  // the copy's ISBN
+			{"B0DAVINA001", "", false},                   // another narrator
+			{"", "", false},
+			{"", "", false}, // no identifiers: never merged
+			{"B0OTHER0001", "0306406152", false},
+		},
+		// Two Audible recordings sharing the print edition's ISBN stay apart,
+		// and a book with only that ISBN is a copy of the first.
+		"shared ISBN": {
+			{"B0KEMPER01", "9780000000002", false},
+			{"B0ZED00001", "978-0-00-000000-2", false}, // another ASIN: never a copy
+			{"", "9780000000002", true},                // no ASIN: the ISBN decides
+			{"b0zed00001", "", true},
+			{"B0THIRD001", "9780000000002", false},
+		},
+		// A book with only an ISBN seen first: the first ASIN sharing it is that
+		// recording, and from then on another ASIN is not.
+		"ISBN first": {
+			{"", "9780000000003", false},
+			{"B0KEMPER01", "9780000000003", true},
+			{"B0ZED00001", "9780000000003", false},
+			{"B0KEMPER01", "", true},
+			{"", "978 0000000003", true},
+		},
 	} {
-		if got := r.Seen(tc.asin, tc.isbn); got != tc.copy {
-			t.Errorf("Seen(%q, %q) = %v, want %v", tc.asin, tc.isbn, got, tc.copy)
+		var r Recordings
+		for _, b := range books {
+			if got := r.Seen(b.asin, b.isbn); got != b.copy {
+				t.Errorf("%s: Seen(%q, %q) = %v, want %v", name, b.asin, b.isbn, got, b.copy)
+			}
 		}
 	}
 }

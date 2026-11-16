@@ -534,8 +534,9 @@ func TestPlaceLocalOwnWork(t *testing.T) {
 }
 
 // TestPlaceLocalOthersDropCopies: local_others never holds a copy of the
-// entry's book (the pick, or requested on its own entry) sharing its ASIN or
-// ISBN in normalized form, as /item's other_recordings leaves it out.
+// entry's book (the pick, or requested on its own entry) sharing its ASIN, or
+// its ISBN when either has no ASIN, in normalized form, as /item's
+// other_recordings leaves it out; a book with another ASIN stays.
 func TestPlaceLocalOthersDropCopies(t *testing.T) {
 	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
 	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
@@ -548,11 +549,12 @@ func TestPlaceLocalOthersDropCopies(t *testing.T) {
 		book("S/1", "one", "B0ONE", "978-0-00-000001-1"),
 		book("S/1 copy", "one", "", "9780000000011"),
 		book("S/1 other", "one", "B0OTHER", ""),
+		book("S/1 zed", "one", "B0ZED", "978 0000000011"), // another ASIN: the pick's ISBN never merges it
 		book("S/2 a", "two", "B0TWO", ""),
 		book("S/2 a copy", "two", " b0two ", ""),
 		book("S/2 b", "two", "B0TWOB", ""),
 	})[0].Works
-	if got, want := others(works), [][]string{{"S/1 other"}, {"S/2 b"}}; !reflect.DeepEqual(got, want) {
+	if got, want := others(works), [][]string{{"S/1 other", "S/1 zed"}, {"S/2 b"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("others = %q, want %q", got, want)
 	}
 	if works[1].Local == nil || works[1].Local.Path != "S/2 a" {
@@ -561,7 +563,7 @@ func TestPlaceLocalOthersDropCopies(t *testing.T) {
 }
 
 // TestPlaceLocalOthersOneEach (server#241): local_others lists each other
-// recording once. Of copies of one (a shared ASIN or ISBN, normalized) the
+// recording once. Of copies of one (a shared ASIN, else ISBN, normalized) the
 // first in the pick's order is listed, the requested library's before
 // another's; a book with neither identifier is never taken for a copy.
 func TestPlaceLocalOthersOneEach(t *testing.T) {
