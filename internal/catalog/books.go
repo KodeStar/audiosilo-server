@@ -859,13 +859,38 @@ const derivedBookCols = bookBaseCols + `, work_id`
 // workIDExpr is the SQL of a book's community work id, the key its other
 // recordings share (server#241): its recorded match (book_matches: the
 // console's match or a match run's), else the work the upcoming releases job
-// resolved from its ASIN or ISBN (a non-empty upcoming_owned.work_id), else
-// empty. t names the books table in the query (its alias). Two primary-key
-// reads a row; OtherRecordings finds a work's books from the other side, by
-// the work id indexes (idx_book_matches_work, idx_upcoming_owned_work).
+// resolved from its ASIN or ISBN (a non-empty upcoming_owned.work_id) while the
+// identifiers it was resolved by (id_key) are still the book's (idKeyExpr), so
+// a retag, an ASIN edit or another book at the path holds no stale work until
+// the job resolves it again; else empty. t names the books table in the query
+// (its alias). Two primary-key reads a row; OtherRecordings finds a work's
+// books from the other side, by the work id indexes (idx_book_matches_work,
+// idx_upcoming_owned_work).
 func workIDExpr(t string) string {
 	return `COALESCE((SELECT wm.work_id FROM book_matches wm WHERE wm.library_id = ` + t + `.library_id AND wm.path = ` + t + `.rel_path AND wm.work_id <> ''),
-		(SELECT wo.work_id FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path AND wo.work_id <> ''), '')`
+		(SELECT wo.work_id FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path AND wo.work_id <> ''
+		   AND wo.id_key = ` + idKeyExpr(t) + `), '')`
+}
+
+// sqlSpace is the white space normASINSQL and normISBNSQL trim, as
+// strings.TrimSpace does in ASCII.
+const sqlSpace = `' ' || char(9, 10, 11, 12, 13)`
+
+// normASINSQL is the SQL of match.NormalizeASIN over col (in ASCII).
+func normASINSQL(col string) string { return `UPPER(TRIM(` + col + `, ` + sqlSpace + `))` }
+
+// normISBNSQL is the SQL of match.NormalizeISBN over col (in ASCII).
+func normISBNSQL(col string) string {
+	return `UPPER(REPLACE(REPLACE(TRIM(` + col + `, ` + sqlSpace + `), '-', ''), ' ', ''))`
+}
+
+// idKeyExpr is the SQL of meta.IDKey over the book t's identifiers: the key the
+// upcoming releases job stores a resolution under (upcoming_owned.id_key), "a:"
+// and the normalized ASIN, else "i:" and the normalized ISBN. A book with
+// neither has "i:", which no stored key is.
+func idKeyExpr(t string) string {
+	return `CASE WHEN ` + normASINSQL(t+`.asin`) + ` <> '' THEN 'a:' || ` + normASINSQL(t+`.asin`) +
+		` ELSE 'i:' || ` + normISBNSQL(t+`.isbn`) + ` END`
 }
 
 // bookDest returns the scan destinations for bookCols, in order, so every query

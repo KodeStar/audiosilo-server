@@ -59,8 +59,8 @@ func otherRecordingsQuery(scopes []Scope, book *Book) (string, []any) {
 		 WHERE l.kind = 'books' AND ` + frag + `
 		   AND NOT (b.library_id = ? AND b.rel_path = ?)
 		   AND ` + workIDExpr("b") + ` = ?
-		   AND NOT (? <> '' AND UPPER(TRIM(b.asin)) = ?)
-		   AND NOT (? <> '' AND UPPER(REPLACE(REPLACE(b.isbn, '-', ''), ' ', '')) = ?)
+		   AND NOT (? <> '' AND ` + normASINSQL("b.asin") + ` = ?)
+		   AND NOT (? <> '' AND ` + normISBNSQL("b.isbn") + ` = ?)
 		 ORDER BY b.library_id <> ?, b.title COLLATE NOCASE, b.narrator COLLATE NOCASE, b.library_id, b.rel_path
 		 LIMIT ?`, args
 }

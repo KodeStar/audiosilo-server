@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
 // recordingsFixture is two books libraries and a podcasts one holding
@@ -134,6 +136,79 @@ func TestBookWorkID(t *testing.T) {
 	next, _, err := f.c.NextInSeries(f.ctx, f.main.ID, first, Scope{LibraryID: f.main.ID, AllowAll: true})
 	if err != nil || next == nil || next.RelPath != "Kemper/One" || next.WorkID != "w-one" {
 		t.Fatalf("NextInSeries = %+v, %v", next, err)
+	}
+}
+
+// TestBookWorkIDFollowsIdentifiers: the work the upcoming job resolved from a
+// book's identifiers is its work only while they are still the book's (the
+// row's id_key): a retag, or another book at the path, holds none until the job
+// resolves it again, and neither does an OtherRecordings candidate; a tag only
+// spelled differently (case, spaces) keeps it, and a recorded match stands
+// whatever the identifiers.
+func TestBookWorkIDFollowsIdentifiers(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	retag := func(lib int64, path, asin string) {
+		t.Helper()
+		b, err := f.c.GetBookByPath(f.ctx, lib, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.ASIN = asin
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work := func(lib int64, path string) string {
+		t.Helper()
+		b, err := f.c.GetBookByPath(f.ctx, lib, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.WorkID
+	}
+	retag(f.main.ID, "Kemper/One", " b0kemper ")
+	if got := work(f.main.ID, "Kemper/One"); got != "w-one" {
+		t.Fatalf("respelled tag: work %q, want w-one", got)
+	}
+	retag(f.main.ID, "Kemper/One", "B0SOMEOTHER")
+	retag(f.main.ID, "Bray/One", "B0SOMEOTHER")
+	if got := work(f.main.ID, "Kemper/One"); got != "" {
+		t.Fatalf("retagged: work %q, want none until resolved again", got)
+	}
+	if got := work(f.main.ID, "Bray/One"); got != "w-one" {
+		t.Fatalf("retagged with a recorded match: work %q, want w-one", got)
+	}
+	me, err := f.c.GetBookByPath(f.ctx, f.main.ID, "Bray/One")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Private/One", "Copy/One", "Abridged/One"}; !reflect.DeepEqual(relPaths(got), want) {
+		t.Fatalf("other recordings after the retag = %q, want %q", relPaths(got), want)
+	}
+}
+
+// TestIDKeyExpr: the SQL key a book's identifiers are matched to a stored
+// resolution by is meta.IDKey's, the key the upcoming job stores it under.
+func TestIDKeyExpr(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	for _, tc := range []struct{ asin, isbn string }{
+		{"B00FLIJJSY", ""}, {" b00flijjsy\t", "9780553418026"}, {"", "978-0-553-41802-6"},
+		{"  ", " 978 0553 41802x\n"}, {"", "0-553-41802-X"},
+	} {
+		var got string
+		if err := c.db.QueryRowContext(ctx, `SELECT `+idKeyExpr("b")+` FROM (SELECT ? AS asin, ? AS isbn) b`,
+			tc.asin, tc.isbn).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if want := meta.IDKey(tc.asin, tc.isbn); got != want {
+			t.Errorf("idKeyExpr(%q, %q) = %q, want %q", tc.asin, tc.isbn, got, want)
+		}
 	}
 }
 

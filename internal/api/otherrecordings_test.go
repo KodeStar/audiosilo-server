@@ -143,8 +143,8 @@ func listWorkIDs(t *testing.T, e *sagaEnv) map[string]string {
 }
 
 // TestListWorkIDCacheMiss: work_id rides on every list book, and a changed
-// work in the upcoming job's resolution of it is never answered from the list
-// cache, while a look-up that only renews when it was checked leaves the cache
+// work, or identifiers, in the upcoming job's resolution of it is never
+// answered from the list cache, while a look-up that only renews when it was checked leaves the cache
 // alone (each kind of change: store's
 // TestUserStateWritesLeaveTheContentGeneration).
 func TestListWorkIDCacheMiss(t *testing.T) {
@@ -172,6 +172,13 @@ func TestListWorkIDCacheMiss(t *testing.T) {
 	want["Saga/2"] = "two-merged"
 	if got := listWorkIDs(t, e); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a changed work: %v, want %v", got, want)
+	}
+	// Resolved from identifiers the book no longer has: no work, answered afresh.
+	e.cachedBodies(`{"books":[{"rel_path":"cached","work_id":"x"}]}`)
+	save(catalog.UpcomingOwned{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2"}, IDKey: "a:B0OLDTAG", WorkID: "two-merged", CheckedAt: "later"})
+	want["Saga/2"] = ""
+	if got := listWorkIDs(t, e); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after a re-keyed resolution: %v, want %v", got, want)
 	}
 }
 

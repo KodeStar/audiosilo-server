@@ -80,10 +80,10 @@ var userStateTables = map[string]tableRule{
 	// (upcoming_announced is its memory of the works it announced).
 	//
 	// upcoming_owned is the exception: a book's work_id (catalog.workIDExpr,
-	// server#241) rides on every list book, so a new or removed row, or a
-	// changed work_id, is content; a run that only looks a book up again
-	// (checked_at, and id_key, which no list reads) is not.
-	"upcoming_owned":     {free: []string{"id_key", "checked_at"}},
+	// server#241) rides on every list book while its id_key is the book's
+	// identifiers' key, so a new or removed row, or a changed work_id or id_key,
+	// is content; a run that only looks a book up again (checked_at) is not.
+	"upcoming_owned":     {free: []string{"checked_at"}},
 	"upcoming_series":    {rows: true},
 	"meta_series":        {rows: true},
 	"upcoming_items":     {rows: true},

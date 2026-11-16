@@ -504,8 +504,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   open rides beside `local` as `local_others` `[{library_id, path}]` in that order (the
   current work's entry: every book of the work but the requested one; an entry placed by
   its index has none); per request like `local`, never on a cached envelope. A book's
-  work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id`
-  (`catalog.workIDExpr`, on every list book and `/item` as `work_id`), and `GET /item`
+  work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
+  row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
+  ASIN edit holds no stale work until the job resolves it again) (`catalog.workIDExpr`, on
+  every list book and `/item` as `work_id`), and `GET /item`
   adds `other_recordings` (list-shape books, `catalog.OtherRecordings`: books libraries,
   the caller's scopes, the same work key, not itself, not a copy sharing its ASIN or ISBN;
   its own library first, then title, then narrator; at most 20; metadata on only).
@@ -600,8 +602,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `errSwitchedOff`: a cancellation, no status recorded, no retry). In mirror mode every call goes to the
   local copy. A failure keeps what earlier runs stored. **Storage** (all derived and rebuildable,
   path-keyed, no FK to `books`, cascaded with the library, written through the user-state path; no
-  content cache reads them but `upcoming_owned`'s rows and `work_id`, the list books' `work_id`, so a new
-  or removed row or a changed work moves the content generation, a re-check does not):
+  content cache reads them but `upcoming_owned`'s rows, `work_id` and `id_key`, the list books' `work_id`,
+  so a new or removed row, a changed work or a re-keyed one moves the content generation, a re-check does not):
   `upcoming_owned` (book -> work id and the identifiers it was resolved by),
   `upcoming_series` (local series -> community series ids, `''` for none found, `classified_at`),
   `meta_series` (a community series' members as last read, `ok`/`gone`), `upcoming_items` (one row per
@@ -851,7 +853,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `progress` (every column but its key), `tokens` (`last_seen`, `last_ip`, `client_*`),
   `bridge_status` (`heartbeat_at`, `status`), `bridge_jobs` (`lease_until`, `updated_at`,
   `progress`), `unknown_asin_reports` (`checked_at`, `sent_at`: Health's `unknown_asin` reads
-  the rest) and `upcoming_owned` (`checked_at`, `id_key`: the list books' `work_id` reads the
+  the rest) and `upcoming_owned` (`checked_at`: the list books' `work_id` reads the
   rest, server#241), which columns an UPDATE may change by value (the hook reads a row only up to
   the rule's last watched column, `watchedChanged`, so a freed column after them, the
   heartbeat's up to 64 KiB `status`, is never copied; S263-HOOK). Anything else on a listed table
@@ -866,7 +868,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   complete poll's `refused_at` cleared and `refusal_ended_at` stamped), the scheduler's `MarkAudibleQueued` (`last_queued_at`) and
   `MarkAudibleSyncQueued` (`sync_queued_at`), an ended sync's `FoldAudibleSync` (`last_sync_at`, `refused_at`),
   `PutMetaCache`, the upcoming releases job's tables
-  (`upcoming_owned` while it only renews `checked_at` or `id_key`, `upcoming_series`, `meta_series`,
+  (`upcoming_owned` while it only renews `checked_at`, `upcoming_series`, `meta_series`,
   `upcoming_items`, `upcoming_announced`: derived,
   read only by `/me/upcoming` and the job), the token touch in
   `auth.Service.resolve` (which then drops that token's cached row, so the next request reads
@@ -884,7 +886,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Each consumer, audited against the tables its answer reads:
   the list cache's player lists (`/libraries/{id}/books`, `/books/recent`, `/search`, a books
   library's authors/narrators/series: `books` and its side tables, `libraries`, and for a
-  book's `work_id` `book_matches` and `upcoming_owned`'s rows and `work_id`; scopes computed
+  book's `work_id` `book_matches` and `upcoming_owned`'s rows, `work_id` and `id_key`; scopes computed
   per request from shares, grants and members' `collection_shares`, into the key) and the
   admin's `/admin/books` first page and facets read no user state but `unknown_asin_reports`
   (`?issue=unknown_asin`); Health `/admin/issues` reads `progress` row counts (the duplicate

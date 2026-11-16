@@ -341,7 +341,7 @@ chapter source while those are the book's files, dormant otherwise; durable, pat
 with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md) and
 `cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens). `0079` (server#241)
 adds `idx_book_matches_work` (a book's community work key is `book_matches.work_id`, else a non-empty
-`upcoming_owned.work_id`: `catalog.workIDExpr`, `Book.work_id`; `catalog.OtherRecordings` finds a work's
+`upcoming_owned.work_id` resolved from the book's current identifiers (`id_key`): `catalog.workIDExpr`, `Book.work_id`; `catalog.OtherRecordings` finds a work's
 books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
