@@ -26,8 +26,9 @@ import (
 //     (below), which is this server's own: then it answers as unmatched with it.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
 //
-// Every rail entry the caller owns carries `local`, the book to open for it
-// (localRails), resolved for this caller on a copy of the rails.
+// Every rail entry the caller owns carries `local`, the book to open for it,
+// and `local_others`, their other recordings of its work (localRails), resolved
+// for this caller on a copy of the rails.
 //
 // The characters, recaps and description the Bridge generated for the book (its
 // .audiosilo/ attachments, catalog.BookAttachments) fill what the community work
@@ -98,7 +99,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		// placed, the envelope goes out without it (the shared rails, unannotated)
 		// rather than failing a lookup that succeeded - and that a client which never
 		// reads `local` asked for.
-		if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
+		if rails, _, err := a.localRails(r.Context(), book, env); err != nil {
 			if r.Context().Err() == nil {
 				a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
 			}
@@ -200,9 +201,11 @@ func writeLookupFailed(w http.ResponseWriter) {
 // localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and
 // the books it placed them from: the caller's books in every library they reach
 // in a series named like a rail, their main one or another (catalog.SeriesBooks
-// over their UserScopes).
+// over their UserScopes). Of a work's several recordings the pick (Local) is by
+// meta's rule, which reads requested's narrator and the caller's progress
+// (catalog.InProgress); the rest ride as LocalOthers.
 // requested is the book env is for. env is shared and never modified.
-func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.Enrichment) ([]meta.MetaSeries, []catalog.Book, error) {
+func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta.Enrichment) ([]meta.MetaSeries, []catalog.Book, error) {
 	if len(env.Series) == 0 {
 		return env.Series, nil, nil
 	}
@@ -214,15 +217,34 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	if err != nil {
 		return nil, nil, err
 	}
+	refs := make([]catalog.Ref, len(books))
+	for i, b := range books {
+		refs[i] = catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}
+	}
+	started, err := a.cat.InProgress(ctx, userFrom(ctx).ID, refs)
+	if err != nil {
+		return nil, nil, err
+	}
+	me := meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.RelPath}
 	// A book in several series is a candidate in each, at its position there.
-	cands := make([]meta.LocalBook, 0, len(books))
-	for _, b := range books {
-		for _, s := range b.AllSeries() {
-			cands = append(cands, meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
-				Series: s.Name, SeriesIndex: s.Position, SeriesIndexEnd: s.PositionEnd, ASIN: b.ASIN, ISBN: b.ISBN})
+	// requested is one too, outside every series when none named it, so the pick
+	// knows its narrator.
+	cands := make([]meta.LocalBook, 0, len(books)+1)
+	cand := func(b *catalog.Book) meta.LocalBook {
+		return meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+			ASIN: b.ASIN, ISBN: b.ISBN, WorkID: b.WorkID, Narrator: b.Narrator,
+			Started:  started[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}],
+			Abridged: b.Abridged != nil && *b.Abridged}
+	}
+	cands = append(cands, cand(requested))
+	for i := range books {
+		for _, s := range books[i].AllSeries() {
+			c := cand(&books[i])
+			c.Series, c.SeriesIndex, c.SeriesIndexEnd = s.Name, s.Position, s.PositionEnd
+			cands = append(cands, c)
 		}
 	}
-	return a.meta.PlaceOwned(ctx, env, meta.MetaLocal(requested), cands), books, nil
+	return a.meta.PlaceOwned(ctx, env, me, cands), books, nil
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the

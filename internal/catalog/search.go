@@ -54,12 +54,14 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 	return dedupBooks(cands, limit), nil
 }
 
+// prefixCols is bookCols for a books table aliased p ("b."): each column
+// prefixed, then the work id (workIDExpr) as work_id.
 func prefixCols(p string) string {
-	cols := strings.Split(bookCols, ",")
+	cols := strings.Split(bookBaseCols, ",")
 	for i, c := range cols {
 		cols[i] = p + strings.TrimSpace(c)
 	}
-	return strings.Join(cols, ", ")
+	return strings.Join(cols, ", ") + ", " + workIDExpr(strings.TrimSuffix(p, ".")) + " AS work_id"
 }
 
 // buildMatchQuery turns free user input into a safe FTS5 prefix query. Each

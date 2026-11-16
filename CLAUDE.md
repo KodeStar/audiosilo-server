@@ -339,7 +339,10 @@ issuer+subject); see Single sign-on in CONVENTIONS.md. `0078` (server#240) adds 
 chapter list made in the console's chapter editor: a `metadata.ChapterList` with the files it was made on, the first
 chapter source while those are the book's files, dormant otherwise; durable, path-keyed, no FK to the index, moved
 with the book, never copied onto a joined one; see Community chapters (Edited chapters) in CONVENTIONS.md) and
-`cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens).
+`cast_grants.editor` (1 for a token the editor's player streams with, capped apart from the person's cast tokens). `0079` (server#241)
+adds `idx_book_matches_work` (a book's community work key is `book_matches.work_id`, else a non-empty
+`upcoming_owned.work_id`: `catalog.workIDExpr`, `Book.work_id`; `catalog.OtherRecordings` finds a work's
+books by it; see Community metadata lookup (Other recordings) in CONVENTIONS.md).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -469,8 +472,9 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
 `metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
-`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) and `meta_covers`
-(`GET /libraries/{id}/meta/cover`) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
+`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`), `meta_covers`
+(`GET /libraries/{id}/meta/cover`) and `other_recordings` (`/item`'s `other_recordings`, `/meta`'s
+`local_others`; `Book.work_id` rides on every book regardless) track `metadata`. `upcoming` (`GET /me/upcoming`) is `metadata`
 AND the live `upcoming.enabled`; `upcoming_calendar` (the calendar feed) and `upcoming_covers`
 (`GET /me/upcoming/cover`) are exactly `upcoming` (see Upcoming releases in CONVENTIONS.md).
 `renditions` is ffmpeg configured AND the rendition cache open (a data dir), with the kinds

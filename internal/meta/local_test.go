@@ -396,3 +396,103 @@ func TestNextRail(t *testing.T) {
 		})
 	}
 }
+
+// others reads each entry's local_others paths off works (nil = none).
+func others(works []MetaSeriesWork) [][]string {
+	out := make([][]string, len(works))
+	for i, w := range works {
+		for _, l := range w.LocalOthers {
+			out[i] = append(out[i], l.Path)
+		}
+	}
+	return out
+}
+
+// TestPlaceLocalPickTable (server#241): of several recordings of the next work
+// the pick is one read by the narrator of the book just finished, then one
+// started and not finished, then one in its library, then one not known to be
+// abridged, then the books' own order; the rest ride as local_others in that
+// order.
+func TestPlaceLocalPickTable(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	book := func(lib int64, path, narrator string, started, abridged bool) LocalBook {
+		b := mine(lib, path, "S", 2, "two")
+		b.Narrator, b.Started, b.Abridged = narrator, started, abridged
+		return b
+	}
+	finished := mine(1, "S/1", "S", 1, "one")
+	finished.Narrator = "R. C. Bray"
+	for _, tc := range []struct {
+		name  string
+		books []LocalBook
+		want  []string // the pick, then local_others
+	}{
+		{"same narrator beats started, library and abridged",
+			[]LocalBook{book(1, "A", "Kemper", true, false), book(2, "B", " r. c.  BRAY ", false, true)},
+			[]string{"B", "A"}},
+		{"started beats library and abridged",
+			[]LocalBook{book(1, "A", "Kemper", false, false), book(2, "B", "Abe", true, true)},
+			[]string{"B", "A"}},
+		{"same library beats abridged",
+			[]LocalBook{book(2, "A", "Kemper", false, false), book(1, "B", "Abe", false, true)},
+			[]string{"B", "A"}},
+		{"unabridged beats the books' order",
+			[]LocalBook{book(1, "A", "Kemper", false, true), book(1, "B", "Abe", false, false)},
+			[]string{"B", "A"}},
+		{"then the books' order (library sort order, then path)",
+			[]LocalBook{book(2, "C", "Kemper", false, false), book(2, "A", "Abe", false, false), book(1, "Z", "Zed", true, false), book(1, "Y", "Yan", true, false)},
+			[]string{"Z", "Y", "C", "A"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			works := PlaceLocal(rails, "one", requested, append([]LocalBook{finished}, tc.books...))[0].Works
+			got := append([]string{works[1].Local.Path}, others(works)[1]...)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("pick + others = %q, want %q", got, tc.want)
+			}
+			// The current work's entry is the requested book, alone.
+			if works[0].Local == nil || *works[0].Local != requested || works[0].LocalOthers != nil {
+				t.Fatalf("current entry = %+v", works[0])
+			}
+		})
+	}
+	// Without the requested book among the books, no narrator is preferred.
+	works := PlaceLocal(rails, "one", requested, []LocalBook{book(2, "A", "", false, false), book(2, "B", "R. C. Bray", false, false)})[0].Works
+	if works[1].Local.Path != "A" {
+		t.Fatalf("pick without a narrator = %+v", works[1].Local)
+	}
+}
+
+// TestPlaceLocalOthers: local_others lists every other recording of an entry's
+// work once (a book in several series is a candidate in each), on the current
+// work's entry too (every book of the work but the requested one), and in an
+// alternate ordering as in the main view; an entry placed by its index has none.
+func TestPlaceLocalOthers(t *testing.T) {
+	r := named("S", "1", "one@1", "two@2", "three@3")
+	r.Orderings = []MetaSeriesOrdering{{Name: "Chronological", Works: r.Works}}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	books := []LocalBook{
+		mine(1, "S/1", "S", 1, "one"),
+		mine(1, "S/1 other", "S", 1, "one"),
+		mine(1, "S/2 a", "S", 2, "two"),
+		mine(1, "S/2 a", "Other series", 7, "two"), // the same book in another series
+		mine(1, "S/2 b", "S", 2, "two"),
+		mine(1, "S/3", "S", 3, ""),
+		mine(1, "S/3 too", "S", 3, ""),
+	}
+	out := PlaceLocal([]MetaSeries{r}, "one", requested, books)
+	for _, view := range [][]MetaSeriesWork{out[0].Works, out[0].Orderings[0].Works} {
+		if got, want := locals(view), []string{"S/1", "S/2 a", "S/3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("locals = %q, want %q", got, want)
+		}
+		if got, want := others(view), [][]string{{"S/1 other"}, {"S/2 b"}, nil}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("others = %q, want %q", got, want)
+		}
+	}
+	// The rails passed in are never annotated.
+	for _, w := range r.Works {
+		if w.Local != nil || w.LocalOthers != nil {
+			t.Fatalf("input rail annotated: %+v", w)
+		}
+	}
+}

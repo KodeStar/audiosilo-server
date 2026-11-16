@@ -842,15 +842,38 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 	return err
 }
 
-const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
+// bookBaseCols are the books table's own columns a Book reads; bookCols adds
+// its community work id.
+const bookBaseCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
 	subtitle, publisher, language, abridged, genres, tags, ebook_path, ebook_size`
 
+// bookCols is a Book's columns selected FROM books (unaliased): bookBaseCols,
+// then its work_id (workIDExpr). prefixCols is the same for an aliased books
+// table, and derivedBookCols for a derived table whose rows prefixCols selected.
+var bookCols = bookBaseCols + `, ` + workIDExpr("books") + ` AS work_id`
+
+// derivedBookCols is bookCols read off a derived table (a subquery in FROM)
+// that selected prefixCols: the work id is already its work_id column.
+const derivedBookCols = bookBaseCols + `, work_id`
+
+// workIDExpr is the SQL of a book's community work id, the key its other
+// recordings share (server#241): its recorded match (book_matches: the
+// console's match or a match run's), else the work the upcoming releases job
+// resolved from its ASIN or ISBN (a non-empty upcoming_owned.work_id), else
+// empty. t names the books table in the query (its alias). Two primary-key
+// reads a row; OtherRecordings finds a work's books from the other side, by
+// the work id indexes (idx_book_matches_work, idx_upcoming_owned_work).
+func workIDExpr(t string) string {
+	return `COALESCE((SELECT wm.work_id FROM book_matches wm WHERE wm.library_id = ` + t + `.library_id AND wm.path = ` + t + `.rel_path AND wm.work_id <> ''),
+		(SELECT wo.work_id FROM upcoming_owned wo WHERE wo.library_id = ` + t + `.library_id AND wo.path = ` + t + `.rel_path AND wo.work_id <> ''), '')`
+}
+
 // bookDest returns the scan destinations for bookCols, in order, so every query
-// selecting bookCols (plain or prefixed) scans it the same way; finish, called
-// after the scan, derives the cover fields, the series list and the labels from
-// the columns behind them.
+// selecting bookCols (plain, prefixed or derived) scans it the same way; finish,
+// called after the scan, derives the cover fields, the series list and the
+// labels from the columns behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
 	var more, art, color, attachments, genres, tags, ebookPath string
 	var ebookSize int64
@@ -858,7 +881,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color, &attachments,
-			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize},
+			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags, &ebookPath, &ebookSize, &b.WorkID},
 		func() {
 			b.Ebook = ebookOf(ebookPath, ebookSize)
 			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)

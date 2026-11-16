@@ -114,7 +114,9 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 // (when found); a later rail's placed entry never answers instead. work is nil
 // when there is no community answer: metadata off, the book unmatched or without
 // rails, the upstream failing, or no rail deciding. When the entry can't be
-// placed, work is it without `local`, as /meta degrades.
+// placed, work is it without `local`, as /meta degrades. Of the caller's several
+// recordings of the next work, `local` is the pick (meta's pickRank: book's
+// narrator first), so Next follows the same reader.
 func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (work *meta.MetaSeriesWork, placed *catalog.Book) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
 		return nil, nil
@@ -137,7 +139,7 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	if at < 0 {
 		return nil, nil
 	}
-	rails, books, err := a.localRails(ctx, catalog.Ref{LibraryID: libraryID, Path: book.RelPath}, env)
+	rails, books, err := a.localRails(ctx, book, env)
 	if err != nil {
 		if ctx.Err() == nil {
 			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
