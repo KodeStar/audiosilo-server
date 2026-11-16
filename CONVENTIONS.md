@@ -3758,7 +3758,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
   the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
   fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
-  older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, an import's apply and
+  older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
+  `finished` even one that flips nothing (`editFinishChangedValue`/`Set`, ?14; server#363), an import's apply and
   undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads

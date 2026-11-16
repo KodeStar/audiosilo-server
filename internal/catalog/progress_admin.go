@@ -228,26 +228,26 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		// own stamps (formatSessionTime): devices stamp their saves in milliseconds,
 		// and a whole-second stamp would let a save made up to a second BEFORE the
 		// edit win last-write-wins against it.
-		// An edit is also a finish-state change when it flips finished (Sync v2's
-		// finish and unfinish events older than it are then "older"), and it
-		// clears the offered place (other_place): the listener chose the place.
-		// ?10 and ?13 are the same stamp: finishChangedValue/Set bind ?13.
+		// An edit is also a finish-state change when it names finished at all
+		// (Sync v2's finish and unfinish events older than it are then "older",
+		// editFinishChangedSet), and it clears the offered place (other_place):
+		// the listener chose the place. ?10 and ?13 are the same stamp.
 		stamp := formatSessionTime(now)
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at,
 			     edit_version)
-			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,`+finishChangedValue+`,?8)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,`+editFinishChangedValue+`,?8)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, finished=excluded.finished, version=excluded.version,
 			     device_id=excluded.device_id,
 			     device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name ELSE '' END,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at,
-			     `+finishChangedSet+`, `+explicitWriteSet+`,
+			     `+editFinishChangedSet+`, `+explicitWriteSet+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, stamp, started, finished, stamp)
+			p.Version+1, p.DeviceID, stamp, started, finished, stamp, e.Finished != nil)
 		return err
 	})
 }

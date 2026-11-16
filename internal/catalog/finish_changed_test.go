@@ -129,6 +129,45 @@ func TestEditedFinishHoldsAgainstAnOlderUnfinish(t *testing.T) {
 	}
 }
 
+// An explicit "not finished" edit on a book that isn't finished flips nothing
+// but is still the listener's word on the finish state (server#363): a finish
+// dated before it is "older", one after it applies. On a new row too.
+func TestEditedNotFinishedHoldsAgainstAnOlderFinish(t *testing.T) {
+	t.Parallel()
+	unfinished := false
+	edit := func(f *syncFixture, e ProgressEdit) {
+		t.Helper()
+		if _, err := f.c.EditProgress(f.ctx, f.user, f.book, e, Scope{AllowAll: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := newSyncFixture(t)
+	f.syncOne(t, "phone", f.listen("resume", 0, 600, time.Hour, base(0)))
+	edit(f, ProgressEdit{Finished: &unfinished})
+	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventFinish, 30*time.Second)), statusNotApplied, reasonOlder)
+	if p := f.progress(t); p.Finished {
+		t.Fatalf("a finish from before the edit applied: %+v", p)
+	}
+	f.clock = f.clock.Add(time.Minute)
+	wantResult(t, f.syncOne(t, "watch", f.finishEvent(EventFinish, 0)), statusApplied, "")
+	if p := f.progress(t); !p.Finished {
+		t.Fatalf("a finish after the edit did not apply: %+v", p)
+	}
+
+	// The edit's new row (no progress yet) records the change too.
+	g := newSyncFixture(t)
+	edit(g, ProgressEdit{Finished: &unfinished})
+	wantResult(t, g.syncOne(t, "watch", g.finishEvent(EventFinish, 30*time.Second)), statusNotApplied, reasonOlder)
+
+	// An edit that names no finished (a position only) changes no finish state:
+	// an older finish still applies, as before.
+	h := newSyncFixture(t)
+	h.syncOne(t, "phone", h.listen("resume", 0, 600, time.Hour, base(0)))
+	pos := 300.0
+	edit(h, ProgressEdit{Position: &pos})
+	wantResult(t, h.syncOne(t, "watch", h.finishEvent(EventFinish, 30*time.Second)), statusApplied, "")
+}
+
 // A re-import's undo of the previous import keeps a rewound row's own
 // updated_at (the new import plans against it) but still dates the finish-state
 // change it takes back now, as a standalone undo does: a finish from after the

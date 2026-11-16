@@ -241,16 +241,28 @@ func (c *Catalog) SaveProgressFrom(ctx context.Context, userID, tokenID int64, i
 // finishChangedValue and finishChangedSet are the one statement of the rule
 // every progress upsert that writes finished follows (Sync v2: a finish or
 // unfinish event older than the change is then "older" and can't undo it):
-// SaveProgressFrom, EditProgress and an import's progressUpsert, each binding
-// the finished value as ?6 and the change's time as ?13 (the sync's own finish
-// writes stamp it directly). finishChangedValue is finish_changed_at in the
-// VALUES: the time when the row is inserted finished, else NULL;
-// finishChangedSet its ON CONFLICT assignment: the time when the write flips
-// finished, else the row's own.
+// SaveProgressFrom and an import's progressUpsert, each binding the finished
+// value as ?6 and the change's time as ?13 (the sync's own finish writes stamp
+// it directly; EditProgress uses the edit's own pair below).
+// finishChangedValue is finish_changed_at in the VALUES: the time when the row
+// is inserted finished, else NULL; finishChangedSet its ON CONFLICT assignment:
+// the time when the write flips finished, else the row's own.
 const (
 	finishChangedValue = `CASE WHEN ?6 THEN ?13 END`
 	finishChangedSet   = `finish_changed_at=CASE WHEN progress.finished <> excluded.finished THEN ?13
 	                                         ELSE progress.finish_changed_at END`
+)
+
+// editFinishChangedValue and editFinishChangedSet are EditProgress's form of
+// the rule, binding ?14 true when the edit names finished at all: an explicit
+// finished, even one that doesn't flip the row ("not finished" on an unfinished
+// book), is the listener's word on the finish state, so a finish or unfinish
+// event dated before it is "older" (server#363). An edit that names no
+// finished stamps only a flip, as the shared pair does (it can't flip one).
+const (
+	editFinishChangedValue = `CASE WHEN ?6 OR ?14 THEN ?13 END`
+	editFinishChangedSet   = `finish_changed_at=CASE WHEN ?14 OR progress.finished <> excluded.finished THEN ?13
+	                                             ELSE progress.finish_changed_at END`
 )
 
 // endSpanChain is the ON CONFLICT assignment of every progress write that is
