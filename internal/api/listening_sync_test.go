@@ -46,17 +46,23 @@ func newSyncEnv(t *testing.T) *syncEnv {
 	return &syncEnv{testEnv: e, lib: lib}
 }
 
-// listenJSON is one listen event on path, ended a minute ago and lasting 60 s.
+// listenJSON is one resume listen event on path, ended a minute ago and
+// lasting 60 s.
 func listenJSON(id string, lib int64, path string, from, to float64, base string) string {
+	return listenJSONStart(id, lib, path, "resume", from, to, base)
+}
+
+// listenJSONStart is listenJSON with the span's start.
+func listenJSONStart(id string, lib int64, path, start string, from, to float64, base string) string {
 	end := time.Now().Add(-time.Minute)
 	b := ""
 	if base != "" {
 		b = `,"base_version":` + base
 	}
 	return fmt.Sprintf(`{"id":%q,"kind":"listen","library_id":%d,"path":%q,"from_pos":%v,"to_pos":%v,`+
-		`"playback_speed":1,"started_at":%q,"ended_at":%q,"start":"resume"%s}`,
+		`"playback_speed":1,"started_at":%q,"ended_at":%q,"start":%q%s}`,
 		id, lib, path, from, to, end.Add(-time.Duration((to-from)*float64(time.Second))).UTC().Format(time.RFC3339Nano),
-		end.UTC().Format(time.RFC3339Nano), b)
+		end.UTC().Format(time.RFC3339Nano), start, b)
 }
 
 func syncBody(device string, events ...string) string {
@@ -309,8 +315,8 @@ func TestListeningSyncStay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stay := func(id string, pos float64, base string) string {
-		return strings.Replace(listenJSON(id, s.lib.ID, syncUnsouled, pos, pos, base), `"start":"resume"`, `"start":"stay"`, 1)
+	stay := func(id string, pos float64, base string) func() string {
+		return func() string { return listenJSONStart(id, s.lib.ID, syncUnsouled, "stay", pos, pos, base) }
 	}
 	listen := func(id string, from, to float64, base string) func() string {
 		return func() string { return listenJSON(id, s.lib.ID, syncUnsouled, from, to, base) }
@@ -325,7 +331,7 @@ func TestListeningSyncStay(t *testing.T) {
 		{phone, "phone", listen("p1", 1000, 1500, "0"), "applied", ""},
 		{watch, "watch", listen("w1", 1500, 2000, "1"), "applied", ""},
 		{watch, "watch", listen("w2", 2000, 2500, "2"), "applied", ""},
-		{phone, "phone", func() string { return stay("p2", 1500, "2") }, "applied", ""},
+		{phone, "phone", stay("p2", 1500, "2"), "applied", ""},
 		{watch, "watch", listen("w3", 2500, 3000, "3"), "diverged", "stored"},
 	}
 	var a syncAnswer

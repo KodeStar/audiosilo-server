@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"database/sql"
 	"testing"
 	"time"
 )
@@ -34,15 +33,18 @@ func (f *syncFixture) stay(pos float64, ago time.Duration, b *int64) SyncEvent {
 	return f.listen(startStay, pos, pos, ago, b)
 }
 
+// phoneStays is the phone's Stay on the watch's offer (base 2) that wins
+// (stay_version 5).
+func (f *syncFixture) phoneStays(t *testing.T) {
+	t.Helper()
+	wantResult(t, f.syncOne(t, "phone", f.stay(18000, 4*time.Minute, base(2))), statusApplied, "")
+}
+
 // stayVersion is the row's stay_version, 0 for none.
 func (f *syncFixture) stayVersion(t *testing.T, ref Ref) int64 {
 	t.Helper()
-	var v sql.NullInt64
-	if err := f.c.db.QueryRowContext(f.ctx, `SELECT stay_version FROM progress
-		WHERE user_id = ? AND library_id = ? AND rel_path = ?`, f.user, ref.LibraryID, ref.Path).Scan(&v); err != nil {
-		t.Fatal(err)
-	}
-	return v.Int64
+	return int64(f.count(t, `SELECT COALESCE(stay_version, 0) FROM progress
+		WHERE user_id = ? AND library_id = ? AND rel_path = ?`, f.user, ref.LibraryID, ref.Path))
 }
 
 // wantKept checks a span resolved as a plain jump against the watch's further
@@ -51,6 +53,16 @@ func wantKept(t *testing.T, res SyncResult) {
 	t.Helper()
 	if res.Status != statusDiverged || res.Kept != "stored" {
 		t.Fatalf("result %+v, want diverged with the stored row kept", res)
+	}
+}
+
+// wantAppliedOrKept checks a span applied, or else resolved as wantKept.
+func wantAppliedOrKept(t *testing.T, res SyncResult, applied bool) {
+	t.Helper()
+	if applied {
+		wantResult(t, res, statusApplied, "")
+	} else {
+		wantKept(t, res)
 	}
 }
 
@@ -97,17 +109,9 @@ func TestSyncStaySlack(t *testing.T) {
 		{time.Minute, 2 * time.Hour, false},       // an old offline Stay
 	} {
 		f := stayFixture(t, tc.watchLast)
-		res := f.syncOne(t, "phone", f.stay(18000, tc.stayAgo, base(2)))
-		if !tc.wins {
-			wantKept(t, res)
-			if f.stayVersion(t, f.book) != 0 {
-				t.Fatalf("%+v: the row is held", tc)
-			}
-			continue
-		}
-		wantResult(t, res, statusApplied, "")
-		if p := f.progress(t); p.Position != 18000 || p.DeviceID != "phone" {
-			t.Fatalf("%+v: %+v", tc, p)
+		wantAppliedOrKept(t, f.syncOne(t, "phone", f.stay(18000, tc.stayAgo, base(2))), tc.wins)
+		if p := f.progress(t); (p.DeviceID == "phone") != tc.wins || (f.stayVersion(t, f.book) != 0) != tc.wins {
+			t.Fatalf("%+v: %+v stay %d", tc, p, f.stayVersion(t, f.book))
 		}
 	}
 }
@@ -119,7 +123,7 @@ func TestSyncStaySlack(t *testing.T) {
 func TestSyncStayHoldsAgainstTheOtherDevice(t *testing.T) {
 	t.Parallel()
 	f := stayFixture(t, 5*time.Minute)
-	wantResult(t, f.syncOne(t, "phone", f.stay(18000, 4*time.Minute, base(2))), statusApplied, "")
+	f.phoneStays(t)
 	res := f.syncOne(t, "watch", f.listen("continue", 19800, 20400, 3*time.Minute, base(4)))
 	wantKept(t, res)
 	if p := f.progress(t); p.Position != 18000 || p.OtherPlace == nil || p.OtherPlace.DeviceID != "watch" ||
@@ -156,29 +160,18 @@ func TestSyncStayAnsweredByTheOtherDevice(t *testing.T) {
 		start    string
 		base     int64
 		applied  bool
+		wantPos  float64
 		wantStay int64
 	}{
-		{"jump", 5, true, 0},
-		{startStay, 5, true, 6},
-		{startStay, 4, false, 5},
+		{"jump", 5, true, 19800, 0},
+		{startStay, 5, true, 19800, 6},
+		{startStay, 4, false, 18000, 5},
 	} {
 		f := stayFixture(t, 5*time.Minute)
-		wantResult(t, f.syncOne(t, "phone", f.stay(18000, 4*time.Minute, base(2))), statusApplied, "")
-		res := f.syncOne(t, "watch", f.listen(tc.start, 19800, 19800, 0, base(tc.base)))
-		p := f.progress(t)
-		if tc.applied {
-			wantResult(t, res, statusApplied, "")
-			if p.Position != 19800 || p.DeviceID != "watch" {
-				t.Fatalf("%+v: %+v", tc, p)
-			}
-		} else {
-			wantKept(t, res)
-			if p.Position != 18000 || p.DeviceID != "phone" {
-				t.Fatalf("%+v: %+v", tc, p)
-			}
-		}
-		if got := f.stayVersion(t, f.book); got != tc.wantStay {
-			t.Fatalf("%+v: stay_version %d", tc, got)
+		f.phoneStays(t)
+		wantAppliedOrKept(t, f.syncOne(t, "watch", f.listen(tc.start, 19800, 19800, 0, base(tc.base))), tc.applied)
+		if p, got := f.progress(t), f.stayVersion(t, f.book); p.Position != tc.wantPos || got != tc.wantStay {
+			t.Fatalf("%+v: %+v stay_version %d", tc, p, got)
 		}
 	}
 }
@@ -191,22 +184,12 @@ func TestSyncStayIsAPlainJump(t *testing.T) {
 	t.Parallel()
 	importPlace := func(t *testing.T, f *syncFixture, undo bool) {
 		t.Helper()
-		imps, err := f.c.CreateImports(f.ctx, []Import{{UserID: f.user, Source: ImportSourceABS, SourceURL: "http://abs"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		id := imps[0].ID
-		if err := f.c.FinishImportFetch(f.ctx, id, "abs", []byte("payload"), ImportPlan{}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.c.ApplyImport(f.ctx, id, func(st ImportState) (*ImportWrite, error) {
+		id := applyImport(t, f.ctx, f.c, f.user, func(st ImportState) (*ImportWrite, error) {
 			have := st.Progress[f.book]
 			up := have
 			up.Position, up.Version, up.UpdatedAt = 21000, have.Version+1, FormatStamp(f.clock.Add(-3*time.Minute))
 			return &ImportWrite{Progress: []ImportProgress{{Prior: &have, Wrote: up}}}, nil
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 		if undo {
 			if _, err := f.c.UndoImport(f.ctx, id); err != nil {
 				t.Fatal(err)
@@ -256,12 +239,7 @@ func TestSyncStayIsAPlainJump(t *testing.T) {
 			ref = tc.on(f)
 			ev.Path = ref.Path
 		}
-		res := f.syncOne(t, "phone", ev)
-		if tc.applies {
-			wantResult(t, res, statusApplied, "")
-		} else {
-			wantKept(t, res)
-		}
+		wantAppliedOrKept(t, f.syncOne(t, "phone", ev), tc.applies)
 		if got := f.stayVersion(t, ref); got != 0 {
 			t.Fatalf("%s: the plain jump holds the row (stay_version %d)", tc.name, got)
 		}
@@ -281,41 +259,55 @@ func TestSyncStayIsAPlainJump(t *testing.T) {
 }
 
 // Every writer but the Stay's own device ends the hold: a PUT, an edit, a
-// finish, an Audible place ahead (furthest only, unchanged); after the edit
-// the watch's backlog resolves as before (kept event).
+// finish, an Audible place ahead (furthest only, unchanged).
 func TestSyncStayClearedByOtherWriters(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"put", "edit", "finish", "audible"} {
-		f := stayFixture(t, 5*time.Minute)
-		wantResult(t, f.syncOne(t, "phone", f.stay(18000, 4*time.Minute, base(2))), statusApplied, "")
-		if f.stayVersion(t, f.book) != 5 {
-			t.Fatal("setup: no hold")
-		}
-		switch name {
-		case "put":
+	for _, tc := range []struct {
+		name  string
+		write func(t *testing.T, f *syncFixture)
+	}{
+		{"put", func(t *testing.T, f *syncFixture) {
 			if _, err := f.c.SaveProgressFrom(f.ctx, f.user, 7, Progress{Ref: f.book, Position: 18100, Duration: syncBookLen,
 				PlaybackSpeed: 1, DeviceID: "phone", UpdatedAt: FormatStamp(f.clock.Add(-3 * time.Minute))}); err != nil {
 				t.Fatal(err)
 			}
-		case "edit":
-			pos := 18100.0
-			if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Position: &pos}, Scope{AllowAll: true}); err != nil {
-				t.Fatal(err)
-			}
-		case "finish":
+		}},
+		{"edit", editTo18100},
+		{"finish", func(t *testing.T, f *syncFixture) {
 			wantResult(t, f.syncOne(t, "phone", f.finishEvent(EventFinish, 3*time.Minute)), statusApplied, "")
-		case "audible":
+		}},
+		{"audible", func(t *testing.T, f *syncFixture) {
 			wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, 3*time.Minute))).Results[0], statusApplied, "")
-		}
+		}},
+	} {
+		f := stayFixture(t, 5*time.Minute)
+		f.phoneStays(t)
+		tc.write(t, f)
 		if got := f.stayVersion(t, f.book); got != 0 {
-			t.Fatalf("%s kept the hold (stay_version %d)", name, got)
+			t.Fatalf("%s kept the hold (stay_version %d)", tc.name, got)
 		}
-		if name == "edit" {
-			res := f.syncOne(t, "watch", f.listen("continue", 19800, 20400, 2*time.Minute, base(4)))
-			if res.Status != statusDiverged || res.Kept != "event" {
-				t.Fatalf("the watch's backlog after the edit: %+v", res)
-			}
-		}
+	}
+}
+
+// editTo18100 is a PATCH of the fixture's row to 18100.
+func editTo18100(t *testing.T, f *syncFixture) {
+	t.Helper()
+	pos := 18100.0
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Position: &pos}, Scope{AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// After an edit ends the hold, the watch's backlog resolves as before (kept
+// event).
+func TestSyncStayBacklogAfterAnEdit(t *testing.T) {
+	t.Parallel()
+	f := stayFixture(t, 5*time.Minute)
+	f.phoneStays(t)
+	editTo18100(t, f)
+	res := f.syncOne(t, "watch", f.listen("continue", 19800, 20400, 2*time.Minute, base(4)))
+	if res.Status != statusDiverged || res.Kept != "event" {
+		t.Fatalf("the watch's backlog after the edit: %+v", res)
 	}
 }
 
