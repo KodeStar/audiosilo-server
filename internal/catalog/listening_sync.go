@@ -273,11 +273,11 @@ type SyncBatch struct {
 	// whatever its time, keeping the row's playback speed (Audible sends none),
 	// else it is not_applied "behind" with no offer (a finished row is at its
 	// end; a place heard at or before the row's finish_changed_at is from
-	// before a finish or restart here, and one heard at or before a held
-	// Stay's row time from before the listener chose it, beforeStay); a place far past the book's end (furthestPastEndRatio) is rejected
+	// before a finish or restart here, and one heard at or before the Stay
+	// that holds the row from before the listener chose it, beforeStay); a place far past the book's end (furthestPastEndRatio) is rejected
 	// duration_mismatch, one just past it is the end; an unfinish is "behind"
-	// too; a finish applies as any finish, unless heard at or before a held
-	// Stay's row time ("behind", beforeStay). Its spans are a place only: no
+	// too; a finish applies as any finish, unless heard at or before the Stay
+	// that holds the row ("behind", beforeStay). Its spans are a place only: no
 	// listening session, daily roll-up or history is recorded (owner decision
 	// 2), and TokenID is 0.
 	FurthestOnly bool
@@ -688,8 +688,8 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 // behind (or at) the stored place, on a finished row, heard at or before the
 // row's last finish or unfinish (finish_changed_at: a place from before a
 // restart here is the old reading's, not this one's), or heard at or before
-// the time of a row a Stay holds (stay_version: the listener chose that place
-// over the other device's, whose earlier place may come back through Audible,
+// the Stay that holds the row (beforeStay: the listener chose that place over
+// the other device's, whose earlier place may come back through Audible,
 // server#415), it is not applied and offers nothing; ahead it is written
 // whatever device or time the row has (the player's own reconcile then moves
 // or offers), the row's time never moving back, its speed and its offered
@@ -698,7 +698,14 @@ func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *sy
 	version := int64(1)
 	if stored != nil {
 		beforeRestart := stored.finishChangedAt.Valid && !p.ended.After(parseSessionTime(stored.finishChangedAt.String))
-		if stored.finished || beforeRestart || beforeStay(p, stored) || p.to <= stored.position+furthestSlack {
+		if stored.finished || beforeRestart || p.to <= stored.position+furthestSlack {
+			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+		}
+		before, err := s.beforeStay(ctx, p, stored)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		if before {
 			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
 		}
 		version = stored.version + 1
@@ -904,14 +911,33 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 }
 
 // beforeStay reports whether a Stay holds the row (stay_version) and the span
-// ended at or before the row's time (the Stay's, or its device's write since):
-// a furthest-only place from before the listener chose the held place.
-func beforeStay(p syncPrepared, stored *syncRow) bool {
+// ended at or before that Stay did: a furthest-only place from before the
+// listener chose the held place. The Stay's time is its own span's end, read
+// from the log (the newest applied "stay" span of the row's device on the
+// book: a held row is still its Stay's device's), never the row's updated_at:
+// the Stay's device listening on moves that on and keeps the hold, and a place
+// heard in the Audible app since the Stay is a new one (furthest wins) however
+// late the Bridge brings it. The row's time is never before the Stay's, so a
+// span after it needs no lookup. A Stay the log no longer holds (pruned at
+// SyncRetention) is older than any place a batch may carry (syncRejectAge).
+func (s *syncRun) beforeStay(ctx context.Context, p syncPrepared, stored *syncRow) (bool, error) {
 	if !stored.stayVersion.Valid {
-		return false
+		return false, nil
 	}
-	t, ok := ParseStamp(stored.updatedAt)
-	return ok && !p.ended.After(t)
+	if t, ok := ParseStamp(stored.updatedAt); ok && p.ended.After(t) {
+		return false, nil
+	}
+	key := p.target.Key
+	var stayed sql.NullString
+	if err := s.tx.QueryRowContext(ctx,
+		`SELECT MAX(ended_at) FROM listening_events
+		  WHERE library_id = ? AND rel_path = ? AND user_id = ? AND device_id = ?
+		    AND kind = ? AND start = ? AND status = ?`,
+		key.LibraryID, key.Path, s.b.UserID, stored.deviceID, EventListen, startStay, statusApplied).
+		Scan(&stayed); err != nil {
+		return false, err
+	}
+	return stayed.Valid && !p.ended.After(parseSessionTime(stayed.String)), nil
 }
 
 // heldByStay reports whether another device's Stay holds the row against this
@@ -992,7 +1018,7 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // except an unfinish of a row that isn't finished, which changes neither the
 // place nor the finish (a device that saw the book finished, late), so it
 // leaves a Stay's hold to hold that device's backlog. A furthest-only finish
-// heard at or before a held Stay's row time is "behind", as its listen is
+// heard at or before the Stay that holds the row is "behind", as its listen is
 // (beforeStay): the Bridge sends a place at the book's end as both, and the
 // finish alone would otherwise end the hold at the end (server#415).
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
@@ -1004,8 +1030,14 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	if err != nil {
 		return SyncResult{}, err
 	}
-	if s.b.FurthestOnly && stored != nil && beforeStay(p, stored) {
-		return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+	if s.b.FurthestOnly && stored != nil {
+		before, err := s.beforeStay(ctx, p, stored)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		if before {
+			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
+		}
 	}
 	if stored != nil && stored.finishChangedAt.Valid {
 		if changed := parseSessionTime(stored.finishChangedAt.String); !p.ended.After(changed) {

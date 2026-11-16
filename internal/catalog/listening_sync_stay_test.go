@@ -346,12 +346,12 @@ func TestSyncStayClearedByOtherWriters(t *testing.T) {
 	}
 }
 
-// server#415: an Audible place heard at or before the held row's time (the
-// Stay's, 4 minutes ago) is refused like one before a restart, however far
-// ahead: it is from before the listener chose the held place (the watch's
-// pre-Stay place echoed back through Audible), and so is the finish an end
-// place brings. The row and its hold stay. One heard after it applies
-// (furthest wins) and ends the hold.
+// server#415: an Audible place heard at or before the Stay that holds the row
+// (4 minutes ago) is refused like one before a restart, however far ahead: it
+// is from before the listener chose the held place (the watch's pre-Stay place
+// echoed back through Audible), and so is the finish an end place brings. The
+// row and its hold stay. One heard after it applies (furthest wins) and ends
+// the hold.
 func TestSyncAudiblePlaceBeforeAStay(t *testing.T) {
 	t.Parallel()
 	f := stayFixture(t, 5*time.Minute)
@@ -378,6 +378,31 @@ func TestSyncAudiblePlaceBeforeAStay(t *testing.T) {
 	// before): the rule is the Stay's, not the row's time.
 	g := stayFixture(t, 5*time.Minute)
 	wantResult(t, g.sync(t, g.audibleBatch(t, g.audiblePlace(40000, 6*time.Minute))).Results[0], statusApplied, "")
+}
+
+// The Stay's time is its own, not the row's: the phone listening on after its
+// Stay (to a minute ago) moves the row's time and keeps the hold, but doesn't
+// make a place heard in the Audible app since the Stay (2 minutes ago) an old
+// one. It applies and ends the hold; one from before the Stay is still
+// refused, its finish too.
+func TestSyncAudiblePlaceAfterAStayItsDeviceListenedPast(t *testing.T) {
+	t.Parallel()
+	f := stayFixture(t, 5*time.Minute)
+	f.phoneStays(t)
+	wantResult(t, f.syncOne(t, "phone", f.listen("continue", 18000, 18060, time.Minute, base(5))), statusApplied, "")
+	if p := f.progress(t); p.Position != 18060 || p.DeviceID != "phone" || f.stayVersion(t, f.book) != 5 {
+		t.Fatalf("setup: the phone listening on lost its hold: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
+	for _, ev := range []SyncEvent{f.audiblePlace(40000, 4*time.Minute), f.finishEvent(EventFinish, 4*time.Minute)} {
+		wantResult(t, f.sync(t, f.audibleBatch(t, ev)).Results[0], statusNotApplied, reasonBehind)
+	}
+	if p := f.progress(t); p.Finished || p.Position != 18060 || f.stayVersion(t, f.book) != 5 {
+		t.Fatalf("an Audible place from before the Stay moved the held row: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, 2*time.Minute))).Results[0], statusApplied, "")
+	if p := f.progress(t); p.Position != 40000 || f.stayVersion(t, f.book) != 0 {
+		t.Fatalf("an Audible place heard after the Stay: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
 }
 
 // editTo18100 is a PATCH of the fixture's row to 18100.
