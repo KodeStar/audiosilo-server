@@ -269,9 +269,9 @@ const endStayHold = `stay_version=NULL`
 // not listening: a PATCH (own or admin), an import's apply or undo, a move or
 // join (and, written inline, a sync finish or unfinish); never a PUT, an old
 // app's listening. The row's edit_version is the version it writes (each also
-// inserts edit_version as its version), so a Stay made on a base below it is a
-// plain jump (0080, staysWin).
-const explicitWriteSet = endSpanChain + `, edit_version=excluded.edit_version`
+// inserts edit_version as its version, for a row it creates), so a Stay made
+// on a base below it is a plain jump (0080, staysWin).
+const explicitWriteSet = endSpanChain + `, edit_version=excluded.version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
 // records as finish_changed_at (and a PUT's event time): the write's own
