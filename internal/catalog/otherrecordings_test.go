@@ -294,6 +294,10 @@ func TestOtherRecordingsPlan(t *testing.T) {
 			"SEARCH book_matches USING INDEX idx_book_matches_work (work_id=?)",
 			"SEARCH upcoming_owned USING COVERING INDEX idx_upcoming_owned_work (work_id=?",
 			"SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?)",
+			// Each candidate's own work key (workIDExpr, its id_key check too) by
+			// the book's key on both sides.
+			"SEARCH wm USING INDEX sqlite_autoindex_book_matches_1 (library_id=? AND path=?)",
+			"SEARCH wo USING PRIMARY KEY (library_id=? AND path=?)",
 		} {
 			if !strings.Contains(joined, want) {
 				t.Errorf("%s: plan does not use %s:\n%s", name, want, joined)

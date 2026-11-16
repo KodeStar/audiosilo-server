@@ -268,10 +268,10 @@ func TestItemAndMetaAgree(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	agree := func(wantWork string, want []string) {
+	agree := func(token, wantWork string, want []string) {
 		t.Helper()
-		work, items, _ := itemRecordings(t, e, "Saga/2", e.adminTok)
-		local, rail, raw := railTwo(t, e, "Saga/2", e.adminTok)
+		work, items, _ := itemRecordings(t, e, "Saga/2", token)
+		local, rail, raw := railTwo(t, e, "Saga/2", token)
 		slices.Sort(items)
 		slices.Sort(rail)
 		if work != wantWork || local != "Saga/2" || !reflect.DeepEqual(items, want) || !reflect.DeepEqual(rail, want) {
@@ -281,13 +281,17 @@ func TestItemAndMetaAgree(t *testing.T) {
 			t.Fatalf("/meta is no longer about the ASIN's work: %s", raw)
 		}
 	}
-	agree("two", []string{"Saga/2 Abe", "Saga/2 Kemper"})
+	agree(e.adminTok, "two", []string{"Saga/2 Abe", "Saga/2 Kemper"})
+	// Denied: the member's grant (Saga/1, Saga/2, Saga/2 Abe) holds neither
+	// the copy, Saga/2 Kemper nor Saga/3.
+	agree(e.memberTok, "two", []string{"Saga/2 Abe"})
 	if err := e.cat.EditBook(ctx, e.lib.ID, "Saga/2", catalog.BookEdit{
 		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agree("three", []string{"Saga/3"})
+	agree(e.adminTok, "three", []string{"Saga/3"})
+	agree(e.memberTok, "three", nil)
 }
 
 // TestNextPicksRecording: after a book, Next opens the pick among the next
