@@ -163,15 +163,17 @@ func TestHouseListeningRules(t *testing.T) {
 	}
 }
 
-// The states follow the newest save's age: playing within a minute, paused
-// within SessionGap, else recent.
+// The states follow the newest save's age: playing within 150 s (a background
+// player saves every 60 s, server#364), paused within SessionGap, else recent.
 func TestHouseState(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		age  time.Duration
 		want string
 	}{
-		{0, SessionPlaying}, {livePlaying, SessionPlaying}, {livePlaying + time.Millisecond, SessionPaused},
+		{0, SessionPlaying}, {61 * time.Second, SessionPlaying}, {149 * time.Second, SessionPlaying},
+		{150 * time.Second, SessionPlaying}, {151 * time.Second, SessionPaused},
+		{livePlaying, SessionPlaying}, {livePlaying + time.Millisecond, SessionPaused},
 		{SessionGap, SessionPaused}, {SessionGap + time.Millisecond, HouseRecent}, {20 * time.Hour, HouseRecent},
 	} {
 		if got := houseState(c.age); got != c.want {

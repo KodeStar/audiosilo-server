@@ -294,10 +294,10 @@ func TestLiveSessionsStatesAndOnePerDevice(t *testing.T) {
 	}
 	f.listen(t, 1, other, 20) // back to the other book for the rest of the test
 
-	f.clock = f.clock.Add(2 * time.Minute)
+	f.clock = f.clock.Add(3 * time.Minute)
 	live, _ = f.c.LiveSessions(f.ctx)
 	if len(live) != 2 || live[0].State != SessionPaused {
-		t.Fatalf("after two quiet minutes sessions read as paused: %+v", live)
+		t.Fatalf("after three quiet minutes sessions read as paused: %+v", live)
 	}
 	f.clock = f.clock.Add(SessionGap)
 	live, _ = f.c.LiveSessions(f.ctx)

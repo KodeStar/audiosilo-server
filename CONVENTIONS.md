@@ -2457,8 +2457,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
-  within 60 s, `paused` within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else the path's last
-  segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
+  within 150 s (`livePlaying`: a background player saves every 60 s, server#364), `paused`
+  within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else
+  the path's last segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
   sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
   NEVER carries a device, address, app or token: `HouseListeningRow` has no such field, unlike the
   admin-only `LiveSessions` (never reuse that for anything a non-admin sees). Polling only (the
