@@ -12,10 +12,9 @@
 # `FROM ${WEB_IMAGE}` below. To build a server-only image (web_player off, /web
 # unmounted), comment out the web stage and the COPY --from=web line.
 ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
-# The platform to pull the web image for. It is static files FROM scratch, the
-# same on every platform, and CI builds it on amd64 runners only, so every target
-# platform (and an arm64 host) takes the amd64 copy. Override if the web image
-# ever goes multi-arch or you pass a locally built one for another platform.
+# The web image is static files FROM scratch, published for linux/amd64 only, so
+# every target platform (and an arm64 host) takes that copy. Override for a
+# locally built web image of another platform.
 ARG WEB_PLATFORM=linux/amd64
 
 # --- build the admin console (admin-ui/) -----------------------------------------
@@ -83,7 +82,6 @@ RUN set -e; \
     fi
 
 # --- pin the prebuilt web player ----------------------------------------------
-# Pulled for WEB_PLATFORM (above): the image has no manifest for other platforms.
 FROM --platform=$WEB_PLATFORM ${WEB_IMAGE} AS web
 
 # --- final image ---------------------------------------------------------------

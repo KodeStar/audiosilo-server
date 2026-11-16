@@ -21,7 +21,10 @@ mkdir -p "$DEST"
 # Supply a placeholder command: `docker create` only records it in the container
 # config - the container is never started (we just `docker cp` out of its layer), so
 # the command is never executed and need not exist in the image.
-cid="$(docker create "$WEB_IMAGE" /audiosilo-web-export)"
+# The image is published for linux/amd64 only (static files, any host can copy
+# them out); without --platform an arm64 host finds no manifest to pull. Same
+# default and override as the Dockerfile's WEB_PLATFORM.
+cid="$(docker create --platform "${WEB_PLATFORM:-linux/amd64}" "$WEB_IMAGE" /audiosilo-web-export)"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 # The web image holds the static export at /web (built with baseUrl=/web).
 docker cp "$cid:/web/." "$DEST/"
