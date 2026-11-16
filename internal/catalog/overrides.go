@@ -110,6 +110,7 @@ func normalizeOverride(field, value string) (string, error) {
 	v := strings.TrimSpace(value)
 	switch field {
 	case FieldTitle, FieldAuthor, FieldNarrator, FieldSeries:
+		v = blankIfInvisible(v)
 		if err := checkText(field, v, maxShortField); err != nil {
 			return "", err
 		}
@@ -118,6 +119,7 @@ func normalizeOverride(field, value string) (string, error) {
 		}
 		return v, nil
 	case FieldSubtitle, FieldPublisher:
+		v = blankIfInvisible(v)
 		return v, checkText(field, v, maxShortField)
 	case FieldLanguage:
 		return v, checkText(field, v, maxLanguage)
@@ -177,6 +179,17 @@ func normalizeOverride(field, value string) (string, error) {
 	default:
 		return "", invalid(field, "not an editable field")
 	}
+}
+
+// blankIfInvisible is v, or "" when v shows nothing (only invisible characters:
+// U+200B, U+FEFF, U+3164, ...), so a title made of them is no title (server#349).
+// A visible value is kept whole, an emoji's trailing variation selector and an
+// inner joiner included.
+func blankIfInvisible(v string) string {
+	if strings.TrimFunc(v, invisible) == "" {
+		return ""
+	}
+	return v
 }
 
 func checkText(field, v string, limit int) error {
@@ -855,7 +868,7 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	}
 	chSet := make(map[int]string, len(e.ChapterSet))
 	for idx, title := range e.ChapterSet {
-		t := strings.TrimSpace(title)
+		t := blankIfInvisible(strings.TrimSpace(title))
 		if t == "" {
 			return e, invalid("chapters", "a chapter title cannot be empty (revert it instead)")
 		}

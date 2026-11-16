@@ -287,11 +287,35 @@ func TestNormalizeOverride(t *testing.T) {
 		{FieldISBN, "978-0-441-17271-9", "9780441172719"},
 		{FieldISBN, "0-441-17271-x", "044117271X"},
 		{FieldDescription, "Line one\r\nLine two", "Line one\nLine two"},
+		// Shows nothing: no value (server#349). A visible one is kept whole.
+		{FieldAuthor, "\u200b\ufeff", ""},
+		{FieldSubtitle, " \u2060 ", ""},
+		{FieldTitle, "Family \U0001F468\u200d\U0001F469\u200d\U0001F467", "Family \U0001F468\u200d\U0001F469\u200d\U0001F467"},
+		{FieldTitle, "Love \u2764\ufe0f", "Love \u2764\ufe0f"},
 	} {
 		got, err := normalizeOverride(tc.field, tc.in)
 		if err != nil || got != tc.want {
 			t.Errorf("normalizeOverride(%s, %q) = %q, %v; want %q", tc.field, tc.in, got, err, tc.want)
 		}
+	}
+}
+
+// TestInvisibleTitleRefused: a title, or a chapter title, made only of
+// characters that show nothing is no title: refused like an empty one
+// (server#349), while a real one with an inner zero-width joiner is kept.
+func TestInvisibleTitleRefused(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"\u200b", "\ufeff", "\u2060", "\u3164", "\u2800", " \u200b\u2800 "} {
+		if _, err := normalizeOverride(FieldTitle, in); err == nil {
+			t.Errorf("title %+q accepted, want refused", in)
+		}
+		if _, err := (BookEdit{ChapterSet: map[int]string{0: in}}).normalize(); err == nil {
+			t.Errorf("chapter title %+q accepted, want refused", in)
+		}
+	}
+	const joined = "A\u200dB"
+	if got, err := normalizeOverride(FieldTitle, joined); err != nil || got != joined {
+		t.Errorf("title %+q = %+q, %v; want kept", joined, got, err)
 	}
 }
 
