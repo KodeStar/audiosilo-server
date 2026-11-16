@@ -2575,8 +2575,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
   seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
   own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
-  grant, or its parent gone, signed out or expired) and keeps the person's newest
-  `maxCastTokens` (20). The console's chapter editor streams a book the same way and sends
+  grant, or its parent gone, signed out or expired) and keeps the newest `maxCastTokens` (20) the
+  sending token minted, so a run of casts on one device never ends the cast another device of the person
+  is playing (server#216), and the person's newest `maxCastTokensPerPerson` (100) over all their devices
+  (`trimCastTokensSQL`). The console's chapter editor streams a book the same way and sends
   `"editor": true` (console-only, additive; a player never sends it): `auth.IssueEditorToken` mints the same
   token with `cast_grants.editor = 1` (`0078`), a 4 h life (`editorTokenTTL`) and a cap of its own
   (`maxEditorTokens`, 5), each cap counting only its own use, so editing many books never drops a token a
