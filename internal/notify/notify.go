@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -109,6 +110,13 @@ type Service struct {
 	server  func() Server
 	queue   chan delivery
 	delays  []time.Duration
+	now     func() time.Time // the clock (tests)
+
+	mu sync.Mutex
+	// oidcPendingAt: when each oidc_pending of the last hour was raised
+	// (oidcPendingPerHour); oidcPendingCapLogged: the cap's reaching is logged.
+	oidcPendingAt        []time.Time
+	oidcPendingCapLogged bool
 }
 
 type delivery struct {
@@ -134,6 +142,7 @@ func New(cat *catalog.Catalog, version string, server func() Server, log *slog.L
 		log: log, version: version, server: server,
 		queue:  make(chan delivery, queueSize),
 		delays: retryDelays,
+		now:    time.Now,
 	}
 }
 
@@ -843,9 +852,17 @@ var oidcPendingText = map[string]string{
 	oidc.ReasonAdminAccount:    "Their email matches an admin's account, which is never linked on its own.",
 }
 
+// oidcPendingPerHour bounds the oidc_pending notifications raised in an hour:
+// a provider anyone can sign up at could otherwise raise one per throwaway
+// subject. Every waiting row is in the console's list all the same.
+const oidcPendingPerHour = 5
+
 // OIDCPending reports a single sign-on no account took (auth.OIDCSignIn's
 // Pending), once per waiting row (pendingID: the row keeps its id across the
-// person's attempts, and a row dismissed and recorded again is a new one).
+// person's attempts, and a row dismissed and recorded again is a new one), at
+// most oidcPendingPerHour an hour (server#408): a row over it is not
+// announced then (logged once a run of them), but may be at the person's next
+// attempt.
 // Its data are the provider's name, the person's name or username and the
 // reason's code: never their email, subject, groups or any token. A name or
 // username that holds an "@" may be their email (providers often make the
@@ -869,7 +886,39 @@ func (s *Service) OIDCPending(ctx context.Context, pendingID int64, provider, na
 	if _, ok := oidcPendingText[reason]; ok {
 		data["reason"] = reason
 	}
-	s.Emit(ctx, Event{Kind: KindOIDCPending, Data: data, Dedup: "pending:" + strconv.FormatInt(pendingID, 10)})
+	dedup := "pending:" + strconv.FormatInt(pendingID, 10)
+	if seen, err := s.cat.ServerEventSeen(context.WithoutCancel(ctx), KindOIDCPending, dedup); err != nil || seen {
+		return
+	}
+	if !s.takeOIDCPending() {
+		return
+	}
+	s.Emit(ctx, Event{Kind: KindOIDCPending, Data: data, Dedup: dedup})
+}
+
+// takeOIDCPending takes one of the hour's oidc_pending notifications, false
+// when oidcPendingPerHour were raised within the last hour.
+func (s *Service) takeOIDCPending() bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.oidcPendingAt[:0]
+	for _, at := range s.oidcPendingAt {
+		if now.Sub(at) < time.Hour {
+			kept = append(kept, at)
+		}
+	}
+	s.oidcPendingAt = kept
+	if len(kept) >= oidcPendingPerHour {
+		if !s.oidcPendingCapLogged {
+			s.oidcPendingCapLogged = true
+			s.log.Warn("notify: over the hour's waiting sign-in notifications; the rest are in People", "per_hour", oidcPendingPerHour)
+		}
+		return false
+	}
+	s.oidcPendingCapLogged = false
+	s.oidcPendingAt = append(s.oidcPendingAt, now)
+	return true
 }
 
 // SignedIn reports a new session: a password sign-in or a device set up by

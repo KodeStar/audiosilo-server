@@ -1047,3 +1047,39 @@ func TestOIDCPending(t *testing.T) {
 		t.Fatalf("a long name with an address: %+v, %v", events, err)
 	}
 }
+
+// TestOIDCPendingCapped: a provider anyone can sign up at raises at most
+// oidcPendingPerHour waiting-sign-in notifications an hour (server#408): the
+// rest are not announced then (denied); a row already told isn't counted
+// again; past the hour they are announced again (allowed).
+func TestOIDCPendingCapped(t *testing.T) {
+	s, cat, ctx := newService(t)
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	count := func() int {
+		t.Helper()
+		events, _, err := cat.ListServerEvents(ctx, 0, 100, KindOIDCPending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(events)
+	}
+	for id := range int64(oidcPendingPerHour + 3) {
+		s.OIDCPending(ctx, id+1, "Keycloak", "Throwaway", "", "no_match")
+	}
+	if n := count(); n != oidcPendingPerHour {
+		t.Fatalf("%d told within the hour, want %d", n, oidcPendingPerHour)
+	}
+	// A row already told, again: not told twice, and it takes no place.
+	now = now.Add(time.Hour + time.Second)
+	s.OIDCPending(ctx, 1, "Keycloak", "Throwaway", "", "no_match")
+	s.OIDCPending(ctx, 100, "Keycloak", "Throwaway", "", "no_match")
+	if n := count(); n != oidcPendingPerHour+1 {
+		t.Fatalf("%d told after the hour, want %d", n, oidcPendingPerHour+1)
+	}
+	// One left out within the cap is told at the person's next attempt.
+	s.OIDCPending(ctx, oidcPendingPerHour+1, "Keycloak", "Throwaway", "", "no_match")
+	if n := count(); n != oidcPendingPerHour+2 {
+		t.Fatalf("%d told, want the one left out told now", n)
+	}
+}
