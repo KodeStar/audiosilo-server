@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -196,6 +197,37 @@ func TestOtherRecordings(t *testing.T) {
 	} {
 		if got, err := f.c.OtherRecordings(f.ctx, tc.scopes, tc.book); err != nil || len(got) != 0 {
 			t.Fatalf("OtherRecordings(%s) = %q, %v", tc.book.RelPath, relPaths(got), err)
+		}
+	}
+}
+
+// TestOtherRecordingsPlan: a work's recordings are found by the work id
+// indexes on both sides whatever the caller reaches, one library (whose
+// library_id SQLite pushes down into the candidate reads) or several, never by
+// a read of every recorded match or resolved book of a library, and each book
+// by its key.
+func TestOtherRecordingsPlan(t *testing.T) {
+	t.Parallel()
+	f := newRecordingsFixture(t)
+	me, err := f.c.GetBookByPath(f.ctx, f.main.ID, "Bray/One")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, scopes := range map[string][]Scope{
+		"one library":          {{LibraryID: f.main.ID, AllowAll: true}},
+		"one library, a share": {{LibraryID: f.main.ID, Paths: []string{"Bray", "Kemper"}}},
+		"every library":        f.all(),
+	} {
+		q, args := otherRecordingsQuery(scopes, me)
+		joined := strings.Join(queryPlan(t, f.c, q, args), "\n")
+		for _, want := range []string{
+			"SEARCH book_matches USING INDEX idx_book_matches_work (work_id=?)",
+			"SEARCH upcoming_owned USING COVERING INDEX idx_upcoming_owned_work (work_id=?",
+			"SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?)",
+		} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("%s: plan does not use %s:\n%s", name, want, joined)
+			}
 		}
 	}
 }

@@ -30,28 +30,39 @@ const MaxOtherRecordings = 20
 // is not one of them whatever its identifiers resolved to. The scope filter
 // keeps every book outside the caller's grant out.
 func (c *Catalog) OtherRecordings(ctx context.Context, scopes []Scope, book *Book) ([]Book, error) {
-	work := book.WorkID
-	if len(scopes) == 0 || work == "" {
+	if len(scopes) == 0 || book.WorkID == "" {
 		return nil, nil
 	}
+	q, args := otherRecordingsQuery(scopes, book)
+	return queryRows(ctx, c.db, scanBookRow, q, args...)
+}
+
+// otherRecordingsQuery is OtherRecordings' query, and its args. INDEXED BY on
+// the recorded matches: a caller reaching one library has its library_id pushed
+// down into both candidate reads, and SQLite (no ANALYZE statistics here) then
+// reads every recorded match of that library by the primary key's prefix
+// rather than the work's few by idx_book_matches_work. upcoming_owned needs no
+// hint: its work index covers both columns.
+func otherRecordingsQuery(scopes []Scope, book *Book) (string, []any) {
+	work := book.WorkID
 	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
 	asin, isbn := match.NormalizeASIN(book.ASIN), match.NormalizeISBN(book.ISBN)
 	args := slices.Concat([]any{work, work}, fargs,
 		[]any{book.LibraryID, book.RelPath, work, asin, asin, isbn, isbn, book.LibraryID, MaxOtherRecordings})
-	return queryRows(ctx, c.db, scanBookRow, `SELECT `+prefixCols("b.")+` FROM (
-		    SELECT library_id, path FROM book_matches WHERE work_id = ?
+	return `SELECT ` + prefixCols("b.") + ` FROM (
+		    SELECT library_id, path FROM book_matches INDEXED BY idx_book_matches_work WHERE work_id = ?
 		    UNION
 		    SELECT library_id, path FROM upcoming_owned WHERE work_id = ?
 		  ) w
 		  CROSS JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.path
 		  CROSS JOIN libraries l ON l.id = b.library_id
-		 WHERE l.kind = 'books' AND `+frag+`
+		 WHERE l.kind = 'books' AND ` + frag + `
 		   AND NOT (b.library_id = ? AND b.rel_path = ?)
-		   AND `+workIDExpr("b")+` = ?
+		   AND ` + workIDExpr("b") + ` = ?
 		   AND NOT (? <> '' AND UPPER(TRIM(b.asin)) = ?)
 		   AND NOT (? <> '' AND UPPER(REPLACE(REPLACE(b.isbn, '-', ''), ' ', '')) = ?)
 		 ORDER BY b.library_id <> ?, b.title COLLATE NOCASE, b.narrator COLLATE NOCASE, b.library_id, b.rel_path
-		 LIMIT ?`, args...)
+		 LIMIT ?`, args
 }
 
 // InProgress reports which of refs the user has started and not finished
