@@ -263,10 +263,19 @@ func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, e
 	return s.createUser(ctx, username, "", RoleUser, "", true)
 }
 
+// cleanUsername is a username as stored: trimmed, and refused when empty.
+func cleanUsername(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", ErrUsernameRequired
+	}
+	return name, nil
+}
+
 func (s *Service) createUser(ctx context.Context, username, password, role, email string, isDemo bool) (*User, error) {
-	username = strings.TrimSpace(username)
-	if username == "" {
-		return nil, ErrUsernameRequired
+	username, err := cleanUsername(username)
+	if err != nil {
+		return nil, err
 	}
 	if role != RoleAdmin {
 		role = RoleUser
@@ -1678,9 +1687,9 @@ type HouseholdChange struct {
 // (notePasswordSet).
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	if c.Username != nil {
-		name := strings.TrimSpace(*c.Username) // stored trimmed, as createUser stores it
-		if name == "" {
-			return ErrUsernameRequired
+		name, err := cleanUsername(*c.Username)
+		if err != nil {
+			return err
 		}
 		c.Username = &name
 	}
