@@ -457,7 +457,7 @@ keep this index in step (one line per topic).
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
 `household_members`, `bridge`, `podcast_fetch`, `podcast_discovery`, `podcast_opml`, `ebooks`, `readalong`, `upcoming`,
-`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
+`upcoming_calendar`, `upcoming_covers`, `listening_sync`, `listening_stay`, `renditions`, `oidc`), plus one flag per managed module (`contributions`, `podcasts`, `audible`); flip them on
 as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` for a signed-in caller only (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
