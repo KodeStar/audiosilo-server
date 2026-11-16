@@ -5,7 +5,6 @@ import (
 	"context"
 	"math"
 	"slices"
-	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -169,16 +168,22 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 	narrator := ""
 	for _, b := range books {
 		if b.MetaLocal == requested {
-			narrator = b.Narrator
+			narrator = match.Fold(b.Narrator)
 			break
 		}
 	}
-	ordered := slices.Clone(books)
-	slices.SortStableFunc(ordered, func(a, b LocalBook) int {
-		return cmp.Compare(pickRank(a, requested, narrator), pickRank(b, requested, narrator))
-	})
+	type ranked struct {
+		book LocalBook
+		rank int
+	}
+	ordered := make([]ranked, len(books))
+	for i, b := range books {
+		ordered[i] = ranked{b, pickRank(b, requested, narrator)}
+	}
+	slices.SortStableFunc(ordered, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
 	p := &placer{current: currentWork, requested: requested, byWork: map[string][]MetaLocal{}, byIndex: map[string][]LocalBook{}}
-	for _, b := range ordered {
+	for _, o := range ordered {
+		b := o.book
 		switch {
 		case b.MetaLocal == requested:
 			// Placed on the current work's entry only.
@@ -198,14 +203,15 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 
 // pickRank is which of a work's recordings the caller is given first, lower
 // first (server#241): one read by the narrator of the book just finished
-// (requested's, narrator; none when it has none), then one started and not
+// (requested's, narrator, folded by match.Fold so case, spacing and
+// punctuation aside; none when it has none), then one started and not
 // finished, then one in requested's library, then one not known to be
 // abridged; the books' own order (library sort order, then path) breaks a tie.
 // Each test is one bit, the first the highest.
 func pickRank(b LocalBook, requested MetaLocal, narrator string) int {
 	rank := 0
 	for _, pass := range []bool{
-		narrator != "" && sameCredit(b.Narrator, narrator),
+		narrator != "" && match.Fold(b.Narrator) == narrator,
 		b.Started,
 		b.LibraryID == requested.LibraryID,
 		!b.Abridged,
@@ -216,12 +222,6 @@ func pickRank(b LocalBook, requested MetaLocal, narrator string) int {
 		}
 	}
 	return rank
-}
-
-// sameCredit reports whether two credits name the same people, case and the
-// spacing around them aside.
-func sameCredit(a, b string) bool {
-	return strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " "))
 }
 
 // view returns a copy of one view's works (named name) with Local and

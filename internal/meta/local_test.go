@@ -429,7 +429,7 @@ func TestPlaceLocalPickTable(t *testing.T) {
 		want  []string // the pick, then local_others
 	}{
 		{"same narrator beats started, library and abridged",
-			[]LocalBook{book(1, "A", "Kemper", true, false), book(2, "B", " r. c.  BRAY ", false, true)},
+			[]LocalBook{book(1, "A", "Kemper", true, false), book(2, "B", " r.c.  BRAY ", false, true)},
 			[]string{"B", "A"}},
 		{"started beats library and abridged",
 			[]LocalBook{book(1, "A", "Kemper", false, false), book(2, "B", "Abe", true, true)},
