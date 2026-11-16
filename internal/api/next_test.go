@@ -80,6 +80,17 @@ func newSagaEnv(t *testing.T, metadataOn bool, books ...*catalog.Book) *sagaEnv 
 	return newLibraryEnv(t, sagaMetaserve(t), metadataOn, books...)
 }
 
+// addBooks indexes books in library lib, each titled by its path.
+func addBooks(t *testing.T, e *testEnv, lib int64, books ...*catalog.Book) {
+	t.Helper()
+	for _, b := range books {
+		b.LibraryID, b.Title, b.Format, b.AddedAt = lib, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // newLibraryEnv is newSagaEnv's library, member and admin over the metadata
 // site mock.
 func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books ...*catalog.Book) *sagaEnv {
@@ -93,12 +104,7 @@ func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books .
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, b := range books {
-		b.LibraryID, b.Title, b.Format, b.AddedAt = lib.ID, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
-		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
-			t.Fatal(err)
-		}
-	}
+	addBooks(t, e, lib.ID, books...)
 	adminTok, memberTok, memberID := adminAndMember(t, e)
 	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Saga start"})
 	if err := e.cat.AddSharePaths(ctx, share.ID, []catalog.PathRule{{LibraryID: lib.ID, Path: "Saga/1"}, {LibraryID: lib.ID, Path: "Saga/2"}}); err != nil {

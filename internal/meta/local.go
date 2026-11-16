@@ -151,13 +151,11 @@ func PlaceLocal(rails []MetaSeries, currentWork string, requested MetaLocal, boo
 
 // placer holds the caller's books indexed for PlaceLocal.
 type placer struct {
-	current   string
-	requested MetaLocal
-	// own is requested's own work id (its WorkID: the recorded match first, as
-	// the catalog's Book.work_id), else current: the work whose other
-	// recordings ride beside requested, as /item's other_recordings. self is
-	// requested among the books (its identifiers), zero when it isn't one.
-	own  string
+	current string
+	// self is requested among the books (its work id and identifiers), only its
+	// handle when it isn't one. Its own work (its WorkID: the recorded match
+	// first, as the catalog's Book.work_id; else current) is the work whose
+	// other recordings ride beside it, as /item's other_recordings.
 	self LocalBook
 	// byWork is every book of each known work id (each once), the pick first
 	// (pickRank).
@@ -174,7 +172,7 @@ type placement struct {
 }
 
 func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *placer {
-	var self LocalBook
+	self := LocalBook{MetaLocal: requested}
 	if i := slices.IndexFunc(books, func(b LocalBook) bool { return b.MetaLocal == requested }); i >= 0 {
 		self = books[i]
 	}
@@ -188,8 +186,7 @@ func newPlacer(currentWork string, requested MetaLocal, books []LocalBook) *plac
 		ordered[i] = ranked{b, pickRank(b, requested, narrator)}
 	}
 	slices.SortStableFunc(ordered, func(a, b ranked) int { return cmp.Compare(a.rank, b.rank) })
-	p := &placer{current: currentWork, requested: requested, own: cmp.Or(self.WorkID, currentWork), self: self,
-		byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{}}
+	p := &placer{current: currentWork, self: self, byWork: map[string][]LocalBook{}, byIndex: map[string][]LocalBook{}}
 	for _, o := range ordered {
 		b := o.book
 		switch {
@@ -261,7 +258,8 @@ func (p *placer) view(works []MetaSeriesWork, name string, mains map[string]plac
 func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]placement) (placement, bool) {
 	if w.ID != "" {
 		if w.ID == p.current {
-			return placement{local: p.requested, others: otherRecordings(p.byWork[p.own], p.self)}, true
+			own := cmp.Or(p.self.WorkID, p.current)
+			return placement{local: p.self.MetaLocal, others: otherRecordings(p.byWork[own], p.self)}, true
 		}
 		if books := p.byWork[w.ID]; len(books) > 0 {
 			return placement{local: books[0].MetaLocal, others: otherRecordings(books[1:], books[0])}, true

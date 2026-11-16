@@ -258,15 +258,10 @@ func TestItemAndMetaAgree(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
 	ctx := context.Background()
-	for _, b := range []*catalog.Book{
-		{RelPath: "Saga/2 copy", Series: "Saga", SeriesIndex: 2, ASIN: "b0two", Narrator: "Bray"},
-		{RelPath: "Saga/3", Series: "Saga", SeriesIndex: 3, ASIN: "B0THREE", Narrator: "Lee"},
-	} {
-		b.LibraryID, b.Title, b.Format, b.AddedAt = e.lib.ID, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
-		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
-			t.Fatal(err)
-		}
-	}
+	addBooks(t, e.testEnv, e.lib.ID,
+		&catalog.Book{RelPath: "Saga/2 copy", Series: "Saga", SeriesIndex: 2, ASIN: "b0two", Narrator: "Bray"},
+		&catalog.Book{RelPath: "Saga/3", Series: "Saga", SeriesIndex: 3, ASIN: "B0THREE", Narrator: "Lee"},
+	)
 	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 copy"}, IDKey: "a:B0TWO", WorkID: "two", CheckedAt: "now"},
 		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/3"}, IDKey: "a:B0THREE", WorkID: "three", CheckedAt: "now"},
