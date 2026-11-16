@@ -2457,7 +2457,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
-  within 150 s (`livePlaying`: a background player saves every 60 s, server#364), `paused`
+  within 150 s (`playingWindow`: a background player saves every 60 s, server#364), `paused`
   within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else
   the path's last segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
   sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
@@ -3758,7 +3758,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
   fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
-  `finished` even one that flips nothing (`editFinishChangedValue`/`Set`, ?14; server#363), an import's apply and
+  `finished` even one that flips nothing (server#363), an import's apply and
   undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
