@@ -50,7 +50,14 @@ func castSender(t *testing.T, s *Service, ctx context.Context, name string) (*Us
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	sess, id := signInDevice(t, s, ctx, u.ID, "phone")
+	return u, sess, id
+}
+
+// signInDevice signs userID in on a device: the session's secret and token id.
+func signInDevice(t *testing.T, s *Service, ctx context.Context, userID int64, device string) (string, int64) {
+	t.Helper()
+	sess, err := s.IssueToken(ctx, userID, KindSession, device, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +65,7 @@ func castSender(t *testing.T, s *Service, ctx context.Context, name string) (*Us
 	if err != nil {
 		t.Fatal(err)
 	}
-	return u, sess, cred.ID
+	return sess, cred.ID
 }
 
 // resolveCast resolves secret as a book media request on (3, path), the way the
@@ -241,7 +248,7 @@ func TestCastTokenIsNoDevice(t *testing.T) {
 	}
 }
 
-// A person keeps at most maxCastTokens: a mint past it drops the oldest, and
+// A device keeps at most maxCastTokens: a mint past it drops its oldest, and
 // never another person's.
 func TestCastTokenCap(t *testing.T) {
 	t.Parallel()
@@ -275,6 +282,73 @@ func TestCastTokenCap(t *testing.T) {
 	}
 	if _, _, err := resolveCast(s, ctx, annTok, "Author/Book"); err != nil {
 		t.Fatalf("another person's token was dropped: %v", err)
+	}
+}
+
+// The cap counts per sending device (server#216): a run of casts on one device
+// never ends the cast another device of the same person is playing. Allowed:
+// device A's one token outlives device B minting 25. Denied: B's own oldest,
+// past B's cap.
+func TestCastTokenCapPerDevice(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	sam, _, phone := castSender(t, s, ctx, "sam")
+	_, tablet := signInDevice(t, s, ctx, sam.ID, "tablet")
+	playing, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromTablet []string
+	for range 25 {
+		sec, _, err := s.IssueCastToken(ctx, sam.ID, tablet, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fromTablet = append(fromTablet, sec)
+	}
+	if _, _, err := resolveCast(s, ctx, playing, "Author/Book/01.mp3"); err != nil {
+		t.Fatalf("the phone's cast ended by the tablet's mints: %v", err)
+	}
+	for i, sec := range fromTablet {
+		_, _, err := resolveCast(s, ctx, sec, "Author/Book")
+		if i < 25-maxCastTokens && !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("the tablet's oldest token %d still works: %v", i, err)
+		}
+		if i >= 25-maxCastTokens && err != nil {
+			t.Fatalf("the tablet's token %d = %v", i, err)
+		}
+	}
+}
+
+// Over all of a person's devices at most maxCastTokensPerPerson stay: past it
+// the person's oldest go, whichever device minted them.
+func TestCastTokenCapPerPerson(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	sam, _, first := castSender(t, s, ctx, "sam")
+	devices := []int64{first}
+	for len(devices)*maxCastTokens <= maxCastTokensPerPerson {
+		_, d := signInDevice(t, s, ctx, sam.ID, "device")
+		devices = append(devices, d)
+	}
+	var oldest string
+	for _, d := range devices {
+		for range maxCastTokens {
+			sec, _, err := s.IssueCastToken(ctx, sam.ID, d, 3, "Author/Book")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if oldest == "" {
+				oldest = sec
+			}
+		}
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND kind = 'cast'`, sam.ID).Scan(&n); err != nil || n != maxCastTokensPerPerson {
+		t.Fatalf("sam's cast tokens = %d, %v; want %d", n, err, maxCastTokensPerPerson)
+	}
+	if _, _, err := resolveCast(s, ctx, oldest, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("the person's oldest token past the backstop = %v, want ErrInvalidToken", err)
 	}
 }
 
