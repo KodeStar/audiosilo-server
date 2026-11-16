@@ -496,3 +496,56 @@ func TestPlaceLocalOthers(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaceLocalOwnWork: the entry the envelope is for lists the other
+// recordings of requested's own work (its recorded match, as Book.work_id),
+// not of the work its identifiers name, so /meta agrees with /item; with no
+// work of its own, those of the envelope's.
+func TestPlaceLocalOwnWork(t *testing.T) {
+	rails := []MetaSeries{named("S", "2", "one@1", "two@2", "three@3")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/2"}
+	books := []LocalBook{
+		mine(1, "S/2", "S", 2, "matched"),
+		mine(1, "S/2 matched too", "S", 2, "matched"),
+		mine(1, "S/2 by asin", "S", 2, "two"),
+	}
+	works := PlaceLocal(rails, "two", requested, books)[0].Works
+	if works[1].Local == nil || *works[1].Local != requested {
+		t.Fatalf("current entry = %+v", works[1])
+	}
+	if got, want := others(works)[1], []string{"S/2 matched too"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current entry's others = %q, want %q", got, want)
+	}
+	books[0].WorkID = ""
+	works = PlaceLocal(rails, "two", requested, books)[0].Works
+	if got, want := others(works)[1], []string{"S/2 by asin"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("no work of its own: others = %q, want %q", got, want)
+	}
+}
+
+// TestPlaceLocalOthersDropCopies: local_others never holds a copy of the
+// entry's book (the pick, or requested on its own entry) sharing its ASIN or
+// ISBN in normalized form, as /item's other_recordings leaves it out.
+func TestPlaceLocalOthersDropCopies(t *testing.T) {
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2")}
+	requested := MetaLocal{LibraryID: 1, Path: "S/1"}
+	book := func(path, work, asin, isbn string) LocalBook {
+		b := mine(1, path, "S", 1, work)
+		b.ASIN, b.ISBN = asin, isbn
+		return b
+	}
+	works := PlaceLocal(rails, "one", requested, []LocalBook{
+		book("S/1", "one", "B0ONE", "978-0-00-000001-1"),
+		book("S/1 copy", "one", "", "9780000000011"),
+		book("S/1 other", "one", "B0OTHER", ""),
+		book("S/2 a", "two", "B0TWO", ""),
+		book("S/2 a copy", "two", " b0two ", ""),
+		book("S/2 b", "two", "B0TWOB", ""),
+	})[0].Works
+	if got, want := others(works), [][]string{{"S/1 other"}, {"S/2 b"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("others = %q, want %q", got, want)
+	}
+	if works[1].Local == nil || works[1].Local.Path != "S/2 a" {
+		t.Fatalf("pick = %+v", works[1].Local)
+	}
+}

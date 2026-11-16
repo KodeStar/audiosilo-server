@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -246,6 +247,52 @@ func TestMetaLocalOthers(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestItemAndMetaAgree: the book page's other recordings (/item) and the
+// rail's (/meta, the entry the envelope is for) are the same books: neither
+// holds a copy of the book sharing its ASIN, and a book matched in the console
+// to another work than its ASIN's lists that work's recordings on both, while
+// /meta stays about its ASIN's work.
+func TestItemAndMetaAgree(t *testing.T) {
+	t.Parallel()
+	e := recordingsEnv(t, true)
+	ctx := context.Background()
+	for _, b := range []*catalog.Book{
+		{RelPath: "Saga/2 copy", Series: "Saga", SeriesIndex: 2, ASIN: "b0two", Narrator: "Bray"},
+		{RelPath: "Saga/3", Series: "Saga", SeriesIndex: 3, ASIN: "B0THREE", Narrator: "Lee"},
+	} {
+		b.LibraryID, b.Title, b.Format, b.AddedAt = e.lib.ID, b.RelPath, "m4b", "2024-01-01T00:00:00Z"
+		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.cat.SaveUpcomingOwned(ctx, []catalog.UpcomingOwned{
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 copy"}, IDKey: "a:B0TWO", WorkID: "two", CheckedAt: "now"},
+		{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/3"}, IDKey: "a:B0THREE", WorkID: "three", CheckedAt: "now"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	agree := func(wantWork string, want []string) {
+		t.Helper()
+		work, items, _ := itemRecordings(t, e, "Saga/2", e.adminTok)
+		local, rail, raw := railTwo(t, e, "Saga/2", e.adminTok)
+		slices.Sort(items)
+		slices.Sort(rail)
+		if work != wantWork || local != "Saga/2" || !reflect.DeepEqual(items, want) || !reflect.DeepEqual(rail, want) {
+			t.Fatalf("work %q: /item %q, /meta local %q others %q, want %q", work, items, local, rail, want)
+		}
+		if !strings.Contains(raw, `"work":{"id":"two"`) {
+			t.Fatalf("/meta is no longer about the ASIN's work: %s", raw)
+		}
+	}
+	agree("two", []string{"Saga/2 Abe", "Saga/2 Kemper"})
+	if err := e.cat.EditBook(ctx, e.lib.ID, "Saga/2", catalog.BookEdit{
+		Match: &catalog.MatchAnchor{WorkID: "three"}, Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agree("three", []string{"Saga/3"})
 }
 
 // TestNextPicksRecording: after a book, Next opens the pick among the next

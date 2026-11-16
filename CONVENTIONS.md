@@ -501,9 +501,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.InProgress`), then the requested book's library, then not known to be
   abridged, then library sort order, then path. **Other recordings (`local_others`,
   capability `other_recordings`)**: every other book of an entry's work id the caller can
-  open rides beside `local` as `local_others` `[{library_id, path}]` in that order (the
-  current work's entry: every book of the work but the requested one; an entry placed by
-  its index has none); per request like `local`, never on a cached envelope. A book's
+  open rides beside `local` as `local_others` `[{library_id, path}]` in that order, never a
+  copy of `local` sharing its ASIN or ISBN (normalized, `sameRecording`); the current work's
+  entry lists every book of the requested book's own work (its `work_id`, the recorded match
+  first, else the envelope's work) but itself, so it agrees with `/item`'s
+  `other_recordings` while `/meta` stays about its ASIN's work; an entry placed by its index
+  has none; per request like `local`, never on a cached envelope. A book's
   work key is `book_matches.work_id`, else a non-empty `upcoming_owned.work_id` while that
   row's `id_key` is the book's identifiers' (`meta.IDKey`, in SQL `idKeyExpr`: a retag or an
   ASIN edit holds no stale work until the job resolves it again) (`catalog.workIDExpr`, on
