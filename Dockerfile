@@ -9,9 +9,13 @@
 # holding only its static web export, built with baseUrl=/web). Override per
 # release: --build-arg WEB_IMAGE=ghcr.io/<owner>/audiosilo-web:<version> (the
 # reference must be lowercase). Declared before any FROM so it is usable in the
-# `FROM ${WEB_IMAGE}` below. To build a server-only image (web_player off, /web
+# web stage's FROM below. To build a server-only image (web_player off, /web
 # unmounted), comment out the web stage and the COPY --from=web line.
 ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
+# The web image is static files FROM scratch, published for linux/amd64 only, so
+# every target platform (and an arm64 host) takes that copy. Override for a
+# locally built web image of another platform.
+ARG WEB_PLATFORM=linux/amd64
 
 # --- build the admin console (admin-ui/) -----------------------------------------
 # A static Vite build embedded into the binary (internal/web/adminui). Built on
@@ -78,7 +82,7 @@ RUN set -e; \
     fi
 
 # --- pin the prebuilt web player ----------------------------------------------
-FROM ${WEB_IMAGE} AS web
+FROM --platform=$WEB_PLATFORM ${WEB_IMAGE} AS web
 
 # --- final image ---------------------------------------------------------------
 # Track the current stable Alpine (3.20 went EOL in April 2026).
