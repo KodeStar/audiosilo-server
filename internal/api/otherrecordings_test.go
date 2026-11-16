@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -47,21 +46,10 @@ func recordingsEnv(t *testing.T, metadataOn bool) *sagaEnv {
 	if err := e.cat.AddSharePaths(ctx, share.ID, []catalog.PathRule{{LibraryID: e.lib.ID, Path: "Saga/2 Abe"}}); err != nil {
 		t.Fatal(err)
 	}
-	member := sagaMemberID(t, e)
-	if err := e.cat.GrantShare(ctx, member, share.ID); err != nil {
+	if err := e.cat.GrantShare(ctx, e.memberID, share.ID); err != nil {
 		t.Fatal(err)
 	}
 	return e
-}
-
-// sagaMemberID is the sagaEnv member's user id (the member token's owner).
-func sagaMemberID(t *testing.T, e *sagaEnv) int64 {
-	t.Helper()
-	u, err := e.auth.ResolveToken(context.Background(), e.memberTok, auth.KindSession)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.ID
 }
 
 // itemRecordings is GET /item's work_id and other_recordings paths.
@@ -74,12 +62,10 @@ func itemRecordings(t *testing.T, e *sagaEnv, path, token string) (work string, 
 	var b struct {
 		WorkID          string `json:"work_id"`
 		OtherRecordings []struct {
-			LibraryID int64   `json:"library_id"`
-			RelPath   string  `json:"rel_path"`
-			Narrator  string  `json:"narrator"`
-			WorkID    string  `json:"work_id"`
-			Files     []any   `json:"files"`
-			Duration  float64 `json:"duration"`
+			LibraryID int64  `json:"library_id"`
+			RelPath   string `json:"rel_path"`
+			WorkID    string `json:"work_id"`
+			Files     []any  `json:"files"`
 		} `json:"other_recordings"`
 	}
 	if err := json.Unmarshal([]byte(body), &b); err != nil {
@@ -156,10 +142,11 @@ func listWorkIDs(t *testing.T, e *sagaEnv) map[string]string {
 	return out
 }
 
-// TestListWorkIDCacheMiss: work_id rides on every list book, and a change to
-// the upcoming job's resolution of it (a new row, a changed work, a removed
-// row) is never answered from the list cache, while a look-up that only renews
-// when it was checked leaves the cache alone.
+// TestListWorkIDCacheMiss: work_id rides on every list book, and a changed
+// work in the upcoming job's resolution of it is never answered from the list
+// cache, while a look-up that only renews when it was checked leaves the cache
+// alone (each kind of change: store's
+// TestUserStateWritesLeaveTheContentGeneration).
 func TestListWorkIDCacheMiss(t *testing.T) {
 	t.Parallel()
 	e := recordingsEnv(t, true)
@@ -185,22 +172,6 @@ func TestListWorkIDCacheMiss(t *testing.T) {
 	want["Saga/2"] = "two-merged"
 	if got := listWorkIDs(t, e); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a changed work: %v, want %v", got, want)
-	}
-	// A removed row: answered afresh.
-	e.cachedBodies(`{"books":[]}`)
-	if err := e.cat.SaveUpcomingOwned(ctx, nil, []catalog.Ref{{LibraryID: e.lib.ID, Path: "Saga/2 Abe"}}); err != nil {
-		t.Fatal(err)
-	}
-	want["Saga/2 Abe"] = ""
-	if got := listWorkIDs(t, e); !reflect.DeepEqual(got, want) {
-		t.Fatalf("after a removed row: %v, want %v", got, want)
-	}
-	// A new row: answered afresh.
-	e.cachedBodies(`{"books":[]}`)
-	save(catalog.UpcomingOwned{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 Abe"}, IDKey: "a:B0TWOABE", WorkID: "two", CheckedAt: "now"})
-	want["Saga/2 Abe"] = "two"
-	if got := listWorkIDs(t, e); !reflect.DeepEqual(got, want) {
-		t.Fatalf("after a new row: %v, want %v", got, want)
 	}
 }
 
@@ -286,8 +257,7 @@ func TestNextPicksRecording(t *testing.T) {
 	}
 	// Started (by the member, not finished) beats path order.
 	ctx := context.Background()
-	member := sagaMemberID(t, e)
-	if _, err := e.cat.SaveProgress(ctx, member, catalog.Progress{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 Abe"},
+	if _, err := e.cat.SaveProgress(ctx, e.memberID, catalog.Progress{Ref: catalog.Ref{LibraryID: e.lib.ID, Path: "Saga/2 Abe"},
 		Position: 30, Duration: 600, UpdatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}

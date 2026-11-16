@@ -68,6 +68,7 @@ type sagaEnv struct {
 	*testEnv
 	lib                 *catalog.Library
 	adminTok, memberTok string
+	memberID            int64
 }
 
 func (e *sagaEnv) url(endpoint, path string) string {
@@ -106,7 +107,7 @@ func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books .
 	if err := e.cat.GrantShare(ctx, memberID, share.ID); err != nil {
 		t.Fatal(err)
 	}
-	return &sagaEnv{testEnv: e, lib: lib, adminTok: adminTok, memberTok: memberTok}
+	return &sagaEnv{testEnv: e, lib: lib, adminTok: adminTok, memberTok: memberTok, memberID: memberID}
 }
 
 // sagaBooks is the default Saga library.
