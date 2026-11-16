@@ -231,7 +231,7 @@ describe('waiting sign-ins', () => {
     );
   });
 
-  it('creates an account with the username typed, prefilled from the sign-in', async () => {
+  it('creates an account with the username typed, the field empty to start (server#408)', async () => {
     const calls = mockFetch(
       routes({
         'POST /admin/oidc/pending/4/create': {
@@ -245,8 +245,8 @@ describe('waiting sign-ins', () => {
     await user.click(await screen.findByRole('button', { name: 'Create account' }));
     const dialog = await screen.findByRole('dialog', { name: 'Make an account for Bob Smith' });
     const field = within(dialog).getByRole('textbox', { name: 'Username' });
-    expect(field).toHaveValue('bob');
-    await user.clear(field);
+    // Not the provider's raw username: empty is the server's cleaned name.
+    expect(field).toHaveValue('');
     await user.type(field, ' bobby ');
     await user.click(within(dialog).getByRole('button', { name: 'Create account' }));
     expect(await screen.findByText('Account bobby made')).toBeInTheDocument();
@@ -392,6 +392,29 @@ describe('a person’s single sign-on', () => {
     // The waiting sign-ins are read again: their Link offers this account once more.
     await waitFor(() =>
       expect(calls.slice(at).some((c) => c.path === '/admin/oidc/pending')).toBe(true),
+    );
+  });
+
+  it('reads the person again when the identity is gone already (404)', async () => {
+    const calls = mockFetch(
+      personRoutes(sam, {
+        'DELETE /admin/users/2/identities/9': {
+          status: 404,
+          body: { error: 'no such identity', code: 'not_found' },
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=sign-in');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink Keycloak from sam?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await screen.findByText('Keycloak unlinked')).toBeInTheDocument();
+    const at = calls.findIndex((c) => c.method === 'DELETE');
+    await waitFor(() =>
+      expect(calls.slice(at).some((c) => c.method === 'GET' && c.path === '/admin/users/2')).toBe(
+        true,
+      ),
     );
   });
 
