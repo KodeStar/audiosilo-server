@@ -664,7 +664,8 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	if pathTooLong(w, req.Path) || pathTooLong(w, rawFrom) {
 		return
 	}
-	if catalog.CleanRelPath(req.Path) == "" {
+	p := catalog.CleanRelPath(req.Path)
+	if p == "" {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}
@@ -684,7 +685,6 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := catalog.CleanRelPath(req.Path)
 	if lib.Kind == catalog.KindPodcasts {
 		if req.Mode == rescanAttachments || req.From != nil {
 			writeError(w, 400, "Podcast rescans take a show path only.")
