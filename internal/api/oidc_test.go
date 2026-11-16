@@ -403,22 +403,30 @@ func TestOIDCAdminSignIn(t *testing.T) {
 	if strings.Join(actions, ",") != "user.role_sync,user.oidc_link" {
 		t.Fatalf("audit: %v", actions)
 	}
-	// Keycloak leaves the groups claim out for a person in no group: once her
-	// identity has carried the claim, an absent one (neither the ID token nor
-	// userinfo) is no groups, and she is an ordinary user at the next sign-in,
-	// with nothing logged as missing.
+	// Allowed (the owner's policy, server#405): once her identity has carried
+	// the claim, an absent one (neither the ID token nor userinfo: a renamed
+	// groups_claim, a dropped scope, Entra's overage) keeps her role, and the
+	// log says the provider stopped sending it, once.
 	logs := &syncBuffer{}
 	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
 	p.Groups = nil
 	e.idp.SetPerson(p)
-	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
-		t.Fatalf("no groups claim after one: %d %v", status, out)
+	for range 2 {
+		if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
+			t.Fatalf("no groups claim after one: %d %v", status, out)
+		}
 	}
-	if strings.Contains(logs.String(), "sent no groups claim") {
-		t.Fatalf("a warning for a provider that sends groups: %s", logs.String())
+	if n := strings.Count(logs.String(), "sent no groups claim this time (it did before)"); n != 1 {
+		t.Fatalf("the warning logged %d times, want once: %s", n, logs.String())
 	}
 	if n := e.idp.Calls("userinfo"); n == 0 {
 		t.Fatal("userinfo wasn't asked for the missing claim")
+	}
+	// Denied: a list that is there without the group demotes.
+	p.Groups = []string{"listeners"}
+	e.idp.SetPerson(p)
+	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleUser {
+		t.Fatalf("a list without the group: %d %v", status, out)
 	}
 	// Back in the group, then out of it again as an empty list: the same.
 	p.Groups = []string{"audiosilo-admins"}
@@ -438,7 +446,7 @@ func TestOIDCAdminSignIn(t *testing.T) {
 
 // TestOIDCNoGroupsClaimNeverSent: with admin_group set, a provider that has
 // never sent the groups claim for a person (no scope or mapper for it) demotes
-// no one: her role is left alone at each sign-in, and the log says why.
+// no one: her role is left alone at each sign-in, and the log says why, once.
 func TestOIDCNoGroupsClaimNeverSent(t *testing.T) {
 	t.Parallel()
 	p := oidcAlice
@@ -461,6 +469,10 @@ func TestOIDCNoGroupsClaimNeverSent(t *testing.T) {
 	}
 	if status, out := e.signInAdmin(t); status != 200 || out["user"].(map[string]any)["role"] != auth.RoleAdmin {
 		t.Fatalf("never sent: %d %v", status, out)
+	}
+	// Logged once a run, not at every sign-in (server#405).
+	if n := strings.Count(logs.String(), "sent no groups claim"); n != 1 {
+		t.Fatalf("the warning logged %d times, want once: %s", n, logs.String())
 	}
 }
 
@@ -641,7 +653,10 @@ func TestOIDCFinishCookieName(t *testing.T) {
 		t.Fatalf("https, the __Host- cookie: %d %v", resp.StatusCode, out)
 	}
 
-	plain := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "http://audiosilo.test" })
+	plain := newTestEnvWith(t, func(c *config.Config) {
+		c.PublicURL = "http://audiosilo.test"
+		c.Auth.OIDC = config.OIDCConfig{Enabled: true, Issuer: "https://idp.example", ClientID: "audiosilo"}
+	})
 	bob := plain.mustUser(t, "bob", "")
 	tok, err := plain.auth.IssueOIDCToken(context.Background(), bob.ID, oidcDoneTTL)
 	if err != nil {
@@ -657,6 +672,35 @@ func TestOIDCFinishCookieName(t *testing.T) {
 	}
 	if c := resp.Cookies(); len(c) != 1 || c[0].Name != oidcDoneCookie || c[0].Path != oidcCookiePath || c[0].Secure {
 		t.Fatalf("http, the clearing cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+}
+
+// TestOIDCFinishRefusedWhileOff: a sign-in's token outlives a restart (60 s),
+// but finish refuses it once single sign-on can't run (turned off, or its
+// provider config broken since the callback): no session, nothing charged,
+// the token unspent. The allowed twin is TestOIDCFinish.
+func TestOIDCFinishRefusedWhileOff(t *testing.T) {
+	t.Parallel()
+	for name, o := range map[string]config.OIDCConfig{
+		"turned off":    {},
+		"misconfigured": {Enabled: true, Issuer: "https://idp.example"}, // no client_id
+	} {
+		e := newTestEnvWith(t, func(c *config.Config) {
+			c.PublicURL = oidcPublic
+			c.Auth.OIDC = o
+		})
+		alice := e.mustUser(t, "alice", "")
+		tok, err := e.auth.IssueOIDCToken(context.Background(), alice.ID, oidcDoneTTL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, out := e.finish(t, &http.Cookie{Name: hostDoneCookie, Value: tok}, "admin-web")
+		if resp.StatusCode != http.StatusUnauthorized || out["code"] != codeOIDCSignInExpired || out["token"] != nil {
+			t.Fatalf("%s: %d %v", name, resp.StatusCode, out)
+		}
+		if u, err := e.auth.ConsumeOIDC(context.Background(), tok); err != nil || u.ID != alice.ID {
+			t.Fatalf("%s: the refused finish spent the token: %v", name, err)
+		}
 	}
 }
 
@@ -1216,4 +1260,65 @@ func TestOIDCBudgetFitsRequestTimeout(t *testing.T) {
 	if oidc.CallBudget+5*time.Second > requestTimeout {
 		t.Fatalf("oidc.CallBudget %v leaves too little of requestTimeout %v", oidc.CallBudget, requestTimeout)
 	}
+}
+
+// TestOIDCScopesFollowGroupPolicy: with the default scopes, /start asks for
+// groups only while admin_group or allowed_group is set (server#406), as the
+// console saves them (live, no restart), and the status and the settings'
+// default say what is asked.
+func TestOIDCScopesFollowGroupPolicy(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	tok := e.session(t, e.adminID)
+	check := func(want string) {
+		t.Helper()
+		e.start(t, oidcReturnAdmin)
+		if got := e.idp.LastAuthorize().Get("scope"); got != want {
+			t.Fatalf("asked for %q, want %q", got, want)
+		}
+		list := `["` + strings.ReplaceAll(want, " ", `","`) + `"]`
+		_, body := e.do(t, "GET", "/api/v1/admin/oidc/status", tok, "")
+		if !strings.Contains(body, `"scopes":`+list) {
+			t.Fatalf("status scopes, want %q: %s", want, body)
+		}
+		_, body = e.do(t, "GET", "/api/v1/admin/settings", tok, "")
+		if !strings.Contains(body, `"scopes_default":`+list) {
+			t.Fatalf("settings' default scopes, want %q: %s", want, body)
+		}
+	}
+	check("openid profile email")
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", tok, `{"signin":{"admin_group":"admins"}}`); resp.StatusCode != 200 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	check("openid profile email groups")
+}
+
+// TestOIDCStartProviderGone: a provider discovered before and gone down since
+// is noticed at /start (the probe), which lands on the unavailable panel
+// rather than sending the browser to it; the status says so too. Back up, the
+// sign-in starts again.
+func TestOIDCStartProviderGone(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcAlice, nil)
+	now := time.Now()
+	p, err := oidc.New(oidc.Settings{Issuer: e.idp.Issuer, ClientID: "audiosilo", ClientSecret: oidcSecret,
+		UsernameClaim: "preferred_username", GroupsClaim: "groups", Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.api.oidc.provider = p
+	e.start(t, oidcReturnAdmin)
+	e.idp.SetKnobs(oidctest.Knobs{FailDiscovery: true})
+	now = now.Add(time.Minute)
+	resp := e.get(t, oidcStartPath+"?return=admin", oidcHost)
+	if loc := resp.Header.Get("Location"); loc != oidcPublic+"/connect#oidc="+oidcUnavailable {
+		t.Fatalf("a provider gone down: %d %q", resp.StatusCode, loc)
+	}
+	_, body := e.do(t, "GET", "/api/v1/admin/oidc/status", e.session(t, e.adminID), "")
+	if !strings.Contains(body, `"state":"error"`) {
+		t.Fatalf("status of a provider gone down: %s", body)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{})
+	now = now.Add(time.Minute)
+	e.start(t, oidcReturnAdmin)
 }

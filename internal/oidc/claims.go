@@ -25,7 +25,8 @@ type Claims struct {
 	Groups        []string
 }
 
-// Caps on what a sign-in carries. maxGroups only bounds the work: every group
+// Caps on what a sign-in carries, in bytes (a group's is config's
+// MaxOIDCGroup, a group setting's). maxGroups only bounds the work: every group
 // under it is matched against admin_group and allowed_group, so it is far above
 // what a directory sends (a waiting row keeps fewer: auth's maxPendingGroups).
 const (
@@ -160,11 +161,6 @@ func (c *Claims) fill(set claimSet, usernameClaim, groupsClaim string) {
 	if c.Groups == nil && set.has(groupsClaim) {
 		c.Groups = set.groups(groupsClaim)
 	}
-}
-
-// complete reports whether c has everything userinfo could add.
-func (c *Claims) complete() bool {
-	return c.Email != "" && c.Username != "" && c.Groups != nil
 }
 
 // InGroup reports whether the person is in group (exact, case counts).

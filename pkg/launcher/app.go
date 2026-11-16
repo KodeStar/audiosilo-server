@@ -561,8 +561,8 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		if err := authSvc.PruneCastTokens(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("cast token retention failed", "err", err)
 		}
-		if _, err := authSvc.PrunePairingTokens(ctx); err != nil && ctx.Err() == nil {
-			log.Warn("pairing token retention failed", "err", err)
+		if _, err := authSvc.PruneSingleUseTokens(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("single-use token retention failed", "err", err)
 		}
 		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows, catalog.MetaCacheWorkRows); err != nil && ctx.Err() == nil {
 			log.Warn("meta cache retention failed", "err", err)

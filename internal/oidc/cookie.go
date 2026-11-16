@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// The flow cookie: what /start chose (state, nonce, PKCE verifier, where the
-// sign-in returns) carried to /callback in the browser, sealed with AES-GCM under
+// The flow cookie: what /start chose (state, nonce, PKCE verifier, the
+// redirect URI it sent the provider, where the sign-in returns) carried to /callback in the browser, sealed with AES-GCM under
 // a key made at start and held only in memory, so no database row exists for an
 // anonymous /start and a restart ends every flow under way. It is valid for
 // FlowMaxAge after /start and once (Replay).
@@ -34,8 +34,11 @@ type Flow struct {
 	State    string `json:"s"`
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
-	Return   string `json:"r"`
-	IssuedAt int64  `json:"t"` // Unix seconds
+	// RedirectURI is the one /start sent the provider: the code exchange must
+	// name the same, whatever public_url says by the callback.
+	RedirectURI string `json:"u"`
+	Return      string `json:"r"`
+	IssuedAt    int64  `json:"t"` // Unix seconds
 }
 
 // flowAD binds a sealed cookie to its use.
@@ -94,7 +97,7 @@ func (s *Sealer) Open(v string) (Flow, error) {
 		return Flow{}, ErrFlowInvalid
 	}
 	var f Flow
-	if json.Unmarshal(plain, &f) != nil || f.State == "" || f.Nonce == "" || f.Verifier == "" {
+	if json.Unmarshal(plain, &f) != nil || f.State == "" || f.Nonce == "" || f.Verifier == "" || f.RedirectURI == "" {
 		return Flow{}, ErrFlowInvalid
 	}
 	age := s.now().Sub(time.Unix(f.IssuedAt, 0))
@@ -111,9 +114,10 @@ const maxReplay = 10000
 // token checked), for FlowMaxAge, so one cookie signs in once even when a copy
 // of it is sent again with another code.
 type Replay struct {
-	mu   sync.Mutex
-	used map[string]time.Time // state -> when it may be forgotten
-	now  func() time.Time
+	mu    sync.Mutex
+	used  map[string]time.Time // state -> when it may be forgotten
+	swept time.Time            // the last time the forgettable were dropped
+	now   func() time.Time
 }
 
 // NewReplay returns an empty Replay. now may be nil.
@@ -124,9 +128,11 @@ func NewReplay(now func() time.Time) *Replay {
 	return &Replay{used: map[string]time.Time{}, now: now}
 }
 
-// Use records state as used, reporting false when it already was. With the
-// memory full of live states it refuses (false): a flood of fresh flows can't
-// push an earlier one out to be used again.
+// Use records state as used, reporting false when it already was. The states
+// past their time are dropped once per FlowMaxAge (and when the memory is
+// full), so completed flows don't stay. With the memory full of live states it
+// refuses (false): a flood of fresh flows can't push an earlier one out to be
+// used again.
 func (r *Replay) Use(state string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -134,7 +140,8 @@ func (r *Replay) Use(state string) bool {
 	if until, ok := r.used[state]; ok && now.Before(until) {
 		return false
 	}
-	if len(r.used) >= maxReplay {
+	if len(r.used) >= maxReplay || now.Sub(r.swept) >= FlowMaxAge {
+		r.swept = now
 		for k, until := range r.used {
 			if !now.Before(until) {
 				delete(r.used, k)

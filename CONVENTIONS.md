@@ -2300,7 +2300,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `listening_daily` per local day, listener and book, blanks `last_ip` on signed-out or expired tokens
   (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
   expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that) and
-  the pairing tokens that can never pair again (`auth.PrunePairingTokens`: revoked, expired, or linked to
+  the single-use tokens that can never be used again (`auth.PruneSingleUseTokens`: pairing tokens revoked, expired, or linked to
   a used-up or expired code; single sign-on's `oidc` tokens too, spent or expired). Migration 0021 backfilled listening from before sessions were
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
@@ -3443,7 +3443,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `upsertPending` drops before it records the attempt), its data `provider` (the button's
   name), `person` (the name, else the username, left out when it holds an "@": providers often make the
   email the username) and `reason` (a Pending reason the messages word, else none): never the email,
-  subject, groups or a token. It links People, where the console lists the waiting sign-ins.
+  subject, groups or a token. It links People, where the console lists the waiting sign-ins. At most
+  5 an hour (`oidcPendingPerHour`, server#408: a provider anyone can sign up at would raise one per
+  throwaway subject): a row over it is not announced then (the reaching logged once), and may be at
+  the person's next attempt.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
@@ -3561,7 +3564,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or a linked single sign-on (`ErrAdminNeedsPassword`, `hasSignInIdentity`; server#235's
   decision 5, so a password-less account with an identity may be promoted and an
   admin with one may clear their password, while unlinking a password-less admin's
-  identity is 409 `admin_needs_password`). Only an identity from the single sign-on
+  identity is 409 `admin_needs_password`; only a promotion is checked, so a save re-sending an admin's
+  role passes even while their single sign-on is off, server#405). Only an identity from the single sign-on
   that can run now counts: its issuer the configured one, enabled and configured
   (the API's `oidcIssuer`, handed to `auth.SetSSOIssuer`, read per check); one from a
   provider no longer configured, or any while it is off, is no way in. The **delete handler additionally refuses self-delete**
@@ -3597,34 +3601,50 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `auth.methods` and `auth.oidc {name}` (the button's name). **`internal/oidc` is pure** (no DB, no
   HTTP handlers): `Provider` (go-oidc + x/oauth2; lazy discovery with a 1 to 15 minute backoff;
   asymmetric algorithms only, `SigningAlgs`; PKCE S256; nonce, `aud`, `azp` when several audiences,
-  `iat` at most 5 minutes ahead; userinfo only when a claim is missing, its `sub` must equal the ID
-  token's; errors never carry a response body; every call one use makes (discovery when due, the token
-  request, the keys, userinfo) shares one deadline, `CallBudget` 20 s, under the API's 30 s
-  `requestTimeout`, so a slow provider ends on the result panel, not a bare 503), the flow cookie (`Sealer`: AES-GCM under a key made at
-  start, so a restart ends flows in flight; `Flow{state, nonce, verifier, return, issued_at}`, ten
-  minutes; `Replay` refuses a state used before, remembering only a flow whose exchange succeeded, so
-  states sent back bare can't fill it), the claims (`Claims`: the email and its verified flag taken
+  `iat` at most 5 minutes ahead; userinfo only when a claim is missing (`askUserinfo`: the groups
+  claim only while a group policy needs it, every time then; the email or the username not again for
+  an hour once userinfo lacked it), its `sub` must equal the ID token's, and a userinfo request that
+  fails leaves the ID token's claims (a warning logged); errors never carry a response body; every
+  call one use makes (discovery when due, the token request, the keys, userinfo) shares one deadline,
+  `CallBudget` 20 s, started once the use is past any wait for another use's discovery (at most
+  `discoveryWait` 8 s), so both stay under the API's 30 s `requestTimeout` and a slow provider ends
+  on the result panel, not a bare 503; a provider discovered before is probed (its discovery
+  document, 3 s, at most every 30 s: `probe`) at `/start` and for the status, so one gone down lands
+  on `#oidc=unavailable` and the status says `error`; the scopes are each `/start`'s, `oidcScopes`:
+  `auth.oidc.scopes` as listed, else the defaults with `groups` only while `admin_group` or
+  `allowed_group` is set, server#406), the flow cookie (`Sealer`: AES-GCM under a key made at
+  start, so a restart ends flows in flight; `Flow{state, nonce, verifier, redirect_uri, return,
+  issued_at}`, ten minutes, the callback's exchange naming the redirect URI `/start` sent; `Replay`
+  refuses a state used before, remembering only a flow whose exchange succeeded, so states sent back
+  bare can't fill it, and dropping the expired every ten minutes), the claims (`Claims`: the email and its verified flag taken
   together, an email cleaning changed (cut, trimmed, a control character dropped) unverified; groups a
   list or a string, up to 2000 so each is there for `admin_group` to match, a name over 256 bytes or
-  with a control character dropped, never mended into another's) and **`Decide`**, the one decision: a linked
+  with a control character dropped, never mended into another's; the group settings are bounded in
+  bytes the same, `config.MaxOIDCGroup`) and **`Decide`**, the one decision: a linked
   identity signs in (refused when the account is disabled, or a household member or demo account
   now); else an email matching accounts links on its own **only** when it is verified and matches
   exactly one eligible account (decision 4: **never an admin's**, a member's or a demo account's;
   any admin match waits, `admin_account`); else `auto_create` makes an ordinary account (for
   `allowed_group`'s members when set; the email kept only when verified), and anything else is a **pending
   sign-in** (`oidc_pending`, one row per issuer+subject, its attempts counted, pruned after 30 days,
-  at most 500, dropped when a later sign-in links it or makes its account; ids AUTOINCREMENT, so a
+  at most 500, the cap's evictions logged by the callback (`OIDCResult.PendingEvicted`), dropped when a
+  later sign-in links it or makes its account; ids AUTOINCREMENT, so a
   dismissed row's id never names another person to a console list read before). `admin_group` (trimmed, like
   `allowed_group`, whatever set it), when set, syncs the role at every sign-in that signs in (in: admin,
   out: user), never demoting the last enabled admin (reported and audited `refused: last_admin`,
-  not an error); a sign-in that carried **no groups claim at all** (neither the ID token nor
-  userinfo; an empty list is a claim and demotes) leaves the role alone (`Decision.NoGroups`, a
-  warning logged) **only while its identity has never carried one**, so a provider that never sends
-  it demotes no one; once a sign-in has carried it (`user_identities.groups_seen`, set by the
-  sign-in, even for an empty list; by the console's Link or Create from a waiting row only when the
-  row holds a group, as its stored list can't tell an absent claim from an empty one), an
-  absent claim is no groups and demotes (Keycloak leaves the claim out for a person in no group).
-  `allowed_group` counts an absent claim as no groups. `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**
+  not an error); a sign-in that carried **no readable groups claim** (neither the ID token nor
+  userinfo: absent, null, of another shape or a list holding no string, Entra's overage included)
+  **never changes the role** (`Decision.NoGroups`), whether or not the identity carried one before
+  (the owner's policy, server#405): only a list that is there changes it, an empty one demoting. So a
+  renamed `groups_claim` or a dropped scope demotes no one, and a provider that leaves the claim out
+  for a person in no group (Keycloak) needs an admin to demote by hand. The callback logs it once per
+  account a run, worded by `user_identities.groups_seen` (`OIDCResult.GroupsSeen`: set by a sign-in
+  that carried the claim, even an empty list; by the console's Link or Create from a waiting row only
+  when the row holds a group): never sent for this person, or sent before and not now (check
+  `groups_claim` and the mapper). `allowed_group` counts an absent claim as no groups.
+  `auth.OIDCSignIn` reads, decides and writes in **one durable transaction**, the finish token
+  included (`tokenTTL`, `OIDCResult.Token`, so a sign-out everywhere can't fall between the decision
+  and the token)
   (`user_identities`: UNIQUE(issuer, subject) and UNIQUE(user_id, issuer), `link_method`
   auto_email|admin|created). The flow (`GET /auth/oidc/start?return=web|admin`, `return` an enum,
   anything else 400; `GET /auth/oidc/callback`, per-IP `oidcLimiter` 10 per 15 minutes; a callback with no cookie
@@ -3643,9 +3663,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   minute) and clears it on every other answer, consumes the token once (`ConsumeOIDC`: only
   `KindOIDC`, so a pairing token planted in the cookie, an invite's QR or an own `/auth/pair`, is
   refused and left unspent; `POST /auth/exchange` in turn refuses a `KindOIDC` token; a sign-out
-  everywhere ends one not yet finished, the daily `PrunePairingTokens` drops it) and answers exactly as
+  everywhere ends one not yet finished, the daily `PruneSingleUseTokens` drops it) and answers exactly as
   `POST /auth/exchange` (the session envelope, `reportSignIn`); 401 code `oidc_no_sign_in` without
-  the cookie (nothing charged), `oidc_sign_in_expired` for a token spent, expired, unknown, of
+  the cookie (nothing charged), `oidc_sign_in_expired` while single sign-on can't run (off since the
+  callback: a token outlives a restart; nothing charged, the token left to expire) and for a token
+  spent, expired, unknown, of
   another kind or its
   account's disabled, or now a household member or demo account (one that joined between the
   callback's decision and its token) (charged to `oidcLimiter`, the callback's, never `redeemLimiter`: any page can make a visitor's browser fail ten exchanges, which must not lock that address out of finishing). The console finishes on

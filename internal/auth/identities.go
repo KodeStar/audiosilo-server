@@ -117,6 +117,18 @@ type OIDCResult struct {
 	// PendingID is the waiting row a Pending outcome recorded or refreshed
 	// (its id stays the same across the person's attempts), else 0.
 	PendingID int64
+	// PendingEvicted is how many of the oldest waiting rows a Pending outcome
+	// dropped to stay within maxPendingSignIns (the callback tells the admin).
+	PendingEvicted int64
+	// GroupsSeen: the linked identity had carried a groups claim before this
+	// sign-in (user_identities.groups_seen), so a sign-in without one is the
+	// provider leaving it out now (Decision.NoGroups says the role stayed).
+	GroupsSeen bool
+	// Token is the single-use token (KindOIDC) an outcome that signs in
+	// minted in the sign-in's own transaction, when asked for (a tokenTTL), so
+	// a sign-out everywhere can't land between the decision and the token and
+	// miss it. "" otherwise.
+	Token string
 }
 
 // accountFacts reads an account's oidc.Account facts; ?1 is the issuer.
@@ -135,21 +147,24 @@ func scanAccount(row interface{ Scan(...any) error }, extra ...any) (oidc.Accoun
 // its email (any state: oidc.Decide sets the ineligible aside), oidc.Decide's
 // answer, then its write. SignIn stamps the identity's last sign-in and what it
 // says now, and marks it groups_seen when the sign-in carried the groups claim
-// (even an empty list: from then on an absent claim is no groups); Link adds
+// (even an empty list; read only for the callback's warning when a later
+// sign-in carries none, OIDCResult.GroupsSeen); Link adds
 // the identity (auto_email); Create makes an ordinary account (its username
 // from the claims, numbered on a clash; the email only when verified) and its
 // identity, both dropping the row the sign-in waited in; Pending records or
 // refreshes the waiting row (capped, pruned). An outcome that signs in applies the role rule: a
 // demotion that would leave no enabled admin is refused and reported, never
-// an error.
-func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) (OIDCResult, error) {
+// an error. With tokenTTL > 0 an outcome that signs in also mints the
+// single-use token the browser finishes with (IssueOIDCToken's kind and
+// life), in the same transaction (OIDCResult.Token).
+func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, tokenTTL time.Duration) (OIDCResult, error) {
 	var res OIDCResult
 	err := s.db.WithDurableTx(ctx, "OIDCSignIn", func(tx *sql.Tx) error {
 		res = OIDCResult{}
 		in := oidc.Input{Claims: c, Policy: p}
 		a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountFacts+`, i.groups_seen
 			  FROM user_identities i JOIN users u ON u.id = i.user_id
-			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &in.GroupsSeen)
+			 WHERE i.issuer = ?1 AND i.subject = ?2`, c.Issuer, c.Subject), &res.GroupsSeen)
 		switch {
 		case err == nil:
 			in.Linked = &a
@@ -189,7 +204,7 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 				return err
 			}
 		case oidc.Pending:
-			res.PendingID, err = upsertPending(ctx, tx, c, d.Reason, now, s.now())
+			res.PendingID, res.PendingEvicted, err = upsertPending(ctx, tx, c, d.Reason, now, s.now())
 			return err
 		default:
 			return nil
@@ -201,7 +216,10 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 			}
 			res.Role = &rs
 		}
-		res.User, err = getUser(ctx, tx, id)
+		if res.User, err = getUser(ctx, tx, id); err != nil || tokenTTL <= 0 {
+			return err
+		}
+		res.Token, err = s.issueToken(ctx, tx, id, KindOIDC, "", tokenTTL)
 		return err
 	})
 	return res, err
@@ -209,7 +227,8 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy) 
 
 // IssueOIDCToken mints the single-use token a sign-in that signed in leaves
 // in the browser's cookie (KindOIDC, ttl long), the only token ConsumeOIDC
-// takes.
+// takes, for an account on its own: the callback's comes from OIDCSignIn's
+// transaction (tokenTTL), so this is the tests' way to one.
 func (s *Service) IssueOIDCToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
 	return s.IssueToken(ctx, userID, KindOIDC, "", ttl)
 }
@@ -353,14 +372,14 @@ func syncRole(ctx context.Context, tx *sql.Tx, id int64, role, now string) (Role
 }
 
 // upsertPending records or refreshes c's waiting row with reason, returning its
-// id. Rows unseen for pendingDays go first, c's own among them: ListPending no
+// id and how many rows the cap evicted. Rows unseen for pendingDays go first, c's own among them: ListPending no
 // longer shows such a row, so the attempt records a new one (a new id, which
 // the callback tells the admins about) rather than bringing back one they were
 // told about long ago. Then the oldest past maxPendingSignIns go, never the
 // row just written (it is the newest, unless the clock stepped back past rows
 // stamped later: excluded by id all the same, so the id returned always names
 // a row).
-func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, error) {
+func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now string, at time.Time) (int64, int64, error) {
 	groups := c.Groups
 	if len(groups) > maxPendingGroups {
 		groups = groups[:maxPendingGroups]
@@ -370,11 +389,11 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 	}
 	g, err := json.Marshal(groups)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	cutoff := at.AddDate(0, 0, -pendingDays).UTC().Format(time.RFC3339)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE last_seen_at < ?`, cutoff); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var id int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO oidc_pending(issuer, subject, email, email_verified, username, name, groups,
@@ -385,11 +404,15 @@ func upsertPending(ctx context.Context, tx *sql.Tx, c oidc.Claims, reason, now s
 		    last_seen_at = excluded.last_seen_at, attempts = attempts + 1
 		RETURNING id`,
 		c.Issuer, c.Subject, c.Email, c.EmailVerified, c.Username, c.Name, string(g), reason, now).Scan(&id); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
+	res, err := tx.ExecContext(ctx, `DELETE FROM oidc_pending WHERE id <> ? AND id IN
 		(SELECT id FROM oidc_pending ORDER BY last_seen_at DESC, id DESC LIMIT -1 OFFSET ?)`, id, maxPendingSignIns)
-	return id, err
+	if err != nil {
+		return 0, 0, err
+	}
+	evicted, err := res.RowsAffected()
+	return id, evicted, err
 }
 
 const pendingColumns = `id, issuer, subject, email, email_verified, username, name, groups, reason, first_seen_at, last_seen_at, attempts`

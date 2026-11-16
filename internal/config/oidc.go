@@ -38,7 +38,8 @@ type OIDCConfig struct {
 	// logged; the console sees only whether one is set.
 	ClientSecret     string `yaml:"client_secret,omitempty" json:"-"`
 	ClientSecretFile string `yaml:"client_secret_file,omitempty"`
-	// Scopes asked for; empty is DefaultOIDCScopes. openid is always asked.
+	// Scopes asked for; empty is DefaultOIDCScopes, with groups only while a
+	// group policy is set (EffectiveScopes). openid is always asked.
 	Scopes []string `yaml:"scopes,omitempty"`
 	// UsernameClaim names the claim a new account's username comes from (empty:
 	// preferred_username); GroupsClaim the claim listing the person's groups
@@ -68,8 +69,14 @@ const (
 	EnvOIDCClientSecret = "AUDIOSILO_OIDC_CLIENT_SECRET" //nolint:gosec // G101: the variable's name, not a credential
 )
 
-// DefaultOIDCScopes are the scopes asked for when none are configured.
+// DefaultOIDCScopes are the scopes asked for when none are configured, groups
+// only while admin_group or allowed_group is set (EffectiveScopes): Keycloak
+// refuses a scope it has no client scope for (invalid_scope), and Google and
+// Entra have no groups scope at all.
 var DefaultOIDCScopes = []string{"openid", "profile", "email", "groups"}
+
+// oidcGroupsScope is the default scope asked for only with a group policy.
+const oidcGroupsScope = "groups"
 
 // maxOIDCClientSecret bounds the client secret (and its file), in bytes.
 const maxOIDCClientSecret = 4096
@@ -82,19 +89,31 @@ func (o OIDCConfig) DisplayName() string {
 	return DefaultOIDCName
 }
 
-// EffectiveScopes are the scopes asked for, openid first and once.
+// EffectiveScopes are the scopes asked for, openid first and once: the
+// configured ones as listed, else DefaultOIDCScopes, without groups while
+// neither admin_group nor allowed_group is set (GroupPolicy). Both groups are
+// live, so this is read at each sign-in.
 func (o OIDCConfig) EffectiveScopes() []string {
 	in := o.Scopes
-	if len(in) == 0 {
+	defaults := len(in) == 0
+	if defaults {
 		in = DefaultOIDCScopes
 	}
 	out := []string{"openid"}
 	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" && !slices.Contains(out, s) {
-			out = append(out, s)
+		s = strings.TrimSpace(s)
+		if s == "" || slices.Contains(out, s) || defaults && s == oidcGroupsScope && !o.GroupPolicy() {
+			continue
 		}
+		out = append(out, s)
 	}
 	return out
+}
+
+// GroupPolicy reports whether a sign-in's groups decide anything: admin_group
+// or allowed_group is set.
+func (o OIDCConfig) GroupPolicy() bool {
+	return strings.TrimSpace(o.AdminGroup) != "" || strings.TrimSpace(o.AllowedGroup) != ""
 }
 
 // EffectiveUsernameClaim is UsernameClaim or its default.
@@ -189,13 +208,24 @@ func claimName(s string) bool {
 	return true
 }
 
-// MaxOIDCGroup bounds a group name setting, in characters.
+// MaxOIDCGroup bounds a group name setting, in bytes: the bound on a group a
+// sign-in carries (internal/oidc's maxGroupClaim), so a setting can always
+// name a group a sign-in can match.
 const MaxOIDCGroup = 256
 
 func fixOIDCAdminGroup(c *Config) error {
-	return fixText(&c.Auth.OIDC.AdminGroup, MaxOIDCGroup, "a group name")
+	return fixGroup(&c.Auth.OIDC.AdminGroup)
 }
 
 func fixOIDCAllowedGroup(c *Config) error {
-	return fixText(&c.Auth.OIDC.AllowedGroup, MaxOIDCGroup, "a group name")
+	return fixGroup(&c.Auth.OIDC.AllowedGroup)
+}
+
+// fixGroup is fixText's rule for a group name, its length counted in bytes.
+func fixGroup(p *string) error {
+	*p = strings.TrimSpace(*p)
+	if len(*p) > MaxOIDCGroup {
+		return fmt.Errorf("a group name can be at most %d bytes", MaxOIDCGroup)
+	}
+	return fixText(p, MaxOIDCGroup, "a group name")
 }
