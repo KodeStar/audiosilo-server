@@ -1004,20 +1004,20 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if err != nil {
 		return err
 	}
-	labels, err := labelSets(ctx, tx, bookID, edit)
+	labelSet, labelRevert, err := labelSets(ctx, tx, bookID, edit)
 	if err != nil {
 		return err
 	}
 	// This book's own copies: EditBooks shares the edit across books. The swap
 	// and the label changes write only fields the edit leaves alone, each either
 	// set or reverted, so no field is both.
-	if len(swapSet) > 0 || len(labels) > 0 {
+	if len(swapSet) > 0 || len(labelSet) > 0 {
 		set = maps.Clone(edit.Set)
 		maps.Copy(set, swapSet)
-		maps.Copy(set, labels)
+		maps.Copy(set, labelSet)
 	}
-	if len(swapRevert) > 0 {
-		revert = slices.Concat(edit.Revert, swapRevert)
+	if len(swapRevert) > 0 || len(labelRevert) > 0 {
+		revert = slices.Concat(edit.Revert, swapRevert, labelRevert)
 	}
 	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
 		return nil // nothing else for this book (a bulk add of a tag it already has, an anchor alone): its row stays as it is

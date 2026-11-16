@@ -186,17 +186,22 @@ func normalizeLabelEdits(e BookEdit) (add, remove map[string][]string, err error
 // labelSets is what an edit's Add and Remove make of one book's lists: the new
 // value of each list field it changes (the book's effective list, books.genres /
 // tags, with the labels added and taken out), leaving out a list it leaves as it
-// was, so adding a tag a book already has edits nothing on it.
-func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (map[string]string, error) {
+// was, so adding a tag a book already has edits nothing on it. A list that ends
+// up holding the labels the book has under its override (the files' or an
+// Audiobookshelf file's, any order or case) is reverted instead, so a bulk add
+// then remove of a label leaves the book unedited, never locked to its own
+// value (server#186).
+func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (set map[string]string, revert []string, err error) {
 	if len(edit.Add) == 0 && len(edit.Remove) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var genres, tags string
 	if err := tx.QueryRowContext(ctx, `SELECT genres, tags FROM books WHERE id = ?`, bookID).Scan(&genres, &tags); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cur := map[string]string{FieldGenres: genres, FieldTags: tags}
-	out := map[string]string{}
+	var under map[string]FieldValue // the layers below any override, read once and only when needed
+	set = map[string]string{}
 	for _, field := range labelFields {
 		add, remove := edit.Add[field], edit.Remove[field]
 		if len(add) == 0 && len(remove) == 0 {
@@ -204,13 +209,31 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (ma
 		}
 		v, err := mergeLabels(field, cur[field], add, remove)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if v != cur[field] {
-			out[field] = v
+		if v == cur[field] {
+			continue
 		}
+		if under == nil {
+			layers, err := loadLayers(ctx, tx, bookID)
+			if err != nil {
+				return nil, nil, err
+			}
+			under = layers.resolve()
+		}
+		if fv := under[field]; fv.Locked && sameLabels(ParseLabels(v), ParseLabels(fv.Scanned)) {
+			revert = append(revert, field)
+			continue
+		}
+		set[field] = v
 	}
-	return out, nil
+	return set, revert, nil
+}
+
+// sameLabels reports whether a and b hold the same labels (labelKey: any case),
+// in any order.
+func sameLabels(a, b []string) bool {
+	return len(a) == len(b) && !slices.ContainsFunc(a, func(l string) bool { return !hasLabel(b, l) })
 }
 
 // writeLabels writes book_labels for a book: each label of its label fields
