@@ -283,13 +283,61 @@ func TestListeningSyncHiddenPodcastLibrary(t *testing.T) {
 	}
 }
 
-// GET /server advertises listening_sync.
+// GET /server advertises listening_sync, and listening_stay (a listen's start
+// "stay", which an older server's strict decoder refuses).
 func TestListeningSyncCapability(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
-	if !strings.Contains(body, `"listening_sync":true`) {
-		t.Fatalf("capability missing: %s", body)
+	for _, flag := range []string{`"listening_sync":true`, `"listening_stay":true`} {
+		if !strings.Contains(body, flag) {
+			t.Fatalf("capability %s missing: %s", flag, body)
+		}
+	}
+}
+
+// A Stay over the wire (start "stay", capability listening_stay): the phone
+// answers the watch's offer with Stay after the watch carried on, and its place
+// applies; the watch's next span from before it is kept out and offered.
+func TestListeningSyncStay(t *testing.T) {
+	t.Parallel()
+	s := newSyncEnv(t)
+	ctx := context.Background()
+	uid, phone := newUserWithSession(t, s.testEnv, "sam", false)
+	grantWightOnly(t, s.testEnv, s.lib.ID, uid)
+	watch, err := s.auth.IssueToken(ctx, uid, auth.KindSession, "Sam's Watch", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stay := func(id string, pos float64, base string) string {
+		return strings.Replace(listenJSON(id, s.lib.ID, syncUnsouled, pos, pos, base), `"start":"resume"`, `"start":"stay"`, 1)
+	}
+	listen := func(id string, from, to float64, base string) func() string {
+		return func() string { return listenJSON(id, s.lib.ID, syncUnsouled, from, to, base) }
+	}
+	// Each event is made when it is sent (its end a minute before then), so
+	// each ends after the one before it, as the server's clock sees them.
+	steps := []struct {
+		token, device string
+		event         func() string
+		status, kept  string
+	}{
+		{phone, "phone", listen("p1", 1000, 1500, "0"), "applied", ""},
+		{watch, "watch", listen("w1", 1500, 2000, "1"), "applied", ""},
+		{watch, "watch", listen("w2", 2000, 2500, "2"), "applied", ""},
+		{phone, "phone", func() string { return stay("p2", 1500, "2") }, "applied", ""},
+		{watch, "watch", listen("w3", 2500, 3000, "3"), "diverged", "stored"},
+	}
+	var a syncAnswer
+	for _, st := range steps {
+		code, got, raw := s.post(t, st.token, syncBody(st.device, st.event()))
+		if code != http.StatusOK || got.Results[0].Status != st.status || got.Results[0].Kept != st.kept {
+			t.Fatalf("%d %s", code, raw)
+		}
+		a = got
+	}
+	if p := a.Progress[0]; p.Position != 1500 || p.DeviceID != "phone" || p.OtherPlace == nil || p.OtherPlace.Position != 3000 {
+		t.Fatalf("held row: %+v", p)
 	}
 }
 

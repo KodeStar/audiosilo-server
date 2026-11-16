@@ -151,6 +151,7 @@ func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
 		"upcoming_calendar":  a.upcomingOn(),       // the calendar feed (GET/POST/DELETE /me/upcoming/calendar, GET /me/upcoming/releases.ics), with upcoming
 		"upcoming_covers":    a.upcomingOn(),       // the Upcoming covers (GET /me/upcoming/cover?work=&size=), with upcoming
 		"listening_sync":     true,                 // Sync v2: POST /me/listening/sync (events, other_place on progress)
+		"listening_stay":     true,                 // a sync listen's start "stay" (a Stay on another device's offer wins: 0080)
 		"renditions":         a.renditionsOn(),     // watch renditions: GET /stream?rendition=, POST/GET /libraries/{id}/renditions; the kinds in the top-level "renditions"
 		"oidc":               a.oidcOn(),           // Sign in with OpenID Connect: GET /auth/oidc/start; the button's name in auth.oidc
 	}
