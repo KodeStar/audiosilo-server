@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -314,6 +315,50 @@ func TestRefreshByAnchor(t *testing.T) {
 	}
 	if a := e.anchorOf(t, "A/TaggedAnchored"); a.WorkID != "the-martian" {
 		t.Errorf("tagged anchored = %+v, want healed", a)
+	}
+}
+
+// TestRefreshSaysAnUnknownIdentifierWhenUpToDate: a book whose own ASIN the
+// community doesn't know (mistyped) falls back to its recorded match; once that
+// has nothing to change, the refresh still says the ASIN is unknown, one none
+// item with nothing to apply, rather than leaving the book out (server#342).
+func TestRefreshSaysAnUnknownIdentifierWhenUpToDate(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/Typo"
+	e.book(t, path, "The Martian", "B0TYPO0001", nil)
+	e.anchor(t, path, "the-martian", "bray")
+	e.matcher.byWork["the-martian"] = []meta.MatchCandidate{workAnswer("the-martian", "bray")}
+	first := e.start(t, catalog.MatchModeRefresh, "")
+	if first.Counts.Auto+first.Counts.Review > 0 {
+		e.applyAndWait(t, first, ScopeOverwrite)
+	}
+	before, err := e.cat.BookMatchState(ctx, e.lib, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	items := e.items(t, run, "")
+	if len(items) != 1 || items[0].Outcome != catalog.OutcomeNone || items[0].Detail != DetailIdentifierUnknown {
+		t.Fatalf("items = %+v, want one none item identifier_unknown", items)
+	}
+	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
+		if ch := items[0].Changes[scope]; ch.Match || len(ch.Fields) > 0 || ch.Cover {
+			t.Fatalf("changes under %s = %+v, want none", scope, ch)
+		}
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, Include: []int64{items[0].ID}}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	after, err := e.cat.BookMatchState(ctx, e.lib, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) || e.covers.Load() != 0 {
+		t.Fatalf("apply wrote: before %+v, after %+v, covers %d", before, after, e.covers.Load())
 	}
 }
 

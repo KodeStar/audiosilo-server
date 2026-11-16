@@ -48,7 +48,8 @@ const (
 )
 
 // DetailIdentifierUnknown is a refresh item's detail when the community doesn't
-// know any of the book's identifiers and it has no recorded work to fall back to.
+// know any of the book's identifiers and it has no recorded work to fall back to,
+// or the recorded work it fell back to has nothing to change (server#342).
 const DetailIdentifierUnknown = "identifier_unknown"
 
 // DetailWorkUnknown is a refresh item's detail when the community no longer knows
@@ -579,6 +580,15 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 		}
 	}
 	if len(item.Unchanged) == len(scopes) {
+		if byWork && hasIdentifier {
+			// Up to date by its recorded match, but the community doesn't know
+			// the book's own identifier (a mistyped ASIN, say): said, as it
+			// would be with no match to fall back on, with nothing to apply
+			// (server#342).
+			item.Outcome, item.Detail, item.Score = catalog.OutcomeNone, DetailIdentifierUnknown, 0
+			item.Proposal, item.Unchanged = catalog.MatchProposal{}, nil
+			return item, nil
+		}
 		return nil, nil
 	}
 	return item, nil
