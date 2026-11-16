@@ -221,9 +221,14 @@ func (a *API) localRails(ctx context.Context, requested *catalog.Book, env *meta
 	for i, b := range books {
 		refs[i] = catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}
 	}
+	// The started books only break ties between recordings: failing to read
+	// them, the pick goes on without them rather than losing every placement.
 	started, err := a.cat.InProgress(ctx, userFrom(ctx).ID, refs)
 	if err != nil {
-		return nil, nil, err
+		if ctx.Err() != nil {
+			return nil, nil, err
+		}
+		a.log.Warn("read started books for the pick failed", "err", err, "library", requested.LibraryID, "path", requested.RelPath)
 	}
 	me := meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.RelPath}
 	// A book in several series is a candidate in each, at its position there.
