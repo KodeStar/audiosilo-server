@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -1017,5 +1018,102 @@ func TestRunnerWakeOnSwitchOn(t *testing.T) {
 	st, _ := f.cat.UpcomingRunState(context.Background())
 	if next, ok := parseStamp(st.NextRunAt); !ok || next.Sub(f.clock) < interval-jitter {
 		t.Fatalf("after the run, the next is a day on: %+v", st)
+	}
+}
+
+// With the job switched off but metadata on (Resolve), a run is step 1 alone
+// (server#241: every book's work id rides on the player's lists): the books'
+// works are resolved, cache first, but no series is read, no item made, no
+// release announced and no status recorded, so switching the job on still finds
+// a full run due. With Resolve off too, a run makes no call at all, and a book
+// a kick finds is resolved by a light run.
+func TestRunnerResolveOnlyWhileOff(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	var resolve atomic.Bool
+	resolve.Store(true)
+	f.r.opt.Resolve = resolve.Load
+	f.off.Store(true)
+	f.expanse("2011", "2012")
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	f.loose(t, f.lib, "Loose", "L1", "")
+	f.md.cached["L1"] = "w-cached" // the cache's answer: no lookup for it
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := f.cat.UpcomingOwnedAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for ref, o := range owned {
+		got[ref.Path] = o.WorkID
+	}
+	if want := map[string]string{"The Expanse/1": "e1", "Loose": "w-cached"}; !maps.Equal(got, want) {
+		t.Fatalf("resolved = %v, want %v", got, want)
+	}
+	if reads := f.md.reads(); len(reads) != 0 || f.md.feedCount() != 0 || len(f.items(t)) != 0 || len(f.announced) != 0 {
+		t.Fatalf("a resolve-only run went past step 1: reads %v, feeds %d, items %v", reads, f.md.feedCount(), f.items(t))
+	}
+	if st, _ := f.cat.UpcomingRunState(context.Background()); st.LastRunAt != "" || st.LastSuccessAt != "" {
+		t.Fatalf("a resolve-only run records no status: %+v", st)
+	}
+	if !f.r.due(catalog.UpcomingRun{}) {
+		t.Fatal("switching on after a resolve-only run must find a full run due")
+	}
+
+	// Metadata off too: nothing at all.
+	resolve.Store(false)
+	f.book(t, f.lib, "The Expanse", 2, "A2", "e2")
+	calls := len(f.md.lookups())
+	if err := f.run(t); !errors.Is(err, errSwitchedOff) || len(f.md.lookups()) != calls {
+		t.Fatalf("run with metadata off = %v, %d lookups (was %d)", err, len(f.md.lookups()), calls)
+	}
+
+	// A light run (a kick) resolves the new book while metadata is on.
+	resolve.Store(true)
+	if err := f.r.RunOnce(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if owned, err = f.cat.UpcomingOwnedAll(context.Background()); err != nil ||
+		owned[catalog.Ref{LibraryID: f.lib.ID, Path: "The Expanse/2"}].WorkID != "e2" {
+		t.Fatalf("after a light run = %v, %v", owned, err)
+	}
+
+	// The job switched on: the full run reads the series and makes items.
+	f.off.Store(false)
+	if err := f.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if f.md.feedCount() != 1 || len(f.md.reads()) == 0 {
+		t.Fatalf("the full run after switching on: feeds %d", f.md.feedCount())
+	}
+}
+
+// A kick while the job is off but metadata on (Resolve) still makes the light
+// run resolve the new book's work; with Resolve off as well, a kick runs nothing.
+func TestRunnerKickResolvesWhileOff(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.clock = time.Now()
+	f.r.settle = 20 * time.Millisecond
+	var resolve atomic.Bool
+	f.r.opt.Resolve = resolve.Load
+	f.off.Store(true)
+	f.book(t, f.lib, "The Expanse", 1, "A1", "e1")
+	runSchedule(t, f)
+	f.r.Kick()
+	time.Sleep(150 * time.Millisecond)
+	if n := len(f.md.lookups()); n != 0 {
+		t.Fatalf("a kick with metadata off made %d lookups", n)
+	}
+	resolve.Store(true)
+	f.r.Kick()
+	eventually(t, "the kicked resolve", func() bool {
+		owned, err := f.cat.UpcomingOwnedAll(context.Background())
+		return err == nil && owned[catalog.Ref{LibraryID: f.lib.ID, Path: "The Expanse/1"}].WorkID == "e1"
+	})
+	if f.md.feedCount() != 0 {
+		t.Fatal("a resolve-only run asks no watch feed")
 	}
 }
