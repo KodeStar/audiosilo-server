@@ -30,7 +30,7 @@ type setupEnvelope struct {
 	// PrintedPassword is whether the signed-in admin still has the password
 	// the server printed in its log at first start (auth.PrintedPassword): the
 	// Your account step then asks for a new one. False for an admin who chose
-	// theirs (the --setup wizard, or since).
+	// theirs (the --setup wizard, or since) or had it replaced.
 	PrintedPassword bool `json:"printed_password"`
 }
 

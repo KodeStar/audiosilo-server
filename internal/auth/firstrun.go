@@ -176,7 +176,8 @@ func (s *Service) noteFirstAdmin(ctx context.Context, note func(*firstAdmin)) er
 }
 
 // PrintedPassword reports whether admin id still has the password the server
-// printed at first start: id is the first-run admin and hasn't set their own.
+// printed at first start: id is the first-run admin and their password was
+// never replaced (by them, another admin or reset-admin).
 // An admin who chose one in the --setup wizard, or any admin of an install
 // from before the row existed, has not.
 func (s *Service) PrintedPassword(ctx context.Context, id int64) (bool, error) {
