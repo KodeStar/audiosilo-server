@@ -72,10 +72,14 @@ func uniqueLabels(in []string) []string {
 // refuses a label over maxLabelLen, one with a control character and a list
 // over maxLabels, naming field; lenient (what a file says) leaves such a label
 // out and keeps the first maxLabels, so one odd value never costs a book the
-// rest. Nil for none.
+// rest. A label that shows nothing (blankIfInvisible) is a blank, left out
+// either way (server#349). Nil for none.
 func cleanLabels(field string, in []string, strict bool) ([]string, error) {
 	var out []string
 	for _, name := range uniqueLabels(in) {
+		if blankIfInvisible(name) == "" {
+			continue
+		}
 		if err := checkText(field, name, maxLabelLen); err != nil {
 			if strict {
 				return nil, invalid(field, "a label must be at most 64 characters, with no control characters")

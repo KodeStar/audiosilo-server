@@ -69,7 +69,7 @@ func normalizeMoreSeries(v string) (string, error) {
 	out := make([]SeriesRef, 0, len(in))
 	seen := map[string]bool{}
 	for _, s := range in {
-		s.Name = strings.TrimSpace(s.Name)
+		s.Name = blankIfInvisible(strings.TrimSpace(s.Name)) // one that shows nothing is no series (server#349)
 		if err := checkText(FieldMoreSeries, s.Name, maxShortField); err != nil {
 			return "", err
 		}

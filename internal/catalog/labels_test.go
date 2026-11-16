@@ -19,6 +19,9 @@ func TestNormalizeLabels(t *testing.T) {
 		{"", ""},
 		{"[]", ""},
 		{`["  Sci-Fi  ", "Space   Opera", "sci-fi", "", "SPACE OPERA", "Tom & Jerry"]`, `["Sci-Fi","Space Opera","Tom & Jerry"]`},
+		// A label that shows nothing is a blank (server#349); a visible one keeps its joiner.
+		{"[\"\u200b\", \"\ufeff \u2800\", \"A\u200dB\"]", "[\"A\u200dB\"]"},
+		{"[\"\u3164\"]", ""},
 	} {
 		got, err := normalizeLabels(FieldTags, tc.in)
 		if err != nil || got != tc.want {

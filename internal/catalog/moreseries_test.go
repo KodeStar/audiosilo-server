@@ -40,6 +40,10 @@ func TestMoreSeries(t *testing.T) {
 	if want := []SeriesRef{{"Discworld", 8, 0}, {watch, 1, 0}}; !reflect.DeepEqual(d.Book.SeriesList, want) {
 		t.Fatalf("series_list = %+v, want %+v", d.Book.SeriesList, want)
 	}
+	// A name that shows nothing is a blank one, dropped (server#349).
+	if got, err := normalizeMoreSeries("[{\"name\":\"\u200b\ufeff\",\"position\":1},{\"name\":\"Real\",\"position\":2}]"); err != nil || got != `[{"name":"Real","position":2}]` {
+		t.Errorf("an invisible name = %q, %v; want it dropped", got, err)
+	}
 	// Written as the console writes it (no HTML escaping), so its drafts compare.
 	if got, err := normalizeMoreSeries(`[{"name":"Tom & Jerry <1>","position":1}]`); err != nil || got != `[{"name":"Tom & Jerry <1>","position":1}]` {
 		t.Fatalf("canonical form = %s %v", got, err)
