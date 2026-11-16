@@ -649,8 +649,8 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 		}
 	}
 	got, b := e.exchangeToken(t, tok, "one-too-many")
-	if got != http.StatusUnauthorized || !strings.Contains(b, "invite already used") {
-		t.Fatalf("exchange past the use limit = %d %s, want 401 + exhausted message", got, b)
+	if got != http.StatusUnauthorized || !strings.Contains(b, `"code":"invite_used"`) {
+		t.Fatalf("exchange past the use limit = %d %s, want 401 invite_used", got, b)
 	}
 	// The spent invite no longer redeems, and says it was used up (the connect
 	// page's "already used"); a code that never existed says nothing more.
@@ -661,6 +661,34 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	if resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"NOPE-NOPE-NOPE-NOPE"}`); resp.StatusCode != http.StatusUnauthorized ||
 		strings.Contains(b, `"code"`) {
 		t.Fatalf("redeem of an unknown code = %d %s, want 401 with no code", resp.StatusCode, b)
+	}
+}
+
+// An exchange whose invite expired after its QR was opened says so with the
+// code redeem answers (server#255), so the player can say "ask for a new
+// invite"; an unknown pairing token carries no code.
+func TestExchangeExpiredInvite(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	code, err := e.auth.CreateAuthCode(ctx, member.ID, "invite", 5, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, tok, _ := e.redeemCode(t, code)
+	if status != http.StatusOK {
+		t.Fatalf("redeem = %d", status)
+	}
+	if _, err := e.db.ExecContext(ctx, `UPDATE auth_codes SET expires_at = ? WHERE user_id = ?`,
+		time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, b := e.exchangeToken(t, tok, "late"); got != http.StatusUnauthorized || !strings.Contains(b, `"code":"invite_expired"`) {
+		t.Fatalf("exchange of an expired invite = %d %s, want 401 invite_expired", got, b)
+	}
+	if got, b := e.exchangeToken(t, "not-a-token", "d"); got != http.StatusUnauthorized || strings.Contains(b, `"code"`) {
+		t.Fatalf("exchange of an unknown token = %d %s, want 401 with no code", got, b)
 	}
 }
 

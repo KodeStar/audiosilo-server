@@ -248,9 +248,9 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		a.redeemLimiter.Fail(ip)
 		switch {
 		case errors.Is(err, auth.ErrCodeExhausted):
-			writeError(w, http.StatusUnauthorized, "invite already used on all its devices - ask for a new invite")
+			writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
 		case errors.Is(err, auth.ErrCodeExpired):
-			writeError(w, http.StatusUnauthorized, "invite has expired - ask for a new invite")
+			writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
 		default:
 			writeError(w, http.StatusUnauthorized, "invalid or expired pairing token")
 		}
