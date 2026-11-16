@@ -195,14 +195,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	rc, err := a.auth.ResolveAuthCode(r.Context(), req.Code)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
-		switch {
-		case errors.Is(err, auth.ErrCodeExhausted):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
-		case errors.Is(err, auth.ErrCodeExpired):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
-		default:
-			writeError(w, http.StatusUnauthorized, "invalid or expired auth code")
-		}
+		writeInviteError(w, err, "invalid or expired auth code")
 		return
 	}
 	a.redeemLimiter.Reset(ip)
@@ -221,6 +214,19 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	payload.UsesRemaining = rc.UsesRemaining()
 	payload.Admin = rc.User.Role == auth.RoleAdmin
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// writeInviteError answers a refused code or pairing token: a 401 naming an
+// invite that is used up or expired, else the plain fallback message.
+func writeInviteError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, auth.ErrCodeExhausted):
+		writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
+	case errors.Is(err, auth.ErrCodeExpired):
+		writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
+	default:
+		writeError(w, http.StatusUnauthorized, fallback)
+	}
 }
 
 // handleExchange turns a pairing token (scanned from a QR) into a durable,
@@ -246,14 +252,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	u, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
-		switch {
-		case errors.Is(err, auth.ErrCodeExhausted):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteUsed, "invite already used on all its devices - ask for a new invite")
-		case errors.Is(err, auth.ErrCodeExpired):
-			writeErrorCode(w, http.StatusUnauthorized, codeInviteExpired, "invite has expired - ask for a new invite")
-		default:
-			writeError(w, http.StatusUnauthorized, "invalid or expired pairing token")
-		}
+		writeInviteError(w, err, "invalid or expired pairing token")
 		return
 	}
 	a.redeemLimiter.Reset(ip)
