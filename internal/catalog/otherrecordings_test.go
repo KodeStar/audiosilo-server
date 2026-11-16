@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,6 +91,16 @@ func (f *recordingsFixture) all() []Scope {
 	return []Scope{{LibraryID: f.main.ID, AllowAll: true}, {LibraryID: f.other.ID, AllowAll: true}, {LibraryID: f.pods.ID, AllowAll: true}}
 }
 
+// book reads the fixture's book at path in lib.
+func (f *recordingsFixture) book(t *testing.T, lib int64, path string) *Book {
+	t.Helper()
+	b, err := f.c.GetBookByPath(f.ctx, lib, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // TestBookWorkID: every read of a book carries its work key, a recorded match
 // first, else the work its identifiers resolved to, else none.
 func TestBookWorkID(t *testing.T) {
@@ -150,10 +161,7 @@ func TestBookWorkIDFollowsIdentifiers(t *testing.T) {
 	f := newRecordingsFixture(t)
 	retag := func(lib int64, path, asin string) {
 		t.Helper()
-		b, err := f.c.GetBookByPath(f.ctx, lib, path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		b := f.book(t, lib, path)
 		b.ASIN = asin
 		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
 			t.Fatal(err)
@@ -161,11 +169,7 @@ func TestBookWorkIDFollowsIdentifiers(t *testing.T) {
 	}
 	work := func(lib int64, path string) string {
 		t.Helper()
-		b, err := f.c.GetBookByPath(f.ctx, lib, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b.WorkID
+		return f.book(t, lib, path).WorkID
 	}
 	retag(f.main.ID, "Kemper/One", " b0kemper ")
 	if got := work(f.main.ID, "Kemper/One"); got != "w-one" {
@@ -179,11 +183,7 @@ func TestBookWorkIDFollowsIdentifiers(t *testing.T) {
 	if got := work(f.main.ID, "Bray/One"); got != "w-one" {
 		t.Fatalf("retagged with a recorded match: work %q, want w-one", got)
 	}
-	me, err := f.c.GetBookByPath(f.ctx, f.main.ID, "Bray/One")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
+	got, err := f.c.OtherRecordings(f.ctx, f.all(), f.book(t, f.main.ID, "Bray/One"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,14 +199,15 @@ func TestIDKeyExpr(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	for _, tc := range []struct{ asin, isbn string }{
 		{"B00FLIJJSY", ""}, {" b00flijjsy\t", "9780553418026"}, {"", "978-0-553-41802-6"},
-		{"  ", " 978 0553 41802x\n"}, {"", "0-553-41802-X"},
+		{"  ", " 978 0553 41802x\n"}, {"", "0-553-41802-X"}, {" ", " - "},
 	} {
-		var got string
+		var key sql.NullString
 		if err := c.db.QueryRowContext(ctx, `SELECT `+idKeyExpr("b")+` FROM (SELECT ? AS asin, ? AS isbn) b`,
-			tc.asin, tc.isbn).Scan(&got); err != nil {
+			tc.asin, tc.isbn).Scan(&key); err != nil {
 			t.Fatal(err)
 		}
-		if want := meta.IDKey(tc.asin, tc.isbn); got != want {
+		// No identifiers: NULL, which equals no stored key, for meta.IDKey's "".
+		if got, want := key.String, meta.IDKey(tc.asin, tc.isbn); got != want {
 			t.Errorf("idKeyExpr(%q, %q) = %q, want %q", tc.asin, tc.isbn, got, want)
 		}
 	}
@@ -220,15 +221,7 @@ func TestIDKeyExpr(t *testing.T) {
 func TestOtherRecordings(t *testing.T) {
 	t.Parallel()
 	f := newRecordingsFixture(t)
-	book := func(lib int64, path string) *Book {
-		t.Helper()
-		b, err := f.c.GetBookByPath(f.ctx, lib, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	me := book(f.main.ID, "Bray/One")
+	me := f.book(t, f.main.ID, "Bray/One")
 
 	got, err := f.c.OtherRecordings(f.ctx, f.all(), me)
 	if err != nil {
@@ -253,7 +246,7 @@ func TestOtherRecordings(t *testing.T) {
 	}
 
 	// Seen from the second library: its own library first.
-	got, err = f.c.OtherRecordings(f.ctx, f.all(), book(f.other.ID, "Abridged/One"))
+	got, err = f.c.OtherRecordings(f.ctx, f.all(), f.book(t, f.other.ID, "Abridged/One"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +259,9 @@ func TestOtherRecordings(t *testing.T) {
 		scopes []Scope
 		book   *Book
 	}{
-		{f.all(), book(f.main.ID, "Else/Three")},
+		{f.all(), f.book(t, f.main.ID, "Else/Three")},
 		{nil, me},
-		{f.all(), book(f.main.ID, "Rematched/Two")},
+		{f.all(), f.book(t, f.main.ID, "Rematched/Two")},
 	} {
 		if got, err := f.c.OtherRecordings(f.ctx, tc.scopes, tc.book); err != nil || len(got) != 0 {
 			t.Fatalf("OtherRecordings(%s) = %q, %v", tc.book.RelPath, relPaths(got), err)

@@ -886,11 +886,10 @@ func normISBNSQL(col string) string {
 
 // idKeyExpr is the SQL of meta.IDKey over the book t's identifiers: the key the
 // upcoming releases job stores a resolution under (upcoming_owned.id_key), "a:"
-// and the normalized ASIN, else "i:" and the normalized ISBN. A book with
-// neither has "i:", which no stored key is.
+// and the normalized ASIN, else "i:" and the normalized ISBN, else NULL (equal
+// to no stored key).
 func idKeyExpr(t string) string {
-	return `CASE WHEN ` + normASINSQL(t+`.asin`) + ` <> '' THEN 'a:' || ` + normASINSQL(t+`.asin`) +
-		` ELSE 'i:' || ` + normISBNSQL(t+`.isbn`) + ` END`
+	return `COALESCE('a:' || NULLIF(` + normASINSQL(t+`.asin`) + `, ''), 'i:' || NULLIF(` + normISBNSQL(t+`.isbn`) + `, ''))`
 }
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
