@@ -113,14 +113,25 @@ const (
 	historyJoinGap     = 60 * time.Second
 	historyJoinOverlap = 2 * time.Second
 	historyJoinPos     = 5.0
+	// staySlack: a Stay (start "stay") beats the other device's listening only
+	// when that listening ended no more than this after the Stay's span did
+	// (resolveListen, staysWin): a Stay made offline long ago is a plain jump.
+	staySlack = 2 * time.Minute
 )
 
 var syncEventID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // listenStarts are a listen span's start kinds: how the span began. resume and
 // continue never move the place back (resume_behind); the others are a
-// deliberate move.
-var listenStarts = map[string]bool{"resume": true, "continue": true, "moved_back": true, "jump": true, "restart": true}
+// deliberate move. stay (capability listening_stay, 0080) is the listener's
+// Stay on another device's offer: a jump that wins over that device's writes
+// since the offer (resolveListen).
+var listenStarts = map[string]bool{"resume": true, "continue": true, "moved_back": true, "jump": true, "restart": true,
+	startStay: true}
+
+// startStay is a listen span's start when the listener answered another
+// device's offer with Stay.
+const startStay = "stay"
 
 // SyncEvent is one event of a batch as the player sends it. Listen spans carry
 // whole-book positions (FromPos, ToPos) and optionally the file places
@@ -575,6 +586,12 @@ type syncRow struct {
 	// finish or unfinish of its own after it), null unless recorded at the row's
 	// current version (0062): that device's chain (chainOf).
 	spanAt sql.NullString
+	// stayVersion is the version a Stay wrote (0080), null when none holds the
+	// row: the Stay's own device writing again keeps it, every other writer
+	// clears it. editVersion is the version of the row's last explicit write
+	// that is not listening (a PATCH, an import's apply or undo, a move or join,
+	// a sync finish or unfinish), null when none.
+	stayVersion, editVersion sql.NullInt64
 }
 
 func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
@@ -582,11 +599,12 @@ func (s *syncRun) row(ctx context.Context, key Ref) (*syncRow, error) {
 	err := s.tx.QueryRowContext(ctx,
 		`SELECT position, duration, finished, version, device_id, device_name, updated_at, finish_changed_at,
 		        other_position, other_device_id, CASE WHEN other_position IS NULL THEN NULL ELSE other_version END,
-		        CASE WHEN span_version = version THEN span_at END
+		        CASE WHEN span_version = version THEN span_at END, stay_version, edit_version
 		   FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 		s.b.UserID, key.LibraryID, key.Path).
 		Scan(&r.position, &r.duration, &r.finished, &r.version, &r.deviceID, &r.deviceName, &r.updatedAt,
-			&r.finishChangedAt, &r.otherPosition, &r.otherDeviceID, &r.otherVersion, &r.spanAt)
+			&r.finishChangedAt, &r.otherPosition, &r.otherDeviceID, &r.otherVersion, &r.spanAt,
+			&r.stayVersion, &r.editVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -681,7 +699,7 @@ func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *sy
 		version = stored.version + 1
 		at = laterStamp(at, stored.updatedAt)
 	}
-	if err := s.writePlace(ctx, p, version, false, at); err != nil {
+	if err := s.writePlace(ctx, p, version, false, false, at); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -696,6 +714,14 @@ func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *sy
 // (base > 0, another device wrote the row since) is not a cold start: it was
 // real listening elsewhere, and ResolvePlace keeps the further place and offers
 // (and persists) the span's, which the backstop would drop.
+//
+// A Stay (start "stay", 0080) is the listener's answer to another device's
+// offer. S1: when it wins (staysWin) it applies over the row whatever the other
+// device wrote since the offer, clears the offered place and holds the row
+// (stay_version); otherwise it resolves as a jump. S2: while a Stay holds the
+// row, another device's span on a base below it (or none) never moves the
+// place: the row is kept and the span's place offered (heldByStay). A device
+// that saw the Stay (base at or above stay_version) resolves as before.
 func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syncRow, mine *ListeningOtherPlace) (SyncResult, error) {
 	key := p.target.Key
 	chainAt, chained := s.chainOf(stored)
@@ -712,6 +738,12 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	if v, ok := s.written[key]; ok && base != nil && *base == 0 {
 		base = &v
 	}
+	if p.ev.Start == startStay && s.staysWin(p, stored) {
+		if err := s.writePlace(ctx, p, stored.version+1, true, true, laterStamp(mine.UpdatedAt, stored.updatedAt)); err != nil {
+			return SyncResult{}, err
+		}
+		return SyncResult{Status: statusApplied}, nil
+	}
 	in := Place{Progression: p.to, DeviceID: s.b.DeviceID, UpdatedAt: mine.UpdatedAt, Version: 1}
 	var storedPlace *Place
 	if stored != nil {
@@ -723,6 +755,9 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		}
 	}
 	outcome := ResolvePlace(storedPlace, in, base)
+	if (outcome == PlaceApply || outcome == PlaceApplyDiverged) && s.heldByStay(stored, base) {
+		outcome = PlaceKeepStored
+	}
 	divergedFromSeen := (outcome == PlaceKeepStored || outcome == PlaceApplyDiverged) && base != nil && *base > 0
 	if (p.ev.Start == "resume" || p.ev.Start == "continue") && stored != nil && !stored.finished &&
 		p.to < stored.position-resumeBehindSlack && !divergedFromSeen {
@@ -763,7 +798,7 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	case PlaceApplyDiverged:
 		lost := &ListeningOtherPlace{Position: stored.position, DeviceID: stored.deviceID,
 			DeviceName: stored.deviceName, UpdatedAt: stored.updatedAt}
-		if err := s.writePlace(ctx, p, in.Version, false, rowAt); err != nil {
+		if err := s.writePlace(ctx, p, in.Version, false, false, rowAt); err != nil {
 			return SyncResult{}, err
 		}
 		if stored.deviceID != s.b.DeviceID && math.Abs(p.to-stored.position) > otherPlaceMin {
@@ -778,7 +813,7 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	// after the version it was recorded at.
 	sent := p.ev.BaseVersion
 	clear := stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64
-	if err := s.writePlace(ctx, p, in.Version, clear, rowAt); err != nil {
+	if err := s.writePlace(ctx, p, in.Version, clear, false, rowAt); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -789,8 +824,11 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 // row's), device, updatedAt and version, a start when none; never the finish
 // state. clear also drops the offered place. The span's end is the newest link of the device's chain, kept on the row at
 // version (span_at, span_version: chainOf) for its next span, in this POST or a
-// later one.
-func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear bool, updatedAt string) error {
+// later one. stay holds the row for a Stay that won (stay_version = version);
+// otherwise a Stay's hold is kept while the row stays this device's (the
+// Stay's own device writing again) and dropped when another device's place
+// replaces it.
+func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear, stay bool, updatedAt string) error {
 	key := p.target.Key
 	spanAt := formatSessionTime(p.ended)
 	if _, err := s.tx.ExecContext(ctx,
@@ -809,13 +847,50 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 		     other_device_name=CASE WHEN ?12 THEN NULL ELSE progress.other_device_name END,
 		     other_at=CASE WHEN ?12 THEN NULL ELSE progress.other_at END,
 		     other_version=CASE WHEN ?12 THEN NULL ELSE progress.other_version END,
-		     span_at=excluded.span_at, span_version=excluded.span_version`,
+		     span_at=excluded.span_at, span_version=excluded.span_version,
+		     stay_version=CASE WHEN ?16 THEN excluded.version
+		                       WHEN progress.device_id = excluded.device_id THEN progress.stay_version END`,
 		s.b.UserID, key.LibraryID, key.Path, p.to, p.length(), p.speed, version, s.b.DeviceID, s.b.DeviceName,
-		updatedAt, p.started.UTC().Format(time.RFC3339), clear, spanAt, version, s.b.FurthestOnly); err != nil {
+		updatedAt, p.started.UTC().Format(time.RFC3339), clear, spanAt, version, s.b.FurthestOnly, stay); err != nil {
 		return err
 	}
 	s.written[key] = version
 	return nil
+}
+
+// staysWin reports whether a Stay span wins over the row (S1, 0080): its base
+// as sent is a version this device saw (above 0, at most the row's), the row is
+// not finished, no other device's Stay holds it at a version above that base,
+// no explicit non-listening write (editVersion: a PATCH, an import, a move or
+// join, a finish or unfinish) came after that base, and the row's time (its
+// device's last span end, span_at, else updated_at) is no more than staySlack
+// after the Stay's end: listening that went on longer after the Stay, or a Stay
+// made offline long ago, is not beaten. A PUT is an old app's listening, not an
+// edit, so only its time counts.
+func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
+	sent := p.ev.BaseVersion
+	switch {
+	case stored == nil || sent == nil || *sent <= 0 || *sent > stored.version || stored.finished:
+		return false
+	case stored.stayVersion.Valid && stored.deviceID != s.b.DeviceID && stored.stayVersion.Int64 > *sent:
+		return false
+	case stored.editVersion.Valid && stored.editVersion.Int64 > *sent:
+		return false
+	}
+	rowAt := stored.updatedAt
+	if stored.spanAt.Valid {
+		rowAt = stored.spanAt.String
+	}
+	t, err := time.Parse(time.RFC3339Nano, rowAt)
+	return err == nil && !t.After(p.ended.Add(staySlack))
+}
+
+// heldByStay reports whether another device's Stay holds the row against this
+// span (S2, 0080): the span's base (after in-batch chaining) is below the
+// Stay's version, or none was sent, so the span was made without seeing it.
+func (s *syncRun) heldByStay(stored *syncRow, base *int64) bool {
+	return stored != nil && stored.stayVersion.Valid && stored.deviceID != s.b.DeviceID &&
+		(base == nil || *base < stored.stayVersion.Int64)
 }
 
 // chainOf is this device's span chain on the row (server#289, 0062): the end of
@@ -883,7 +958,9 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // ends later or the row's time is later than the change; an unfinish of
 // another device's unfinished row takes nothing, so this device's next base-0
 // span still diverges from that row. An unfinish with no row has nothing to
-// change (applied, nothing written).
+// change (applied, nothing written). Both are explicit writes, not listening:
+// they end a Stay's hold (stay_version) and record their version as the row's
+// edit_version, so a Stay made before them is a plain jump (0080, staysWin).
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
 	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
@@ -911,8 +988,8 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		if _, err := s.tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
 			     version, device_id, device_name, updated_at, started_at, finished_at, finish_changed_at,
-			     span_at, span_version)
-			 VALUES(?,?,?,?,?,1,1,1,?,?,?,?,?,?,?,1)`,
+			     span_at, span_version, edit_version)
+			 VALUES(?,?,?,?,?,1,1,1,?,?,?,?,?,?,?,1,1)`,
 			s.b.UserID, key.LibraryID, key.Path, duration, duration, s.b.DeviceID, s.b.DeviceName, at, day, day,
 			at, at); err != nil {
 			return SyncResult{}, err
@@ -953,7 +1030,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			     position = CASE WHEN ?2 > 0 THEN ?2 ELSE position END,
 			     duration = CASE WHEN ?2 > 0 THEN ?2 ELSE duration END,
 			     version = ?3, device_id = ?4, device_name = ?5, updated_at = ?6, finish_changed_at = ?7,
-			     span_at = ?11, span_version = ?12,
+			     span_at = ?11, span_version = ?12, stay_version = NULL, edit_version = ?3,
 			     `+clearOtherPlace+`
 			  WHERE user_id = ?8 AND library_id = ?9 AND rel_path = ?10`,
 			day, duration, version, s.b.DeviceID, s.b.DeviceName, updated, at,
@@ -966,9 +1043,9 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		_, err = s.tx.ExecContext(ctx,
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
 			     updated_at = ?, finish_changed_at = ?,
-			     span_at = ?, span_version = ?
+			     span_at = ?, span_version = ?, stay_version = NULL, edit_version = ?
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-			version, device, name, updated, at, chainAt, chainVersion, s.b.UserID, key.LibraryID, key.Path)
+			version, device, name, updated, at, chainAt, chainVersion, version, s.b.UserID, key.LibraryID, key.Path)
 	}
 	if err != nil {
 		return SyncResult{}, err

@@ -235,15 +235,16 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 		stamp := formatSessionTime(now)
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at)
-			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,`+finishChangedValue+`)
+			     playback_speed, version, device_id, updated_at, started_at, finished_at, finish_changed_at,
+			     edit_version)
+			 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,`+finishChangedValue+`,?8)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, finished=excluded.finished, version=excluded.version,
 			     device_id=excluded.device_id,
 			     device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name ELSE '' END,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at,
-			     `+finishChangedSet+`, `+endSpanChain+`,
+			     `+finishChangedSet+`, `+endSpanChain+`, `+editVersionSet+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
 			p.Version+1, p.DeviceID, stamp, started, finished, stamp)

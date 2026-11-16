@@ -3734,7 +3734,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   is stored on the row (`other_*`; `other_version` = the version written when the event's place is kept, else
   the row's next one, since the row's own device acknowledged its current version before the offer existed)
   unless it is the kept row's device or within 30 s; it is cleared by a non-diverged apply whose base as sent
-  (never the in-batch chaining's) is at or after `other_version`, a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
+  (never the in-batch chaining's) is at or after `other_version`, a Stay that wins (below), a finish, an edit, or a move/join. A listen writes position, duration, speed, device, `device_name` (the token's),
   `updated_at` (the corrected end, or the row's own when that is later: a diverged apply never moves it back, so
   an old app's PUT dated in between can't win, server#284; the device's later spans then compare with the end
   of its own last span, or of a finish or unfinish of its own after it, `span_at`: the chain below), version + 1, never the finish. finish/unfinish apply only when newer than
@@ -3773,6 +3773,23 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   back in, but also a backlog that resumes after a pause and a seek: one POST would have chained it). Every
   other writer ends the chain (`endSpanChain`: the PUT, which can keep the client's version, `EditProgress`, an
   import's apply and undo, a move or join). An Audible account's batch is furthest only (`SyncBatch.FurthestOnly`, see Audible sync).
+  **Stay wins** (row 9c-2, capability `listening_stay`, migration `0080`, `listening_sync_stay_test.go`): a listen's
+  `start` may be `stay`, the listener's Stay on another device's offer (a player sends it only when `/server` says
+  `listening_stay`: an older server's strict decoder refuses the start as `invalid`). In `resolveListen`, never
+  `ResolvePlace` (the reader is unchanged): **S1** (`staysWin`) a Stay applies over the row (its place, this device,
+  the offer cleared, `progress.stay_version` = the version it writes) when its base as sent is above 0 and at most
+  the row's version, the row is not finished, no other device's Stay holds the row at a version above that base, no
+  explicit non-listening write came after that base (`progress.edit_version`: the version an `EditProgress`, an
+  import's apply or undo (`progressUpsert`), a move or join (`carryProgress`) or a sync finish or unfinish wrote;
+  `editVersionSet`), and the row's time (`span_at` at its version, else `updated_at`) is no more than `staySlack`
+  (2 min) after the Stay's corrected end; otherwise it resolves as a `jump`. A `PUT` is an old app's listening, not
+  an edit: it sets no `edit_version`, so a PUT since the offer does not stop a Stay (only its time counts). **S2**
+  (`heldByStay`) while `stay_version` is set, another device's span on a base below it, or none (after in-batch
+  chaining), never moves the place: an apply becomes kept-stored, its place offered (`setOther`); a device whose
+  base is at or above it saw the Stay and resolves as before. The Stay's own device writing again keeps the hold
+  (`writePlace` keeps `stay_version` while the row stays its device's); every other writer clears it: another
+  device's applied span (an Audible furthest-only place too), `endSpanChain` (PUT, PATCH, an import's apply and
+  undo, a move or join) and a finish or unfinish.
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and

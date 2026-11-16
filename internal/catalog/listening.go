@@ -257,8 +257,16 @@ const (
 // not a sync span's (a PUT, an edit, an import, a move): the row no longer
 // holds a device's last applied span, so its device's next sync span compares
 // with updated_at again (span_at, 0062; see chainOf). A PUT may keep the
-// version, so the version check alone wouldn't end it.
-const endSpanChain = `span_at=NULL, span_version=NULL`
+// version, so the version check alone wouldn't end it. It also ends a Stay's
+// hold on the row (stay_version, 0080: another writer replaced its place).
+const endSpanChain = `span_at=NULL, span_version=NULL, stay_version=NULL`
+
+// editVersionSet is the ON CONFLICT assignment of every explicit progress write
+// that is not listening (an edit, an import's apply or undo, a move or join;
+// never a PUT, an old app's listening): the row's edit_version is the version
+// it writes, so a Stay made on a base below it is a plain jump (0080,
+// staysWin). Each also inserts edit_version as its version.
+const editVersionSet = `edit_version=excluded.edit_version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
 // records as finish_changed_at (and a PUT's event time): the write's own
@@ -613,17 +621,17 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at, device_name,
-			     finish_changed_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			     finish_changed_at, edit_version)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 			     position=excluded.position, duration=excluded.duration, finished=excluded.finished,
 			     playback_speed=excluded.playback_speed, version=excluded.version,
 			     device_id=excluded.device_id, updated_at=excluded.updated_at,
 			     started_at=excluded.started_at, finished_at=excluded.finished_at,
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
-			     `+endSpanChain+`, `+clearOtherPlace,
+			     `+endSpanChain+`, `+editVersionSet+`, `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
-			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged); err != nil {
+			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, p.Version); err != nil {
 			return err
 		}
 	}
