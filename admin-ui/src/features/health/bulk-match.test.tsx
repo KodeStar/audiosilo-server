@@ -1265,6 +1265,35 @@ describe('bulk matching', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('drops the length line once the book reads as long as the recording (server#355)', async () => {
+    const sameNow: MatchRunItem = {
+      ...doubtful,
+      detail: 'length_differs',
+      proposal: { ...doubtful.proposal, runtime_min: 37 },
+      // The book's length as it is now: it changed since the run held the item.
+      book: { title: 'Artemis', author: 'Andy Weir', duration: 37 * 60 + 10 },
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'review' ? [sameNow] : [confident],
+            next_after: 0,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /To review/ }));
+    const row = (await within(dialog).findByRole('checkbox', { name: 'Apply to Artemis' })).closest(
+      'li',
+    )!;
+    expect(within(row).queryByText(/^Held for review: the book is/)).not.toBeInTheDocument();
+  });
+
   it('says nothing about length for an item held only for its score', async () => {
     mockFetch(routes([run()]));
     const user = userEvent.setup();

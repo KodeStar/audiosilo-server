@@ -789,6 +789,16 @@ function ItemRow({
   );
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
+  // An item held for its length says both, the book's as it is now: none once
+  // they read the same (the book's length changed since the run, server#355).
+  const lengths =
+    item.detail === 'length_differs' && p.runtime_min && item.book.duration
+      ? {
+          book: formatDuration(item.book.duration, lang),
+          recording: formatDuration(p.runtime_min * 60, lang),
+        }
+      : undefined;
+  const heldForLength = lengths && lengths.book !== lengths.recording ? lengths : undefined;
   const seriesLine = (refs: SeriesRef[]) =>
     refs
       .map((r) => seriesLabel(r.name, r.position, lang, t, r.position_end))
@@ -888,12 +898,9 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && item.detail === 'length_differs' && p.runtime_min && item.book.duration ? (
+        {candidate && heldForLength ? (
           <span className="text-[12.5px] text-warning [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.item.lengthDiffers', {
-              book: formatDuration(item.book.duration, lang),
-              recording: formatDuration(p.runtime_min * 60, lang),
-            })}
+            {t('health.bulkMatch.item.lengthDiffers', heldForLength)}
           </span>
         ) : null}
         {candidate && item.detail === 'identifier_disagrees' ? (
