@@ -426,13 +426,11 @@ func mintGrownUpCredentials(t *testing.T, s *Service, ctx context.Context) grown
 	// own (no created_on_token_id), as the session id a request carries.
 	sessionOn := func(member, on int64) int64 {
 		t.Helper()
-		tok := ""
-		var err error
 		if on == 0 {
-			tok, err = s.IssueToken(ctx, member, KindSession, "own phone", 0)
-		} else {
-			tok, _, err = s.MemberSession(ctx, owner.ID, member, "here", on)
+			_, id := mustSession(t, s, ctx, member, "own phone")
+			return id
 		}
+		tok, _, err := s.MemberSession(ctx, owner.ID, member, "here", on)
 		if err != nil {
 			t.Fatal(err)
 		}

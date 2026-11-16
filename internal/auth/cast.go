@@ -213,9 +213,11 @@ func (s *Service) issueCastToken(ctx context.Context, use castUse, userID, paren
 		// The caps, among the person's tokens of this use only (every cast
 		// token has a grant by now: the prune above deleted any without one):
 		// all but the newest use.keep of this sending token's go, then all but
-		// the person's newest use.perPerson.
-		if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID); err != nil {
-			return err
+		// the person's newest use.perPerson (alone when it is no larger).
+		if use.keep < use.perPerson {
+			if _, err := tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.keep, parentTokenID); err != nil {
+				return err
+			}
 		}
 		_, err = tx.ExecContext(ctx, trimCastTokensSQL, userID, use.editor, use.perPerson, 0)
 		return err

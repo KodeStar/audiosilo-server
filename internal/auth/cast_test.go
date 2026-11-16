@@ -50,22 +50,8 @@ func castSender(t *testing.T, s *Service, ctx context.Context, name string) (*Us
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, id := signInDevice(t, s, ctx, u.ID, "phone")
+	sess, id := mustSession(t, s, ctx, u.ID, "phone")
 	return u, sess, id
-}
-
-// signInDevice signs userID in on a device: the session's secret and token id.
-func signInDevice(t *testing.T, s *Service, ctx context.Context, userID int64, device string) (string, int64) {
-	t.Helper()
-	sess, err := s.IssueToken(ctx, userID, KindSession, device, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cred, err := s.ResolveRequest(ctx, sess, Presence{}, KindSession)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sess, cred.ID
 }
 
 // resolveCast resolves secret as a book media request on (3, path), the way the
@@ -293,7 +279,7 @@ func TestCastTokenCapPerDevice(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
 	sam, _, phone := castSender(t, s, ctx, "sam")
-	_, tablet := signInDevice(t, s, ctx, sam.ID, "tablet")
+	_, tablet := mustSession(t, s, ctx, sam.ID, "tablet")
 	playing, _, err := s.IssueCastToken(ctx, sam.ID, phone, 3, "Author/Book")
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +314,7 @@ func TestCastTokenCapPerPerson(t *testing.T) {
 	sam, _, first := castSender(t, s, ctx, "sam")
 	devices := []int64{first}
 	for len(devices)*maxCastTokens <= maxCastTokensPerPerson {
-		_, d := signInDevice(t, s, ctx, sam.ID, "device")
+		_, d := mustSession(t, s, ctx, sam.ID, "device")
 		devices = append(devices, d)
 	}
 	var oldest string
