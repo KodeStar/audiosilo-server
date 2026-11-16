@@ -875,11 +875,14 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 // as sent is a version this device saw (above 0, at most the row's), the row is
 // not finished, no other device's Stay holds it at a version above that base,
 // no explicit non-listening write (editVersion, explicitWriteSet) came after
-// that base, and the row's time (its device's last span end, span_at, else
-// updated_at) is no more than staySlack after the Stay's end: listening that
-// went on longer after the Stay, or a Stay made offline long ago, is not
-// beaten. A PUT is an old app's listening, not an edit, so only its time
-// counts.
+// that base, and the row's time is no more than staySlack after the Stay's end:
+// listening that went on longer after the Stay, or a Stay made offline long
+// ago, is not beaten. The row's time is its updated_at, which never moves back
+// and is never before its device's last span end (writePlace, finish), not
+// that end (span_at): a place that ended long ago and was applied over newer
+// listening (a late backlog further on, an Audible place) leaves span_at old
+// on a row heard since, which an old Stay must not beat. A PUT is an old app's
+// listening, not an edit, so only its time counts.
 func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	sent := p.ev.BaseVersion
 	switch {
@@ -890,11 +893,7 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	case stored.editVersion.Valid && stored.editVersion.Int64 > *sent:
 		return false
 	}
-	rowAt := stored.updatedAt
-	if stored.spanAt.Valid {
-		rowAt = stored.spanAt.String
-	}
-	t, ok := ParseStamp(rowAt)
+	t, ok := ParseStamp(stored.updatedAt)
 	return ok && !t.After(p.ended.Add(staySlack))
 }
 

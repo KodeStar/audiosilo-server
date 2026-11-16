@@ -3781,7 +3781,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the row's version, the row is not finished, no other device's Stay holds the row at a version above that base, no
   explicit non-listening write came after that base (`progress.edit_version`: the version an `EditProgress`, an
   import's apply or undo (`progressUpsert`), a move or join (`carryProgress`) or a sync finish or unfinish wrote;
-  `explicitWriteSet`), and the row's time (`span_at` at its version, else `updated_at`) is no more than `staySlack`
+  `explicitWriteSet`), and the row's time (`updated_at`, never `span_at`: an old place applied over newer listening,
+  a late backlog further on or an Audible place, keeps the later `updated_at`) is no more than `staySlack`
   (2 min) after the Stay's corrected end; otherwise it resolves as a `jump`. A `PUT` is an old app's listening, not
   an edit: it sets no `edit_version`, so a PUT since the offer does not stop a Stay (only its time counts). **S2**
   (`heldByStay`) while `stay_version` is set, another device's span on a base below it, or none (after in-batch

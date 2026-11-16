@@ -116,6 +116,36 @@ func TestSyncStaySlack(t *testing.T) {
 	}
 }
 
+// The slack is measured from the row's time (updated_at), not the end of the
+// span whose place it holds: a place that ended long ago, applied over the
+// watch's listening of a minute ago (the watch's own late backlog further on,
+// an Audible place), leaves the row heard since, so an old offline Stay is
+// still a plain jump.
+func TestSyncStaySlackAfterAnOldPlaceApplied(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		apply func(t *testing.T, f *syncFixture)
+	}{
+		{"backlog", func(t *testing.T, f *syncFixture) {
+			res := f.syncOne(t, "watch", f.listen("resume", 30000, 30600, 3*time.Hour, base(0)))
+			if res.Status != statusDiverged || res.Kept != "event" {
+				t.Fatalf("the watch's late backlog: %+v", res)
+			}
+		}},
+		{"audible", func(t *testing.T, f *syncFixture) {
+			wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(30600, 3*time.Hour))).Results[0], statusApplied, "")
+		}},
+	} {
+		f := stayFixture(t, time.Minute)
+		tc.apply(t, f)
+		wantKept(t, f.syncOne(t, "phone", f.stay(18000, 2*time.Hour, base(2))))
+		if p := f.progress(t); p.Position != 30600 || f.stayVersion(t, f.book) != 0 {
+			t.Fatalf("%s: an old Stay moved a row heard since: %+v stay %d", tc.name, p, f.stayVersion(t, f.book))
+		}
+	}
+}
+
 // S2: after the Stay, the watch's spans on a base below it (its backlog, an
 // old offline resume, a span sent with no base) are kept out and offered,
 // while the phone's own continues apply and keep the hold. The watch's first
