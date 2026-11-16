@@ -302,6 +302,17 @@ func TestPlaceOwned(t *testing.T) {
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
+
+	// requested is placed on env's work's entry whatever its own work id, so
+	// its identifiers are never looked up: the store is not read for it.
+	fresh := NewService("http://meta.invalid", nil)
+	fresh.SetStore(store)
+	loads := store.loads.Load()
+	mine := []LocalBook{{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/1"}, Series: "S", SeriesIndex: 1, ASIN: "B0REQUESTED"}}
+	got = locals(fresh.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, mine)[0].Works)
+	if want := []string{"S/1", "", ""}; !reflect.DeepEqual(got, want) || store.loads.Load() != loads {
+		t.Fatalf("requested: placed %q (want %q), store reads %d", got, want, store.loads.Load()-loads)
+	}
 }
 
 func TestRailOrder(t *testing.T) {
