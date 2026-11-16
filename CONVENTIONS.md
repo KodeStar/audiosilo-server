@@ -3790,7 +3790,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   chaining), never moves the place: an apply becomes kept-stored, its place offered (`setOther`); a device whose
   base is at or above it saw the Stay and resolves as before. The Stay's own device writing again keeps the hold
   (`writePlace` keeps `stay_version` while the row stays its device's); every other writer clears it: another
-  device's applied span (an Audible furthest-only place too), `endSpanChain` (PUT, PATCH, an import's apply and
+  device's applied span (an Audible furthest-only place heard after the held row's time too), `endSpanChain` (PUT, PATCH, an import's apply and
   undo, a move or join) and a finish or unfinish (not an unfinish of a row that isn't finished: it changes nothing,
   so it keeps the hold and records no `edit_version`).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
@@ -3951,7 +3951,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the row's `updated_at` never moves back, its playback speed and offer kept; the player's own reconcile then moves
   or offers, and a device's diverged span offers Audible's place by name); at or behind it, or on a finished row,
   `not_applied` `behind` (no offer, nothing stored on the row), and so is a listen heard at or before the row's
-  `finish_changed_at` (a place from before a finish or a restart here is the old reading's); a place past the book's end by more than 5% plus 2
+  `finish_changed_at` (a place from before a finish or a restart here is the old reading's), and so is one heard at
+  or before the `updated_at` of a row a Stay holds (`beforeStay`, `stay_version` set: the listener chose that place, and
+  the other device's earlier place must not come back through Audible, server#415); a place past the book's end by more than 5% plus 2
   min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
   is the end; an unfinish is `behind`; a finish is any finish. The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under

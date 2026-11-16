@@ -48,7 +48,8 @@ const (
 	reasonOlder        = "older"
 	reasonResumeBehind = "resume_behind"
 	// reasonBehind: a furthest-only batch's (SyncBatch.FurthestOnly) place not
-	// ahead of the stored one, or its unfinish: never applied, never offered.
+	// ahead of the stored one (or from before a restart or a held Stay), or its
+	// unfinish: never applied, never offered.
 	reasonBehind = "behind"
 	// SyncInvalid, SyncNoAccess and SyncNotFound are also a SyncTarget's
 	// reason: the handler decides them while resolving an event's path.
@@ -272,7 +273,8 @@ type SyncBatch struct {
 	// whatever its time, keeping the row's playback speed (Audible sends none),
 	// else it is not_applied "behind" with no offer (a finished row is at its
 	// end; a place heard at or before the row's finish_changed_at is from
-	// before a finish or restart here); a place far past the book's end (furthestPastEndRatio) is rejected
+	// before a finish or restart here, and one heard at or before a held
+	// Stay's row time from before the listener chose it, beforeStay); a place far past the book's end (furthestPastEndRatio) is rejected
 	// duration_mismatch, one just past it is the end; an unfinish is "behind"
 	// too; a finish applies as any finish. Its spans are a place only: no
 	// listening session, daily roll-up or history is recorded (owner decision
@@ -682,17 +684,20 @@ func (s *syncRun) listen(ctx context.Context, p syncPrepared) (SyncResult, error
 }
 
 // furthestListen is a furthest-only batch's listen (SyncBatch.FurthestOnly):
-// behind (or at) the stored place, on a finished row, or heard at or before
-// the row's last finish or unfinish (finish_changed_at: a place from before a
-// restart here is the old reading's, not this one's), it is not applied and
-// offers nothing; ahead it is written whatever device or time the row has
-// (the player's own reconcile then moves or offers), the row's time never
-// moving back, its speed and its offered place kept. No listening is recorded.
+// behind (or at) the stored place, on a finished row, heard at or before the
+// row's last finish or unfinish (finish_changed_at: a place from before a
+// restart here is the old reading's, not this one's), or heard at or before
+// the time of a row a Stay holds (stay_version: the listener chose that place
+// over the other device's, whose earlier place may come back through Audible,
+// server#415), it is not applied and offers nothing; ahead it is written
+// whatever device or time the row has (the player's own reconcile then moves
+// or offers), the row's time never moving back, its speed and its offered
+// place kept. No listening is recorded.
 func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *syncRow, at string) (SyncResult, error) {
 	version := int64(1)
 	if stored != nil {
 		beforeRestart := stored.finishChangedAt.Valid && !p.ended.After(parseSessionTime(stored.finishChangedAt.String))
-		if stored.finished || beforeRestart || p.to <= stored.position+furthestSlack {
+		if stored.finished || beforeRestart || beforeStay(p, stored) || p.to <= stored.position+furthestSlack {
 			return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
 		}
 		version = stored.version + 1
@@ -895,6 +900,17 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	}
 	t, ok := ParseStamp(stored.updatedAt)
 	return ok && !t.After(p.ended.Add(staySlack))
+}
+
+// beforeStay reports whether a Stay holds the row (stay_version) and the span
+// ended at or before the row's time (the Stay's, or its device's write since):
+// a furthest-only place from before the listener chose the held place.
+func beforeStay(p syncPrepared, stored *syncRow) bool {
+	if !stored.stayVersion.Valid {
+		return false
+	}
+	t, ok := ParseStamp(stored.updatedAt)
+	return ok && !p.ended.After(t)
 }
 
 // heldByStay reports whether another device's Stay holds the row against this

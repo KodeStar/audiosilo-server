@@ -346,6 +346,32 @@ func TestSyncStayClearedByOtherWriters(t *testing.T) {
 	}
 }
 
+// server#415: an Audible place heard at or before the held row's time (the
+// Stay's, 4 minutes ago) is refused like one before a restart, however far
+// ahead: it is from before the listener chose the held place (the watch's
+// pre-Stay place echoed back through Audible). The row and its hold stay. One
+// heard after it applies (furthest wins) and ends the hold.
+func TestSyncAudiblePlaceBeforeAStay(t *testing.T) {
+	t.Parallel()
+	f := stayFixture(t, 5*time.Minute)
+	f.phoneStays(t)
+	for _, ago := range []time.Duration{5 * time.Minute, 4 * time.Minute} {
+		wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, ago))).Results[0], statusNotApplied, reasonBehind)
+		if p := f.progress(t); p.Position != 18000 || p.DeviceID != "phone" || f.stayVersion(t, f.book) != 5 {
+			t.Fatalf("an Audible place %v ago moved the held row: %+v stay %d", ago, p, f.stayVersion(t, f.book))
+		}
+	}
+	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, 3*time.Minute))).Results[0], statusApplied, "")
+	if p := f.progress(t); p.Position != 40000 || f.stayVersion(t, f.book) != 0 {
+		t.Fatalf("an Audible place after the Stay: %+v stay %d", p, f.stayVersion(t, f.book))
+	}
+
+	// Without a hold the same dated place still applies (furthest wins, as
+	// before): the rule is the Stay's, not the row's time.
+	g := stayFixture(t, 5*time.Minute)
+	wantResult(t, g.sync(t, g.audibleBatch(t, g.audiblePlace(40000, 6*time.Minute))).Results[0], statusApplied, "")
+}
+
 // editTo18100 is a PATCH of the fixture's row to 18100.
 func editTo18100(t *testing.T, f *syncFixture) {
 	t.Helper()
