@@ -198,6 +198,37 @@ describe('the chapter editor', () => {
     expect((puts(calls)[0].body as ChapterEditRequest).chapters[1].start).toBe(1500.25);
   });
 
+  it('mints a new token once when the audio fails, then says it can’t play', async () => {
+    // The token held may have run out (four hours) or been dropped by the cap.
+    let n = 0;
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'POST /cast/token': () => ({
+          status: 201,
+          body: { token: `media-tok-${++n}`, expires_at: 'x' },
+        }),
+      }),
+    );
+    const { container } = renderApp(URL);
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: 'Listen from chapter 2' }));
+    await waitFor(() => expect(container.querySelector('audio')).not.toBeNull());
+    const mints = () => calls.filter((c) => c.path === '/cast/token');
+    expect(mints()).toHaveLength(1);
+
+    fireEvent.error(container.querySelector('audio')!);
+    await waitFor(() =>
+      expect(container.querySelector('audio')?.getAttribute('src')).toContain('media-tok-2'),
+    );
+    expect(mints()).toHaveLength(2);
+    expect(screen.queryByText(/The audio didn’t load/)).not.toBeInTheDocument();
+
+    // The new token fails too: the file can't play, and no third mint.
+    fireEvent.error(container.querySelector('audio')!);
+    expect(await screen.findByText(/The audio didn’t load/)).toBeInTheDocument();
+    expect(mints()).toHaveLength(2);
+  });
+
   it('asks before discarding unsaved changes', async () => {
     mockFetch(routes(bookDetail()));
     renderApp(URL);

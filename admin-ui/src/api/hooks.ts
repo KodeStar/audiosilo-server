@@ -996,7 +996,8 @@ const MEDIA_TOKEN_FRESH_MS = 2 * 60 * 60 * 1000;
  * four hours and is kept while the editor is open (a new one would reload the audio
  * mid-scrub, so neither the window's focus nor a reconnect asks again), then
  * dropped five minutes after; an editor opened on one two hours old asks for
- * another. A failed mint isn't retried (the player says so).
+ * another. A failed mint isn't retried (the player says so); audio that fails to
+ * load mints again once (the token may have run out or been capped away).
  */
 export function useBookMediaToken(libraryId: number, path: string) {
   return useQuery({

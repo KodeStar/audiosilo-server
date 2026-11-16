@@ -462,6 +462,10 @@ function Scrubber({
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Whether a failed load has already asked for a new token: the one held may
+  // have run out (four hours) or been dropped by the cap on editor tokens (a
+  // sixth book's editor), so the first failure mints again before giving up.
+  const reminted = useRef(false);
   const target = row ? toFileTime(spans, row.start) : undefined;
   const span = target?.span;
   const offset = target?.offset ?? 0;
@@ -533,6 +537,7 @@ function Scrubber({
           preload="metadata"
           onLoadedMetadata={(e) => {
             setFailed(false);
+            reminted.current = false;
             if (pending.current !== null) {
               e.currentTarget.currentTime = pending.current;
               pending.current = null;
@@ -542,7 +547,14 @@ function Scrubber({
           onSeeked={(e) => setPos(e.currentTarget.currentTime)}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
-          onError={() => setFailed(true)}
+          onError={() => {
+            if (reminted.current) {
+              setFailed(true);
+              return;
+            }
+            reminted.current = true;
+            void token.refetch();
+          }}
         />
       ) : null}
       <input
