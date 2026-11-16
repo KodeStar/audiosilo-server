@@ -872,14 +872,18 @@ func workIDExpr(t string) string {
 		   AND wo.id_key = ` + idKeyExpr(t) + `), '')`
 }
 
-// sqlSpace is the white space normASINSQL and normISBNSQL trim, as
-// strings.TrimSpace does in ASCII.
-const sqlSpace = `' ' || char(9, 10, 11, 12, 13)`
+// sqlSpace is the white space normASINSQL and normISBNSQL trim: every rune
+// strings.TrimSpace trims (unicode.IsSpace: ASCII's six, NEL, NBSP and the
+// Unicode spaces), so a key never differs from meta.IDKey's by white space.
+const sqlSpace = `' ' || char(9, 10, 11, 12, 13, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196,
+	8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288)`
 
-// normASINSQL is the SQL of match.NormalizeASIN over col (in ASCII).
+// normASINSQL is the SQL of match.NormalizeASIN over col (upper-casing ASCII
+// only: a stored ASIN is ten ASCII letters and digits, match.ValidASIN).
 func normASINSQL(col string) string { return `UPPER(TRIM(` + col + `, ` + sqlSpace + `))` }
 
-// normISBNSQL is the SQL of match.NormalizeISBN over col (in ASCII).
+// normISBNSQL is the SQL of match.NormalizeISBN over col (upper-casing ASCII
+// only, as normASINSQL).
 func normISBNSQL(col string) string {
 	return `UPPER(REPLACE(REPLACE(TRIM(` + col + `, ` + sqlSpace + `), '-', ''), ' ', ''))`
 }

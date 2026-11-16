@@ -200,6 +200,8 @@ func TestIDKeyExpr(t *testing.T) {
 	for _, tc := range []struct{ asin, isbn string }{
 		{"B00FLIJJSY", ""}, {" b00flijjsy\t", "9780553418026"}, {"", "978-0-553-41802-6"},
 		{"  ", " 978 0553 41802x\n"}, {"", "0-553-41802-X"}, {" ", " - "},
+		// White space beyond ASCII, which strings.TrimSpace trims too.
+		{"B00FLIJJSY ", ""}, {"\u0085b00flijjsy　", ""}, {" ", " 978-0553418026 "},
 	} {
 		var key sql.NullString
 		if err := c.db.QueryRowContext(ctx, `SELECT `+idKeyExpr("b")+` FROM (SELECT ? AS asin, ? AS isbn) b`,
