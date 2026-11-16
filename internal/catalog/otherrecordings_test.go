@@ -348,13 +348,14 @@ func TestOtherRecordingsSharedISBN(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	printed := Book{LibraryID: f.other.ID, RelPath: "Print/One", Title: "One", Narrator: "Kemper", ISBN: isbn,
+	// Spelled unlike either recording's, so only the normalized ISBN makes it a copy.
+	printed := Book{LibraryID: f.other.ID, RelPath: "Print/One", Title: "One", Narrator: "Kemper", ISBN: "978 0000000002",
 		AddedAt: "2024-01-01T00:00:00Z"}
 	if _, err := f.c.UpsertBook(f.ctx, &printed); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.c.SaveUpcomingOwned(f.ctx, []UpcomingOwned{{Ref: Ref{LibraryID: f.other.ID, Path: "Print/One"},
-		IDKey: meta.IDKey("", isbn), WorkID: "w-one", CheckedAt: "now"}}, nil); err != nil {
+		IDKey: meta.IDKey("", printed.ISBN), WorkID: "w-one", CheckedAt: "now"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.book(t, f.other.ID, "Print/One").WorkID; got != "w-one" {
