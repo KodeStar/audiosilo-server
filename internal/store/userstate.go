@@ -78,7 +78,12 @@ var userStateTables = map[string]tableRule{
 	// books and the community metadata, read only by GET /me/upcoming and the
 	// job itself, never by a content cache. The daily run rewrites them
 	// (upcoming_announced is its memory of the works it announced).
-	"upcoming_owned":     {rows: true},
+	//
+	// upcoming_owned is the exception: a book's work_id (catalog.workIDExpr,
+	// server#241) rides on every list book, so a new or removed row, or a
+	// changed work_id, is content; a run that only looks a book up again
+	// (checked_at, and id_key, which no list reads) is not.
+	"upcoming_owned":     {free: []string{"id_key", "checked_at"}},
 	"upcoming_series":    {rows: true},
 	"meta_series":        {rows: true},
 	"upcoming_items":     {rows: true},
