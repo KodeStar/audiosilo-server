@@ -414,9 +414,6 @@ func TestBulkLabelEdit(t *testing.T) {
 	}
 }
 
-// TestSetGenres: the backfill of a book indexed before genres were read puts
-// them in its snapshot (source tag, an edit still over them) and marks it
-// checked, so Signatures stops asking.
 // TestBulkLabelAddThenRemoveLeavesTheBookUnedited (server#186): a bulk add of
 // a label then its removal lands the list back on the book's own, which reverts
 // the field rather than leaving an override (a lock) equal to it; a removal and
@@ -458,6 +455,9 @@ func TestBulkLabelAddThenRemoveLeavesTheBookUnedited(t *testing.T) {
 	}
 }
 
+// TestSetGenres: the backfill of a book indexed before genres were read puts
+// them in its snapshot (source tag, an edit still over them) and marks it
+// checked, so Signatures stops asking.
 func TestSetGenres(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)

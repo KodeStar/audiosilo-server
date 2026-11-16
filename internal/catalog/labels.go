@@ -196,7 +196,10 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (se
 		return nil, nil, nil
 	}
 	var genres, tags string
-	if err := tx.QueryRowContext(ctx, `SELECT genres, tags FROM books WHERE id = ?`, bookID).Scan(&genres, &tags); err != nil {
+	var overridden bool // a label field has an override, the only kind a list can revert
+	if err := tx.QueryRowContext(ctx, `SELECT b.genres, b.tags, EXISTS (SELECT 1 FROM book_overrides o
+	     WHERE o.library_id = b.library_id AND o.path = b.rel_path AND o.field IN (?, ?))
+	     FROM books b WHERE b.id = ?`, FieldGenres, FieldTags, bookID).Scan(&genres, &tags, &overridden); err != nil {
 		return nil, nil, err
 	}
 	cur := map[string]string{FieldGenres: genres, FieldTags: tags}
@@ -212,6 +215,10 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (se
 			return nil, nil, err
 		}
 		if v == cur[field] {
+			continue
+		}
+		if !overridden {
+			set[field] = v
 			continue
 		}
 		if under == nil {
