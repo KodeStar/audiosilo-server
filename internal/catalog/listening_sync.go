@@ -1058,10 +1058,10 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
 			     updated_at = ?, finish_changed_at = ?,
 			     span_at = ?, span_version = ?,
-			     stay_version = CASE WHEN ? THEN NULL ELSE stay_version END,
-			     edit_version = CASE WHEN ? THEN ? ELSE edit_version END
+			     stay_version = CASE WHEN finished THEN NULL ELSE stay_version END,
+			     edit_version = CASE WHEN finished THEN ? ELSE edit_version END
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-			version, device, name, updated, at, chainAt, chainVersion, stored.finished, stored.finished, version,
+			version, device, name, updated, at, chainAt, chainVersion, version,
 			s.b.UserID, key.LibraryID, key.Path)
 	}
 	if err != nil {
