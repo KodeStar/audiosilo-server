@@ -62,7 +62,11 @@ const CallBudget = 20 * time.Second
 // discoveryWait bounds how long a use waits for a discovery another use has
 // under way before it ends as unavailable; that wait is not charged to its
 // own CallBudget.
-const discoveryWait = 8 * time.Second
+const discoveryWait = 5 * time.Second
+
+// UseTime is the longest one use of the provider takes: a wait for another
+// use's discovery, then its own CallBudget.
+const UseTime = discoveryWait + CallBudget
 
 // The provider probe: once discovered, a provider is asked for its discovery
 // document again (probeTimeout) before a sign-in is sent there or the console

@@ -1302,13 +1302,14 @@ func TestOIDCReasonsWorded(t *testing.T) {
 // the timeout's bare 503.
 func TestOIDCBudgetFitsRequestTimeout(t *testing.T) {
 	t.Parallel()
-	if oidc.CallBudget+5*time.Second > requestTimeout {
-		t.Fatalf("oidc.CallBudget %v leaves too little of requestTimeout %v", oidc.CallBudget, requestTimeout)
+	if oidc.UseTime+5*time.Second > requestTimeout {
+		t.Fatalf("oidc.UseTime %v leaves too little of requestTimeout %v", oidc.UseTime, requestTimeout)
 	}
 }
 
 // TestOIDCScopesFollowGroupPolicy: with the default scopes, /start asks for
-// groups only while admin_group or allowed_group is set (server#406), as the
+// groups only while admin_group is set, or allowed_group with auto_create on
+// (server#406), as the
 // console saves them (live, no restart), and the status and the settings'
 // default say what is asked.
 func TestOIDCScopesFollowGroupPolicy(t *testing.T) {

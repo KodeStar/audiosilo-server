@@ -3610,7 +3610,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   keeping the identity's stored email and username); errors never carry a response body; every
   call one use makes (discovery when due, the token request, the keys, userinfo) shares one deadline,
   `CallBudget` 20 s, started once the use is past any wait for another use's discovery (at most
-  `discoveryWait` 8 s), so both stay under the API's 30 s `requestTimeout` and a slow provider ends
+  `discoveryWait` 5 s; `UseTime` 25 s together), so both stay under the API's 30 s `requestTimeout` and a slow provider ends
   on the result panel, not a bare 503; a provider discovered before is probed (its discovery
   document, 3 s, at most every 30 s: `probe`) at `/start` and for the status, so one gone down lands
   on `#oidc=unavailable` and the status says `error`; the scopes are each `/start`'s, `oidcScopes`:
