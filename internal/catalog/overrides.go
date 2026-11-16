@@ -105,12 +105,12 @@ var (
 	publishedRE = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2})?)?$`)
 )
 
-// normalizeOverride validates value for field and returns its stored form.
+// normalizeOverride validates value for field and returns its stored form; a
+// value that shows nothing (blankIfInvisible) is empty.
 func normalizeOverride(field, value string) (string, error) {
-	v := strings.TrimSpace(value)
+	v := blankIfInvisible(strings.TrimSpace(value))
 	switch field {
 	case FieldTitle, FieldAuthor, FieldNarrator, FieldSeries:
-		v = blankIfInvisible(v)
 		if err := checkText(field, v, maxShortField); err != nil {
 			return "", err
 		}
@@ -119,7 +119,6 @@ func normalizeOverride(field, value string) (string, error) {
 		}
 		return v, nil
 	case FieldSubtitle, FieldPublisher:
-		v = blankIfInvisible(v)
 		return v, checkText(field, v, maxShortField)
 	case FieldLanguage:
 		return v, checkText(field, v, maxLanguage)

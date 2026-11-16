@@ -290,6 +290,8 @@ func TestNormalizeOverride(t *testing.T) {
 		// Shows nothing: no value (server#349). A visible one is kept whole.
 		{FieldAuthor, "\u200b\ufeff", ""},
 		{FieldSubtitle, " \u2060 ", ""},
+		{FieldDescription, "\u200b\u2800", ""},
+		{FieldLanguage, "\ufeff", ""},
 		{FieldTitle, "Family \U0001F468\u200d\U0001F469\u200d\U0001F467", "Family \U0001F468\u200d\U0001F469\u200d\U0001F467"},
 		{FieldTitle, "Love \u2764\ufe0f", "Love \u2764\ufe0f"},
 	} {
