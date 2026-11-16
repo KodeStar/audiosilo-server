@@ -276,7 +276,8 @@ type SyncBatch struct {
 	// before a finish or restart here, and one heard at or before a held
 	// Stay's row time from before the listener chose it, beforeStay); a place far past the book's end (furthestPastEndRatio) is rejected
 	// duration_mismatch, one just past it is the end; an unfinish is "behind"
-	// too; a finish applies as any finish. Its spans are a place only: no
+	// too; a finish applies as any finish, unless heard at or before a held
+	// Stay's row time ("behind", beforeStay). Its spans are a place only: no
 	// listening session, daily roll-up or history is recorded (owner decision
 	// 2), and TokenID is 0.
 	FurthestOnly bool
@@ -990,7 +991,10 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // (explicitWriteSet): they end a Stay's hold and record their edit_version,
 // except an unfinish of a row that isn't finished, which changes neither the
 // place nor the finish (a device that saw the book finished, late), so it
-// leaves a Stay's hold to hold that device's backlog.
+// leaves a Stay's hold to hold that device's backlog. A furthest-only finish
+// heard at or before a held Stay's row time is "behind", as its listen is
+// (beforeStay): the Bridge sends a place at the book's end as both, and the
+// finish alone would otherwise end the hold at the end (server#415).
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
 	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
@@ -999,6 +1003,9 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 	stored, err := s.row(ctx, key)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	if s.b.FurthestOnly && stored != nil && beforeStay(p, stored) {
+		return SyncResult{Status: statusNotApplied, Reason: reasonBehind}, nil
 	}
 	if stored != nil && stored.finishChangedAt.Valid {
 		if changed := parseSessionTime(stored.finishChangedAt.String); !p.ended.After(changed) {

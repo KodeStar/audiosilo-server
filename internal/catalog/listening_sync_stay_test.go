@@ -349,8 +349,9 @@ func TestSyncStayClearedByOtherWriters(t *testing.T) {
 // server#415: an Audible place heard at or before the held row's time (the
 // Stay's, 4 minutes ago) is refused like one before a restart, however far
 // ahead: it is from before the listener chose the held place (the watch's
-// pre-Stay place echoed back through Audible). The row and its hold stay. One
-// heard after it applies (furthest wins) and ends the hold.
+// pre-Stay place echoed back through Audible), and so is the finish an end
+// place brings. The row and its hold stay. One heard after it applies
+// (furthest wins) and ends the hold.
 func TestSyncAudiblePlaceBeforeAStay(t *testing.T) {
 	t.Parallel()
 	f := stayFixture(t, 5*time.Minute)
@@ -359,6 +360,13 @@ func TestSyncAudiblePlaceBeforeAStay(t *testing.T) {
 		wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, ago))).Results[0], statusNotApplied, reasonBehind)
 		if p := f.progress(t); p.Position != 18000 || p.DeviceID != "phone" || f.stayVersion(t, f.book) != 5 {
 			t.Fatalf("an Audible place %v ago moved the held row: %+v stay %d", ago, p, f.stayVersion(t, f.book))
+		}
+		// A place at the book's end comes with a finish (the Bridge's
+		// atBookEnd): from before the Stay it is refused too, never finishing
+		// the book over the hold.
+		wantResult(t, f.sync(t, f.audibleBatch(t, f.finishEvent(EventFinish, ago))).Results[0], statusNotApplied, reasonBehind)
+		if p := f.progress(t); p.Finished || p.Position != 18000 || f.stayVersion(t, f.book) != 5 {
+			t.Fatalf("an Audible finish %v ago ended the hold: %+v stay %d", ago, p, f.stayVersion(t, f.book))
 		}
 	}
 	wantResult(t, f.sync(t, f.audibleBatch(t, f.audiblePlace(40000, 3*time.Minute))).Results[0], statusApplied, "")

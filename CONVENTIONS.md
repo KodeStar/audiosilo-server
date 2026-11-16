@@ -3755,11 +3755,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Rejected events are never stored. `listening_events` is pruned at 120 days (`PruneListeningEvents`, from
   `pkg/launcher.retention`). The legacy PUT stays last-write-wins (finished included) and is logged as a `put`
   event (`SaveProgressFrom`), stores `device_name` and `finish_changed_at` (at its `updated_at`, never past
-  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too (the upserts through one
-  fragment, `finishChangedValue` / `finishChangedSet`, binding finished as ?6 and the time as ?13), so an
+  the server's clock), clears no offer. Every other writer of `finished` stamps `finish_changed_at` too, so an
   older sync finish/unfinish can't undo it: `EditProgress` (own and admin PATCH) at now, on ANY explicit
-  `finished` even one that flips nothing (server#363), an import's apply and
-  undo (`progressUpsert`) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
+  `finished` even one that flips nothing (server#363; bound from Go, kept by `COALESCE` when the edit names
+  none), an import's apply and
+  undo (`progressUpsert`, through the PUT's fragment `finishChangedValue` / `finishChangedSet`, finished as
+  ?6 and the time as ?13) at the row's `updated_at` capped at now (`finishChangeStamp`, the PUT's rule; an undo of a
   row the import had moved on at now, a re-import's too), a move or
   join keeping the newer of the two. Progress reads
   carry `device_name` and `other_place` (omitempty). The chain lasts across POSTs (server#289, `0062`,
@@ -3792,7 +3793,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`writePlace` keeps `stay_version` while the row stays its device's); every other writer clears it: another
   device's applied span (an Audible furthest-only place heard after the held row's time too), `endSpanChain` (PUT, PATCH, an import's apply and
   undo, a move or join) and a finish or unfinish (not an unfinish of a row that isn't finished: it changes nothing,
-  so it keeps the hold and records no `edit_version`).
+  so it keeps the hold and records no `edit_version`; nor an Audible finish heard at or before the held row's time,
+  which is `behind`).
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
   library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
@@ -3955,7 +3957,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   or before the `updated_at` of a row a Stay holds (`beforeStay`, `stay_version` set: the listener chose that place, and
   the other device's earlier place must not come back through Audible, server#415); a place past the book's end by more than 5% plus 2
   min (`furthestPastEndRatio`, the manager's wrong-match guard) is `rejected` `duration_mismatch`, one just past it
-  is the end; an unfinish is `behind`; a finish is any finish. The device id `audible:<account>` is this route's
+  is the end; an unfinish is `behind`; a finish is any finish, except one heard at or before a held Stay's row time
+  (`behind`, `beforeStay`: the Bridge sends a place at the end as a listen and a finish). The device id `audible:<account>` is this route's
   alone: `/me/listening/sync` refuses a batch naming one (400), a legacy PUT naming one (a row echoed back) saves under
   none, and `EditProgress` clears it on the row it edits (the edit reaches the feed, and Audible's next place can't
   undo it unseen), as a listening import does on a row it moves on (`importer.mergeProgress`, the device name too;
