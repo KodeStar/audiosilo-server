@@ -171,9 +171,8 @@ func TestHouseState(t *testing.T) {
 		age  time.Duration
 		want string
 	}{
-		{0, SessionPlaying}, {61 * time.Second, SessionPlaying}, {149 * time.Second, SessionPlaying},
-		{150 * time.Second, SessionPlaying}, {151 * time.Second, SessionPaused},
-		{livePlaying, SessionPlaying}, {livePlaying + time.Millisecond, SessionPaused},
+		{0, SessionPlaying}, {61 * time.Second, SessionPlaying},
+		{150 * time.Second, SessionPlaying}, {150*time.Second + time.Millisecond, SessionPaused},
 		{SessionGap, SessionPaused}, {SessionGap + time.Millisecond, HouseRecent}, {20 * time.Hour, HouseRecent},
 	} {
 		if got := houseState(c.age); got != c.want {

@@ -29,13 +29,16 @@ const (
 	// before its next save starts a new session ("Sessions with no position update
 	// for 10 minutes close automatically").
 	SessionGap = 10 * time.Minute
-	// livePlaying is how recent the newest save must be for a session to read as
-	// playing; past it, until SessionGap, the session reads as paused. Players
+	// playingWindow is how recent the newest save must be for a session to read
+	// as playing; past it, until SessionGap, the session reads as paused. Players
 	// save every 15 s in front or streaming but every 60 s in the background or
 	// from a download (server#364), so this allows one missed background save
-	// plus some delivery delay. It also bounds continuousPlayback's slack and
-	// which Sync v2 span can be marked transcoded: the same "still live" idea.
-	livePlaying = 150 * time.Second
+	// plus some delivery delay.
+	playingWindow = 150 * time.Second
+	// livePlaying is the slack of continuousPlayback's upper bound and how
+	// recent a Sync v2 span must end to be marked transcoded: a few missed
+	// 15 s saves, tighter than playingWindow so neither widens with it.
+	livePlaying = 60 * time.Second
 	// resumeWindow bounds how far back a save may reach to continue a session
 	// across a gap longer than SessionGap: a player the OS stopped from saving
 	// while it kept playing (Android pauses JS timers while the phone is locked)
@@ -230,7 +233,7 @@ func extendSession(ctx context.Context, tx *sql.Tx, id int64, hb Heartbeat, last
 
 // Session states, from the age of the newest save.
 const (
-	SessionPlaying = "playing" // a save within livePlaying
+	SessionPlaying = "playing" // a save within playingWindow
 	SessionPaused  = "paused"  // still open (within SessionGap)
 	SessionEnded   = "ended"
 )
@@ -320,7 +323,7 @@ func (c *Catalog) scanSession(rows *sql.Rows, s *Session, extra ...any) error {
 
 func sessionState(age time.Duration) string {
 	switch {
-	case age <= livePlaying:
+	case age <= playingWindow:
 		return SessionPlaying
 	case age <= SessionGap:
 		return SessionPaused
