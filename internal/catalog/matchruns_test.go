@@ -104,8 +104,9 @@ func TestListMatchRunItemsBestFirst(t *testing.T) {
 // TestClearCommunityMatches: clearing one library removes its community overrides
 // and covers and rebuilds its books (the scanned values back, an admin's own edit,
 // upload and an enrichment kept), drops its match runs and its books'
-// items in a run over every library, and leaves the other library alone; clearing
-// every library then takes the rest.
+// items in a run over every library (and such a run it leaves with none,
+// server#214), counts only indexed books (a leftover at a gone path is no book),
+// and leaves the other library alone; clearing every library then takes the rest.
 func TestClearCommunityMatches(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -148,12 +149,17 @@ func TestClearCommunityMatches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A run over every library that only reached this library's books.
+	emptiedRun, _ := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 1})
+	if err := c.RecordMatchItem(ctx, emptiedRun, &MatchRunItem{LibraryID: one.ID, Path: "A/Uploaded", Outcome: OutcomeNone}); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := c.ClearCommunityMatches(ctx, one.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (ClearedMatches{Books: 3, Covers: 1, Runs: 1}); *got != want {
+	if want := (ClearedMatches{Books: 2, Covers: 1, Runs: 2}); *got != want {
 		t.Fatalf("cleared = %+v, want %+v", *got, want)
 	}
 	b := mustBook(t, c, ctx, one.ID, "A/Matched")
@@ -189,6 +195,9 @@ func TestClearCommunityMatches(t *testing.T) {
 	}
 	if _, err := c.GetMatchRun(ctx, oneRun); !errors.Is(err, ErrNotFound) {
 		t.Errorf("the library's run = %v, want removed", err)
+	}
+	if _, err := c.GetMatchRun(ctx, emptiedRun); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the run over every library left empty = %v, want removed", err)
 	}
 	if _, err := c.GetMatchRun(ctx, twoRun); err != nil {
 		t.Errorf("the other library's run = %v, want kept", err)

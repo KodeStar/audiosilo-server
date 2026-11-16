@@ -2047,7 +2047,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
   overrides and covers and the recorded matches (`book_matches`), rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
-  runs (a library's clear: its runs, and its items in runs over every library), one transaction;
+  runs (a library's clear: its runs, its items in runs over every library and such a run it
+  leaves with none, counted in `runs`), one transaction; `books` counts indexed books only;
   edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id

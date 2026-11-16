@@ -582,7 +582,7 @@ func CleanOverride(field, value string) string {
 
 // ClearedMatches is what ClearCommunityMatches removed.
 type ClearedMatches struct {
-	Books  int `json:"books"`  // books that had a community value, cover or recorded match
+	Books  int `json:"books"`  // indexed books that had a community value, cover or recorded match
 	Covers int `json:"covers"` // community covers
 	Runs   int `json:"runs"`   // match runs, with their reviews
 }
@@ -592,7 +592,7 @@ type ClearedMatches struct {
 // covers and recorded matches (book_matches) go (an admin's own edits and
 // uploads, the tags and an enrichment stay), each book's effective metadata and cover art are rebuilt, and
 // the match runs go with their reviews (a run over every library loses only this
-// library's books). One transaction. The caller makes sure no match run is
+// library's books, and goes too once it has none left). One transaction. The caller makes sure no match run is
 // working meanwhile (matchrun.Runner.Clear).
 func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*ClearedMatches, error) {
 	var out ClearedMatches
@@ -616,6 +616,19 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 		if libraryID == 0 {
 			return nil
 		}
+		// A run over every library that held only this library's books is left
+		// with nothing: it goes too, as this library's own runs do (server#214).
+		res, err = tx.ExecContext(ctx, `DELETE FROM match_runs WHERE library_id IS NULL
+		     AND EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id = ?1)
+		     AND NOT EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id != ?1)`,
+			libraryID)
+		if err != nil {
+			return err
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			return err
+		}
+		out.Runs += int(n)
 		_, err = tx.ExecContext(ctx, `DELETE FROM match_run_items WHERE library_id = ?
 		     AND run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL)`, libraryID)
 		return err
@@ -649,8 +662,8 @@ func oneBook(ref Ref) clearPick {
 // clearCommunity removes the community overrides, covers and recorded matches
 // (book_matches) of the books pick names, keeping an admin's own edits and
 // uploads, and rebuilds each such indexed book's effective metadata and cover
-// art, in tx. It returns how many books had any and how many community covers
-// went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
+// art, in tx. It returns how many indexed books had any and how many community
+// covers went: ClearCommunityMatches for a library, an unlink (BookEdit.Match with no
 // work) for one book.
 func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, covers int, err error) {
 	where, args := pick.where, pick.args
@@ -672,31 +685,53 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 	if err != nil {
 		return 0, 0, err
 	}
-	touched := map[Ref]bool{}
-	for _, ref := range fields {
-		if touched[ref] {
-			continue // one row per field
+	// Each path's book id, 0 when no book is indexed there now: only indexed
+	// books are counted (a leftover row of a gone path is cleared, not a book,
+	// server#214) and rebuilt.
+	ids := map[Ref]int64{}
+	bookAt := func(ref Ref) (id int64, first bool, err error) {
+		if id, ok := ids[ref]; ok {
+			return id, false, nil
 		}
-		touched[ref] = true
-		id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
+		id, err = bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
 		if errors.Is(err, ErrNotFound) {
-			continue // not indexed now: nothing to rebuild
+			id, err = 0, nil
 		}
 		if err != nil {
+			return 0, false, err
+		}
+		ids[ref] = id
+		return id, true, nil
+	}
+	for _, ref := range fields {
+		id, first, err := bookAt(ref)
+		if err != nil {
 			return 0, 0, err
+		}
+		if !first || id == 0 {
+			continue // one row per field; not indexed now: nothing to rebuild
 		}
 		if err := refreshEffective(ctx, tx, id); err != nil {
 			return 0, 0, err
 		}
 	}
 	for _, ref := range coverRefs {
-		touched[ref] = true
+		if _, _, err := bookAt(ref); err != nil {
+			return 0, 0, err
+		}
 		if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
 			return 0, 0, err
 		}
 	}
 	for _, ref := range anchors {
-		touched[ref] = true // the row is all there is: nothing to rebuild
+		if _, _, err := bookAt(ref); err != nil { // the row is all there is: nothing to rebuild
+			return 0, 0, err
+		}
 	}
-	return len(touched), len(coverRefs), nil
+	for _, id := range ids {
+		if id != 0 {
+			books++
+		}
+	}
+	return books, len(coverRefs), nil
 }
