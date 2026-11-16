@@ -731,13 +731,13 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 			MatchIf: was, Source: SourceCommunity,
 		})
 	}
-	title := func() string {
+	field := func(name string) string {
 		t.Helper()
 		st, err := c.BookMatchState(ctx, lib.ID, p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return st.Fields[FieldTitle].Value
+		return st.Fields[name].Value
 	}
 	stale := func(label string, was *MatchAnchor) {
 		t.Helper()
@@ -752,12 +752,11 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "hand-work" || a.How != MatchHowAccepted {
 		t.Fatalf("a hand match since = %+v, want it kept", a)
 	}
-	st, _ := c.BookMatchState(ctx, lib.ID, p)
-	if got := st.Fields[FieldTitle]; got.Value == "Stale hand" {
-		t.Fatalf("title = %+v, want the edit rolled back", got)
+	if got := field(FieldTitle); got == "Stale hand" {
+		t.Fatalf("title = %q, want the edit rolled back", got)
 	}
-	if got := st.Fields[FieldASIN]; got.Value == "B0OLDMATCH" {
-		t.Fatalf("asin = %+v, want the old match's ASIN not written", got)
+	if got := field(FieldASIN); got == "B0OLDMATCH" {
+		t.Fatalf("asin = %q, want the old match's ASIN not written", got)
 	}
 	// The same work but other offered identifiers (accepted again by hand): kept.
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{
@@ -777,7 +776,7 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" || a.How != MatchHowAuto {
 		t.Fatalf("still the one read = %+v, want it written", a)
 	}
-	if got := title(); got != "Written" {
+	if got := field(FieldTitle); got != "Written" {
 		t.Fatalf("title = %q, want the edit applied", got)
 	}
 	// A zero MatchIf (none read): never over a match the book has now.
@@ -785,7 +784,7 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.OfferedASIN != "B0FILLED01" {
 		t.Fatalf("none read, one there = %+v, want it kept", a)
 	}
-	if got := title(); got != "Written" {
+	if got := field(FieldTitle); got != "Written" {
 		t.Fatalf("title = %q, want the stale edit rolled back", got)
 	}
 	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil { // Unlink

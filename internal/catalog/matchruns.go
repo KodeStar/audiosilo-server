@@ -604,31 +604,25 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 
 		// The runs: every one (their items cascade), or this library's and its
 		// books' items in the runs over every library.
-		res, err := tx.ExecContext(ctx, `DELETE FROM match_runs WHERE ?1 = 0 OR library_id = ?1`, libraryID)
-		if err != nil {
+		deleteRuns := func(query string) error {
+			res, err := tx.ExecContext(ctx, query, libraryID)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			out.Runs += int(n)
 			return err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
+		if err := deleteRuns(`DELETE FROM match_runs WHERE ?1 = 0 OR library_id = ?1`); err != nil || libraryID == 0 {
 			return err
-		}
-		out.Runs = int(n)
-		if libraryID == 0 {
-			return nil
 		}
 		// A run over every library that held only this library's books is left
 		// with nothing: it goes too, as this library's own runs do (server#214).
-		res, err = tx.ExecContext(ctx, `DELETE FROM match_runs WHERE library_id IS NULL
+		if err := deleteRuns(`DELETE FROM match_runs WHERE library_id IS NULL
 		     AND EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id = ?1)
-		     AND NOT EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id != ?1)`,
-			libraryID)
-		if err != nil {
+		     AND NOT EXISTS (SELECT 1 FROM match_run_items i WHERE i.run_id = match_runs.id AND i.library_id != ?1)`); err != nil {
 			return err
 		}
-		if n, err = res.RowsAffected(); err != nil {
-			return err
-		}
-		out.Runs += int(n)
 		_, err = tx.ExecContext(ctx, `DELETE FROM match_run_items WHERE library_id = ?
 		     AND run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL)`, libraryID)
 		return err
@@ -689,49 +683,37 @@ func clearCommunity(ctx context.Context, tx *sql.Tx, pick clearPick) (books, cov
 	// books are counted (a leftover row of a gone path is cleared, not a book,
 	// server#214) and rebuilt.
 	ids := map[Ref]int64{}
-	bookAt := func(ref Ref) (id int64, first bool, err error) {
-		if id, ok := ids[ref]; ok {
-			return id, false, nil
+	for _, ref := range slices.Concat(fields, coverRefs, anchors) {
+		if _, seen := ids[ref]; seen {
+			continue // one row per field, and a path in more than one table
 		}
-		id, err = bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
+		id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
 		if errors.Is(err, ErrNotFound) {
 			id, err = 0, nil
 		}
 		if err != nil {
-			return 0, false, err
+			return 0, 0, err
 		}
 		ids[ref] = id
-		return id, true, nil
-	}
-	for _, ref := range fields {
-		id, first, err := bookAt(ref)
-		if err != nil {
-			return 0, 0, err
-		}
-		if !first || id == 0 {
-			continue // one row per field; not indexed now: nothing to rebuild
-		}
-		if err := refreshEffective(ctx, tx, id); err != nil {
-			return 0, 0, err
-		}
-	}
-	for _, ref := range coverRefs {
-		if _, _, err := bookAt(ref); err != nil {
-			return 0, 0, err
-		}
-		if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
-			return 0, 0, err
-		}
-	}
-	for _, ref := range anchors {
-		if _, _, err := bookAt(ref); err != nil { // the row is all there is: nothing to rebuild
-			return 0, 0, err
-		}
-	}
-	for _, id := range ids {
 		if id != 0 {
 			books++
 		}
 	}
+	rebuilt := map[Ref]bool{}
+	for _, ref := range fields {
+		if ids[ref] == 0 || rebuilt[ref] {
+			continue
+		}
+		rebuilt[ref] = true
+		if err := refreshEffective(ctx, tx, ids[ref]); err != nil {
+			return 0, 0, err
+		}
+	}
+	for _, ref := range coverRefs {
+		if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
+			return 0, 0, err
+		}
+	}
+	// A recorded match's row is all there is: nothing to rebuild.
 	return books, len(coverRefs), nil
 }
