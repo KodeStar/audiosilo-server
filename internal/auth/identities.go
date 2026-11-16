@@ -181,9 +181,13 @@ func (s *Service) OIDCSignIn(ctx context.Context, c oidc.Claims, p oidc.Policy, 
 		id := d.Account
 		switch d.Outcome {
 		case oidc.SignIn:
-			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?, email = ?, username = ?,
-				groups_seen = groups_seen OR ? WHERE issuer = ? AND subject = ?`,
-				now, c.Email, c.Username, c.Groups != nil, c.Issuer, c.Subject); err != nil {
+			// Partial claims (userinfo unreadable) keep the email and username
+			// stored for a claim they lack: it may be the person's still.
+			if _, err := tx.ExecContext(ctx, `UPDATE user_identities SET last_sign_in_at = ?1,
+				email    = CASE WHEN ?2 = '' AND ?4 THEN email ELSE ?2 END,
+				username = CASE WHEN ?3 = '' AND ?4 THEN username ELSE ?3 END,
+				groups_seen = groups_seen OR ?5 WHERE issuer = ?6 AND subject = ?7`,
+				now, c.Email, c.Username, c.Partial, c.Groups != nil, c.Issuer, c.Subject); err != nil {
 				return err
 			}
 		case oidc.Link:

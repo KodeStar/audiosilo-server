@@ -1105,6 +1105,51 @@ func TestOIDCAutoCreateAllowedGroup(t *testing.T) {
 	}
 }
 
+// TestOIDCUserinfoDownMakesNoSecondAccount: with auto_create on and an ID token
+// that leaves the email to userinfo, a first sign-in while userinfo fails is
+// refused as unavailable (denied: it would make a second account for someone
+// whose email links an existing one); once userinfo answers, the same person
+// links to their account (allowed), and a later sign-in while it fails still
+// signs in, keeping the identity's stored email.
+func TestOIDCUserinfoDownMakesNoSecondAccount(t *testing.T) {
+	t.Parallel()
+	e := newOIDCEnv(t, oidcCarol, func(o *config.OIDCConfig) { o.AutoCreate = true })
+	carol := e.mustUser(t, "carol-account", oidcCarol.Email)
+	accounts := func() int {
+		t.Helper()
+		users, err := e.auth.ListUsers(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(users)
+	}
+	before := accounts()
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true, FailUserinfo: true})
+	wantResult(t, e.signIn(t, oidcReturnWeb), oidcUnavailable)
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 0 {
+		t.Fatalf("linked while userinfo failed: %v %v", ids, err)
+	}
+	if n := accounts(); n != before {
+		t.Fatalf("an account made while userinfo failed: %d, want %d", n, before)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("userinfo back: %q", loc)
+	}
+	ids, err := e.auth.ListIdentities(context.Background(), carol.ID)
+	if err != nil || len(ids) != 1 || ids[0].Email != oidcCarol.Email {
+		t.Fatalf("not linked by email: %+v %v", ids, err)
+	}
+	e.idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true, FailUserinfo: true})
+	if loc := e.signIn(t, oidcReturnWeb); !strings.Contains(loc, oidcDoneWeb) {
+		t.Fatalf("a linked sign-in while userinfo fails: %q", loc)
+	}
+	if ids, err := e.auth.ListIdentities(context.Background(), carol.ID); err != nil || len(ids) != 1 ||
+		ids[0].Email != oidcCarol.Email || ids[0].Username != oidcCarol.PreferredUsername {
+		t.Fatalf("the stored email or username lost: %+v %v", ids, err)
+	}
+}
+
 // TestOIDCCallbackRateLimited: ten failed callbacks from an address lock it out
 // for a while; a good one before that resets the count. A callback with no
 // flow cookie (what another site's page can make a browser send) counts for

@@ -57,6 +57,7 @@ const (
 	ReasonAdminAccount    = "admin_account"    // it matches an admin, never linked by email (decision 4)
 	ReasonDisabled        = "disabled"         // Refuse: the linked account is disabled
 	ReasonMember          = "member"           // Refuse: the linked account has become a household member
+	ReasonIncomplete      = "incomplete"       // Refuse: a first sign-in without an email, userinfo unreadable (Claims.Partial)
 )
 
 // PendingReasons are the reasons Decide gives a Pending outcome: what a waiting
@@ -95,6 +96,8 @@ const (
 
 // Decide says what a sign-in does (decisions 1-4):
 //   - linked: sign in, unless the account is disabled or now a member;
+//   - not linked, no email and userinfo unreadable (Claims.Partial): refuse
+//     (incomplete), so the provider's blip makes no second account;
 //   - a verified email matching an admin: pending (never linked by email);
 //   - a verified email matching exactly one eligible account: link it;
 //   - a verified email matching others (several, or none eligible): pending;
@@ -132,6 +135,12 @@ func decide(in Input) Decision {
 		return Decision{Outcome: SignIn, Account: a.ID}
 	}
 	c := in.Claims
+	// A first sign-in links by its email or makes an account: with no email
+	// because userinfo couldn't be read, it would make a second account for
+	// someone the email links to an existing one (and bind the identity to it).
+	if c.Partial && c.Email == "" {
+		return Decision{Outcome: Refuse, Reason: ReasonIncomplete}
+	}
 	if c.Email != "" && len(in.Matches) > 0 {
 		if !c.EmailVerified {
 			return Decision{Outcome: Pending, Reason: ReasonUnverifiedEmail}

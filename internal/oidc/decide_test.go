@@ -48,6 +48,14 @@ func TestDecide(t *testing.T) {
 			Pending, ReasonNotAllowed, 0},
 		{"allowed group is exact", Input{Claims: verified, Policy: Policy{AutoCreate: true, AllowedGroup: "Listeners"}},
 			Pending, ReasonNotAllowed, 0},
+		// Userinfo unreadable (Partial): a first sign-in without an email is
+		// refused, never an account made; with one, or linked, it goes on.
+		{"partial, no email, auto_create on, refused", Input{Claims: Claims{Partial: true}, Policy: Policy{AutoCreate: true}},
+			Refuse, ReasonIncomplete, 0},
+		{"partial, no email, auto_create off, refused", Input{Claims: Claims{Partial: true}}, Refuse, ReasonIncomplete, 0},
+		{"partial with an email links", Input{Claims: Claims{Email: "a@example.org", EmailVerified: true, Partial: true},
+			Matches: []Account{user}}, Link, "", 7},
+		{"partial, linked, signs in", Input{Claims: Claims{Partial: true}, Linked: &Account{ID: 3}}, SignIn, "", 3},
 	}
 	pending := map[string]bool{}
 	for _, c := range cases {

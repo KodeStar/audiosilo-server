@@ -418,11 +418,16 @@ func (a *API) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcResult(w, r, oidcPending)
 		return
 	case oidc.Refuse:
-		if d.Reason == oidc.ReasonDisabled {
+		switch d.Reason {
+		case oidc.ReasonDisabled:
 			a.oidcResult(w, r, oidcDisabled)
-			return
+		case oidc.ReasonIncomplete:
+			// A first sign-in userinfo couldn't complete: the provider's
+			// trouble, worth trying again, never a second account.
+			a.oidcResult(w, r, oidcUnavailable)
+		default:
+			a.oidcResult(w, r, oidcNotAllowed)
 		}
-		a.oidcResult(w, r, oidcNotAllowed)
 		return
 	}
 	if res.User.Role == auth.RoleAdmin {

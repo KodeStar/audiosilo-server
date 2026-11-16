@@ -358,8 +358,42 @@ func TestUserinfoFailureFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a userinfo failure ended the sign-in: %v", err)
 	}
-	if idp.Calls("userinfo") != 1 || c.Subject != "sub-alice" || c.Email != "alice@example.org" || len(c.Groups) != 2 || c.Username != "" {
+	if idp.Calls("userinfo") != 1 || c.Subject != "sub-alice" || c.Email != "alice@example.org" || len(c.Groups) != 2 || c.Username != "" ||
+		!c.Partial {
 		t.Fatalf("claims: %+v (userinfo asked %d times)", c, idp.Calls("userinfo"))
+	}
+	// Userinfo answering: the claims are whole.
+	idp.SetKnobs(oidctest.Knobs{})
+	f = flow()
+	if c, err := p.Exchange(context.Background(), signIn(t, p, f), f, true); err != nil || c.Partial {
+		t.Fatalf("userinfo answering: %+v %v", c, err)
+	}
+}
+
+// TestUserinfoLackIsPerPerson: a claim userinfo didn't hold for one person is
+// still asked of it for the next (allowed: their email may link them to their
+// account), while the first person isn't asked again within the recheck
+// (TestUserinfoNotAskedForANeverSentClaim).
+func TestUserinfoLackIsPerPerson(t *testing.T) {
+	t.Parallel()
+	noEmail := alice
+	noEmail.Email, noEmail.EmailVerified, noEmail.PreferredUsername = "", false, ""
+	idp := oidctest.New(t, "audiosilo", "s3cret", noEmail)
+	idp.SetKnobs(oidctest.Knobs{UserinfoOnly: true})
+	p := newProvider(t, idp, "s3cret")
+	f := flow()
+	if c, err := p.Exchange(context.Background(), signIn(t, p, f), f, false); err != nil || c.Email != "" {
+		t.Fatalf("no email: %+v %v", c, err)
+	}
+	bob := oidctest.Person{Subject: "sub-bob", Email: "bob@example.org", EmailVerified: true, PreferredUsername: "bob"}
+	idp.SetPerson(bob)
+	f = flow()
+	c, err := p.Exchange(context.Background(), signIn(t, p, f), f, false)
+	if err != nil || c.Email != "bob@example.org" || !c.EmailVerified || c.Username != "bob" {
+		t.Fatalf("another person's email skipped: %+v %v", c, err)
+	}
+	if n := idp.Calls("userinfo"); n != 2 {
+		t.Fatalf("userinfo asked %d times, want 2", n)
 	}
 }
 

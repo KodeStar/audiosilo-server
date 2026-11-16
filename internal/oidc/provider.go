@@ -73,9 +73,20 @@ const (
 	probeEvery   = 30 * time.Second
 )
 
-// userinfoRecheck is how long a claim userinfo didn't hold (the email, the
-// username) is not asked of it again when the ID token lacks only that.
-const userinfoRecheck = time.Hour
+// userinfoRecheck is how long a claim userinfo didn't hold for a person (the
+// email, the username) is not asked of it again for that person when the ID
+// token lacks only that. Per person: one account without an email says nothing
+// of the next, whose email may decide which account a first sign-in links to.
+// maxUserinfoLacks bounds the people remembered; past it a person is asked
+// every time.
+const (
+	userinfoRecheck  = time.Hour
+	maxUserinfoLacks = 1000
+)
+
+// userinfoLack is until when userinfo is not asked for a person's email or
+// username again (zero: ask).
+type userinfoLack struct{ email, username time.Time }
 
 // HTTPClientFor is the client a Provider uses: CallBudget as its timeout (what
 // bounds the key set's own fetch, which runs on the provider's context, not a
@@ -146,9 +157,9 @@ type Provider struct {
 	// The last probe: when, and what failed ("" when the provider answered).
 	probedAt time.Time
 	probeErr string
-	// Until when userinfo is not asked for the email or the username again
-	// (it didn't hold that claim; zero: ask).
-	emailLackedUntil, usernameLackedUntil time.Time
+	// lacks: per subject, until when userinfo is not asked for the email or
+	// the username again (it didn't hold that claim for the person).
+	lacks map[string]userinfoLack
 
 	probeMu sync.Mutex // one probe at a time; the others take its answer
 }
@@ -174,7 +185,7 @@ func New(s Settings) (*Provider, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Provider{s: s, client: client, ctx: ctx, log: log}, nil
+	return &Provider{s: s, client: client, ctx: ctx, log: log, lacks: map[string]userinfoLack{}}, nil
 }
 
 // Status reports the discovery's state.
@@ -462,8 +473,9 @@ const issuedAtLeeway = 5 * time.Minute
 // lacks (askUserinfo; its sub must be the ID token's). The groups claim is
 // asked of userinfo only when needGroups (a group policy is set: nothing else
 // reads it). A userinfo request that fails leaves the ID token's claims, a
-// warning logged: a claim it can't add is absent, which never signs anyone in
-// as more. Every call shares one deadline, the call budget.
+// warning logged and Claims.Partial set: a claim it can't add is absent, which
+// never signs anyone in as more (and Decide doesn't decide a first sign-in on
+// an email it lacks for that). Every call shares one deadline, the call budget.
 func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups bool) (Claims, error) {
 	ctx, cancel, prov, verifier, err := p.begin(ctx)
 	defer cancel()
@@ -509,6 +521,7 @@ func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups
 	if err != nil {
 		p.log.Warn("oidc: userinfo failed: signing in with the ID token's claims",
 			"err", outOfTime(ctx, errors.New(exchangeError(err))))
+		c.Partial = true
 		return c, nil
 	}
 	if ui.Subject != idt.Subject {
@@ -517,6 +530,7 @@ func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups
 	var uset claimSet
 	if err := ui.Claims(&uset); err != nil {
 		p.log.Warn("oidc: userinfo unreadable: signing in with the ID token's claims", "err", err)
+		c.Partial = true
 		return c, nil
 	}
 	before := c
@@ -528,8 +542,9 @@ func (p *Provider) Exchange(ctx context.Context, code string, f Flow, needGroups
 // askUserinfo reports whether userinfo is worth asking for what c (the ID
 // token's claims) lacks: the groups claim when needGroups, every time (a
 // role or an account may hang on it); the email or the username unless
-// userinfo lacked that claim within userinfoRecheck (noteUserinfo), so a claim
-// the provider never sends doesn't cost a request at every sign-in.
+// userinfo lacked that claim for this person within userinfoRecheck
+// (noteUserinfo), so a claim the provider never sends them doesn't cost a
+// request at each of their sign-ins.
 func (p *Provider) askUserinfo(c Claims, needGroups bool) bool {
 	if needGroups && c.Groups == nil {
 		return true
@@ -537,16 +552,21 @@ func (p *Provider) askUserinfo(c Claims, needGroups bool) bool {
 	now := p.s.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return (c.Email == "" && !now.Before(p.emailLackedUntil)) ||
-		(c.Username == "" && !now.Before(p.usernameLackedUntil))
+	l := p.lacks[c.Subject]
+	return (c.Email == "" && !now.Before(l.email)) ||
+		(c.Username == "" && !now.Before(l.username))
 }
 
 // noteUserinfo records which claims the ID token lacked (before) and userinfo
-// didn't add (after): not asked of it again for userinfoRecheck.
+// didn't add (after) for the person: not asked of it again for them for
+// userinfoRecheck. With maxUserinfoLacks people remembered (the expired
+// dropped first), a new one isn't: they are asked again next time.
 func (p *Provider) noteUserinfo(before, after Claims) {
-	until := p.s.Now().Add(userinfoRecheck)
+	now := p.s.Now()
+	until := now.Add(userinfoRecheck)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	l, known := p.lacks[after.Subject]
 	note := func(lackedUntil *time.Time, lacked, got bool) {
 		if lacked {
 			*lackedUntil = until
@@ -555,8 +575,23 @@ func (p *Provider) noteUserinfo(before, after Claims) {
 			}
 		}
 	}
-	note(&p.emailLackedUntil, before.Email == "", after.Email != "")
-	note(&p.usernameLackedUntil, before.Username == "", after.Username != "")
+	note(&l.email, before.Email == "", after.Email != "")
+	note(&l.username, before.Username == "", after.Username != "")
+	if l == (userinfoLack{}) {
+		delete(p.lacks, after.Subject)
+		return
+	}
+	if !known && len(p.lacks) >= maxUserinfoLacks {
+		for k, v := range p.lacks {
+			if !now.Before(v.email) && !now.Before(v.username) {
+				delete(p.lacks, k)
+			}
+		}
+		if len(p.lacks) >= maxUserinfoLacks {
+			return
+		}
+	}
+	p.lacks[after.Subject] = l
 }
 
 // exchangeError words a failed token or userinfo request, or a refused ID
