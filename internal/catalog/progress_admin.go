@@ -244,7 +244,7 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name ELSE '' END,
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at,
-			     `+finishChangedSet+`, `+endSpanChain+`, `+editVersionSet+`,
+			     `+finishChangedSet+`, `+explicitWriteSet+`,
 			     `+clearOtherPlace,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
 			p.Version+1, p.DeviceID, stamp, started, finished, stamp)

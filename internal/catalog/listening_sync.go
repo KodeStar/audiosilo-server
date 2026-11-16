@@ -589,8 +589,7 @@ type syncRow struct {
 	// stayVersion is the version a Stay wrote (0080), null when none holds the
 	// row: the Stay's own device writing again keeps it, every other writer
 	// clears it. editVersion is the version of the row's last explicit write
-	// that is not listening (a PATCH, an import's apply or undo, a move or join,
-	// a sync finish or unfinish), null when none.
+	// that is not listening (explicitWriteSet), null when none.
 	stayVersion, editVersion sql.NullInt64
 }
 
@@ -699,7 +698,7 @@ func (s *syncRun) furthestListen(ctx context.Context, p syncPrepared, stored *sy
 		version = stored.version + 1
 		at = laterStamp(at, stored.updatedAt)
 	}
-	if err := s.writePlace(ctx, p, version, false, false, at); err != nil {
+	if err := s.writePlace(ctx, p, version, keepOffer, at); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
@@ -738,8 +737,16 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	if v, ok := s.written[key]; ok && base != nil && *base == 0 {
 		base = &v
 	}
+	// The row's time never moves back (server#284): a span that ended before the
+	// row it replaces keeps the row's updated_at, so an old app's PUT dated in
+	// between can't win last-write-wins against it (and a span chaining on a
+	// diverged apply of its device's, span_at, keeps its kept time too).
+	rowAt := mine.UpdatedAt
+	if stored != nil {
+		rowAt = laterStamp(rowAt, stored.updatedAt)
+	}
 	if p.ev.Start == startStay && s.staysWin(p, stored) {
-		if err := s.writePlace(ctx, p, stored.version+1, true, true, laterStamp(mine.UpdatedAt, stored.updatedAt)); err != nil {
+		if err := s.writePlace(ctx, p, stored.version+1, holdStay, rowAt); err != nil {
 			return SyncResult{}, err
 		}
 		return SyncResult{Status: statusApplied}, nil
@@ -772,14 +779,6 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 		}
 		return SyncResult{Status: statusNotApplied, Reason: reasonResumeBehind, OtherPlace: mine}, nil
 	}
-	// The row's time never moves back (server#284): a span that ended before the
-	// row it replaces keeps the row's updated_at, so an old app's PUT dated in
-	// between can't win last-write-wins against it (and a span chaining on a
-	// diverged apply of its device's, span_at, keeps its kept time too).
-	rowAt := mine.UpdatedAt
-	if stored != nil {
-		rowAt = laterStamp(rowAt, stored.updatedAt)
-	}
 	switch outcome {
 	case PlaceStale:
 		return SyncResult{Status: statusNotApplied, Reason: reasonOlder}, nil
@@ -798,7 +797,7 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	case PlaceApplyDiverged:
 		lost := &ListeningOtherPlace{Position: stored.position, DeviceID: stored.deviceID,
 			DeviceName: stored.deviceName, UpdatedAt: stored.updatedAt}
-		if err := s.writePlace(ctx, p, in.Version, false, false, rowAt); err != nil {
+		if err := s.writePlace(ctx, p, in.Version, keepOffer, rowAt); err != nil {
 			return SyncResult{}, err
 		}
 		if stored.deviceID != s.b.DeviceID && math.Abs(p.to-stored.position) > otherPlaceMin {
@@ -812,24 +811,38 @@ func (s *syncRun) resolveListen(ctx context.Context, p syncPrepared, stored *syn
 	// as sent (never the in-batch chaining's, which the device didn't see) at or
 	// after the version it was recorded at.
 	sent := p.ev.BaseVersion
-	clear := stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64
-	if err := s.writePlace(ctx, p, in.Version, clear, false, rowAt); err != nil {
+	offer := keepOffer
+	if stored != nil && stored.otherVersion.Valid && sent != nil && *sent >= stored.otherVersion.Int64 {
+		offer = clearOffer
+	}
+	if err := s.writePlace(ctx, p, in.Version, offer, rowAt); err != nil {
 		return SyncResult{}, err
 	}
 	return SyncResult{Status: statusApplied}, nil
 }
 
+// placeOffer is what writePlace does with the row's offered place (other_*)
+// and a Stay's hold (stay_version).
+type placeOffer int
+
+const (
+	keepOffer  placeOffer = iota // keep the offered place
+	clearOffer                   // drop it: the device had seen it
+	holdStay                     // drop it and hold the row for a Stay that won (stay_version = version)
+)
+
 // writePlace stores a span's place at version: position, length (the span's,
 // else the book's, else kept), speed (a furthest-only batch's keeps the
 // row's), device, updatedAt and version, a start when none; never the finish
-// state. clear also drops the offered place. The span's end is the newest link of the device's chain, kept on the row at
+// state; offer says what happens to the offered place and a Stay's hold. The
+// span's end is the newest link of the device's chain, kept on the row at
 // version (span_at, span_version: chainOf) for its next span, in this POST or a
-// later one. stay holds the row for a Stay that won (stay_version = version);
-// otherwise a Stay's hold is kept while the row stays this device's (the
-// Stay's own device writing again) and dropped when another device's place
-// replaces it.
-func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, clear, stay bool, updatedAt string) error {
+// later one. A Stay's hold (stay_version) is kept while the row stays this
+// device's (the Stay's own device writing again) and dropped when another
+// device's place replaces it, unless offer is holdStay.
+func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64, offer placeOffer, updatedAt string) error {
 	key := p.target.Key
+	clear, stay := offer != keepOffer, offer == holdStay
 	spanAt := formatSessionTime(p.ended)
 	if _, err := s.tx.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, playback_speed,
@@ -861,8 +874,8 @@ func (s *syncRun) writePlace(ctx context.Context, p syncPrepared, version int64,
 // staysWin reports whether a Stay span wins over the row (S1, 0080): its base
 // as sent is a version this device saw (above 0, at most the row's), the row is
 // not finished, no other device's Stay holds it at a version above that base,
-// no explicit non-listening write (editVersion: a PATCH, an import, a move or
-// join, a finish or unfinish) came after that base, and the row's time (its
+// no explicit non-listening write (editVersion, explicitWriteSet) came after
+// that base, and the row's time (its
 // device's last span end, span_at, else updated_at) is no more than staySlack
 // after the Stay's end: listening that went on longer after the Stay, or a Stay
 // made offline long ago, is not beaten. A PUT is an old app's listening, not an
@@ -872,7 +885,7 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	switch {
 	case stored == nil || sent == nil || *sent <= 0 || *sent > stored.version || stored.finished:
 		return false
-	case stored.stayVersion.Valid && stored.deviceID != s.b.DeviceID && stored.stayVersion.Int64 > *sent:
+	case s.heldByStay(stored, sent):
 		return false
 	case stored.editVersion.Valid && stored.editVersion.Int64 > *sent:
 		return false
@@ -881,8 +894,8 @@ func (s *syncRun) staysWin(p syncPrepared, stored *syncRow) bool {
 	if stored.spanAt.Valid {
 		rowAt = stored.spanAt.String
 	}
-	t, err := time.Parse(time.RFC3339Nano, rowAt)
-	return err == nil && !t.After(p.ended.Add(staySlack))
+	t, ok := ParseStamp(rowAt)
+	return ok && !t.After(p.ended.Add(staySlack))
 }
 
 // heldByStay reports whether another device's Stay holds the row against this
@@ -958,9 +971,8 @@ func (s *syncRun) setOther(ctx context.Context, key Ref, place *ListeningOtherPl
 // ends later or the row's time is later than the change; an unfinish of
 // another device's unfinished row takes nothing, so this device's next base-0
 // span still diverges from that row. An unfinish with no row has nothing to
-// change (applied, nothing written). Both are explicit writes, not listening:
-// they end a Stay's hold (stay_version) and record their version as the row's
-// edit_version, so a Stay made before them is a plain jump (0080, staysWin).
+// change (applied, nothing written). Both are explicit writes, not listening
+// (explicitWriteSet): they end a Stay's hold and record their edit_version.
 func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error) {
 	key := p.target.Key
 	if s.b.FurthestOnly && p.ev.Kind == EventUnfinish {
@@ -1030,7 +1042,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 			     position = CASE WHEN ?2 > 0 THEN ?2 ELSE position END,
 			     duration = CASE WHEN ?2 > 0 THEN ?2 ELSE duration END,
 			     version = ?3, device_id = ?4, device_name = ?5, updated_at = ?6, finish_changed_at = ?7,
-			     span_at = ?11, span_version = ?12, stay_version = NULL, edit_version = ?3,
+			     span_at = ?11, span_version = ?12, `+endStayHold+`, edit_version = ?3,
 			     `+clearOtherPlace+`
 			  WHERE user_id = ?8 AND library_id = ?9 AND rel_path = ?10`,
 			day, duration, version, s.b.DeviceID, s.b.DeviceName, updated, at,
@@ -1043,7 +1055,7 @@ func (s *syncRun) finish(ctx context.Context, p syncPrepared) (SyncResult, error
 		_, err = s.tx.ExecContext(ctx,
 			`UPDATE progress SET finished = 0, finished_at = NULL, version = ?, device_id = ?, device_name = ?,
 			     updated_at = ?, finish_changed_at = ?,
-			     span_at = ?, span_version = ?, stay_version = NULL, edit_version = ?
+			     span_at = ?, span_version = ?, `+endStayHold+`, edit_version = ?
 			  WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 			version, device, name, updated, at, chainAt, chainVersion, version, s.b.UserID, key.LibraryID, key.Path)
 	}

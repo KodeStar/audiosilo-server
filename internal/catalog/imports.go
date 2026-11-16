@@ -824,7 +824,7 @@ const progressUpsert = `INSERT INTO progress(user_id, library_id, rel_path, posi
 	    device_name=CASE WHEN excluded.device_id = progress.device_id THEN progress.device_name
 	                     ELSE excluded.device_name END,
 	    updated_at=excluded.updated_at, started_at=excluded.started_at, finished_at=excluded.finished_at,
-	    ` + finishChangedSet + `, ` + endSpanChain + `, ` + editVersionSet
+	    ` + finishChangedSet + `, ` + explicitWriteSet
 
 // progressRowArgs are progressUpsert's arguments for p as userID's progress,
 // changedAt the finish_changed_at a finish-state change records.

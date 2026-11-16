@@ -258,15 +258,20 @@ const (
 // holds a device's last applied span, so its device's next sync span compares
 // with updated_at again (span_at, 0062; see chainOf). A PUT may keep the
 // version, so the version check alone wouldn't end it. It also ends a Stay's
-// hold on the row (stay_version, 0080: another writer replaced its place).
-const endSpanChain = `span_at=NULL, span_version=NULL, stay_version=NULL`
+// hold (endStayHold).
+const endSpanChain = `span_at=NULL, span_version=NULL, ` + endStayHold
 
-// editVersionSet is the ON CONFLICT assignment of every explicit progress write
-// that is not listening (an edit, an import's apply or undo, a move or join;
-// never a PUT, an old app's listening): the row's edit_version is the version
-// it writes, so a Stay made on a base below it is a plain jump (0080,
-// staysWin). Each also inserts edit_version as its version.
-const editVersionSet = `edit_version=excluded.edit_version`
+// endStayHold ends a Stay's hold on the row (stay_version, 0080): another
+// writer replaced its place.
+const endStayHold = `stay_version=NULL`
+
+// explicitWriteSet is endSpanChain for every explicit progress write that is
+// not listening: a PATCH (own or admin), an import's apply or undo, a move or
+// join (and, written inline, a sync finish or unfinish); never a PUT, an old
+// app's listening. The row's edit_version is the version it writes (each also
+// inserts edit_version as its version), so a Stay made on a base below it is a
+// plain jump (0080, staysWin).
+const explicitWriteSet = endSpanChain + `, edit_version=excluded.edit_version`
 
 // finishChangeStamp is the time a write that changes a row's finished state
 // records as finish_changed_at (and a PUT's event time): the write's own
@@ -629,7 +634,7 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 			     device_id=excluded.device_id, updated_at=excluded.updated_at,
 			     started_at=excluded.started_at, finished_at=excluded.finished_at,
 			     device_name=excluded.device_name, finish_changed_at=excluded.finish_changed_at,
-			     `+endSpanChain+`, `+editVersionSet+`, `+clearOtherPlace,
+			     `+explicitWriteSet+`, `+clearOtherPlace,
 			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
 			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt, p.DeviceName, finishChanged, p.Version); err != nil {
 			return err
