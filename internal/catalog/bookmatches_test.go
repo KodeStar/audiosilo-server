@@ -712,7 +712,7 @@ func TestMatchedExprIsAnIndexSeek(t *testing.T) {
 // identifiers), checked in the edit's transaction; else nothing of the edit is
 // written (an ASIN taken from the old match would outrank the new one,
 // server#354) and EditBook returns ErrMatchedSince. A zero MatchIf records one
-// only while the book has none.
+// only while the book has none, and no ASIN or ISBN either.
 func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -795,5 +795,20 @@ func TestAnchorWrittenOnlyIfStillTheOne(t *testing.T) {
 	}
 	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "the-work" || a.OfferedASIN != "B0FILLED01" {
 		t.Fatalf("none read, none there = %+v, want it written", a)
+	}
+	// A zero MatchIf is an unmatched book: an ASIN set by hand since, with no
+	// match recorded, is kept too, and no match goes in beside it.
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Match: &MatchAnchor{}}); err != nil { // Unlink
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldASIN: "B0BYHAND01"}}); err != nil {
+		t.Fatal(err)
+	}
+	stale("an ASIN by hand", &MatchAnchor{})
+	if got := field(FieldASIN); got != "B0BYHAND01" {
+		t.Fatalf("asin = %q, want the one set by hand kept", got)
+	}
+	if a := anchorOf(t, c, ctx, lib.ID, p); a.WorkID != "" {
+		t.Fatalf("an ASIN by hand, none recorded = %+v, want no match written", a)
 	}
 }

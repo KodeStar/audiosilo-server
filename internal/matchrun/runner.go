@@ -734,9 +734,11 @@ func (r *Runner) applyItem(ctx context.Context, run *catalog.MatchRun, it *catal
 			case it.Outcome == catalog.OutcomeAuto:
 				how = catalog.MatchHowAuto
 			}
-			// Only while the book's match is still the one read here (none, for
-			// a match item: matchedSince): a match made by hand meanwhile stays
-			// with its values, and the whole edit is skipped (BookEdit.MatchIf).
+			// Only while the book's match is still the one read here (for a
+			// match item none, and no ASIN or ISBN either: matchedSince, checked
+			// again in the edit's transaction): a match made by hand meanwhile
+			// stays with its values, and the whole edit is skipped
+			// (BookEdit.MatchIf).
 			was := st.Anchor
 			edit.MatchIf = &was
 			m := *w.Anchor

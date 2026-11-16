@@ -113,7 +113,8 @@ func normalizeAnchor(a *MatchAnchor, source string) (*MatchAnchor, error) {
 
 // ErrMatchedSince marks an edit with a MatchIf whose book's recorded match is no
 // longer the one it names (matched again by hand, or unlinked, since the caller
-// read it): nothing of the edit was written.
+// read it), or, for a zero MatchIf, whose book has an ASIN or ISBN now: nothing
+// of the edit was written.
 var ErrMatchedSince = errors.New("the book's community match changed since it was read")
 
 // writeAnchor stores the book's anchor at ref (a non-empty WorkID; an unlink is

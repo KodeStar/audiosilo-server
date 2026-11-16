@@ -819,12 +819,14 @@ type BookEdit struct {
 	Match *MatchAnchor
 	// MatchIf, beside a Match naming a work, writes it only while the book's
 	// recorded match is still this one (its work, recording and offered
-	// identifiers; a zero MatchIf: none recorded), checked in the edit's
-	// transaction; else nothing of the edit is written and EditBook returns
-	// ErrMatchedSince. A run's bookkeeping of a match it read (a refresh's heal
-	// or new identifier, a repick's ASIN, a match item's new match), so a match
-	// made by hand meanwhile stays, and so do its values: an ASIN taken from the
-	// old match would outrank it (server#354).
+	// identifiers), checked in the edit's transaction; else nothing of the edit
+	// is written and EditBook returns ErrMatchedSince. A zero MatchIf is an
+	// unmatched book, as a match run takes one (matchedExpr): none recorded and
+	// no ASIN or ISBN either, so one set by hand meanwhile (an edit, a rescan,
+	// the Audible backfill) stays too. A run's bookkeeping of a match it read (a
+	// refresh's heal or new identifier, a repick's ASIN, a match item's new
+	// match), so a match made by hand meanwhile stays, and so do its values: an
+	// ASIN taken from the old match would outrank it (server#354).
 	MatchIf *MatchAnchor
 	Source  string
 	UserID  int64
@@ -994,6 +996,18 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			return err
 		}
 	default:
+		if edit.MatchIf != nil && edit.MatchIf.WorkID == "" {
+			// Read as unmatched: the anchor write below refuses a match recorded
+			// since, this an ASIN or ISBN the book gained since, which the
+			// edit's own would replace.
+			var matched bool
+			if err := tx.QueryRowContext(ctx, `SELECT `+matchedExpr+` FROM books b WHERE b.id = ?`, bookID).Scan(&matched); err != nil {
+				return err
+			}
+			if matched {
+				return ErrMatchedSince
+			}
+		}
 		if err := writeAnchor(ctx, tx, at, edit.Match, edit.MatchIf, editor, now); err != nil {
 			return err
 		}

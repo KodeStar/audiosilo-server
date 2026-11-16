@@ -275,3 +275,38 @@ func TestMatchApplyLeavesAHandMatchMadeMeanwhile(t *testing.T) {
 		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
 	}
 }
+
+// TestMatchApplyLeavesAnIdentifierSetMeanwhile: a match item is for an
+// unmatched book, checked in the edit's transaction as the apply's read checks
+// it (matchedSince): an ASIN set by hand after that read, with no match
+// recorded, stays, the run records no match beside it, and the item is skipped
+// as matched_since.
+func TestMatchApplyLeavesAnIdentifierSetMeanwhile(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	const path = "A/One"
+	e.book(t, path, "One", "", nil)
+	e.matcher.byTitle["One"] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	e.runner.beforeEdit = func(*catalog.MatchRunItem) {
+		if err := e.cat.EditBook(ctx, e.lib, path, catalog.BookEdit{
+			Set: map[string]string{catalog.FieldASIN: "B0BYHAND01"},
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	e.applyAndWait(t, run, ScopeOverwrite)
+	if f := e.field(t, path, catalog.FieldASIN); f.Value != "B0BYHAND01" || f.Source != catalog.SourceEdited {
+		t.Fatalf("asin = %+v, want the one set by hand", f)
+	}
+	if a := e.anchorOf(t, path); a.WorkID != "" {
+		t.Fatalf("anchor = %+v, want none recorded", a)
+	}
+	if it := e.items(t, run, catalog.OutcomeAuto)[0]; it.Applied != catalog.ItemSkipped || it.Detail != "matched_since" {
+		t.Fatalf("item = %+v, want skipped matched_since", it.MatchRunItem)
+	}
+}

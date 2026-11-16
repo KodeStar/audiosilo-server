@@ -1994,10 +1994,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   match (`planFor`: the anchor kept, its offered ASIN the one the repick writes);
   copied by a join, moved with the book. A refresh's or repick's anchor write keeps the
   match's `how`; every apply's anchor write is conditional (`BookEdit.MatchIf`, the anchor the
-  apply read: work, recording and offered identifiers, or none for a match item; checked in
+  apply read: work, recording and offered identifiers, or for a match item an unmatched book,
+  none recorded and no ASIN or ISBN (`matchedExpr`, as `matchedSince` reads it); checked in
   the edit's transaction; else nothing of the edit is written, `catalog.ErrMatchedSince`, and
   the item is skipped as `matched_since`), so a match made by hand mid-apply stays with its
-  values (an ASIN from the old match would outrank it, server#354). No backfill: '' (a match recorded before 0070, or an
+  values (an ASIN from the old match would outrank it, server#354). An edit that records no
+  match (a refresh of details alone, a `cover_pending` item) carries no such condition. No backfill: '' (a match recorded before 0070, or an
   accept from an older console) fills as before.
   The anchor is only healed (`planRefresh`): a merged work's new slug is a change by itself (`match`),
   a book matched by its own identifier with no anchor never gets one. It fills or
