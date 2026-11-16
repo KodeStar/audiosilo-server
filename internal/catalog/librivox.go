@@ -82,7 +82,10 @@ func (c *Catalog) FoldLibrivoxFetch(ctx context.Context, j bridge.Job) error {
 			was = &MatchAnchor{} // insert only: a match recorded since stays
 		}
 		a := &MatchAnchor{WorkID: p.WorkID, RecordingID: p.RecordingID, How: MatchHowAccepted}
-		return writeAnchor(ctx, tx, ref, a, was, editor, c.ts())
+		if err := writeAnchor(ctx, tx, ref, a, was, editor, c.ts()); !errors.Is(err, ErrMatchedSince) {
+			return err
+		}
+		return nil // adopted, matched already: its match stays
 	})
 	if err == nil {
 		c.changed()
