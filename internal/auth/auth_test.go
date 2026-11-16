@@ -886,7 +886,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secret, meta, err := s.IssueAPIToken(ctx, user.ID, "cron job")
+	secret, meta, err := s.IssueAPIToken(ctx, user.ID, 0, "cron job")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +947,7 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, meta, err := s.IssueAPIToken(ctx, owner.ID, "key")
+	_, meta, err := s.IssueAPIToken(ctx, owner.ID, 0, "key")
 	if err != nil {
 		t.Fatal(err)
 	}

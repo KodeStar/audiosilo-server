@@ -61,7 +61,7 @@ func mintEveryKind(t *testing.T, s *Service, ctx context.Context, name string) e
 	if k.castLaptop, _, err = s.IssueCastToken(ctx, admin.ID, laptopID, 3, "Author/Book"); err != nil {
 		t.Fatal(err)
 	}
-	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, "script"); err != nil {
+	if k.key, _, err = s.IssueAPIToken(ctx, admin.ID, 0, "script"); err != nil {
 		t.Fatal(err)
 	}
 	k.feed = mustFeed(t, s, ctx, admin.ID, k.phoneID)
@@ -401,5 +401,124 @@ func TestNoPasswordChangeKeepsMembers(t *testing.T) {
 	}
 	if _, _, err := s.lookupToken(ctx, hashSecret(h.pairing), KindPairing); err != nil {
 		t.Errorf("an edit without a password ended a member's pairing code: %v", err)
+	}
+}
+
+// grownUpCredentials is an owner's grown-up member's API keys and calendar
+// links: made from a sign-in on the owner's laptop, on the owner's phone (the
+// device kept), and on the member's own device, plus another member's link made
+// on their own device.
+type grownUpCredentials struct {
+	owner                             *User
+	phoneID                           int64
+	keyOnLaptop, keyOnPhone, keyOwn   string
+	feedOnLaptop, otherMembersOwnFeed string
+}
+
+func mintGrownUpCredentials(t *testing.T, s *Service, ctx context.Context) grownUpCredentials {
+	t.Helper()
+	owner := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	_, phone := mustSession(t, s, ctx, owner.ID, "phone")
+	_, laptop := mustSession(t, s, ctx, owner.ID, "laptop")
+	gus := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Gus", Kind: MemberGrownup, Access: MemberAll})
+	hal := mustMember(t, s, ctx, owner.ID, NewMember{Name: "Hal", Kind: MemberGrownup, Access: MemberAll})
+	// A member's session made on one of the owner's devices, or on the member's
+	// own (no created_on_token_id), as the session id a request carries.
+	sessionOn := func(member, on int64) int64 {
+		t.Helper()
+		tok := ""
+		var err error
+		if on == 0 {
+			tok, err = s.IssueToken(ctx, member, KindSession, "own phone", 0)
+		} else {
+			tok, _, err = s.MemberSession(ctx, owner.ID, member, "here", on)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cred, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cred.ID
+	}
+	key := func(member, session int64) string {
+		t.Helper()
+		k, _, err := s.IssueAPIToken(ctx, member, session, "dash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		warm(t, s, k, KindSession, KindAPI)
+		return k
+	}
+	gusLaptop := sessionOn(gus.ID, laptop)
+	return grownUpCredentials{
+		owner:               owner,
+		phoneID:             phone,
+		keyOnLaptop:         key(gus.ID, gusLaptop),
+		keyOnPhone:          key(gus.ID, sessionOn(gus.ID, phone)),
+		keyOwn:              key(gus.ID, sessionOn(gus.ID, 0)),
+		feedOnLaptop:        mustFeed(t, s, ctx, gus.ID, gusLaptop),
+		otherMembersOwnFeed: mustFeed(t, s, ctx, hal.ID, sessionOn(hal.ID, 0)),
+	}
+}
+
+func (g grownUpCredentials) check(t *testing.T, s *Service, ctx context.Context, phoneKept bool) {
+	t.Helper()
+	want := func(what string, live bool, err error) { t.Helper(); wantLive(t, what, live, err) }
+	key := func(k string) error {
+		_, _, err := s.ResolveRequest(ctx, k, Presence{}, KindSession, KindAPI)
+		return err
+	}
+	feed := func(f string) error { _, _, err := s.ResolveRequest(ctx, f, Presence{}, KindFeed); return err }
+	want("the member's key made on the owner's laptop", false, key(g.keyOnLaptop))
+	want("the member's calendar link made on the owner's laptop", false, feed(g.feedOnLaptop))
+	want("the member's key made on the kept phone", phoneKept, key(g.keyOnPhone))
+	want("the member's key made on their own device", true, key(g.keyOwn))
+	want("another member's link made on their own device", true, feed(g.otherMembersOwnFeed))
+}
+
+// Security-critical (D5, server#361): the owner's password change ends the API
+// keys and calendar links their grown-up members made while signed in on the
+// owner's other devices, as it ends those sign-ins; what a member made on the
+// device kept, or on their own device, stays.
+func TestPasswordChangeEndsMembersKeysAndLinks(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	g := mintGrownUpCredentials(t, s, ctx)
+	if err := s.SetPassword(ctx, g.owner.ID, "a-new-password", g.phoneID); err != nil {
+		t.Fatal(err)
+	}
+	g.check(t, s, ctx, true)
+}
+
+// Security-critical (D5): Sign out everywhere does the same, the device kept
+// or none; an edit with no password ends none of them.
+func TestSignOutEverywhereEndsMembersKeysAndLinks(t *testing.T) {
+	t.Parallel()
+	for _, keepPhone := range []bool{false, true} {
+		s, ctx := newTestService(t)
+		g := mintGrownUpCredentials(t, s, ctx)
+		keep := int64(0)
+		if keepPhone {
+			keep = g.phoneID
+		}
+		if _, err := s.SignOutEverywhere(ctx, g.owner.ID, keep); err != nil {
+			t.Fatal(err)
+		}
+		g.check(t, s, ctx, keepPhone)
+	}
+	s, ctx := newTestService(t)
+	g := mintGrownUpCredentials(t, s, ctx)
+	if err := s.UpdateUser(ctx, g.owner.ID, UserChanges{CanAddMembers: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{g.keyOnLaptop, g.keyOnPhone, g.keyOwn} {
+		if _, _, err := s.ResolveRequest(ctx, k, Presence{}, KindSession, KindAPI); err != nil {
+			t.Errorf("an edit without a password ended a member's key: %v", err)
+		}
+	}
+	if _, _, err := s.ResolveRequest(ctx, g.feedOnLaptop, Presence{}, KindFeed); err != nil {
+		t.Errorf("an edit without a password ended a member's link: %v", err)
 	}
 }

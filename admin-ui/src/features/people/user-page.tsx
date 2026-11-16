@@ -217,7 +217,8 @@ function UserView({ detail }: { detail: UserDetail }) {
 /**
  * Signs a person out of every device (server#281): their sessions end, and with
  * them anything they are casting, their open pairing codes and their recovery
- * code; API keys and calendar links stay. Offered while they have a session the
+ * code, and their household members' sign-ins, API keys and calendar links made
+ * on those devices; their own API keys and calendar links stay. Offered while they have a session the
  * console isn't using. The words say how they get back in: a password, their
  * single sign-on (sso, its provider's name) or a new invite, or a kid's owner.
  */

@@ -316,7 +316,7 @@ func TestMembers_Create_Denied(t *testing.T) {
 	if status, b := m.add(t, demoTok, kid); status != http.StatusForbidden || codeOf(b) != "demo_account" {
 		t.Errorf("demo = %d %s", status, b)
 	}
-	key, _, err := m.auth.IssueAPIToken(ctx, m.adam, "script")
+	key, _, err := m.auth.IssueAPIToken(ctx, m.adam, 0, "script")
 	if err != nil {
 		t.Fatal(err)
 	}

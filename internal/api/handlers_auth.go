@@ -436,7 +436,9 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 // Changing an existing password ends the user's other sessions (their cast tokens
 // with them), keeping the caller's, and their open pairing codes and recovery
-// code; API keys, the calendar feed token and Bridge tokens stay (auth.endSessions).
+// code, and their household members' sign-ins, API keys and calendar links
+// made on their other devices; their own API keys, calendar feed token and
+// Bridge tokens stay (auth.endSessions).
 // A wrong current password is 401 current_password_incorrect. An admin's change
 // ends the start's first-run hint, and the first-run admin's the printed
 // password and auth code (auth.UpdateUser's notePasswordSet).
@@ -615,7 +617,7 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "label is too long")
 		return
 	}
-	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, label)
+	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, credentialFrom(r.Context()).ID, label)
 	if writeKidRefusal(w, err) {
 		return
 	}

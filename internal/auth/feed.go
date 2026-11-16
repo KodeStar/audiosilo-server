@@ -46,9 +46,10 @@ type FeedStatus struct {
 // IssueFeedToken mints userID's calendar feed token from their session (the
 // token id the request authenticated with), deleting any earlier one in the
 // same transaction, and returns the secret (shown once) with its creation time.
-// The row records the device the session was made on (its created_on_token_id:
-// a member's sign-in on their owner's device), so leaveOwners ends a link made
-// there as it ends that sign-in. A kid's is refused inside the write
+// The row records the device the session was made on (madeOn: a member's
+// sign-in on their owner's device), so leaveOwners, and the owner's password
+// change or Sign out everywhere (endSessions), end a link made there as they
+// end that sign-in. A kid's is refused inside the write
 // (ErrKidAccount, refuseKid), so a request that passed the route's check just
 // before the switch to a kid committed still mints nothing; a demo account is
 // refused by the route.
@@ -78,12 +79,11 @@ func (s *Service) IssueFeedToken(ctx context.Context, userID, session int64) (se
 		if _, err := tx.ExecContext(ctx, deleteFeedTokensSQL, userID); err != nil {
 			return err
 		}
-		var on sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT created_on_token_id FROM tokens WHERE id = ? AND user_id = ?`,
-			session, userID).Scan(&on); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		on, err := madeOn(ctx, tx, userID, session)
+		if err != nil {
 			return err
 		}
-		_, err := s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on, createdAt)
+		_, err = s.insertTokenOn(ctx, tx, userID, hash, KindFeed, FeedTokenName, nil, nil, "", on, createdAt)
 		return err
 	})
 	if err != nil {

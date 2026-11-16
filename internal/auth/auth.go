@@ -443,6 +443,20 @@ func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, h
 	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil, s.ts())
 }
 
+// madeOn is the device userID's token session was made on (its
+// created_on_token_id: a household member's sign-in on their owner's device),
+// for a credential minted from it to record; NULL for any other session, an
+// unknown one or another person's.
+func madeOn(ctx context.Context, tx *sql.Tx, userID, session int64) (sql.NullInt64, error) {
+	var on sql.NullInt64
+	err := tx.QueryRowContext(ctx, `SELECT created_on_token_id FROM tokens WHERE id = ? AND user_id = ?`,
+		session, userID).Scan(&on)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	return on, err
+}
+
 // insertTokenOn is insertToken recording createdOn, the owner's token a household
 // member's sign-in was made on (nil: none), and createdAt (s.ts(), RFC3339 UTC,
 // except a feed token's millisUTC) - the single place the column list lives.
@@ -713,9 +727,14 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // IssueAPIToken mints a personal API key (kind=api, no expiry) for a user and
 // returns the plaintext secret (shown once) plus the stored row's metadata for
 // the create response. The secret is stored only as a hash. label is carried in
-// device_name; callers trim/validate it before calling. A kid's is refused
-// inside the write (ErrKidAccount, refuseKid).
-func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string) (string, APIToken, error) {
+// device_name; callers trim/validate it before calling. session is the token
+// the request authenticated with: the key records the device that session was
+// made on (madeOn: a household member's sign-in on their owner's device), so
+// the owner's password change and Sign out everywhere end a member's key made
+// there as they end that sign-in (endSessions, server#361), and so do the
+// device revoke's alsoMembers and leaveOwners. A kid's is refused inside the
+// write (ErrKidAccount, refuseKid).
+func (s *Service) IssueAPIToken(ctx context.Context, userID, session int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", APIToken{}, err
@@ -725,7 +744,11 @@ func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string)
 		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
-		res, err := s.insertToken(ctx, tx, userID, hash, KindAPI, label, nil, nil, "")
+		on, err := madeOn(ctx, tx, userID, session)
+		if err != nil {
+			return err
+		}
+		res, err := s.insertTokenOn(ctx, tx, userID, hash, KindAPI, label, nil, nil, "", on, s.ts())
 		if err != nil {
 			return err
 		}
@@ -1831,13 +1854,15 @@ func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
 // leaveOwners ends them), a single sign-on not yet finished (KindOIDC) and their
 // recovery code (its linked pairing tokens cascade). Their household members go the same way where the person put them
 // (server#285): a member's session made on any of the person's devices but keep
-// (created_on_token_id, the record the device revoke's alsoMembers reads; only
-// sessions here, a member's API keys stay as the person's do), and every
-// member's open pairing code (a pairing code records no device, so one a
-// grown-up member minted on their own device goes too). A member's own device,
-// paired before, stays signed in. API keys stay (listed and revoked on
-// their own), and so do the calendar feed token (the person's to end) and Bridge
-// tokens (the Bridge's). A cast token needs no write: it is refused once its
+// (created_on_token_id, the record the device revoke's alsoMembers reads), with
+// the API keys and the calendar feed link the member made from such a session
+// (which record the same device, madeOn; server#361: the person's sign-in there
+// is what let them be made), and every member's open pairing code (a pairing
+// code records no device, so one a grown-up member minted on their own device
+// goes too). A member's own device, paired before, stays signed in, with what
+// was made on it. The person's own API keys stay (listed and revoked on their
+// own), and so do their calendar feed token (theirs to end) and Bridge tokens
+// (the Bridge's). A cast token needs no write: it is refused once its
 // parent is revoked (cast.go). The write moves the content generation, so the
 // token cache reads an ended token again and refuses it on the very next request.
 // It returns how many of the person's own sessions it ended.
@@ -1861,12 +1886,20 @@ func endSessions(ctx context.Context, tx *sql.Tx, userID, keep int64) (int64, er
 		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
 		return 0, err
 	}
+	const (
+		members   = `user_id IN (SELECT id FROM users WHERE managed_by = ?1)`
+		onDevices = `created_on_token_id IN (SELECT id FROM tokens WHERE user_id = ?1 AND id != ?2)`
+	)
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1
-		  WHERE revoked = 0 AND user_id IN (SELECT id FROM users WHERE managed_by = ?1)
-		    AND ((kind = ?2 AND created_on_token_id IN (SELECT id FROM tokens WHERE user_id = ?1 AND id != ?3))
-		         OR (kind = ?4 AND auth_code_id IS NULL))`,
-		userID, KindSession, keep, KindPairing); err != nil {
+		  WHERE revoked = 0 AND `+members+`
+		    AND ((kind IN (?3, ?4) AND `+onDevices+`) OR (kind = ?5 AND auth_code_id IS NULL))`,
+		userID, keep, KindSession, KindAPI, KindPairing); err != nil {
+		return 0, err
+	}
+	// A feed row is deleted, never revoked (feed.go).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tokens WHERE kind = '`+KindFeed+`' AND `+members+` AND `+onDevices, userID, keep); err != nil {
 		return 0, err
 	}
 	return n, nil

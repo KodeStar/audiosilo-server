@@ -595,9 +595,12 @@ describe('a person', () => {
     expect(
       within(dialog).getByText(/Their phones, tablets and browsers are signed out/),
     ).toBeInTheDocument();
-    // server#285: members signed in on those devices end with them.
+    // server#285: members signed in on those devices end with them, and
+    // server#361: so do the keys and calendar links the members made there.
     expect(
-      within(dialog).getByText(/Household members signed in on those devices are signed out too/),
+      within(dialog).getByText(
+        /Household members signed in on those devices are signed out too, and the API keys and calendar links they made there stop working/,
+      ),
     ).toBeInTheDocument();
     await waitFor(() => expect(devicesReads()).toBeGreaterThan(0));
     const before = devicesReads();
